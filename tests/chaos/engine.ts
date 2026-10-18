@@ -284,7 +284,9 @@ export function runClient(runId: string): Promise<{ code: number; output: string
     );
 
     let output = "";
+    const t0 = Date.now();
     child.stdout?.on("data", (chunk) => {
+      if (process.env.CHAOS_TS) output += `[+${Date.now() - t0}ms] `;
       output += chunk.toString();
     });
     child.stderr?.on("data", (chunk) => {
@@ -295,8 +297,9 @@ export function runClient(runId: string): Promise<{ code: number; output: string
       child.kill("SIGKILL");
     }, 30_000);
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timer);
+      if (code === null) output += `\n[client terminated by signal ${signal}]`;
       resolve({ code: code ?? 1, output });
     });
   });

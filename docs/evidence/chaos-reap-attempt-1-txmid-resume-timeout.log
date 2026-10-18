@@ -1,0 +1,45 @@
+=== chaos run 1 start 2026-10-18T16:36:26Z
+bun test v1.4.2 (744846f84)
+
+tests/chaos/subprocess.test.ts:
+(pass) Chaos Tests - Subprocess Killpoints > event gap helper rejects holes and duplicate seqs [0.44ms]
+Testing killpoint: tx.mid
+    wiped +239ms
+    engine-up +2593ms
+    first-client exit=1 killed=true +15964ms
+    stopped-after-kill +16162ms
+    engine-restarted +17338ms
+  ✗ tx.mid killed=true (53374ms) resume failed (1): Starting run: chaos-tx-mid-n1-1792341386440
+Goal: ChaosGoal
+
+✓ Run created (planning)
+
+→ Planning...
+✓ Plan created: 2 tasks
+
+→ Creating tasks...
+  ✓ task-1
+  ✓ task-2
+
+→ Provisioning worker...
+✓ Worker chaos-tx-mid-n1-1792341386440-worker-1 ready (idle)
+
+→ Executing tasks...
+  → task-1 (epoch 1)
+  ✓ task-1 verified and merged
+  → task-2 (epoch 1)
+  ✓ task-2 verified and merged
+
+→ All tasks complete, judging...
+
+✓ Run completed successfully
+  Goal achieved
+
+Run ID: chaos-tx-mid-n1-1792341386440
+✓ Sandbox destroyed
+
+Testing killpoint: model.after_return.before_commit
+    wiped +219ms
+    engine-up +2729ms
+    first-client exit=1 killed=true +16392ms
+    stopped-after-kill +16615ms

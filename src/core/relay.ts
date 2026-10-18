@@ -60,7 +60,9 @@ const TERMINAL_RUN = new Set(["completed", "failed", "cancelled"]);
  * when every task is terminal, or when the worker is past its TTL.
  */
 export async function reapSandboxes(c: ReturnType<typeof client>, runId: string): Promise<{ reaped: boolean; reason?: string }> {
-  const run = await c.run.get([runId]).getRun({ runId }).catch(() => null);
+  // getOrCreate, not get: `get` on a run that was never created makes the client
+  // retry actor_not_found for ~30s, which stalls every recovery of an early crash.
+  const run = await c.run.getOrCreate([runId]).getRun({ runId }).catch(() => null);
   if (!run) return { reaped: false };
   let terminal = TERMINAL_RUN.has(run.state);
   const ids: string[] = run.context?.plan?.tasks ?? [];
