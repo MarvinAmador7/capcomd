@@ -28,3 +28,21 @@
   audit correctly reported an expired active sandbox. That's environmental, not a recovery bug.
   Run 2 started 05:46Z and ended 13:47Z.
 - Run 3 never started (the script stops on the first failure). The 3-consecutive gate restarts from zero.
+
+## Seed 36 (chaos-run-2) root cause — revised 2026-10-18
+
+The earlier note blamed the box suspension. That was only the trigger. The real cause: before 71e889b,
+**nothing ever destroyed a worker's sandbox**. `drainWorker` had no callers. Recovery reconciled the
+merge correctly, but no path, including the one where the crash lands between CAS and event, released the VM.
+Every run left its worker `idle` with a live vmId. The TTL invariant only noticed when wall time passed
+createdAt+1h, which the 7.26h suspension caused for seed 36.
+
+Proof: `tests/chaos/seed36-regression.test.ts` run against ee9b0d5 fails with
+`unreaped sandbox ...-worker-1 (worker idle, run completed)`, and passes on the fix.
+
+Fix (idempotent reap):
+- `reapSandboxes(runId)` runs on every executeRun entry (recovery) and reaps when the run is terminal, all tasks are terminal, or the worker is past TTL.
+- teardown runs on completion, failure and cancel (71e889b).
+- the worker actor schedules `reapIfExpired` at createdAt+ttl (a sweep that works with no client).
+- `drainWorker` resumes a half-done drain.
+- the invariant now also flags any active worker of a finished run. This check doesn't depend on the clock.

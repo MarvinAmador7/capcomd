@@ -13,6 +13,69 @@ import {
 import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
 
+
+// Shared by drainWorker, reap and the TTL alarm. Idempotent and resumable.
+async function drainWorkerImpl(c: any, workerId: string) {
+
+            const { provider } = getDependencies();
+
+      const workerLife = await getLifecycle(c.db, workerId);
+      if (!workerLife) return;
+
+      const workerContext: WorkerContext = JSON.parse(workerLife.context);
+      const workerSnapshot = workerMachine.resolveState({
+        value: workerLife.state,
+        context: workerContext,
+      });
+
+      const drainEvent = { type: "DRAIN" as const };
+
+      // Resume a drain that crashed after DRAIN but before VM_DESTROYED.
+      const resuming = workerLife.state === "draining";
+      if (!resuming && !workerSnapshot.can(drainEvent)) return;
+
+      const [drainSnapshot] = resuming
+        ? [workerSnapshot]
+        : transition(workerMachine, workerSnapshot, drainEvent);
+
+      if (!resuming) await c.db.transaction(async (tx) => {
+        await transitionLifecycle(
+          tx,
+          workerId,
+          "worker",
+          drainSnapshot.value as string,
+          drainSnapshot.context,
+          drainEvent,
+          `worker-${workerId}-drain-${Date.now()}`,
+          []
+        );
+      }, { name: "drain" });
+
+      if (workerContext.vmId) {
+        await provider.destroy(workerContext.vmId);
+
+        const destroyEvent = { type: "VM_DESTROYED" as const };
+        const [destroySnapshot] = transition(
+          workerMachine,
+          drainSnapshot,
+          destroyEvent
+        );
+
+        await c.db.transaction(async (tx) => {
+          await transitionLifecycle(
+            tx,
+            workerId,
+            "worker",
+            destroySnapshot.value as string,
+            destroySnapshot.context,
+            destroyEvent,
+            `worker-${workerId}-destroyed-${Date.now()}`,
+            []
+          );
+        }, { name: "vmDestroyed" });
+      }
+}
+
 export const workerActor = actor({
   db: db({
     onMigrate: async (database) => {
@@ -90,6 +153,14 @@ export const workerActor = actor({
         });
 
         await provider.waitReady(vmId, 90_000);
+
+        // TTL sweep: the actor reaps its own sandbox at createdAt+ttl even if no client ever returns.
+        {
+          const life = await getLifecycle(c.db, workerId);
+          const ctx = life ? JSON.parse(life.context as string) : {};
+          const at = Number(ctx.createdAt ?? Date.now()) + Number(ctx.ttlMs ?? 3_600_000);
+          await c.schedule.at(at, "reapIfExpired", { workerId });
+        }
 
         const workerLife = await getLifecycle(c.db, workerId);
         if (!workerLife) {
@@ -305,68 +376,31 @@ export const workerActor = actor({
       }, { name: "taskDone" });
     },
 
-    async drainWorker(
-      c,
-      params: { workerId: string }
-    ) {
-      const { workerId } = params;
-      const { provider } = getDependencies();
+    async drainWorker(c, params: { workerId: string }) {
+      await drainWorkerImpl(c, params.workerId);
+    },
 
-      const workerLife = await getLifecycle(c.db, workerId);
-      if (!workerLife) return;
+    /**
+     * Idempotent reap. Destroys the sandbox when the caller says the run/task is
+     * terminal, or when the worker is past its TTL. No-op once destroyed.
+     */
+    async reap(c, params: { workerId: string; terminal?: boolean; now?: number }) {
+      const life = await getLifecycle(c.db, params.workerId);
+      if (!life || life.state === "destroyed") return { reaped: false, state: life?.state ?? null };
+      const ctx = JSON.parse(life.context as string);
+      const expired = (params.now ?? Date.now()) >= Number(ctx.createdAt ?? 0) + Number(ctx.ttlMs ?? 3_600_000);
+      if (!params.terminal && !expired) return { reaped: false, state: life.state };
+      await drainWorkerImpl(c, params.workerId);
+      return { reaped: true, reason: params.terminal ? "terminal" : "ttl" };
+    },
 
-      const workerContext: WorkerContext = JSON.parse(workerLife.context);
-      const workerSnapshot = workerMachine.resolveState({
-        value: workerLife.state,
-        context: workerContext,
-      });
-
-      const drainEvent = { type: "DRAIN" as const };
-
-      // Resume a drain that crashed after DRAIN but before VM_DESTROYED.
-      const resuming = workerLife.state === "draining";
-      if (!resuming && !workerSnapshot.can(drainEvent)) return;
-
-      const [drainSnapshot] = resuming
-        ? [workerSnapshot]
-        : transition(workerMachine, workerSnapshot, drainEvent);
-
-      if (!resuming) await c.db.transaction(async (tx) => {
-        await transitionLifecycle(
-          tx,
-          workerId,
-          "worker",
-          drainSnapshot.value as string,
-          drainSnapshot.context,
-          drainEvent,
-          `worker-${workerId}-drain-${Date.now()}`,
-          []
-        );
-      }, { name: "drain" });
-
-      if (workerContext.vmId) {
-        await provider.destroy(workerContext.vmId);
-
-        const destroyEvent = { type: "VM_DESTROYED" as const };
-        const [destroySnapshot] = transition(
-          workerMachine,
-          drainSnapshot,
-          destroyEvent
-        );
-
-        await c.db.transaction(async (tx) => {
-          await transitionLifecycle(
-            tx,
-            workerId,
-            "worker",
-            destroySnapshot.value as string,
-            destroySnapshot.context,
-            destroyEvent,
-            `worker-${workerId}-destroyed-${Date.now()}`,
-            []
-          );
-        }, { name: "vmDestroyed" });
-      }
+    async reapIfExpired(c, params: { workerId: string }) {
+      const life = await getLifecycle(c.db, params.workerId);
+      if (!life || life.state === "destroyed") return { reaped: false };
+      const ctx = JSON.parse(life.context as string);
+      if (Date.now() < Number(ctx.createdAt ?? 0) + Number(ctx.ttlMs ?? 3_600_000)) return { reaped: false };
+      await drainWorkerImpl(c, params.workerId);
+      return { reaped: true, reason: "ttl" };
     },
 
     async getWorker(c, params: { workerId: string }) {

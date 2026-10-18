@@ -53,6 +53,29 @@ export async function teardownRun(c: ReturnType<typeof client>, runId: string): 
   if (worker && worker.state !== "destroyed") await handle.drainWorker({ workerId });
 }
 
+const TERMINAL_RUN = new Set(["completed", "failed", "cancelled"]);
+
+/**
+ * Idempotent reap for one run: destroy the sandbox when the run is terminal,
+ * when every task is terminal, or when the worker is past its TTL.
+ */
+export async function reapSandboxes(c: ReturnType<typeof client>, runId: string): Promise<{ reaped: boolean; reason?: string }> {
+  const run = await c.run.get([runId]).getRun({ runId }).catch(() => null);
+  if (!run) return { reaped: false };
+  let terminal = TERMINAL_RUN.has(run.state);
+  const ids: string[] = run.context?.plan?.tasks ?? [];
+  if (!terminal && ids.length) {
+    const board = c.taskBoard.getOrCreate([runId]);
+    const states = await Promise.all(ids.map((taskId) => board.getTask({ taskId }).then((t: any) => t?.state)));
+    terminal = states.every((st) => st && TERMINAL_TASK.has(st));
+  }
+  const workerId = `${runId}-worker-1`;
+  const handle = c.worker.getOrCreate([runId, workerId]);
+  const worker = await handle.getWorker({ workerId });
+  if (!worker || worker.state === "destroyed") return { reaped: false };
+  return handle.reap({ workerId, terminal });
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface RunOptions {
@@ -78,6 +101,8 @@ export interface RunResult {
  */
 export async function executeRun(opts: RunOptions): Promise<RunResult> {
   const runId = opts.runId ?? generateRunId();
+  // Recovery reap: a crashed earlier attempt may have left a sandbox behind.
+  await reapSandboxes(client(), runId).catch(() => {});
   const result = await executeRunInner({ ...opts, runId });
   if (["completed", "failed", "cancelled"].includes(result.state)) {
     await teardownRun(client(), runId);

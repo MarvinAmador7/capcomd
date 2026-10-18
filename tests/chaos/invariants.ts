@@ -104,6 +104,11 @@ export async function auditRun(runId: string): Promise<InvariantReport> {
     if (active && Date.now() - createdAt > ttlMs) {
       sandboxViolations.push(`orphan sandbox ${workerId} past TTL`);
     }
+    // Deterministic (clock-independent) form: a finished run must have reaped its sandbox.
+    const runNow = await runHandle.getRun({ runId });
+    if (active && runNow && ["completed", "failed", "cancelled"].includes(runNow.state)) {
+      sandboxViolations.push(`unreaped sandbox ${workerId} (worker ${worker.state}, run ${runNow.state})`);
+    }
   }
 
   const charges = await runHandle.getCharges({ runId });
