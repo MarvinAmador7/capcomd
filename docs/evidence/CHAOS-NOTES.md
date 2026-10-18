@@ -19,3 +19,12 @@
 ## Gate runs (tree 61e9a7b, runner /workspace/chaos3.sh)
 - Run 1: 10/10 killpoints, 50/50 seeds, exit 0 (`chaos-run-1.log`).
 - Runs 2 and 3: see `chaos-run-2.log` and `chaos-run-3.log`.
+
+## Run 2: 10/10 killpoints, 49/50 seeds, failed on seed 36 (`merge.after_cas.before_event:2`)
+- Violation: `orphan sandbox …-worker-1 past TTL` (worker TTL is 1h).
+- That case's first client took `+26131796ms` (7.26h), even though `runClient` SIGKILLs after 30s.
+  A 30s timer firing 7h late means the whole box was suspended mid-case (the same night my
+  agent waits stopped tracking real time). The wall clock jumped past the 1h worker TTL, so the
+  audit correctly reported an expired active sandbox. That's environmental, not a recovery bug.
+  Run 2 started 05:46Z and ended 13:47Z.
+- Run 3 never started (the script stops on the first failure). The 3-consecutive gate restarts from zero.
