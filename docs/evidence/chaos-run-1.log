@@ -1,0 +1,312 @@
+=== chaos run 1 start 2026-10-18T04:50:07Z
+bun test v1.4.2 (744846f84)
+
+tests/chaos/subprocess.test.ts:
+(pass) Chaos Tests - Subprocess Killpoints > event gap helper rejects holes and duplicate seqs [0.41ms]
+Testing killpoint: tx.mid
+    wiped +238ms
+    engine-up +2738ms
+    first-client exit=1 killed=true +13905ms
+    stopped-after-kill +14120ms
+    engine-restarted +44742ms
+  ✓ tx.mid killed=true (52377ms)
+Testing killpoint: model.after_return.before_commit
+    wiped +214ms
+    engine-up +2708ms
+    first-client exit=1 killed=true +14020ms
+    stopped-after-kill +14233ms
+    engine-restarted +44783ms
+  ✓ model.after_return.before_commit killed=true (52290ms)
+Testing killpoint: merge.before_cas
+    wiped +218ms
+    engine-up +2730ms
+    first-client exit=1 killed=true +17063ms
+    stopped-after-kill +17248ms
+    engine-restarted +47784ms
+  ✓ merge.before_cas killed=true (53311ms)
+Testing killpoint: merge.after_cas.before_event
+    wiped +214ms
+    engine-up +2570ms
+    first-client exit=1 killed=true +16837ms
+    stopped-after-kill +17036ms
+    engine-restarted +47555ms
+  ✓ merge.after_cas.before_event killed=true (53210ms)
+Testing killpoint: push.mid
+    wiped +215ms
+    engine-up +2546ms
+    first-client exit=1 killed=true +22151ms
+    stopped-after-kill +22351ms
+    engine-restarted +52857ms
+  ✓ push.mid killed=true (58856ms)
+Testing killpoint: push.after.before_event
+    wiped +219ms
+    engine-up +6634ms
+    first-client exit=1 killed=true +26207ms
+    stopped-after-kill +26407ms
+    engine-restarted +56852ms
+  ✓ push.after.before_event killed=true (62892ms)
+Testing killpoint: vm.create.after_request.before_record
+    wiped +217ms
+    engine-up +2556ms
+    first-client exit=1 killed=true +15136ms
+    stopped-after-kill +15320ms
+    engine-restarted +45790ms
+  ✓ vm.create.after_request.before_record killed=true (52495ms)
+Testing killpoint: lease.expire.mid
+    wiped +220ms
+    engine-up +2710ms
+    first-client exit=1 killed=true +14469ms
+    stopped-after-kill +14662ms
+    engine-restarted +45183ms
+  ✓ lease.expire.mid killed=true (54120ms)
+Testing killpoint: budget.charge.mid
+    wiped +216ms
+    engine-up +2714ms
+    first-client exit=1 killed=true +378656ms
+    stopped-after-kill +378895ms
+    engine-restarted +409517ms
+  ✓ budget.charge.mid killed=true (417179ms)
+Testing killpoint: outbox.dispatch.after_send.before_ack
+    wiped +221ms
+    engine-up +2621ms
+    first-client exit=1 killed=true +15186ms
+    stopped-after-kill +15386ms
+    engine-restarted +45879ms
+  ✓ outbox.dispatch.after_send.before_ack killed=true (52542ms)
+Total: 10/10 passed
+(pass) Chaos Tests - Subprocess Killpoints > survives all 10 named killpoints [552437.74ms]
+    wiped +214ms
+    engine-up +2563ms
+    first-client exit=1 killed=true +20620ms
+    stopped-after-kill +20830ms
+    engine-restarted +51339ms
+    wiped +217ms
+    engine-up +2575ms
+    first-client exit=1 killed=true +15148ms
+    stopped-after-kill +15344ms
+    engine-restarted +45790ms
+    wiped +214ms
+    engine-up +2555ms
+    first-client exit=1 killed=true +13459ms
+    stopped-after-kill +13655ms
+    engine-restarted +44204ms
+    wiped +220ms
+    engine-up +2709ms
+    first-client exit=0 killed=false +9101ms
+    wiped +215ms
+    engine-up +2551ms
+    first-client exit=1 killed=true +16873ms
+    stopped-after-kill +17064ms
+    engine-restarted +47556ms
+    wiped +215ms
+    engine-up +32638ms
+    first-client exit=1 killed=true +48667ms
+    stopped-after-kill +48852ms
+    engine-restarted +79408ms
+    wiped +216ms
+    engine-up +2711ms
+    first-client exit=0 killed=false +9059ms
+    wiped +214ms
+    engine-up +2655ms
+    first-client exit=1 killed=true +22119ms
+    stopped-after-kill +22307ms
+    engine-not-ready attempt=1, cold restart: engine not ready: d code=actor_ready_timeout message="Timed out waiting for actor to become ready. Ensure that the pool selector is accurate and there are envoy
+    engine-not-ready attempt=2, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=l7vkhdoiaf8t92ftykny9e9119dl00 
+    engine-restarted +440372ms
+    wiped +217ms
+    engine-up +2598ms
+    first-client exit=0 killed=false +9028ms
+    wiped +215ms
+    engine-up +2552ms
+    first-client exit=0 killed=false +8957ms
+Completed 10/50 seeds (10 passed, 0 failed)
+    wiped +217ms
+    engine-up +2557ms
+    first-client exit=1 killed=true +13498ms
+    stopped-after-kill +13739ms
+    engine-restarted +44403ms
+    wiped +217ms
+    engine-up +2585ms
+    first-client exit=1 killed=true +21497ms
+    stopped-after-kill +21705ms
+    engine-restarted +52252ms
+    wiped +218ms
+    engine-up +2561ms
+    first-client exit=1 killed=true +14357ms
+    stopped-after-kill +14563ms
+    engine-restarted +45155ms
+    wiped +217ms
+    engine-up +7636ms
+    first-client exit=1 killed=true +18983ms
+    stopped-after-kill +19189ms
+    engine-restarted +49764ms
+    wiped +217ms
+    engine-up +2572ms
+    first-client exit=1 killed=true +18652ms
+    stopped-after-kill +18867ms
+    engine-restarted +49528ms
+    wiped +227ms
+    engine-up +2648ms
+    first-client exit=0 killed=false +9218ms
+    wiped +218ms
+    engine-up +2627ms
+    first-client exit=1 killed=true +22158ms
+    stopped-after-kill +22359ms
+    engine-restarted +52926ms
+    wiped +219ms
+    engine-up +2628ms
+    first-client exit=1 killed=true +22146ms
+    stopped-after-kill +22360ms
+    engine-restarted +52800ms
+    wiped +217ms
+    engine-up +2573ms
+    first-client exit=0 killed=false +8986ms
+    wiped +220ms
+    engine-up +2593ms
+    first-client exit=1 killed=true +14356ms
+    stopped-after-kill +14553ms
+    engine-restarted +45199ms
+Completed 20/50 seeds (20 passed, 0 failed)
+    wiped +217ms
+    engine-up +2574ms
+    first-client exit=1 killed=true +13537ms
+    stopped-after-kill +13740ms
+    engine-restarted +44276ms
+    wiped +216ms
+    engine-up +2548ms
+    first-client exit=1 killed=true +21295ms
+    stopped-after-kill +21497ms
+    engine-restarted +51959ms
+    wiped +216ms
+    engine-up +2565ms
+    first-client exit=1 killed=true +13578ms
+    stopped-after-kill +13791ms
+    engine-restarted +44286ms
+    wiped +219ms
+    engine-up +2724ms
+    first-client exit=0 killed=false +9193ms
+    wiped +216ms
+    engine-up +2577ms
+    first-client exit=0 killed=false +8942ms
+    wiped +216ms
+    engine-up +2539ms
+    first-client exit=1 killed=true +16785ms
+    stopped-after-kill +16969ms
+    engine-restarted +47460ms
+    wiped +216ms
+    engine-up +2566ms
+    first-client exit=1 killed=true +22121ms
+    stopped-after-kill +22334ms
+    engine-restarted +52870ms
+    wiped +215ms
+    engine-up +2570ms
+    first-client exit=0 killed=false +8907ms
+    wiped +215ms
+    engine-up +2508ms
+    first-client exit=1 killed=true +15135ms
+    stopped-after-kill +15346ms
+    engine-restarted +45795ms
+    wiped +215ms
+    engine-up +6607ms
+    first-client exit=1 killed=true +18402ms
+    stopped-after-kill +18600ms
+    engine-restarted +49122ms
+Completed 30/50 seeds (30 passed, 0 failed)
+    wiped +216ms
+    engine-up +2551ms
+    first-client exit=1 killed=true +20539ms
+    stopped-after-kill +20731ms
+    engine-restarted +51193ms
+    wiped +216ms
+    engine-up +2567ms
+    first-client exit=1 killed=true +15061ms
+    stopped-after-kill +15268ms
+    engine-restarted +45729ms
+    wiped +221ms
+    engine-up +2574ms
+    first-client exit=1 killed=true +13474ms
+    stopped-after-kill +13687ms
+    engine-restarted +44237ms
+    wiped +217ms
+    engine-up +2541ms
+    first-client exit=0 killed=false +8898ms
+    wiped +216ms
+    engine-up +2563ms
+    first-client exit=1 killed=true +16805ms
+    stopped-after-kill +17021ms
+    engine-restarted +47556ms
+    wiped +216ms
+    engine-up +2565ms
+    first-client exit=1 killed=true +18614ms
+    stopped-after-kill +18808ms
+    engine-restarted +49478ms
+    wiped +217ms
+    engine-up +2587ms
+    first-client exit=0 killed=false +8986ms
+    wiped +216ms
+    engine-up +2565ms
+    first-client exit=1 killed=true +22058ms
+    stopped-after-kill +22268ms
+    engine-restarted +52760ms
+    wiped +215ms
+    engine-up +2560ms
+    first-client exit=0 killed=false +9007ms
+    wiped +215ms
+    engine-up +2569ms
+    first-client exit=0 killed=false +8968ms
+Completed 40/50 seeds (40 passed, 0 failed)
+    wiped +217ms
+    engine-up +2722ms
+    first-client exit=1 killed=true +13741ms
+    stopped-after-kill +13936ms
+    engine-restarted +44347ms
+    wiped +215ms
+    engine-up +2562ms
+    first-client exit=1 killed=true +21373ms
+    stopped-after-kill +21568ms
+    engine-restarted +51962ms
+    wiped +215ms
+    engine-up +2562ms
+    first-client exit=1 killed=true +14307ms
+    stopped-after-kill +14505ms
+    engine-restarted +44939ms
+    wiped +217ms
+    engine-up +2543ms
+    first-client exit=1 killed=true +13784ms
+    stopped-after-kill +13987ms
+    engine-restarted +44470ms
+    wiped +216ms
+    engine-up +2549ms
+    first-client exit=1 killed=true +18530ms
+    stopped-after-kill +18747ms
+    engine-restarted +49209ms
+    wiped +215ms
+    engine-up +2568ms
+    first-client exit=0 killed=false +8954ms
+    wiped +217ms
+    engine-up +2565ms
+    first-client exit=1 killed=true +22091ms
+    stopped-after-kill +22291ms
+    engine-restarted +52804ms
+    wiped +216ms
+    engine-up +2561ms
+    first-client exit=1 killed=true +22080ms
+    stopped-after-kill +22280ms
+    engine-restarted +52693ms
+    wiped +218ms
+    engine-up +2577ms
+    first-client exit=0 killed=false +8968ms
+    wiped +216ms
+    engine-up +2542ms
+    first-client exit=1 killed=true +14339ms
+    stopped-after-kill +14541ms
+    engine-restarted +45002ms
+Completed 50/50 seeds (50 passed, 0 failed)
+Final: 50/50 passed, 0/50 failed
+(pass) Chaos Tests - Subprocess Killpoints > survives 50 seeded killpoint iterations [2193345.84ms]
+
+ 3 pass
+ 0 fail
+ 5 expect() calls
+Ran 3 tests across 1 file. [3375.70s]
+=== chaos run 1 end 2026-10-18T05:46:22Z exit=0
