@@ -1,0 +1,174 @@
+=== chaos run 1 start 2026-10-18T14:17:54Z
+bun test v1.4.2 (744846f84)
+
+tests/chaos/subprocess.test.ts:
+(pass) Chaos Tests - Subprocess Killpoints > event gap helper rejects holes and duplicate seqs [0.31ms]
+Testing killpoint: tx.mid
+    wiped +254ms
+    engine-up +2629ms
+    first-client exit=1 killed=true +13656ms
+    stopped-after-kill +13865ms
+    engine-restarted +44568ms
+  ✓ tx.mid killed=true (52549ms)
+Testing killpoint: model.after_return.before_commit
+    wiped +220ms
+    engine-up +2634ms
+    first-client exit=1 killed=true +13961ms
+    stopped-after-kill +14159ms
+    engine-restarted +44803ms
+  ✓ model.after_return.before_commit killed=true (52518ms)
+Testing killpoint: merge.before_cas
+    wiped +221ms
+    engine-up +2633ms
+    first-client exit=1 killed=true +17021ms
+    stopped-after-kill +17232ms
+    engine-restarted +47743ms
+  ✓ merge.before_cas killed=true (53560ms)
+Testing killpoint: merge.after_cas.before_event
+    wiped +219ms
+    engine-up +2639ms
+    first-client exit=1 killed=true +17041ms
+    stopped-after-kill +17240ms
+    engine-restarted +47815ms
+  ✓ merge.after_cas.before_event killed=true (53691ms)
+Testing killpoint: push.mid
+    wiped +219ms
+    engine-up +2667ms
+    first-client exit=1 killed=true +22388ms
+    stopped-after-kill +22615ms
+    engine-restarted +53087ms
+  ✓ push.mid killed=true (59487ms)
+Testing killpoint: push.after.before_event
+    wiped +235ms
+    engine-up +2647ms
+    first-client exit=1 killed=true +22271ms
+    stopped-after-kill +22486ms
+    engine-restarted +53103ms
+  ✓ push.after.before_event killed=true (59469ms)
+Testing killpoint: vm.create.after_request.before_record
+    wiped +221ms
+    engine-up +2591ms
+    first-client exit=1 killed=true +15215ms
+    stopped-after-kill +15429ms
+    engine-restarted +45932ms
+  ✓ vm.create.after_request.before_record killed=true (52980ms)
+Testing killpoint: lease.expire.mid
+    wiped +220ms
+    engine-up +2701ms
+    first-client exit=1 killed=true +14497ms
+    stopped-after-kill +14704ms
+    engine-restarted +45205ms
+  ✓ lease.expire.mid killed=true (52296ms)
+Testing killpoint: budget.charge.mid
+    wiped +218ms
+    engine-up +2601ms
+    first-client exit=1 killed=true +13555ms
+    stopped-after-kill +13758ms
+    engine-restarted +44232ms
+  ✓ budget.charge.mid killed=true (51900ms)
+Testing killpoint: outbox.dispatch.after_send.before_ack
+    wiped +217ms
+    engine-up +2590ms
+    first-client exit=1 killed=true +15204ms
+    stopped-after-kill +15414ms
+    engine-restarted +45925ms
+  ✓ outbox.dispatch.after_send.before_ack killed=true (52799ms)
+Total: 10/10 passed
+(pass) Chaos Tests - Subprocess Killpoints > survives all 10 named killpoints [541250.69ms]
+    wiped +225ms
+    engine-up +2600ms
+    first-client exit=1 killed=true +20580ms
+    stopped-after-kill +20781ms
+    engine-restarted +51464ms
+    wiped +218ms
+    engine-up +2620ms
+    first-client exit=1 killed=true +15159ms
+    stopped-after-kill +15372ms
+    engine-restarted +45893ms
+    wiped +219ms
+    engine-up +2629ms
+    first-client exit=1 killed=true +13586ms
+    stopped-after-kill +13782ms
+    engine-restarted +44295ms
+    wiped +219ms
+    engine-up +2623ms
+    first-client exit=0 killed=false +9245ms
+    wiped +220ms
+    engine-up +2647ms
+    first-client exit=1 killed=true +16938ms
+    stopped-after-kill +17164ms
+    engine-not-ready attempt=1, cold restart: engine not ready: xceeded message="Actor 14nkgcwoc9zqi8mgr1heev2e59cl00 stopped before becoming ready after 8 wake retries: actor_stopped_before_ready." metadat
+    engine-not-ready attempt=2, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=hccy2zow2g0dgzxr1hztfr0q7qal00 
+    engine-restarted +6138213ms
+    wiped +228ms
+    engine-up +2805ms
+    first-client exit=1 killed=true +19414ms
+    stopped-after-kill +19674ms
+    engine-restarted +50350ms
+    wiped +223ms
+    engine-up +7724ms
+    first-client exit=0 killed=false +14486ms
+    wiped +220ms
+    engine-up +2701ms
+    first-client exit=1 killed=true +22460ms
+    stopped-after-kill +22726ms
+    engine-restarted +53253ms
+    wiped +219ms
+    engine-up +7634ms
+    first-client exit=0 killed=false +14438ms
+    wiped +219ms
+    engine-up +2582ms
+    first-client exit=0 killed=false +9257ms
+Completed 10/50 seeds (10 passed, 0 failed)
+    wiped +225ms
+    engine-up +2585ms
+    first-client exit=1 killed=true +13586ms
+    stopped-after-kill +13779ms
+    engine-restarted +44411ms
+    wiped +221ms
+    engine-up +2717ms
+    first-client exit=1 killed=true +21596ms
+    stopped-after-kill +21851ms
+    engine-restarted +52297ms
+    wiped +226ms
+    engine-up +2584ms
+    first-client exit=1 killed=true +246133ms
+    stopped-after-kill +246700ms
+    engine-restarted +278020ms
+    wiped +222ms
+    engine-up +2641ms
+    first-client exit=1 killed=true +14060ms
+    stopped-after-kill +14274ms
+    engine-restarted +44964ms
+    wiped +218ms
+    engine-up +6665ms
+    first-client exit=1 killed=true +22764ms
+    stopped-after-kill +22974ms
+    engine-restarted +53630ms
+    wiped +222ms
+    engine-up +7625ms
+    first-client exit=0 killed=false +14330ms
+    wiped +221ms
+    engine-up +2598ms
+    first-client exit=1 killed=true +22260ms
+    stopped-after-kill +22475ms
+    engine-restarted +52889ms
+    wiped +221ms
+    engine-up +2602ms
+    first-client exit=1 killed=true +22224ms
+    stopped-after-kill +22423ms
+    engine-restarted +53064ms
+    wiped +216ms
+    engine-up +7577ms
+    first-client exit=1 killed=false +130265ms
+    stopped-after-kill +130318ms
+    engine-restarted +160854ms
+    wiped +219ms
+    engine-up +2656ms
+    first-client exit=1 killed=true +14584ms
+    stopped-after-kill +14823ms
+    engine-restarted +45324ms
+Completed 20/50 seeds (20 passed, 0 failed)
+    wiped +219ms
+    engine-up +2725ms
+=== STOPPED 2026-10-18T10:29:11-06:00 by operator: code stale (pre-reap fix); partial run, not a gate result
