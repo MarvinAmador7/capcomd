@@ -1,0 +1,176 @@
+import type {
+  SandboxProvider,
+  VmId,
+  VmSpec,
+  ExecResult,
+  VmInfo,
+} from "./sandbox";
+
+interface FakeVm {
+  id: VmId;
+  name: string;
+  state: "creating" | "ready" | "suspended" | "destroyed";
+  spec: VmSpec;
+  files: Map<string, Uint8Array>;
+  checkpoints: Map<string, any>;
+  createTime: number;
+}
+
+export class FakeProvider implements SandboxProvider {
+  private vms = new Map<string, FakeVm>();
+  private nextId = 1;
+  public clock: number = Date.now();
+
+  async ensure(spec: VmSpec): Promise<{ id: VmId; created: boolean }> {
+    const existing = Array.from(this.vms.values()).find(
+      (vm) => vm.name === spec.idemKey && vm.state !== "destroyed"
+    );
+
+    if (existing) {
+      return { id: existing.id, created: false };
+    }
+
+    const id = `vm-${this.nextId++}`;
+    const vm: FakeVm = {
+      id,
+      name: spec.idemKey,
+      state: "creating",
+      spec,
+      files: new Map(),
+      checkpoints: new Map(),
+      createTime: this.clock,
+    };
+    this.vms.set(id, vm);
+
+    setTimeout(() => {
+      if (this.vms.get(id)?.state === "creating") {
+        this.vms.get(id)!.state = "ready";
+      }
+    }, 10);
+
+    return { id, created: true };
+  }
+
+  async waitReady(id: VmId, timeoutMs: number): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+
+    const start = Date.now();
+    while (vm.state === "creating") {
+      if (Date.now() - start > timeoutMs) {
+        throw new Error(`VM ${id} not ready within ${timeoutMs}ms`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  async exec(
+    id: VmId,
+    cmd: string[],
+    opts?: {
+      env?: Record<string, string>;
+      timeoutMs?: number;
+      cwd?: string;
+    }
+  ): Promise<ExecResult> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+    if (vm.state !== "ready") throw new Error(`VM ${id} not ready`);
+
+    if (cmd[0] === "git" && cmd[1] === "commit") {
+      return { code: 0, stdout: "[main abc1234] test commit\n", stderr: "" };
+    }
+
+    if (cmd[0] === "git" && cmd[1] === "push") {
+      return { code: 0, stdout: "", stderr: "" };
+    }
+
+    return {
+      code: 0,
+      stdout: `Executed: ${cmd.join(" ")}`,
+      stderr: "",
+    };
+  }
+
+  async upload(id: VmId, path: string, data: Uint8Array): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+    vm.files.set(path, data);
+  }
+
+  async download(id: VmId, path: string): Promise<Uint8Array> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+    const data = vm.files.get(path);
+    if (!data) throw new Error(`File ${path} not found in VM ${id}`);
+    return data;
+  }
+
+  async setEgress(id: VmId, allow: string[]): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+  }
+
+  async checkpoint(id: VmId, name: string): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+    vm.checkpoints.set(name, { state: vm.state, files: new Map(vm.files) });
+  }
+
+  async restore(id: VmId, name: string): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+    const checkpoint = vm.checkpoints.get(name);
+    if (!checkpoint) throw new Error(`Checkpoint ${name} not found`);
+    vm.state = checkpoint.state;
+    vm.files = new Map(checkpoint.files);
+  }
+
+  async snapshot(id: VmId, name: string): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+  }
+
+  async suspend(id: VmId): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+    vm.state = "suspended";
+  }
+
+  async resume(id: VmId): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+    if (vm.state === "suspended") {
+      vm.state = "ready";
+    }
+  }
+
+  async destroy(id: VmId): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) return;
+    vm.state = "destroyed";
+  }
+
+  async list(prefix: string): Promise<VmInfo[]> {
+    const result: VmInfo[] = [];
+    for (const vm of this.vms.values()) {
+      if (vm.name.startsWith(prefix) && vm.state !== "destroyed") {
+        const shouldReap =
+          vm.spec.ttlSeconds > 0 &&
+          this.clock - vm.createTime > vm.spec.ttlSeconds * 1000;
+        if (!shouldReap) {
+          result.push({
+            id: vm.id,
+            name: vm.name,
+            state: vm.state,
+          });
+        }
+      }
+    }
+    return result;
+  }
+
+  advanceClock(ms: number): void {
+    this.clock += ms;
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "relay",
+  "version": "0.1.0",
+  "description": "Agent orchestration CLI built on Rivet Actors",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "relay": "./src/cli/index.ts"
+  },
+  "scripts": {
+    "typecheck": "bun check",
+    "test": "bun test",
+    "test:chaos": "bun test tests/chaos/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "playwright": "^1.64.1"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@boxd-sh/sdk": "^0.2.17",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
+    "@opentelemetry/sdk-trace-base": "^2.12.0",
+    "@opentelemetry/sdk-trace-node": "^2.12.0",
+    "@xyflow/react": "^12.12.0",
+    "commander": "^15.0.0",
+    "elkjs": "^0.12.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "rivetkit": "^2.3.27",
+    "xstate": "^5.33.3"
+  }
+}
