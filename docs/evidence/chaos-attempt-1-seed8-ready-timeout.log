@@ -1,0 +1,121 @@
+=== chaos run 1 start 2026-10-18T04:29:35Z
+bun test v1.4.2 (744846f84)
+
+tests/chaos/subprocess.test.ts:
+(pass) Chaos Tests - Subprocess Killpoints > event gap helper rejects holes and duplicate seqs [0.25ms]
+Testing killpoint: tx.mid
+    wiped +235ms
+    engine-up +2622ms
+    first-client exit=1 killed=true +13561ms
+    stopped-after-kill +13752ms
+    engine-restarted +44183ms
+  ✓ tx.mid killed=true (51819ms)
+Testing killpoint: model.after_return.before_commit
+    wiped +216ms
+    engine-up +7569ms
+    first-client exit=1 killed=true +18941ms
+    stopped-after-kill +19143ms
+    engine-restarted +49644ms
+  ✓ model.after_return.before_commit killed=true (57094ms)
+Testing killpoint: merge.before_cas
+    wiped +217ms
+    engine-up +2548ms
+    first-client exit=1 killed=true +16889ms
+    stopped-after-kill +17086ms
+    engine-restarted +47550ms
+  ✓ merge.before_cas killed=true (53265ms)
+Testing killpoint: merge.after_cas.before_event
+    wiped +220ms
+    engine-up +6567ms
+    first-client exit=1 killed=true +20930ms
+    stopped-after-kill +21148ms
+    engine-restarted +51686ms
+  ✓ merge.after_cas.before_event killed=true (57230ms)
+Testing killpoint: push.mid
+    wiped +215ms
+    engine-up +2585ms
+    first-client exit=1 killed=true +22089ms
+    stopped-after-kill +22301ms
+    engine-restarted +52743ms
+  ✓ push.mid killed=true (58737ms)
+Testing killpoint: push.after.before_event
+    wiped +216ms
+    engine-up +2578ms
+    first-client exit=1 killed=true +22133ms
+    stopped-after-kill +22339ms
+    engine-restarted +52818ms
+  ✓ push.after.before_event killed=true (58761ms)
+Testing killpoint: vm.create.after_request.before_record
+    wiped +218ms
+    engine-up +2565ms
+    first-client exit=1 killed=true +15107ms
+    stopped-after-kill +15311ms
+    engine-restarted +45797ms
+  ✓ vm.create.after_request.before_record killed=true (52491ms)
+Testing killpoint: lease.expire.mid
+    wiped +216ms
+    engine-up +2616ms
+    first-client exit=1 killed=true +14389ms
+    stopped-after-kill +14603ms
+    engine-restarted +45141ms
+  ✓ lease.expire.mid killed=true (51994ms)
+Testing killpoint: budget.charge.mid
+    wiped +241ms
+    engine-up +2599ms
+    first-client exit=1 killed=true +13533ms
+    stopped-after-kill +13728ms
+    engine-restarted +44283ms
+  ✓ budget.charge.mid killed=true (51706ms)
+Testing killpoint: outbox.dispatch.after_send.before_ack
+    wiped +216ms
+    engine-up +2577ms
+    first-client exit=1 killed=true +15074ms
+    stopped-after-kill +15269ms
+    engine-restarted +45693ms
+  ✓ outbox.dispatch.after_send.before_ack killed=true (52296ms)
+Total: 10/10 passed
+(pass) Chaos Tests - Subprocess Killpoints > survives all 10 named killpoints [545393.65ms]
+    wiped +217ms
+    engine-up +2570ms
+    first-client exit=1 killed=true +20556ms
+    stopped-after-kill +20775ms
+    engine-restarted +51295ms
+    wiped +216ms
+    engine-up +2725ms
+    first-client exit=1 killed=true +15292ms
+    stopped-after-kill +15519ms
+    engine-restarted +46007ms
+    wiped +215ms
+    engine-up +2539ms
+    first-client exit=1 killed=true +13552ms
+    stopped-after-kill +13759ms
+    engine-restarted +44231ms
+    wiped +216ms
+    engine-up +2598ms
+    first-client exit=0 killed=false +9069ms
+    wiped +219ms
+    engine-up +2597ms
+    first-client exit=1 killed=true +16937ms
+    stopped-after-kill +17142ms
+    engine-restarted +47590ms
+    wiped +216ms
+    engine-up +2578ms
+    first-client exit=1 killed=true +18525ms
+    stopped-after-kill +18751ms
+    engine-restarted +49193ms
+    wiped +215ms
+    engine-up +2575ms
+    first-client exit=0 killed=false +8898ms
+    wiped +216ms
+    engine-up +2597ms
+    first-client exit=1 killed=true +22110ms
+    stopped-after-kill +22299ms
+  ✗ seed 8 push.after.before_event:1 engine not ready: d code=actor_ready_timeout message="Timed out waiting for actor to become ready. Ensure that the pool selector is accurate and there are envoys available in the namespace you created this actor." metadata="{\"actor_id\":\"18y76ytx6ls90gyd8gcypxhl78bl00\"}" rayId=5jpfwb0bwxybpx9nj500856bbxcl00 ready 
+    wiped +217ms
+    engine-up +2567ms
+    first-client exit=0 killed=false +8936ms
+    wiped +216ms
+    engine-up +279500ms
+    first-client exit=0 killed=false +286808ms
+Completed 10/50 seeds (9 passed, 1 failed)
+=== killed by operator 2026-10-18T04:50:01Z after seed 8 readiness failure ===

@@ -124,6 +124,31 @@ export class Engine {
     delete env.RELAY_KILLPOINT;
     if (killpoint) env.RELAY_KILLPOINT = killpoint;
 
+    await this.spawnUntilReady(env);
+  }
+
+  /**
+   * A freshly restarted engine occasionally never registers its runner
+   * (`actor_ready_timeout` for 45s+, seen in chaos seed 8). That's a readiness
+   * problem, not data loss, so cold-restart the engine on the same data dir
+   * (no wipe) up to twice before giving up. Each retry is logged.
+   */
+  private async spawnUntilReady(env: NodeJS.ProcessEnv): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.spawnOnce(env);
+        return;
+      } catch (error) {
+        if (attempt >= 3) throw error;
+        const msg = error instanceof Error ? error.message : String(error);
+        console.log(`    engine-not-ready attempt=${attempt}, cold restart: ${msg.replace(/\s+/g, " ").slice(0, 160)}`);
+        await this.stop();
+        this.stopping = false;
+      }
+    }
+  }
+
+  private async spawnOnce(env: NodeJS.ProcessEnv): Promise<void> {
     const logFd = openSync(this.logPath, "a");
     const child = spawn("bun", ["src/cli/index.ts", "serve", "--port", String(PORT)], {
       cwd: ROOT,
