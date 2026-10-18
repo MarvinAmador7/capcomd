@@ -8,12 +8,22 @@ export interface CanvasPreferences {
   miniMapEnabled: boolean;
 }
 
-export const preferencesStore = createStore<CanvasPreferences>({
-  theme: "dark",
-  autoLayout: true,
-  showGrid: true,
-  snapToGrid: false,
-  miniMapEnabled: true,
+// @xstate/store v4 takes { context, on }; the old positional form threw at import
+// and left the canvas blank.
+export const preferencesStore = createStore({
+  context: {
+    theme: "dark",
+    autoLayout: true,
+    showGrid: true,
+    snapToGrid: false,
+    miniMapEnabled: true,
+  } as CanvasPreferences,
+  on: {
+    SET_PREFERENCES: (context, event: { preferences: Partial<CanvasPreferences> }) => ({
+      ...context,
+      ...event.preferences,
+    }),
+  },
 });
 
 // Persist to localStorage

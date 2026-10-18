@@ -21,11 +21,21 @@ export function graphToReactFlow(graph: RelayGraph): {
     const { nodes, edges } = toXYFlow(stately);
 
     // Map to React Flow format with our custom data
+    // Fallback layout until ELK positions are applied: runs on row 0, other
+    // nodes on row 1, spaced evenly. toXYFlow can return NaN positions.
+    const rowCount: Record<number, number> = {};
     const reactFlowNodes: Node[] = nodes.map((node) => {
       const graphNode = graph.nodes[node.id];
+      const row = graphNode?.data?.type === "run" ? 0 : 1;
+      const col = (rowCount[row] = (rowCount[row] ?? -1) + 1);
+      const p = node.position;
+      const position =
+        p && Number.isFinite(p.x) && Number.isFinite(p.y) && (p.x !== 0 || p.y !== 0)
+          ? p
+          : { x: 40 + col * 200, y: 60 + row * 140 };
       return {
         id: node.id,
-        position: node.position || { x: 0, y: 0 },
+        position,
         data: graphNode?.data || { label: node.id, status: "pending", type: "task" },
         type: "default",
         style: {

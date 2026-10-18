@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { ReactFlow, Background, Controls, MiniMap, Panel } from "@xyflow/react";
 import { useMachine } from "@xstate/react";
 import { canvasMachine, type WaterfallSpan } from "./lib/canvas-machine";
+import { KIND_COLORS, parseNdjson } from "./lib/waterfall";
+import demoTrace from "./fixtures/demo-trace.ndjson?raw";
 import { createLayoutWorker, graphToReactFlow, requestLayout } from "./lib/react-flow-adapter";
 import { preferencesStore } from "./lib/preferences-store";
 import type { RelayEvent } from "./lib/graph-fold";
@@ -17,12 +19,24 @@ export default function App() {
     const unsub = preferencesStore.subscribe((snapshot) => {
       setPrefs(snapshot.context);
     });
-    return unsub;
+    return () => unsub.unsubscribe();
   }, []);
 
   useEffect(() => {
     layoutWorkerRef.current = createLayoutWorker();
     send({ type: "STREAM.CONNECT" });
+
+    // Real spans: ?run=<runId> loads .traces/<runId>.ndjson through the dev server;
+    // otherwise use a trace captured from a real `relay run` (src/fixtures/demo-trace.ndjson).
+    const runParam = new URLSearchParams(window.location.search).get("run");
+    if (runParam) {
+      fetch(`/api/trace/${encodeURIComponent(runParam)}`)
+        .then((r) => (r.ok ? r.text() : ""))
+        .then((text) => send({ type: "TRACE.LOADED", spans: parseNdjson(text) }))
+        .catch(() => {});
+    } else {
+      send({ type: "TRACE.LOADED", spans: parseNdjson(demoTrace) });
+    }
 
     // Simulate some events for demo
     const demoEvents: RelayEvent[] = [
@@ -141,7 +155,7 @@ export default function App() {
                   {state.matches({ panel: { spans: "loading" } }) && <p>Loading spans…</p>}
                   {state.matches({ panel: { spans: "error" } }) && <p>Error loading traces</p>}
                   {state.matches({ panel: { spans: "ready" } }) && (
-                    <SpanWaterfall spans={state.context.traceData?.spans ?? []} />
+                    <SpanWaterfall spans={state.context.traceData?.spans ?? []} source={state.context.traceData?.source} />
                   )}
                 </div>
               ) : null}
@@ -156,42 +170,41 @@ export default function App() {
   );
 }
 
-function SpanWaterfall({ spans }: { spans: WaterfallSpan[] }) {
+function SpanWaterfall({ spans, source }: { spans: WaterfallSpan[]; source?: "trace" | "events" }) {
   if (spans.length === 0) {
-    return <p>No spans for this node.</p>;
+    return <p data-testid="waterfall-empty">No spans for this node.</p>;
   }
-
-  const min = Math.min(...spans.map((span) => span.startTime));
-  const max = Math.max(...spans.map((span) => span.endTime));
-  const total = Math.max(1, max - min);
+  const total = Math.max(...spans.map((s) => s.endTime)) - Math.min(...spans.map((s) => s.startTime));
+  const kinds = [...new Set(spans.map((s) => s.kind))];
 
   return (
-    <div style={{ display: "grid", gap: 6, minWidth: 360 }}>
-      {spans.map((span, index) => {
-        const offset = ((span.startTime - min) / total) * 100;
-        const width = Math.max(2, ((span.endTime - span.startTime) / total) * 100);
-        const detail = Object.entries(span.attributes)
-          .map(([key, value]) => `${key}: ${value}`)
-          .join(" · ");
+    <div data-testid="waterfall" style={{ display: "grid", gap: 3, width: 560, maxHeight: "60vh", overflowY: "auto" }}>
+      <div style={{ fontSize: 11, color: "#94a3b8", display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <span>{spans.length} spans · {total}ms · {source === "trace" ? "from trace" : "from events (no trace loaded)"}</span>
+        {kinds.map((k) => (
+          <span key={k}><span style={{ display: "inline-block", width: 8, height: 8, background: KIND_COLORS[k], marginRight: 3 }} />{k}</span>
+        ))}
+      </div>
+      {spans.map((span) => {
+        const detail =
+          span.attributes["relay.state_from"] !== undefined
+            ? `${span.attributes["relay.entity_id"] ?? ""} ${span.attributes["relay.state_from"]} → ${span.attributes["relay.state_to"]}`
+            : span.attributes["gen_ai.request.model"]
+              ? `tokens ${span.attributes["gen_ai.usage.input_tokens"] ?? "?"}/${span.attributes["gen_ai.usage.output_tokens"] ?? "?"}`
+              : span.attributes["git.ref"] ?? "";
         return (
-          <div key={`${span.name}-${index}`}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-              <span>{span.name}</span>
-              <span>{span.endTime - span.startTime}ms</span>
-            </div>
-            <div style={{ position: "relative", height: 10, background: "#1f2937", borderRadius: 4 }}>
+          <div key={span.spanId} title={JSON.stringify(span.attributes, null, 1)} style={{ display: "grid", gridTemplateColumns: "230px 1fr 52px", alignItems: "center", gap: 6, fontSize: 11 }}>
+            <span style={{ paddingLeft: span.depth * 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: span.error ? "#fca5a5" : "#e2e8f0" }}>
+              {span.name}
+              {detail ? <span style={{ color: "#64748b" }}> {detail}</span> : null}
+            </span>
+            <div style={{ position: "relative", height: 9, background: "#1f2937", borderRadius: 3 }}>
               <div
-                style={{
-                  position: "absolute",
-                  left: `${offset}%`,
-                  width: `${width}%`,
-                  height: "100%",
-                  background: "#38bdf8",
-                  borderRadius: 4,
-                }}
+                data-kind={span.kind}
+                style={{ position: "absolute", left: `${span.offsetPct}%`, width: `${Math.min(span.widthPct, 100 - span.offsetPct)}%`, minWidth: 2, height: "100%", background: span.error ? "#ef4444" : KIND_COLORS[span.kind], borderRadius: 3 }}
               />
             </div>
-            {detail ? <div style={{ fontSize: 11, color: "#cbd5e1" }}>{detail}</div> : null}
+            <span style={{ textAlign: "right", color: "#94a3b8" }}>{span.durationMs}ms</span>
           </div>
         );
       })}

@@ -2,30 +2,31 @@ import { setup, assign, fromPromise } from "xstate";
 import type { RelayEvent, RelayGraph } from "./graph-fold";
 import { foldEvent, createEmptyGraph, replayEvents } from "./graph-fold";
 
-export interface WaterfallSpan {
-  name: string;
-  startTime: number;
-  endTime: number;
-  attributes: Record<string, string>;
-}
+import { layoutWaterfall, type TraceSpan, type WaterfallSpan } from "./waterfall";
+export type { WaterfallSpan, TraceSpan } from "./waterfall";
 
-export function buildWaterfall(nodeId: string, events: RelayEvent[]): WaterfallSpan[] {
+/**
+ * Fallback when no real trace is loaded: one pseudo-span per lifecycle event,
+ * so the panel still shows ordering. Real traces come in via TRACE.LOADED.
+ */
+export function eventsToSpans(nodeId: string, events: RelayEvent[]): TraceSpan[] {
   const isRun = events.some((event) => "runId" in event && event.runId === nodeId);
-  const related = events.filter((event) => {
-    if (isRun) return true;
-    return "taskId" in event && event.taskId === nodeId;
-  });
-
+  const related = events.filter((event) => isRun || ("taskId" in event && event.taskId === nodeId));
   return related.map((event, index) => {
     const startTime = event.timestamp;
     const endTime = Math.max(related[index + 1]?.timestamp ?? startTime + 40, startTime + 1);
-    const attributes: Record<string, string> = {};
-    if ("epoch" in event && event.epoch !== undefined) attributes["relay.epoch"] = String(event.epoch);
+    const attributes: Record<string, unknown> = { "relay.synthetic": true };
+    if ("epoch" in event && event.epoch !== undefined) attributes["relay.epoch"] = event.epoch;
     if ("workerId" in event && event.workerId) attributes["relay.worker"] = event.workerId;
     if ("commitSha" in event && event.commitSha) attributes["relay.commit"] = event.commitSha;
-    if ("taskId" in event && event.taskId) attributes["relay.task"] = event.taskId;
-    return { name: event.type, startTime, endTime, attributes };
+    if ("taskId" in event && event.taskId) attributes["relay.task_id"] = event.taskId;
+    return { traceId: "events", spanId: `ev-${index}`, name: `event.${event.type}`, startTime, endTime, attributes };
   });
+}
+
+export function buildWaterfall(nodeId: string, events: RelayEvent[], spans: TraceSpan[] = []): WaterfallSpan[] {
+  if (spans.length > 0) return layoutWaterfall(spans, nodeId);
+  return layoutWaterfall(eventsToSpans(nodeId, events), nodeId);
 }
 
 export type CanvasMode = "live" | "replay";
@@ -46,7 +47,9 @@ export interface CanvasContext {
   selectedNodeId: string | null;
   error: Error | null;
   layoutInProgress: boolean;
-  traceData: { spans: WaterfallSpan[] } | null;
+  traceData: { spans: WaterfallSpan[]; source: "trace" | "events" } | null;
+  /** Raw spans from `.traces/<runId>.ndjson`, if loaded. */
+  spans: TraceSpan[];
 }
 
 export const canvasMachine = setup({
@@ -72,16 +75,20 @@ export const canvasMachine = setup({
       | { type: "PANE.DRAG_END" }
       | { type: "PANEL.OPEN_DETAILS" }
       | { type: "PANEL.OPEN_SPANS" }
-      | { type: "PANEL.CLOSE" },
+      | { type: "PANEL.CLOSE" }
+      | { type: "TRACE.LOADED"; spans: TraceSpan[] },
   },
   actors: {
     layoutComputer: fromPromise(async ({ input }: { input: { graph: RelayGraph } }) => {
       // Will be computed in Web Worker
       return input.graph;
     }),
-    traceLoader: fromPromise(async ({ input }: { input: { nodeId: string; events: RelayEvent[] } }) => {
-      return { spans: buildWaterfall(input.nodeId, input.events) };
-    }),
+    traceLoader: fromPromise(
+      async ({ input }: { input: { nodeId: string; events: RelayEvent[]; spans: TraceSpan[] } }) => ({
+        spans: buildWaterfall(input.nodeId, input.events, input.spans),
+        source: (input.spans.length > 0 ? "trace" : "events") as "trace" | "events",
+      })
+    ),
   },
 }).createMachine({
   id: "canvas",
@@ -98,6 +105,10 @@ export const canvasMachine = setup({
     error: null,
     layoutInProgress: false,
     traceData: null,
+    spans: [],
+  },
+  on: {
+    "TRACE.LOADED": { actions: assign({ spans: ({ event }) => event.spans }) },
   },
   states: {
     mode: {
@@ -340,6 +351,7 @@ export const canvasMachine = setup({
                 input: ({ context }) => ({
                   nodeId: context.selectedNodeId || "",
                   events: context.events,
+                  spans: context.spans,
                 }),
                 onDone: {
                   target: "ready",
