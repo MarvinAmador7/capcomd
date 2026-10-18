@@ -323,11 +323,15 @@ export const workerActor = actor({
 
       const drainEvent = { type: "DRAIN" as const };
 
-      if (!workerSnapshot.can(drainEvent)) return;
+      // Resume a drain that crashed after DRAIN but before VM_DESTROYED.
+      const resuming = workerLife.state === "draining";
+      if (!resuming && !workerSnapshot.can(drainEvent)) return;
 
-      const [drainSnapshot] = transition(workerMachine, workerSnapshot, drainEvent);
+      const [drainSnapshot] = resuming
+        ? [workerSnapshot]
+        : transition(workerMachine, workerSnapshot, drainEvent);
 
-      await c.db.transaction(async (tx) => {
+      if (!resuming) await c.db.transaction(async (tx) => {
         await transitionLifecycle(
           tx,
           workerId,

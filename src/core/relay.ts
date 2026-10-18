@@ -45,6 +45,14 @@ function taskIdsFromPlanner(context: { tasks?: Array<{ id: string } | string> })
   return (context.tasks ?? []).map((task) => (typeof task === "string" ? task : task.id));
 }
 
+/** Destroy the run's sandbox VM(s). Called on completion, failure and cancel; idempotent. */
+export async function teardownRun(c: ReturnType<typeof client>, runId: string): Promise<void> {
+  const workerId = `${runId}-worker-1`;
+  const handle = c.worker.getOrCreate([runId, workerId]);
+  const worker = await handle.getWorker({ workerId });
+  if (worker && worker.state !== "destroyed") await handle.drainWorker({ workerId });
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface RunOptions {
@@ -69,6 +77,16 @@ export interface RunResult {
  * again with the same runId resumes a crashed run (the chaos suite relies on it).
  */
 export async function executeRun(opts: RunOptions): Promise<RunResult> {
+  const runId = opts.runId ?? generateRunId();
+  const result = await executeRunInner({ ...opts, runId });
+  if (["completed", "failed", "cancelled"].includes(result.state)) {
+    await teardownRun(client(), runId);
+    opts.emit("worker.destroyed", { workerId: `${runId}-worker-1` }, `✓ Sandbox destroyed`);
+  }
+  return result;
+}
+
+async function executeRunInner(opts: RunOptions): Promise<RunResult> {
   const runId = opts.runId ?? generateRunId();
   const emit = opts.emit;
   const c = client();
@@ -368,6 +386,7 @@ export async function cancelRun(runId: string): Promise<{ runId: string; state: 
       if (t?.state === "awaiting_approval") await board.cancelTask({ taskId });
     }
   }
+  if ((after?.state ?? before) === "cancelled") await teardownRun(c, runId);
   return { runId, state: after?.state ?? before, changed: (after?.state ?? before) !== before };
 }
 

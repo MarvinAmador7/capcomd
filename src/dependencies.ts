@@ -40,9 +40,20 @@ function tracedProvider(provider: SandboxProvider, name: string): SandboxProvide
   });
 }
 
+/** RELAY_SANDBOX=boxd selects BoxdProvider; anything else (default) is the in-memory fake. */
+export function providerFromEnv(env: Record<string, string | undefined> = process.env): SandboxProvider {
+  const kind = (env.RELAY_SANDBOX ?? "fake").toLowerCase();
+  if (kind === "boxd") {
+    const { BoxdProvider } = require("./providers/boxd") as typeof import("./providers/boxd");
+    return new BoxdProvider();
+  }
+  if (kind !== "fake") throw new Error(`Unknown RELAY_SANDBOX=${kind} (expected fake|boxd)`);
+  return new FakeProvider();
+}
+
 export function initDependencies(config?: { model?: ModelClient; provider?: SandboxProvider }) {
   const model = config?.model || new FakeModelClient();
-  const provider = config?.provider || new FakeProvider();
+  const provider = config?.provider || providerFromEnv();
   deps = {
     model: tracedModel(model, model.constructor?.name === "FakeModelClient" ? "fake" : model.constructor?.name ?? "model"),
     provider: tracedProvider(provider, provider.constructor?.name === "FakeProvider" ? "fake" : provider.constructor?.name ?? "provider"),

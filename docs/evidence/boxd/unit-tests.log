@@ -1,0 +1,20 @@
+bun test v1.4.2 (744846f84)
+
+tests/providers/boxd.test.ts:
+(pass) BoxdProvider (mocked SDK) > create uses a deterministic name from the idempotency key, isolated, deleteAfter=ttl [2.69ms]
+(pass) BoxdProvider (mocked SDK) > VM id is recorded in SQLite before the VM is used (before setEgressAllow) [0.45ms]
+(pass) BoxdProvider (mocked SDK) > retry with the same key reuses the recorded VM (no second create) [0.44ms]
+(pass) BoxdProvider (mocked SDK) > crash after create but before record: a fresh provider reuses the VM by name [0.57ms]
+(pass) BoxdProvider (mocked SDK) > create racing ConflictError (name already taken by our own earlier attempt) adopts that VM [0.65ms]
+(pass) BoxdProvider (mocked SDK) > a recorded VM that was destroyed remotely is recreated [0.35ms]
+(pass) BoxdProvider (mocked SDK) > always sends an explicit non-empty egress allowlist; empty is refused before any create [0.59ms]
+(pass) BoxdProvider (mocked SDK) > hibernated VM on reuse is woken; keepalive execs run on the interval [122.38ms]
+(pass) BoxdProvider (mocked SDK) > git execs get per-task credentials from the hook; other execs do not [1.48ms]
+(pass) BoxdProvider (mocked SDK) > typed errors: quota, timeout, hibernated, not found [1.22ms]
+(pass) BoxdProvider (mocked SDK) > destroy is idempotent, marks the ledger, and list filters by prefix [0.69ms]
+(pass) BoxdProvider (mocked SDK) > RELAY_SANDBOX selects the provider; fake is the default [0.32ms]
+
+ 12 pass
+ 0 fail
+ 38 expect() calls
+Ran 12 tests across 1 file. [149.00ms]

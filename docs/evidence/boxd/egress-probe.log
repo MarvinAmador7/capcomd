@@ -1,0 +1,4 @@
+# box egress probe 2026-10-18T08:17:39-06:00
+198.18.0.1      boxd.sh
+https://boxd.sh:443 -> 200
+tcp boxd.sh:9443 -> no connection within 8s

@@ -1,0 +1,40 @@
+bun test v1.4.2 (744846f84)
+
+tests/providers/boxd.live.test.ts:
+26 |   const e = err as { name?: string; constructor?: { name?: string }; grpcCode?: number; message?: string };
+27 |   const cls = e?.constructor?.name ?? e?.name ?? "";
+28 |   const msg = `${what} failed${vmId ? ` (vm ${vmId})` : ""}: ${e?.message ?? String(err)}`;
+29 |   if (cls === "NotFoundError" || e?.grpcCode === GRPC.NOT_FOUND) return new SandboxNotFoundError(msg, vmId, err);
+30 |   if (cls === "RateLimitError" || e?.grpcCode === GRPC.RESOURCE_EXHAUSTED) return new SandboxQuotaError(msg, vmId, err);
+31 |   if (e?.grpcCode === GRPC.DEADLINE_EXCEEDED || /deadline|timed? ?out/i.test(e?.message ?? "")) return new SandboxTimeoutError(msg, vmId, err);
+                                                                                                            ^
+SandboxTimeoutError: machines.get failed (vm relay-b7da70f7de4c4d59): Deadline exceeded after 60.001s,name resolution: 0.012s,metadata filters: 0.001s,Waiting for LB pick
+  vmId: "relay-b7da70f7de4c4d59",
+  kind: "timeout",
+
+      at mapBoxdError (/workspace/relay/src/providers/boxd-errors.ts:31:104)
+      at tryGet (/workspace/relay/src/providers/boxd.ts:143:13)
+      at async ensure (/workspace/relay/src/providers/boxd.ts:156:40)
+      at async <anonymous> (/workspace/relay/tests/providers/boxd.live.test.ts:19:51)
+
+107 | };
+108 | export function fromGrpcError(err) {
+109 |     const code = err.code;
+110 |     const cls = (code !== undefined ? STATUS_MAP[code] : undefined) ?? APIStatusError;
+111 |     const msg = err.details || err.message || "grpc error";
+112 |     return new cls(msg, code);
+                 ^
+APIStatusError: Deadline exceeded after 60.001s,name resolution: 0.012s,metadata filters: 0.001s,Waiting for LB pick
+ grpcCode: 4,
+
+      at fromGrpcError (/workspace/relay/node_modules/@boxd-sh/sdk/dist/errors.js:112:12)
+      at <anonymous> (/workspace/relay/node_modules/@boxd-sh/sdk/dist/_transport.js:118:35)
+      at onReceiveStatus (/workspace/relay/node_modules/@grpc/grpc-js/build/src/client.js:193:36)
+      at onReceiveStatus (/workspace/relay/node_modules/@grpc/grpc-js/build/src/client-interceptors.js:367:141)
+      at onReceiveStatus (/workspace/relay/node_modules/@grpc/grpc-js/build/src/client-interceptors.js:327:181)
+      at <anonymous> (/workspace/relay/node_modules/@grpc/grpc-js/build/src/resolving-call.js:155:78)
+(fail) BoxdProvider live (BOXD_API_KEY) > create → uname → egress allowlist blocks a non-allowed host → destroy [60821.17ms]
+
+ 0 pass
+ 1 fail
+Ran 1 test across 1 file. [60.83s]
