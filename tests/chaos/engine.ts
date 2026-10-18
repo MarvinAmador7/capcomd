@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { openSync, readFileSync, readdirSync, readlinkSync } from "fs";
 
 const PORT = 6420;
-const ROOT = "/workspace";
+const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

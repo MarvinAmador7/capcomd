@@ -39,7 +39,7 @@ async function releasePort(): Promise<void> {
 async function wipeEngineData(): Promise<void> {
   await releasePort();
   const { rm } = await import("fs/promises");
-  await rm("/home/ubuntu/.rivetkit/var/engine", { recursive: true, force: true });
+  await rm(`${(await import("os")).homedir()}/.rivetkit/var/engine`, { recursive: true, force: true });
 }
 
 async function survive(killpoint: string, count: number, requireKill: boolean): Promise<{
