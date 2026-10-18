@@ -1,0 +1,82 @@
+Trace: run-e2e-1
+Trace ID: eb1e596a7076705d9d6bc45ba5245aee
+Spans: 77  Duration: 6534ms
+
+relay.run                                          6534ms |████████████████████████████████████████|
+  cli.run                                          6534ms |████████████████████████████████████████|
+  actor.run.createRun                                43ms |█                                       |
+    transition.run                                    2ms |█                                       | run-e2e-1 (new)→planning
+  actor.planner.createPlan                           48ms |  █                                     |
+    model.generate                                    0ms |  █                                     | model=fake tokens=40/6
+  actor.run.chargeBudget                             45ms |   █                                    |
+  actor.run.planReady                                44ms |    █                                   |
+    transition.run                                    0ms |    █                                   | run-e2e-1 planning→executing
+  actor.taskBoard.createTask                         41ms |     █                                  |
+    transition.task                                   1ms |     █                                  | task-1 (new)→pending
+  actor.taskBoard.createTask                         45ms |       █                                |
+    transition.task                                   1ms |       █                                | task-2 (new)→pending
+  actor.taskBoard.expireLease                         2ms |        █                               |
+  actor.taskBoard.expireLease                         1ms |         █                              |
+  actor.worker.provisionWorker                       61ms |          █                             |
+    transition.worker                                 4ms |          █                             | run-e2e-1-worker-1 (new)→provisioning
+    sandbox.ensure                                    1ms |           █                            |
+    sandbox.waitReady                                10ms |           █                            |
+    transition.worker                                 1ms |           █                            | run-e2e-1-worker-1 provisioning→idle
+  actor.run.chargeBudget                             45ms |            █                           |
+  actor.worker.flushOutbox                           45ms |            █                           |
+  actor.taskBoard.grantLease                         49ms |              █                         |
+    transition.task                                   2ms |              █                         | task-1 pending→leased
+    transition.lease                                  1ms |              █                         | task-1-lease (new)→held
+  actor.taskBoard.workerStarted                      46ms |               █                        |
+    transition.task                                  18ms |               █                        | task-1 leased→running
+  actor.worker.assignTask                            45ms |                 █                      |
+    transition.worker                                 1ms |                 █                      | run-e2e-1-worker-1 idle→busy
+  actor.worker.pushBranch                            45ms |                  █                     |
+    sandbox.ensure                                    0ms |                  █                     |
+    sandbox.waitReady                                 0ms |                  █                     |
+    git.push                                          0ms |                  █                     | ref=task/task-1/e1
+    transition.worker                                 2ms |                  █                     | run-e2e-1-worker-1 busy→busy
+  actor.taskBoard.handoffTask                        44ms |                  █                     |
+    transition.task                                   0ms |                  █                     | task-1 running→handed_off
+  actor.taskBoard.startVerify                        45ms |                   █                    |
+    transition.task                                   2ms |                   █                    | task-1 handed_off→verifying
+  actor.verifier.verify                              47ms |                     █                  |
+    transition.verifier                               1ms |                     █                  | task-1-verifier (new)→verifying
+    git.merge_cas                                     0ms |                     █                  | ref=task/task-1/e1
+    transition.verifier                               2ms |                     █                  | task-1-verifier verifying→passed
+  actor.taskBoard.verifyComplete                     44ms |                      █                 |
+    transition.task                                   2ms |                      █                 | task-1 verifying→merged
+  actor.worker.taskDone                              45ms |                       █                |
+    transition.worker                                 2ms |                       █                | run-e2e-1-worker-1 busy→idle
+  actor.taskBoard.grantLease                         48ms |                         █              |
+    transition.task                                   1ms |                         █              | task-2 pending→leased
+    transition.lease                                  2ms |                         █              | task-2-lease (new)→held
+  actor.taskBoard.workerStarted                      45ms |                          █             |
+    transition.task                                   1ms |                          █             | task-2 leased→running
+  actor.worker.assignTask                            45ms |                            █           |
+    transition.worker                                 1ms |                            █           | run-e2e-1-worker-1 idle→busy
+  actor.worker.pushBranch                            44ms |                            █           |
+    sandbox.ensure                                    0ms |                            █           |
+    sandbox.waitReady                                 0ms |                            █           |
+    git.push                                          0ms |                            █           | ref=task/task-2/e1
+    transition.worker                                 3ms |                            █           | run-e2e-1-worker-1 busy→busy
+  actor.taskBoard.handoffTask                        44ms |                             █          |
+    transition.task                                   1ms |                             █          | task-2 running→handed_off
+  actor.taskBoard.startVerify                        37ms |                              █         |
+    transition.task                                   3ms |                              █         | task-2 handed_off→verifying
+  actor.verifier.verify                              49ms |                                █       |
+    transition.verifier                               1ms |                                █       | task-2-verifier (new)→verifying
+    git.merge_cas                                     0ms |                                █       | ref=task/task-2/e1
+    transition.verifier                               1ms |                                █       | task-2-verifier verifying→passed
+  actor.taskBoard.verifyComplete                     48ms |                                █       |
+    transition.task                                   1ms |                                █       | task-2 verifying→merged
+  actor.worker.taskDone                              48ms |                                  █     |
+    transition.worker                                 1ms |                                  █     | run-e2e-1-worker-1 busy→idle
+  actor.taskBoard.flushOutbox                        49ms |                                   █    |
+  actor.run.allTasksTerminal                         45ms |                                    █   |
+    transition.run                                    2ms |                                    █   | run-e2e-1 executing→judging
+  actor.judge.judge                                  45ms |                                      █ |
+    model.generate                                    0ms |                                      █ | model=fake tokens=48/6
+  actor.run.chargeBudget                             45ms |                                       █|
+  actor.run.judgePass                                42ms |                                       █|
+    transition.run                                    2ms |                                       █| run-e2e-1 judging→completed

@@ -1,8 +1,50 @@
-# ADR 010: Distributed Tracing with OpenTelemetry
+# ADR 010: Distributed Tracing (OTel conventions, tracing-simple runtime)
 
-**Status:** Accepted  
+**Status:** Accepted, amended 2026-10-18 (see "Amendment: tracing-simple replaced the OTel SDK")  
 **Date:** 2026-10-17  
 **Authors:** Relay Team
+
+
+## Amendment (2026-10-18): tracing-simple replaced the OTel SDK
+
+**What changed.** Relay no longer uses the OpenTelemetry SDK at runtime. All spans go through
+`src/utils/tracing-simple.ts`. `src/utils/tracing.ts` is now a re-export shim, and the
+`@opentelemetry/*` packages are no longer imported anywhere.
+
+**Why.**
+- Under Bun, the SDK path didn't work. `BasicTracerProvider.addSpanProcessor` and the `Resource`
+  exports the code relied on are not usable with the SDK 2.x API on Bun. The NDJSON exporter in the
+  old `tracing.ts` was built but never registered, so no span ever reached disk. `initTracing` was
+  never called from the CLI or the actors. In practice, tracing was off.
+- Relay runs in two processes, the engine (actors) and the CLI. They need to write one trace per run
+  without a collector. tracing-simple does that with almost no code:
+  - `traceId = sha256("trace:" + runId)`, so every process agrees on the trace id without
+    propagating context.
+  - Actor spans with no in-process parent hang off a deterministic root span id
+    (`sha256("root:" + runId)`). `relay trace` makes up that root when it isn't on disk.
+  - Each span is appended to `.traces/<runId>.ndjson` (`appendFileSync`) the moment it ends, so a
+    process killed at a killpoint keeps every span that finished before the kill. A
+    `killpoint.<name>` marker span records where it died.
+  - `AsyncLocalStorage` gives correct parent/child nesting inside a process.
+- We keep the OTel *data model and semantic conventions* (`traceId`/`spanId`/`parentSpanId`,
+  `status.code` 0/1/2, `gen_ai.*`, and our `relay.*`, `sandbox.*` and `git.*` attributes). Feeding these
+  spans to a real OTLP exporter later is a mapping job, not a redesign.
+
+**What is instrumented** (all automatic, no per-call code in the actors):
+- `actor.<actor>.<action>`: every mutating actor action, via `traceActions()` (`get*` reads are skipped).
+- `transition.<machine>`: every `transitionLifecycle`, with `relay.state_from`, `relay.state_to`,
+  `relay.event_type` and `relay.machine_version`. The span ids are also written to
+  `lifecycle_events.trace_id/span_id`.
+- `model.generate`: `gen_ai.*` tokens and cost (a proxy over the model client).
+- `sandbox.<op>`: every provider call (a proxy over the provider). `exec` of `git …` becomes `git.<subcommand>`.
+- `git.merge_cas`: the verifier's compare-and-swap window, which brackets the two merge killpoints.
+- `cli.run`: one per `relay run` invocation. A resumed run has several.
+
+**OTLP status: not connected.** Nothing exports to an OTLP endpoint today, and
+`OTEL_EXPORTER_OTLP_ENDPOINT` is ignored. The section above that describes OTLP is the intended
+future design, not current behavior.
+
+Set `RELAY_TRACE=off` to disable writing traces, and `RELAY_TRACE_DIR` to move them.
 
 ## Context
 
@@ -116,15 +158,15 @@ We will use **OpenTelemetry** for distributed tracing with:
 ## Implementation
 
 ### Phase 1 (v0) ✓
-- [x] Core tracing module with OTel SDK
+- [x] Core tracing module (tracing-simple; the OTel SDK was dropped, see Amendment)
 - [x] NDJSON exporter
 - [x] `relay trace` command
 - [x] Lifecycle table columns for trace_id/span_id
 - [x] Basic tests (span creation, context serialization)
 
 ### Phase 2 (future)
-- [ ] Full actor action instrumentation
-- [ ] Automatic span creation via actor framework hooks
+- [x] Full actor action instrumentation (traceActions, 2026-10-18)
+- [x] Automatic span creation via actor action wrapper
 - [ ] Canvas waterfall UI
 - [ ] Span-to-span linking after chaos restarts
 - [ ] Sampling for high-throughput scenarios

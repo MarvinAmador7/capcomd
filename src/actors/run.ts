@@ -1,3 +1,4 @@
+import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
 import { runMachine, type RunContext } from "../machines/run";
@@ -28,7 +29,7 @@ export const runActor = actor({
     },
   }),
 
-  actions: {
+  actions: traceActions("run", {
     async createRun(
       c,
       params: {
@@ -447,7 +448,7 @@ export const runActor = actor({
         );
       }, { name: "workerEvent" });
     },
-  },
+  }),
 
   async onWake(c) {
     const pending = await getUndispatchedOutbox(c.db);

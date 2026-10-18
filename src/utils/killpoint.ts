@@ -1,3 +1,4 @@
+import { startSpan, endSpan } from "./tracing-simple";
 const KILLPOINT_ENV = process.env.RELAY_KILLPOINT;
 
 let killpointCounts = new Map<string, number>();
@@ -21,6 +22,9 @@ export function killpoint(name: string): void {
 
   if (count === config.n) {
     console.error(`[KILLPOINT] Exiting at ${name}:${count}`);
+    const marker = startSpan(`killpoint.${name}`, { "relay.killpoint": `${name}:${count}` });
+    marker.status = { code: 2, message: "process killed by killpoint" };
+    if (marker.attributes["relay.run_id"]) endSpan(marker);
     process.exit(137);
   }
 }

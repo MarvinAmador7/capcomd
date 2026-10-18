@@ -24,6 +24,7 @@ const TASK_STATES = new Set([
   "handed_off",
   "verifying",
   "merged",
+  "awaiting_approval",
   "failed",
   "cancelled",
 ]);

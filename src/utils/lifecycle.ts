@@ -1,5 +1,6 @@
 import type { RawAccess } from "rivetkit/db";
 import { killpoint } from "./killpoint";
+import { activeSpan, startSpan, endSpan, recordStateTransition } from "./tracing-simple";
 
 export interface LifecycleRow {
   entity_id: string;
@@ -72,7 +73,7 @@ export async function setupLifecycleTables(db: RawAccess): Promise<void> {
   `);
 }
 
-export async function transitionLifecycle(
+async function transitionLifecycleInner(
   tx: RawAccess,
   entityId: string,
   machine: string,
@@ -188,4 +189,32 @@ export async function markOutboxDispatched(
 ): Promise<void> {
   killpoint("outbox.dispatch.after_send.before_ack");
   await db.execute("UPDATE outbox SET dispatched_at = ? WHERE id = ?", Date.now(), id);
+}
+
+export async function transitionLifecycle(
+  tx: RawAccess,
+  entityId: string,
+  machine: string,
+  newState: string,
+  newContext: any,
+  event: any,
+  idemKey: string,
+  actions: Array<{ type: string; params?: any }>,
+  traceMetadata?: { traceId: string; spanId: string }
+): Promise<void> {
+  const prev = await tx.execute("SELECT state, version FROM lifecycle WHERE entity_id = ?", entityId);
+  const from = prev.length > 0 && prev[0] ? String(prev[0].state) : "(new)";
+  const version = prev.length > 0 && prev[0] ? Number(prev[0].version) + 1 : 1;
+  const span = startSpan(`transition.${machine}`, { "relay.entity_id": entityId, "relay.idempotency_key": idemKey });
+  recordStateTransition(span, from, newState, String(event?.type ?? "unknown"), version);
+  const meta = traceMetadata ?? (activeSpan() ? { traceId: span.traceId, spanId: span.spanId } : undefined);
+  try {
+    await transitionLifecycleInner(tx, entityId, machine, newState, newContext, event, idemKey, actions, meta);
+    span.status.code = 1;
+  } catch (error) {
+    span.status = { code: 2, message: error instanceof Error ? error.message : String(error) };
+    throw error;
+  } finally {
+    endSpan(span);
+  }
 }

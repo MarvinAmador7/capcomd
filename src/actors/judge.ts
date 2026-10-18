@@ -1,3 +1,4 @@
+import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
 import { setupLifecycleTables } from "../utils/lifecycle";
@@ -10,7 +11,7 @@ export const judgeActor = actor({
     },
   }),
 
-  actions: {
+  actions: traceActions("judge", {
     async judge(
       c,
       params: {
@@ -103,5 +104,5 @@ export const judgeActor = actor({
         seq: Number(row.seq),
       }));
     },
-  },
+  }),
 });

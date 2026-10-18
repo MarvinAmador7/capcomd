@@ -1,3 +1,4 @@
+import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
 import { setupLifecycleTables, getLifecycle } from "../utils/lifecycle";
@@ -11,7 +12,7 @@ export const plannerActor = actor({
     },
   }),
 
-  actions: {
+  actions: traceActions("planner", {
     async createPlan(
       c,
       params: {
@@ -112,5 +113,5 @@ export const plannerActor = actor({
         seq: Number(row.seq),
       }));
     },
-  },
+  }),
 });

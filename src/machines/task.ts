@@ -11,6 +11,9 @@ export interface TaskContext {
     branch: string;
     commitSha: string;
   };
+  /** Branch the task merges into. Protected targets park in awaiting_approval. */
+  targetBranch?: string;
+  approval?: { approvedBy: string; approvedAt: number };
   verificationResult?: {
     passed: boolean;
     reason?: string;
@@ -25,6 +28,8 @@ export type TaskEvent =
   | { type: "VERIFY_STARTED" }
   | { type: "VERIFIED_AND_MERGED" }
   | { type: "VERIFY_FAILED"; reason: string }
+  | { type: "VERIFIED_AWAITING_APPROVAL" }
+  | { type: "APPROVED"; approvedBy: string; approvedAt: number }
   | { type: "CANCEL" };
 
 export const taskMachine = setup({
@@ -82,13 +87,21 @@ export const taskMachine = setup({
             passed: false,
             reason: event.reason,
           };
-        } else if (event.type === "VERIFIED_AND_MERGED") {
+        } else if (
+          event.type === "VERIFIED_AND_MERGED" ||
+          event.type === "VERIFIED_AWAITING_APPROVAL" ||
+          event.type === "APPROVED"
+        ) {
           return {
             passed: true,
           };
         }
         return undefined;
       },
+    }),
+    storeApproval: assign({
+      approval: ({ event }) =>
+        event.type === "APPROVED" ? { approvedBy: event.approvedBy, approvedAt: event.approvedAt } : undefined,
     }),
   },
 }).createMachine({
@@ -154,6 +167,10 @@ export const taskMachine = setup({
           target: "merged",
           actions: ["storeVerificationResult"],
         },
+        VERIFIED_AWAITING_APPROVAL: {
+          target: "awaiting_approval",
+          actions: ["storeVerificationResult"],
+        },
         VERIFY_FAILED: [
           {
             target: "pending",
@@ -165,6 +182,15 @@ export const taskMachine = setup({
             actions: ["storeVerificationResult", "incrementRetry"],
           },
         ],
+      },
+    },
+    awaiting_approval: {
+      on: {
+        APPROVED: {
+          target: "merged",
+          actions: ["storeApproval"],
+        },
+        CANCEL: "cancelled",
       },
     },
     merged: {

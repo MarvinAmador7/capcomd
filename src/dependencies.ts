@@ -2,6 +2,7 @@ import type { ModelClient } from "./models/fake";
 import type { SandboxProvider } from "./providers/sandbox";
 import { FakeModelClient } from "./models/fake";
 import { FakeProvider } from "./providers/fake";
+import { traceMethods } from "./utils/tracing-simple";
 
 interface Dependencies {
   model: ModelClient;
@@ -10,17 +11,46 @@ interface Dependencies {
 
 let deps: Dependencies | null = null;
 
+function tracedModel(model: ModelClient, name: string): ModelClient {
+  return traceMethods("model", model, (method, _args, result) => ({
+    name: `model.${method}`,
+    attributes: result
+      ? {
+          "gen_ai.system": name,
+          "gen_ai.request.model": name,
+          "gen_ai.usage.input_tokens": result.usage?.promptTokens,
+          "gen_ai.usage.output_tokens": result.usage?.completionTokens,
+          "gen_ai.response.cost": result.cost,
+        }
+      : { "gen_ai.system": name },
+  }));
+}
+
+function tracedProvider(provider: SandboxProvider, name: string): SandboxProvider {
+  return traceMethods("sandbox", provider, (method, args, result) => {
+    const attributes: Record<string, any> = { "sandbox.provider": name, "sandbox.operation": method };
+    if (typeof args[0] === "string") attributes["sandbox.vm_id"] = args[0];
+    if (result && typeof result === "object" && "id" in result) attributes["sandbox.vm_id"] = result.id;
+    if (method === "exec" && Array.isArray(args[1]) && args[1][0] === "git") {
+      attributes["git.operation"] = args[1][1];
+      if (args[1][1] === "push") attributes["git.ref"] = args[1][3];
+      return { name: `git.${args[1][1]}`, attributes };
+    }
+    return { name: `sandbox.${method}`, attributes };
+  });
+}
+
 export function initDependencies(config?: { model?: ModelClient; provider?: SandboxProvider }) {
+  const model = config?.model || new FakeModelClient();
+  const provider = config?.provider || new FakeProvider();
   deps = {
-    model: config?.model || new FakeModelClient(),
-    provider: config?.provider || new FakeProvider(),
+    model: tracedModel(model, model.constructor?.name === "FakeModelClient" ? "fake" : model.constructor?.name ?? "model"),
+    provider: tracedProvider(provider, provider.constructor?.name === "FakeProvider" ? "fake" : provider.constructor?.name ?? "provider"),
   };
 }
 
 export function getDependencies(): Dependencies {
-  if (!deps) {
-    initDependencies();
-  }
+  if (!deps) initDependencies();
   return deps!;
 }
 

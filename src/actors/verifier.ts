@@ -1,3 +1,4 @@
+import { traceActions, withSpan } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
 import { setupLifecycleTables, transitionLifecycle, getLifecycle, getUndispatchedOutbox, markOutboxDispatched } from "../utils/lifecycle";
@@ -10,7 +11,7 @@ export const verifierActor = actor({
     },
   }),
 
-  actions: {
+  actions: traceActions("verifier", {
     async verify(
       c,
       params: {
@@ -48,11 +49,16 @@ export const verifierActor = actor({
         );
       }, { name: "startVerify" });
 
-      killpoint("merge.before_cas");
-
-      const passed = true;
-
-      killpoint("merge.after_cas.before_event");
+      const passed = await withSpan(
+        "git.merge_cas",
+        { "relay.run_id": runId, "git.operation": "merge_cas", "git.ref": branch, "git.sha": commitSha },
+        () => {
+          killpoint("merge.before_cas");
+          const ok = true;
+          killpoint("merge.after_cas.before_event");
+          return ok;
+        }
+      );
 
       // Complete verification with outbox to run
       await c.db.transaction(async (tx) => {
@@ -152,5 +158,5 @@ export const verifierActor = actor({
         seq: Number(row.seq),
       }));
     },
-  },
+  }),
 });

@@ -21,16 +21,14 @@
   },
   "dependencies": {
     "@boxd-sh/sdk": "^0.2.17",
-    "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
-    "@opentelemetry/sdk-trace-base": "^2.12.0",
-    "@opentelemetry/sdk-trace-node": "^2.12.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@xyflow/react": "^12.12.0",
     "commander": "^15.0.0",
     "elkjs": "^0.12.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "rivetkit": "^2.3.27",
-    "xstate": "^5.33.3"
+    "xstate": "^5.33.3",
+    "zod": "^4.6.7"
   }
 }

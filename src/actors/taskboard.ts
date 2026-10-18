@@ -1,3 +1,5 @@
+import { traceActions } from "../utils/tracing-simple";
+import { isProtectedBranch } from "../utils/protected";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
 import { taskMachine, type TaskContext } from "../machines/task";
@@ -21,14 +23,18 @@ export const taskBoardActor = actor({
     },
   }),
 
-  actions: {
-    async createTask(c, params: { taskId: string; goal: string; runId: string; maxRetries: number }) {
-      const { taskId, goal, maxRetries } = params;
+  actions: traceActions("taskBoard", {
+    async createTask(
+      c,
+      params: { taskId: string; goal: string; runId: string; maxRetries: number; targetBranch?: string }
+    ) {
+      const { taskId, goal, maxRetries, targetBranch } = params;
 
       const [snapshot] = initialTransition(taskMachine, {
         taskId,
         goal,
         maxRetries,
+        ...(targetBranch ? { targetBranch } : {}),
       });
 
       await c.db.transaction(async (tx) => {
@@ -349,9 +355,12 @@ export const taskBoardActor = actor({
         context: taskContext,
       });
 
-      const event = passed
-        ? { type: "VERIFIED_AND_MERGED" as const, commitSha }
-        : { type: "VERIFY_FAILED" as const };
+      const needsApproval = passed && isProtectedBranch(taskContext.targetBranch);
+      const event = !passed
+        ? { type: "VERIFY_FAILED" as const }
+        : needsApproval
+          ? { type: "VERIFIED_AWAITING_APPROVAL" as const, commitSha, targetBranch: taskContext.targetBranch }
+          : { type: "VERIFIED_AND_MERGED" as const, commitSha };
 
       if (!taskSnapshot.can(event)) {
         throw new Error(`Task ${taskId} cannot accept ${event.type} from state ${taskLife.state}`);
@@ -411,6 +420,40 @@ export const taskBoardActor = actor({
       }, { name: "expireLease" });
     },
 
+    async approveTask(c, params: { taskId: string; approvedBy?: string }) {
+      const { taskId } = params;
+      const taskLife = await getLifecycle(c.db, taskId);
+      if (!taskLife) return { taskId, ok: false as const, error: "not_found" as const, state: null };
+      if (taskLife.state === "merged") return { taskId, ok: true as const, already: true, state: "merged" };
+      if (taskLife.state !== "awaiting_approval") {
+        return { taskId, ok: false as const, error: "not_awaiting_approval" as const, state: taskLife.state };
+      }
+      const taskContext: TaskContext = JSON.parse(taskLife.context);
+      const snapshot = taskMachine.resolveState({ value: taskLife.state, context: taskContext });
+      const event = { type: "APPROVED" as const, approvedBy: params.approvedBy ?? "cli", approvedAt: Date.now() };
+      const [next] = transition(taskMachine, snapshot, event);
+      await c.db.transaction(async (tx) => {
+        await transitionLifecycle(
+          tx, taskId, "task", next.value as string, next.context, event,
+          `task-${taskId}-approved`, []
+        );
+      }, { name: "approveTask" });
+      return { taskId, ok: true as const, already: false, state: next.value as string };
+    },
+
+    async cancelTask(c, params: { taskId: string }) {
+      const taskLife = await getLifecycle(c.db, params.taskId);
+      if (!taskLife) return { taskId: params.taskId, state: null as string | null, changed: false };
+      const snapshot = taskMachine.resolveState({ value: taskLife.state, context: JSON.parse(taskLife.context) });
+      const event = { type: "CANCEL" as const };
+      if (!snapshot.can(event)) return { taskId: params.taskId, state: taskLife.state, changed: false };
+      const [next] = transition(taskMachine, snapshot, event);
+      await c.db.transaction(async (tx) => {
+        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-cancel`, []);
+      }, { name: "cancelTask" });
+      return { taskId: params.taskId, state: next.value as string, changed: true };
+    },
+
     async getTask(c, params: { taskId: string }) {
       const taskLife = await getLifecycle(c.db, params.taskId);
       if (!taskLife) return null;
@@ -464,7 +507,7 @@ export const taskBoardActor = actor({
         seq: Number(row.seq),
       }));
     },
-  },
+  }),
 
   async onWake(c) {
     try {

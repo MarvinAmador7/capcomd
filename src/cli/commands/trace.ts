@@ -1,89 +1,75 @@
-import { Command } from "commander";
-import { readFile } from "fs/promises";
-import { existsSync } from "fs";
-import { join } from "path";
+import { existsSync, readFileSync } from "fs";
+import { readTrace, rootSpanIdForRun, tracePath, traceIdForRun, type SimpleSpan } from "../../utils/tracing-simple";
 
-interface Span {
+export interface TraceTree {
+  runId: string;
   traceId: string;
-  spanId: string;
-  parentSpanId?: string;
-  name: string;
-  startTime: number;
-  endTime?: number;
-  attributes: Record<string, any>;
+  durationMs: number;
+  spanCount: number;
+  spans: Array<SimpleSpan & { depth: number; offsetMs: number; durationMs: number }>;
 }
 
-export const traceCommand = new Command("trace")
-  .description("Display trace waterfall for a run")
-  .argument("<runId>", "Run ID to trace")
-  .option("--json", "Output raw JSON")
-  .action(async (runId: string, options) => {
-    await trace({ runId, json: options.json });
-  });
+/** Load a run's spans and order them depth-first under a (possibly synthesized) root. */
+export function loadTrace(runId: string): TraceTree | null {
+  const path = tracePath(runId);
+  if (!existsSync(path)) return null;
+  const raw = readTrace(readFileSync(path, "utf8"));
+  if (raw.length === 0) return null;
 
-export async function trace(opts: { runId: string; json?: boolean }) {
-  const { runId, json } = opts;
-  const tracePath = join(".traces", `${runId}.ndjson`);
+  const rootId = rootSpanIdForRun(runId);
+  const all: SimpleSpan[] = [...raw];
+  if (!all.some((s) => s.spanId === rootId)) {
+    all.push({
+      traceId: traceIdForRun(runId),
+      spanId: rootId,
+      name: "relay.run",
+      startTime: Math.min(...raw.map((s) => s.startTime)),
+      endTime: Math.max(...raw.map((s) => s.endTime ?? s.startTime)),
+      attributes: { "relay.run_id": runId, "relay.synthesized": true },
+      events: [],
+      status: { code: 0 },
+    });
+  }
+  const ids = new Set(all.map((s) => s.spanId));
+  const children = new Map<string, SimpleSpan[]>();
+  const roots: SimpleSpan[] = [];
+  for (const s of all) {
+    const parent = s.parentSpanId && ids.has(s.parentSpanId) ? s.parentSpanId : s.spanId === rootId ? null : rootId;
+    if (parent === null) roots.push(s);
+    else children.set(parent, [...(children.get(parent) ?? []), s]);
+  }
+  for (const list of children.values()) list.sort((a, b) => a.startTime - b.startTime);
 
-    if (!existsSync(tracePath)) {
-      console.error(`No trace found for run: ${runId}`);
-      console.error(`Expected file: ${tracePath}`);
-      process.exit(1);
-    }
+  const min = Math.min(...all.map((s) => s.startTime));
+  const max = Math.max(...all.map((s) => s.endTime ?? s.startTime));
+  const out: TraceTree["spans"] = [];
+  const walk = (s: SimpleSpan, depth: number) => {
+    out.push({ ...s, depth, offsetMs: s.startTime - min, durationMs: (s.endTime ?? s.startTime) - s.startTime });
+    for (const c of children.get(s.spanId) ?? []) walk(c, depth + 1);
+  };
+  roots.sort((a, b) => a.startTime - b.startTime).forEach((r) => walk(r, 0));
+  return { runId, traceId: traceIdForRun(runId), durationMs: max - min, spanCount: raw.length, spans: out };
+}
 
-    const content = await readFile(tracePath, "utf-8");
-    const spans: Span[] = content
-      .trim()
-      .split("\n")
-      .filter((line) => line.trim())
-      .map((line) => JSON.parse(line));
-
-    if (json) {
-      console.log(JSON.stringify(spans, null, 2));
-      return;
-    }
-
-    // Build span tree
-    const minTime = Math.min(...spans.map((s) => s.startTime));
-    const maxTime = Math.max(...spans.map((s) => s.endTime || s.startTime));
-    const totalDuration = maxTime - minTime;
-
-    console.log(`\nTrace: ${runId}`);
-    console.log(`Duration: ${totalDuration}ms\n`);
-
-    function printSpan(span: Span, indent: number = 0) {
-      const duration = span.endTime ? span.endTime - span.startTime : 0;
-      const offset = span.startTime - minTime;
-      const barWidth = 60;
-      const startPos = Math.floor((offset / totalDuration) * barWidth);
-      const barLength = Math.max(1, Math.floor((duration / totalDuration) * barWidth));
-
-      const prefix = "  ".repeat(indent);
-      const bar = " ".repeat(startPos) + "█".repeat(barLength);
-      
-      console.log(`${prefix}${span.name.padEnd(30)} ${duration.toString().padStart(6)}ms ${bar}`);
-
-      // Print key attributes
-      if (span.attributes) {
-        const keys = ["relay.state_from", "relay.state_to", "gen_ai.request.model"];
-        for (const key of keys) {
-          if (span.attributes[key]) {
-            console.log(`${prefix}  ${key}: ${span.attributes[key]}`);
-          }
-        }
-      }
-
-      // Find and print children
-      const children = spans.filter((s) => s.parentSpanId === span.spanId);
-      for (const child of children) {
-        printSpan(child, indent + 1);
-      }
-    }
-
-    const roots = spans.filter((s) => !s.parentSpanId);
-    for (const root of roots) {
-      printSpan(root);
-    }
-
-    console.log();
+export function renderTrace(tree: TraceTree, width = 40): string {
+  const lines = [`Trace: ${tree.runId}`, `Trace ID: ${tree.traceId}`, `Spans: ${tree.spanCount}  Duration: ${tree.durationMs}ms`, ""];
+  const total = Math.max(1, tree.durationMs);
+  for (const s of tree.spans) {
+    const start = Math.min(width - 1, Math.floor((s.offsetMs / total) * width));
+    const len = Math.max(1, Math.round((s.durationMs / total) * width));
+    const bar = " ".repeat(start) + "█".repeat(Math.min(len, width - start));
+    const label = ("  ".repeat(s.depth) + s.name).slice(0, 48).padEnd(48);
+    const flag = s.status.code === 2 ? " ✗" : "";
+    const a = s.attributes ?? {};
+    const detail =
+      a["relay.state_from"] !== undefined
+        ? ` ${a["relay.entity_id"] ?? ""} ${a["relay.state_from"]}→${a["relay.state_to"]}`
+        : a["gen_ai.request.model"]
+          ? ` model=${a["gen_ai.request.model"]} tokens=${a["gen_ai.usage.input_tokens"] ?? "?"}/${a["gen_ai.usage.output_tokens"] ?? "?"}`
+          : a["git.ref"]
+            ? ` ref=${a["git.ref"]}`
+            : "";
+    lines.push(`${label} ${String(s.durationMs).padStart(6)}ms |${bar.padEnd(width)}|${flag}${detail}`);
+  }
+  return lines.join("\n");
 }

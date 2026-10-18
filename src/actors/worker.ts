@@ -1,3 +1,4 @@
+import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
 import { workerMachine, type WorkerContext } from "../machines/worker";
@@ -19,7 +20,7 @@ export const workerActor = actor({
     },
   }),
 
-  actions: {
+  actions: traceActions("worker", {
     async provisionWorker(
       c,
       params: {
@@ -374,7 +375,7 @@ export const workerActor = actor({
         context: JSON.parse(workerLife.context),
       };
     },
-  },
+  }),
 
   async onWake(c) {
     const pending = await getUndispatchedOutbox(c.db);
