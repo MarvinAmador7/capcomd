@@ -46,3 +46,13 @@ Fix (idempotent reap):
 - the worker actor schedules `reapIfExpired` at createdAt+ttl (a sweep that works with no client).
 - `drainWorker` resumes a half-done drain.
 - the invariant now also flags any active worker of a finished run. This check doesn't depend on the clock.
+
+## Gate attempt 2, run 2: push.mid resume SIGKILL (2026-10-18)
+
+Run 1 on 7d0597f was green (`chaos-run-1.log`). In run 2, push.mid failed. The resume printed
+"✓ Run completed successfully … ✓ Sandbox destroyed" and was then killed by the harness's 30s client timer.
+The engine log shows rivetkit stalls: 60s before the kill ("websocket not available for sending"),
+and 31s after the restart before any actor ran ("failed to sync scheduled actor alarm", key `__ready__`).
+Median resume time is about 7.5s. This was a readiness stall, not a hang or an invariant breach. The client timeout is
+now 90s, which still catches the seed-29 class (a CLI that never exits). Log:
+`chaos-gate2-run-2-pushmid-resume-sigkill.log`. The gate restarts from zero.

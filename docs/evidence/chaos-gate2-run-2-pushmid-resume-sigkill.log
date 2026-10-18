@@ -1,0 +1,178 @@
+=== chaos run 2 start 2026-10-18T17:36:31Z
+bun test v1.4.2 (744846f84)
+
+tests/chaos/subprocess.test.ts:
+(pass) Chaos Tests - Subprocess Killpoints > event gap helper rejects holes and duplicate seqs [0.28ms]
+Testing killpoint: tx.mid
+    wiped +237ms
+    engine-up +2620ms
+    first-client exit=1 killed=true +13654ms
+    stopped-after-kill +13877ms
+    engine-restarted +44444ms
+  ✓ tx.mid killed=true (52562ms)
+Testing killpoint: model.after_return.before_commit
+    wiped +219ms
+    engine-up +2575ms
+    first-client exit=1 killed=true +13950ms
+    stopped-after-kill +14160ms
+    engine-restarted +44638ms
+  ✓ model.after_return.before_commit killed=true (52493ms)
+Testing killpoint: merge.before_cas
+    wiped +218ms
+    engine-up +2734ms
+    first-client exit=1 killed=true +17243ms
+    stopped-after-kill +17451ms
+    engine-restarted +47958ms
+  ✓ merge.before_cas killed=true (54151ms)
+Testing killpoint: merge.after_cas.before_event
+    wiped +220ms
+    engine-up +2624ms
+    first-client exit=1 killed=true +17182ms
+    stopped-after-kill +17409ms
+    engine-restarted +47997ms
+  ✓ merge.after_cas.before_event killed=true (54227ms)
+Testing killpoint: push.mid
+    wiped +216ms
+    engine-up +2537ms
+    first-client exit=1 killed=true +76930ms
+    stopped-after-kill +77122ms
+    engine-restarted +78323ms
+  ✗ push.mid killed=true (112731ms) resume failed (1): Starting run: chaos-push-mid-n1-1792345204876
+Goal: ChaosGoal
+
+✓ Run resumed (executing)
+
+→ Creating tasks...
+
+→ Provisioning worker...
+✓ Worker chaos-push-mid-n1-1792345204876-worker-1 ready (busy)
+
+→ Executing tasks...
+  ✓ task-1 verified and merged
+  → task-2 (epoch 1)
+  ✓ task-2 verified and merged
+
+→ All tasks complete, judging...
+
+✓ Run completed successfully
+  Goal achieved
+
+Run ID: chaos-push-mid-n1-1792345204876
+✓ Sandbox destroyed
+
+[client terminated by signal SIGKILL]
+Testing killpoint: push.after.before_event
+    wiped +218ms
+    engine-up +2576ms
+    first-client exit=1 killed=true +22229ms
+    stopped-after-kill +22426ms
+    engine-restarted +52908ms
+  ✓ push.after.before_event killed=true (59721ms)
+Testing killpoint: vm.create.after_request.before_record
+    wiped +219ms
+    engine-up +2593ms
+    first-client exit=1 killed=true +15330ms
+    stopped-after-kill +15518ms
+    engine-restarted +46010ms
+  ✓ vm.create.after_request.before_record killed=true (53521ms)
+Testing killpoint: lease.expire.mid
+    wiped +217ms
+    engine-up +2579ms
+    first-client exit=1 killed=true +14509ms
+    stopped-after-kill +14713ms
+    engine-restarted +45204ms
+  ✓ lease.expire.mid killed=true (52767ms)
+Testing killpoint: budget.charge.mid
+    wiped +225ms
+    engine-up +2568ms
+    first-client exit=1 killed=true +13598ms
+    stopped-after-kill +13809ms
+    engine-restarted +44280ms
+  ✓ budget.charge.mid killed=true (52109ms)
+Testing killpoint: outbox.dispatch.after_send.before_ack
+    wiped +220ms
+    engine-up +2590ms
+    first-client exit=1 killed=true +15281ms
+    stopped-after-kill +15499ms
+    engine-restarted +45889ms
+  ✓ outbox.dispatch.after_send.before_ack killed=true (53157ms)
+Total: 9/10 passed
+[
+  {
+    "killpoint": "push.mid",
+    "ok": false,
+    "ms": 112731,
+    "error": "resume failed (1): Starting run: chaos-push-mid-n1-1792345204876\nGoal: ChaosGoal\n\n✓ Run resumed (executing)\n\n→ Creating tasks...\n\n→ Provisioning worker...\n✓ Worker chaos-push-mid-n1-1792345204876-worker-1 ready (busy)\n\n→ Executing tasks...\n  ✓ task-1 verified and merged\n  → task-2 (epoch 1)\n  ✓ task-2 verified and merged\n\n→ All tasks complete, judging...\n\n✓ Run completed successfully\n  Goal achieved\n\nRun ID: chaos-push-mid-n1-1792345204876\n✓ Sandbox destroyed\n\n[client terminated by signal SIGKILL]",
+    "killed": true
+  }
+]
+46 |     const failed = results.filter((result) => !result.ok);
+47 |     console.log(`Total: ${results.length - failed.length}/${results.length} passed`);
+48 |     if (failed.length > 0) {
+49 |       console.log(JSON.stringify(failed, null, 2));
+50 |     }
+51 |     expect(failed).toEqual([]);
+                        ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "error": 
++ "resume failed (1): Starting run: chaos-push-mid-n1-1792345204876
++ Goal: ChaosGoal
++ 
++ ✓ Run resumed (executing)
++ 
++ → Creating tasks...
++ 
++ → Provisioning worker...
++ ✓ Worker chaos-push-mid-n1-1792345204876-worker-1 ready (busy)
++ 
++ → Executing tasks...
++   ✓ task-1 verified and merged
++   → task-2 (epoch 1)
++   ✓ task-2 verified and merged
++ 
++ → All tasks complete, judging...
++ 
++ ✓ Run completed successfully
++   Goal achieved
++ 
++ Run ID: chaos-push-mid-n1-1792345204876
++ ✓ Sandbox destroyed
++ 
++ [client terminated by signal SIGKILL]"
++ ,
++     "killed": true,
++     "killpoint": "push.mid",
++     "ms": 112731,
++     "ok": false,
++   },
++ ]
+
+- Expected  - 1
++ Received  + 34
+
+      at <anonymous> (/workspace/relay/tests/chaos/subprocess.test.ts:51:20)
+(fail) Chaos Tests - Subprocess Killpoints > survives all 10 named killpoints [597441.94ms]
+    wiped +216ms
+    engine-up +2581ms
+    first-client exit=1 killed=true +20523ms
+    stopped-after-kill +20718ms
+    engine-restarted +51208ms
+    wiped +218ms
+    engine-up +2549ms
+    first-client exit=1 killed=true +15223ms
+    stopped-after-kill +15432ms
+    engine-restarted +45899ms
+    wiped +215ms
+    engine-up +2536ms
+    first-client exit=1 killed=true +13490ms
+    stopped-after-kill +13697ms
+    engine-restarted +44158ms
+    wiped +218ms
+    engine-up +2577ms
+    first-client exit=0 killed=false +9359ms
+    wiped +217ms
+=== STOPPED 2026-10-18T17:50:35Z: push.mid resume hit the 30s client SIGKILL after a 31s rivetkit actor-readiness stall (engine log /tmp/relay-chaos-push.mid-1-chaos-push-mid-n1-1792345204876.log)

@@ -269,6 +269,10 @@ export class Engine {
   }
 }
 
+// 90s: still catches a CLI that never exits (seed 29), but tolerates rivetkit's ~30s
+// actor-readiness stall after a cold engine restart (gate-2 push.mid evidence).
+const CLIENT_TIMEOUT_MS = 90_000;
+
 export function runClient(runId: string): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
     const env = { ...process.env };
@@ -295,7 +299,7 @@ export function runClient(runId: string): Promise<{ code: number; output: string
 
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-    }, 30_000);
+    }, CLIENT_TIMEOUT_MS);
 
     child.on("close", (code, signal) => {
       clearTimeout(timer);
