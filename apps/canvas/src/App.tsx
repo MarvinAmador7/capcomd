@@ -4,7 +4,8 @@ import { useMachine } from "@xstate/react";
 import { canvasMachine, type WaterfallSpan } from "./lib/canvas-machine";
 import { KIND_COLORS, parseNdjson } from "./lib/waterfall";
 import demoTrace from "./fixtures/demo-trace.ndjson?raw";
-import { createLayoutWorker, graphToReactFlow, requestLayout } from "./lib/react-flow-adapter";
+import { graphToReactFlow } from "./lib/react-flow-adapter";
+import { createElkLayout, type Positions } from "./lib/elk-layout";
 import { preferencesStore } from "./lib/preferences-store";
 import type { RelayEvent } from "./lib/graph-fold";
 import "@xyflow/react/dist/style.css";
@@ -12,8 +13,10 @@ import "@xyflow/react/dist/style.css";
 export default function App() {
   const [state, send] = useMachine(canvasMachine);
   const [prefs, setPrefs] = useState(preferencesStore.getSnapshot().context);
-  const layoutWorkerRef = useRef<Worker | null>(null);
-  const { nodes, edges } = graphToReactFlow(state.context.graph);
+  const layoutRef = useRef<ReturnType<typeof createElkLayout> | null>(null);
+  const [positions, setPositions] = useState<Positions>({});
+  const [layoutStatus, setLayoutStatus] = useState<"pending" | "elk" | "fallback">("pending");
+  const { nodes, edges } = graphToReactFlow(state.context.graph, positions);
 
   useEffect(() => {
     const unsub = preferencesStore.subscribe((snapshot) => {
@@ -23,7 +26,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    layoutWorkerRef.current = createLayoutWorker();
+    layoutRef.current = createElkLayout();
     send({ type: "STREAM.CONNECT" });
 
     // Real spans: ?run=<runId> loads .traces/<runId>.ndjson through the dev server;
@@ -70,17 +73,30 @@ export default function App() {
 
     return () => {
       clearInterval(interval);
-      layoutWorkerRef.current?.terminate();
+      layoutRef.current?.terminate();
     };
   }, [send]);
 
   // Trigger layout when graph changes
   useEffect(() => {
-    if (prefs.autoLayout && layoutWorkerRef.current && Object.keys(state.context.graph.nodes).length > 0) {
-      requestLayout(layoutWorkerRef.current, state.context.graph).catch((err) => {
-        console.error("Layout failed:", err);
+    const elk = layoutRef.current;
+    if (!prefs.autoLayout || !elk || layoutStatus === "fallback" || Object.keys(state.context.graph.nodes).length === 0) return;
+    let stale = false;
+    elk
+      .layout(state.context.graph)
+      .then((p) => {
+        if (stale) return;
+        setPositions(p);
+        setLayoutStatus("elk");
+      })
+      .catch((err) => {
+        // Only a real worker/ELK failure gets here; the grid fallback in graphToReactFlow takes over.
+        console.warn("[layout] ELK worker failed, using fallback grid layout:", err);
+        setLayoutStatus("fallback");
       });
-    }
+    return () => {
+      stale = true;
+    };
   }, [state.context.graph, prefs.autoLayout]);
 
   const handleNodeClick = (_: React.MouseEvent, node: { id: string }) => {
@@ -109,6 +125,7 @@ export default function App() {
             <div>Mode: {state.value.mode}</div>
             <div>Events: {state.context.events.length}</div>
             <div>Nodes: {Object.keys(state.context.graph.nodes).length}</div>
+            <div data-testid="layout-status">Layout: {layoutStatus}</div>
             <button
               onClick={() => send({ type: state.context.mode === "live" ? "MODE.SWITCH_TO_REPLAY" : "MODE.SWITCH_TO_LIVE" })}
               style={{ marginTop: 10, padding: "5px 10px" }}

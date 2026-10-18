@@ -3,7 +3,7 @@ import { toXYFlow } from "@statelyai/graph/xyflow";
 import type { Node, Edge } from "@xyflow/react";
 import type { NodeData, RelayGraph } from "./graph-fold";
 
-export function graphToReactFlow(graph: RelayGraph): {
+export function graphToReactFlow(graph: RelayGraph, positions: Record<string, { x: number; y: number }> = {}): {
   nodes: Node[];
   edges: Edge[];
 } {
@@ -29,10 +29,10 @@ export function graphToReactFlow(graph: RelayGraph): {
       const row = graphNode?.data?.type === "run" ? 0 : 1;
       const col = (rowCount[row] = (rowCount[row] ?? -1) + 1);
       const p = node.position;
-      const position =
+      const position = positions[node.id] ?? (
         p && Number.isFinite(p.x) && Number.isFinite(p.y) && (p.x !== 0 || p.y !== 0)
           ? p
-          : { x: 40 + col * 200, y: 60 + row * 140 };
+          : { x: 40 + col * 200, y: 60 + row * 140 });
       return {
         id: node.id,
         position,
@@ -78,49 +78,3 @@ function getStatusColor(status?: string): string {
   }
 }
 
-export function createLayoutWorker(): Worker {
-  return new Worker(new URL("../workers/layout.worker.ts", import.meta.url), {
-    type: "module",
-  });
-}
-
-export interface LayoutWorkerMessage {
-  type: "LAYOUT_REQUEST";
-  graph: Graph<NodeData>;
-  id: string;
-}
-
-export interface LayoutWorkerResponse {
-  type: "LAYOUT_COMPLETE" | "LAYOUT_ERROR";
-  graph?: Graph<NodeData>;
-  error?: string;
-  id: string;
-}
-
-export function requestLayout(worker: Worker, graph: Graph<NodeData>): Promise<Graph<NodeData>> {
-  return new Promise((resolve, reject) => {
-    const id = Math.random().toString(36).slice(2);
-
-    const handleMessage = (e: MessageEvent<LayoutWorkerResponse>) => {
-      if (e.data.id !== id) return;
-
-      worker.removeEventListener("message", handleMessage);
-
-      if (e.data.type === "LAYOUT_COMPLETE" && e.data.graph) {
-        resolve(e.data.graph);
-      } else {
-        reject(new Error(e.data.error || "Layout failed"));
-      }
-    };
-
-    worker.addEventListener("message", handleMessage);
-
-    const message: LayoutWorkerMessage = {
-      type: "LAYOUT_REQUEST",
-      graph,
-      id,
-    };
-
-    worker.postMessage(message);
-  });
-}
