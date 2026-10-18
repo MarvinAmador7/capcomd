@@ -21,7 +21,7 @@ describe("Chaos - Fixed Harness", () => {
     // Start serve with killpoint
     const serve1 = spawn("bun", ["src/cli/index.ts", "serve"], {
       cwd: "/workspace",
-      env: { ...process.env, RELAY_KILLPOINT: "merge.before_cas:1" },
+      env: { ...process.env, CAPCOMD_KILLPOINT: "merge.before_cas:1" },
       stdio: "pipe",
     });
     

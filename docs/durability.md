@@ -13,7 +13,7 @@
 | Failure | Expected behaviour | Recovery |
 |---|---|---|
 | Orchestrator process crash (local CLI/engine or runner) | Committed transactions survive; uncommitted ones are lost and their events never existed. Actors restart on the next request or alarm [Rivet docs]. | `onWake` re-dispatches undelivered outbox rows. In-flight model calls are lost and re-issued from the last committed state (cost: one duplicate model call). |
-| Host reboot (local mode) | Same as a crash. The engine data dir survives on disk. | Restart `relay`; actors resume. Workers on boxd keep running until the lease expires. |
+| Host reboot (local mode) | Same as a crash. The engine data dir survives on disk. | Restart `capcomd`; actors resume. Workers on boxd keep running until the lease expires. |
 | Disk loss (local mode) | **Data loss back to the last backup.** | Restore the engine data dir from backup (below). Run the reconciler: list boxd VMs and remote task branches, mark unknown work `failed`, and reap the VMs. (On Rivet Cloud, if adopted later, storage is Rivet's replicated hot tier [rivet-sqlite.md].) |
 | Worker VM death | The heartbeat stops, the lease expires, and the task returns to `pending` with epoch+1. Late results from the old epoch are rejected. | WorkerActor destroys or reaps the VM; a new VM is created under the new idem name. |
 | boxd outage | VM create/exec fails; tasks stay leased until expiry, then go back to `pending`. Backoff is capped and the run goes to `degraded`. | Retry with backoff. Running VMs may survive; the reconciler adopts them by name if the epoch is still current. The bwrap local fallback is optional (ADR-005). |
@@ -24,7 +24,7 @@
 
 ## Crash-test suite
 Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.ts`.
-- **Mechanics:** Rivet local mode (`setupTest`/local engine) plus a `FakeSandboxProvider` and a fake model client. An env var `RELAY_KILLPOINT=<name>[:n]` makes `killpoint(name)` call `process.exit(137)` on its nth hit; the harness then restarts the process and lets the run finish. A real-boxd profile is nightly-only.
+- **Mechanics:** Rivet local mode (`setupTest`/local engine) plus a `FakeSandboxProvider` and a fake model client. An env var `CAPCOMD_KILLPOINT=<name>[:n]` makes `killpoint(name)` call `process.exit(137)` on its nth hit; the harness then restarts the process and lets the run finish. A real-boxd profile is nightly-only.
 - **Kill points** (named calls in code):
   1. `tx.mid`: inside the lifecycle transaction, between the event insert and the lifecycle update. Expect: neither persisted.
   2. `model.after_return.before_commit`: expect the model call to repeat, with exactly one `task_handed_off` event.
@@ -43,7 +43,7 @@ Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.t
 
 ## Local-mode backup plan (inference; the local engine's backend is unverified, assumed file-based RocksDB/fs)
 1. Find the engine data dir (spike: inspect the `@rivetkit/engine-cli` config) and pin it with config, e.g. `~/.relay/engine`.
-2. **Consistent snapshot:** stop relay (or run `relay pause`, which drains actors) → `tar --zstd` the dir → restart. Do this nightly and before upgrades. If the engine supports online checkpoints, switch to those.
+2. **Consistent snapshot:** stop capcomd (or run `relay pause`, which drains actors) → `tar --zstd` the dir → restart. Do this nightly and before upgrades. If the engine supports online checkpoints, switch to those.
 3. **Logical export (backend-agnostic):** `relay export <runId>` calls a read-only action on each actor that dumps `lifecycle`, `lifecycle_events` and `outbox` as NDJSON. This is also the migration path to or from Rivet Cloud (ADR-009).
 4. Ship backups off the host (e.g. S3/R2 with rclone); keep 7 daily + 4 weekly.
 5. **Restore drill** (monthly, and in CI weekly on a sample): restore into a fresh dir, run the reconciler, then `checkInvariants()`.

@@ -1,6 +1,6 @@
-# Relay Canvas - Visual Orchestrator
+# Capcomd Canvas - Visual Orchestrator
 
-An infinite-canvas flow-graph visualization for relay orchestrator runs, built with React Flow and ELK auto-layout.
+An infinite-canvas flow-graph visualization for capcomd orchestrator runs, built with React Flow and ELK auto-layout.
 
 ## Features
 
@@ -47,7 +47,7 @@ When clicking a node, shows:
 
 ### Launch the UI
 ```bash
-relay ui
+capcomd ui
 ```
 
 Opens browser at http://localhost:3000
@@ -195,7 +195,7 @@ Replay mode with timeline controls at bottom.
 ## Future Enhancements
 
 ### Live Mode
-- WebSocket server in `relay serve`
+- WebSocket server in `capcomd serve`
 - Real-time event streaming
 - Auto-scroll to new nodes
 

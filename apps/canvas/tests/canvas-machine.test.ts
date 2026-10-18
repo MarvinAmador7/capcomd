@@ -116,7 +116,7 @@ describe("Canvas Machine - Model-Based Tests", () => {
 });
 
 describe("Graph Folding - Property Tests", () => {
-  test("folding events matches relay status (idempotency)", () => {
+  test("folding events matches capcomd status (idempotency)", () => {
     const events: RelayEvent[] = [
       { type: "RUN_CREATED", runId: "run-1", timestamp: 100 },
       { type: "PLAN_READY", runId: "run-1", tasks: ["task-1", "task-2"], timestamp: 200 },

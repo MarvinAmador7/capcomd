@@ -1,4 +1,4 @@
-// `relay mcp`: the relay tools over MCP on stdio, for agent callers such as Hermes.
+// `capcomd mcp`: the capcomd tools over MCP on stdio, for agent callers such as Hermes.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { spawn } from "child_process";
@@ -54,15 +54,15 @@ export function startDetachedRun(goal: string, runId: string, targetBranch?: str
 }
 
 export function buildServer(): McpServer {
-  const server = new McpServer({ name: "relay", version: "0.1.0" });
+  const server = new McpServer({ name: "capcomd", version: "0.1.0" });
 
   server.registerTool(
-    "relay_run",
+    "capcomd_run",
     {
       description:
-        "Start a relay run for a coding goal. Returns {runId} immediately; poll relay_status. " +
+        "Start a capcomd run for a coding goal. Returns {runId} immediately; poll capcomd_status. " +
         "Set wait=true to block until the run finishes or a merge awaits approval (bounded by timeoutMs). " +
-        "If targetBranch is protected (main, master, release/* by default) verified merges wait for relay_approve.",
+        "If targetBranch is protected (main, master, release/* by default) verified merges wait for capcomd_approve.",
       inputSchema: {
         goal: z.string().min(1).describe("What the run should accomplish"),
         runId: z.string().optional().describe("Resume or name a run; generated if omitted"),
@@ -76,7 +76,7 @@ export function buildServer(): McpServer {
         await assertEngine();
         const id = runId ?? generateRunId();
         const { log } = startDetachedRun(goal, id, targetBranch);
-        if (!wait) return ok({ runId: id, log, next: `Poll relay_status with runId ${id}.` });
+        if (!wait) return ok({ runId: id, log, next: `Poll capcomd_status with runId ${id}.` });
         const deadline = Date.now() + (timeoutMs ?? 120_000);
         let status: Awaited<ReturnType<typeof getStatus>> | null = null;
         while (Date.now() < deadline) {
@@ -95,10 +95,10 @@ export function buildServer(): McpServer {
           status,
           timedOut: !status || (!TERMINAL.has(status.state) && waiting.length === 0),
           next: waiting.length
-            ? `Approve with relay_approve {runId: "${id}", taskId: "${waiting[0]}"} after review.`
+            ? `Approve with capcomd_approve {runId: "${id}", taskId: "${waiting[0]}"} after review.`
             : status && TERMINAL.has(status.state)
-              ? `Run is ${status.state}. See relay_trace or relay_events.`
-              : `Still running. Poll relay_status.`,
+              ? `Run is ${status.state}. See capcomd_trace or capcomd_events.`
+              : `Still running. Poll capcomd_status.`,
         });
       } catch (error) {
         return fail(error);
@@ -107,7 +107,7 @@ export function buildServer(): McpServer {
   );
 
   server.registerTool(
-    "relay_status",
+    "capcomd_status",
     {
       description: "Current state of a run: lifecycle state, budget, per-task state and tasks awaiting approval.",
       inputSchema: { runId: z.string().min(1) },
@@ -122,7 +122,7 @@ export function buildServer(): McpServer {
   );
 
   server.registerTool(
-    "relay_cancel",
+    "capcomd_cancel",
     { description: "Cancel a run. Tasks parked for approval are cancelled too.", inputSchema: { runId: z.string().min(1) } },
     async ({ runId }) => {
       try {
@@ -134,7 +134,7 @@ export function buildServer(): McpServer {
   );
 
   server.registerTool(
-    "relay_events",
+    "capcomd_events",
     {
       description:
         "Lifecycle events for a run, oldest first, cursor-paginated. Pass nextCursor back as cursor for the next page. " +
@@ -161,11 +161,11 @@ export function buildServer(): McpServer {
   );
 
   server.registerTool(
-    "relay_trace",
+    "capcomd_trace",
     {
       description:
         "Span waterfall for a run (actor actions, state transitions, model, sandbox and git calls), depth-first, " +
-        "cursor-paginated like relay_events. truncated=true means more spans exist; pass nextCursor back as cursor.",
+        "cursor-paginated like capcomd_events. truncated=true means more spans exist; pass nextCursor back as cursor.",
       inputSchema: {
         runId: z.string().min(1),
         cursor: z.string().optional(),
@@ -177,7 +177,7 @@ export function buildServer(): McpServer {
         const tree = loadTrace(runId);
         if (!tree) {
           const { RelayError } = await import("../core/errors");
-          throw new RelayError("not_found", `No trace for run ${runId}`, "Traces appear once a run has started; check relay_status.");
+          throw new RelayError("not_found", `No trace for run ${runId}`, "Traces appear once a run has started; check capcomd_status.");
         }
         const KEEP = ["relay.entity_id", "relay.state_from", "relay.state_to", "relay.task_id", "relay.killpoint",
           "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.response.cost", "git.ref", "sandbox.vm_id", "relay.outcome"];
@@ -199,7 +199,7 @@ export function buildServer(): McpServer {
   );
 
   server.registerTool(
-    "relay_approve",
+    "capcomd_approve",
     {
       description: "Approve a verified task whose merge into a protected branch is parked in awaiting_approval.",
       inputSchema: { runId: z.string().min(1), taskId: z.string().min(1), approvedBy: z.string().optional() },

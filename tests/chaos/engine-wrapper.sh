@@ -7,7 +7,7 @@
 # unchanged. (Lowering pegboard envoy/runner thresholds here was measured and did NOT help:
 # the ~39s restart is gasoline's compile-time WORKER_LOST_THRESHOLD_MS=30s + 10s GC; see
 # docs/evidence/CHAOS-NOTES.md.)
-if [ -n "$CHAOS_ENGINE_DATA" ]; then
-  export RIVET__FILE_SYSTEM__PATH="$CHAOS_ENGINE_DATA/db"
+if [ -n "$CAPCOMD_CHAOS_ENGINE_DATA" ]; then
+  export RIVET__FILE_SYSTEM__PATH="$CAPCOMD_CHAOS_ENGINE_DATA/db"
 fi
-exec "$CHAOS_REAL_ENGINE" "$@"
+exec "$CAPCOMD_CHAOS_REAL_ENGINE" "$@"

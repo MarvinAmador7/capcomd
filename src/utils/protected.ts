@@ -1,10 +1,11 @@
+import { env } from "./env";
 /**
  * Protected merge targets. Merges into these park in `awaiting_approval`
- * until `relay approve`. Configure with RELAY_PROTECTED_BRANCHES
+ * until `capcomd approve`. Configure with CAPCOMD_PROTECTED_BRANCHES (deprecated alias RELAY_PROTECTED_BRANCHES)
  * (comma-separated, `*` suffix globs). Default: main, master, release/*.
  */
 export function protectedPatterns(): string[] {
-  const raw = process.env.RELAY_PROTECTED_BRANCHES ?? "main,master,release/*";
+  const raw = env("PROTECTED_BRANCHES") ?? "main,master,release/*";
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 }
 

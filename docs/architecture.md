@@ -1,4 +1,4 @@
-# relay architecture
+# capcomd architecture
 > Reconstruction: **LOW-MEDIUM confidence.** The original Mermaid diagram and the options A/B/C prose are not retained verbatim. The diagram below is re-derived from the recalled topology (actors-v1.md) and the appended decision lines, which are recalled accurately. Deployment line updated for ADR-009 = Deferred.
 
 ```mermaid

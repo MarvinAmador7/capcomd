@@ -1,10 +1,10 @@
-# relay
+# capcomd
 
 Agent orchestration CLI built on Rivet Actors and XState state machines.
 
 ## Overview
 
-`relay` is a v0 implementation of an agent orchestration system that coordinates planners, workers, and verifiers through explicit lifecycle state machines. It demonstrates crash-safe execution using Rivet Actors' SQLite persistence and XState v5 for pure transitions.
+`capcomd` is a v0 implementation of an agent orchestration system that coordinates planners, workers, and verifiers through explicit lifecycle state machines. It demonstrates crash-safe execution using Rivet Actors' SQLite persistence and XState v5 for pure transitions.
 
 **Key features:**
 - Crash-safe lifecycle management with atomic state transitions
@@ -55,7 +55,7 @@ bun run src/cli/index.ts serve
 Or use the CLI directly:
 
 ```bash
-bun relay serve
+bun capcomd serve
 ```
 
 ### Run a task
@@ -63,25 +63,25 @@ bun relay serve
 In a separate terminal:
 
 ```bash
-bun relay run "Build a todo app"
+bun capcomd run "Build a todo app"
 ```
 
 ### Check status
 
 ```bash
-bun relay status <runId>
+bun capcomd status <runId>
 ```
 
 ### Cancel a run
 
 ```bash
-bun relay cancel <runId>
+bun capcomd cancel <runId>
 ```
 
 ### Replay events
 
 ```bash
-bun relay replay <runId>
+bun capcomd replay <runId>
 ```
 
 ## Testing
@@ -99,7 +99,7 @@ bun test tests/machines/
 bun test tests/chaos/
 
 # Run with specific killpoint
-RELAY_KILLPOINT=tx.mid:1 bun test tests/chaos/
+CAPCOMD_KILLPOINT=tx.mid:1 bun test tests/chaos/
 ```
 
 ### Named killpoints
@@ -161,3 +161,10 @@ This is a v0 implementation for demonstration and testing purposes. Production u
 - Production-grade error handling
 
 See `docs/durability.md` for the full failure matrix and recovery procedures.
+
+## Naming (renamed from relay)
+
+The CLI was renamed from `relay` to `capcomd` on 2026-10-18.
+- Binary / package: `capcomd`. MCP tools: `capcomd_run`, `capcomd_status`, `capcomd_cancel`, `capcomd_events`, `capcomd_trace`, `capcomd_approve`.
+- Env: `CAPCOMD_*` (`CAPCOMD_ENDPOINT`, `CAPCOMD_SANDBOX`, `CAPCOMD_PROTECTED_BRANCHES`, `CAPCOMD_TRACE`, `CAPCOMD_TRACE_DIR`, `CAPCOMD_KILLPOINT`, `CAPCOMD_BOXD_DB`). The old `RELAY_*` names still work as deprecated aliases and print one warning on stderr (silence with `CAPCOMD_NO_DEPRECATION_WARNINGS=1`).
+- Deliberately unchanged, for compatibility: actor names, the `relay.v1` JSON schema id, `relay.*` span attribute keys in traces, the `.relay/` state directory, and the `relay-` boxd VM name prefix (existing idempotency keys stay stable).

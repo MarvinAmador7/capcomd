@@ -30,7 +30,7 @@ export default function App() {
     send({ type: "STREAM.CONNECT" });
 
     // Real spans: ?run=<runId> loads .traces/<runId>.ndjson through the dev server;
-    // otherwise use a trace captured from a real `relay run` (src/fixtures/demo-trace.ndjson).
+    // otherwise use a trace captured from a real `capcomd run` (src/fixtures/demo-trace.ndjson).
     const runParam = new URLSearchParams(window.location.search).get("run");
     if (runParam) {
       fetch(`/api/trace/${encodeURIComponent(runParam)}`)

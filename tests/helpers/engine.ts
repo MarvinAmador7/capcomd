@@ -20,7 +20,7 @@ export async function ensureEngine(label: string): Promise<{ stop: () => Promise
   return { stop: () => engine.stop() };
 }
 
-export async function relay(args: string[], env: Record<string, string> = {}) {
+export async function capcomd(args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", CLI, ...args], {
     cwd: REPO,
     env: { ...process.env, ...env },

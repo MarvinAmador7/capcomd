@@ -39,10 +39,10 @@ export function toRelayError(error: unknown): RelayError {
   if (error instanceof RelayError) return error;
   const message = error instanceof Error ? error.message : String(error);
   if (/ECONNREFUSED|Unable to connect|fetch failed|ConnectionRefused|engine unreachable/i.test(message)) {
-    return new RelayError("engine_unreachable", message, "Start the engine with `relay serve` and retry.");
+    return new RelayError("engine_unreachable", message, "Start the engine with `capcomd serve` and retry.");
   }
   if (/not.?found/i.test(message)) {
-    return new RelayError("not_found", message, "Check the id with `relay status <runId>`.");
+    return new RelayError("not_found", message, "Check the id with `capcomd status <runId>`.");
   }
-  return new RelayError("run_failed", message, "Inspect `relay events <runId>` and `relay trace <runId>`.");
+  return new RelayError("run_failed", message, "Inspect `capcomd events <runId>` and `capcomd trace <runId>`.");
 }

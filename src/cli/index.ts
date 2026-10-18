@@ -21,20 +21,20 @@ import {
 import { initDependencies } from "../dependencies";
 
 const HELP = `
-relay - agent orchestration CLI
+capcomd - agent orchestration CLI
 
 Usage:
-  relay serve                          Start the Rivet engine (port 6420)
-  relay run <goal> [--run-id ID] [--target-branch B] [--detach]
+  capcomd serve                          Start the Rivet engine (port 6420)
+  capcomd run <goal> [--run-id ID] [--target-branch B] [--detach]
                                        Start or resume a run
-  relay status <runId>                 Show run status
-  relay cancel <runId>                 Cancel a run
-  relay events <runId> [--cursor N] [--limit N]
+  capcomd status <runId>                 Show run status
+  capcomd cancel <runId>                 Cancel a run
+  capcomd events <runId> [--cursor N] [--limit N]
                                        List lifecycle events (alias: replay)
-  relay trace <runId>                  Show the span waterfall
-  relay approve <runId> <taskId>       Approve a merge parked in awaiting_approval
-  relay mcp                            Serve the relay tools over MCP (stdio)
-  relay ui                             Launch the web UI
+  capcomd trace <runId>                  Show the span waterfall
+  capcomd approve <runId> <taskId>       Approve a merge parked in awaiting_approval
+  capcomd mcp                            Serve the capcomd tools over MCP (stdio)
+  capcomd ui                             Launch the web UI
 
 Options:
   --json        Machine-readable output (schema "${SCHEMA}"); run streams NDJSON
@@ -45,7 +45,7 @@ Exit codes: 0 ok, 1 run failed, 2 usage, 3 not found, 4 engine unreachable
 `;
 
 function usage(message: string): never {
-  throw new RelayError("usage", message, "Run `relay --help` for usage.");
+  throw new RelayError("usage", message, "Run `capcomd --help` for usage.");
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -68,7 +68,7 @@ async function main(argv: string[]): Promise<number> {
       strict: true,
     });
   } catch (error) {
-    const err = new RelayError("usage", error instanceof Error ? error.message : String(error), "Run `relay --help` for usage.");
+    const err = new RelayError("usage", error instanceof Error ? error.message : String(error), "Run `capcomd --help` for usage.");
     const wantsJson = argv.includes("--json");
     if (wantsJson) console.log(JSON.stringify(err.toJSON()));
     else console.error(`Error: ${err.message}\n${err.hint}`);
@@ -102,7 +102,7 @@ async function main(argv: string[]): Promise<number> {
 
       case "run": {
         const goal = positionals[1];
-        if (!goal) usage("goal required: relay run <goal>");
+        if (!goal) usage("goal required: capcomd run <goal>");
         const runId = (values["run-id"] as string | undefined) ?? generateRunId();
         const targetBranch = values["target-branch"] as string | undefined;
         await assertEngine();
@@ -137,7 +137,7 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case "status": {
-        const runId = positionals[1] ?? usage("runId required: relay status <runId>");
+        const runId = positionals[1] ?? usage("runId required: capcomd status <runId>");
         const s = await getStatus(runId);
         if (json) out({ run: s });
         else {
@@ -147,14 +147,14 @@ async function main(argv: string[]): Promise<number> {
             console.log(`\nTasks:`);
             for (const t of s.tasks) console.log(`  ${t.taskId}: ${t.state}${t.targetBranch ? ` → ${t.targetBranch}` : ""}`);
           }
-          if (s.awaitingApproval.length) console.log(`\nAwaiting approval: ${s.awaitingApproval.join(", ")}  (relay approve ${s.runId} <taskId>)`);
+          if (s.awaitingApproval.length) console.log(`\nAwaiting approval: ${s.awaitingApproval.join(", ")}  (capcomd approve ${s.runId} <taskId>)`);
           console.log(`\nEvents: ${s.events} total`);
         }
         return EXIT.ok;
       }
 
       case "cancel": {
-        const runId = positionals[1] ?? usage("runId required: relay cancel <runId>");
+        const runId = positionals[1] ?? usage("runId required: capcomd cancel <runId>");
         const r = await cancelRun(runId);
         if (json) out(r);
         else console.log(r.changed ? `✓ Run ${runId} cancelled` : `Run ${runId} is ${r.state}; nothing to cancel`);
@@ -163,7 +163,7 @@ async function main(argv: string[]): Promise<number> {
 
       case "events":
       case "replay": {
-        const runId = positionals[1] ?? usage(`runId required: relay ${command} <runId>`);
+        const runId = positionals[1] ?? usage(`runId required: capcomd ${command} <runId>`);
         const limit = values.limit ? Number.parseInt(values.limit as string, 10) : 1000;
         if (!Number.isFinite(limit) || limit < 1) usage("--limit must be a positive integer");
         const all = await listEvents(runId);
@@ -178,17 +178,17 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case "trace": {
-        const runId = positionals[1] ?? usage("runId required: relay trace <runId>");
+        const runId = positionals[1] ?? usage("runId required: capcomd trace <runId>");
         const tree = loadTrace(runId);
-        if (!tree) throw new RelayError("not_found", `No trace found for run ${runId}`, "Traces are written to .traces/<runId>.ndjson while a run executes; start one with `relay run`.");
+        if (!tree) throw new RelayError("not_found", `No trace found for run ${runId}`, "Traces are written to .traces/<runId>.ndjson while a run executes; start one with `capcomd run`.");
         if (json) out({ trace: tree });
         else console.log(renderTrace(tree));
         return EXIT.ok;
       }
 
       case "approve": {
-        const runId = positionals[1] ?? usage("usage: relay approve <runId> <taskId>");
-        const taskId = positionals[2] ?? usage("usage: relay approve <runId> <taskId>");
+        const runId = positionals[1] ?? usage("usage: capcomd approve <runId> <taskId>");
+        const taskId = positionals[2] ?? usage("usage: capcomd approve <runId> <taskId>");
         const r = await approveTask(runId, taskId, (values.by as string | undefined) ?? "cli");
         if (json) out(r);
         else console.log(r.already ? `${taskId} was already merged` : `✓ Approved ${taskId}; merging into protected branch`);

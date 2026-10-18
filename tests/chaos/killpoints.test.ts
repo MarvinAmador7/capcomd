@@ -28,7 +28,7 @@ describe("Chaos Tests - Named Killpoints", () => {
   });
 
   test("survives tx.mid killpoint", async () => {
-    process.env.RELAY_KILLPOINT = "tx.mid:1";
+    process.env.CAPCOMD_KILLPOINT = "tx.mid:1";
 
     const runId = `chaos-test-${Date.now()}`;
 
@@ -45,7 +45,7 @@ describe("Chaos Tests - Named Killpoints", () => {
       }
     }
 
-    delete process.env.RELAY_KILLPOINT;
+    delete process.env.CAPCOMD_KILLPOINT;
 
     await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -56,7 +56,7 @@ describe("Chaos Tests - Named Killpoints", () => {
   }, 10000);
 
   test("survives model.after_return.before_commit killpoint", async () => {
-    process.env.RELAY_KILLPOINT = "model.after_return.before_commit:1";
+    process.env.CAPCOMD_KILLPOINT = "model.after_return.before_commit:1";
 
     const runId = `chaos-model-${Date.now()}`;
 
@@ -80,7 +80,7 @@ describe("Chaos Tests - Named Killpoints", () => {
       // Expected to fail due to killpoint
     }
 
-    delete process.env.RELAY_KILLPOINT;
+    delete process.env.CAPCOMD_KILLPOINT;
 
     await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -90,7 +90,7 @@ describe("Chaos Tests - Named Killpoints", () => {
   }, 10000);
 
   test("survives budget.charge.mid killpoint", async () => {
-    process.env.RELAY_KILLPOINT = "budget.charge.mid:1";
+    process.env.CAPCOMD_KILLPOINT = "budget.charge.mid:1";
 
     const runId = `chaos-budget-${Date.now()}`;
 
@@ -112,7 +112,7 @@ describe("Chaos Tests - Named Killpoints", () => {
     } catch (error: any) {
     }
 
-    delete process.env.RELAY_KILLPOINT;
+    delete process.env.CAPCOMD_KILLPOINT;
 
     await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -127,7 +127,7 @@ describe("Chaos Tests - Named Killpoints", () => {
   }, 10000);
 
   test("survives vm.create.after_request.before_record killpoint", async () => {
-    process.env.RELAY_KILLPOINT = "vm.create.after_request.before_record:1";
+    process.env.CAPCOMD_KILLPOINT = "vm.create.after_request.before_record:1";
 
     const runId = `chaos-vm-${Date.now()}`;
     const workerId = `${runId}-worker-1`;
@@ -150,7 +150,7 @@ describe("Chaos Tests - Named Killpoints", () => {
       // Expected to fail due to killpoint
     }
 
-    delete process.env.RELAY_KILLPOINT;
+    delete process.env.CAPCOMD_KILLPOINT;
 
     await new Promise((resolve) => setTimeout(resolve, 500));
 

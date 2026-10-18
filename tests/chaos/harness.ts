@@ -13,7 +13,7 @@ export async function runChaosTest(config: ChaosTestConfig): Promise<void> {
 
   const env = {
     ...process.env,
-    RELAY_KILLPOINT: `${killpoint}:${iteration}`,
+    CAPCOMD_KILLPOINT: `${killpoint}:${iteration}`,
   };
 
   let attempt = 0;

@@ -2,10 +2,11 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
+import { env } from "../../src/utils/env";
 
 /** Serves relay's `.traces/<runId>.ndjson` at `/api/trace/<runId>` in dev. */
 function relayTraces(): Plugin {
-  const dir = process.env.RELAY_TRACE_DIR ?? resolve(import.meta.dirname, "../../.traces");
+  const dir = env("TRACE_DIR") ?? resolve(import.meta.dirname, "../../.traces");
   return {
     name: "relay-traces",
     configureServer(server) {

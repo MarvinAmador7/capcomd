@@ -3,6 +3,7 @@ import type { SandboxProvider } from "./providers/sandbox";
 import { FakeModelClient } from "./models/fake";
 import { FakeProvider } from "./providers/fake";
 import { traceMethods } from "./utils/tracing-simple";
+import { env as envVar } from "./utils/env";
 
 interface Dependencies {
   model: ModelClient;
@@ -40,14 +41,14 @@ function tracedProvider(provider: SandboxProvider, name: string): SandboxProvide
   });
 }
 
-/** RELAY_SANDBOX=boxd selects BoxdProvider; anything else (default) is the in-memory fake. */
+/** CAPCOMD_SANDBOX=boxd (or deprecated RELAY_SANDBOX) selects BoxdProvider; anything else (default) is the in-memory fake. */
 export function providerFromEnv(env: Record<string, string | undefined> = process.env): SandboxProvider {
-  const kind = (env.RELAY_SANDBOX ?? "fake").toLowerCase();
+  const kind = (envVar("SANDBOX", env) ?? "fake").toLowerCase();
   if (kind === "boxd") {
     const { BoxdProvider } = require("./providers/boxd") as typeof import("./providers/boxd");
     return new BoxdProvider();
   }
-  if (kind !== "fake") throw new Error(`Unknown RELAY_SANDBOX=${kind} (expected fake|boxd)`);
+  if (kind !== "fake") throw new Error(`Unknown CAPCOMD_SANDBOX=${kind} (expected fake|boxd)`);
   return new FakeProvider();
 }
 

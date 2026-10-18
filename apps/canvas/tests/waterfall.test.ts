@@ -88,7 +88,7 @@ describe("canvas machine spans state", () => {
     actor.stop();
   });
 
-  test("demo fixture is a real relay trace with every span kind", () => {
+  test("demo fixture is a real capcomd trace with every span kind", () => {
     const parsed = parseNdjson(demoTrace as unknown as string);
     expect(parsed.length).toBeGreaterThan(20);
     const kinds = new Set(layoutWaterfall(parsed, null).map((s) => s.kind));

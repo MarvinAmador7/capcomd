@@ -1,12 +1,13 @@
-// Data-returning operations shared by the CLI (`--json` and human output) and `relay mcp`.
+// Data-returning operations shared by the CLI (`--json` and human output) and `capcomd mcp`.
 import { createClient } from "rivetkit/client";
 import type { Registry } from "../registry";
 import { RelayError, SCHEMA, toRelayError } from "./errors";
 import { withSpan } from "../utils/tracing-simple";
 import { isProtectedBranch } from "../utils/protected";
+import { env } from "../utils/env";
 
 export function endpoint(): string {
-  return process.env.RELAY_ENDPOINT ?? "http://127.0.0.1:6420";
+  return env("ENDPOINT") ?? "http://127.0.0.1:6420";
 }
 
 export function client() {
@@ -20,7 +21,7 @@ export async function assertEngine(): Promise<void> {
     throw new RelayError(
       "engine_unreachable",
       `Rivet engine not reachable at ${endpoint()}`,
-      "Start the engine with `relay serve` (or set RELAY_ENDPOINT) and retry."
+      "Start the engine with `capcomd serve` (or set CAPCOMD_ENDPOINT) and retry."
     );
   }
 }
@@ -83,7 +84,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export interface RunOptions {
   goal: string;
   runId?: string;
-  /** Branch tasks merge into. Protected targets wait for `relay approve`. */
+  /** Branch tasks merge into. Protected targets wait for `capcomd approve`. */
   targetBranch?: string;
   approvalPollMs?: number;
   approvalTimeoutMs?: number;
@@ -286,12 +287,12 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
         emit(
           "task.awaiting_approval",
           { taskId, targetBranch: target },
-          `  ⏸ ${taskId} verified; merge into protected branch ${target} awaits approval (relay approve ${runId} ${taskId})`
+          `  ⏸ ${taskId} verified; merge into protected branch ${target} awaits approval (capcomd approve ${runId} ${taskId})`
         );
         const deadline = Date.now() + (opts.approvalTimeoutMs ?? 24 * 3600_000);
         while (task?.state === "awaiting_approval") {
           if (Date.now() > deadline) {
-            throw new RelayError("run_failed", `Approval for ${taskId} timed out`, `Run \`relay approve ${runId} ${taskId}\` then resume with \`relay run --run-id ${runId} <goal>\`.`);
+            throw new RelayError("run_failed", `Approval for ${taskId} timed out`, `Run \`capcomd approve ${runId} ${taskId}\` then resume with \`capcomd run --run-id ${runId} <goal>\`.`);
           }
           await sleep(opts.approvalPollMs ?? 1000);
           task = await taskBoardHandle.getTask({ taskId });
@@ -361,9 +362,9 @@ async function getRunOrThrow(runId: string) {
   } catch (error) {
     const e = toRelayError(error);
     if (e.code === "engine_unreachable") throw e;
-    throw new RelayError("not_found", `Run ${runId} not found`, "List your run ids from `relay run --json` output, or start one with `relay run <goal>`.");
+    throw new RelayError("not_found", `Run ${runId} not found`, "List your run ids from `capcomd run --json` output, or start one with `capcomd run <goal>`.");
   }
-  if (!run) throw new RelayError("not_found", `Run ${runId} not found`, "Start one with `relay run <goal>`.");
+  if (!run) throw new RelayError("not_found", `Run ${runId} not found`, "Start one with `capcomd run <goal>`.");
   return { c, run };
 }
 
@@ -403,7 +404,7 @@ export async function cancelRun(runId: string): Promise<{ runId: string; state: 
   const { c, run } = await getRunOrThrow(runId);
   const before = run.state;
   await c.run.get([runId]).cancel({ runId });
-  // Also cancel tasks parked for approval so a waiting `relay run` exits.
+  // Also cancel tasks parked for approval so a waiting `capcomd run` exits.
   const ids: string[] = run.context.plan?.tasks ?? [];
   const after = await c.run.get([runId]).getRun({ runId });
   if (ids.length) {
@@ -458,10 +459,10 @@ export async function approveTask(runId: string, taskId: string, approvedBy = "c
   const { c } = await getRunOrThrow(runId);
   const res = await c.taskBoard.getOrCreate([runId]).approveTask({ taskId, approvedBy });
   if (!res.ok && res.error === "not_found") {
-    throw new RelayError("not_found", `Task ${taskId} not found in run ${runId}`, `Check task ids with \`relay status ${runId}\`.`);
+    throw new RelayError("not_found", `Task ${taskId} not found in run ${runId}`, `Check task ids with \`capcomd status ${runId}\`.`);
   }
   if (!res.ok) {
-    throw new RelayError("conflict", `Task ${taskId} is ${res.state}, not awaiting_approval`, `Only tasks in awaiting_approval can be approved; see \`relay status ${runId}\`.`);
+    throw new RelayError("conflict", `Task ${taskId} is ${res.state}, not awaiting_approval`, `Only tasks in awaiting_approval can be approved; see \`capcomd status ${runId}\`.`);
   }
   return { runId, taskId, state: res.state, already: res.already };
 }

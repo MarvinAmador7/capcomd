@@ -18,7 +18,7 @@ Lifecycle state (task, lease, worker, run) is governed by **ADR-008**: XState v5
 Per-RunActor event log in c.db, contiguous `seq`, replayable (ADR-002).
 
 ## 4. CLI wiring (recalled outline)
-`relay` CLI uses `rivetkit/client` against the local engine (`http://localhost:6420`).
+`capcomd` CLI uses `rivetkit/client` against the local engine (`http://localhost:6420`).
 
 ## 5. TypeScript sketch (RE-DERIVED, not original)
 ```ts

@@ -1,3 +1,4 @@
+import { env as envVar } from "../../src/utils/env";
 import { spawn, type ChildProcess } from "child_process";
 import { homedir } from "os";
 import { openSync, readFileSync, readdirSync, readlinkSync } from "fs";
@@ -120,7 +121,7 @@ const REAL_ENGINE = `${ROOT}/node_modules/@rivetkit/engine-cli-linux-x64-musl/ri
 export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   const port = opts.port ?? DEFAULT_PORT;
-  env.RELAY_ENDPOINT = `http://127.0.0.1:${port}`;
+  env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${port}`;
   if (opts.port !== undefined) {
     env.RIVET_RUN_ENGINE_PORT = String(port);
     // rivet-services (agentOS/durable streams, unused by relay) binds a fixed :8642 and
@@ -129,8 +130,8 @@ export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
   }
   if (opts.dataDir) {
     env.RIVET_ENGINE_BINARY = `${ROOT}/tests/chaos/engine-wrapper.sh`;
-    env.CHAOS_REAL_ENGINE = REAL_ENGINE;
-    env.CHAOS_ENGINE_DATA = opts.dataDir;
+    env.CAPCOMD_CHAOS_REAL_ENGINE = REAL_ENGINE;
+    env.CAPCOMD_CHAOS_ENGINE_DATA = opts.dataDir;
   }
   return env;
 }
@@ -204,8 +205,9 @@ export class Engine {
     this.stopping = false;
     this.sawKill = false;
     const env = { ...process.env, ...engineEnv(this.opts) };
+    delete env.CAPCOMD_KILLPOINT;
     delete env.RELAY_KILLPOINT;
-    if (killpoint) env.RELAY_KILLPOINT = killpoint;
+    if (killpoint) env.CAPCOMD_KILLPOINT = killpoint;
 
     await this.spawnUntilReady(env);
   }
@@ -281,7 +283,7 @@ export class Engine {
         await sleep(100);
       }
     }
-    if (process.env.CHAOS_TS) console.log(`    [ts] http-up`, Date.now());
+    if (envVar("CHAOS_TS")) console.log(`    [ts] http-up`, Date.now());
     if (!httpUp) {
       throw new Error(`engine http not ready\n${tailFile(this.logPath)}`);
     }
@@ -307,7 +309,7 @@ export class Engine {
         resolve({ code: code ?? 1, output });
       });
     });
-    if (process.env.CHAOS_TS) console.log(`    [ts] probe-done`, Date.now(), outcome.output.replace(/\s+/g, " ").slice(-200));
+    if (envVar("CHAOS_TS")) console.log(`    [ts] probe-done`, Date.now(), outcome.output.replace(/\s+/g, " ").slice(-200));
     if (outcome.code === 0 && outcome.output.includes("ready")) return;
     const detail = outcome.output.replace(/\s+/g, " ").slice(-300);
     throw new Error(`engine not ready: ${detail}`);
@@ -359,7 +361,9 @@ const CLIENT_TIMEOUT_MS = 90_000;
 
 export function runClient(runId: string, opts: EngineOpts = {}): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const env = { ...process.env, RELAY_ENDPOINT: engineEnv(opts).RELAY_ENDPOINT };
+    const env = { ...process.env, CAPCOMD_ENDPOINT: engineEnv(opts).CAPCOMD_ENDPOINT };
+    delete env.RELAY_ENDPOINT;
+    delete env.CAPCOMD_KILLPOINT;
     delete env.RELAY_KILLPOINT;
     // process.execPath, not "bun": the latter is a /bin/sh wrapper, and the timeout's
     // SIGKILL would hit only the wrapper, leaving bun.exe holding the pipes ('close' never fires).
@@ -376,7 +380,7 @@ export function runClient(runId: string, opts: EngineOpts = {}): Promise<{ code:
     let output = "";
     const t0 = Date.now();
     child.stdout?.on("data", (chunk) => {
-      if (process.env.CHAOS_TS) output += `[+${Date.now() - t0}ms] `;
+      if (envVar("CHAOS_TS")) output += `[+${Date.now() - t0}ms] `;
       output += chunk.toString();
     });
     child.stderr?.on("data", (chunk) => {

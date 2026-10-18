@@ -190,9 +190,9 @@ describe("BoxdProvider (mocked SDK)", () => {
     expect(await p.list("relay-")).toEqual([]);
   });
 
-  test("RELAY_SANDBOX selects the provider; fake is the default", () => {
+  test("CAPCOMD_SANDBOX selects the provider; fake is the default", () => {
     expect(providerFromEnv({})).toBeInstanceOf(FakeProvider);
-    expect(providerFromEnv({ RELAY_SANDBOX: "fake" })).toBeInstanceOf(FakeProvider);
-    expect(() => providerFromEnv({ RELAY_SANDBOX: "nope" })).toThrow();
+    expect(providerFromEnv({ CAPCOMD_SANDBOX: "fake" })).toBeInstanceOf(FakeProvider);
+    expect(() => providerFromEnv({ CAPCOMD_SANDBOX: "nope" })).toThrow();
   });
 });

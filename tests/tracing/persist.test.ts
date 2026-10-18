@@ -6,10 +6,10 @@ import { join } from "path";
 let dir = "";
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "relay-trace-"));
-  process.env.RELAY_TRACE_DIR = dir;
+  process.env.CAPCOMD_TRACE_DIR = dir;
 });
 afterAll(() => {
-  delete process.env.RELAY_TRACE_DIR;
+  delete process.env.CAPCOMD_TRACE_DIR;
   rmSync(dir, { recursive: true, force: true });
 });
 

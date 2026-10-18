@@ -22,4 +22,4 @@
 
 **@xstate/store:** use it for flat UI preferences (filters, collapsed groups, theme), with `persist`. Anything with modes or async work goes in the machine.
 
-**Testing:** `createTestModel(canvasMachine).getShortestPaths()` drives Playwright paths (live to replay to seek to open spans, plus disconnect during replay). Property tests check that folding all events matches the `relay status` output, and that replaying the event log to its end gives the same result as live mode.
+**Testing:** `createTestModel(canvasMachine).getShortestPaths()` drives Playwright paths (live to replay to seek to open spans, plus disconnect during replay). Property tests check that folding all events matches the `capcomd status` output, and that replaying the event log to its end gives the same result as live mode.

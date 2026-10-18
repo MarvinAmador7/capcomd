@@ -10,6 +10,7 @@
  *
  * Usage: bun tests/chaos/fast.ts [--rounds 3] [--workers N] [--only killpoints|seeds]
  */
+import { env as envVar } from "../../src/utils/env";
 import { availableParallelism, freemem } from "os";
 import { mkdirSync, rmSync } from "fs";
 import { KILLPOINTS } from "./cases";
@@ -28,11 +29,11 @@ const seeds = Number(arg("seeds") ?? 50);
 // Measured: one worker peaks ~PER_WORKER_MB (runner + engine + client). Cases are mostly
 // waiting on the engine's fixed 30s workflow-lease recovery, so N can exceed the core count;
 // memory is the real limit.
-const PER_WORKER_MB = Number(process.env.CHAOS_PER_WORKER_MB ?? 250);
+const PER_WORKER_MB = Number(envVar("CHAOS_PER_WORKER_MB") ?? 250);
 const autoN = Math.max(1, Math.min(availableParallelism() * 2, Math.floor((freemem() / 1048576 - 1024) / PER_WORKER_MB), 16));
-const N = Number(arg("workers") ?? process.env.CHAOS_WORKERS ?? autoN);
-const BASE_PORT = Number(process.env.CHAOS_BASE_PORT ?? 7700);
-const DATA_ROOT = process.env.CHAOS_DATA_ROOT ?? "/tmp/relay-chaos-fast";
+const N = Number(arg("workers") ?? envVar("CHAOS_WORKERS") ?? autoN);
+const BASE_PORT = Number(envVar("CHAOS_BASE_PORT") ?? 7700);
+const DATA_ROOT = envVar("CHAOS_DATA_ROOT") ?? "/tmp/capcomd-chaos-fast";
 
 interface Job { round: number; kind: "killpoint" | "seed"; id: string; killpoint: string; iteration: number; requireKill: boolean }
 const jobs: Job[] = [];

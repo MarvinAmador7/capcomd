@@ -1,43 +1,43 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { ensureEngine, relay, sleep } from "../helpers/engine";
+import { ensureEngine, capcomd, sleep } from "../helpers/engine";
 
 const lines = (s: string) => s.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
 
-describe("relay CLI exit codes without an engine", () => {
+describe("capcomd CLI exit codes without an engine", () => {
   test("usage errors exit 2 with a JSON error", async () => {
-    const r = await relay(["run", "--json"]);
+    const r = await capcomd(["run", "--json"]);
     expect(r.code).toBe(2);
     const body = JSON.parse(r.stdout);
     expect(body).toMatchObject({ schema: "relay.v1", ok: false, error: { code: "usage" } });
-    expect(body.error.hint).toContain("relay --help");
+    expect(body.error.hint).toContain("capcomd --help");
   });
 
   test("unknown flags exit 2", async () => {
-    const r = await relay(["status", "x", "--bogus", "--json"]);
+    const r = await capcomd(["status", "x", "--bogus", "--json"]);
     expect(r.code).toBe(2);
     expect(JSON.parse(r.stdout).error.code).toBe("usage");
   });
 
   test("unknown command exits 2", async () => {
-    expect((await relay(["frobnicate"])).code).toBe(2);
+    expect((await capcomd(["frobnicate"])).code).toBe(2);
   });
 
   test("engine unreachable exits 4", async () => {
-    const r = await relay(["status", "run-x", "--json"], { RELAY_ENDPOINT: "http://127.0.0.1:6499" });
+    const r = await capcomd(["status", "run-x", "--json"], { CAPCOMD_ENDPOINT: "http://127.0.0.1:6499" });
     expect(r.code).toBe(4);
     expect(JSON.parse(r.stdout).error).toMatchObject({ code: "engine_unreachable" });
-    const run = await relay(["run", "goal", "--json"], { RELAY_ENDPOINT: "http://127.0.0.1:6499" });
+    const run = await capcomd(["run", "goal", "--json"], { CAPCOMD_ENDPOINT: "http://127.0.0.1:6499" });
     expect(run.code).toBe(4);
   });
 
   test("trace for an unknown run exits 3", async () => {
-    const r = await relay(["trace", "run-does-not-exist", "--json"]);
+    const r = await capcomd(["trace", "run-does-not-exist", "--json"]);
     expect(r.code).toBe(3);
     expect(JSON.parse(r.stdout).error.code).toBe("not_found");
   });
 });
 
-describe("relay CLI against a live engine", () => {
+describe("capcomd CLI against a live engine", () => {
   let engine: { stop: () => Promise<void> };
   beforeAll(async () => {
     engine = await ensureEngine("cli");
@@ -50,7 +50,7 @@ describe("relay CLI against a live engine", () => {
 
   test("run --json streams NDJSON and ends with run.result", async () => {
     runId = `run-clijson-${Date.now()}`;
-    const r = await relay(["run", "--json", "--run-id", runId, "Build a thing"]);
+    const r = await capcomd(["run", "--json", "--run-id", runId, "Build a thing"]);
     expect(r.code).toBe(0);
     const evs = lines(r.stdout);
     for (const e of evs) {
@@ -69,7 +69,7 @@ describe("relay CLI against a live engine", () => {
   }, 120_000);
 
   test("status --json has the stable shape", async () => {
-    const r = await relay(["status", runId, "--json"]);
+    const r = await capcomd(["status", runId, "--json"]);
     expect(r.code).toBe(0);
     const body = JSON.parse(r.stdout);
     expect(body.schema).toBe("relay.v1");
@@ -81,20 +81,20 @@ describe("relay CLI against a live engine", () => {
   });
 
   test("status of an unknown run exits 3", async () => {
-    const r = await relay(["status", `run-missing-${Date.now()}`, "--json"]);
+    const r = await capcomd(["status", `run-missing-${Date.now()}`, "--json"]);
     expect(r.code).toBe(3);
     expect(JSON.parse(r.stdout).error.code).toBe("not_found");
   });
 
   test("events --json paginates with an explicit truncated flag", async () => {
-    const first = JSON.parse((await relay(["events", runId, "--json", "--limit", "5"])).stdout);
+    const first = JSON.parse((await capcomd(["events", runId, "--json", "--limit", "5"])).stdout);
     expect(first.events.length).toBe(5);
     expect(first.truncated).toBe(true);
     expect(first.nextCursor).toBe("5");
     const seen = [...first.events];
     let cursor = first.nextCursor;
     while (cursor) {
-      const page = JSON.parse((await relay(["events", runId, "--json", "--limit", "5", "--cursor", cursor])).stdout);
+      const page = JSON.parse((await capcomd(["events", runId, "--json", "--limit", "5", "--cursor", cursor])).stdout);
       seen.push(...page.events);
       cursor = page.nextCursor;
       if (!cursor) expect(page.truncated).toBe(false);
@@ -103,7 +103,7 @@ describe("relay CLI against a live engine", () => {
   }, 60_000);
 
   test("trace --json has actor, transition, model, sandbox and git spans", async () => {
-    const r = await relay(["trace", runId, "--json"]);
+    const r = await capcomd(["trace", runId, "--json"]);
     expect(r.code).toBe(0);
     const { trace } = JSON.parse(r.stdout);
     const names: string[] = trace.spans.map((s: any) => s.name);
@@ -119,13 +119,13 @@ describe("relay CLI against a live engine", () => {
   });
 
   test("cancel --json on a finished run reports no change", async () => {
-    const body = JSON.parse((await relay(["cancel", runId, "--json"])).stdout);
+    const body = JSON.parse((await capcomd(["cancel", runId, "--json"])).stdout);
     expect(body).toMatchObject({ ok: true, runId, changed: false, state: "completed" });
   });
 
   test("run --json --detach returns {runId}; protected merge waits for approve", async () => {
     const id = `run-approve-${Date.now()}`;
-    const r = await relay(["run", "--json", "--detach", "--run-id", id, "--target-branch", "main", "Ship to main"]);
+    const r = await capcomd(["run", "--json", "--detach", "--run-id", id, "--target-branch", "main", "Ship to main"]);
     expect(r.code).toBe(0);
     const started = JSON.parse(r.stdout);
     expect(started).toMatchObject({ schema: "relay.v1", ok: true, runId: id, detached: true });
@@ -133,7 +133,7 @@ describe("relay CLI against a live engine", () => {
     let status: any;
     for (let i = 0; i < 120; i++) {
       await sleep(500);
-      const s = await relay(["status", id, "--json"]);
+      const s = await capcomd(["status", id, "--json"]);
       if (s.code !== 0) continue;
       status = JSON.parse(s.stdout).run;
       if (status.awaitingApproval.length) break;
@@ -141,7 +141,7 @@ describe("relay CLI against a live engine", () => {
     expect(status.awaitingApproval).toEqual(["task-1"]);
     expect(status.state).toBe("executing");
 
-    const early = await relay(["approve", id, status.tasks[1].taskId, "--json"]);
+    const early = await capcomd(["approve", id, status.tasks[1].taskId, "--json"]);
     expect(early.code).toBe(1);
     expect(JSON.parse(early.stdout).error.code).toBe("conflict");
 
@@ -149,22 +149,22 @@ describe("relay CLI against a live engine", () => {
     expect(taskIds.length).toBeGreaterThan(1);
     for (const taskId of taskIds) {
       for (let i = 0; i < 60; i++) {
-        const s = JSON.parse((await relay(["status", id, "--json"])).stdout).run;
+        const s = JSON.parse((await capcomd(["status", id, "--json"])).stdout).run;
         if (s.awaitingApproval.includes(taskId)) break;
         await sleep(500);
       }
-      const a = await relay(["approve", id, taskId, "--json"]);
+      const a = await capcomd(["approve", id, taskId, "--json"]);
       expect(a.code).toBe(0);
       expect(JSON.parse(a.stdout)).toMatchObject({ ok: true, taskId, state: "merged" });
     }
 
     for (let i = 0; i < 60; i++) {
-      status = JSON.parse((await relay(["status", id, "--json"])).stdout).run;
+      status = JSON.parse((await capcomd(["status", id, "--json"])).stdout).run;
       if (status.state === "completed") break;
       await sleep(500);
     }
     expect(status.state).toBe("completed");
-    const evs = JSON.parse((await relay(["events", id, "--json"])).stdout).events.map((e: any) => e.type);
+    const evs = JSON.parse((await capcomd(["events", id, "--json"])).stdout).events.map((e: any) => e.type);
     expect(evs.filter((t: string) => t === "VERIFIED_AWAITING_APPROVAL").length).toBe(taskIds.length);
     expect(evs.filter((t: string) => t === "APPROVED").length).toBe(taskIds.length);
     expect(evs).not.toContain("VERIFIED_AND_MERGED");

@@ -2,13 +2,14 @@
 //
 // Spans that carry `relay.run_id` are appended, one JSON object per line, to
 // `<traceDir>/<runId>.ndjson` as soon as they end. The engine process (actors)
-// and the CLI process both append to the same file, so `relay trace <runId>`
+// and the CLI process both append to the same file, so `capcomd trace <runId>`
 // sees the whole run. The trace id is derived from the run id, so every
 // process agrees on it without passing context around.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
+import { env } from "./env";
 
 export interface SimpleSpan {
   traceId: string;
@@ -27,8 +28,8 @@ let currentSpan: SimpleSpan | null = null;
 const als = new AsyncLocalStorage<SimpleSpan>();
 
 export function traceDir(): string {
-  return process.env.RELAY_TRACE_DIR
-    ? resolve(process.env.RELAY_TRACE_DIR)
+  return env("TRACE_DIR")
+    ? resolve(env("TRACE_DIR"))
     : resolve(new URL("../..", import.meta.url).pathname, ".traces");
 }
 
@@ -81,7 +82,7 @@ export function startSpan(
 
 function persist(span: SimpleSpan) {
   const runId = span.attributes["relay.run_id"];
-  if (!runId || process.env.RELAY_TRACE === "off") return;
+  if (!runId || env("TRACE") === "off") return;
   try {
     mkdirSync(traceDir(), { recursive: true });
     appendFileSync(tracePath(String(runId)), JSON.stringify(span) + "\n");

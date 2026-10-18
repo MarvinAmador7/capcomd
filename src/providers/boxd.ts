@@ -12,6 +12,7 @@ import {
   SandboxTimeoutError,
   mapBoxdError,
 } from "./boxd-errors";
+import { env } from "../utils/env";
 
 export * from "./boxd-errors";
 
@@ -62,7 +63,7 @@ export interface BoxdProviderOptions {
   client?: BoxdLike;
   /** Defaults to env BOXD_API_KEY. Never logged. */
   apiKey?: string;
-  /** SQLite file for the idemKey → VM id ledger. Default env RELAY_BOXD_DB or .relay/boxd.sqlite. */
+  /** SQLite file for the idemKey → VM id ledger. Default env CAPCOMD_BOXD_DB or .relay/boxd.sqlite. */
   dbPath?: string;
   gitCredentials?: GitCredentialHook;
   /** Keepalive interval. boxd auto-hibernates idle VMs (4h); default every 30 min. 0 disables. */
@@ -85,7 +86,7 @@ export function vmNameFor(idemKey: string, prefix = "relay-"): string {
 export function assertEgress(allow: string[] | undefined): string[] {
   const list = (allow ?? []).map((s) => s.trim()).filter(Boolean);
   if (list.length === 0) {
-    throw new SandboxConfigError("egress allowlist is empty; boxd treats [] as unrestricted, so relay refuses to send it");
+    throw new SandboxConfigError("egress allowlist is empty; boxd treats [] as unrestricted, so capcomd refuses to send it");
   }
   return list;
 }
@@ -114,7 +115,7 @@ export class BoxdProvider implements SandboxProvider {
     this.keepaliveMs = opts.keepaliveMs ?? 30 * 60_000;
     this.org = opts.org ?? process.env.BOXD_ORG;
     this.prefix = opts.namePrefix ?? "relay-";
-    const path = opts.dbPath ?? process.env.RELAY_BOXD_DB ?? resolve(new URL("../..", import.meta.url).pathname, ".relay", "boxd.sqlite");
+    const path = opts.dbPath ?? env("BOXD_DB") ?? resolve(new URL("../..", import.meta.url).pathname, ".relay", "boxd.sqlite");
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true });
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;");

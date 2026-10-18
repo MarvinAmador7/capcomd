@@ -1,11 +1,11 @@
 {
-  "name": "relay",
+  "name": "capcomd",
   "version": "0.1.0",
-  "description": "Agent orchestration CLI built on Rivet Actors",
+  "description": "capcomd: agent orchestration CLI built on Rivet Actors",
   "type": "module",
   "private": true,
   "bin": {
-    "relay": "./src/cli/index.ts"
+    "capcomd": "./src/cli/index.ts"
   },
   "scripts": {
     "typecheck": "bun check",

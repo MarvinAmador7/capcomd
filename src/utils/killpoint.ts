@@ -1,5 +1,6 @@
 import { startSpan, endSpan } from "./tracing-simple";
-const KILLPOINT_ENV = process.env.RELAY_KILLPOINT;
+import { env } from "./env";
+const KILLPOINT_ENV = env("KILLPOINT");
 
 let killpointCounts = new Map<string, number>();
 

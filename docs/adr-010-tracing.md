@@ -2,12 +2,12 @@
 
 **Status:** Accepted, amended 2026-10-18 (see "Amendment: tracing-simple replaced the OTel SDK")  
 **Date:** 2026-10-17  
-**Authors:** Relay Team
+**Authors:** Capcomd Team
 
 
 ## Amendment (2026-10-18): tracing-simple replaced the OTel SDK
 
-**What changed.** Relay no longer uses the OpenTelemetry SDK at runtime. All spans go through
+**What changed.** Capcomd no longer uses the OpenTelemetry SDK at runtime. All spans go through
 `src/utils/tracing-simple.ts`. `src/utils/tracing.ts` is now a re-export shim, and the
 `@opentelemetry/*` packages are no longer imported anywhere.
 
@@ -16,12 +16,12 @@
   exports the code relied on are not usable with the SDK 2.x API on Bun. The NDJSON exporter in the
   old `tracing.ts` was built but never registered, so no span ever reached disk. `initTracing` was
   never called from the CLI or the actors. In practice, tracing was off.
-- Relay runs in two processes, the engine (actors) and the CLI. They need to write one trace per run
+- Capcomd runs in two processes, the engine (actors) and the CLI. They need to write one trace per run
   without a collector. tracing-simple does that with almost no code:
   - `traceId = sha256("trace:" + runId)`, so every process agrees on the trace id without
     propagating context.
   - Actor spans with no in-process parent hang off a deterministic root span id
-    (`sha256("root:" + runId)`). `relay trace` makes up that root when it isn't on disk.
+    (`sha256("root:" + runId)`). `capcomd trace` makes up that root when it isn't on disk.
   - Each span is appended to `.traces/<runId>.ndjson` (`appendFileSync`) the moment it ends, so a
     process killed at a killpoint keeps every span that finished before the kill. A
     `killpoint.<name>` marker span records where it died.
@@ -38,17 +38,17 @@
 - `model.generate`: `gen_ai.*` tokens and cost (a proxy over the model client).
 - `sandbox.<op>`: every provider call (a proxy over the provider). `exec` of `git …` becomes `git.<subcommand>`.
 - `git.merge_cas`: the verifier's compare-and-swap window, which brackets the two merge killpoints.
-- `cli.run`: one per `relay run` invocation. A resumed run has several.
+- `cli.run`: one per `capcomd run` invocation. A resumed run has several.
 
 **OTLP status: not connected.** Nothing exports to an OTLP endpoint today, and
 `OTEL_EXPORTER_OTLP_ENDPOINT` is ignored. The section above that describes OTLP is the intended
 future design, not current behavior.
 
-Set `RELAY_TRACE=off` to disable writing traces, and `RELAY_TRACE_DIR` to move them.
+Set `CAPCOMD_TRACE=off` to disable writing traces, and `CAPCOMD_TRACE_DIR` to move them.
 
 ## Context
 
-Relay orchestrates complex multi-actor workflows involving:
+Capcomd orchestrates complex multi-actor workflows involving:
 - Actor actions across 6 actor types (run, planner, taskBoard, worker, verifier, judge)
 - State machine transitions with XState v5
 - External calls (model APIs, sandbox providers, git operations)
@@ -106,7 +106,7 @@ We will use **OpenTelemetry** for distributed tracing with:
 
 ### 4. Tools
 
-**`relay trace <runId>`:**
+**`capcomd trace <runId>`:**
 - Reads NDJSON file
 - Prints tree/waterfall view with durations
 - Shows cost, failures, state transitions
@@ -160,7 +160,7 @@ We will use **OpenTelemetry** for distributed tracing with:
 ### Phase 1 (v0) ✓
 - [x] Core tracing module (tracing-simple; the OTel SDK was dropped, see Amendment)
 - [x] NDJSON exporter
-- [x] `relay trace` command
+- [x] `capcomd trace` command
 - [x] Lifecycle table columns for trace_id/span_id
 - [x] Basic tests (span creation, context serialization)
 
