@@ -199,3 +199,9 @@ The fast-gate env vars are now `CAPCOMD_CHAOS_{WORKERS,BASE_PORT,DATA_ROOT,PER_W
 `CAPCOMD_CHAOS_{ENGINE_DATA,REAL_ENGINE}` are set by the harness itself. The client endpoint is `CAPCOMD_ENDPOINT`.
 The default data root is `/tmp/capcomd-chaos-fast`.
 Merged-code fast gate: 180/180, wall 556.6s, N=14 (auto from free memory). Log: `chaos-fast-capcomd-merged.log`.
+
+## Merge-backed chaos (ADR-013)
+chaos:fast now runs every case against a per-case bare repo at `<dataDir>/git/origin.git` (direct mode, target `trunk`,
+squash; override with `CAPCOMD_CHAOS_MERGE_STRATEGY`, disable with `CAPCOMD_CHAOS_REPO=0`). There are 12 killpoints,
+two of them new (`merge.lock.acquired`, `merge.after_fetch.before_integrate`), so 186 jobs. Audit adds git invariants: no double
+landing, merged task ⇒ 1 landing + sha, unmerged ⇒ 0 landings. Log: `docs/evidence/chaos-fast-merge.log`.
