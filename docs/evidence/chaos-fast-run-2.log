@@ -1,0 +1,457 @@
+$ bun tests/chaos/fast.ts
+=== chaos:fast start 2026-10-19T20:39:09.041Z rounds=3 jobs=180 workers=14 (cores=8 freeMB=4526 perWorkerMB=250)
+    refusing to kill pid 581794: not owned by engine :7920
+    refusing to kill pid 581745: not owned by engine :7720
+    refusing to kill pid 581782: not owned by engine :7880
+    refusing to kill pid 581839: not owned by engine :7780
+    refusing to kill pid 581766: not owned by engine :7760
+    refusing to kill pid 581748: not owned by engine :7740
+    refusing to kill pid 581808: not owned by engine :7900
+    refusing to kill pid 581747: not owned by engine :7860
+    refusing to kill pid 581804: not owned by engine :7840
+    refusing to kill pid 581818: not owned by engine :7820
+    refusing to kill pid 581801: not owned by engine :7800
+    refusing to kill pid 581785: not owned by engine :7940
+    refusing to kill pid 581739: not owned by engine :7960
+    refusing to kill pid 581741: not owned by engine :7700
+    refusing to kill pid 582850: not owned by engine :7720
+[50.7s] ✓ r1 model.after_return.before_commit model.after_return.before_commit:1 w1 killed=true 50655ms [up=2169 first=796 stop=182 restart=39141 resume=6696 audit=1343]
+[50.7s] ✓ r2 model.after_return.before_commit model.after_return.before_commit:1 w11 killed=true 50654ms [up=2158 first=786 stop=159 restart=39143 resume=6754 audit=1305]
+    refusing to kill pid 583095: not owned by engine :7780
+    refusing to kill pid 583016: not owned by engine :7880
+[51.6s] ✓ r1 outbox.dispatch.after_send.before_ack outbox.dispatch.after_send.before_ack:1 w9 killed=true 51549ms [up=2076 first=2451 stop=227 restart=39152 resume=5980 audit=1335]
+[51.6s] ✓ r1 push.mid push.mid:1 w4 killed=true 51551ms [up=1964 first=3334 stop=122 restart=39151 resume=5247 audit=1346]
+    refusing to kill pid 583327: not owned by engine :7760
+[51.7s] ✓ r1 merge.before_cas merge.before_cas:1 w2 killed=true 51738ms [up=2067 first=3845 stop=118 restart=39167 resume=4930 audit=1355]
+[51.8s] ✓ r1 merge.after_cas.before_event merge.after_cas.before_event:1 w3 killed=true 51775ms [up=2070 first=3827 stop=137 restart=39148 resume=4993 audit=1342]
+    refusing to kill pid 583618: not owned by engine :7900
+    refusing to kill pid 583682: not owned by engine :7860
+[54.3s] ✓ r2 tx.mid tx.mid:1 w10 killed=true 54295ms [up=6109 first=464 stop=201 restart=39158 resume=6775 audit=1324]
+[54.3s] ✓ r1 budget.charge.mid budget.charge.mid:1 w8 killed=true 54305ms [up=5864 first=947 stop=197 restart=39159 resume=6707 audit=1251]
+[54.9s] ✓ r1 lease.expire.mid lease.expire.mid:1 w7 killed=true 54865ms [up=6066 first=1703 stop=130 restart=39179 resume=6194 audit=1376]
+    refusing to kill pid 583938: not owned by engine :7820
+    refusing to kill pid 585207: not owned by engine :7780
+[55.2s] ✓ r1 vm.create.after_request.before_record vm.create.after_request.before_record:1 w6 killed=true 55234ms [up=6110 first=2123 stop=251 restart=39168 resume=6161 audit=1237]
+    refusing to kill pid 585199: not owned by engine :7880
+    refusing to kill pid 584024: not owned by engine :7800
+    refusing to kill pid 584122: not owned by engine :7940
+    refusing to kill pid 584116: not owned by engine :7960
+[55.9s] ✓ r1 push.after.before_event push.after.before_event:1 w5 killed=true 55850ms [up=6087 first=3310 stop=193 restart=39263 resume=5411 audit=1352]
+    refusing to kill pid 585056: not owned by engine :7720
+[55.9s] ✓ r2 merge.before_cas merge.before_cas:1 w12 killed=true 55922ms [up=6083 first=3908 stop=165 restart=39152 resume=5058 audit=1339]
+[55.9s] ✓ r2 merge.after_cas.before_event merge.after_cas.before_event:1 w13 killed=true 55941ms [up=6120 first=3890 stop=158 restart=39164 resume=5089 audit=1328]
+    refusing to kill pid 585063: not owned by engine :7920
+    refusing to kill pid 585248: not owned by engine :7760
+    refusing to kill pid 585667: not owned by engine :7900
+    refusing to kill pid 585668: not owned by engine :7860
+    refusing to kill pid 585224: not owned by engine :7740
+    refusing to kill pid 586113: not owned by engine :7960
+    refusing to kill pid 585789: not owned by engine :7840
+    refusing to kill pid 586053: not owned by engine :7800
+    refusing to kill pid 585861: not owned by engine :7820
+    refusing to kill pid 586112: not owned by engine :7940
+[84.2s] ✓ r1 tx.mid tx.mid:1 w0 killed=true 84170ms [up=36097 first=479 stop=167 restart=39164 resume=6712 audit=1298]
+    refusing to kill pid 587747: not owned by engine :7700
+    refusing to kill pid 586106: not owned by engine :7720
+    refusing to kill pid 586277: not owned by engine :7920
+[102.2s] ✓ r2 push.mid push.mid:1 w1 killed=true 51489ms [up=1842 first=3274 stop=140 restart=39161 resume=5390 audit=1341]
+    refusing to kill pid 585860: not owned by engine :7780
+[102.4s] ✓ r2 push.after.before_event push.after.before_event:1 w11 killed=true 51708ms [up=1842 first=3402 stop=179 restart=39153 resume=5391 audit=1351]
+[102.4s] ✓ r2 lease.expire.mid lease.expire.mid:1 w4 killed=true 50850ms [up=1836 first=1624 stop=199 restart=39313 resume=6092 audit=1372]
+    refusing to kill pid 586226: not owned by engine :7760
+    refusing to kill pid 585996: not owned by engine :7880
+[102.9s] ✓ r2 outbox.dispatch.after_send.before_ack outbox.dispatch.after_send.before_ack:1 w3 killed=true 51088ms [up=1840 first=2378 stop=112 restart=39165 resume=6006 audit=1311]
+[103.0s] ✓ r2 vm.create.after_request.before_record vm.create.after_request.before_record:1 w9 killed=true 51400ms [up=1835 first=2082 stop=160 restart=39300 resume=6302 audit=1354]
+    refusing to kill pid 586693: not owned by engine :7860
+    refusing to kill pid 586600: not owned by engine :7900
+[104.6s] ✓ r3 model.after_return.before_commit model.after_return.before_commit:1 w8 killed=true 50326ms [up=1929 first=838 stop=159 restart=39153 resume=6591 audit=1317]
+[104.7s] ✓ r3 tx.mid tx.mid:1 w10 killed=true 50367ms [up=2010 first=476 stop=221 restart=39155 resume=6827 audit=1342]
+    refusing to kill pid 588639: not owned by engine :7880
+    refusing to kill pid 586928: not owned by engine :7740
+[106.3s] ✓ r2 budget.charge.mid budget.charge.mid:1 w2 killed=true 54567ms [up=5882 first=890 stop=142 restart=39155 resume=6709 audit=1335]
+    refusing to kill pid 587104: not owned by engine :7840
+[106.5s] ✓ r3 merge.before_cas merge.before_cas:1 w7 killed=true 51586ms [up=1865 first=3862 stop=124 restart=39144 resume=5046 audit=1321]
+    refusing to kill pid 587025: not owned by engine :7960
+[107.1s] ✓ r3 vm.create.after_request.before_record vm.create.after_request.before_record:1 w13 killed=true 51164ms [up=1887 first=2094 stop=228 restart=39143 resume=6194 audit=1348]
+    refusing to kill pid 588626: not owned by engine :7760
+    refusing to kill pid 587287: not owned by engine :7800
+[107.6s] ✓ r3 push.mid push.mid:1 w5 killed=true 51712ms [up=1946 first=3296 stop=218 restart=39142 resume=5506 audit=1348]
+    refusing to kill pid 588435: not owned by engine :7720
+    refusing to kill pid 588874: not owned by engine :7900
+    refusing to kill pid 588448: not owned by engine :7920
+    refusing to kill pid 588476: not owned by engine :7780
+    refusing to kill pid 587454: not owned by engine :7820
+[111.1s] ✓ r3 merge.after_cas.before_event merge.after_cas.before_event:1 w6 killed=true 55865ms [up=5883 first=3809 stop=174 restart=39284 resume=5041 audit=1340]
+    refusing to kill pid 587514: not owned by engine :7940
+[111.6s] ✓ r3 push.after.before_event push.after.before_event:1 w12 killed=true 55673ms [up=5946 first=3292 stop=317 restart=39143 resume=5362 audit=1340]
+    refusing to kill pid 589357: not owned by engine :7960
+    refusing to kill pid 590147: not owned by engine :7940
+    refusing to kill pid 588875: not owned by engine :7860
+[115.0s] ✓ r1 seed 4 model.after_return.before_commit:3 w8 killed=false 10343ms [up=1857 first=6867 stop=- restart=- resume=- audit=1333]
+    refusing to kill pid 589204: not owned by engine :7840
+[116.6s] ✓ r1 seed 7 push.mid:3 w7 killed=false 10170ms [up=1827 first=6779 stop=- restart=- resume=- audit=1312]
+    refusing to kill pid 589162: not owned by engine :7740
+    refusing to kill pid 590672: not owned by engine :7840
+[121.3s] ✓ r1 seed 10 lease.expire.mid:3 w6 killed=false 10171ms [up=1832 first=6745 stop=- restart=- resume=- audit=1303]
+    refusing to kill pid 589482: not owned by engine :7800
+[121.9s] ✓ r1 seed 9 vm.create.after_request.before_record:2 w5 killed=false 14307ms [up=5853 first=6844 stop=- restart=- resume=- audit=1332]
+    refusing to kill pid 590581: not owned by engine :7860
+    refusing to kill pid 591073: not owned by engine :7820
+    refusing to kill pid 591137: not owned by engine :7800
+    refusing to kill pid 587882: not owned by engine :7700
+[134.7s] ✓ r3 lease.expire.mid lease.expire.mid:1 w0 killed=true 50558ms [up=1843 first=1659 stop=146 restart=39148 resume=6103 audit=1331]
+    refusing to kill pid 591646: not owned by engine :7700
+[145.0s] ✓ r1 seed 16 merge.after_cas.before_event:3 w0 killed=false 10219ms [up=1861 first=6784 stop=- restart=- resume=- audit=1320]
+    refusing to kill pid 589098: not owned by engine :7880
+[153.6s] ✓ r1 seed 3 tx.mid:2 w9 killed=true 50593ms [up=1855 first=1053 stop=362 restart=39163 resume=6586 audit=1320]
+    refusing to kill pid 589371: not owned by engine :7760
+[154.1s] ✓ r1 seed 2 outbox.dispatch.after_send.before_ack:1 w3 killed=true 51264ms [up=1831 first=2371 stop=132 restart=39250 resume=6018 audit=1289]
+[154.1s] ✓ r1 seed 1 budget.charge.mid:3 w4 killed=true 51726ms [up=1831 first=6528 stop=131 restart=39156 resume=2319 audit=1381]
+    refusing to kill pid 591816: not owned by engine :7700
+[156.4s] ✓ r1 seed 5 merge.before_cas:1 w10 killed=true 51694ms [up=1845 first=3878 stop=135 restart=39260 resume=4953 audit=1337]
+    refusing to kill pid 589745: not owned by engine :7720
+[156.7s] ✓ r3 budget.charge.mid budget.charge.mid:1 w1 killed=true 54575ms [up=5851 first=880 stop=168 restart=39147 resume=6807 audit=1329]
+    refusing to kill pid 589912: not owned by engine :7920
+[157.6s] ✓ r3 outbox.dispatch.after_send.before_ack outbox.dispatch.after_send.before_ack:1 w11 killed=true 55242ms [up=5859 first=2376 stop=105 restart=39250 resume=6079 audit=1336]
+    refusing to kill pid 592313: not owned by engine :7780
+[158.8s] ✓ r1 seed 8 push.after.before_event:1 w13 killed=true 51692ms [up=1866 first=3394 stop=237 restart=39160 resume=5412 audit=1335]
+    refusing to kill pid 592733: not owned by engine :7920
+    refusing to kill pid 592570: not owned by engine :7900
+    refusing to kill pid 590504: not owned by engine :7940
+[162.0s] ✓ r1 seed 11 budget.charge.mid:1 w12 killed=true 50383ms [up=1834 first=845 stop=245 restart=39152 resume=6811 audit=1253]
+[162.0s] ✓ r1 seed 6 merge.after_cas.before_event:2 w2 killed=true 55711ms [up=5858 first=5575 stop=147 restart=39152 resume=3343 audit=1385]
+    refusing to kill pid 592634: not owned by engine :7720
+    refusing to kill pid 592201: not owned by engine :7880
+    refusing to kill pid 591238: not owned by engine :7860
+[166.5s] ✓ r1 seed 12 outbox.dispatch.after_send.before_ack:2 w8 killed=true 51522ms [up=1838 first=6069 stop=193 restart=39134 resume=2592 audit=1348]
+[166.9s] ✓ r1 seed 13 tx.mid:3 w7 killed=true 50319ms [up=1845 first=1288 stop=142 restart=39154 resume=6341 audit=1272]
+    refusing to kill pid 592303: not owned by engine :7760
+[168.4s] ✓ r1 seed 19 vm.create.after_request.before_record:3 w3 killed=false 14250ms [up=5850 first=6814 stop=- restart=- resume=- audit=1321]
+[169.1s] ✓ r1 seed 24 model.after_return.before_commit:2 w13 killed=false 10283ms [up=1833 first=6796 stop=- restart=- resume=- audit=1303]
+[171.5s] ✓ r1 seed 14 model.after_return.before_commit:1 w6 killed=true 50221ms [up=1838 first=764 stop=261 restart=39141 resume=6690 audit=1263]
+    refusing to kill pid 593422: not owned by engine :7740
+    refusing to kill pid 594056: not owned by engine :7760
+    refusing to kill pid 594199: not owned by engine :7960
+    refusing to kill pid 591525: not owned by engine :7800
+[173.5s] ✓ r1 seed 15 merge.before_cas:2 w5 killed=true 51665ms [up=1834 first=5518 stop=123 restart=39157 resume=3393 audit=1358]
+    refusing to kill pid 593804: not owned by engine :7860
+    refusing to kill pid 593423: not owned by engine :7940
+[176.3s] ✓ r1 seed 25 merge.before_cas:3 w12 killed=false 14345ms [up=5873 first=6826 stop=- restart=- resume=- audit=1314]
+    refusing to kill pid 593869: not owned by engine :7840
+[177.0s] ✓ r1 seed 28 push.after.before_event:3 w7 killed=false 10080ms [up=1837 first=6645 stop=- restart=- resume=- audit=1324]
+    refusing to kill pid 594691: not owned by engine :7800
+    refusing to kill pid 594901: not owned by engine :7940
+    refusing to kill pid 594361: not owned by engine :7820
+    refusing to kill pid 594976: not owned by engine :7840
+[187.2s] ✓ r1 seed 34 model.after_return.before_commit:3 w7 killed=false 10135ms [up=1833 first=6712 stop=- restart=- resume=- audit=1305]
+    refusing to kill pid 595529: not owned by engine :7840
+    refusing to kill pid 592430: not owned by engine :7700
+[200.4s] ✓ r1 seed 17 push.mid:1 w0 killed=true 55428ms [up=5855 first=3366 stop=166 restart=39153 resume=5279 audit=1335]
+[204.7s] ✓ r1 seed 20 lease.expire.mid:1 w4 killed=true 50609ms [up=1831 first=1690 stop=162 restart=39162 resume=6109 audit=1334]
+[207.4s] ✓ r1 seed 21 budget.charge.mid:2 w10 killed=true 51034ms [up=1836 first=2321 stop=143 restart=39158 resume=5883 audit=1368]
+[207.8s] ✓ r1 seed 23 tx.mid:1 w11 killed=true 50237ms [up=1825 first=486 stop=243 restart=39170 resume=6870 audit=1335]
+    refusing to kill pid 595928: not owned by engine :7700
+    refusing to kill pid 593628: not owned by engine :7720
+[208.3s] ✓ r1 seed 22 outbox.dispatch.after_send.before_ack:3 w1 killed=true 51544ms [up=1836 first=6015 stop=250 restart=39150 resume=2595 audit=1380]
+[210.4s] ✓ r1 seed 18 push.after.before_event:2 w9 killed=true 56804ms [up=6953 first=5020 stop=260 restart=39149 resume=3741 audit=1349]
+    refusing to kill pid 596251: not owned by engine :7900
+    refusing to kill pid 596675: not owned by engine :7880
+    refusing to kill pid 596106: not owned by engine :7780
+[214.9s] ✓ r1 seed 37 push.mid:3 w4 killed=false 10208ms [up=1838 first=6760 stop=- restart=- resume=- audit=1327]
+    refusing to kill pid 594426: not owned by engine :7740
+[217.6s] ✓ r1 seed 26 merge.after_cas.before_event:1 w2 killed=true 55578ms [up=5866 first=3753 stop=211 restart=39148 resume=4947 audit=1328]
+    refusing to kill pid 594690: not owned by engine :7860
+    refusing to kill pid 596324: not owned by engine :7920
+[218.1s] ✓ r1 seed 27 push.mid:2 w8 killed=true 51623ms [up=1941 first=4995 stop=291 restart=39158 resume=3694 audit=1257]
+[218.2s] ✓ r1 seed 39 vm.create.after_request.before_record:2 w11 killed=false 10308ms [up=1941 first=6755 stop=- restart=- resume=- audit=1336]
+    refusing to kill pid 596447: not owned by engine :7720
+[218.7s] ✓ r1 seed 40 lease.expire.mid:3 w1 killed=false 10406ms [up=1853 first=6908 stop=- restart=- resume=- audit=1340]
+    refusing to kill pid 594515: not owned by engine :7760
+[219.7s] ✓ r1 seed 29 vm.create.after_request.before_record:1 w3 killed=true 51271ms [up=1847 first=2116 stop=254 restart=39283 resume=6150 audit=1338]
+[219.9s] ✓ r1 seed 30 lease.expire.mid:2 w13 killed=true 50839ms [up=1839 first=1847 stop=238 restart=39151 resume=6179 audit=1339]
+    refusing to kill pid 597258: not owned by engine :7740
+    refusing to kill pid 597337: not owned by engine :7860
+    refusing to kill pid 597105: not owned by engine :7780
+    refusing to kill pid 597597: not owned by engine :7760
+[225.2s] ✓ r1 seed 32 outbox.dispatch.after_send.before_ack:1 w5 killed=true 51697ms [up=1844 first=2445 stop=274 restart=39146 resume=6112 audit=1288]
+    refusing to kill pid 597336: not owned by engine :7920
+    refusing to kill pid 595242: not owned by engine :7940
+[227.0s] ✓ r1 seed 33 tx.mid:2 w12 killed=true 50655ms [up=1837 first=1098 stop=158 restart=39151 resume=6715 audit=1271]
+    refusing to kill pid 597684: not owned by engine :7960
+[227.4s] ✓ r1 seed 31 budget.charge.mid:3 w6 killed=true 55853ms [up=5884 first=6654 stop=134 restart=39156 resume=2262 audit=1392]
+    refusing to kill pid 597478: not owned by engine :7720
+[228.9s] ✓ r1 seed 46 merge.after_cas.before_event:3 w1 killed=false 10178ms [up=1848 first=6725 stop=- restart=- resume=- audit=1306]
+    refusing to kill pid 598526: not owned by engine :7940
+    refusing to kill pid 598792: not owned by engine :7720
+[235.7s] ✓ r1 seed 49 vm.create.after_request.before_record:3 w5 killed=false 10435ms [up=1956 first=6850 stop=- restart=- resume=- audit=1326]
+    refusing to kill pid 598657: not owned by engine :7820
+    refusing to kill pid 595682: not owned by engine :7840
+[238.7s] ✓ r1 seed 35 merge.before_cas:1 w7 killed=true 51527ms [up=1852 first=3742 stop=153 restart=39149 resume=5012 audit=1339]
+    refusing to kill pid 599182: not owned by engine :7800
+    refusing to kill pid 599399: not owned by engine :7840
+[249.0s] ✓ r2 seed 4 model.after_return.before_commit:3 w7 killed=false 10268ms [up=1840 first=6699 stop=- restart=- resume=- audit=1337]
+[252.3s] ✓ r1 seed 36 merge.after_cas.before_event:2 w0 killed=true 51950ms [up=1832 first=5659 stop=291 restart=39156 resume=3374 audit=1355]
+    refusing to kill pid 599733: not owned by engine :7840
+    refusing to kill pid 596891: not owned by engine :7900
+[259.0s] ✓ r1 seed 38 push.after.before_event:1 w10 killed=true 51557ms [up=1835 first=3259 stop=239 restart=39162 resume=5443 audit=1348]
+    refusing to kill pid 599898: not owned by engine :7700
+    refusing to kill pid 597001: not owned by engine :7880
+[260.7s] ✓ r1 seed 41 budget.charge.mid:1 w9 killed=true 50381ms [up=1841 first=875 stop=135 restart=39154 resume=6737 audit=1335]
+    refusing to kill pid 600390: not owned by engine :7880
+[266.4s] ✓ r1 seed 42 outbox.dispatch.after_send.before_ack:2 w4 killed=true 51481ms [up=1829 first=6034 stop=166 restart=39248 resume=2576 audit=1384]
+    refusing to kill pid 597876: not owned by engine :7740
+[268.3s] ✓ r1 seed 43 tx.mid:3 w2 killed=true 50658ms [up=1936 first=1292 stop=379 restart=39171 resume=6348 audit=1276]
+    refusing to kill pid 597951: not owned by engine :7860
+[268.8s] ✓ r1 seed 44 model.after_return.before_commit:1 w8 killed=true 50696ms [up=1949 first=1071 stop=170 restart=39148 resume=6633 audit=1324]
+    refusing to kill pid 600173: not owned by engine :7900
+[269.2s] ✓ r2 seed 7 push.mid:3 w10 killed=false 10257ms [up=1839 first=6839 stop=- restart=- resume=- audit=1308]
+[269.9s] ✓ r1 seed 45 merge.before_cas:2 w11 killed=true 51732ms [up=1957 first=5522 stop=121 restart=39155 resume=3310 audit=1340]
+    refusing to kill pid 598267: not owned by engine :7760
+[271.4s] ✓ r1 seed 47 push.mid:1 w3 killed=true 51771ms [up=1862 first=3321 stop=285 restart=39158 resume=5514 audit=1344]
+    refusing to kill pid 598536: not owned by engine :7960
+[271.6s] ✓ r1 seed 48 push.after.before_event:2 w13 killed=true 51687ms [up=1836 first=5140 stop=192 restart=39159 resume=3755 audit=1359]
+    refusing to kill pid 600927: not owned by engine :7860
+    refusing to kill pid 601075: not owned by engine :7920
+[277.9s] ✓ r1 seed 50 lease.expire.mid:1 w12 killed=true 50951ms [up=1991 first=1671 stop=195 restart=39181 resume=6211 audit=1349]
+    refusing to kill pid 601261: not owned by engine :7760
+    refusing to kill pid 600856: not owned by engine :7740
+[278.6s] ✓ r2 seed 10 lease.expire.mid:3 w2 killed=false 10337ms [up=1857 first=6863 stop=- restart=- resume=- audit=1311]
+    refusing to kill pid 599246: not owned by engine :7820
+[279.2s] ✓ r2 seed 1 budget.charge.mid:3 w6 killed=true 51887ms [up=1844 first=6681 stop=123 restart=39154 resume=2323 audit=1397]
+    refusing to kill pid 601323: not owned by engine :7960
+    refusing to kill pid 599087: not owned by engine :7720
+[280.0s] ✓ r2 seed 2 outbox.dispatch.after_send.before_ack:1 w1 killed=true 51188ms [up=1853 first=2423 stop=131 restart=39151 resume=5996 audit=1334]
+    refusing to kill pid 600989: not owned by engine :7900
+    refusing to kill pid 600748: not owned by engine :7780
+[281.8s] ✓ r2 seed 9 vm.create.after_request.before_record:2 w4 killed=false 15355ms [up=6859 first=6892 stop=- restart=- resume=- audit=1337]
+    refusing to kill pid 602014: not owned by engine :7740
+    refusing to kill pid 602523: not owned by engine :7780
+    refusing to kill pid 599398: not owned by engine :7800
+[286.3s] ✓ r2 seed 3 tx.mid:2 w5 killed=true 50634ms [up=1857 first=1064 stop=204 restart=39157 resume=6747 audit=1328]
+    refusing to kill pid 602115: not owned by engine :7820
+    refusing to kill pid 601853: not owned by engine :7940
+[288.4s] ✓ r2 seed 16 merge.after_cas.before_event:3 w12 killed=false 10481ms [up=1953 first=6894 stop=- restart=- resume=- audit=1316]
+    refusing to kill pid 602290: not owned by engine :7720
+[290.4s] ✓ r2 seed 19 vm.create.after_request.before_record:3 w1 killed=false 10337ms [up=1864 first=6854 stop=- restart=- resume=- audit=1316]
+    refusing to kill pid 602873: not owned by engine :7800
+    refusing to kill pid 603229: not owned by engine :7720
+    refusing to kill pid 603077: not owned by engine :7940
+[300.5s] ✓ r2 seed 5 merge.before_cas:1 w7 killed=true 51543ms [up=1833 first=3773 stop=253 restart=39163 resume=4926 audit=1327]
+    refusing to kill pid 600239: not owned by engine :7700
+[304.0s] ✓ r2 seed 6 merge.after_cas.before_event:2 w0 killed=true 51665ms [up=1882 first=5560 stop=124 restart=39148 resume=3362 audit=1277]
+    refusing to kill pid 603705: not owned by engine :7840
+[310.7s] ✓ r2 seed 24 model.after_return.before_commit:2 w7 killed=false 10210ms [up=1835 first=6699 stop=- restart=- resume=- audit=1334]
+    refusing to kill pid 600660: not owned by engine :7880
+[312.5s] ✓ r2 seed 8 push.after.before_event:1 w9 killed=true 51767ms [up=1851 first=3347 stop=186 restart=39257 resume=5473 audit=1364]
+[314.3s] ✓ r2 seed 25 merge.before_cas:3 w0 killed=false 10263ms [up=1834 first=6850 stop=- restart=- resume=- audit=1344]
+    refusing to kill pid 604088: not owned by engine :7840
+[319.3s] ✓ r2 seed 11 budget.charge.mid:1 w8 killed=true 50519ms [up=1936 first=895 stop=207 restart=39149 resume=6705 audit=1283]
+[320.3s] ✓ r2 seed 13 tx.mid:3 w11 killed=true 50374ms [up=1846 first=1300 stop=147 restart=39176 resume=6298 audit=1317]
+    refusing to kill pid 604637: not owned by engine :7860
+    refusing to kill pid 602114: not owned by engine :7960
+    refusing to kill pid 604243: not owned by engine :7880
+[323.6s] ✓ r2 seed 15 merge.before_cas:2 w13 killed=true 52005ms [up=1843 first=5638 stop=334 restart=39160 resume=3340 audit=1382]
+    refusing to kill pid 604703: not owned by engine :7920
+    refusing to kill pid 602443: not owned by engine :7900
+[324.9s] ✓ r2 seed 12 outbox.dispatch.after_send.before_ack:2 w10 killed=true 55655ms [up=5967 first=6015 stop=253 restart=39247 resume=2545 audit=1363]
+    refusing to kill pid 601947: not owned by engine :7760
+[325.9s] ✓ r2 seed 14 model.after_return.before_commit:1 w3 killed=true 54497ms [up=5981 first=775 stop=222 restart=39146 resume=6780 audit=1267]
+    refusing to kill pid 605468: not owned by engine :7760
+    refusing to kill pid 605322: not owned by engine :7900
+    refusing to kill pid 604345: not owned by engine :7700
+[329.5s] ✓ r2 seed 28 push.after.before_event:3 w0 killed=false 15251ms [up=6850 first=6830 stop=- restart=- resume=- audit=1334]
+    refusing to kill pid 602692: not owned by engine :7740
+[330.3s] ✓ r2 seed 17 push.mid:1 w2 killed=true 51716ms [up=1860 first=3320 stop=189 restart=39163 resume=5486 audit=1344]
+[331.2s] ✓ r2 seed 18 push.after.before_event:2 w6 killed=true 51918ms [up=1841 first=5073 stop=141 restart=39143 resume=3807 audit=1340]
+    refusing to kill pid 605059: not owned by engine :7960
+[332.5s] ✓ r2 seed 20 lease.expire.mid:1 w4 killed=true 50711ms [up=1849 first=1690 stop=205 restart=39150 resume=6245 audit=1244]
+    refusing to kill pid 605904: not owned by engine :7740
+[337.5s] ✓ r2 seed 21 budget.charge.mid:2 w5 killed=true 51182ms [up=1831 first=2358 stop=172 restart=39155 resume=6119 audit=1269]
+    refusing to kill pid 605998: not owned by engine :7820
+[339.8s] ✓ r2 seed 34 model.after_return.before_commit:3 w0 killed=false 10273ms [up=1850 first=6792 stop=- restart=- resume=- audit=1298]
+[339.8s] ✓ r2 seed 22 outbox.dispatch.after_send.before_ack:3 w12 killed=true 51395ms [up=1834 first=6008 stop=172 restart=39155 resume=2580 audit=1340]
+    refusing to kill pid 603440: not owned by engine :7720
+[340.5s] ✓ r2 seed 23 tx.mid:1 w1 killed=true 50076ms [up=1931 first=459 stop=140 restart=39148 resume=6760 audit=1306]
+    refusing to kill pid 606491: not owned by engine :7800
+    refusing to kill pid 606874: not owned by engine :7720
+    refusing to kill pid 606169: not owned by engine :7780
+[346.6s] ✓ r2 seed 37 push.mid:3 w4 killed=false 14096ms [up=5841 first=6641 stop=- restart=- resume=- audit=1313]
+[350.0s] ✓ r2 seed 40 lease.expire.mid:3 w12 killed=false 10137ms [up=1844 first=6692 stop=- restart=- resume=- audit=1322]
+[350.1s] ✓ r2 seed 39 vm.create.after_request.before_record:2 w0 killed=false 10334ms [up=1851 first=6816 stop=- restart=- resume=- audit=1323]
+    refusing to kill pid 607441: not owned by engine :7700
+    refusing to kill pid 607402: not owned by engine :7940
+    refusing to kill pid 607270: not owned by engine :7780
+[362.2s] ✓ r2 seed 26 merge.after_cas.before_event:1 w7 killed=true 51524ms [up=1859 first=3803 stop=138 restart=39155 resume=4945 audit=1339]
+    refusing to kill pid 605048: not owned by engine :7880
+[368.2s] ✓ r2 seed 27 push.mid:2 w9 killed=true 55727ms [up=5845 first=5088 stop=149 restart=39152 resume=3793 audit=1351]
+    refusing to kill pid 608032: not owned by engine :7840
+    refusing to kill pid 604985: not owned by engine :7860
+[370.4s] ✓ r2 seed 29 vm.create.after_request.before_record:1 w8 killed=true 51060ms [up=1827 first=2077 stop=154 restart=39167 resume=6212 audit=1344]
+[371.1s] ✓ r2 seed 30 lease.expire.mid:2 w11 killed=true 50822ms [up=1845 first=1891 stop=245 restart=39151 resume=6088 audit=1275]
+[375.5s] ✓ r2 seed 31 budget.charge.mid:3 w13 killed=true 51893ms [up=1841 first=6696 stop=236 restart=39150 resume=2296 audit=1385]
+    refusing to kill pid 608528: not owned by engine :7860
+[376.1s] ✓ r2 seed 32 outbox.dispatch.after_send.before_ack:1 w10 killed=true 51221ms [up=1836 first=2464 stop=132 restart=39257 resume=5968 audit=1288]
+[376.5s] ✓ r2 seed 33 tx.mid:2 w3 killed=true 50552ms [up=1834 first=1043 stop=193 restart=39159 resume=6745 audit=1315]
+    refusing to kill pid 608602: not owned by engine :7920
+[378.5s] ✓ r2 seed 46 merge.after_cas.before_event:3 w9 killed=false 10284ms [up=1883 first=6780 stop=- restart=- resume=- audit=1310]
+[382.0s] ✓ r2 seed 35 merge.before_cas:1 w2 killed=true 51708ms [up=1826 first=3870 stop=217 restart=39145 resume=5018 audit=1339]
+    refusing to kill pid 606617: not owned by engine :7820
+[383.0s] ✓ r2 seed 36 merge.after_cas.before_event:2 w6 killed=true 51825ms [up=1846 first=5498 stop=254 restart=39175 resume=3327 audit=1351]
+    refusing to kill pid 609327: not owned by engine :7880
+    refusing to kill pid 608991: not owned by engine :7900
+    refusing to kill pid 609071: not owned by engine :7760
+    refusing to kill pid 609510: not owned by engine :7740
+    refusing to kill pid 608854: not owned by engine :7960
+[385.6s] ✓ r2 seed 49 vm.create.after_request.before_record:3 w13 killed=false 10124ms [up=1828 first=6725 stop=- restart=- resume=- audit=1330]
+    refusing to kill pid 607087: not owned by engine :7800
+[389.2s] ✓ r2 seed 38 push.after.before_event:1 w5 killed=true 51668ms [up=1833 first=3302 stop=221 restart=39245 resume=5428 audit=1350]
+    refusing to kill pid 607151: not owned by engine :7720
+[390.7s] ✓ r2 seed 41 budget.charge.mid:1 w1 killed=true 50248ms [up=1846 first=866 stop=171 restart=39153 resume=6692 audit=1237]
+    refusing to kill pid 610099: not owned by engine :7960
+    refusing to kill pid 610269: not owned by engine :7800
+    refusing to kill pid 609664: not owned by engine :7820
+[397.5s] ✓ r3 seed 4 model.after_return.before_commit:3 w6 killed=false 14481ms [up=5860 first=6742 stop=- restart=- resume=- audit=1316]
+[398.0s] ✓ r2 seed 42 outbox.dispatch.after_send.before_ack:2 w4 killed=true 51360ms [up=1852 first=6011 stop=146 restart=39161 resume=2541 audit=1380]
+[400.4s] ✓ r2 seed 44 model.after_return.before_commit:1 w0 killed=true 50300ms [up=1893 first=756 stop=151 restart=39251 resume=6509 audit=1281]
+[400.4s] ✓ r2 seed 43 tx.mid:3 w12 killed=true 50466ms [up=1851 first=1252 stop=237 restart=39154 resume=6224 audit=1304]
+    refusing to kill pid 610360: not owned by engine :7720
+[400.9s] ✓ r3 seed 7 push.mid:3 w1 killed=false 10153ms [up=1834 first=6754 stop=- restart=- resume=- audit=1301]
+    refusing to kill pid 610796: not owned by engine :7820
+    refusing to kill pid 611034: not owned by engine :7940
+[408.3s] ✓ r3 seed 9 vm.create.after_request.before_record:2 w4 killed=false 10315ms [up=1837 first=6814 stop=- restart=- resume=- audit=1323]
+    refusing to kill pid 611163: not owned by engine :7720
+    refusing to kill pid 611035: not owned by engine :7700
+[410.8s] ✓ r3 seed 10 lease.expire.mid:3 w0 killed=false 10342ms [up=1937 first=6741 stop=- restart=- resume=- audit=1336]
+    refusing to kill pid 611572: not owned by engine :7780
+    refusing to kill pid 611805: not owned by engine :7700
+[414.1s] ✓ r2 seed 45 merge.before_cas:2 w7 killed=true 51883ms [up=1843 first=5615 stop=139 restart=39266 resume=3406 audit=1352]
+    refusing to kill pid 612094: not owned by engine :7840
+[421.9s] ✓ r2 seed 47 push.mid:1 w8 killed=true 51460ms [up=1829 first=3269 stop=165 restart=39258 resume=5404 audit=1325]
+[422.6s] ✓ r2 seed 48 push.after.before_event:2 w11 killed=true 51504ms [up=1832 first=5084 stop=139 restart=39142 resume=3765 audit=1281]
+    refusing to kill pid 612557: not owned by engine :7920
+[428.2s] ✓ r3 seed 1 budget.charge.mid:3 w3 killed=true 51694ms [up=1842 first=6577 stop=224 restart=39161 resume=2258 audit=1369]
+    refusing to kill pid 609663: not owned by engine :7880
+[430.0s] ✓ r3 seed 2 outbox.dispatch.after_send.before_ack:1 w9 killed=true 51455ms [up=1833 first=2530 stop=342 restart=39175 resume=5989 audit=1320]
+[430.4s] ✓ r2 seed 50 lease.expire.mid:1 w10 killed=true 54332ms [up=5849 first=1612 stop=181 restart=39159 resume=6031 audit=1252]
+[432.5s] ✓ r3 seed 3 tx.mid:2 w2 killed=true 50500ms [up=1831 first=1066 stop=194 restart=39157 resume=6762 audit=1242]
+    refusing to kill pid 613114: not owned by engine :7900
+    refusing to kill pid 612910: not owned by engine :7760
+[436.1s] ✓ r3 seed 16 merge.after_cas.before_event:3 w8 killed=false 14201ms [up=5848 first=6736 stop=- restart=- resume=- audit=1320]
+    refusing to kill pid 613304: not owned by engine :7740
+[437.2s] ✓ r3 seed 5 merge.before_cas:1 w13 killed=true 51540ms [up=1862 first=3769 stop=167 restart=39148 resume=4975 audit=1328]
+    refusing to kill pid 613773: not owned by engine :7960
+[440.3s] ✓ r3 seed 19 vm.create.after_request.before_record:3 w9 killed=false 10295ms [up=1872 first=6809 stop=- restart=- resume=- audit=1309]
+[440.9s] ✓ r3 seed 6 merge.after_cas.before_event:2 w5 killed=true 51713ms [up=1855 first=5620 stop=162 restart=39148 resume=3342 audit=1278]
+    refusing to kill pid 613630: not owned by engine :7860
+    refusing to kill pid 611369: not owned by engine :7820
+[449.0s] ✓ r3 seed 8 push.after.before_event:1 w6 killed=true 51587ms [up=1829 first=3293 stop=244 restart=39143 resume=5410 audit=1340]
+[450.5s] ✓ r3 seed 24 model.after_return.before_commit:2 w9 killed=false 10232ms [up=1845 first=6800 stop=- restart=- resume=- audit=1310]
+[450.9s] ✓ r3 seed 11 budget.charge.mid:1 w12 killed=true 50432ms [up=1945 first=869 stop=170 restart=39144 resume=6743 audit=1252]
+[451.0s] ✓ r3 seed 25 merge.before_cas:3 w5 killed=false 10126ms [up=1827 first=6705 stop=- restart=- resume=- audit=1290]
+[452.3s] ✓ r3 seed 12 outbox.dispatch.after_send.before_ack:2 w1 killed=true 51435ms [up=1840 first=5913 stop=170 restart=39156 resume=2634 audit=1382]
+    refusing to kill pid 614486: not owned by engine :7820
+    refusing to kill pid 614734: not owned by engine :7800
+    refusing to kill pid 614836: not owned by engine :7720
+    refusing to kill pid 614572: not owned by engine :7880
+    refusing to kill pid 611877: not owned by engine :7780
+[458.5s] ✓ r3 seed 13 tx.mid:3 w4 killed=true 50275ms [up=1845 first=1261 stop=176 restart=39136 resume=6248 audit=1331]
+    refusing to kill pid 614679: not owned by engine :7940
+[460.9s] ✓ r3 seed 14 model.after_return.before_commit:1 w0 killed=true 50142ms [up=1835 first=759 stop=149 restart=39170 resume=6607 audit=1345]
+[461.1s] ✓ r3 seed 28 push.after.before_event:3 w12 killed=false 10278ms [up=1854 first=6707 stop=- restart=- resume=- audit=1303]
+    refusing to kill pid 615618: not owned by engine :7700
+[465.9s] ✓ r3 seed 15 merge.before_cas:2 w7 killed=true 51754ms [up=1854 first=5606 stop=151 restart=39166 resume=3356 audit=1348]
+    refusing to kill pid 615459: not owned by engine :7780
+    refusing to kill pid 615648: not owned by engine :7940
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    refusing to kill pid 613712: not owned by engine :7740
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    refusing to kill pid 613518: not owned by engine :7760
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    refusing to kill pid 615377: not owned by engine :7880
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    refusing to kill pid 615268: not owned by engine :7720
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    refusing to kill pid 613918: not owned by engine :7960
+    refusing to kill pid 612847: not owned by engine :7920
+[518.2s] ✓ r3 seed 17 push.mid:1 w11 killed=true 95645ms [up=1840 first=3193 stop=225 restart=39160 resume=49539 audit=1357]
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    refusing to kill pid 616175: not owned by engine :7940
+[519.3s] ✓ r3 seed 31 budget.charge.mid:3 w4 killed=true 60728ms [up=1849 first=6516 stop=157 restart=48300 resume=2271 audit=1376]
+    refusing to kill pid 615898: not owned by engine :7840
+[520.2s] ✓ r3 seed 34 model.after_return.before_commit:3 w7 killed=false 54283ms [up=1836 first=50829 stop=- restart=- resume=- audit=1325]
+[522.9s] ✓ r3 seed 21 budget.charge.mid:2 w2 killed=true 90344ms [up=1821 first=2304 stop=253 restart=78263 resume=6082 audit=1337]
+[523.1s] ✓ r3 seed 32 outbox.dispatch.after_send.before_ack:1 w0 killed=true 62170ms [up=1833 first=2442 stop=138 restart=49871 resume=6076 audit=1332]
+    refusing to kill pid 616601: not owned by engine :7960
+[523.4s] ✓ r3 seed 23 tx.mid:1 w13 killed=true 86253ms [up=1835 first=454 stop=142 restart=75549 resume=6721 audit=1313]
+    refusing to kill pid 617502: not owned by engine :7920
+    refusing to kill pid 617634: not owned by engine :7780
+    refusing to kill pid 617931: not owned by engine :7740
+[530.4s] ✓ r3 seed 37 push.mid:3 w7 killed=false 10199ms [up=1862 first=6785 stop=- restart=- resume=- audit=1286]
+    refusing to kill pid 617946: not owned by engine :7700
+    refusing to kill pid 618546: not owned by engine :7840
+[533.2s] ✓ r3 seed 39 vm.create.after_request.before_record:2 w0 killed=false 10133ms [up=1834 first=6758 stop=- restart=- resume=- audit=1333]
+[533.4s] ✓ r3 seed 40 lease.expire.mid:3 w13 killed=false 9942ms [up=1830 first=6598 stop=- restart=- resume=- audit=1300]
+    refusing to kill pid 618783: not owned by engine :7960
+    refusing to kill pid 618672: not owned by engine :7700
+    refusing to kill pid 616569: not owned by engine :7880
+    refusing to kill pid 616625: not owned by engine :7760
+[550.4s] ✓ r3 seed 27 push.mid:2 w9 killed=true 99897ms [up=1955 first=5026 stop=246 restart=87201 resume=3820 audit=1353]
+[550.4s] ✓ r3 seed 18 push.after.before_event:2 w3 killed=true 122231ms [up=1836 first=4989 stop=254 restart=109769 resume=3800 audit=1339]
+[551.6s] ✓ r3 seed 26 merge.after_cas.before_event:1 w6 killed=true 102567ms [up=1827 first=3882 stop=178 restart=90062 resume=5020 audit=1330]
+    refusing to kill pid 616595: not owned by engine :7900
+    refusing to kill pid 616588: not owned by engine :7720
+    refusing to kill pid 616579: not owned by engine :7800
+[552.8s] ✓ r3 seed 20 lease.expire.mid:1 w10 killed=true 122368ms [up=1839 first=1651 stop=240 restart=110840 resume=6051 audit=1269]
+[552.8s] ✓ r3 seed 30 lease.expire.mid:2 w1 killed=true 100511ms [up=1834 first=1831 stop=166 restart=88843 resume=6055 audit=1322]
+[552.8s] ✓ r3 seed 29 vm.create.after_request.before_record:1 w5 killed=true 101810ms [up=1827 first=2100 stop=261 restart=89755 resume=6217 audit=1325]
+    refusing to kill pid 619417: not owned by engine :7880
+    refusing to kill pid 616602: not owned by engine :7860
+[558.0s] ✓ r3 seed 22 outbox.dispatch.after_send.before_ack:3 w8 killed=true 121955ms [up=5858 first=6096 stop=271 restart=105486 resume=2551 audit=1361]
+    refusing to kill pid 619663: not owned by engine :7900
+    refusing to kill pid 619542: not owned by engine :7820
+    refusing to kill pid 620140: not owned by engine :7860
+[561.9s] ✓ r3 seed 46 merge.after_cas.before_event:3 w6 killed=false 10263ms [up=1839 first=6796 stop=- restart=- resume=- audit=1284]
+    refusing to kill pid 619418: not owned by engine :7760
+    refusing to kill pid 619672: not owned by engine :7720
+[566.4s] ✓ r3 seed 33 tx.mid:2 w12 killed=true 105269ms [up=5847 first=1103 stop=300 restart=89707 resume=6776 audit=1235]
+    refusing to kill pid 619685: not owned by engine :7800
+[567.1s] ✓ r3 seed 49 vm.create.after_request.before_record:3 w5 killed=false 14329ms [up=5940 first=6856 stop=- restart=- resume=- audit=1274]
+    refusing to kill pid 618124: not owned by engine :7920
+[569.7s] ✓ r3 seed 35 merge.before_cas:1 w11 killed=true 51480ms [up=1834 first=3794 stop=139 restart=39164 resume=4972 audit=1327]
+[571.1s] ✓ r3 seed 36 merge.after_cas.before_event:2 w4 killed=true 51799ms [up=1846 first=5632 stop=236 restart=39167 resume=3362 audit=1344]
+[574.4s] ✓ r3 seed 38 push.after.before_event:1 w2 killed=true 51568ms [up=1944 first=3297 stop=159 restart=39151 resume=5310 audit=1344]
+[580.5s] ✓ r3 seed 41 budget.charge.mid:1 w7 killed=true 50168ms [up=1847 first=867 stop=139 restart=39143 resume=6648 audit=1303]
+[583.7s] ✓ r3 seed 43 tx.mid:3 w13 killed=true 50294ms [up=1863 first=1306 stop=138 restart=39150 resume=6211 audit=1381]
+    refusing to kill pid 619075: not owned by engine :7700
+[584.5s] ✓ r3 seed 42 outbox.dispatch.after_send.before_ack:2 w0 killed=true 51264ms [up=1829 first=5963 stop=175 restart=39164 resume=2563 audit=1371]
+[600.3s] ✓ r3 seed 44 model.after_return.before_commit:1 w9 killed=true 49943ms [up=1827 first=816 stop=149 restart=39133 resume=6550 audit=1322]
+[604.1s] ✓ r3 seed 47 push.mid:1 w10 killed=true 51356ms [up=1832 first=3312 stop=198 restart=39140 resume=5362 audit=1326]
+[605.9s] ✓ r3 seed 45 merge.before_cas:2 w3 killed=true 55502ms [up=5851 first=5580 stop=110 restart=39165 resume=3370 audit=1279]
+[608.2s] ✓ r3 seed 48 push.after.before_event:2 w1 killed=true 55368ms [up=5855 first=4946 stop=123 restart=39240 resume=3791 audit=1263]
+    refusing to kill pid 620450: not owned by engine :7860
+[608.5s] ✓ r3 seed 50 lease.expire.mid:1 w8 killed=true 50436ms [up=1839 first=1629 stop=206 restart=39150 resume=6114 audit=1262]
+
+=== per-phase timing (ms, per case)
+  wipe         n=180 mean=116 p50=111 max=354 sum=20909
+  engineUp     n=180 mean=2837 p50=1849 max=36097 sum=510665
+  firstClient  n=180 mean=4258 p50=3809 max=50829 sum=766444
+  stop         n=135 mean=190 p50=172 max=379 sum=25640
+  restart      n=135 mean=43271 p50=39157 max=110840 sum=5841519
+  resume       n=135 mean=5552 p50=5514 max=49539 sum=749500
+  audit        n=180 mean=1324 p50=1330 max=1397 sum=238337
+  case total   n=180 mean=45479 p50=51356 max=122368 sum=8186182
+
+=== pass counts
+  round 1 killpoints: 10/10 passed (killed 10)
+  round 1 seeds: 50/50 passed (killed 35)
+  round 2 killpoints: 10/10 passed (killed 10)
+  round 2 seeds: 50/50 passed (killed 35)
+  round 3 killpoints: 10/10 passed (killed 10)
+  round 3 seeds: 50/50 passed (killed 35)
+  TOTAL: 180/180 passed, 0 failed; serial-equivalent case time 8186s
+=== chaos:fast end 2026-10-19T20:49:17.497Z wall=608.5s exit=0
+rc=0

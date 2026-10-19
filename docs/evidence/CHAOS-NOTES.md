@@ -182,3 +182,13 @@ Fix (`tests/chaos/engine.ts`):
   `refusing to kill pid`. This also guards against PID reuse.
 The attempt-1 runs 2 and 3 (180/180 each, 498.7s and 498.8s; `chaos-fast-attempt1-run-{2,3}.log`) ran on the buggy
 code. They passed because no w1 retry happened to overlap. All 3 runs were redone on the fix.
+
+### Fast gate, green on the fix (1306429)
+- run 1: 180/180, wall 578.0s (`chaos-fast-run-1.log`)
+- run 2: 180/180, wall 608.5s (`chaos-fast-run-2.log`)
+- run 3: 180/180, wall 580.0s (`chaos-fast-run-3.log`)
+
+Each run is 30 killpoint cases plus 150 seeds; 105 seeds per run actually crashed. N=16. Restart p50 is 39.2s.
+Restart max was 85–157s: an `engine-not-ready` cold retry, an existing readiness behaviour that the retry handles.
+The `refusing to kill pid` lines are PIDs that had already exited (environ unreadable). Sampling during the runs found
+no live runner or engine without the port marker.
