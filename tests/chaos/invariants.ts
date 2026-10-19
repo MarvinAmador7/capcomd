@@ -25,6 +25,7 @@ const TASK_STATES = new Set([
   "verifying",
   "merged",
   "awaiting_approval",
+  "approved",
   "failed",
   "cancelled",
 ]);
@@ -62,7 +63,13 @@ export function eventGapViolations(rows: SeqRow[]): string[] {
   return violations;
 }
 
-export async function auditRun(runId: string, endpoint = "http://127.0.0.1:6420"): Promise<InvariantReport> {
+/**
+ * repo: when the run merged into a real bare repo, git is checked too (git wins):
+ *  doubleMerge: no task's change appears twice on the target;
+ *  lostTasks:   a `merged` task's change is on the target exactly once, and nothing is on the
+ *               target for a task that is not recorded `merged`.
+ */
+export async function auditRun(runId: string, endpoint = "http://127.0.0.1:6420", repo?: { bare: string; target: string }): Promise<InvariantReport> {
   const client = createClient({ endpoint });
   const violations: string[] = [];
 
@@ -87,6 +94,16 @@ export async function auditRun(runId: string, endpoint = "http://127.0.0.1:6420"
     const merges = events.filter((event: { event?: { type?: string } }) => event.event?.type === "VERIFIED_AND_MERGED");
     if (merges.length > 1) {
       mergeViolations.push(`double merge ${task.taskId} (${merges.length})`);
+    }
+    if (repo) {
+      const { Git } = await import("../../src/merge/git");
+      const { countTaskLandings } = await import("../../src/merge/repo");
+      const landed = await countTaskLandings(new Git(repo.bare), `refs/heads/${repo.target}`, `${runId}/${task.taskId}`);
+      if (landed > 1) mergeViolations.push(`git double merge ${task.taskId}: ${landed} commits on ${repo.target}`);
+      if (task.state === "merged" && landed !== 1) lostViolations.push(`task ${task.taskId} recorded merged but ${landed} landings on ${repo.target}`);
+      if (task.state !== "merged" && landed > 0) lostViolations.push(`task ${task.taskId} is ${task.state} but its change is on ${repo.target} (merge not recorded)`);
+      const full = await client.taskBoard.getOrCreate([runId]).getTask({ taskId: task.taskId });
+      if (task.state === "merged" && !full?.context?.merge?.sha) lostViolations.push(`task ${task.taskId} merged without a recorded sha`);
     }
   }
 

@@ -114,6 +114,21 @@ export interface EngineOpts {
   port?: number;
   /** Isolated engine data dir (fast mode). Default: rivetkit's ~/.rivetkit/var/engine. */
   dataDir?: string;
+  /** Real git merges: a bare repo under dataDir/git (direct mode, target `trunk`). Needs dataDir. */
+  repo?: boolean;
+}
+
+/** Merge env for a repo-backed case. Shared by the runner (verifier merges) and the client. */
+export function repoEnv(opts: EngineOpts): NodeJS.ProcessEnv {
+  if (!opts.repo || !opts.dataDir) return {};
+  return {
+    CAPCOMD_REPO: `${opts.dataDir}/git/origin.git`,
+    CAPCOMD_WORKDIR: `${opts.dataDir}/git/work`,
+    CAPCOMD_MERGE_MODE: "direct",
+    CAPCOMD_MERGE_STRATEGY: process.env.CAPCOMD_CHAOS_MERGE_STRATEGY ?? "squash",
+    CAPCOMD_MERGE_TARGET: "trunk",
+    CAPCOMD_TEST_COMMAND: 'test -f "tasks/$CAPCOMD_TASK_ID.md"',
+  };
 }
 
 const REAL_ENGINE = `${ROOT}/node_modules/@rivetkit/engine-cli-linux-x64-musl/rivet-engine`;
@@ -128,6 +143,7 @@ export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
     // runs outside the runner's process group; parallel workers would share it.
     env.RIVET_RUN_SERVICES = "0";
   }
+  Object.assign(env, repoEnv(opts));
   if (opts.dataDir) {
     env.RIVET_ENGINE_BINARY = `${ROOT}/tests/chaos/engine-wrapper.sh`;
     env.CAPCOMD_CHAOS_REAL_ENGINE = REAL_ENGINE;
@@ -361,7 +377,7 @@ const CLIENT_TIMEOUT_MS = 90_000;
 
 export function runClient(runId: string, opts: EngineOpts = {}): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const env = { ...process.env, CAPCOMD_ENDPOINT: engineEnv(opts).CAPCOMD_ENDPOINT };
+    const env = { ...process.env, CAPCOMD_ENDPOINT: engineEnv(opts).CAPCOMD_ENDPOINT, ...repoEnv(opts) };
     delete env.RELAY_ENDPOINT;
     delete env.CAPCOMD_KILLPOINT;
     delete env.RELAY_KILLPOINT;

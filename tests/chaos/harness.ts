@@ -120,6 +120,8 @@ export function randomKillpoint(seed: number): {
     "model.after_return.before_commit",
     "merge.before_cas",
     "merge.after_cas.before_event",
+    "merge.lock.acquired",
+    "merge.after_fetch.before_integrate",
     "push.mid",
     "push.after.before_event",
     "vm.create.after_request.before_record",

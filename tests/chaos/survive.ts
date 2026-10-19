@@ -25,6 +25,27 @@ export async function wipeEngineData(opts: EngineOpts = {}): Promise<void> {
   await rm(dir, { recursive: true, force: true });
 }
 
+function repoAudit(opts: EngineOpts) {
+  return opts.repo && opts.dataDir ? { bare: `${opts.dataDir}/git/origin.git`, target: "trunk" } : undefined;
+}
+
+/** Fresh bare repo per case with a seeded `trunk` (the merge target). */
+export async function seedRepo(opts: EngineOpts): Promise<void> {
+  const { mkdirSync, writeFileSync } = await import("fs");
+  const { Git } = await import("../../src/merge/git");
+  const bare = `${opts.dataDir}/git/origin.git`;
+  const seed = `${opts.dataDir}/git/seed`;
+  mkdirSync(bare, { recursive: true });
+  mkdirSync(seed, { recursive: true });
+  await new Git(bare).ok(["init", "-q", "--bare", "-b", "trunk"]);
+  const g = new Git(seed);
+  await g.ok(["init", "-q", "-b", "trunk"]);
+  writeFileSync(`${seed}/README.md`, "chaos fixture\n");
+  await g.ok(["add", "."]);
+  await g.ok(["commit", "-q", "-m", "seed"]);
+  await g.ok(["push", "-q", bare, "trunk"]);
+}
+
 /** Per-phase wall times of one survive() case, in ms. */
 export interface Phases {
   wipe: number;
@@ -59,6 +80,7 @@ export async function survive(killpoint: string, count: number, requireKill: boo
 
   async function surviveInner(): Promise<{ ok: boolean; error?: string; killed: boolean }> {
   await wipeEngineData(opts);
+  if (opts.repo) await seedRepo(opts);
   mark("wiped", "wipe");
 
   try {
@@ -72,7 +94,7 @@ export async function survive(killpoint: string, count: number, requireKill: boo
       (await Bun.file(engine.logPath).text().catch(() => "")).includes("[KILLPOINT]");
 
     if (first.code === 0 && !killed) {
-      const report = await auditRun(runId, endpoint);
+      const report = await auditRun(runId, endpoint, repoAudit(opts));
       mark("audited", "audit");
       if (requireKill) {
         return { ok: false, killed: false, error: "killpoint never fired" };
@@ -100,7 +122,7 @@ export async function survive(killpoint: string, count: number, requireKill: boo
       return { ok: false, killed: false, error: "killpoint never fired" };
     }
 
-    const report = await auditRun(runId, endpoint);
+    const report = await auditRun(runId, endpoint, repoAudit(opts));
     mark("audited", "audit");
     if (!report.ok) {
       return {

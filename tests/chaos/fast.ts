@@ -62,7 +62,7 @@ async function worker(slot: number) {
   while (next < jobs.length) {
     const job = jobs[next++];
     const started = Date.now();
-    const r = await survive(job.killpoint, job.iteration, job.requireKill, { port, dataDir }, true);
+    const r = await survive(job.killpoint, job.iteration, job.requireKill, { port, dataDir, repo: process.env.CAPCOMD_CHAOS_REPO !== "0" }, true);
     const res: Result = { job, ok: r.ok, killed: r.killed, ms: Date.now() - started, error: r.error, phases: r.phases, slot };
     results.push(res);
     const p = r.phases;
