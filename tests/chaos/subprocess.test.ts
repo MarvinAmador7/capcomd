@@ -4,6 +4,11 @@ import { auditRun, eventGapViolations } from "./invariants";
 import { randomKillpoint } from "./harness";
 import { survive, wipeEngineData, releasePort } from "./survive";
 
+// Measured on gate 5 run 1 (65baa08): 45 normal seeds, mean 35.5s, max 53.5s per seed.
+// Budget = 50 seeds x 53.5s max x 2 headroom ≈ 5350s → 5400s. (Three seeds at
+// 908s, 3461s and 5498s were box suspensions; no timeout covers those.)
+const SEED_SUITE_TIMEOUT_MS = 5_400_000;
+
 const KILLPOINTS = [
   "tx.mid",
   "model.after_return.before_commit",
@@ -72,5 +77,5 @@ describe("Chaos Tests - Subprocess Killpoints", () => {
     console.log(`Final: ${passed}/50 passed, ${failures.length}/50 failed`);
     if (failures.length > 0) console.log(JSON.stringify(failures, null, 2));
     expect(failures).toEqual([]);
-  }, 4_500_000);
+  }, SEED_SUITE_TIMEOUT_MS);
 });

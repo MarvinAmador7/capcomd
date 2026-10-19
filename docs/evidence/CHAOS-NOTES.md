@@ -86,3 +86,15 @@ Log: `chaos-gate4-run-1-orphan-engine-stall.log` (killpoints 10/10, stalled duri
 2. The client's 90s timeout never fired. `spawn("bun")` starts `/usr/local/bin/bun`, which is a `/bin/sh` wrapper,
    so `child.kill("SIGKILL")` killed only the wrapper. `bun.exe` kept the pipes open and `close` never fired. This is also
    why seed 35's resume client lived ~17 min. Fix: spawn `process.execPath` for the engine, the probe and the client.
+
+## Gate 5, run 1: seed suite hit bun's 4500s test timeout (2026-10-19)
+
+Log: `chaos-gate5-run-1-timeout.log`. Killpoints 10/10; 48 seeds ran, 0 invariant failures.
+- **Restart time.** The `engine-restarted` mark is cumulative from the start of the seed, so "~45s" includes the ~14s
+  first client. The restart itself (stop→ready) is ~30s, against 2.4s for a fresh engine. Measured: http up in ~1s, then the
+  readiness probe's first `getRun` on `__ready__` blocks ~30s. That actor lived on the SIGKILLed runner, and the
+  engine only reschedules it once it declares that runner lost. Probing a fresh actor key instead made restart 1.2s,
+  but the resume client then took 34s instead of ~7s, waiting on the same reschedule for its own actors. So the wait is the
+  engine's lost-runner detection, which is inherent to crash recovery. It is not a harness sleep or a lock wait, so there was no cheap fix. The probe was left unchanged.
+- **Timeout.** The 45 normal seeds averaged 35.5s, max 53.5s. Three outliers (908s, 3461s, 5498s) were box suspensions.
+  The seed suite timeout is now 50 × 53.5s × 2 ≈ 5400s.

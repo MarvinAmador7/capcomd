@@ -208,6 +208,7 @@ export class Engine {
         await sleep(100);
       }
     }
+    if (process.env.CHAOS_TS) console.log(`    [ts] http-up`, Date.now());
     if (!httpUp) {
       throw new Error(`engine http not ready\n${tailFile(this.logPath)}`);
     }
@@ -233,6 +234,7 @@ export class Engine {
         resolve({ code: code ?? 1, output });
       });
     });
+    if (process.env.CHAOS_TS) console.log(`    [ts] probe-done`, Date.now(), outcome.output.replace(/\s+/g, " ").slice(-200));
     if (outcome.code === 0 && outcome.output.includes("ready")) return;
     const detail = outcome.output.replace(/\s+/g, " ").slice(-300);
     throw new Error(`engine not ready: ${detail}`);
