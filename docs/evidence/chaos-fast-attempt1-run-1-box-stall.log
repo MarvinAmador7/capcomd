@@ -1,0 +1,261 @@
+$ bun tests/chaos/fast.ts
+=== chaos:fast start 2026-10-19T19:49:01.995Z rounds=3 jobs=180 workers=16 (cores=8 freeMB=5434 perWorkerMB=250)
+[50.2s] ✓ r2 tx.mid tx.mid:1 w10 killed=true 50208ms [up=2150 first=463 stop=140 restart=39161 resume=6640 audit=1336]
+[50.5s] ✓ r1 model.after_return.before_commit model.after_return.before_commit:1 w1 killed=true 50531ms [up=2179 first=726 stop=164 restart=39148 resume=6750 audit=1298]
+[51.5s] ✓ r1 outbox.dispatch.after_send.before_ack outbox.dispatch.after_send.before_ack:1 w9 killed=true 51469ms [up=2075 first=2400 stop=231 restart=39150 resume=6002 audit=1281]
+[51.8s] ✓ r2 merge.before_cas merge.before_cas:1 w12 killed=true 51823ms [up=1968 first=3778 stop=172 restart=39307 resume=4991 audit=1351]
+[52.0s] ✓ r1 merge.before_cas merge.before_cas:1 w2 killed=true 51997ms [up=2065 first=3927 stop=188 restart=39251 resume=5026 audit=1344]
+[52.0s] ✓ r1 push.after.before_event push.after.before_event:1 w5 killed=true 52024ms [up=2166 first=3310 stop=263 restart=39320 resume=5422 audit=1342]
+[54.2s] ✓ r1 tx.mid tx.mid:1 w0 killed=true 54206ms [up=5996 first=533 stop=181 restart=39229 resume=6792 audit=1265]
+[54.8s] ✓ r1 budget.charge.mid budget.charge.mid:1 w8 killed=true 54779ms [up=6073 first=976 stop=232 restart=39153 resume=6722 audit=1329]
+[54.8s] ✓ r2 model.after_return.before_commit model.after_return.before_commit:1 w11 killed=true 54796ms [up=6329 first=724 stop=213 restart=39152 resume=6672 audit=1328]
+[55.3s] ✓ r1 lease.expire.mid lease.expire.mid:1 w7 killed=true 55239ms [up=6150 first=1723 stop=187 restart=39266 resume=6230 audit=1419]
+[55.5s] ✓ r1 vm.create.after_request.before_record vm.create.after_request.before_record:1 w6 killed=true 55480ms [up=6050 first=2228 stop=165 restart=39147 resume=6218 audit=1297]
+[56.0s] ✓ r2 merge.after_cas.before_event merge.after_cas.before_event:1 w13 killed=true 55964ms [up=6027 first=3935 stop=192 restart=39149 resume=4996 audit=1385]
+[56.1s] ✓ r1 merge.after_cas.before_event merge.after_cas.before_event:1 w3 killed=true 56084ms [up=6110 first=4023 stop=242 restart=39155 resume=4954 audit=1352]
+[56.1s] ✓ r2 push.after.before_event push.after.before_event:1 w15 killed=true 56093ms [up=6032 first=3348 stop=245 restart=39264 resume=5435 audit=1420]
+[56.1s] ✓ r1 push.mid push.mid:1 w4 killed=true 56122ms [up=6145 first=3487 stop=199 restart=39267 resume=5442 audit=1304]
+[56.1s] ✓ r2 push.mid push.mid:1 w14 killed=true 56128ms [up=6142 first=3501 stop=218 restart=39276 resume=5447 audit=1356]
+[101.5s] ✓ r2 lease.expire.mid lease.expire.mid:1 w1 killed=true 50952ms [up=1838 first=1693 stop=280 restart=39307 resume=6164 audit=1293]
+[101.8s] ✓ r2 vm.create.after_request.before_record vm.create.after_request.before_record:1 w10 killed=true 51577ms [up=1842 first=2295 stop=186 restart=39283 resume=6201 audit=1357]
+[102.3s] ✓ r3 tx.mid tx.mid:1 w2 killed=true 50309ms [up=1864 first=530 stop=229 restart=39261 resume=6797 audit=1259]
+[102.5s] ✓ r3 model.after_return.before_commit model.after_return.before_commit:1 w5 killed=true 50447ms [up=1853 first=867 stop=153 restart=39268 resume=6712 audit=1305]
+[103.0s] ✓ r2 outbox.dispatch.after_send.before_ack outbox.dispatch.after_send.before_ack:1 w12 killed=true 51128ms [up=1842 first=2463 stop=131 restart=39150 resume=5957 audit=1258]
+[106.0s] ✓ r2 budget.charge.mid budget.charge.mid:1 w9 killed=true 54556ms [up=5890 first=894 stop=191 restart=39141 resume=6741 audit=1314]
+[106.6s] ✓ r3 vm.create.after_request.before_record vm.create.after_request.before_record:1 w6 killed=true 51106ms [up=1931 first=2064 stop=153 restart=39147 resume=6157 audit=1279]
+[106.7s] ✓ r3 budget.charge.mid budget.charge.mid:1 w3 killed=true 50603ms [up=1928 first=878 stop=292 restart=39153 resume=6716 audit=1270]
+[107.2s] ✓ r3 push.after.before_event push.after.before_event:1 w7 killed=true 51952ms [up=1830 first=3268 stop=345 restart=39367 resume=5292 audit=1346]
+[107.2s] ✓ r3 merge.after_cas.before_event merge.after_cas.before_event:1 w8 killed=true 52412ms [up=1989 first=4062 stop=421 restart=39142 resume=5076 audit=1334]
+[110.3s] ✓ r3 merge.before_cas merge.before_cas:1 w0 killed=true 56068ms [up=5977 first=3760 stop=216 restart=39252 resume=5062 audit=1329]
+[110.7s] ✓ r3 push.mid push.mid:1 w11 killed=true 55876ms [up=5963 first=3308 stop=260 restart=39260 resume=5482 audit=1336]
+[110.8s] ✓ r3 lease.expire.mid lease.expire.mid:1 w13 killed=true 54855ms [up=5858 first=1734 stop=199 restart=39258 resume=6113 audit=1347]
+[111.7s] ✓ r1 seed 2 outbox.dispatch.after_send.before_ack:1 w14 killed=true 55590ms [up=5947 first=2497 stop=253 restart=39162 resume=6004 audit=1361]
+[111.7s] ✓ r3 outbox.dispatch.after_send.before_ack outbox.dispatch.after_send.before_ack:1 w15 killed=true 55626ms [up=5940 first=2500 stop=258 restart=39154 resume=5968 audit=1363]
+[112.2s] ✓ r1 seed 1 budget.charge.mid:3 w4 killed=true 56025ms [up=5954 first=6622 stop=298 restart=39155 resume=2339 audit=1372]
+[112.2s] ✓ r1 seed 4 model.after_return.before_commit:3 w10 killed=false 10359ms [up=1952 first=6806 stop=- restart=- resume=- audit=1326]
+[113.3s] ✓ r1 seed 7 push.mid:3 w12 killed=false 10384ms [up=1842 first=6902 stop=- restart=- resume=- audit=1341]
+[117.1s] ✓ r1 seed 10 lease.expire.mid:3 w3 killed=false 10408ms [up=1965 first=6859 stop=- restart=- resume=- audit=1340]
+[120.9s] ✓ r1 seed 9 vm.create.after_request.before_record:2 w6 killed=false 14273ms [up=5850 first=6800 stop=- restart=- resume=- audit=1331]
+[122.1s] ✓ r1 seed 16 merge.after_cas.before_event:3 w14 killed=false 10344ms [up=1964 first=6740 stop=- restart=- resume=- audit=1309]
+[122.5s] ✓ r1 seed 19 vm.create.after_request.before_record:3 w10 killed=false 10303ms [up=1841 first=6824 stop=- restart=- resume=- audit=1303]
+[132.6s] ✓ r1 seed 24 model.after_return.before_commit:2 w10 killed=false 10116ms [up=1879 first=6621 stop=- restart=- resume=- audit=1303]
+[143.1s] ✓ r1 seed 25 merge.before_cas:3 w10 killed=false 10485ms [up=1940 first=6714 stop=- restart=- resume=- audit=1300]
+[152.3s] ✓ r1 seed 3 tx.mid:2 w1 killed=true 50802ms [up=1838 first=1106 stop=174 restart=39169 resume=6690 audit=1264]
+[154.0s] ✓ r1 seed 5 merge.before_cas:1 w2 killed=true 51709ms [up=1843 first=3863 stop=287 restart=39151 resume=4911 audit=1327]
+[154.5s] ✓ r1 seed 6 merge.after_cas.before_event:2 w5 killed=true 52017ms [up=1935 first=5649 stop=228 restart=39165 resume=3406 audit=1265]
+[157.9s] ✓ r1 seed 11 budget.charge.mid:1 w7 killed=true 50697ms [up=1843 first=982 stop=236 restart=39257 resume=6672 audit=1336]
+[161.0s] ✓ r1 seed 13 tx.mid:3 w0 killed=true 50672ms [up=1973 first=1335 stop=202 restart=39148 resume=6276 audit=1365]
+[161.0s] ✓ r1 seed 14 model.after_return.before_commit:1 w11 killed=true 50299ms [up=1832 first=823 stop=210 restart=39171 resume=6661 audit=1259]
+[162.0s] ✓ r1 seed 8 push.after.before_event:1 w9 killed=true 55948ms [up=5984 first=3306 stop=289 restart=39166 resume=5438 audit=1364]
+[162.8s] ✓ r1 seed 15 merge.before_cas:2 w13 killed=true 51949ms [up=1873 first=5637 stop=186 restart=39151 resume=3384 audit=1368]
+[162.8s] ✓ r1 seed 12 outbox.dispatch.after_send.before_ack:2 w8 killed=true 55624ms [up=5840 first=6034 stop=261 restart=39156 resume=2588 audit=1373]
+[163.3s] ✓ r1 seed 17 push.mid:1 w15 killed=true 51616ms [up=1852 first=3332 stop=181 restart=39143 resume=5376 audit=1351]
+[164.0s] ✓ r1 seed 18 push.after.before_event:2 w4 killed=true 51805ms [up=1967 first=5013 stop=219 restart=39150 resume=3792 audit=1356]
+[164.5s] ✓ r1 seed 28 push.after.before_event:3 w2 killed=false 10469ms [up=1937 first=6848 stop=- restart=- resume=- audit=1335]
+[168.3s] ✓ r1 seed 20 lease.expire.mid:1 w12 killed=true 54989ms [up=5990 first=1653 stop=301 restart=39149 resume=6176 audit=1329]
+[168.6s] ✓ r1 seed 21 budget.charge.mid:2 w3 killed=true 51464ms [up=1825 first=2366 stop=251 restart=39275 resume=6053 audit=1357]
+[172.5s] ✓ r1 seed 23 tx.mid:1 w14 killed=true 50403ms [up=1933 first=515 stop=187 restart=39149 resume=6883 audit=1328]
+[173.2s] ✓ r1 seed 34 model.after_return.before_commit:3 w13 killed=false 10453ms [up=1950 first=6887 stop=- restart=- resume=- audit=1304]
+[174.3s] ✓ r1 seed 37 push.mid:3 w4 killed=false 10347ms [up=1950 first=6718 stop=- restart=- resume=- audit=1320]
+[176.5s] ✓ r1 seed 22 outbox.dispatch.after_send.before_ack:3 w6 killed=true 55672ms [up=5957 first=5972 stop=223 restart=39154 resume=2637 audit=1359]
+[178.8s] ✓ r1 seed 39 vm.create.after_request.before_record:2 w12 killed=false 10449ms [up=1942 first=6810 stop=- restart=- resume=- audit=1323]
+[179.1s] ✓ r1 seed 40 lease.expire.mid:3 w3 killed=false 10523ms [up=1942 first=6812 stop=- restart=- resume=- audit=1297]
+[189.3s] ✓ r1 seed 46 merge.after_cas.before_event:3 w3 killed=false 10159ms [up=1836 first=6705 stop=- restart=- resume=- audit=1312]
+[194.6s] ✓ r1 seed 26 merge.after_cas.before_event:1 w10 killed=true 51553ms [up=1847 first=3722 stop=215 restart=39143 resume=4935 audit=1320]
+[203.9s] ✓ r1 seed 27 push.mid:2 w1 killed=true 51568ms [up=1840 first=4988 stop=202 restart=39146 resume=3737 audit=1342]
+[205.7s] ✓ r1 seed 29 vm.create.after_request.before_record:1 w5 killed=true 51221ms [up=1836 first=2155 stop=246 restart=39252 resume=6160 audit=1265]
+[208.7s] ✓ r1 seed 30 lease.expire.mid:2 w7 killed=true 50765ms [up=1833 first=1875 stop=216 restart=39166 resume=6053 audit=1275]
+[212.4s] ✓ r1 seed 32 outbox.dispatch.after_send.before_ack:1 w11 killed=true 51438ms [up=1866 first=2467 stop=297 restart=39164 resume=5957 audit=1265]
+[212.7s] ✓ r1 seed 33 tx.mid:2 w9 killed=true 50710ms [up=1806 first=1101 stop=297 restart=39252 resume=6598 audit=1259]
+[213.0s] ✓ r1 seed 31 budget.charge.mid:3 w0 killed=true 52069ms [up=1883 first=6667 stop=173 restart=39262 resume=2295 audit=1380]
+[214.1s] ✓ r1 seed 49 vm.create.after_request.before_record:3 w1 killed=false 10234ms [up=1849 first=6763 stop=- restart=- resume=- audit=1320]
+[214.7s] ✓ r1 seed 35 merge.before_cas:1 w8 killed=true 51868ms [up=1957 first=3855 stop=177 restart=39263 resume=4944 audit=1332]
+[215.2s] ✓ r1 seed 36 merge.after_cas.before_event:2 w15 killed=true 51855ms [up=1849 first=5696 stop=182 restart=39159 resume=3375 audit=1271]
+[216.1s] ✓ r1 seed 38 push.after.before_event:1 w2 killed=true 51610ms [up=1829 first=3383 stop=251 restart=39156 resume=5331 audit=1352]
+[222.9s] ✓ r1 seed 41 budget.charge.mid:1 w14 killed=true 50378ms [up=1845 first=935 stop=163 restart=39143 resume=6678 audit=1331]
+[223.1s] ✓ r2 seed 4 model.after_return.before_commit:3 w0 killed=false 10114ms [up=1842 first=6663 stop=- restart=- resume=- audit=1329]
+[224.9s] ✓ r1 seed 42 outbox.dispatch.after_send.before_ack:2 w13 killed=true 51670ms [up=1836 first=6039 stop=307 restart=39159 resume=2552 audit=1353]
+[224.9s] ✓ r1 seed 43 tx.mid:3 w4 killed=true 50597ms [up=1825 first=1276 stop=272 restart=39146 resume=6291 audit=1349]
+[225.6s] ✓ r2 seed 7 push.mid:3 w15 killed=false 10389ms [up=1860 first=6853 stop=- restart=- resume=- audit=1333]
+[226.8s] ✓ r1 seed 44 model.after_return.before_commit:1 w6 killed=true 50254ms [up=1833 first=718 stop=183 restart=39154 resume=6669 audit=1345]
+[230.8s] ✓ r1 seed 45 merge.before_cas:2 w12 killed=true 52044ms [up=1826 first=5604 stop=174 restart=39164 resume=3406 audit=1310]
+[233.2s] ✓ r2 seed 9 vm.create.after_request.before_record:2 w14 killed=false 10361ms [up=1852 first=6863 stop=- restart=- resume=- audit=1327]
+[233.4s] ✓ r2 seed 10 lease.expire.mid:3 w0 killed=false 10250ms [up=1838 first=6823 stop=- restart=- resume=- audit=1308]
+[241.0s] ✓ r1 seed 47 push.mid:1 w3 killed=true 51731ms [up=1845 first=3407 stop=224 restart=39146 resume=5472 audit=1339]
+[243.5s] ✓ r2 seed 16 merge.after_cas.before_event:3 w14 killed=false 10270ms [up=1849 first=6777 stop=- restart=- resume=- audit=1314]
+[246.3s] ✓ r1 seed 48 push.after.before_event:2 w10 killed=true 51702ms [up=1833 first=5073 stop=242 restart=39163 resume=3729 audit=1269]
+[256.4s] ✓ r1 seed 50 lease.expire.mid:1 w5 killed=true 50656ms [up=1840 first=1675 stop=304 restart=39147 resume=6117 audit=1257]
+[257.8s] ✓ r2 seed 19 vm.create.after_request.before_record:3 w14 killed=false 14330ms [up=5845 first=6814 stop=- restart=- resume=- audit=1304]
+[260.4s] ✓ r2 seed 1 budget.charge.mid:3 w7 killed=true 51767ms [up=1839 first=6642 stop=154 restart=39149 resume=2300 audit=1368]
+[264.0s] ✓ r2 seed 2 outbox.dispatch.after_send.before_ack:1 w11 killed=true 51530ms [up=1942 first=2421 stop=203 restart=39155 resume=5930 audit=1359]
+    engine-not-ready attempt=1, cold restart: engine http not ready Starting Rivet engine on port 7920... RivetKit 2.3.27 (Engine - Serverful) - Endpoint: http://127.0.0.1:7920 (local native) - Actors: 6 ✓ 
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=xgim7z0ed5476y33xzfyhbf4kzbl00 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=th8gja39kilk6uabu5w4y6cplxbl00 
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=ljsak7fi97v1jjx6kun75x0o18dl00 
+[396.3s] ✗ r2 seed 3 tx.mid:2 w9 killed=true 183623ms [up=5867 first=1099 stop=182 restart=39159 resume=136940 audit=-] ERROR resume failed (1): Starting run: chaos-tx-mid-n2-1792439554691-p7880 Goal: ChaosGoal ✓ Run resumed (planning) ✓ Plan restored: 2 tasks → Creating tasks... ✓ task-1 ✓ task-2 → Provisioning worker... ✓ Worker chaos-tx-mid-n2-1792439554691-p7880-worker-1 ready (idle) → Executing tasks... → task-1 (epoch 1) ✓ task-1 verified and merged → task-2 (epoch 1) [client terminated by signal SIGKILL]
+[396.3s] ✗ r2 seed 6 merge.after_cas.before_event:2 w8 killed=true 181652ms [up=1937 first=5526 stop=230 restart=39266 resume=134271 audit=-] ERROR resume failed (1): Starting run: chaos-merge-after_cas-before_event-n2-1792439556689-p7860 Goal: ChaosGoal ✓ Run resumed (executing) → Creating tasks... → Provisioning worker... ✓ Worker chaos-merge-after_cas-before_event-n2-1792439556689-p7860-worker-1 ready (busy) → Executing tasks... ✓ task-1 already merged ✓ task-2 verified and merged → All tasks complete, judging... [client terminated by sign
+level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=x02b1trcvbqj9xjo3hcw262xtsal00
+[397.8s] ✗ r2 seed 5 merge.before_cas:1 w1 killed=false 183675ms [up=1948 first=3867 stop=152 restart=39144 resume=4979 audit=-] ERROR An internal error occurred
+[401.3s] ✓ r2 seed 12 outbox.dispatch.after_send.before_ack:2 w4 killed=true 176400ms [up=5954 first=6073 stop=160 restart=159837 resume=2667 audit=1342]
+[402.4s] ✓ r2 seed 15 merge.before_cas:2 w12 killed=true 171620ms [up=1842 first=5610 stop=173 restart=158890 resume=3427 audit=1368]
+[405.3s] ✓ r2 seed 13 tx.mid:3 w15 killed=true 179705ms [up=1841 first=1304 stop=310 restart=168262 resume=6332 audit=1329]
+[405.7s] ✓ r2 seed 24 model.after_return.before_commit:2 w11 killed=false 141761ms [up=133324 first=6771 stop=- restart=- resume=- audit=1324]
+[406.8s] ✓ r2 seed 25 merge.before_cas:3 w9 killed=false 10481ms [up=2064 first=6737 stop=- restart=- resume=- audit=1313]
+[411.6s] ✓ r2 seed 28 push.after.before_event:3 w4 killed=false 10262ms [up=1837 first=6820 stop=- restart=- resume=- audit=1312]
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=5j9vrhew09sng2food91bcllc9dl00 
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=td18e374dmcfc0e8cc07nj7t8adl00 
+[717.6s] ✓ r2 seed 22 outbox.dispatch.after_send.before_ack:3 w14 killed=true 459768ms [up=1835 first=136251 stop=279 restart=315211 resume=4379 audit=1338]
+[717.6s] ✓ r2 seed 18 push.after.before_event:2 w3 killed=true 476606ms [up=1835 first=5003 stop=300 restart=463130 resume=4534 audit=1377]
+[719.7s] ✓ r2 seed 17 push.mid:1 w0 killed=true 486320ms [up=1836 first=3245 stop=151 restart=473147 resume=6046 audit=1384]
+[719.7s] ✓ r2 seed 8 push.after.before_event:1 w2 killed=true 503609ms [up=5851 first=3336 stop=215 restart=486203 resume=6260 audit=1367]
+[720.3s] ✓ r2 seed 21 budget.charge.mid:2 w5 killed=true 463921ms [up=1849 first=2274 stop=295 restart=450825 resume=6843 audit=1405]
+[720.6s] ✓ r2 seed 20 lease.expire.mid:1 w10 killed=true 474249ms [up=1842 first=1676 stop=245 restart=461835 resume=6882 audit=1393]
+[720.8s] ✓ r2 seed 14 model.after_return.before_commit:1 w6 killed=true 493985ms [up=1839 first=779 stop=200 restart=481897 resume=7492 audit=1326]
+[720.8s] ✓ r2 seed 11 budget.charge.mid:1 w13 killed=true 495886ms [up=5960 first=880 stop=226 restart=479309 resume=7629 audit=1370]
+[721.2s] ✓ r2 seed 23 tx.mid:1 w7 killed=true 460729ms [up=1933 first=490 stop=226 restart=448663 resume=7625 audit=1330]
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=5f6qwmv024rf0h59sjjo3bimqrcl00 
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=l3sfyr1h4s7xsiv39dkpvpm7mrcl00 
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=h0bh4se1zo4yiw8og5718esm0nal00 
+    engine-not-ready attempt=1, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=5n0vyq2euq1atw5ho2wmbknankal00 
+[731.4s] ✓ r2 seed 39 vm.create.after_request.before_record:2 w10 killed=false 10797ms [up=1990 first=7039 stop=- restart=- resume=- audit=1338]
+[731.4s] ✓ r2 seed 40 lease.expire.mid:3 w6 killed=false 10608ms [up=1880 first=6998 stop=- restart=- resume=- audit=1346]
+[732.2s] ✓ r2 seed 34 model.after_return.before_commit:3 w14 killed=false 14648ms [up=5972 first=6979 stop=- restart=- resume=- audit=1326]
+    engine-not-ready attempt=1, cold restart: engine not ready: 
+[734.7s] ✓ r2 seed 37 push.mid:3 w2 killed=false 15017ms [up=5981 first=6966 stop=- restart=- resume=- audit=1338]
+[744.9s] ✓ r2 seed 46 merge.after_cas.before_event:3 w2 killed=false 10207ms [up=1849 first=6753 stop=- restart=- resume=- audit=1323]
+[756.2s] ✓ r2 seed 31 budget.charge.mid:3 w11 killed=true 350485ms [up=1831 first=6629 stop=139 restart=337823 resume=2381 audit=1360]
+[758.1s] ✓ r2 seed 27 push.mid:2 w1 killed=true 360286ms [up=1841 first=5030 stop=256 restart=347608 resume=3854 audit=1402]
+[760.6s] ✓ r2 seed 33 tx.mid:2 w4 killed=true 349042ms [up=1842 first=1033 stop=194 restart=337617 resume=6692 audit=1322]
+[770.3s] ✓ r2 seed 35 merge.before_cas:1 w3 killed=true 52694ms [up=2002 first=4224 stop=264 restart=39271 resume=5160 audit=1353]
+[771.9s] ✓ r2 seed 41 budget.charge.mid:1 w13 killed=true 51150ms [up=2089 first=961 stop=317 restart=39268 resume=6812 audit=1326]
+[772.3s] ✓ r2 seed 36 merge.after_cas.before_event:2 w0 killed=true 52606ms [up=2000 first=5856 stop=165 restart=39296 resume=3430 audit=1344]
+[772.5s] ✓ r2 seed 49 vm.create.after_request.before_record:3 w1 killed=false 14458ms [up=6004 first=6852 stop=- restart=- resume=- audit=1323]
+[774.4s] ✓ r2 seed 42 outbox.dispatch.after_send.before_ack:2 w7 killed=true 53201ms [up=3000 first=6196 stop=168 restart=39420 resume=2653 audit=1368]
+[775.8s] ✓ r2 seed 26 merge.after_cas.before_event:1 w8 killed=true 379481ms [up=6085 first=3867 stop=415 restart=362375 resume=5076 audit=1344]
+[776.6s] ✓ r2 seed 32 outbox.dispatch.after_send.before_ack:1 w9 killed=true 369819ms [up=1830 first=2401 stop=155 restart=357812 resume=5922 audit=1318]
+[776.9s] ✓ r2 seed 29 vm.create.after_request.before_record:1 w12 killed=true 374486ms [up=1836 first=2404 stop=176 restart=362174 resume=6232 audit=1360]
+[776.9s] ✓ r2 seed 30 lease.expire.mid:2 w15 killed=true 371638ms [up=1970 first=1843 stop=201 restart=359710 resume=6254 audit=1317]
+[777.4s] ✓ r2 seed 38 push.after.before_event:1 w5 killed=true 57089ms [up=6968 first=3480 stop=196 restart=39282 resume=5378 audit=1348]
+[782.0s] ✓ r2 seed 43 tx.mid:3 w10 killed=true 50646ms [up=1920 first=1302 stop=109 restart=39153 resume=6378 audit=1338]
+[782.0s] ✓ r2 seed 44 model.after_return.before_commit:1 w6 killed=true 50618ms [up=1896 first=863 stop=430 restart=39144 resume=6665 audit=1229]
+[782.8s] ✓ r3 seed 4 model.after_return.before_commit:3 w1 killed=false 10293ms [up=1844 first=6829 stop=- restart=- resume=- audit=1308]
+[784.3s] ✓ r2 seed 45 merge.before_cas:2 w14 killed=true 52058ms [up=1980 first=5571 stop=300 restart=39255 resume=3367 audit=1274]
+[787.2s] ✓ r3 seed 9 vm.create.after_request.before_record:2 w15 killed=false 10245ms [up=1834 first=6752 stop=- restart=- resume=- audit=1304]
+[791.2s] ✓ r3 seed 7 push.mid:3 w9 killed=false 14563ms [up=5951 first=6798 stop=- restart=- resume=- audit=1317]
+[791.7s] ✓ r3 seed 10 lease.expire.mid:3 w5 killed=false 14336ms [up=5851 first=6829 stop=- restart=- resume=- audit=1312]
+[801.7s] ✓ r3 seed 16 merge.after_cas.before_event:3 w9 killed=false 10475ms [up=1943 first=6840 stop=- restart=- resume=- audit=1300]
+[801.7s] ✓ r2 seed 47 push.mid:1 w2 killed=true 56794ms [up=6911 first=3383 stop=300 restart=39163 resume=5430 audit=1340]
+[808.2s] ✓ r2 seed 48 push.after.before_event:2 w11 killed=true 52049ms [up=1855 first=5160 stop=195 restart=39309 resume=3768 audit=1370]
+[811.6s] ✓ r2 seed 50 lease.expire.mid:1 w4 killed=true 51029ms [up=1864 first=1786 stop=208 restart=39284 resume=6166 audit=1335]
+[811.9s] ✓ r3 seed 19 vm.create.after_request.before_record:3 w2 killed=false 10210ms [up=1834 first=6827 stop=- restart=- resume=- audit=1325]
+[822.3s] ✓ r3 seed 1 budget.charge.mid:3 w3 killed=true 52062ms [up=1939 first=6578 stop=199 restart=39248 resume=2313 audit=1394]
+[823.5s] ✓ r3 seed 2 outbox.dispatch.after_send.before_ack:1 w13 killed=true 51543ms [up=1830 first=2452 stop=252 restart=39260 resume=6061 audit=1354]
+[826.2s] ✓ r3 seed 5 merge.before_cas:1 w7 killed=true 51828ms [up=1823 first=3807 stop=293 restart=39142 resume=5084 audit=1345]
+[826.9s] ✓ r3 seed 3 tx.mid:2 w0 killed=true 54601ms [up=5854 first=1084 stop=284 restart=39149 resume=6684 audit=1240]
+[827.6s] ✓ r3 seed 6 merge.after_cas.before_event:2 w8 killed=true 51821ms [up=1849 first=5517 stop=290 restart=39165 resume=3326 audit=1276]
+[832.5s] ✓ r3 seed 8 push.after.before_event:1 w12 killed=true 55586ms [up=5975 first=3244 stop=149 restart=39147 resume=5354 audit=1350]
+[832.6s] ✓ r3 seed 11 budget.charge.mid:1 w10 killed=true 50591ms [up=1840 first=937 stop=172 restart=39180 resume=6737 audit=1333]
+[833.5s] ✓ r3 seed 13 tx.mid:3 w1 killed=true 50700ms [up=1844 first=1313 stop=216 restart=39258 resume=6320 audit=1402]
+[833.6s] ✓ r3 seed 12 outbox.dispatch.after_send.before_ack:2 w6 killed=true 51588ms [up=1835 first=6013 stop=283 restart=39153 resume=2564 audit=1360]
+[833.9s] ✓ r3 seed 24 model.after_return.before_commit:2 w13 killed=false 10394ms [up=1845 first=6821 stop=- restart=- resume=- audit=1329]
+[836.3s] ✓ r3 seed 25 merge.before_cas:3 w7 killed=false 10147ms [up=1836 first=6715 stop=- restart=- resume=- audit=1281]
+[839.2s] ✓ r3 seed 14 model.after_return.before_commit:1 w14 killed=true 54889ms [up=5855 first=885 stop=205 restart=39282 resume=6786 audit=1336]
+[839.2s] ✓ r3 seed 15 merge.before_cas:2 w15 killed=true 52002ms [up=1832 first=5512 stop=211 restart=39163 resume=3407 audit=1386]
+[843.4s] ✓ r3 seed 17 push.mid:1 w5 killed=true 51653ms [up=1855 first=3285 stop=215 restart=39154 resume=5425 audit=1324]
+[846.8s] ✓ r3 seed 28 push.after.before_event:3 w12 killed=false 14285ms [up=5864 first=6762 stop=- restart=- resume=- audit=1324]
+[853.3s] ✓ r3 seed 18 push.after.before_event:2 w9 killed=true 51610ms [up=1846 first=4983 stop=187 restart=39160 resume=3795 audit=1277]
+[853.5s] ✓ r3 seed 34 model.after_return.before_commit:3 w14 killed=false 14313ms [up=5854 first=6724 stop=- restart=- resume=- audit=1348]
+[857.3s] ✓ r3 seed 37 push.mid:3 w12 killed=false 10454ms [up=1837 first=6907 stop=- restart=- resume=- audit=1326]
+[859.0s] ✓ r3 seed 20 lease.expire.mid:1 w11 killed=true 50734ms [up=1845 first=1703 stop=259 restart=39163 resume=6157 audit=1283]
+[863.7s] ✓ r3 seed 22 outbox.dispatch.after_send.before_ack:3 w2 killed=true 51782ms [up=1837 first=6170 stop=170 restart=39166 resume=2541 audit=1377]
+[863.8s] ✓ r3 seed 39 vm.create.after_request.before_record:2 w14 killed=false 10303ms [up=1839 first=6796 stop=- restart=- resume=- audit=1334]
+[866.9s] ✓ r3 seed 21 budget.charge.mid:2 w4 killed=true 55252ms [up=5843 first=2335 stop=211 restart=39138 resume=6060 audit=1329]
+[867.5s] ✓ r3 seed 40 lease.expire.mid:3 w12 killed=false 10209ms [up=1850 first=6736 stop=- restart=- resume=- audit=1309]
+[872.5s] ✓ r3 seed 23 tx.mid:1 w3 killed=true 50126ms [up=1836 first=498 stop=302 restart=39159 resume=6731 audit=1227]
+[879.3s] ✓ r3 seed 27 push.mid:2 w8 killed=true 51696ms [up=1831 first=5090 stop=223 restart=39141 resume=3747 audit=1354]
+[882.7s] ✓ r3 seed 26 merge.after_cas.before_event:1 w0 killed=true 55739ms [up=5874 first=3846 stop=221 restart=39156 resume=5008 audit=1325]
+[882.7s] ✓ r3 seed 46 merge.after_cas.before_event:3 w3 killed=false 10205ms [up=1838 first=6775 stop=- restart=- resume=- audit=1323]
+[883.8s] ✓ r3 seed 29 vm.create.after_request.before_record:1 w10 killed=true 51235ms [up=1852 first=2191 stop=230 restart=39253 resume=6127 audit=1244]
+[884.3s] ✓ r3 seed 30 lease.expire.mid:2 w1 killed=true 50821ms [up=1931 first=1873 stop=203 restart=39155 resume=6051 audit=1336]
+[885.4s] ✓ r3 seed 32 outbox.dispatch.after_send.before_ack:1 w13 killed=true 51545ms [up=1818 first=2497 stop=326 restart=39271 resume=6005 audit=1340]
+[889.7s] ✓ r3 seed 31 budget.charge.mid:3 w6 killed=true 56097ms [up=5879 first=6656 stop=314 restart=39144 resume=2295 audit=1388]
+[891.1s] ✓ r3 seed 33 tx.mid:2 w7 killed=true 54795ms [up=5946 first=1176 stop=273 restart=39155 resume=6702 audit=1240]
+[893.0s] ✓ r3 seed 49 vm.create.after_request.before_record:3 w3 killed=false 10360ms [up=1840 first=6880 stop=- restart=- resume=- audit=1321]
+[894.9s] ✓ r3 seed 35 merge.before_cas:1 w15 killed=true 55675ms [up=5849 first=3758 stop=305 restart=39166 resume=4952 audit=1328]
+[895.3s] ✓ r3 seed 36 merge.after_cas.before_event:2 w5 killed=true 51954ms [up=1938 first=5627 stop=185 restart=39140 resume=3369 audit=1334]
+[904.9s] ✓ r3 seed 38 push.after.before_event:1 w9 killed=true 51638ms [up=1846 first=3312 stop=168 restart=39258 resume=5394 audit=1344]
+[909.4s] ✓ r3 seed 41 budget.charge.mid:1 w11 killed=true 50448ms [up=1838 first=870 stop=311 restart=39148 resume=6733 audit=1318]
+[914.3s] ✓ r3 seed 43 tx.mid:3 w14 killed=true 50547ms [up=1842 first=1365 stop=263 restart=39155 resume=6291 audit=1343]
+[915.2s] ✓ r3 seed 42 outbox.dispatch.after_send.before_ack:2 w2 killed=true 51444ms [up=1842 first=6049 stop=197 restart=39162 resume=2582 audit=1397]
+[917.2s] ✓ r3 seed 44 model.after_return.before_commit:1 w4 killed=true 50269ms [up=1843 first=786 stop=161 restart=39156 resume=6685 audit=1329]
+[919.1s] ✓ r3 seed 45 merge.before_cas:2 w12 killed=true 51615ms [up=1831 first=5505 stop=159 restart=39148 resume=3431 audit=1337]
+[930.7s] ✓ r3 seed 47 push.mid:1 w8 killed=true 51325ms [up=1837 first=3249 stop=157 restart=39149 resume=5369 audit=1347]
+[934.1s] ✓ r3 seed 48 push.after.before_event:2 w0 killed=true 51446ms [up=1847 first=4976 stop=177 restart=39159 resume=3768 audit=1279]
+[938.4s] ✓ r3 seed 50 lease.expire.mid:1 w10 killed=true 54527ms [up=5959 first=1621 stop=223 restart=39152 resume=6099 audit=1312]
+
+=== per-phase timing (ms, per case)
+  wipe         n=180 mean=137 p50=129 max=328 sum=24655
+  engineUp     n=180 mean=3673 p50=1880 max=133324 sum=661114
+  firstClient  n=180 mean=4769 p50=3855 max=136251 sum=858475
+  stop         n=135 mean=226 p50=216 max=430 sum=30540
+  restart      n=135 mean=85621 p50=39164 max=486203 sum=11558795
+  resume       n=135 mean=7229 p50=5930 max=136940 sum=975869
+  audit        n=177 mean=1328 p50=1330 max=1420 sum=235120
+  case total   n=180 mean=80649 p50=51610 max=503609 sum=14516831
+
+=== pass counts
+  round 1 killpoints: 10/10 passed (killed 10)
+  round 1 seeds: 50/50 passed (killed 35)
+  round 2 killpoints: 10/10 passed (killed 10)
+  round 2 seeds: 47/50 passed (killed 34)
+  round 3 killpoints: 10/10 passed (killed 10)
+  round 3 seeds: 50/50 passed (killed 35)
+  TOTAL: 177/180 passed, 3 failed; serial-equivalent case time 14517s
+  FAILED r2 seed 3 tx.mid:2: resume failed (1): Starting run: chaos-tx-mid-n2-1792439554691-p7880
+Goal: ChaosGoal
+
+✓ Run resumed (planning)
+✓ Plan restored: 2 tasks
+
+→ Creating tasks...
+  ✓ task-1
+  ✓ task-2
+
+→ Provisioning worker...
+✓ Worker chaos-tx-mid-n2-1792439554691-p7880-worker-1 ready (idle)
+
+→ Executing tasks...
+  → task-1 (epoch 1)
+  ✓ task-1 verified and merged
+  → task-2 (epoch 1)
+
+[client terminated by signal SIGKILL]
+  FAILED r2 seed 6 merge.after_cas.before_event:2: resume failed (1): Starting run: chaos-merge-after_cas-before_event-n2-1792439556689-p7860
+Goal: ChaosGoal
+
+✓ Run resumed (executing)
+
+→ Creating tasks...
+
+→ Provisioning worker...
+✓ Worker chaos-merge-after_cas-before_event-n2-1792439556689-p7860-worker-1 ready (busy)
+
+→ Executing tasks...
+  ✓ task-1 already merged
+  ✓ task-2 verified and merged
+
+→ All tasks complete, judging...
+
+[client terminated by signal SIGKILL]
+  FAILED r2 seed 5 merge.before_cas:1: An internal error occurred
+=== chaos:fast end 2026-10-19T20:04:40.359Z wall=938.4s exit=1
+error: script "chaos:fast" exited with code 1
+rc=1

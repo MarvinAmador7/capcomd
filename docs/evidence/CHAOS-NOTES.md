@@ -152,3 +152,33 @@ The restart wait is NOT the pegboard envoy/runner lost threshold:
 ### Result
 Trial run on this box: 180/180, wall 496s (serial-equivalent case time 7547s, i.e. ~2.1h of serial work).
 Official runs: `chaos-fast-run-{1,2,3}.log`.
+
+### Fast attempt 1, run 1: 177/180, a box stall, not an isolation bug
+Log: `chaos-fast-attempt1-run-1-box-stall.log` (wall 938s). Failures: r2 seeds 3 and 6 (resume client hit the 90s
+SIGKILL) and seed 5 (`internal_error`). Timeline from the per-case phase timings (start = end − duration):
+- Every case active between t≈265s and t≈715s (19:53:26Z–20:01Z) stalled at once, on all 16 workers, in every phase.
+  That includes a **fresh** engine on an empty, isolated data dir (`seed 24 up=133324ms`, normally 1.8s) and first
+  clients (`seed 22 first=136251ms`). Restarts took 159–486s instead of 39.2s.
+- Engine/runner logs on every worker go silent over the same window (for example p7900 19:53:11→20:00:54Z,
+  p7960 and p7980 19:55:37→20:00:54Z) and resume within the same second.
+- No OOM in dmesg. Load average stayed under 3.2 on 8 cores, and free memory never fell below ~2.1GB.
+- The window matches a 600s idle wait by the agent (the same pattern as the gate-2 seed-36 7.26h suspension).
+A cross-worker isolation bug would hit one worker's port or data dir, not freeze fresh engines on empty dirs across
+all slots at the same instant. Verdict: box suspension or freeze. N stays at 16, and the code is unchanged. The run
+was redone, with agent waits ≤90s.
+
+### Fast attempt 2, run 1: a real isolation bug (stopped at 2 failures)
+Log: `chaos-fast-attempt2-run-1-prefix-kill.log`. r1 seed 42 (w5) and seed 40 (w11) had `killed=false`, a first client
+that ran 35–90s, then `actor_ready_timeout`. Both runners logged `websocket not available for sending` at the same
+instant (20:24:58.69Z and 20:24:58.72Z), so something killed their engines with no killpoint involved. At that moment
+w1 was cold-retrying its restart (seed 27, restart 48.9s), and that retry path calls stop().
+Root cause: stop()'s lock-holder filter was `path.startsWith("/tmp/relay-chaos-fast/w1")`, which also matches
+`w10`…`w15`. w1's stop() therefore SIGKILLed every process holding w11's data files. The w5 hit happened at the same
+instant. The ownership check below now closes any such path regardless.
+Fix (`tests/chaos/engine.ts`):
+- The data-root filter now ends with `/`.
+- Every non-group SIGKILL (port holders, lock holders, descendants, straggler runners) first checks that
+  `/proc/<pid>/environ` carries this instance's `RIVET_RUN_ENGINE_PORT=<port>`. Otherwise it refuses and logs
+  `refusing to kill pid`. This also guards against PID reuse.
+The attempt-1 runs 2 and 3 (180/180 each, 498.7s and 498.8s; `chaos-fast-attempt1-run-{2,3}.log`) ran on the buggy
+code. They passed because no w1 retry happened to overlap. All 3 runs were redone on the fix.

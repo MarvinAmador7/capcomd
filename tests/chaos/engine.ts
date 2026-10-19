@@ -172,11 +172,31 @@ export class Engine {
     }
   };
 
+  /**
+   * In isolated (fast) mode, only SIGKILL processes that belong to this instance: the
+   * runner and its engine both carry RIVET_RUN_ENGINE_PORT=<port> in their environment.
+   * Guards every non-group kill against PID reuse and path/port mistakes hitting a sibling worker.
+   */
+  private owns(pid: number): boolean {
+    if (this.opts.port === undefined) return true;
+    try {
+      return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(`RIVET_RUN_ENGINE_PORT=${this.port}`);
+    } catch {
+      return false;
+    }
+  }
+
+  private kill(pid: number): void {
+    if (!this.owns(pid)) {
+      console.log(`    refusing to kill pid ${pid}: not owned by engine :${this.port}`);
+      return;
+    }
+    try { process.kill(pid, "SIGKILL"); } catch {}
+  }
+
   private async killPortHolders(): Promise<void> {
     for (const port of this.ports()) {
-      for (const pid of await pidsListening(port)) {
-        try { process.kill(pid, "SIGKILL"); } catch {}
-      }
+      for (const pid of await pidsListening(port)) this.kill(pid);
     }
   }
 
@@ -235,7 +255,8 @@ export class Engine {
     // Only this instance's engine data. The broad fd regex also matches shared files
     // (e.g. the rivetkit napi .node / rivet-engine binary), and treating those as "locks"
     // made stop() SIGKILL every other parallel worker's runner and engine.
-    const root = this.opts.dataDir ?? `${homedir()}/.rivetkit/var`;
+    // Trailing slash: "/w1" must not prefix-match "/w10".."/w15" (fast attempt 2, run 1).
+    const root = `${(this.opts.dataDir ?? `${homedir()}/.rivetkit/var`).replace(/\/$/, "")}/`;
     this.dataFiles = [...files].filter((path) => path.startsWith(root));
   }
 
@@ -304,19 +325,13 @@ export class Engine {
       } catch {
         // group already gone
       }
-      for (const victim of victims) {
-        try {
-          process.kill(victim, "SIGKILL");
-        } catch {
-          // already exited
-        }
-      }
+      for (const victim of victims) this.kill(victim);
     }
 
     // Defense in depth: no runner from an earlier engine may outlive stop(). A
     // straggler reconnects to the next engine and steals actor assignments.
     for (const straggler of await serveRunnerPids(this.port)) {
-      try { process.kill(straggler, "SIGKILL"); } catch {}
+      this.kill(straggler);
     }
 
     const deadline = Date.now() + 8_000;
@@ -328,13 +343,7 @@ export class Engine {
         this.child = null;
         return;
       }
-      for (const holder of holders) {
-        try {
-          process.kill(holder, "SIGKILL");
-        } catch {
-          // raced
-        }
-      }
+      for (const holder of holders) this.kill(holder);
       await sleep(50);
     }
 
