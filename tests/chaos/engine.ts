@@ -122,6 +122,13 @@ export class Engine {
     if (this.stopping) return;
     if (code === 137 || tailFile(this.logPath).includes("[KILLPOINT]")) {
       this.sawKill = true;
+      // A killpoint is a whole-host crash. The SIGKILLed runner can't reap its
+      // rivet-engine child, so take the process group down. Otherwise a runner-less
+      // engine keeps accepting requests and the client waits on it forever.
+      const pid = this.child?.pid;
+      if (pid) {
+        try { process.kill(-pid, "SIGKILL"); } catch {}
+      }
     }
   };
 
@@ -158,7 +165,7 @@ export class Engine {
 
   private async spawnOnce(env: NodeJS.ProcessEnv): Promise<void> {
     const logFd = openSync(this.logPath, "a");
-    const child = spawn("bun", ["src/cli/index.ts", "serve", "--port", String(PORT)], {
+    const child = spawn(process.execPath, ["src/cli/index.ts", "serve", "--port", String(PORT)], {
       cwd: ROOT,
       env,
       detached: true,
@@ -206,7 +213,7 @@ export class Engine {
     }
 
     const probe = spawn(
-      "bun",
+      process.execPath,
       ["tests/chaos/ready-probe.ts", String(PORT)],
       { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] }
     );
@@ -291,8 +298,10 @@ export function runClient(runId: string): Promise<{ code: number; output: string
   return new Promise((resolve) => {
     const env = { ...process.env };
     delete env.RELAY_KILLPOINT;
+    // process.execPath, not "bun": the latter is a /bin/sh wrapper, and the timeout's
+    // SIGKILL would hit only the wrapper, leaving bun.exe holding the pipes ('close' never fires).
     const child = spawn(
-      "bun",
+      process.execPath,
       ["src/cli/index.ts", "run", "--run-id", runId, "ChaosGoal"],
       {
         cwd: ROOT,

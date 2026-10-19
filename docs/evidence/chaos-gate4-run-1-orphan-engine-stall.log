@@ -1,0 +1,142 @@
+=== chaos run 1 start 2026-10-19T14:19:07Z
+bun test v1.4.2 (744846f84)
+
+tests/chaos/subprocess.test.ts:
+(pass) Chaos Tests - Subprocess Killpoints > event gap helper rejects holes and duplicate seqs [0.36ms]
+Testing killpoint: tx.mid
+    wiped +248ms
+    engine-up +2625ms
+    first-client exit=1 killed=true +13610ms
+    stopped-after-kill +13843ms
+    engine-restarted +44424ms
+  ✓ tx.mid killed=true (52546ms)
+Testing killpoint: model.after_return.before_commit
+    wiped +224ms
+    engine-up +2592ms
+    first-client exit=1 killed=true +13922ms
+    stopped-after-kill +14128ms
+    engine-restarted +44681ms
+  ✓ model.after_return.before_commit killed=true (52895ms)
+Testing killpoint: merge.before_cas
+    wiped +223ms
+    engine-up +2640ms
+    first-client exit=1 killed=true +17158ms
+    stopped-after-kill +17359ms
+    engine-restarted +47781ms
+  ✓ merge.before_cas killed=true (54179ms)
+Testing killpoint: merge.after_cas.before_event
+    wiped +218ms
+    engine-up +2583ms
+    first-client exit=1 killed=true +16993ms
+    stopped-after-kill +17207ms
+    engine-restarted +47689ms
+  ✓ merge.after_cas.before_event killed=true (54123ms)
+Testing killpoint: push.mid
+    wiped +220ms
+    engine-up +2693ms
+    first-client exit=1 killed=true +22351ms
+    stopped-after-kill +22590ms
+    engine-restarted +53119ms
+  ✓ push.mid killed=true (59851ms)
+Testing killpoint: push.after.before_event
+    wiped +218ms
+    engine-up +6659ms
+    first-client exit=1 killed=true +26403ms
+    stopped-after-kill +26625ms
+    engine-restarted +57255ms
+  ✓ push.after.before_event killed=true (63922ms)
+Testing killpoint: vm.create.after_request.before_record
+    wiped +219ms
+    engine-up +2595ms
+    first-client exit=1 killed=true +15280ms
+    stopped-after-kill +15508ms
+    engine-restarted +46055ms
+  ✓ vm.create.after_request.before_record killed=true (53631ms)
+Testing killpoint: lease.expire.mid
+    wiped +222ms
+    engine-up +2600ms
+    first-client exit=1 killed=true +14515ms
+    stopped-after-kill +14732ms
+    engine-restarted +45298ms
+  ✓ lease.expire.mid killed=true (52841ms)
+Testing killpoint: budget.charge.mid
+    wiped +219ms
+    engine-up +6735ms
+    first-client exit=1 killed=true +17699ms
+    stopped-after-kill +17940ms
+    engine-restarted +48547ms
+  ✓ budget.charge.mid killed=true (56569ms)
+Testing killpoint: outbox.dispatch.after_send.before_ack
+    wiped +222ms
+    engine-up +2965ms
+    first-client exit=1 killed=true +15730ms
+    stopped-after-kill +15939ms
+    engine-restarted +46535ms
+  ✓ outbox.dispatch.after_send.before_ack killed=true (53858ms)
+Total: 10/10 passed
+(pass) Chaos Tests - Subprocess Killpoints > survives all 10 named killpoints [554416.42ms]
+    wiped +218ms
+    engine-up +2597ms
+    first-client exit=1 killed=true +20537ms
+    stopped-after-kill +20765ms
+    engine-restarted +51476ms
+    wiped +219ms
+    engine-up +2629ms
+    first-client exit=1 killed=true +15398ms
+    stopped-after-kill +15614ms
+    engine-restarted +46157ms
+    wiped +218ms
+    engine-up +2605ms
+    first-client exit=1 killed=true +13622ms
+    stopped-after-kill +13853ms
+    engine-restarted +44263ms
+    wiped +219ms
+    engine-up +2638ms
+    first-client exit=0 killed=false +9499ms
+    wiped +220ms
+    engine-up +2645ms
+    first-client exit=1 killed=true +17098ms
+    stopped-after-kill +17334ms
+    engine-restarted +47896ms
+    wiped +220ms
+    engine-up +2644ms
+    first-client exit=1 killed=true +18987ms
+    stopped-after-kill +19231ms
+    engine-restarted +49906ms
+    wiped +220ms
+    engine-up +2601ms
+    first-client exit=0 killed=false +9464ms
+    wiped +218ms
+    engine-up +2727ms
+    first-client exit=1 killed=true +22473ms
+    stopped-after-kill +22736ms
+    engine-restarted +53230ms
+    wiped +219ms
+    engine-up +2646ms
+    first-client exit=0 killed=false +9473ms
+    wiped +220ms
+    engine-up +2622ms
+    first-client exit=0 killed=false +9395ms
+Completed 10/50 seeds (10 passed, 0 failed)
+    wiped +224ms
+    engine-up +2643ms
+    first-client exit=1 killed=true +13664ms
+    stopped-after-kill +13886ms
+    engine-restarted +44426ms
+    wiped +220ms
+    engine-up +2704ms
+    first-client exit=1 killed=true +21699ms
+    stopped-after-kill +21927ms
+    engine-restarted +52509ms
+    wiped +220ms
+    engine-up +2599ms
+    first-client exit=1 killed=true +14517ms
+    stopped-after-kill +14721ms
+    engine-restarted +45399ms
+    wiped +218ms
+    engine-up +2639ms
+    first-client exit=1 killed=true +14038ms
+    stopped-after-kill +14245ms
+    engine-restarted +44736ms
+    wiped +220ms
+    engine-up +2601ms

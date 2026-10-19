@@ -76,3 +76,13 @@ Fix:
 Regression test: `tests/chaos/seed35-regression.test.ts`. Its SIGKILL test fails on the old killpoint (5s hang in an exit hook)
 and passes on the fix. The end-to-end merge.before_cas:1 survive check passes.
 (`tests/chaos/harness-fix.test.ts` is a legacy imported test that runs `pkill -9 bun` and kills its own runner. It is not part of the gate.)
+
+## Gate 4, run 1: stopped (harness stall after the SIGKILL change)
+
+Log: `chaos-gate4-run-1-orphan-engine-stall.log` (killpoints 10/10, stalled during seeds). There were two harness bugs:
+1. With a true SIGKILL, the runner no longer reaps its `rivet-engine` child. A runner-less engine kept accepting the
+   client's requests, so the client waited forever. Fix: `Engine.noteKill` SIGKILLs the whole process group when a kill is
+   seen (a whole-host crash).
+2. The client's 90s timeout never fired. `spawn("bun")` starts `/usr/local/bin/bun`, which is a `/bin/sh` wrapper,
+   so `child.kill("SIGKILL")` killed only the wrapper. `bun.exe` kept the pipes open and `close` never fired. This is also
+   why seed 35's resume client lived ~17 min. Fix: spawn `process.execPath` for the engine, the probe and the client.
