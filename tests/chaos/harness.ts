@@ -115,13 +115,13 @@ export function randomKillpoint(seed: number): {
   killpoint: string;
   iteration: number;
 } {
+  // Frozen list: seed→killpoint mappings are pinned by regression tests. New killpoints
+  // (e.g. merge.lock.acquired) are covered by the named KILLPOINTS jobs in cases.ts.
   const killpoints = [
     "tx.mid",
     "model.after_return.before_commit",
     "merge.before_cas",
     "merge.after_cas.before_event",
-    "merge.lock.acquired",
-    "merge.after_fetch.before_integrate",
     "push.mid",
     "push.after.before_event",
     "vm.create.after_request.before_record",
