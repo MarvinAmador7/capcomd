@@ -8,6 +8,8 @@ import { env as envVar } from "./utils/env";
 interface Dependencies {
   model: ModelClient;
   provider: SandboxProvider;
+  /** True when the sandbox is the in-memory fake: task commits are produced locally (src/merge/fakework). */
+  fakeWork: boolean;
 }
 
 let deps: Dependencies | null = null;
@@ -56,6 +58,7 @@ export function initDependencies(config?: { model?: ModelClient; provider?: Sand
   const model = config?.model || new FakeModelClient();
   const provider = config?.provider || providerFromEnv();
   deps = {
+    fakeWork: provider instanceof FakeProvider,
     model: tracedModel(model, model.constructor?.name === "FakeModelClient" ? "fake" : model.constructor?.name ?? "model"),
     provider: tracedProvider(provider, provider.constructor?.name === "FakeProvider" ? "fake" : provider.constructor?.name ?? "provider"),
   };

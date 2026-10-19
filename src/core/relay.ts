@@ -5,6 +5,8 @@ import { RelayError, SCHEMA, toRelayError } from "./errors";
 import { withSpan } from "../utils/tracing-simple";
 import { isProtectedBranch } from "../utils/protected";
 import { env } from "../utils/env";
+import { loadMergeConfig, taskBranch } from "../merge/config";
+import type { MergeOutcome } from "../merge/types";
 
 export function endpoint(): string {
   return env("ENDPOINT") ?? "http://127.0.0.1:6420";
@@ -205,6 +207,11 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
     await workerHandle.flushOutbox({});
 
     emit("tasks.executing", {}, "\n→ Executing tasks...");
+    const mergeCfg = loadMergeConfig();
+    const releaseWorker = async () => {
+      worker = await workerHandle.getWorker({ workerId });
+      if (worker?.state === "busy") await workerHandle.taskDone({ workerId });
+    };
     for (const taskId of tasks) {
       const runNow = await runHandle.getRun({ runId });
       if (runNow?.state === "cancelled") {
@@ -217,94 +224,93 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
         emit("task.skipped", { taskId, state: task.state }, `  ✓ ${taskId} already ${task.state}`);
         continue;
       }
+      // Effective merge target: the run's --target-branch, else the repo default (no repo: none).
+      const target: string | undefined = task.context.targetBranch ?? mergeCfg?.target;
+      const branch = mergeCfg ? taskBranch(runId, taskId) : `task/${taskId}`;
 
-      if (task.state === "pending") {
-        const lease = await taskBoardHandle.grantLease({ taskId, workerId });
-        emit("task.leased", { taskId, epoch: lease.epoch, workerId }, `  → ${taskId} (epoch ${lease.epoch})`);
-        task = await taskBoardHandle.getTask({ taskId });
-        if (!task) throw new Error(`Task ${taskId} missing after lease`);
-      }
-
-      const epoch = Number(task.context.epoch);
-      if (!epoch) throw new Error(`Task ${taskId} has no lease epoch in state ${task.state}`);
-
-      if (task.state === "leased") {
-        await taskBoardHandle.workerStarted({ taskId, epoch });
-        task = await taskBoardHandle.getTask({ taskId });
-        if (!task) throw new Error(`Task ${taskId} missing after worker start`);
-      }
-
-      if (task.state !== "awaiting_approval") {
-        worker = await workerHandle.getWorker({ workerId });
-        if (worker?.state === "idle") {
-          await workerHandle.assignTask({ workerId, taskId, epoch });
-        } else if (worker?.state === "busy" && worker.context.taskId !== taskId) {
-          throw new Error(`Worker ${workerId} is busy on ${worker.context.taskId}, expected ${taskId}`);
-        }
-
-        await workerHandle.pushBranch({ workerId, taskId, epoch, branch: `task/${taskId}/e${epoch}` });
-      }
-
-      if (task.state === "running") {
-        await taskBoardHandle.handoffTask({ taskId, epoch });
-        task = await taskBoardHandle.getTask({ taskId });
-        if (!task) throw new Error(`Task ${taskId} missing after handoff`);
-      }
-
-      if (task.state === "handed_off") {
-        await taskBoardHandle.startVerify({ taskId });
-        task = await taskBoardHandle.getTask({ taskId });
-        if (!task) throw new Error(`Task ${taskId} missing after verify start`);
-      }
-
-      if (task.state === "verifying") {
-        const verifierHandle = c.verifier.getOrCreate([runId, taskId]);
-        const verifyResult = await verifierHandle.verify({
-          verifierId: `${taskId}-verifier`,
-          taskId,
-          branch: `task/${taskId}/e${epoch}`,
-          commitSha: "abc123",
-          runId,
-        });
-
-        await taskBoardHandle.verifyComplete({ taskId, passed: verifyResult.passed, commitSha: verifyResult.commitSha });
-        task = await taskBoardHandle.getTask({ taskId });
-
-        if (task?.state !== "awaiting_approval") {
+      // Each pass advances one state; a merge conflict sends the task back to pending (new epoch).
+      for (let step = 0; step < 64 && task && !TERMINAL_TASK.has(task.state); step++) {
+        if (task.state === "pending") {
+          const lease = await taskBoardHandle.grantLease({ taskId, workerId });
+          emit("task.leased", { taskId, epoch: lease.epoch, workerId }, `  → ${taskId} (epoch ${lease.epoch})`);
+        } else if (task.state === "leased") {
+          await taskBoardHandle.workerStarted({ taskId, epoch: Number(task.context.epoch) });
+        } else if (task.state === "running") {
+          const epoch = Number(task.context.epoch);
           worker = await workerHandle.getWorker({ workerId });
-          if (worker?.state === "busy") await workerHandle.taskDone({ workerId });
-        }
-
-        if (!verifyResult.passed) {
-          emit("task.verify_failed", { taskId }, `  ✗ ${taskId} verification failed`);
-        } else if (task?.state === "merged") {
-          emit("task.merged", { taskId, commitSha: verifyResult.commitSha }, `  ✓ ${taskId} verified and merged`);
-        }
-      }
-
-      if (task?.state === "awaiting_approval") {
-        const target = task.context.targetBranch;
-        emit(
-          "task.awaiting_approval",
-          { taskId, targetBranch: target },
-          `  ⏸ ${taskId} verified; merge into protected branch ${target} awaits approval (capcomd approve ${runId} ${taskId})`
-        );
-        const deadline = Date.now() + (opts.approvalTimeoutMs ?? 24 * 3600_000);
-        while (task?.state === "awaiting_approval") {
-          if (Date.now() > deadline) {
-            throw new RelayError("run_failed", `Approval for ${taskId} timed out`, `Run \`capcomd approve ${runId} ${taskId}\` then resume with \`capcomd run --run-id ${runId} <goal>\`.`);
+          if (worker?.state === "idle") {
+            await workerHandle.assignTask({ workerId, taskId, epoch });
+          } else if (worker?.state === "busy" && worker.context.taskId !== taskId) {
+            throw new Error(`Worker ${workerId} is busy on ${worker.context.taskId}, expected ${taskId}`);
           }
-          await sleep(opts.approvalPollMs ?? 1000);
-          task = await taskBoardHandle.getTask({ taskId });
-        }
-        if (task?.state === "merged") {
-          worker = await workerHandle.getWorker({ workerId });
-          if (worker?.state === "busy") await workerHandle.taskDone({ workerId });
-          emit("task.approved", { taskId, approvedBy: task.context.approval?.approvedBy ?? null }, `  ✓ ${taskId} approved and merged`);
+          const pushed = await workerHandle.pushBranch({ workerId, taskId, epoch, branch, runId, target, rework: !!task.context.conflict });
+          await taskBoardHandle.handoffTask({ taskId, epoch, branch, commitSha: (pushed as any).sha || undefined });
+        } else if (task.state === "handed_off") {
+          await taskBoardHandle.startVerify({ taskId });
+        } else if (task.state === "verifying" || task.state === "approved") {
+          const epoch = Number(task.context.epoch);
+          const approved = task.state === "approved";
+          // Protected targets: verify only, park for approval, merge after `capcomd approve`.
+          const testOnly = !approved && isProtectedBranch(target);
+          const verifierHandle = c.verifier.getOrCreate([runId, taskId]);
+          const result = await verifierHandle.verify({
+            verifierId: `${taskId}-${approved ? "merge" : "verify"}-e${epoch}`,
+            taskId, branch, runId, target, testOnly,
+          });
+          const outcome = result.outcome as MergeOutcome;
+          if (outcome.status === "conflict") {
+            await taskBoardHandle.mergeConflict({ taskId, files: outcome.files, targetSha: outcome.targetSha, epoch });
+            await releaseWorker();
+            const after = await taskBoardHandle.getTask({ taskId });
+            const escalated = after?.state === "failed";
+            emit(
+              escalated ? "task.conflict_escalated" : "task.conflict",
+              { taskId, files: outcome.files, epoch },
+              `  ⚠ ${taskId} merge conflict in ${outcome.files.join(", ") || "(see PR)"}${escalated ? "; retries exhausted, escalated" : "; back to worker"}`
+            );
+          } else if (outcome.status === "failed") {
+            if (approved) throw new RelayError("run_failed", `Merge of ${taskId} failed: ${outcome.reason}`, `Fix the cause, then resume with \`capcomd run --run-id ${runId} <goal>\`.`);
+            await taskBoardHandle.verifyComplete({ taskId, passed: false, target });
+            await releaseWorker();
+            emit("task.verify_failed", { taskId, reason: outcome.reason }, `  ✗ ${taskId} verification failed: ${outcome.reason}`);
+          } else if (outcome.status === "verified") {
+            await taskBoardHandle.verifyComplete({ taskId, passed: true, commitSha: outcome.sha, target });
+          } else {
+            const merge = { sha: outcome.sha, mode: outcome.mode, strategy: outcome.strategy, how: outcome.how, already: outcome.already, target, ...(outcome.pr ? { pr: outcome.pr } : {}) };
+            if (approved) await taskBoardHandle.mergeComplete({ taskId, merge });
+            else await taskBoardHandle.verifyComplete({ taskId, passed: true, commitSha: outcome.sha, target, merge });
+            await releaseWorker();
+            emit(
+              approved ? "task.approved" : "task.merged",
+              { taskId, commitSha: outcome.sha, merge, approvedBy: task.context.approval?.approvedBy ?? null },
+              approved ? `  ✓ ${taskId} approved and merged${outcome.sha ? ` (${outcome.sha.slice(0, 12)})` : ""}` : `  ✓ ${taskId} verified and merged${outcome.sha ? ` (${outcome.sha.slice(0, 12)})` : ""}`
+            );
+          }
+        } else if (task.state === "awaiting_approval") {
+          emit(
+            "task.awaiting_approval",
+            { taskId, targetBranch: target },
+            `  ⏸ ${taskId} verified; merge into protected branch ${target} awaits approval (capcomd approve ${runId} ${taskId})`
+          );
+          const deadline = Date.now() + (opts.approvalTimeoutMs ?? 24 * 3600_000);
+          while (task?.state === "awaiting_approval") {
+            if (Date.now() > deadline) {
+              throw new RelayError("run_failed", `Approval for ${taskId} timed out`, `Run \`capcomd approve ${runId} ${taskId}\` then resume with \`capcomd run --run-id ${runId} <goal>\`.`);
+            }
+            await sleep(opts.approvalPollMs ?? 1000);
+            task = await taskBoardHandle.getTask({ taskId });
+          }
+          if (task?.state === "cancelled") {
+            await releaseWorker();
+            emit("task.cancelled", { taskId, state: task.state }, `  ✗ ${taskId} cancelled`);
+          }
+          continue;
         } else {
-          emit("task.cancelled", { taskId, state: task?.state ?? null }, `  ✗ ${taskId} ${task?.state}`);
+          throw new Error(`Task ${taskId} in unexpected state ${task.state}`);
         }
+        task = await taskBoardHandle.getTask({ taskId });
       }
+      if (task && !TERMINAL_TASK.has(task.state)) throw new Error(`Task ${taskId} did not settle (state ${task.state})`);
     }
 
     await taskBoardHandle.flushOutbox({});

@@ -2,7 +2,8 @@ import { traceActions, withSpan } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
 import { setupLifecycleTables, transitionLifecycle, getLifecycle, getUndispatchedOutbox, markOutboxDispatched } from "../utils/lifecycle";
-import { killpoint } from "../utils/killpoint";
+import { mergeTask } from "../merge/service";
+import type { MergeOutcome } from "../merge/types";
 
 export const verifierActor = actor({
   db: db({
@@ -12,120 +13,67 @@ export const verifierActor = actor({
   }),
 
   actions: traceActions("verifier", {
+    /**
+     * Verify (and, unless testOnly, land) one task: tests run on the task branch merged with the
+     * latest target, then PR or direct merge (src/merge). Re-entrant: a crash anywhere leaves the
+     * row in `verifying`, and the next call re-runs mergeTask, which finds an already-landed change
+     * in git (ancestor / trailer / patch-id / merged PR) and records it instead of merging twice.
+     */
     async verify(
       c,
       params: {
         verifierId: string;
         taskId: string;
         branch: string;
-        commitSha: string;
+        commitSha?: string;
         runId: string;
+        target?: string;
+        testOnly?: boolean;
       }
     ) {
-      const { verifierId, taskId, branch, commitSha, runId } = params;
+      const { verifierId, taskId, branch, runId } = params;
 
-      // Check if already completed (idempotency)
       const existing = await getLifecycle(c.db, verifierId);
-      if (existing && (existing.state === "passed" || existing.state === "failed")) {
-        console.log(`[verifier.verify] ${verifierId} already ${existing.state}`);
-        return {
-          verifierId,
-          passed: existing.state === "passed",
-          commitSha,
-        };
+      if (existing && ["passed", "failed", "conflict"].includes(existing.state)) {
+        const ctx = JSON.parse(existing.context as string);
+        return { verifierId, passed: existing.state === "passed", commitSha: ctx.commitSha ?? params.commitSha ?? "", outcome: ctx.outcome as MergeOutcome };
       }
 
-      // Start verification - write to DB before killpoint
-      await c.db.transaction(async (tx) => {
-        await transitionLifecycle(
-          tx,
-          verifierId,
-          "verifier",
-          "verifying",
-          { taskId, branch, commitSha, runId },
-          { type: "START_VERIFY" },
-          `verifier-${verifierId}-start`,
-          []
-        );
-      }, { name: "startVerify" });
+      if (!existing) {
+        await c.db.transaction(async (tx) => {
+          await transitionLifecycle(tx, verifierId, "verifier", "verifying", { taskId, branch, runId, target: params.target, testOnly: !!params.testOnly }, { type: "START_VERIFY" }, `verifier-${verifierId}-start`, []);
+        }, { name: "startVerify" });
+      }
 
-      const passed = await withSpan(
-        "git.merge_cas",
-        { "relay.run_id": runId, "git.operation": "merge_cas", "git.ref": branch, "git.sha": commitSha },
-        () => {
-          killpoint("merge.before_cas");
-          const ok = true;
-          killpoint("merge.after_cas.before_event");
-          return ok;
-        }
+      const outcome = await withSpan(
+        params.testOnly ? "git.verify" : "git.merge",
+        { "relay.run_id": runId, "git.operation": params.testOnly ? "verify" : "merge", "git.ref": branch, "git.target": params.target ?? "" },
+        () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly })
       );
 
-      // Complete verification with outbox to run
+      const state = outcome.status === "merged" || outcome.status === "verified" ? "passed" : outcome.status === "conflict" ? "conflict" : "failed";
+      const commitSha = "sha" in outcome ? outcome.sha : "";
       await c.db.transaction(async (tx) => {
         await transitionLifecycle(
-          tx,
-          verifierId,
-          "verifier",
-          passed ? "passed" : "failed",
-          { taskId, branch, commitSha, passed, verifiedAt: Date.now(), runId },
-          { type: passed ? "VERIFY_PASS" : "VERIFY_FAIL" },
-          `verifier-${verifierId}-${passed ? "pass" : "fail"}`,
-          []
+          tx, verifierId, "verifier", state,
+          { taskId, branch, runId, target: params.target, commitSha, passed: state === "passed", outcome, verifiedAt: Date.now() },
+          { type: state === "passed" ? "VERIFY_PASS" : state === "conflict" ? "VERIFY_CONFLICT" : "VERIFY_FAIL" },
+          `verifier-${verifierId}-${state}`, []
         );
       }, { name: "completeVerify" });
 
-      return {
-        verifierId,
-        passed,
-        commitSha,
-      };
+      return { verifierId, passed: state === "passed", commitSha, outcome };
     },
 
+    /**
+     * onWake hook. Deliberately does NOT decide outcomes any more: only git can say whether a
+     * crashed merge landed, and that check is a remote call. The resuming client re-enters
+     * verify(), which reconciles against git idempotently.
+     */
     async recoverInflight(c, params: {}) {
       try {
-        // Find stuck verifications
-        const stuck = await c.db.execute(
-          "SELECT entity_id, context FROM lifecycle WHERE machine = 'verifier' AND state = 'verifying'"
-        );
-
-        if (stuck.length === 0) return;
-
-        console.log(`[verifier.recoverInflight] Recovering ${stuck.length} stuck verifications`);
-
-        for (const row of stuck) {
-          const verifierId = row.entity_id as string;
-          const context = JSON.parse(row.context as string);
-          
-          // TODO: Check git to see if merge already happened (CAS against expected sha)
-          // For now, just mark as passed to recover
-          const passed = true;
-          
-          const idemKey = `verifier-${verifierId}-recovered-${Date.now()}`;
-          
-          await c.db.transaction(async (tx) => {
-            // Check if already recovered
-            const existing = await tx.execute(
-              "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
-              idemKey
-            );
-            
-            if (existing.length > 0) {
-              console.log(`[verifier.recoverInflight] Already recovered: ${verifierId}`);
-              return;
-            }
-
-            await transitionLifecycle(
-              tx,
-              verifierId,
-              "verifier",
-              passed ? "passed" : "failed",
-              { ...context, passed, verifiedAt: Date.now(), recovered: true },
-              { type: passed ? "VERIFY_PASS" : "VERIFY_FAIL" },
-              idemKey,
-              []
-            );
-          }, { name: "recoverVerify" });
-        }
+        const stuck = await c.db.execute("SELECT entity_id FROM lifecycle WHERE machine = 'verifier' AND state = 'verifying'");
+        if (stuck.length > 0) console.log(`[verifier.recoverInflight] ${stuck.length} in-flight verification(s); will reconcile against git on resume`);
       } catch (error) {
         console.error("[verifier.recoverInflight] Error:", error);
       }

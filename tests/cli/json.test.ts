@@ -114,7 +114,7 @@ describe("capcomd CLI against a live engine", () => {
     expect(names).toContain("model.generate");
     expect(names).toContain("sandbox.ensure");
     expect(names).toContain("git.push");
-    expect(names).toContain("git.merge_cas");
+    expect(names).toContain("git.merge");
     for (const s of trace.spans) expect(s.traceId).toBe(trace.traceId);
   });
 
@@ -155,7 +155,7 @@ describe("capcomd CLI against a live engine", () => {
       }
       const a = await capcomd(["approve", id, taskId, "--json"]);
       expect(a.code).toBe(0);
-      expect(JSON.parse(a.stdout)).toMatchObject({ ok: true, taskId, state: "merged" });
+      expect(JSON.parse(a.stdout)).toMatchObject({ ok: true, taskId, state: "approved" });
     }
 
     for (let i = 0; i < 60; i++) {

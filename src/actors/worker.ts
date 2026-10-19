@@ -10,6 +10,8 @@ import {
   getUndispatchedOutbox,
   markOutboxDispatched,
 } from "../utils/lifecycle";
+import { loadMergeConfig } from "../merge/config";
+import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
 
@@ -276,7 +278,7 @@ export const workerActor = actor({
 
     async pushBranch(
       c,
-      params: { workerId: string; taskId: string; epoch: number; branch: string }
+      params: { workerId: string; taskId: string; epoch: number; branch: string; runId?: string; target?: string; rework?: boolean }
     ) {
       const { workerId, taskId, epoch, branch } = params;
       const idemKey = `worker-${workerId}-push-${taskId}-e${epoch}`;
@@ -308,6 +310,14 @@ export const workerActor = actor({
       await provider.waitReady(vmId, 90_000);
       await provider.exec(vmId, ["git", "push", "origin", branch]);
 
+      // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
+      // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
+      let sha = "";
+      const cfg = loadMergeConfig();
+      if (cfg && getDependencies().fakeWork && params.runId) {
+        sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework });
+      }
+
       killpoint("push.after.before_event");
 
       await c.db.transaction(async (tx) => {
@@ -317,13 +327,13 @@ export const workerActor = actor({
           "worker",
           workerLife.state,
           { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha: "abc123" },
+          { type: "PUSHED", taskId, epoch, branch, sha },
           idemKey,
           []
         );
       }, { name: "pushBranch" });
 
-      return { workerId, taskId, pushed: true, already: false };
+      return { workerId, taskId, pushed: true, already: false, sha };
     },
 
     async flushOutbox(c, _params: Record<string, never>) {

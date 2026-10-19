@@ -55,7 +55,7 @@ describe("capcomd mcp", () => {
       }
       const a = await call("capcomd_approve", { runId, taskId, approvedBy: "hermes" });
       expect(a.isError).toBe(false);
-      expect(a.body.state).toBe("merged");
+      expect(a.body.state).toBe("approved");
     }
 
     let state = "";

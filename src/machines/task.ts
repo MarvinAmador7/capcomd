@@ -14,10 +14,24 @@ export interface TaskContext {
   /** Branch the task merges into. Protected targets park in awaiting_approval. */
   targetBranch?: string;
   approval?: { approvedBy: string; approvedAt: number };
+  /** Recorded merge (sha in the target, how, PR number). Git is the source of truth; this mirrors it. */
+  merge?: MergeRecord;
+  /** Last merge conflict; the task goes back to a worker with these files, or escalates (failed). */
+  conflict?: { files: string[]; targetSha?: string; at: number; escalated?: boolean };
   verificationResult?: {
     passed: boolean;
     reason?: string;
   };
+}
+
+export interface MergeRecord {
+  sha: string;
+  mode: "pr" | "direct" | "none";
+  strategy: string;
+  how: string;
+  already: boolean;
+  target?: string;
+  pr?: number;
 }
 
 export type TaskEvent =
@@ -26,7 +40,9 @@ export type TaskEvent =
   | { type: "LEASE_EXPIRED" }
   | { type: "HANDOFF"; epoch: number; branch: string; commitSha: string }
   | { type: "VERIFY_STARTED" }
-  | { type: "VERIFIED_AND_MERGED" }
+  | { type: "VERIFIED_AND_MERGED"; commitSha?: string; merge?: MergeRecord }
+  | { type: "MERGED"; merge: MergeRecord }
+  | { type: "MERGE_CONFLICT"; files: string[]; targetSha?: string; at: number }
   | { type: "VERIFY_FAILED"; reason: string }
   | { type: "VERIFIED_AWAITING_APPROVAL" }
   | { type: "APPROVED"; approvedBy: string; approvedAt: number }
@@ -99,6 +115,16 @@ export const taskMachine = setup({
         return undefined;
       },
     }),
+    storeMerge: assign({
+      merge: ({ context, event }) =>
+        (event.type === "VERIFIED_AND_MERGED" || event.type === "MERGED") && event.merge ? event.merge : context.merge,
+    }),
+    storeConflict: assign({
+      conflict: ({ context, event }) =>
+        event.type === "MERGE_CONFLICT"
+          ? { files: event.files, targetSha: event.targetSha, at: event.at, escalated: context.retryCount >= context.maxRetries }
+          : context.conflict,
+    }),
     storeApproval: assign({
       approval: ({ event }) =>
         event.type === "APPROVED" ? { approvedBy: event.approvedBy, approvedAt: event.approvedAt } : undefined,
@@ -165,8 +191,12 @@ export const taskMachine = setup({
       on: {
         VERIFIED_AND_MERGED: {
           target: "merged",
-          actions: ["storeVerificationResult"],
+          actions: ["storeVerificationResult", "storeMerge"],
         },
+        MERGE_CONFLICT: [
+          { target: "pending", guard: "withinBudget", actions: ["storeConflict", "incrementRetry", "incrementEpoch"] },
+          { target: "failed", actions: ["storeConflict", "incrementRetry"] },
+        ],
         VERIFIED_AWAITING_APPROVAL: {
           target: "awaiting_approval",
           actions: ["storeVerificationResult"],
@@ -187,9 +217,20 @@ export const taskMachine = setup({
     awaiting_approval: {
       on: {
         APPROVED: {
-          target: "merged",
+          target: "approved",
           actions: ["storeApproval"],
         },
+        CANCEL: "cancelled",
+      },
+    },
+    /** Approved for a protected target; the merge itself runs next (PR or direct). */
+    approved: {
+      on: {
+        MERGED: { target: "merged", actions: ["storeMerge"] },
+        MERGE_CONFLICT: [
+          { target: "pending", guard: "withinBudget", actions: ["storeConflict", "incrementRetry", "incrementEpoch"] },
+          { target: "failed", actions: ["storeConflict", "incrementRetry"] },
+        ],
         CANCEL: "cancelled",
       },
     },

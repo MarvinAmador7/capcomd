@@ -1,5 +1,6 @@
 import { traceActions } from "../utils/tracing-simple";
 import { isProtectedBranch } from "../utils/protected";
+import type { MergeRecord } from "../machines/task";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
 import { taskMachine, type TaskContext } from "../machines/task";
@@ -208,6 +209,8 @@ export const taskBoardActor = actor({
       params: {
         taskId: string;
         epoch: number;
+        branch?: string;
+        commitSha?: string;
       }
     ) {
       const { taskId, epoch } = params;
@@ -267,7 +270,7 @@ export const taskBoardActor = actor({
         context: taskContext,
       });
 
-      const event = { type: "HANDOFF" as const, epoch };
+      const event = { type: "HANDOFF" as const, epoch, branch: params.branch ?? "", commitSha: params.commitSha ?? "" };
 
       if (!taskSnapshot.can(event)) {
         throw new Error(`Task ${taskId} cannot HANDOFF from state ${taskLife.state}`);
@@ -340,9 +343,13 @@ export const taskBoardActor = actor({
         taskId: string;
         passed: boolean;
         commitSha?: string;
+        /** Effective target (run's or repo default). Protection is decided on this. */
+        target?: string;
+        /** Present when the merge already happened (unprotected target). */
+        merge?: MergeRecord;
       }
     ) {
-      const { taskId, passed, commitSha } = params;
+      const { taskId, passed, commitSha, merge } = params;
 
       const taskLife = await getLifecycle(c.db, taskId);
       if (!taskLife) {
@@ -355,12 +362,13 @@ export const taskBoardActor = actor({
         context: taskContext,
       });
 
-      const needsApproval = passed && isProtectedBranch(taskContext.targetBranch);
+      const target = params.target ?? taskContext.targetBranch;
+      const needsApproval = passed && !merge && isProtectedBranch(target);
       const event = !passed
         ? { type: "VERIFY_FAILED" as const }
         : needsApproval
-          ? { type: "VERIFIED_AWAITING_APPROVAL" as const, commitSha, targetBranch: taskContext.targetBranch }
-          : { type: "VERIFIED_AND_MERGED" as const, commitSha };
+          ? { type: "VERIFIED_AWAITING_APPROVAL" as const, commitSha, targetBranch: target }
+          : { type: "VERIFIED_AND_MERGED" as const, commitSha, merge };
 
       if (!taskSnapshot.can(event)) {
         throw new Error(`Task ${taskId} cannot accept ${event.type} from state ${taskLife.state}`);
@@ -424,7 +432,7 @@ export const taskBoardActor = actor({
       const { taskId } = params;
       const taskLife = await getLifecycle(c.db, taskId);
       if (!taskLife) return { taskId, ok: false as const, error: "not_found" as const, state: null };
-      if (taskLife.state === "merged") return { taskId, ok: true as const, already: true, state: "merged" };
+      if (taskLife.state === "merged" || taskLife.state === "approved") return { taskId, ok: true as const, already: true, state: taskLife.state };
       if (taskLife.state !== "awaiting_approval") {
         return { taskId, ok: false as const, error: "not_awaiting_approval" as const, state: taskLife.state };
       }
@@ -439,6 +447,37 @@ export const taskBoardActor = actor({
         );
       }, { name: "approveTask" });
       return { taskId, ok: true as const, already: false, state: next.value as string };
+    },
+
+    /** approved → merged, once the PR/direct merge landed (or was found already landed). */
+    async mergeComplete(c, params: { taskId: string; merge: MergeRecord }) {
+      const taskLife = await getLifecycle(c.db, params.taskId);
+      if (!taskLife) throw new Error(`Task ${params.taskId} not found`);
+      if (taskLife.state === "merged") return { taskId: params.taskId, state: "merged", already: true };
+      const snapshot = taskMachine.resolveState({ value: taskLife.state, context: JSON.parse(taskLife.context) });
+      const event = { type: "MERGED" as const, merge: params.merge };
+      if (!snapshot.can(event)) throw new Error(`Task ${params.taskId} cannot accept MERGED from state ${taskLife.state}`);
+      const [next] = transition(taskMachine, snapshot, event);
+      await c.db.transaction(async (tx) => {
+        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-merged`, []);
+      }, { name: "mergeComplete" });
+      return { taskId: params.taskId, state: next.value as string, already: false };
+    },
+
+    /** A real conflict: back to a worker with the files (pending, new epoch) or escalate (failed). */
+    async mergeConflict(c, params: { taskId: string; files: string[]; targetSha?: string; epoch: number }) {
+      const taskLife = await getLifecycle(c.db, params.taskId);
+      if (!taskLife) throw new Error(`Task ${params.taskId} not found`);
+      const ctx: TaskContext = JSON.parse(taskLife.context);
+      if (ctx.epoch !== params.epoch) return { taskId: params.taskId, state: taskLife.state, changed: false };
+      const snapshot = taskMachine.resolveState({ value: taskLife.state, context: ctx });
+      const event = { type: "MERGE_CONFLICT" as const, files: params.files, targetSha: params.targetSha, at: Date.now() };
+      if (!snapshot.can(event)) return { taskId: params.taskId, state: taskLife.state, changed: false };
+      const [next] = transition(taskMachine, snapshot, event);
+      await c.db.transaction(async (tx) => {
+        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-conflict-e${params.epoch}`, []);
+      }, { name: "mergeConflict" });
+      return { taskId: params.taskId, state: next.value as string, changed: true };
     },
 
     async cancelTask(c, params: { taskId: string }) {
