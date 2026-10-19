@@ -192,3 +192,10 @@ Each run is 30 killpoint cases plus 150 seeds; 105 seeds per run actually crashe
 Restart max was 85–157s: an `engine-not-ready` cold retry, an existing readiness behaviour that the retry handles.
 The `refusing to kill pid` lines are PIDs that had already exited (environ unreadable). Sampling during the runs found
 no live runner or engine without the port marker.
+
+### capcomd rename merged (rebased onto c0bbd7b)
+The fast-gate env vars are now `CAPCOMD_CHAOS_{WORKERS,BASE_PORT,DATA_ROOT,PER_WORKER_MB,TS}` and are read through
+`src/utils/env.ts`, which also accepts the deprecated `RELAY_CHAOS_*` aliases. The harness-internal
+`CAPCOMD_CHAOS_{ENGINE_DATA,REAL_ENGINE}` are set by the harness itself. The client endpoint is `CAPCOMD_ENDPOINT`.
+The default data root is `/tmp/capcomd-chaos-fast`.
+Merged-code fast gate: 180/180, wall 556.6s, N=14 (auto from free memory). Log: `chaos-fast-capcomd-merged.log`.
