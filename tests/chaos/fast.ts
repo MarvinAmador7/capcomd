@@ -1,0 +1,100 @@
+/**
+ * Fast chaos gate: the same cases as the serial gate (subprocess.test.ts), run on N
+ * isolated workers in parallel. Kill semantics and invariants are unchanged: every case
+ * still SIGKILLs its runner's process group (plus that instance's rivet-engine, found by
+ * its own ports), cold-restarts the engine on the same data dir and audits all 5 invariants.
+ *
+ * Isolation per worker slot: its own guard port (+1 api-peer, +10 metrics), its own engine
+ * data dir, rivet-services disabled (it binds a fixed :8642). No global pkill anywhere;
+ * runner reaping is scoped by `serve --port <port>`.
+ *
+ * Usage: bun tests/chaos/fast.ts [--rounds 3] [--workers N] [--only killpoints|seeds]
+ */
+import { availableParallelism, freemem } from "os";
+import { mkdirSync, rmSync } from "fs";
+import { KILLPOINTS } from "./cases";
+import { randomKillpoint } from "./harness";
+import { survive, type Phases } from "./survive";
+
+const args = process.argv.slice(2);
+const arg = (name: string) => {
+  const i = args.indexOf(`--${name}`);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const rounds = Number(arg("rounds") ?? 3);
+const only = arg("only");
+const seeds = Number(arg("seeds") ?? 50);
+
+// Measured: one worker peaks ~PER_WORKER_MB (runner + engine + client). Cases are mostly
+// waiting on the engine's fixed 30s workflow-lease recovery, so N can exceed the core count;
+// memory is the real limit.
+const PER_WORKER_MB = Number(process.env.CHAOS_PER_WORKER_MB ?? 250);
+const autoN = Math.max(1, Math.min(availableParallelism() * 2, Math.floor((freemem() / 1048576 - 1024) / PER_WORKER_MB), 16));
+const N = Number(arg("workers") ?? process.env.CHAOS_WORKERS ?? autoN);
+const BASE_PORT = Number(process.env.CHAOS_BASE_PORT ?? 7700);
+const DATA_ROOT = process.env.CHAOS_DATA_ROOT ?? "/tmp/relay-chaos-fast";
+
+interface Job { round: number; kind: "killpoint" | "seed"; id: string; killpoint: string; iteration: number; requireKill: boolean }
+const jobs: Job[] = [];
+for (let round = 1; round <= rounds; round++) {
+  if (only !== "seeds") for (const kp of KILLPOINTS) jobs.push({ round, kind: "killpoint", id: kp, killpoint: kp, iteration: 1, requireKill: true });
+  if (only !== "killpoints") for (let seed = 1; seed <= seeds; seed++) {
+    const pick = randomKillpoint(seed);
+    jobs.push({ round, kind: "seed", id: `seed ${seed}`, killpoint: pick.killpoint, iteration: pick.iteration, requireKill: false });
+  }
+}
+// Longest-first-ish: killpoint cases always crash+restart, start them first.
+jobs.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "killpoint" ? -1 : 1));
+
+interface Result { job: Job; ok: boolean; killed: boolean; ms: number; error?: string; phases: Partial<Phases>; slot: number }
+const results: Result[] = [];
+const t0 = Date.now();
+const stamp = () => `[${((Date.now() - t0) / 1000).toFixed(1)}s]`;
+console.log(`=== chaos:fast start ${new Date().toISOString()} rounds=${rounds} jobs=${jobs.length} workers=${N} (cores=${availableParallelism()} freeMB=${Math.round(freemem() / 1048576)} perWorkerMB=${PER_WORKER_MB})`);
+
+rmSync(DATA_ROOT, { recursive: true, force: true });
+let next = 0;
+async function worker(slot: number) {
+  const port = BASE_PORT + slot * 20;
+  const dataDir = `${DATA_ROOT}/w${slot}`;
+  mkdirSync(DATA_ROOT, { recursive: true });
+  while (next < jobs.length) {
+    const job = jobs[next++];
+    const started = Date.now();
+    const r = await survive(job.killpoint, job.iteration, job.requireKill, { port, dataDir }, true);
+    const res: Result = { job, ok: r.ok, killed: r.killed, ms: Date.now() - started, error: r.error, phases: r.phases, slot };
+    results.push(res);
+    const p = r.phases;
+    console.log(
+      `${stamp()} ${r.ok ? "✓" : "✗"} r${job.round} ${job.id} ${job.killpoint}:${job.iteration} w${slot} killed=${r.killed} ${res.ms}ms ` +
+      `[up=${p.engineUp ?? "-"} first=${p.firstClient ?? "-"} stop=${p.stop ?? "-"} restart=${p.restart ?? "-"} resume=${p.resume ?? "-"} audit=${p.audit ?? "-"}]` +
+      (r.error ? ` ERROR ${r.error.replace(/\s+/g, " ").slice(0, 400)}` : "")
+    );
+  }
+}
+await Promise.all(Array.from({ length: N }, (_, i) => worker(i)));
+const wall = Date.now() - t0;
+
+const stat = (xs: number[]) => {
+  if (xs.length === 0) return "n=0";
+  const s = [...xs].sort((a, b) => a - b);
+  const mean = s.reduce((a, b) => a + b, 0) / s.length;
+  return `n=${s.length} mean=${Math.round(mean)} p50=${s[Math.floor(s.length / 2)]} max=${s[s.length - 1]} sum=${s.reduce((a, b) => a + b, 0)}`;
+};
+console.log(`\n=== per-phase timing (ms, per case)`);
+for (const phase of ["wipe", "engineUp", "firstClient", "stop", "restart", "resume", "audit"] as const) {
+  console.log(`  ${phase.padEnd(12)} ${stat(results.map((r) => r.phases[phase]).filter((x): x is number => typeof x === "number"))}`);
+}
+console.log(`  case total   ${stat(results.map((r) => r.ms))}`);
+console.log(`\n=== pass counts`);
+for (let round = 1; round <= rounds; round++) {
+  for (const kind of ["killpoint", "seed"] as const) {
+    const rs = results.filter((r) => r.job.round === round && r.job.kind === kind);
+    if (rs.length) console.log(`  round ${round} ${kind}s: ${rs.filter((r) => r.ok).length}/${rs.length} passed (killed ${rs.filter((r) => r.killed).length})`);
+  }
+}
+const failed = results.filter((r) => !r.ok);
+console.log(`  TOTAL: ${results.length - failed.length}/${results.length} passed, ${failed.length} failed; serial-equivalent case time ${Math.round(results.reduce((a, r) => a + r.ms, 0) / 1000)}s`);
+for (const f of failed) console.log(`  FAILED r${f.job.round} ${f.job.id} ${f.job.killpoint}:${f.job.iteration}: ${f.error}`);
+console.log(`=== chaos:fast end ${new Date().toISOString()} wall=${(wall / 1000).toFixed(1)}s exit=${failed.length ? 1 : 0}`);
+process.exit(failed.length ? 1 : 0);

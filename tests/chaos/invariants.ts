@@ -62,8 +62,8 @@ export function eventGapViolations(rows: SeqRow[]): string[] {
   return violations;
 }
 
-export async function auditRun(runId: string): Promise<InvariantReport> {
-  const client = createClient({ endpoint: "http://127.0.0.1:6420" });
+export async function auditRun(runId: string, endpoint = "http://127.0.0.1:6420"): Promise<InvariantReport> {
+  const client = createClient({ endpoint });
   const violations: string[] = [];
 
   const runHandle = client.run.getOrCreate([runId]);

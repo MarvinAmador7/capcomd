@@ -1,58 +1,79 @@
-import { Engine, runClient, sleep } from "./engine";
+import { Engine, runClient, sleep, pidsListening, type EngineOpts } from "./engine";
 import { auditRun } from "./invariants";
 
-export async function releasePort(): Promise<void> {
-  const proc = Bun.spawn(["lsof", "-nP", "-iTCP:6420", "-sTCP:LISTEN", "-t"], {
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  const text = await new Response(proc.stdout).text();
-  await proc.exited;
-  for (const part of text.split(/\s+/)) {
-    const pid = Number(part);
-    if (pid > 0) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // already gone
-      }
+export async function releasePort(port = 6420): Promise<void> {
+  let killed = false;
+  for (const pid of await pidsListening(port)) {
+    killed = true;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
     }
   }
-  await sleep(200);
+  // Wait for the listener to actually go away instead of a fixed sleep.
+  if (killed) {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && (await pidsListening(port)).length > 0) await sleep(25);
+  }
 }
 
-export async function wipeEngineData(): Promise<void> {
-  await releasePort();
+export async function wipeEngineData(opts: EngineOpts = {}): Promise<void> {
+  await releasePort(opts.port ?? 6420);
   const { rm } = await import("fs/promises");
-  await rm(`${(await import("os")).homedir()}/.rivetkit/var/engine`, { recursive: true, force: true });
+  const dir = opts.dataDir ?? `${(await import("os")).homedir()}/.rivetkit/var/engine`;
+  await rm(dir, { recursive: true, force: true });
 }
 
-export async function survive(killpoint: string, count: number, requireKill: boolean): Promise<{
+/** Per-phase wall times of one survive() case, in ms. */
+export interface Phases {
+  wipe: number;
+  engineUp: number;
+  firstClient: number;
+  stop: number;
+  restart: number;
+  resume: number;
+  audit: number;
+}
+
+export async function survive(killpoint: string, count: number, requireKill: boolean, opts: EngineOpts = {}, quiet = false): Promise<{
   ok: boolean;
   error?: string;
   killed: boolean;
+  phases: Partial<Phases>;
 }> {
-  const runId = `chaos-${killpoint.replace(/\./g, "-")}-n${count}-${Date.now()}`;
-  const engine = new Engine(`${killpoint}-${count}-${runId}`);
+  const runId = `chaos-${killpoint.replace(/\./g, "-")}-n${count}-${Date.now()}-p${opts.port ?? 6420}`;
+  const engine = new Engine(`${killpoint}-${count}-${runId}`, opts);
+  const endpoint = `http://127.0.0.1:${opts.port ?? 6420}`;
   const started = Date.now();
-  const mark = (label: string) => {
-    console.log(`    ${label} +${Date.now() - started}ms`);
+  const phases: Partial<Phases> = {};
+  let last = started;
+  const mark = (label: string, phase?: keyof Phases) => {
+    const now = Date.now();
+    if (phase) phases[phase] = now - last;
+    last = now;
+    if (!quiet) console.log(`    ${label} +${now - started}ms`);
   };
-  await wipeEngineData();
-  mark("wiped");
+  const result = await surviveInner();
+  return { ...result, phases };
+
+  async function surviveInner(): Promise<{ ok: boolean; error?: string; killed: boolean }> {
+  await wipeEngineData(opts);
+  mark("wiped", "wipe");
 
   try {
     await engine.start(`${killpoint}:${count}`);
-    mark("engine-up");
-    const first = await runClient(runId);
-    mark(`first-client exit=${first.code} killed=${engine.sawKill}`);
+    mark("engine-up", "engineUp");
+    const first = await runClient(runId, opts);
+    mark(`first-client exit=${first.code} killed=${engine.sawKill}`, "firstClient");
     const killed =
       engine.sawKill ||
       first.output.includes("[KILLPOINT]") ||
       (await Bun.file(engine.logPath).text().catch(() => "")).includes("[KILLPOINT]");
 
     if (first.code === 0 && !killed) {
-      const report = await auditRun(runId);
+      const report = await auditRun(runId, endpoint);
+      mark("audited", "audit");
       if (requireKill) {
         return { ok: false, killed: false, error: "killpoint never fired" };
       }
@@ -63,10 +84,11 @@ export async function survive(killpoint: string, count: number, requireKill: boo
     }
 
     await engine.stop();
-    mark("stopped-after-kill");
+    mark("stopped-after-kill", "stop");
     await engine.start(null);
-    mark("engine-restarted");
-    const second = await runClient(runId);
+    mark("engine-restarted", "restart");
+    const second = await runClient(runId, opts);
+    mark("resumed", "resume");
     if (second.code !== 0 || !second.output.includes("✓ Run completed successfully")) {
       return {
         ok: false,
@@ -78,7 +100,8 @@ export async function survive(killpoint: string, count: number, requireKill: boo
       return { ok: false, killed: false, error: "killpoint never fired" };
     }
 
-    const report = await auditRun(runId);
+    const report = await auditRun(runId, endpoint);
+    mark("audited", "audit");
     if (!report.ok) {
       return {
         ok: false,
@@ -106,4 +129,5 @@ export async function survive(killpoint: string, count: number, requireKill: boo
       console.log(`    cleanup error: ${error instanceof Error ? error.message : error}`);
     }
   }
+}
 }

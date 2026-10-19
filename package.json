@@ -10,7 +10,9 @@
   "scripts": {
     "typecheck": "bun check",
     "test": "bun test",
-    "test:chaos": "bun test tests/chaos/*.test.ts"
+    "test:chaos": "bun test tests/chaos/*.test.ts",
+    "chaos:fast": "bun tests/chaos/fast.ts",
+    "chaos:slow": "bun test tests/chaos/subprocess.test.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

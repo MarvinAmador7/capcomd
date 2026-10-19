@@ -9,18 +9,7 @@ import { survive, wipeEngineData, releasePort } from "./survive";
 // 908s, 3461s and 5498s were box suspensions; no timeout covers those.)
 const SEED_SUITE_TIMEOUT_MS = 5_400_000;
 
-const KILLPOINTS = [
-  "tx.mid",
-  "model.after_return.before_commit",
-  "merge.before_cas",
-  "merge.after_cas.before_event",
-  "push.mid",
-  "push.after.before_event",
-  "vm.create.after_request.before_record",
-  "lease.expire.mid",
-  "budget.charge.mid",
-  "outbox.dispatch.after_send.before_ack",
-];
+import { KILLPOINTS } from "./cases";
 
 
 describe("Chaos Tests - Subprocess Killpoints", () => {

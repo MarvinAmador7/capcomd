@@ -98,3 +98,57 @@ Log: `chaos-gate5-run-1-timeout.log`. Killpoints 10/10; 48 seeds ran, 0 invarian
   engine's lost-runner detection, which is inherent to crash recovery. It is not a harness sleep or a lock wait, so there was no cheap fix. The probe was left unchanged.
 - **Timeout.** The 45 normal seeds averaged 35.5s, max 53.5s. Three outliers (908s, 3461s, 5498s) were box suspensions.
   The seed suite timeout is now 50 × 53.5s × 2 ≈ 5400s.
+
+## Fast gate: `bun run chaos:fast` (2026-10-19)
+
+Same cases as the serial gate (3 rounds × (10 named killpoints + seeds 1–50) = 180 cases), same
+kill semantics (killpoint SIGKILLs itself; harness SIGKILLs the runner's process group and that
+instance's rivet-engine; cold restart on the same data dir) and the same 5 invariants. The serial
+gate is kept as `bun run chaos:slow` / `bun test tests/chaos/subprocess.test.ts`.
+
+### Where the time goes (measured, merge.before_cas:1, one case)
+| phase | serial (before) | fast worker (after) |
+|---|---|---|
+| wipe | 42ms | ~130ms (16 concurrent) |
+| engine up (fresh) | 2.4s | 1.9s (p50) |
+| first client | 3.7s | 3.9s |
+| stop after kill | 33ms | ~220ms |
+| **restart (stop→ready)** | **39.1s** | **39.2s** |
+| resume client | 4.9s | 5.2s |
+| audit | 1.3s | 1.3s |
+
+The restart wait is NOT the pegboard envoy/runner lost threshold:
+- rivetkit 2.3.27's native runtime already spawns the engine with
+  `RIVET__PEGBOARD__ENVOY_LOST_THRESHOLD=7000`, `RUNNER_LOST_THRESHOLD=7000`, `*_ELIGIBLE_THRESHOLD=5000`
+  (read from `/proc/<engine>/environ`). Keys and defaults: rivet `engine/packages/config/src/config/pegboard.rs`
+  (`envoy_lost_threshold`, `envoy_ping_timeout`, `envoy_update_ping_interval`, `envoy_eligible_threshold`,
+  `runner_lost_threshold`, `runner_ping_timeout_ms`, `runner_update_ping_interval_ms`, `actor_start_threshold`,
+  `gateway_tunnel_ping_timeout_ms`), env form `RIVET__PEGBOARD__<KEY>`.
+- Forcing envoy/runner lost=1500, eligible=1000, ping_timeout=1500, ping_interval=250 (confirmed applied: the
+  envoy init frame reported `envoyLostThreshold: 1500`), and separately gateway_tunnel_ping_timeout_ms=2000:
+  restart stayed 39.2s. Dropped.
+- Debug timeline: new engine's envoy connects at T, the `__ready__` actor only starts at T+30.3s. That is
+  gasoline (the engine's workflow runtime): the SIGKILLed engine's worker still holds the workflow leases, and
+  they are only released by `clear_expired_leases` once the worker's last ping is older than
+  `WORKER_LOST_THRESHOLD_MS = 30s`, checked every `GC_INTERVAL = 10s` (rivet
+  `engine/packages/gasoline/src/worker.rs`, `src/db/kv/mod.rs`). These are compile-time constants, not config.
+  It is inherent to a whole-host crash with a cold engine restart, so it stays in the test.
+
+### What made it fast
+1. **Parallel isolated workers** (`tests/chaos/fast.ts`). Each slot gets guard port 7700+20·slot (engine also
+   binds +1 api-peer, +10 metrics), its own engine data dir `/tmp/relay-chaos-fast/w<slot>`, and
+   `RIVET_RUN_SERVICES=0` (rivet-services binds a fixed :8642 outside the runner's process group). The data dir is
+   applied by `tests/chaos/engine-wrapper.sh` via `RIVET_ENGINE_BINARY` (`@rivetkit/engine-cli` getEnginePath),
+   because rivetkit forces `RIVET__FILE_SYSTEM__PATH=$HOME/.rivetkit/var/engine/db` on the engine it spawns.
+   Cases are ~75% idle wait, so N is memory-bound, not core-bound: measured ~125MB per worker, load average < 2 at
+   N=16 on 8 cores. Auto N = min(2×cores, (freeMB−1024)/250, 16) = 16 here.
+2. **Kill scoping** (required for N>1): runner reaping is `pgrep -f "src/cli/index.ts serve --port <port>"`; the
+   orphaned engine (it runs in its own process group) is killed by its own ports; stop()'s lock holders are now only
+   files under that instance's data dir. Bug found on the first parallel pilot: the old fd regex `/sqlite|\.db|rivet/`
+   matched shared files (rivetkit napi / engine binary), so one worker's stop() SIGKILLed every other worker.
+3. **Sleeps**: `releasePort` waits for the listener to disappear instead of a fixed 200ms; stop() polls at 50ms.
+   These are small; the 30s gasoline lease dominates.
+
+### Result
+Trial run on this box: 180/180, wall 496s (serial-equivalent case time 7547s, i.e. ~2.1h of serial work).
+Official runs: `chaos-fast-run-{1,2,3}.log`.
