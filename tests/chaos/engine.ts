@@ -90,6 +90,14 @@ function pidsHolding(files: string[]): number[] {
   return holders;
 }
 
+/** PIDs of any `src/cli/index.ts serve` runner processes (this repo's engine hosts). */
+export async function serveRunnerPids(): Promise<number[]> {
+  const proc = Bun.spawn(["pgrep", "-f", "src/cli/index.ts serve"], { stdout: "pipe", stderr: "ignore" });
+  const text = await new Response(proc.stdout).text();
+  await proc.exited;
+  return text.split(/\s+/).map(Number).filter((n) => n > 0 && n !== process.pid);
+}
+
 export function tailFile(path: string, max = 2000): string {
   try {
     const text = readFileSync(path, "utf8");
@@ -242,6 +250,12 @@ export class Engine {
           // already exited
         }
       }
+    }
+
+    // Defense in depth: no runner from an earlier engine may outlive stop(). A
+    // straggler reconnects to the next engine and steals actor assignments.
+    for (const straggler of await serveRunnerPids()) {
+      try { process.kill(straggler, "SIGKILL"); } catch {}
     }
 
     const deadline = Date.now() + 8_000;

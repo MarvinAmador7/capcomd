@@ -25,7 +25,12 @@ export function killpoint(name: string): void {
     const marker = startSpan(`killpoint.${name}`, { "relay.killpoint": `${name}:${count}` });
     marker.status = { code: 2, message: "process killed by killpoint" };
     if (marker.attributes["relay.run_id"]) endSpan(marker);
-    process.exit(137);
+    // A killpoint simulates a crash, so die by SIGKILL. process.exit() runs exit
+    // hooks and rivetkit's native envoy shutdown. In gate-3 seed 35 that kept the
+    // "dead" runner alive ~2 min, and it reconnected to the restarted engine, which then
+    // routed actors to a zombie (tunnel_message_timeout / no_responders).
+    try { process.kill(process.pid, "SIGKILL"); } catch {}
+    process.exit(137); // unreachable unless SIGKILL is unavailable
   }
 }
 

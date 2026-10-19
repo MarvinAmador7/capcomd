@@ -1,0 +1,363 @@
+=== chaos run 1 start 2026-10-18T17:50:42Z
+bun test v1.4.2 (744846f84)
+
+tests/chaos/subprocess.test.ts:
+(pass) Chaos Tests - Subprocess Killpoints > event gap helper rejects holes and duplicate seqs [0.34ms]
+Testing killpoint: tx.mid
+    wiped +246ms
+    engine-up +2609ms
+    first-client exit=1 killed=true +25091ms
+    stopped-after-kill +25296ms
+    engine-restarted +26448ms
+  ✓ tx.mid killed=true (62117ms)
+Testing killpoint: model.after_return.before_commit
+    wiped +218ms
+    engine-up +2677ms
+    first-client exit=1 killed=true +14070ms
+    stopped-after-kill +14275ms
+    engine-restarted +44843ms
+  ✓ model.after_return.before_commit killed=true (52971ms)
+Testing killpoint: merge.before_cas
+    wiped +218ms
+    engine-up +2586ms
+    first-client exit=1 killed=true +17104ms
+    stopped-after-kill +17323ms
+    engine-restarted +47932ms
+  ✓ merge.before_cas killed=true (54366ms)
+Testing killpoint: merge.after_cas.before_event
+    wiped +218ms
+    engine-up +2585ms
+    first-client exit=1 killed=true +17052ms
+    stopped-after-kill +17243ms
+    engine-restarted +47816ms
+  ✓ merge.after_cas.before_event killed=true (54123ms)
+Testing killpoint: push.mid
+    wiped +217ms
+    engine-up +2547ms
+    first-client exit=1 killed=true +22217ms
+    stopped-after-kill +22444ms
+    engine-restarted +52871ms
+  ✓ push.mid killed=true (59585ms)
+Testing killpoint: push.after.before_event
+    wiped +218ms
+    engine-up +2628ms
+    first-client exit=1 killed=true +22363ms
+    stopped-after-kill +22570ms
+    engine-restarted +53175ms
+  ✓ push.after.before_event killed=true (59977ms)
+Testing killpoint: vm.create.after_request.before_record
+    wiped +226ms
+    engine-up +2588ms
+    first-client exit=1 killed=true +15315ms
+    stopped-after-kill +15514ms
+    engine-restarted +45969ms
+  ✓ vm.create.after_request.before_record killed=true (53643ms)
+Testing killpoint: lease.expire.mid
+    wiped +217ms
+    engine-up +2585ms
+    first-client exit=1 killed=true +14522ms
+    stopped-after-kill +14750ms
+    engine-restarted +45266ms
+  ✓ lease.expire.mid killed=true (52682ms)
+Testing killpoint: budget.charge.mid
+    wiped +217ms
+    engine-up +2585ms
+    first-client exit=1 killed=true +13568ms
+    stopped-after-kill +13787ms
+    engine-restarted +44166ms
+  ✓ budget.charge.mid killed=true (52199ms)
+Testing killpoint: outbox.dispatch.after_send.before_ack
+    wiped +218ms
+    engine-up +2623ms
+    first-client exit=1 killed=true +15344ms
+    stopped-after-kill +15563ms
+    engine-restarted +46097ms
+  ✓ outbox.dispatch.after_send.before_ack killed=true (53529ms)
+Total: 10/10 passed
+(pass) Chaos Tests - Subprocess Killpoints > survives all 10 named killpoints [555192.40ms]
+    wiped +226ms
+    engine-up +2607ms
+    first-client exit=1 killed=true +20663ms
+    stopped-after-kill +20879ms
+    engine-restarted +51311ms
+    wiped +217ms
+    engine-up +2626ms
+    first-client exit=1 killed=true +15315ms
+    stopped-after-kill +15517ms
+    engine-restarted +45962ms
+    wiped +218ms
+    engine-up +2599ms
+    first-client exit=1 killed=true +13536ms
+    stopped-after-kill +13762ms
+    engine-restarted +44334ms
+    wiped +218ms
+    engine-up +2554ms
+    first-client exit=0 killed=false +9227ms
+    wiped +220ms
+    engine-up +2628ms
+    first-client exit=1 killed=true +17124ms
+    stopped-after-kill +17327ms
+    engine-not-ready attempt=1, cold restart: engine not ready: xceeded message="Actor 186a273c0qzrj44b0ovw59mamccl00 stopped before becoming ready after 8 wake retries: actor_stopped_before_ready." metadat
+    engine-not-ready attempt=2, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=xwihsw0rm5p5ew1k8sqdueit7hcl00 
+    engine-restarted +419116ms
+    wiped +218ms
+    engine-up +2641ms
+    first-client exit=1 killed=true +18928ms
+    stopped-after-kill +19142ms
+    engine-restarted +49785ms
+    wiped +217ms
+    engine-up +2586ms
+    first-client exit=0 killed=false +9428ms
+    wiped +224ms
+    engine-up +2630ms
+    first-client exit=1 killed=true +22349ms
+    stopped-after-kill +22564ms
+    engine-restarted +53041ms
+    wiped +227ms
+    engine-up +2596ms
+    first-client exit=0 killed=false +9323ms
+    wiped +222ms
+    engine-up +2619ms
+    first-client exit=0 killed=false +9434ms
+Completed 10/50 seeds (10 passed, 0 failed)
+    wiped +218ms
+    engine-up +2578ms
+    first-client exit=1 killed=true +13537ms
+    stopped-after-kill +13738ms
+    engine-restarted +44385ms
+    wiped +220ms
+    engine-up +2628ms
+    first-client exit=1 killed=true +21655ms
+    stopped-after-kill +21860ms
+    engine-restarted +52316ms
+    wiped +216ms
+    engine-up +2572ms
+    first-client exit=1 killed=true +14475ms
+    stopped-after-kill +14679ms
+    engine-restarted +45232ms
+    wiped +216ms
+    engine-up +2576ms
+    first-client exit=1 killed=true +13946ms
+    stopped-after-kill +14140ms
+    engine-restarted +44744ms
+    wiped +217ms
+    engine-up +2577ms
+    first-client exit=1 killed=true +18872ms
+    stopped-after-kill +19090ms
+    engine-not-ready attempt=1, cold restart: engine not ready: d code=actor_ready_timeout message="Timed out waiting for actor to become ready. Ensure that the pool selector is accurate and there are envoy
+    engine-restarted +162587ms
+    wiped +219ms
+    engine-up +2591ms
+    first-client exit=0 killed=false +9392ms
+    wiped +217ms
+    engine-up +2574ms
+    first-client exit=1 killed=true +22251ms
+    stopped-after-kill +22447ms
+    engine-restarted +52968ms
+    wiped +218ms
+    engine-up +2592ms
+    first-client exit=1 killed=true +22247ms
+    stopped-after-kill +22450ms
+    engine-restarted +52940ms
+    wiped +217ms
+    engine-up +2574ms
+    first-client exit=0 killed=false +9363ms
+    wiped +217ms
+    engine-up +2622ms
+    first-client exit=1 killed=true +14605ms
+    stopped-after-kill +14818ms
+    engine-restarted +45334ms
+Completed 20/50 seeds (20 passed, 0 failed)
+    wiped +220ms
+    engine-up +2587ms
+    first-client exit=1 killed=true +13525ms
+    stopped-after-kill +13746ms
+    engine-restarted +44136ms
+    wiped +218ms
+    engine-up +2587ms
+    first-client exit=1 killed=true +21430ms
+    stopped-after-kill +21652ms
+    engine-restarted +52159ms
+    wiped +215ms
+    engine-up +2571ms
+    first-client exit=1 killed=true +13543ms
+    stopped-after-kill +13762ms
+    engine-restarted +44143ms
+    wiped +219ms
+    engine-up +2585ms
+    first-client exit=0 killed=false +9292ms
+    wiped +215ms
+    engine-up +2573ms
+    first-client exit=0 killed=false +9295ms
+    wiped +217ms
+    engine-up +2600ms
+    first-client exit=1 killed=true +17052ms
+    stopped-after-kill +17262ms
+    engine-not-ready attempt=1, cold restart: engine not ready: d code=actor_ready_timeout message="Timed out waiting for actor to become ready. Ensure that the pool selector is accurate and there are envoy
+    engine-not-ready attempt=2, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=d195it2d8m4y2pkf1nagyazfa3dl00 
+    engine-restarted +218998ms
+    wiped +224ms
+    engine-up +2782ms
+    first-client exit=1 killed=true +22596ms
+    stopped-after-kill +22822ms
+    engine-restarted +53377ms
+    wiped +221ms
+    engine-up +2616ms
+    first-client exit=0 killed=false +9386ms
+    wiped +222ms
+    engine-up +2596ms
+    first-client exit=1 killed=true +15263ms
+    stopped-after-kill +15477ms
+    engine-restarted +45924ms
+    wiped +217ms
+    engine-up +2598ms
+    first-client exit=1 killed=true +14572ms
+    stopped-after-kill +14785ms
+    engine-restarted +45224ms
+Completed 30/50 seeds (30 passed, 0 failed)
+    wiped +227ms
+    engine-up +2601ms
+    first-client exit=1 killed=true +20530ms
+    stopped-after-kill +20721ms
+    engine-restarted +51292ms
+    wiped +218ms
+    engine-up +2571ms
+    first-client exit=1 killed=true +15238ms
+    stopped-after-kill +15451ms
+    engine-restarted +46015ms
+    wiped +219ms
+    engine-up +2590ms
+    first-client exit=1 killed=true +13512ms
+    stopped-after-kill +13715ms
+    engine-restarted +44278ms
+    wiped +219ms
+    engine-up +2595ms
+    first-client exit=0 killed=false +9442ms
+    wiped +219ms
+    engine-up +2582ms
+    first-client exit=1 killed=true +136726ms
+    stopped-after-kill +136942ms
+    engine-restarted +167615ms
+  ✗ seed 35 merge.before_cas:1 resume failed (1): equest_start: no_responders_after_retry_budget_exhausted." metadata="{\"phase\":\"request_start\",\"reason\":\"no_responders_after_retry_budget_exhausted\"}" rayId=x4hl13agdx55zo3m7u2dqdesxccl00
+✓ Run resumed (executing)
+
+→ Creating tasks...
+level=warn msg="http error response" group=guard code=tunnel_message_timeout message="Actor tunnel message timed out during request_start: no_responders_after_retry_budget_exhausted." metadata="{\"phase\":\"request_start\",\"reason\":\"no_responders_after_retry_budget_exhausted\"}" rayId=dp35mu0qb5wokys05or33vmzy3bl00
+
+[client terminated by signal SIGKILL]
+    wiped +218ms
+    engine-up +2695ms
+    first-client exit=1 killed=true +18939ms
+    stopped-after-kill +19155ms
+    engine-restarted +49664ms
+    wiped +222ms
+    engine-up +2638ms
+    first-client exit=0 killed=false +9273ms
+    wiped +215ms
+    engine-up +2566ms
+    first-client exit=1 killed=true +22198ms
+    stopped-after-kill +22404ms
+    engine-restarted +52810ms
+    wiped +216ms
+    engine-up +2563ms
+    first-client exit=0 killed=false +9237ms
+    wiped +218ms
+    engine-up +2569ms
+    first-client exit=0 killed=false +9287ms
+Completed 40/50 seeds (39 passed, 1 failed)
+    wiped +219ms
+    engine-up +2580ms
+    first-client exit=1 killed=true +13485ms
+    stopped-after-kill +13691ms
+    engine-restarted +44076ms
+    wiped +215ms
+    engine-up +2572ms
+    first-client exit=1 killed=true +21437ms
+    stopped-after-kill +21649ms
+    engine-restarted +52057ms
+    wiped +216ms
+    engine-up +2577ms
+    first-client exit=1 killed=true +14454ms
+    stopped-after-kill +14650ms
+    engine-restarted +45188ms
+    wiped +217ms
+    engine-up +2568ms
+    first-client exit=1 killed=true +13863ms
+    stopped-after-kill +14078ms
+    engine-not-ready attempt=1, cold restart: engine not ready: d code=actor_ready_timeout message="Timed out waiting for actor to become ready. Ensure that the pool selector is accurate and there are envoy
+    engine-not-ready attempt=2, cold restart: engine not ready: level=warn msg="http error response" group=core code=internal_error message="An internal error occurred" rayId=h0rpaww2g43p4sf3afcirb1ybvcl00 
+    engine-restarted +5519294ms
+    wiped +222ms
+    engine-up +2603ms
+    first-client exit=1 killed=true +18952ms
+    stopped-after-kill +19156ms
+    engine-restarted +49684ms
+    wiped +218ms
+    engine-up +2578ms
+    first-client exit=0 killed=false +9278ms
+    wiped +221ms
+    engine-up +2588ms
+    first-client exit=1 killed=true +22210ms
+    stopped-after-kill +22434ms
+    engine-restarted +52944ms
+    wiped +217ms
+    engine-up +2724ms
+    first-client exit=1 killed=true +22417ms
+    stopped-after-kill +22642ms
+    engine-restarted +53162ms
+    wiped +220ms
+    engine-up +2589ms
+    first-client exit=0 killed=false +9322ms
+    wiped +217ms
+    engine-up +2715ms
+    first-client exit=1 killed=true +14593ms
+    stopped-after-kill +14807ms
+    engine-restarted +45259ms
+Completed 50/50 seeds (49 passed, 1 failed)
+Final: 49/50 passed, 1/50 failed
+[
+  {
+    "seed": 35,
+    "killpoint": "merge.before_cas",
+    "iteration": 1,
+    "error": "resume failed (1): equest_start: no_responders_after_retry_budget_exhausted.\" metadata=\"{\\\"phase\\\":\\\"request_start\\\",\\\"reason\\\":\\\"no_responders_after_retry_budget_exhausted\\\"}\" rayId=x4hl13agdx55zo3m7u2dqdesxccl00\n✓ Run resumed (executing)\n\n→ Creating tasks...\nlevel=warn msg=\"http error response\" group=guard code=tunnel_message_timeout message=\"Actor tunnel message timed out during request_start: no_responders_after_retry_budget_exhausted.\" metadata=\"{\\\"phase\\\":\\\"request_start\\\",\\\"reason\\\":\\\"no_responders_after_retry_budget_exhausted\\\"}\" rayId=dp35mu0qb5wokys05or33vmzy3bl00\n\n[client terminated by signal SIGKILL]"
+  }
+]
+69 |       }
+70 |     }
+71 | 
+72 |     console.log(`Final: ${passed}/50 passed, ${failures.length}/50 failed`);
+73 |     if (failures.length > 0) console.log(JSON.stringify(failures, null, 2));
+74 |     expect(failures).toEqual([]);
+                          ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "error": 
++ "resume failed (1): equest_start: no_responders_after_retry_budget_exhausted." metadata="{\"phase\":\"request_start\",\"reason\":\"no_responders_after_retry_budget_exhausted\"}" rayId=x4hl13agdx55zo3m7u2dqdesxccl00
++ ✓ Run resumed (executing)
++ 
++ → Creating tasks...
++ level=warn msg="http error response" group=guard code=tunnel_message_timeout message="Actor tunnel message timed out during request_start: no_responders_after_retry_budget_exhausted." metadata="{\"phase\":\"request_start\",\"reason\":\"no_responders_after_retry_budget_exhausted\"}" rayId=dp35mu0qb5wokys05or33vmzy3bl00
++ 
++ [client terminated by signal SIGKILL]"
++ ,
++     "iteration": 1,
++     "killpoint": "merge.before_cas",
++     "seed": 35,
++   },
++ ]
+
+- Expected  - 1
++ Received  + 16
+
+      at <anonymous> (/workspace/relay/tests/chaos/subprocess.test.ts:74:22)
+(fail) Chaos Tests - Subprocess Killpoints > survives 50 seeded killpoint iterations [3932895.07ms]
+
+ 2 pass
+ 1 fail
+ 5 expect() calls
+Ran 3 tests across 1 file. [10157.43s]
+=== chaos run 1 end 2026-10-18T20:39:59Z exit=1

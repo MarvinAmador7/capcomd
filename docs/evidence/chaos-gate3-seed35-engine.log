@@ -1,0 +1,83 @@
+Starting Rivet engine on port 6420...
+
+  RivetKit 2.3.27 (Engine - Serverful)
+  - Endpoint:     http://127.0.0.1:6420 (local native)
+  - Actors:       6
+
+✓ Rivet engine running at http://localhost:6420
+  Press Ctrl+C to stop
+Durable Streams: http://127.0.0.1:8642/durable-streams/v1/stream/<path>
+2026-10-18T18:34:30.476025Z  WARN agentos_preload: preload coordinator plan read failed error=action failed (actor/no_runner_config_configured): No runner config with name 'services' are available in any datacenter for the namespace 'default'. Validate a provider is listed that matches the requested pool name., metadata=Some(Object {"namespace": String("default"), "pool_name": String("services")})
+2026-10-18T18:34:30.476101Z  INFO rivet_services: agentOS process preload completed total=0 ready=0 failed=0 skipped=0 deadline_hit=false coordinator_available=false
+2026-10-18T18:34:30.481936Z  INFO rivet_envoy_client::envoy: starting envoy envoy_key=9ebcf86a-5968-44eb-acae-45ce6abe225f
+2026-10-18T18:34:30.482702Z  INFO rivet_envoy_client::connection::native: websocket connected endpoint=http://127.0.0.1:6420 namespace=default envoy_key=9ebcf86a-5968-44eb-acae-45ce6abe225f has_token=true
+2026-10-18T18:34:30.483257Z  INFO envoy_client{envoy_key=9ebcf86a-5968-44eb-acae-45ce6abe225f}: rivet_envoy_client::envoy: received init init.metadata=ProtocolMetadata { envoy_lost_threshold: 7000, actor_stop_threshold: 1800000, max_response_payload_size: 20971520 }
+ts=2026-10-18T18:34:31.088251945Z level=warn message="SQLite transaction is unnamed. Add a static `name` to group transaction, storage, and commit performance across executions. Individual statement profiling remains available." fingerprint=shape-c04e6dcb31fc3cce
+ts=2026-10-18T18:34:31.091185168Z level=warn message="SQLite transaction is unnamed. Add a static `name` to group transaction, storage, and commit performance across executions. Individual statement profiling remains available." fingerprint=shape-04dcb3392d330c7d
+ts=2026-10-18T18:34:31.105018671Z level=warn message="SQLite transaction is unnamed. Add a static `name` to group transaction, storage, and commit performance across executions. Individual statement profiling remains available." fingerprint=shape-b8ea6c9dd0f67c47
+ts=2026-10-18T18:34:31.31226219Z level=warn message="SQLite transaction is unnamed. Add a static `name` to group transaction, storage, and commit performance across executions. Individual statement profiling remains available." fingerprint=shape-04dcb3392d330c7d
+ts=2026-10-18T18:34:31.742990678Z level=warn message="SQLite transaction is unnamed. Add a static `name` to group transaction, storage, and commit performance across executions. Individual statement profiling remains available." fingerprint=shape-b8ea6c9dd0f67c47
+ts=2026-10-18T18:34:32.257351371Z level=warn message="SQLite profiling capacity reached; observations are being aggregated or dropped" actor_name=taskBoard operation_type=statement reason=series_budget overflow_observations=1
+ts=2026-10-18T18:34:32.257433402Z level=warn message="SQLite profiling capacity reached; observations are being aggregated or dropped" actor_name=taskBoard operation_type=statement reason=series_budget overflow_observations=2
+ts=2026-10-18T18:34:32.266561278Z level=warn message="SQLite profiling capacity reached; observations are being aggregated or dropped" actor_name=taskBoard operation_type=statement reason=series_budget overflow_observations=4
+ts=2026-10-18T18:34:32.367747682Z level=warn message="SQLite profiling capacity reached; observations are being aggregated or dropped" actor_name=taskBoard operation_type=statement reason=series_budget overflow_observations=8
+ts=2026-10-18T18:34:32.551823631Z level=warn message="SQLite profiling capacity reached; observations are being aggregated or dropped" actor_name=taskBoard operation_type=statement reason=series_budget overflow_observations=16
+ts=2026-10-18T18:34:33.785258417Z level=warn message="SQLite profiling capacity reached; observations are being aggregated or dropped" actor_name=taskBoard operation_type=statement reason=series_budget overflow_observations=32
+ts=2026-10-18T18:34:34.650687935Z level=warn message="SQLite profiling capacity reached; observations are being aggregated or dropped" actor_name=taskBoard operation_type=statement reason=series_budget overflow_observations=64
+ts=2026-10-18T18:34:34.847901112Z level=warn message="SQLite transaction is unnamed. Add a static `name` to group transaction, storage, and commit performance across executions. Individual statement profiling remains available." fingerprint=shape-04dcb3392d330c7d
+[KILLPOINT] Exiting at merge.before_cas:1
+2026-10-18T18:36:40.339363Z  INFO rivet_envoy_client::connection::native: websocket closed code=1011 reason=ws.timed_out#hsoa032qhz0iv6vcqjgyj7smtnbl00
+2026-10-18T18:36:40.339452Z  INFO rivet_envoy_client::connection::native: websocket session ended envoy_key=9ebcf86a-5968-44eb-acae-45ce6abe225f reason="close" session_duration_ms=129856
+2026-10-18T18:36:40.339556Z  INFO rivet_envoy_client::connection::native: reconnecting attempt=0 delay_ms=1121
+2026-10-18T18:36:41.462727Z  INFO rivet_envoy_client::connection::native: websocket connected endpoint=http://127.0.0.1:6420 namespace=default envoy_key=9ebcf86a-5968-44eb-acae-45ce6abe225f has_token=true
+2026-10-18T18:36:41.463909Z  INFO envoy_client{envoy_key=9ebcf86a-5968-44eb-acae-45ce6abe225f}: rivet_envoy_client::envoy: received init init.metadata=ProtocolMetadata { envoy_lost_threshold: 7000, actor_stop_threshold: 1800000, max_response_payload_size: 20971520 }
+Starting Rivet engine on port 6420...
+
+  RivetKit 2.3.27 (Engine - Serverful)
+  - Endpoint:     http://127.0.0.1:6420 (local native)
+  - Actors:       6
+
+✓ Rivet engine running at http://localhost:6420
+  Press Ctrl+C to stop
+Durable Streams: http://127.0.0.1:8642/durable-streams/v1/stream/<path>
+2026-10-18T18:36:46.052614Z  INFO rivet_envoy_client::envoy: starting envoy envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd
+2026-10-18T18:36:46.053623Z  INFO rivet_envoy_client::connection::native: websocket connected endpoint=http://127.0.0.1:6420 namespace=default envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd has_token=true
+2026-10-18T18:36:46.054427Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::envoy: received init init.metadata=ProtocolMetadata { envoy_lost_threshold: 7000, actor_stop_threshold: 1800000, max_response_payload_size: 20971520 }
+2026-10-18T18:36:47.543606Z  WARN agentos_preload: preload coordinator plan read timed out timeout_ms=1500 configuration_path="PreloadProcessOptions.plan_read_timeout_ms"
+2026-10-18T18:36:47.543779Z  INFO rivet_services: agentOS process preload completed total=0 ready=0 failed=0 skipped=0 deadline_hit=false coordinator_available=false
+2026-10-18T18:37:02.156910Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::commands: received commands command_count=1
+2026-10-18T18:37:02.157055Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::commands: received command command=CommandWrapper{actorId: "xsnus6omxpqhfjt1v4g8jflhy1bl00", generation: 1, index: 1, inner: CommandStartActor{config: {name: "agentOS-preload-coordinator", key: "global", createTs: 1792348622155, input: null}, hibernatingRequests: []}}
+2026-10-18T18:37:02.173500Z  INFO run{actor_id=xsnus6omxpqhfjt1v4g8jflhy1bl00 generation=1 actor_key=global}: rivetkit_core::actor::task: actor lifecycle transition actor_id=xsnus6omxpqhfjt1v4g8jflhy1bl00 old=Loading new=Started
+2026-10-18T18:37:02.175277Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending events event_count=1
+2026-10-18T18:37:02.175315Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending event event=EventWrapper{actorId: xsnus6omxpqhfjt1v4g8jflhy1bl00, generation: 1, index: 0, inner: EventActorStateUpdate{state: Running}}
+2026-10-18T18:37:02.175329Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending events event_count=1
+2026-10-18T18:37:02.175334Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending event event=EventWrapper{actorId: xsnus6omxpqhfjt1v4g8jflhy1bl00, generation: 1, index: 1, inner: EventActorSetAlarm{alarmTs: null}}
+2026-10-18T18:37:02.175348Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending events event_count=1
+2026-10-18T18:37:02.175355Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending event event=EventWrapper{actorId: xsnus6omxpqhfjt1v4g8jflhy1bl00, generation: 1, index: 2, inner: EventActorSetAlarm{alarmTs: null}}
+2026-10-18T18:37:32.176654Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending events event_count=1
+2026-10-18T18:37:32.176748Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending event event=EventWrapper{actorId: xsnus6omxpqhfjt1v4g8jflhy1bl00, generation: 1, index: 3, inner: EventActorIntent{intent: Sleep}}
+2026-10-18T18:37:32.180911Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::commands: received commands command_count=1
+2026-10-18T18:37:32.180940Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::commands: received command command=CommandWrapper{actorId: "xsnus6omxpqhfjt1v4g8jflhy1bl00", generation: 1, index: 2, inner: CommandStopActor{reason: SleepIntent}}
+2026-10-18T18:37:32.181096Z  INFO run{actor_id=xsnus6omxpqhfjt1v4g8jflhy1bl00 generation=1 actor_key=global}: rivetkit_core::actor::task: actor lifecycle transition actor_id=xsnus6omxpqhfjt1v4g8jflhy1bl00 old=Started new=SleepGrace
+2026-10-18T18:37:32.181211Z  INFO run{actor_id=xsnus6omxpqhfjt1v4g8jflhy1bl00 generation=1 actor_key=global}: rivetkit_core::actor::task: actor lifecycle transition actor_id=xsnus6omxpqhfjt1v4g8jflhy1bl00 old=SleepGrace new=SleepFinalize
+2026-10-18T18:37:32.230353Z  INFO run{actor_id=xsnus6omxpqhfjt1v4g8jflhy1bl00 generation=1 actor_key=global}: rivetkit_core::actor::task: actor lifecycle transition actor_id=xsnus6omxpqhfjt1v4g8jflhy1bl00 old=SleepFinalize new=Terminated
+2026-10-18T18:37:32.230519Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending events event_count=1
+2026-10-18T18:37:32.230555Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::events: sending event event=EventWrapper{actorId: xsnus6omxpqhfjt1v4g8jflhy1bl00, generation: 1, index: 4, inner: EventActorStateUpdate{state: Stopped{code: Ok, message: null}}}
+ts=2026-10-18T18:37:46.084926878Z level=error message="sqlite operation failed" actor_id=pej79hx8hlqfmhfn0cw6mo0a4fbl00 generation=Some(2) backend=LocalNative operation=query sql="SELECT MIN(trigger_at) FROM _rivet_schedule_events" binding_count=0 statement_count=1 group=sqlite code=transaction_closed error_message="SQLite transaction coordinator is closed." metadata=None error_chain="[\"actor pej79hx8hlqfmhfn0cw6mo0a4fbl00 generation 2 key chaos-merge-before_cas-n1-1792348468590/task-1\", \"sqlite transaction coordinator is closed\", \"transaction_closed: SQLite transaction coordinator is closed.\"]"
+ts=2026-10-18T18:37:46.085029187Z level=error message="failed to sync scheduled actor alarm" actor_id=pej79hx8hlqfmhfn0cw6mo0a4fbl00 error="actor pej79hx8hlqfmhfn0cw6mo0a4fbl00 generation 2 key chaos-merge-before_cas-n1-1792348468590/task-1\n\nCaused by:\n    0: sqlite transaction coordinator is closed\n    1: transaction_closed: SQLite transaction coordinator is closed."
+ts=2026-10-18T18:37:46.159420343Z level=error message="sqlite operation failed" actor_id=h4e6xj961g8vl6fs6ba1v2bs8zal00 generation=Some(2) backend=LocalNative operation=query sql="SELECT MIN(trigger_at) FROM _rivet_schedule_events" binding_count=0 statement_count=1 group=sqlite code=transaction_closed error_message="SQLite transaction coordinator is closed." metadata=None error_chain="[\"actor h4e6xj961g8vl6fs6ba1v2bs8zal00 generation 2 key __ready__\", \"sqlite transaction coordinator is closed\", \"transaction_closed: SQLite transaction coordinator is closed.\"]"
+ts=2026-10-18T18:37:46.159476689Z level=error message="failed to sync scheduled actor alarm" actor_id=h4e6xj961g8vl6fs6ba1v2bs8zal00 error="actor h4e6xj961g8vl6fs6ba1v2bs8zal00 generation 2 key __ready__\n\nCaused by:\n    0: sqlite transaction coordinator is closed\n    1: transaction_closed: SQLite transaction coordinator is closed."
+ts=2026-10-18T18:37:46.365124743Z level=error message="sqlite operation failed" actor_id=xkdp6mbq6vw7zyboyvfb3l2v08bl00 generation=Some(2) backend=LocalNative operation=query sql="SELECT MIN(trigger_at) FROM _rivet_schedule_events" binding_count=0 statement_count=1 group=sqlite code=transaction_closed error_message="SQLite transaction coordinator is closed." metadata=None error_chain="[\"actor xkdp6mbq6vw7zyboyvfb3l2v08bl00 generation 2 key chaos-merge-before_cas-n1-1792348468590\", \"sqlite transaction coordinator is closed\", \"transaction_closed: SQLite transaction coordinator is closed.\"]"
+ts=2026-10-18T18:37:46.365174353Z level=error message="failed to sync scheduled actor alarm" actor_id=xkdp6mbq6vw7zyboyvfb3l2v08bl00 error="actor xkdp6mbq6vw7zyboyvfb3l2v08bl00 generation 2 key chaos-merge-before_cas-n1-1792348468590\n\nCaused by:\n    0: sqlite transaction coordinator is closed\n    1: transaction_closed: SQLite transaction coordinator is closed."
+2026-10-18T18:47:40.262986Z  INFO rivet_envoy_client::connection::native: websocket closed code=1011 reason=ws.timed_out#1c1xkoksx1hvgyzwqoteibg3nobl00
+2026-10-18T18:47:40.263244Z  INFO rivet_envoy_client::connection::native: websocket session ended envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd reason="close" session_duration_ms=654209
+2026-10-18T18:47:40.263398Z  INFO rivet_envoy_client::connection::native: reconnecting attempt=0 delay_ms=1020
+2026-10-18T18:47:41.285869Z  INFO rivet_envoy_client::connection::native: websocket connected endpoint=http://127.0.0.1:6420 namespace=default envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd has_token=true
+2026-10-18T18:47:41.287344Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::envoy: received init init.metadata=ProtocolMetadata { envoy_lost_threshold: 7000, actor_stop_threshold: 1800000, max_response_payload_size: 20971520 }
+2026-10-18T18:50:27.714804Z  INFO rivet_envoy_client::connection::native: websocket closed code=1011 reason=ws.timed_out#piy1xntioo061paw0a4q69xjoval00
+2026-10-18T18:50:27.716263Z  INFO rivet_envoy_client::connection::native: websocket session ended envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd reason="close" session_duration_ms=35233
+2026-10-18T18:50:27.717050Z  INFO rivet_envoy_client::connection::native: reconnecting attempt=1 delay_ms=2083
+2026-10-18T18:50:29.807266Z  INFO rivet_envoy_client::connection::native: websocket connected endpoint=http://127.0.0.1:6420 namespace=default envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd has_token=true
+2026-10-18T18:50:29.811060Z  INFO envoy_client{envoy_key=79b2cb18-cafc-49ac-9e71-2992e74df9dd}: rivet_envoy_client::envoy: received init init.metadata=ProtocolMetadata { envoy_lost_threshold: 7000, actor_stop_threshold: 1800000, max_response_payload_size: 20971520 }
+ts=2026-10-18T18:55:08.488797913Z level=error message="sqlite operation failed" actor_id=xkdp6mbq6vw7zyboyvfb3l2v08bl00 generation=Some(3) backend=LocalNative operation=query sql="SELECT MIN(trigger_at) FROM _rivet_schedule_events" binding_count=0 statement_count=1 group=sqlite code=transaction_closed error_message="SQLite transaction coordinator is closed." metadata=None error_chain="[\"actor xkdp6mbq6vw7zyboyvfb3l2v08bl00 generation 3 key chaos-merge-before_cas-n1-1792348468590\", \"sqlite transaction coordinator is closed\", \"transaction_closed: SQLite transaction coordinator is closed.\"]"
+ts=2026-10-18T18:55:08.488953893Z level=error message="failed to sync scheduled actor alarm" actor_id=xkdp6mbq6vw7zyboyvfb3l2v08bl00 error="actor xkdp6mbq6vw7zyboyvfb3l2v08bl00 generation 3 key chaos-merge-before_cas-n1-1792348468590\n\nCaused by:\n    0: sqlite transaction coordinator is closed\n    1: transaction_closed: SQLite transaction coordinator is closed."
