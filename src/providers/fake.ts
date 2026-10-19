@@ -16,10 +16,24 @@ interface FakeVm {
   createTime: number;
 }
 
+export interface FakeProviderOptions {
+  /**
+   * Run exec/upload/download for real on this host (tests of the agent adapter with a fake
+   * `claude` binary). Paths are host paths; env is the given env only (plus `inheritEnv`).
+   */
+  hostExec?: boolean;
+  /** Host env names passed through in hostExec mode (e.g. GIT_* fixtures). */
+  inheritEnv?: string[];
+  /** Records every exec (cmd + env names, never values) for assertions. */
+  log?: Array<{ cmd: string[]; envKeys: string[]; env?: Record<string, string> }>;
+}
+
 export class FakeProvider implements SandboxProvider {
   private vms = new Map<string, FakeVm>();
   private nextId = 1;
   public clock: number = Date.now();
+  public egress = new Map<VmId, string[]>();
+  constructor(readonly opts: FakeProviderOptions = {}) {}
 
   async ensure(spec: VmSpec): Promise<{ id: VmId; created: boolean }> {
     const existing = Array.from(this.vms.values()).find(
@@ -41,6 +55,7 @@ export class FakeProvider implements SandboxProvider {
       createTime: this.clock,
     };
     this.vms.set(id, vm);
+    this.egress.set(id, [...spec.egressAllow]);
 
     setTimeout(() => {
       if (this.vms.get(id)?.state === "creating") {
@@ -76,6 +91,18 @@ export class FakeProvider implements SandboxProvider {
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
     if (vm.state !== "ready") throw new Error(`VM ${id} not ready`);
+    this.opts.log?.push({ cmd, envKeys: Object.keys(opts?.env ?? {}), env: opts?.env });
+
+    if (this.opts.hostExec) {
+      const env: Record<string, string> = {};
+      for (const k of this.opts.inheritEnv ?? []) if (process.env[k] !== undefined) env[k] = process.env[k]!;
+      Object.assign(env, opts?.env ?? {});
+      const proc = Bun.spawn(cmd, { cwd: opts?.cwd, env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+      const timer = opts?.timeoutMs ? setTimeout(() => proc.kill("SIGKILL"), opts.timeoutMs) : null;
+      const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      if (timer) clearTimeout(timer);
+      return { code, stdout, stderr };
+    }
 
     if (cmd[0] === "git" && cmd[1] === "commit") {
       return { code: 0, stdout: "[main abc1234] test commit\n", stderr: "" };
@@ -95,12 +122,14 @@ export class FakeProvider implements SandboxProvider {
   async upload(id: VmId, path: string, data: Uint8Array): Promise<void> {
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
+    if (this.opts.hostExec) { await Bun.write(path, data); return; }
     vm.files.set(path, data);
   }
 
   async download(id: VmId, path: string): Promise<Uint8Array> {
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
+    if (this.opts.hostExec) return new Uint8Array(await Bun.file(path).arrayBuffer());
     const data = vm.files.get(path);
     if (!data) throw new Error(`File ${path} not found in VM ${id}`);
     return data;
@@ -109,6 +138,7 @@ export class FakeProvider implements SandboxProvider {
   async setEgress(id: VmId, allow: string[]): Promise<void> {
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
+    this.egress.set(id, [...allow]);
   }
 
   async checkpoint(id: VmId, name: string): Promise<void> {
