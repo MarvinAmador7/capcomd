@@ -1,3 +1,4 @@
+import { agentFromEnv } from "../agents/config";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -31,6 +32,18 @@ export const plannerActor = actor({
           typeof task === "string" ? task : task.id
         );
         return { plannerId, tasks, cost: ctx.cost ?? 0 };
+      }
+
+      // Real agent (claude-code): one goal becomes one task; the agent does its own decomposition.
+      if (agentFromEnv() === "claude-code") {
+        const tasks = [{ id: "task-1", goal }];
+        await c.db.execute(
+          `INSERT INTO lifecycle (entity_id, machine, version, state, context, seq)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(entity_id) DO UPDATE SET state = excluded.state, context = excluded.context, seq = seq + 1`,
+          plannerId, "planner", 1, "completed", JSON.stringify({ runId, goal, tasks, cost: 0 }), 1
+        );
+        return { plannerId, tasks: ["task-1"], cost: 0 };
       }
 
       const response = await model.generate([

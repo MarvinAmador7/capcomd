@@ -6,6 +6,8 @@ import { mergeTask } from "../merge/service";
 import type { MergeOutcome } from "../merge/types";
 
 export const verifierActor = actor({
+  // PR mode can wait on required checks / merge queue (CAPCOMD_GITHUB_TIMEOUT_MS).
+  options: { actionTimeout: 60 * 60_000 },
   db: db({
     onMigrate: async (database) => {
       await setupLifecycleTables(database);

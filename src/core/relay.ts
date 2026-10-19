@@ -172,6 +172,12 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
 
     if (!tasks || tasks.length === 0) throw new Error(`Run ${runId} has no tasks`);
 
+    // Per-task goals from the plan (claude-code: the single task's goal is the run goal).
+    const plannerCtx = (await plannerHandle.getPlanner({ plannerId }))?.context;
+    const goalOf = (taskId: string): string => {
+      const t = (plannerCtx?.tasks ?? []).find((x: any) => typeof x === "object" && x.id === taskId) as { goal?: string } | undefined;
+      return t?.goal ?? `Task ${taskId}`;
+    };
     emit("tasks.creating", {}, "\n→ Creating tasks...");
     const taskBoardHandle = c.taskBoard.getOrCreate([runId]);
     for (const taskId of tasks) {
@@ -179,7 +185,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
       if (!existing) {
         await taskBoardHandle.createTask({
           taskId,
-          goal: `Task ${taskId}`,
+          goal: goalOf(taskId),
           runId,
           maxRetries: 3,
           ...(opts.targetBranch ? { targetBranch: opts.targetBranch } : {}),
@@ -243,7 +249,12 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
           } else if (worker?.state === "busy" && worker.context.taskId !== taskId) {
             throw new Error(`Worker ${workerId} is busy on ${worker.context.taskId}, expected ${taskId}`);
           }
-          const pushed = await workerHandle.pushBranch({ workerId, taskId, epoch, branch, runId, target, rework: !!task.context.conflict });
+          const pushed = await workerHandle.pushBranch({
+            workerId, taskId, epoch, branch, runId, target, rework: !!task.context.conflict,
+            goal: String(task.context.goal ?? goalOf(taskId)), conflictFiles: task.context.conflict?.files,
+          });
+          const agentCost = Number((pushed as any).costUsd ?? 0);
+          if (agentCost > 0) await runHandle.chargeBudget({ runId, chargeId: `${runId}-${taskId}-e${epoch}-agent`, amount: agentCost });
           await taskBoardHandle.handoffTask({ taskId, epoch, branch, commitSha: (pushed as any).sha || undefined });
         } else if (task.state === "handed_off") {
           await taskBoardHandle.startVerify({ taskId });

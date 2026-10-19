@@ -14,6 +14,14 @@ import { loadMergeConfig } from "../merge/config";
 import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
+import { agentFromEnv, loadAgentConfig } from "../agents/config";
+import { runClaudeCode } from "../agents/claude-code";
+
+const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
+/** claude-code VMs may reach only GitHub, the Anthropic API and the package registries the bootstrap needs. */
+function egressAllow(): string[] {
+  return agentFromEnv() === "claude-code" ? loadAgentConfig().egress : LEGACY_EGRESS;
+}
 
 
 // Shared by drainWorker, reap and the TTL alarm. Idempotent and resumable.
@@ -79,6 +87,8 @@ async function drainWorkerImpl(c: any, workerId: string) {
 }
 
 export const workerActor = actor({
+  // A claude-code task runs for minutes inside pushBranch (install + agent + push).
+  options: { actionTimeout: 60 * 60_000 },
   db: db({
     onMigrate: async (database) => {
       await setupLifecycleTables(database);
@@ -146,7 +156,7 @@ export const workerActor = actor({
           idemKey,
           isolated: true,
           ttlSeconds: 3600,
-          egressAllow: ["github.com", "registry.npmjs.org"],
+          egressAllow: egressAllow(),
           labels: {
             runId,
             workerId,
@@ -278,7 +288,12 @@ export const workerActor = actor({
 
     async pushBranch(
       c,
-      params: { workerId: string; taskId: string; epoch: number; branch: string; runId?: string; target?: string; rework?: boolean }
+      params: {
+        workerId: string; taskId: string; epoch: number; branch: string; runId?: string; target?: string; rework?: boolean;
+        /** Task goal for a real agent (claude-code). */
+        goal?: string;
+        conflictFiles?: string[];
+      }
     ) {
       const { workerId, taskId, epoch, branch } = params;
       const idemKey = `worker-${workerId}-push-${taskId}-e${epoch}`;
@@ -304,17 +319,40 @@ export const workerActor = actor({
         idemKey: vmKey,
         isolated: true,
         ttlSeconds: 3600,
-        egressAllow: ["github.com", "registry.npmjs.org"],
+        egressAllow: egressAllow(),
         labels: { workerId, taskId, epoch: String(epoch) },
       });
       await provider.waitReady(vmId, 90_000);
-      await provider.exec(vmId, ["git", "push", "origin", branch]);
+
+      let sha = "";
+      let costUsd = 0;
+      const cfg = loadMergeConfig();
+      if (agentFromEnv() === "claude-code") {
+        // Real worker: Claude Code edits the repo in the VM, commits with trailers, pushes the task branch.
+        if (!cfg) throw new Error("CAPCOMD_AGENT=claude-code needs a repo: set CAPCOMD_REPO");
+        if (!params.runId) throw new Error("pushBranch needs runId for claude-code");
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) throw new Error("CAPCOMD_AGENT=claude-code needs ANTHROPIC_API_KEY");
+        const runId = params.runId;
+        const res = await runClaudeCode(provider, vmId, {
+          runId, taskId, epoch, branch, target: params.target ?? cfg.target, repoUrl: cfg.remote,
+          goal: params.goal ?? `Task ${taskId}`, rework: params.rework, conflictFiles: params.conflictFiles,
+        }, loadAgentConfig(), {
+          apiKey,
+          isCancelled: async () => {
+            const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
+            return run?.state === "cancelled";
+          },
+        });
+        sha = res.sha;
+        costUsd = res.costUsd;
+      } else {
+        await provider.exec(vmId, ["git", "push", "origin", branch]);
+      }
 
       // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
       // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
-      let sha = "";
-      const cfg = loadMergeConfig();
-      if (cfg && getDependencies().fakeWork && params.runId) {
+      if (!sha && cfg && getDependencies().fakeWork && params.runId) {
         sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework });
       }
 
@@ -327,13 +365,13 @@ export const workerActor = actor({
           "worker",
           workerLife.state,
           { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha },
+          { type: "PUSHED", taskId, epoch, branch, sha, costUsd },
           idemKey,
           []
         );
       }, { name: "pushBranch" });
 
-      return { workerId, taskId, pushed: true, already: false, sha };
+      return { workerId, taskId, pushed: true, already: false, sha, costUsd };
     },
 
     async flushOutbox(c, _params: Record<string, never>) {
