@@ -1,0 +1,9 @@
+{"schema":"relay.v1","type":"run.started","runId":"run-1792332972267-hbi14yr","ts":"2026-10-18T14:16:12.362Z","goal":"boxd e2e: uname","targetBranch":null}
+{"schema":"relay.v1","type":"run.created","runId":"run-1792332972267-hbi14yr","ts":"2026-10-18T14:16:12.565Z","state":"planning"}
+{"schema":"relay.v1","type":"plan.started","runId":"run-1792332972267-hbi14yr","ts":"2026-10-18T14:16:12.791Z"}
+{"schema":"relay.v1","type":"plan.ready","runId":"run-1792332972267-hbi14yr","ts":"2026-10-18T14:16:12.949Z","tasks":["task-1","task-2"],"cost":0.0005675000000000001}
+{"schema":"relay.v1","type":"tasks.creating","runId":"run-1792332972267-hbi14yr","ts":"2026-10-18T14:16:13.249Z"}
+{"schema":"relay.v1","type":"task.created","runId":"run-1792332972267-hbi14yr","ts":"2026-10-18T14:16:13.477Z","taskId":"task-1"}
+{"schema":"relay.v1","type":"task.created","runId":"run-1792332972267-hbi14yr","ts":"2026-10-18T14:16:13.665Z","taskId":"task-2"}
+{"schema":"relay.v1","type":"worker.provisioning","runId":"run-1792332972267-hbi14yr","ts":"2026-10-18T14:16:14.051Z"}
+{"schema":"relay.v1","ok":false,"error":{"code":"run_failed","message":"Action timed out","hint":"Inspect `relay events <runId>` and `relay trace <runId>`."}}

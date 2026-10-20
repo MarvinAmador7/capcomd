@@ -1,0 +1,27 @@
+{"schema":"relay.v1","type":"run.started","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:00.000Z","goal":"Add rate limiting to the public API","targetBranch":"main"}
+{"schema":"relay.v1","type":"run.created","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:00.200Z","state":"planning"}
+{"schema":"relay.v1","type":"plan.started","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:00.300Z"}
+{"schema":"relay.v1","type":"plan.ready","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:10.100Z","tasks":["task-1","task-2","task-3"],"cost":0.041}
+{"schema":"relay.v1","type":"tasks.creating","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:10.150Z"}
+{"schema":"relay.v1","type":"task.created","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:10.400Z","taskId":"task-1"}
+{"schema":"relay.v1","type":"worker.provisioning","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:10.400Z"}
+{"schema":"relay.v1","type":"task.leased","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:10.500Z","taskId":"task-1","workerId":"wrk-vm-1"}
+{"schema":"relay.v1","type":"task.created","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:10.800Z","taskId":"task-2"}
+{"schema":"relay.v1","type":"task.leased","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:10.900Z","taskId":"task-2","workerId":"wrk-vm-2"}
+{"schema":"relay.v1","type":"task.created","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:11.200Z","taskId":"task-3"}
+{"schema":"relay.v1","type":"task.leased","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:11.300Z","taskId":"task-3","workerId":"wrk-vm-3"}
+{"schema":"relay.v1","type":"worker.ready","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:13.100Z","taskId":"task-1","vmId":"vm-1"}
+{"schema":"relay.v1","type":"worker.ready","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:13.500Z","taskId":"task-2","vmId":"vm-2"}
+{"schema":"relay.v1","type":"worker.ready","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:13.900Z","taskId":"task-3","vmId":"vm-3"}
+{"schema":"relay.v1","type":"agent.status","runId":"run-demo-3tasks","ts":"2026-10-19T15:02:30.000Z","taskId":"task-1","text":"reading src/api/router.ts"}
+{"schema":"relay.v1","type":"agent.status","runId":"run-demo-3tasks","ts":"2026-10-19T15:03:41.000Z","taskId":"task-2","agentId":"agt-task-2-review","text":"sub-agent reviewing diff"}
+{"schema":"relay.v1","type":"task.verify_failed","runId":"run-demo-3tasks","ts":"2026-10-19T15:04:11.400Z","taskId":"task-3","reason":"checks failed: 2 tests"}
+{"schema":"relay.v1","type":"task.awaiting_approval","runId":"run-demo-3tasks","ts":"2026-10-19T15:05:12.700Z","taskId":"task-1","sha":"4f1c2ab"}
+{"schema":"relay.v1","type":"task.awaiting_approval","runId":"run-demo-3tasks","ts":"2026-10-19T15:06:12.100Z","taskId":"task-2","sha":"a90e113"}
+{"schema":"relay.v1","type":"task.approved","runId":"run-demo-3tasks","ts":"2026-10-19T15:06:15.000Z","taskId":"task-1","by":"marvin"}
+{"schema":"relay.v1","type":"task.merged","runId":"run-demo-3tasks","ts":"2026-10-19T15:06:18.400Z","taskId":"task-1","sha":"4f1c2ab"}
+{"schema":"relay.v1","type":"task.approved","runId":"run-demo-3tasks","ts":"2026-10-19T15:08:39.000Z","taskId":"task-2","by":"marvin"}
+{"schema":"relay.v1","type":"task.merged","runId":"run-demo-3tasks","ts":"2026-10-19T15:08:42.700Z","taskId":"task-2","sha":"a90e113"}
+{"schema":"relay.v1","type":"task.skipped","runId":"run-demo-3tasks","ts":"2026-10-19T15:08:43.000Z","taskId":"task-3","reason":"verify failed"}
+{"schema":"relay.v1","type":"run.completed","runId":"run-demo-3tasks","ts":"2026-10-19T15:08:51.950Z","merged":2,"skipped":1}
+{"schema":"relay.v1","type":"run.result","runId":"run-demo-3tasks","ts":"2026-10-19T15:08:52.000Z","ok":true,"state":"completed"}
