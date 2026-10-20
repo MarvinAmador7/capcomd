@@ -104,7 +104,16 @@ bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
 ENGINE_PID=$!
 cleanup() { [ -n "${RUN_PID:-}" ] && kill "$RUN_PID" 2>/dev/null; pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
-bun tests/chaos/ready-probe.ts "$PORT" >/dev/null || die "engine not ready (see $WORK/engine.log)"
+engine_dead() { ! kill -0 "$ENGINE_PID" 2>/dev/null; }
+engine_why() { grep -iE 'error|in use|refusing|exiting' "$WORK/engine.log" | tail -1 | cut -c1-200; }
+# Wait for readiness, but bail as soon as the engine process dies (e.g. a port bind failure).
+bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" &
+PROBE_PID=$!
+while kill -0 "$PROBE_PID" 2>/dev/null; do
+  if engine_dead; then kill "$PROBE_PID" 2>/dev/null; die "engine exited during startup: $(engine_why) (see $WORK/engine.log)"; fi
+  sleep 1
+done
+wait "$PROBE_PID" || die "engine not ready on :$PORT: $(tail -1 "$WORK/ready.err" | cut -c1-200) (see $WORK/engine.log)"
 
 echo "== 3. capcomd run 'make the failing test pass' (run $RUN_ID)"
 T_RUN0=$(date +%s)
@@ -115,6 +124,7 @@ RUN_PID=$!
 APPROVED=0
 while kill -0 "$RUN_PID" 2>/dev/null; do
   sleep 5
+  if engine_dead; then kill "$RUN_PID" 2>/dev/null; die "engine died during the run: $(engine_why) (see $WORK/engine.log)"; fi
   [ "$APPROVED" = 1 ] && continue
   if bun src/cli/index.ts status "$RUN_ID" --json 2>/dev/null | grep -q '"awaitingApproval":\[[^]]*"task-1"'; then
     bun src/cli/index.ts approve "$RUN_ID" task-1 --json >/dev/null 2>&1 && { APPROVED=1; echo "   approved task-1"; }
