@@ -38,6 +38,19 @@ export async function envBuild(p: SandboxProvider & EnvPlatform, o: BuildOptions
   const home = agentHome(o.cfg);
   const T = templateDir(o.cfg);
   const baseEnv = { PATH: agentPath(home), HOME: home };
+  // No repo → the name is known up front (pins + no lockfile): skip the VM when it is already built.
+  if (!o.repoUrl && !o.force) {
+    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash: "none", lockFile: "none", repo: "" };
+    const name = envName(manifest);
+    const existing = await p.snapshotGet(name);
+    if (existing?.status === "ready") {
+      const l = readLedger(o.ledgerPath);
+      const record = l.history.find((h) => h.name === name) ?? { name, manifest, versions: {}, builtAt: new Date().toISOString(), buildMs: 0, depsInstalled: false };
+      writeLedger({ current: record, history: l.history.some((h) => h.name === name) ? l.history : [...l.history, record] }, o.ledgerPath);
+      log(`snapshot ${name} already ready; no VM booted`);
+      return { name, cached: true, record, snapshot: existing };
+    }
+  }
   const { id } = await p.ensure({ idemKey: `capcomd-env-build-${t0}`, isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "env-build" } });
   const sh = (s: string, timeoutMs = 120_000) => p.exec(id, ["sh", "-c", s], { env: baseEnv, timeoutMs });
   const must = async (what: string, s: string, timeoutMs?: number) => {
