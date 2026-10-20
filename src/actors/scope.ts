@@ -1,3 +1,4 @@
+import { redactShapes } from "../agents/redact";
 // ADR-016 primitives, step 1: one scope actor per run. It holds the agent tree, the
 // idempotency keys and the primitive event log. Every spawn and cancel is a single
 // transaction, so children limits and the budget carve can't be raced, and a crash
@@ -398,7 +399,7 @@ export const scopeActor = actor({
       if (!params.lines.length) return { ok: true };
       await c.db.transaction(async (tx: RawAccess) => {
         const now = Date.now();
-        for (const l of params.lines) await tx.execute("INSERT INTO agent_logs (agent_id, at, stream, line) VALUES (?, ?, ?, ?)", params.agentId, now, params.stream, l.slice(0, 4000));
+        for (const l of params.lines) await tx.execute("INSERT INTO agent_logs (agent_id, at, stream, line) VALUES (?, ?, ?, ?)", params.agentId, now, params.stream, redactShapes(l).slice(0, 4000));
         await tx.execute("UPDATE agents_v2 SET heartbeat_at = ? WHERE agent_id = ?", now, params.agentId);
       }, { name: "scopeLog" });
       return { ok: true };

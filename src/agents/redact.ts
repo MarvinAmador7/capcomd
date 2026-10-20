@@ -7,7 +7,15 @@ const PATTERNS: RegExp[] = [
   /eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}/g, // JWTs (ChatGPT/codex access tokens)
   /github_pat_[A-Za-z0-9_]{20,}/g,
   /(x-access-token:)[^@\s]+(@)/g,           // tokens embedded in git URLs
+  /cct1\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}/g, // ADR-017 in-VM capability tokens
 ];
+
+/** Pattern-only deep redaction (no key heuristics): for agent-authored data stored by the engine. */
+export function redactShapes<T>(v: T): T {
+  const r = new Redactor();
+  const walk = (x: any): any => typeof x === "string" ? r.text(x) : Array.isArray(x) ? x.map(walk) : x && typeof x === "object" ? Object.fromEntries(Object.entries(x).map(([k, y]) => [k, walk(y)])) : x;
+  return walk(v);
+}
 
 export const REDACTED = "[REDACTED]";
 

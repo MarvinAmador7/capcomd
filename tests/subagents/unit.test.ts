@@ -141,3 +141,13 @@ test("skill injection: spawners get capcomd + MCP + skill; others get nothing", 
   expect(existsSync(join(no.W, "append-system.txt"))).toBe(false);
   expect(existsSync(join(no.rpcDir, "bin", "capcomd"))).toBe(false);
 }, 60_000);
+
+test("capability tokens are redacted from agent-authored logs/args", async () => {
+  const { redactShapes } = await import("../../src/agents/redact");
+  const { mint } = await import("../../src/subagents/token");
+  process.env.CAPCOMD_RPC_KEY ??= "unit-test-key";
+  const { token } = mint({ run: "run-x", sub: "agt-x", ops: ["status"] } as any);
+  const out = redactShapes({ summary: `my token is ${token}`, nested: [token] });
+  expect(JSON.stringify(out)).not.toContain(token);
+  expect(out.summary).toContain("[REDACTED]");
+});

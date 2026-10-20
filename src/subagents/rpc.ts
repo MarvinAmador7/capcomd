@@ -6,6 +6,7 @@
 // subtree. READ ops (status, await, tree, inspect, logs, events) may also see the caller's
 // parent's subtree (its siblings), so peers can coordinate and await-cycles can be detected.
 // Agent-authored text in responses (results, messages, logs) is fenced.
+import { redactShapes } from "../agents/redact";
 import { RelayError } from "../core/errors";
 import { client } from "../core/relay";
 import * as O from "../primitives/ops";
@@ -31,7 +32,8 @@ export async function handleRpc(req: RpcRequest, ctx: RpcContext): Promise<RpcRe
   const id = String(req?.id ?? "?");
   try {
     const claims = await authorize(req, ctx);
-    let result = await dispatch(claims, req.op as Op, req.args ?? {}, id);
+    // Never store a capability token (or other known secret shapes) an agent pasted into its args.
+    let result = await dispatch(claims, req.op as Op, redactShapes(req.args ?? {}), id);
     const js = JSON.stringify(result ?? null);
     if (Buffer.byteLength(js) > RESPONSE_MAX_BYTES) result = { truncated: [{ field: "response", bytes: Buffer.byteLength(js), kept: 0 }], hint: "Response too large; narrow the query (e.g. --tail, --limit, a subtree root)." };
     ctx.onCall?.(req.op, true);
