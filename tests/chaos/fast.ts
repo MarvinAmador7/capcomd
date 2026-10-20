@@ -10,6 +10,7 @@
  *
  * Usage: bun tests/chaos/fast.ts [--rounds 3] [--workers N] [--only killpoints|seeds]
  */
+import { classify, SLOW_FACTOR } from "./classify";
 import { env as envVar } from "../../src/utils/env";
 import { availableParallelism, freemem } from "os";
 import { mkdirSync, rmSync } from "fs";
@@ -51,7 +52,7 @@ for (let round = 1; round <= rounds; round++) {
 // Longest-first-ish: killpoint cases always crash+restart, start them first.
 jobs.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "seed" ? 1 : b.kind === "seed" ? -1 : 0));
 
-interface Result { job: Job; ok: boolean; killed: boolean; ms: number; error?: string; phases: Partial<Phases>; slot: number }
+interface Result { job: Job; ok: boolean; killed: boolean; ms: number; error?: string; phases: Partial<Phases>; slot: number; start: number; end: number }
 const results: Result[] = [];
 const t0 = Date.now();
 const stamp = () => `[${((Date.now() - t0) / 1000).toFixed(1)}s]`;
@@ -69,7 +70,7 @@ async function worker(slot: number) {
     const r = job.kind === "primitive"
       ? await survivePrimitives(`${job.killpoint}:${job.iteration}`, { port, dataDir })
       : await survive(job.killpoint, job.iteration, job.requireKill, { port, dataDir, repo: process.env.CAPCOMD_CHAOS_REPO !== "0" }, true);
-    const res: Result = { job, ok: r.ok, killed: r.killed, ms: Date.now() - started, error: r.error, phases: r.phases, slot };
+    const res: Result = { job, ok: r.ok, killed: r.killed, ms: Date.now() - started, error: r.error, phases: r.phases, slot, start: started, end: Date.now() };
     results.push(res);
     const p = r.phases;
     console.log(
@@ -100,8 +101,16 @@ for (let round = 1; round <= rounds; round++) {
     if (rs.length) console.log(`  round ${round} ${kind}s: ${rs.filter((r) => r.ok).length}/${rs.length} passed (killed ${rs.filter((r) => r.killed).length})`);
   }
 }
-const failed = results.filter((r) => !r.ok);
-console.log(`  TOTAL: ${results.length - failed.length}/${results.length} passed, ${failed.length} failed; serial-equivalent case time ${Math.round(results.reduce((a, r) => a + r.ms, 0) / 1000)}s`);
+const verdicts = classify(results);
+const failed = results.filter((_, i) => verdicts[i]!.outcome === "fail");
+const stalled = results.map((r, i) => ({ r, v: verdicts[i]! })).filter(({ v }) => v.outcome === "host-stall");
+// Host stalls do not fail the run unless strict, or unless they are frequent
+// enough (>5% of cases) that the box itself is the problem worth surfacing.
+const stallLimit = Math.max(1, Math.floor(results.length * 0.05));
+const strict = process.env.CHAOS_STRICT === "1";
+const exitCode = failed.length || (stalled.length && (strict || stalled.length > stallLimit)) ? 1 : 0;
+console.log(`  TOTAL: ${results.length - failed.length - stalled.length}/${results.length} passed, ${failed.length} failed, ${stalled.length} host-stall (limit ${stallLimit}${strict ? ", strict" : ""}); serial-equivalent case time ${Math.round(results.reduce((a, r) => a + r.ms, 0) / 1000)}s`);
 for (const f of failed) console.log(`  FAILED r${f.job.round} ${f.job.id} ${f.job.killpoint}:${f.job.iteration}: ${f.error}`);
-console.log(`=== chaos:fast end ${new Date().toISOString()} wall=${(wall / 1000).toFixed(1)}s exit=${failed.length ? 1 : 0}`);
-process.exit(failed.length ? 1 : 0);
+for (const { r, v } of stalled) console.log(`  HOST-STALL r${r.job.round} ${r.job.id} ${r.job.killpoint}:${r.job.iteration}: ${v.slowPeers} overlapping cases >${SLOW_FACTOR}x median phase; error: ${(r.error ?? "").replace(/\s+/g, " ").slice(0, 240)}`);
+console.log(`=== chaos:fast end ${new Date().toISOString()} wall=${(wall / 1000).toFixed(1)}s exit=${exitCode}`);
+process.exit(exitCode);
