@@ -1,6 +1,6 @@
 // TUI output contract (docs/output-contract.md): fields apps/tui depends on, from a real scripted run.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { world, newRun, spawnRoot, waitAll, type World } from "./harness";
+import { world, newRun, spawnRoot, waitAll, WORKER, type World } from "./harness";
 
 let w: World;
 beforeAll(async () => { w = await world("contract"); }, 120_000);
@@ -74,3 +74,60 @@ capcomd result --summary "done"
   expect(el.map((l: any) => l.seq)).toEqual([ev.length - 1, ev.length]);
   expect(el[0].ts).toMatch(ISO); expect("agentId" in el[0]).toBe(true);
 }, 150_000);
+
+test("contract: nested sub-agent tree keeps events, lanes and span parenting consistent (planner→lead→2 workers)", async () => {
+  const run = await newRun(w);
+  const worker = w.script("nw", WORKER);
+  const lead = w.script("nl", `
+set -e
+a=$(capcomd spawn --profile worker --task wa --key wa --children.maxChildren=0 --contract "$($S/json script='${worker}')" | $S/jget agentId)
+b=$(capcomd spawn --profile worker --task wb --key wb --children.maxChildren=0 --contract "$($S/json script='${worker}')" | $S/jget agentId)
+capcomd await "$a" "$b" --timeout-ms 60000 >/dev/null
+capcomd send parent "both workers done" >/dev/null
+capcomd result --summary "lead ok"
+`);
+  const planner = w.script("np", `
+set -e
+l=$(capcomd spawn --profile lead --task lead --key lead --children.maxChildren=2 --children.maxDepth=1 --contract "$($S/json script='${lead}')" | $S/jget agentId)
+capcomd await "$l" --timeout-ms 80000 >/dev/null
+capcomd result --summary "planner ok"
+`);
+  const root = await spawnRoot(w, run, "planner", planner);
+  const aw = await waitAll(w, run, [root], 120_000);
+  expect(aw.agents[0].status).toBe("done");
+
+  const t = (await w.cj(["tree", run])).j;
+  const all: any[] = [];
+  const walk = (n: any) => { all.push(n); n.children.forEach(walk); };
+  t.tree.forEach(walk);
+  expect(all.length).toBe(4);
+  expect(all.map((n) => n.depth).sort()).toEqual([0, 1, 2, 2]);
+  const byId = new Map(all.map((n) => [n.agentId, n]));
+
+  // events: contiguous seq; (entity, entitySeq) unique; agent-scoped events name their agent in entity + agentId
+  const ev: any[] = (await w.cj(["events", run])).j.events;
+  ev.forEach((e, i) => expect(e.seq).toBe(i + 1));
+  expect(new Set(ev.map((e) => `${e.entity}/${e.entitySeq}`)).size).toBe(ev.length);
+  const scoped = ev.filter((e) => e.entity.startsWith("scope:"));
+  for (const e of scoped) expect(e.entity).toBe(`scope:${e.agentId}`);
+  for (const ty of ["AGENT_SPAWNED", "AGENT_STARTED", "AGENT_DONE"]) {
+    const got = ev.filter((e) => e.type === ty);
+    expect(got.length).toBe(4);
+    for (const e of got) expect(byId.has(e.agentId)).toBe(true);
+  }
+  expect(ev.some((e) => e.type === "MESSAGE_SENT")).toBe(true);
+  // the TUI's sub-agent lanes: span relay.parent_agent_id == tree parent; span parent == parent's agent.run span
+  const b = (await w.cj(["inspect", run])).j;
+  const runs = (b.trace?.spans ?? []).filter((x: any) => x.name === "agent.run");
+  expect(runs.length).toBe(4);
+  for (const r of runs) {
+    const n = byId.get(r.attributes["relay.agent_id"]);
+    expect(n).toBeTruthy();
+    expect(r.spanId).toBe(n.spanId);
+    expect(r.attributes["relay.parent_agent_id"]).toBe(n.parent);
+    if (n.parent) expect(r.parentSpanId).toBe(byId.get(n.parent).spanId);
+  }
+  // rollups: workers' turns roll up through the lead to the root
+  expect(t.totals.agents).toBe(4);
+  expect(byId.get(root).rollup.agents).toBe(4);
+}, 180_000);
