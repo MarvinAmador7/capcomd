@@ -422,7 +422,15 @@ export interface RunStatus {
   goal: string;
   budget: { spent: number; maxCost: number };
   tasks: Array<{ taskId: string; state: string; targetBranch: string | null }>;
+  /** Legacy alias of pendingApprovals[].taskId. */
   awaitingApproval: string[];
+  /** TUI contract: merges parked for a human (`capcomd approve <runId> <taskId>`). */
+  pendingApprovals: Array<{ taskId: string; kind: "merge"; targetBranch: string | null; since: string | null }>;
+  /** ISO-8601 UTC of the run's first event (null if none yet); startedAtMs is the same in ms. */
+  startedAt: string | null;
+  startedAtMs: number | null;
+  /** Primitives scope runs (`capcomd run new`): agent counts and a derived state (idle|running|done|failed). */
+  scope: { state: string; agents: number; byStatus: Record<string, number> } | null;
   events: number;
 }
 
@@ -450,10 +458,31 @@ export async function getStatus(runId: string): Promise<RunStatus> {
       if (t) tasks.push({ taskId, state: t.state, targetBranch: t.context.targetBranch ?? null });
     }
   }
+  const runEvents: any[] = await c.run.get([runId]).getEvents({ runId }).catch(() => []);
+  const firstAt: number | null = runEvents.length ? Math.min(...runEvents.map((e) => Number(e.at))) : null;
+  const pending = [] as RunStatus["pendingApprovals"];
+  for (const t of tasks.filter((t) => t.state === "awaiting_approval")) {
+    const evs: any[] = await c.taskBoard.getOrCreate([runId]).getTaskEvents({ taskId: t.taskId }).catch(() => []);
+    const at = evs.filter((e) => /approval/i.test(String(e.event?.type ?? ""))).map((e) => Number(e.at)).pop();
+    pending.push({ taskId: t.taskId, kind: "merge", targetBranch: t.targetBranch, since: at ? new Date(at).toISOString() : null });
+  }
+  let scope: RunStatus["scope"] = null;
+  const agents: any[] | null = await c.scope.getOrCreate([runId]).listAgents({}).catch(() => null);
+  if (agents && agents.length) {
+    const byStatus: Record<string, number> = {};
+    for (const a of agents) byStatus[a.status] = (byStatus[a.status] ?? 0) + 1;
+    const live = agents.some((a) => !["done", "failed", "cancelled"].includes(a.status));
+    const roots = agents.filter((a) => !a.parent);
+    scope = { state: live ? "running" : roots.every((a) => a.status === "done") ? "done" : "failed", agents: agents.length, byStatus };
+  }
   return {
     runId: run.runId,
     state: run.state,
     goal: run.context.goal,
+    startedAt: firstAt ? new Date(firstAt).toISOString() : null,
+    startedAtMs: firstAt,
+    pendingApprovals: pending,
+    scope,
     budget: { spent: run.context.budget?.spent ?? 0, maxCost: run.context.budget?.maxCost ?? 0 },
     tasks,
     awaitingApproval: tasks.filter((t) => t.state === "awaiting_approval").map((t) => t.taskId),

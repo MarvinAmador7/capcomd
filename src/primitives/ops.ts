@@ -118,7 +118,23 @@ export async function treeOf(runId: string, root?: string) {
   const s = client().scope.getOrCreate([runId]);
   const all: ScopeAgent[] = await s.listAgents({});
   if (root && !all.some((a) => a.agentId === root)) throw new RelayError("not_found", `agent ${root} not found in ${runId}`, "Check ids with `capcomd tree <runId>`.");
-  return { runId, root: root ?? null, tree: treeView(all, root), totals: rollupTotals(all, root) };
+  // TUI contract: per-node startedAt/endedAt (ISO, null until known), taskId (worker task label), spanId (agent.run).
+  const times = new Map<string, { s?: number; e?: number }>();
+  for (const ev of await s.getEvents({}).catch(() => [] as any[])) {
+    if (!ev.agentId) continue;
+    const t = times.get(ev.agentId) ?? {};
+    if (ev.type === "AGENT_STARTED" && t.s === undefined) t.s = ev.at;
+    if (["AGENT_DONE", "AGENT_FAILED", "AGENT_CANCELLED", "AGENT_REAPED"].includes(ev.type)) t.e = ev.at;
+    times.set(ev.agentId, t);
+  }
+  const byId = new Map(all.map((a) => [a.agentId, a]));
+  const iso = (n?: number) => (n ? new Date(n).toISOString() : null);
+  const decorate = (n: any): any => {
+    const a = byId.get(n.agentId)!; const t = times.get(n.agentId) ?? {};
+    return { ...n, parent: a.parent ?? null, createdAt: iso(a.createdAt), startedAt: iso(t.s), endedAt: TERMINAL_AGENT.has(a.status) ? iso(t.e ?? a.updatedAt) : null,
+      taskId: taskLabelOf(a, a.agentId), spanId: agentSpanId(runId, a.agentId), children: n.children.map(decorate) };
+  };
+  return { runId, root: root ?? null, tree: treeView(all, root).map(decorate), totals: rollupTotals(all, root) };
 }
 function rollupTotals(all: ScopeAgent[], root?: string) {
   const ids = root ? subtree(all, root) : new Set(all.map((a) => a.agentId));
