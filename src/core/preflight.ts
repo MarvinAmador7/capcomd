@@ -22,7 +22,7 @@ async function defaultBoxdList(apiKey: string) {
   try { return await c.machines.list(); } finally { await c.close?.().catch(() => {}); }
 }
 
-export async function runPreflight(source: Record<string, string | undefined> = process.env, deps: PreflightDeps = {}): Promise<PreflightCheck[]> {
+export async function runPreflight(source: Record<string, string | undefined> = process.env, deps: PreflightDeps = {}, profile?: string): Promise<PreflightCheck[]> {
   const out: PreflightCheck[] = [];
   const boxdKey = source.BOXD_API_KEY?.trim();
   const anthKey = source.ANTHROPIC_API_KEY?.trim();
@@ -40,14 +40,32 @@ export async function runPreflight(source: Record<string, string | undefined> = 
     }
   }
 
-  const agent = (envVar("AGENT", source) ?? "fake").toLowerCase();
-  const credMode = (envVar("CREDENTIALS", source) ?? "auto").toLowerCase();
+  const { credentialModeFor } = require("../agents/config") as typeof import("../agents/config");
+  const { profileFor } = require("../auth/profiles") as typeof import("../auth/profiles");
+  const { resolveAgent } = require("../agents/profiles") as typeof import("../agents/profiles");
+  let agent: string = "fake";
+  let credMode: string = "auto";
+  try {
+    const ra = resolveAgent(profile, source);
+    agent = ra.kind;
+    if (agent !== "fake") credMode = credentialModeFor(ra.kind, source, ra.spec?.auth);
+  } catch (e) {
+    // Bad profile file, unknown profile, or both/neither credentials configured.
+    out.push({ name: "agent", ok: false, detail: r.text((e as Error).message) });
+    return out.map((c) => ({ ...c, detail: r.text(c.detail) }));
+  }
   const spec = agent === "claude-code"
     ? { name: "anthropic", env: "ANTHROPIC_API_KEY", label: "Anthropic", url: "https://api.anthropic.com/v1/models?limit=1", headers: (k: string) => ({ "x-api-key": k, "anthropic-version": "2023-06-01" }) }
     : agent === "codex"
       ? { name: "openai", env: "OPENAI_API_KEY", label: "OpenAI", url: "https://api.openai.com/v1/models", headers: (k: string) => ({ Authorization: `Bearer ${k}` }) }
       : null;
-  if (spec) {
+  if (spec && credMode === "subscription") {
+    // Plan login: no API key needed. The login itself is checked by `capcomd auth status` / doctor.
+    const prof = profileFor(agent, source);
+    out.push(prof
+      ? { name: spec.name, ok: true, detail: `subscription login (${prof.method}, ${prof.store === "secret" ? "boxd secret" : prof.snapshot}); no API key needed` }
+      : { name: spec.name, ok: false, detail: `CAPCOMD_CREDENTIALS=subscription but no auth profile; run \`capcomd auth login ${agent === "codex" ? "codex" : "claude"}\`` });
+  } else if (spec) {
     const key = source[spec.env]?.trim();
     r.add(key);
     if (!key) {

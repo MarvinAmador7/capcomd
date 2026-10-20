@@ -37,7 +37,9 @@ describe("preflight", () => {
     expect(r.find((c) => c.name === "anthropic")).toMatchObject({ ok: false });
     expect(r.find((c) => c.name === "anthropic")!.detail).toContain("ANTHROPIC_API_KEY was rejected (HTTP 401)");
     const m = await runPreflight({ CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "claude-code" }, { boxdList: async () => [], fetch: okFetch });
-    expect(m.map((c) => c.detail)).toEqual(["BOXD_API_KEY is not set", "ANTHROPIC_API_KEY is not set (or run `capcomd secrets sync` and set CAPCOMD_CREDENTIALS=secret)"]);
+    expect(m.map((c) => c.detail)).toEqual(["BOXD_API_KEY is not set", "claude-code: no credentials configured; set auth (agent profile or CAPCOMD_AUTH) and either ANTHROPIC_API_KEY or `capcomd auth login claude`"]);
+    const forced = await runPreflight({ CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "claude-code", CAPCOMD_AUTH: "apikey" }, { boxdList: async () => [], fetch: okFetch });
+    expect(forced[1]!.detail).toContain("ANTHROPIC_API_KEY is not set");
     expect(JSON.stringify(r)).not.toContain(ANTH);
   });
 

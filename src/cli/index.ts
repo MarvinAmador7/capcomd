@@ -26,6 +26,10 @@ capcomd - agent orchestration CLI
 Usage:
   capcomd serve                          Start the Rivet engine (port 6420)
   capcomd run <goal> [--run-id ID] [--target-branch B] [--detach]
+             [--profile NAME] [--set key=value]... [--overrides JSON] [--operator]
+                                       Pick an agent profile; overrides only narrow it
+                                       (e.g. --set children.maxDepth=1 --set maxTurns=10)
+                                       unless --operator
                                        Start or resume a run
   capcomd status <runId>                 Show run status
   capcomd cancel <runId>                 Cancel a run
@@ -35,6 +39,15 @@ Usage:
   capcomd approve <runId> <taskId>       Approve a merge parked in awaiting_approval
   capcomd env build [--force]            Bake agent CLIs + repo deps into a boxd snapshot (no secrets)
   capcomd env status | env rm [name|all] List / delete env snapshots
+  capcomd agents list|show|add|set|rm|schema|validate
+                                       Named agent profiles (.capcomd/agents.json): provider, auth
+                                       (apikey|subscription, exactly one), model, limits, prompts, tools.
+                                       add/set flags: --provider --auth --model --max-turns --budget
+                                       --timeout-ms --sandbox --egress --system-prompt
+                                       --append-system-prompt --allowed-tools --disallowed-tools
+                                       --description --default --spec JSON --unset k1,k2
+  capcomd auth login claude|codex        Log in with your Claude/ChatGPT plan in a VM; saves a private auth profile
+  capcomd auth status [agent] [--quick]  Verify saved logins   |   capcomd auth logout claude|codex
   capcomd secrets sync                   Store local ANTHROPIC/OPENAI keys as boxd host-bound secrets
   capcomd doctor                         Check agents + credentials inside a snapshot VM
   capcomd mcp                            Serve the capcomd tools over MCP (stdio)
@@ -47,6 +60,12 @@ Options:
 
 Exit codes: 0 ok, 1 run failed, 2 usage, 3 not found, 4 engine unreachable
 `;
+
+function deepMerge(a: Record<string, any>, b: Record<string, any>): Record<string, any> {
+  const o: Record<string, any> = { ...a };
+  for (const [k, v] of Object.entries(b)) o[k] = v && typeof v === "object" && !Array.isArray(v) && o[k] && typeof o[k] === "object" ? deepMerge(o[k], v) : v;
+  return o;
+}
 
 function usage(message: string): never {
   throw new RelayError("usage", message, "Run `capcomd --help` for usage.");
@@ -68,6 +87,28 @@ async function main(argv: string[]): Promise<number> {
         limit: { type: "string" },
         by: { type: "string" },
         force: { type: "boolean" },
+        quick: { type: "boolean" },
+        agent: { type: "string" },
+        profile: { type: "string" },
+        set: { type: "string", multiple: true },
+        overrides: { type: "string" },
+        operator: { type: "boolean" },
+        provider: { type: "string" },
+        auth: { type: "string" },
+        model: { type: "string" },
+        "max-turns": { type: "string" },
+        budget: { type: "string" },
+        "timeout-ms": { type: "string" },
+        sandbox: { type: "string" },
+        egress: { type: "string" },
+        "system-prompt": { type: "string" },
+        "append-system-prompt": { type: "string" },
+        "allowed-tools": { type: "string" },
+        "disallowed-tools": { type: "string" },
+        description: { type: "string" },
+        default: { type: "boolean" },
+        spec: { type: "string" },
+        unset: { type: "string" },
       },
       allowPositionals: true,
       strict: true,
@@ -93,9 +134,14 @@ async function main(argv: string[]): Promise<number> {
     switch (command) {
       case "env":
       case "secrets":
+      case "auth":
       case "doctor": {
         const { envCommand } = await import("./commands/env");
         return await envCommand(command, positionals, values as any);
+      }
+      case "agents": {
+        const { agentsCommand } = await import("./commands/agents");
+        return await agentsCommand(positionals, values as any);
       }
       case "serve":
         await serve({ port: parseInt(values.port as string, 10) });
@@ -112,8 +158,26 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case "run": {
-        const goal = positionals[1];
-        if (!goal) usage("goal required: capcomd run <goal>");
+        const rawGoal = positionals[1];
+        if (!rawGoal) usage("goal required: capcomd run <goal>");
+        // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
+        // the planner/worker/preflight read. Overrides may only narrow the profile unless --operator.
+        const agentFlag = (values.profile ?? values.agent) as string | undefined;
+        const sets = (values.set as string[] | undefined) ?? [];
+        if ((sets.length || values.overrides || values.operator) && !agentFlag) usage("--set/--overrides/--operator need --profile NAME");
+        let goal = rawGoal;
+        if (agentFlag) {
+          if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(agentFlag)) usage(`invalid --profile ${agentFlag}`);
+          const P = await import("../agents/profiles");
+          let set: Record<string, unknown> = {};
+          try {
+            if (values.overrides) set = JSON.parse(values.overrides as string);
+            set = deepMerge(set, P.parseSetPairs(sets));
+          } catch (e) { usage(`bad override: ${(e as Error).message}`); }
+          const ref = P.encodeAgentRef(agentFlag, { set, operator: !!values.operator });
+          try { P.resolveAgent(ref); } catch (e) { throw new RelayError("config", (e as Error).message, "Overrides may only narrow the profile (fewer turns/budget/tools/egress, stricter sandbox, smaller children limits); pass --operator to widen deliberately."); }
+          if (!/^\s*\[agent:/i.test(rawGoal)) goal = `[agent:${ref}] ${rawGoal}`;
+        }
         const runId = (values["run-id"] as string | undefined) ?? generateRunId();
         const targetBranch = values["target-branch"] as string | undefined;
         await assertEngine();

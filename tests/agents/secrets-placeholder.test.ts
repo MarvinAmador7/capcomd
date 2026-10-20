@@ -24,7 +24,7 @@ async function setup(a: AgentAdapter, over: Record<string, string> = {}, sync = 
   if (sync) await secretsSync(provider, { ANTHROPIC_API_KEY: ANTH, OPENAI_API_KEY: OPENAI });
   const { id } = await provider.ensure({ idemKey: `s-${Math.random()}`, isolated: true, ttlSeconds: 60, egressAllow: agentEgress(a.kind), labels: {} });
   await provider.waitReady(id, 1000);
-  const cfg = loadAgentConfig({ CAPCOMD_AGENT: a.kind, CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_BIN: BIN[a.kind]!, CAPCOMD_AGENT_POLL_MS: "50", ...over });
+  const cfg = loadAgentConfig({ CAPCOMD_AGENT: a.kind, CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_BIN: BIN[a.kind]!, CAPCOMD_AGENT_POLL_MS: "50", CAPCOMD_AUTH: "apikey", ...over });
   const task = { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: r.bare, goal: "make the failing test pass" };
   return { provider, id, cfg, task, log, W: join(workdir, "task-1-e1") };
 }

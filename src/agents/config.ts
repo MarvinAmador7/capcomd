@@ -4,10 +4,10 @@ export type AgentKind = "fake" | "claude-code" | "codex";
 export type RealAgent = Exclude<AgentKind, "fake">;
 
 /** CAPCOMD_AGENT=claude-code|codex selects a real worker; default (unset/"fake") keeps the local fake work. */
-export function agentFromEnv(source: Record<string, string | undefined> = process.env): AgentKind {
-  const v = (envVar("AGENT", source) ?? "fake").toLowerCase();
-  if (v === "fake" || v === "claude-code" || v === "codex") return v;
-  throw new Error(`Unknown CAPCOMD_AGENT=${v} (expected fake|claude-code|codex)`);
+export function agentFromEnv(source: Record<string, string | undefined> = process.env, profile?: string | null): AgentKind {
+  // CAPCOMD_AGENT may be a provider kind or a profile name; else the agents file's default; else fake.
+  const { resolveAgent } = require("./profiles") as typeof import("./profiles");
+  return resolveAgent(profile, source).kind;
 }
 export const isRealAgent = (k: AgentKind): k is RealAgent => k !== "fake";
 
@@ -35,6 +35,35 @@ export function agentEgress(kind: RealAgent): string[] {
   return [...BASE_EGRESS.slice(0, 1), AGENT_API_HOST[kind], ...BASE_EGRESS.slice(1)];
 }
 
+/** ChatGPT-plan codex talks to the ChatGPT backend and refreshes via auth.openai.com (verify live). */
+export const CODEX_SUBSCRIPTION_HOSTS = ["chatgpt.com", "auth.openai.com"];
+
+/**
+ * Credential mode, strictly one of API key or subscription per agent (no fallback between them):
+ * CAPCOMD_CREDENTIALS (override) → the profile's `auth` → CAPCOMD_AUTH → inferred only when exactly one
+ * of {local API key, auth-login profile} exists; both or neither is a configuration error.
+ * apikey maps to "auto" (boxd secret placeholder, else the local key), or "secret"/"env" when forced.
+ */
+export function credentialModeFor(kind: AgentKind, source: Record<string, string | undefined> = process.env, auth?: "apikey" | "subscription"): AgentConfig["credentialMode"] {
+  const explicit = envVar("CREDENTIALS", source)?.toLowerCase();
+  if (explicit) {
+    if (!["secret", "env", "subscription", "auto"].includes(explicit)) throw new Error(`CAPCOMD_CREDENTIALS=${explicit} is invalid (subscription|auto|secret|env)`);
+    return explicit as AgentConfig["credentialMode"];
+  }
+  if (!isRealAgent(kind)) return "auto";
+  const a = auth ?? (envVar("AUTH", source)?.toLowerCase() as typeof auth | undefined);
+  if (a) {
+    if (a !== "apikey" && a !== "subscription") throw new Error(`CAPCOMD_AUTH=${a} is invalid (apikey|subscription)`);
+    return a === "subscription" ? "subscription" : "auto";
+  }
+  const { profileFor } = require("../auth/profiles") as typeof import("../auth/profiles");
+  const keyName = kind === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const hasKey = !!source[keyName]?.trim(), hasSub = !!profileFor(kind, source);
+  if (hasKey && hasSub) throw new Error(`${kind}: both ${keyName} and a subscription login are configured; choose one (agent profile auth, or CAPCOMD_AUTH=apikey|subscription)`);
+  if (!hasKey && !hasSub) throw new Error(`${kind}: no credentials configured; set auth (agent profile or CAPCOMD_AUTH) and either ${keyName} or \`capcomd auth login ${kind === "codex" ? "codex" : "claude"}\``);
+  return hasSub ? "subscription" : "auto";
+}
+
 export interface AgentConfig {
   version: string;
   codexVersion: string;
@@ -57,24 +86,35 @@ export interface AgentConfig {
   /** USD per million tokens, for the codex budget guard (codex exec reports tokens, not cost). */
   codexUsdPerMtokIn: number;
   codexUsdPerMtokOut: number;
-  /** "auto" (prefer a boxd host-bound secret placeholder, else env injection), "secret" (require it), "env". */
-  credentialMode: "auto" | "secret" | "env";
+  /** Profile name this config came from (null: env only). */
+  profile: string | null;
+  systemPrompt?: string;
+  appendSystemPrompt?: string;
+  /**
+   * "subscription" (Claude/ChatGPT plan login from `capcomd auth login`; no API key), "auto" (prefer a
+   * boxd host-bound secret placeholder, else env injection), "secret" (require it), "env".
+   * Default: subscription when an auth profile exists for the agent, else auto.
+   */
+  credentialMode: "auto" | "secret" | "env" | "subscription";
 }
 
 const list = (v: string | undefined, d: string[]) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : d);
 
-export function loadAgentConfig(source: Record<string, string | undefined> = process.env): AgentConfig {
+export function loadAgentConfig(source: Record<string, string | undefined> = process.env, profileName?: string | null): AgentConfig {
+  const { resolveAgent } = require("./profiles") as typeof import("./profiles");
+  const ra = resolveAgent(profileName, source);
+  const spec = ra.spec;
+  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs };
   const num = (name: string, d: number) => {
     const v = envVar(name, source);
-    const n = v === undefined ? d : Number(v);
+    const n = v === undefined ? (specNum[name] ?? d) : Number(v);
     if (!Number.isFinite(n) || n <= 0) throw new Error(`CAPCOMD_${name} must be a positive number`);
     return n;
   };
-  const kind = agentFromEnv(source);
-  const sandbox = (envVar("CODEX_SANDBOX", source) ?? "workspace-write") as AgentConfig["codexSandbox"];
+  const kind = ra.kind;
+  const sandbox = (envVar("CODEX_SANDBOX", source) ?? spec?.sandbox ?? "workspace-write") as AgentConfig["codexSandbox"];
   if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) throw new Error(`CAPCOMD_CODEX_SANDBOX=${sandbox} is invalid`);
-  const cred = (envVar("CREDENTIALS", source) ?? "auto") as AgentConfig["credentialMode"];
-  if (!["auto", "secret", "env"].includes(cred)) throw new Error(`CAPCOMD_CREDENTIALS=${cred} is invalid (auto|secret|env)`);
+  const cred = credentialModeFor(kind, source, spec?.auth);
   return {
     version: envVar("CLAUDE_CODE_VERSION", source) ?? CLAUDE_CODE_VERSION,
     codexVersion: envVar("CODEX_VERSION", source) ?? CODEX_VERSION,
@@ -83,13 +123,16 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     maxBudgetUsd: num("AGENT_MAX_BUDGET_USD", 2),
     timeoutMs: num("AGENT_TIMEOUT_MS", 20 * 60_000),
     pollMs: num("AGENT_POLL_MS", 2000),
-    allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), DEFAULT_ALLOWED_TOOLS),
-    disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), DEFAULT_DISALLOWED_TOOLS),
-    model: envVar("AGENT_MODEL", source),
+    allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? DEFAULT_ALLOWED_TOOLS),
+    disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), spec?.disallowedTools ?? DEFAULT_DISALLOWED_TOOLS),
+    model: envVar("AGENT_MODEL", source) ?? spec?.model,
+    profile: ra.name,
+    systemPrompt: spec?.systemPrompt,
+    appendSystemPrompt: spec?.appendSystemPrompt,
     workdir: envVar("AGENT_WORKDIR", source) ?? "/var/tmp/capcomd",
     claudeBin: envVar("AGENT_CLAUDE_BIN", source),
     agentBin: envVar("AGENT_BIN", source),
-    egress: list(envVar("AGENT_EGRESS", source), kind === "codex" ? agentEgress("codex") : AGENT_EGRESS),
+    egress: list(envVar("AGENT_EGRESS", source), spec?.egress ?? (kind === "codex" ? (cred === "subscription" ? [...agentEgress("codex"), ...CODEX_SUBSCRIPTION_HOSTS] : agentEgress("codex")) : AGENT_EGRESS)),
     codexSandbox: sandbox,
     codexUsdPerMtokIn: num("CODEX_USD_PER_MTOK_IN", 1.25),
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),

@@ -1,5 +1,6 @@
 // Data-returning operations shared by the CLI (`--json` and human output) and `capcomd mcp`.
 import { preflightNeeded, runPreflight } from "./preflight";
+import { parseAgentDirective } from "../agents/profiles";
 import { BOXD_AUTH_HINT, isBoxdAuthError } from "../providers/boxd-errors";
 import { createClient } from "rivetkit/client";
 import type { Registry } from "../registry";
@@ -111,7 +112,7 @@ export async function executeRun(opts: RunOptions): Promise<RunResult> {
   // Recovery reap: a crashed earlier attempt may have left a sandbox behind.
   // Real sandbox: validate credentials before creating the run (fail fast, never print keys).
   if (preflightNeeded()) {
-    const bad = (await runPreflight()).filter((x) => !x.ok);
+    const bad = (await runPreflight(process.env, {}, parseAgentDirective(opts.goal).agent)).filter((x) => !x.ok);
     if (bad.length) throw new RelayError("config", `Preflight failed: ${bad.map((x) => x.detail).join("; ")}`, "Fix the credentials above, then rerun. (CAPCOMD_SKIP_PREFLIGHT=1 skips this check.)");
   }
   await reapSandboxes(client(), runId).catch(() => {});
@@ -183,7 +184,10 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
           const stored = await plannerHandle.getPlanner({ plannerId });
           await runHandle.chargeBudget({ runId, chargeId: `${runId}-plan`, amount: stored?.context?.cost ?? 0 });
         }
-        await runHandle.planReady({ runId, tasks: tasks! });
+        const pctx = (await plannerHandle.getPlanner({ plannerId }))?.context;
+        const agents: Record<string, unknown> = {};
+        for (const t of (pctx?.tasks ?? []) as any[]) if (t && typeof t === "object" && t.agentSpec) agents[t.id] = t.agentSpec;
+        await runHandle.planReady({ runId, tasks: tasks!, ...(Object.keys(agents).length ? { agents } : {}) });
       }
     }
 
@@ -195,6 +199,14 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
       const t = (plannerCtx?.tasks ?? []).find((x: any) => typeof x === "object" && x.id === taskId) as { goal?: string } | undefined;
       return t?.goal ?? `Task ${taskId}`;
     };
+    // Agent profile per task (planner, from a `[agent:NAME]` goal directive / `capcomd run --agent`).
+    const agentOf = (taskId: string): string | undefined => {
+      const t = (plannerCtx?.tasks ?? []).find((x: any) => typeof x === "object" && x.id === taskId) as { agent?: string } | undefined;
+      return t?.agent;
+    };
+    for (const t of (plannerCtx?.tasks ?? []) as any[]) {
+      if (t && typeof t === "object" && t.agentSpec) emit("agent.resolved", { taskId: t.id, agent: t.agentSpec }, `  agent for ${t.id}: ${t.agentSpec.name ?? t.agentSpec.kind}${t.agentSpec.overridden ? " (overridden)" : ""}`);
+    }
     emit("tasks.creating", {}, "\n→ Creating tasks...");
     const taskBoardHandle = c.taskBoard.getOrCreate([runId]);
     for (const taskId of tasks) {
@@ -221,7 +233,8 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
     const workerHandle = c.worker.getOrCreate([runId, workerId]);
     let worker = await workerHandle.getWorker({ workerId });
     if (!worker || worker.state === "provisioning" || worker.state === "failed") {
-      await workerHandle.provisionWorker({ workerId, runId, epoch: 1 });
+      const firstAgent = agentOf(tasks[0]!);
+      await workerHandle.provisionWorker({ workerId, runId, epoch: 1, ...(firstAgent ? { agent: firstAgent } : {}) });
       worker = await workerHandle.getWorker({ workerId });
     }
     emit("worker.ready", { workerId, state: worker?.state ?? "unknown" }, `✓ Worker ${workerId} ready (${worker?.state ?? "unknown"})`);
@@ -269,6 +282,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
           const pushed = await workerHandle.pushBranch({
             workerId, taskId, epoch, branch, runId, target, rework: !!task.context.conflict,
             goal: String(task.context.goal ?? goalOf(taskId)), conflictFiles: task.context.conflict?.files,
+            ...(agentOf(taskId) ? { agent: agentOf(taskId) } : {}),
           });
           const agentCost = Number((pushed as any).costUsd ?? 0);
           if (agentCost > 0) await runHandle.chargeBudget({ runId, chargeId: `${runId}-${taskId}-e${epoch}-agent`, amount: agentCost });

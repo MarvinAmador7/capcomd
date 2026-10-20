@@ -75,6 +75,8 @@ export const runActor = actor({
       params: {
         runId: string;
         tasks: string[];
+        /** Effective resolved agent spec per task (real agents), recorded in the run's event log. */
+        agents?: Record<string, unknown>;
       }
     ) {
       const { runId, tasks } = params;
@@ -90,7 +92,7 @@ export const runActor = actor({
         context: runContext,
       });
 
-      const event = { type: "PLAN_READY" as const, tasks };
+      const event = { type: "PLAN_READY" as const, tasks, ...(params.agents && Object.keys(params.agents).length ? { agents: params.agents } : {}) };
 
       if (!runSnapshot.can(event)) {
         throw new Error(

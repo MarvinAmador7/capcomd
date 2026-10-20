@@ -29,7 +29,10 @@ export interface AgentResult {
   stopReason: string;
   events: number;
   /** How the API credential reached the agent: boxd host-bound secret placeholder, or env injection. */
-  credentialMode?: "secret" | "env";
+  credentialMode?: "secret" | "env" | "subscription";
+  /** "subscription": costUsd is 0 and notionalCostUsd holds what the CLI estimated. */
+  billing?: "api" | "subscription";
+  notionalCostUsd?: number;
   agentVersion?: string;
 }
 
@@ -128,7 +131,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
   };
   const key = taskKey(task.runId, task.taskId);
   const attrs = {
-    "agent.kind": name, "relay.run_id": task.runId, "relay.task_id": task.taskId, "relay.epoch": task.epoch,
+    "agent.kind": name, "agent.profile": cfg.profile ?? "", "relay.run_id": task.runId, "relay.task_id": task.taskId, "relay.epoch": task.epoch,
     "git.branch": task.branch, "agent.max_turns": cfg.maxTurns, "agent.max_budget_usd": cfg.maxBudgetUsd,
   };
 
@@ -181,33 +184,51 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     // 3. Credential: a boxd host-bound secret shows up as a bxds_ placeholder (the real key is substituted
     //    only on egress to the API host). Fall back to injecting the key into the start exec's env.
     let credential: string | undefined;
-    let credentialMode: "secret" | "env" = "env";
-    if (cfg.credentialMode !== "env") {
-      const pe = await sh(`printenv ${adapter.secretName} 2>/dev/null; true`);
-      const v = pe.stdout.trim();
-      if (v.startsWith(SECRET_PLACEHOLDER_PREFIX)) { credential = v; credentialMode = "secret"; }
-    }
-    if (!credential) {
-      if (cfg.credentialMode === "secret") throw new AgentError("credentials", `CAPCOMD_CREDENTIALS=secret but the VM has no ${adapter.secretName} placeholder; run \`capcomd secrets sync\``);
-      if (!opts.apiKey) throw new AgentError("credentials", `no ${adapter.secretName}: set it locally or run \`capcomd secrets sync\``);
-      credential = opts.apiKey;
+    let credentialMode: "secret" | "env" | "subscription" = "env";
+    let prelude = "";
+    if (cfg.credentialMode === "subscription") {
+      const chk = (await sh(adapter.subscriptionCheck(home, sq))).stdout;
+      if (!/secret|file/.test(chk)) throw new AgentError("credentials", `no ${name} subscription login in this VM; run \`capcomd auth login ${name === "claude-code" ? "claude" : "codex"}\``);
+      credentialMode = "subscription";
+      prelude = adapter.subscriptionPrelude(home, sq);
+    } else {
+      if (cfg.credentialMode !== "env") {
+        const pe = await sh(`printenv ${adapter.secretName} 2>/dev/null; true`);
+        const v = pe.stdout.trim();
+        if (v.startsWith(SECRET_PLACEHOLDER_PREFIX)) { credential = v; credentialMode = "secret"; }
+      }
+      if (!credential) {
+        if (cfg.credentialMode === "secret") throw new AgentError("credentials", `CAPCOMD_CREDENTIALS=secret but the VM has no ${adapter.secretName} placeholder; run \`capcomd secrets sync\``);
+        if (!opts.apiKey) throw new AgentError("credentials", `no ${adapter.secretName}: run \`capcomd auth login\`, set the key locally, or \`capcomd secrets sync\``);
+        credential = opts.apiKey;
+      }
     }
     setSpanAttributes(span, { "agent.credential_mode": credentialMode });
 
     // 4. Run headless in the background; the JSON event stream lands in a file we tail.
-    await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(buildPrompt(task))));
+    // Profile prompts: claude takes flags; codex has none, so they wrap the prompt text.
+    let promptText = buildPrompt(task);
+    let systemFile: string | undefined, appendSystemFile: string | undefined;
+    if (adapter.kind === "claude-code") {
+      if (cfg.systemPrompt) { systemFile = `${W}/system.txt`; await provider.upload(vmId, systemFile, new TextEncoder().encode(r.text(cfg.systemPrompt))); }
+      if (cfg.appendSystemPrompt) { appendSystemFile = `${W}/append-system.txt`; await provider.upload(vmId, appendSystemFile, new TextEncoder().encode(r.text(cfg.appendSystemPrompt))); }
+    } else {
+      promptText = [cfg.systemPrompt, promptText, cfg.appendSystemPrompt].filter(Boolean).join("\n\n");
+    }
+    await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(promptText)));
     const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`;
     const script = [
       "#!/bin/sh",
       `cd ${sq(repo)} || exit 97`,
       `echo $$ > ${sq(pidFile)}`,
-      `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg }, sq)}`,
+      ...(prelude ? [prelude] : []),
+      `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile }, sq)}`,
       `echo $? > ${sq(exitFile)}`,
     ].join("\n");
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));
     // The credential exists only in this exec's env (inherited by the agent). Never logged.
     must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
-      { ...adapter.baseEnv(), ...adapter.credentialEnv(credential) }), `start ${name}`, "failed");
+      { ...adapter.baseEnv(), ...(credential ? adapter.credentialEnv(credential) : {}) }), `start ${name}`, "failed");
 
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
     const deadline = now() + cfg.timeoutMs + 30_000;
@@ -256,7 +277,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     await drain(true);
 
     const out = adapter.outcome(state, exitCode!);
-    const { costUsd, turns } = state;
+    const billing = credentialMode === "subscription" ? "subscription" : "api";
+    const notionalCostUsd = state.costUsd;
+    const costUsd = billing === "subscription" ? 0 : state.costUsd;
+    const { turns } = state;
+    setSpanAttributes(span, { "agent.billing": billing, "agent.notional_cost_usd": notionalCostUsd });
     setSpanAttributes(span, { "agent.exit_code": exitCode, "agent.cost_usd": costUsd, "agent.turns": turns, "agent.stop_reason": out.stopReason, "agent.events": state.events, "gen_ai.response.cost": costUsd, "gen_ai.usage.input_tokens": state.inputTokens, "gen_ai.usage.output_tokens": state.outputTokens });
     if (out.stopReason === "timeout") throw new AgentError("timeout", `${name} hit the ${cfg.timeoutMs}ms timeout for ${key}`);
     if (!out.ok) {
@@ -279,6 +304,6 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const lease = branchExists ? `--force-with-lease=refs/heads/${task.branch}` : `--force-with-lease=refs/heads/${task.branch}:`;
     must(await git(["push", "--porcelain", lease, "origin", `HEAD:refs/heads/${task.branch}`], repo, 300_000), "git push");
     setSpanAttributes(span, { "git.sha": sha });
-    return { sha, already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version };
+    return { sha, already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd };
   });
 }

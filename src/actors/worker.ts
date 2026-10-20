@@ -19,18 +19,26 @@ import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { runAgent } from "../agents/runner";
 import { adapterFor } from "../agents/adapters";
 import { resolveEnvSnapshot } from "../env/resolve";
+import { profileFor } from "../auth/profiles";
+import { effectiveAgentRecord } from "../agents/profiles";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
 /** claude-code VMs may reach only GitHub, the Anthropic API and the package registries the bootstrap needs. */
 /** Real-agent VMs boot from the `capcomd env build` snapshot when one exists (else the default image). */
-function snapshotSpec(): { fromSnapshot?: string } {
-  if (!isRealAgent(agentFromEnv())) return {};
+function snapshotSpec(profile?: string): { fromSnapshot?: string } {
+  const agent = agentFromEnv(process.env, profile);
+  if (!isRealAgent(agent)) return {};
+  // Plan login (capcomd auth login): boot from the auth profile's snapshot when it has one.
+  if (loadAgentConfig(process.env, profile).credentialMode === "subscription") {
+    const prof = profileFor(agent);
+    if (prof?.snapshot) return { fromSnapshot: prof.snapshot };
+  }
   const snap = resolveEnvSnapshot();
   return snap ? { fromSnapshot: snap } : {};
 }
 
-function egressAllow(): string[] {
-  return isRealAgent(agentFromEnv()) ? loadAgentConfig().egress : LEGACY_EGRESS;
+function egressAllow(profile?: string): string[] {
+  return isRealAgent(agentFromEnv(process.env, profile)) ? loadAgentConfig(process.env, profile).egress : LEGACY_EGRESS;
 }
 
 
@@ -112,6 +120,8 @@ export const workerActor = actor({
         workerId: string;
         runId: string;
         epoch: number;
+        /** Agent profile name (.capcomd/agents.json) for this worker's task. */
+        agent?: string;
       }
     ) {
       const { workerId, runId, epoch } = params;
@@ -143,7 +153,7 @@ export const workerActor = actor({
             "worker",
             snapshot.value as string,
             snapshot.context,
-            { type: "PROVISIONING" },
+            { type: "PROVISIONING", ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
             `worker-${workerId}-provisioning`,
             [
               {
@@ -166,8 +176,8 @@ export const workerActor = actor({
           idemKey,
           isolated: true,
           ttlSeconds: 3600,
-          egressAllow: egressAllow(),
-        ...snapshotSpec(),
+          egressAllow: egressAllow(params.agent),
+        ...snapshotSpec(params.agent),
           labels: {
             runId,
             workerId,
@@ -306,6 +316,8 @@ export const workerActor = actor({
         /** Task goal for a real agent (claude-code). */
         goal?: string;
         conflictFiles?: string[];
+        /** Agent profile name for this task. */
+        agent?: string;
       }
     ) {
       const { workerId, taskId, epoch, branch } = params;
@@ -332,8 +344,8 @@ export const workerActor = actor({
         idemKey: vmKey,
         isolated: true,
         ttlSeconds: 3600,
-        egressAllow: egressAllow(),
-        ...snapshotSpec(),
+        egressAllow: egressAllow(params.agent),
+        ...snapshotSpec(params.agent),
         labels: { workerId, taskId, epoch: String(epoch) },
       }).catch((error) => {
         if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
@@ -344,7 +356,7 @@ export const workerActor = actor({
       let sha = "";
       let costUsd = 0;
       const cfg = loadMergeConfig();
-      const agent = agentFromEnv();
+      const agent = agentFromEnv(process.env, params.agent);
       if (isRealAgent(agent)) {
         // Real worker: the agent edits the repo in the VM, commits with trailers, pushes the task branch.
         if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
@@ -356,7 +368,7 @@ export const workerActor = actor({
         const res = await runAgent(adapter, provider, vmId, {
           runId, taskId, epoch, branch, target: params.target ?? cfg.target, repoUrl: cfg.remote,
           goal: params.goal ?? `Task ${taskId}`, rework: params.rework, conflictFiles: params.conflictFiles,
-        }, loadAgentConfig(), {
+        }, loadAgentConfig(process.env, params.agent), {
           apiKey,
           isCancelled: async () => {
             const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
@@ -384,7 +396,7 @@ export const workerActor = actor({
           "worker",
           workerLife.state,
           { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha, costUsd },
+          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
           idemKey,
           []
         );

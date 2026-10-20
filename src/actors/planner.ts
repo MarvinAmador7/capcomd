@@ -1,4 +1,5 @@
 import { agentFromEnv, isRealAgent } from "../agents/config";
+import { effectiveAgentRecord, parseAgentDirective } from "../agents/profiles";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -35,8 +36,11 @@ export const plannerActor = actor({
       }
 
       // Real agent (claude-code): one goal becomes one task; the agent does its own decomposition.
-      if (isRealAgent(agentFromEnv())) {
-        const tasks = [{ id: "task-1", goal }];
+      // `[agent:NAME] goal` selects an agent profile for the run's task.
+      const directive = parseAgentDirective(goal);
+      if (isRealAgent(agentFromEnv(process.env, directive.agent))) {
+        // The effective resolved spec is recorded in the planner's event log context.
+        const tasks = [{ id: "task-1", goal: directive.goal, ...(directive.agent ? { agent: directive.agent } : {}), agentSpec: effectiveAgentRecord(directive.agent) }];
         await c.db.execute(
           `INSERT INTO lifecycle (entity_id, machine, version, state, context, seq)
            VALUES (?, ?, ?, ?, ?, ?)
