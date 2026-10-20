@@ -61,6 +61,7 @@ Usage:
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
   capcomd task renew|release|done <runId> <tsk> --holder H --epoch E [--lease-ms N] [--result JSON] [--key K]   (fenced: a stale epoch is rejected)
   capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv del <runId> <k> [--expect V]  ·  kv list <runId> [--prefix P] [--all]   (values ≤ 64KB)
+  capcomd inspect <runId> [--json] [--follow [--since-seq N] [--until TYPE]]   run bundle: status + tree + trace + events
   capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start | --since-seq N]   (with --json: one JSON line per event; resume with --since-seq <last seq>)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
@@ -379,8 +380,47 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case "inspect": {
-        const runId = positionals[1] ?? usage("capcomd inspect <runId> <agt>");
-        const id = positionals[2] ?? usage("capcomd inspect <runId> <agt>");
+        const runId = positionals[1] ?? usage("capcomd inspect <runId> [agt] [--json] [--follow]");
+        if (!positionals[2]) {
+          // TUI contract: one bundle (status + tree + trace + events); --follow then streams event lines.
+          const bundle = async () => {
+            const P = await import("../primitives/ops");
+            const [status, tree, events] = await Promise.all([
+              getStatus(runId), P.treeOf(runId).catch(() => ({ runId, root: null, tree: [], totals: null })), listEvents(runId),
+            ]);
+            const trace = loadTrace(runId);
+            const now = Date.now();
+            return { type: "inspect.snapshot", runId, ts: new Date(now).toISOString(), epochMs: now, seq: events.length, status, tree: tree.tree, totals: tree.totals, trace, events };
+          };
+          const snap = await bundle();
+          if (!values.follow) {
+            if (json) out(snap);
+            else {
+              console.log(`Run ${runId}  ${snap.status.state}${snap.status.scope ? ` (agents ${snap.status.scope.state})` : ""}  started ${snap.status.startedAt ?? "-"}`);
+              console.log(`Goal: ${snap.status.goal}`);
+              if (snap.status.pendingApprovals.length) console.log(`Pending approvals: ${snap.status.pendingApprovals.map((p) => p.taskId).join(", ")}`);
+              console.log(`Agents: ${JSON.stringify(snap.totals)}  events ${snap.events.length}  spans ${snap.trace?.spanCount ?? 0}`);
+            }
+            return EXIT.ok;
+          }
+          const emit = (o: Record<string, unknown>) => json ? out(o) : console.log(JSON.stringify(o));
+          const sinceSeq = values["since-seq"] !== undefined ? Number(values["since-seq"]) : snap.seq;
+          emit({ ...snap, events: snap.events.filter((e) => e.seq > (values["since-seq"] !== undefined ? sinceSeq : -1)) });
+          const S = await import("../primitives/state");
+          const P = await import("../primitives/ops");
+          const r = await S.followEvents(runId, {
+            sinceSeq, until: values.until as string | undefined,
+            timeoutMs: values["timeout-ms"] !== undefined ? Number(values["timeout-ms"]) : undefined,
+            emit: (ev) => {
+              emit({ type: "event", runId, seq: ev.seq, ts: ev.ts, epochMs: ev.epochMs, agentId: ev.agentId, event: ev });
+              // Agent lifecycle changes the tree: push a fresh one so a TUI never has to re-poll.
+              if (/^AGENT_/.test(ev.type)) void P.treeOf(runId).then((t) => emit({ type: "inspect.tree", runId, seq: ev.seq, ts: new Date().toISOString(), tree: t.tree, totals: t.totals })).catch(() => {});
+            },
+          });
+          emit({ type: "inspect.end", runId, ts: new Date().toISOString(), end: r });
+          return EXIT.ok;
+        }
+        const id = positionals[2];
         const r: any = await (await import("../primitives/ops")).inspectAgent(runId, id, { logTail: values.tail ? Number(values.tail) : 50 });
         if (json) out(r);
         else {

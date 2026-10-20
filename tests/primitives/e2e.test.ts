@@ -61,8 +61,10 @@ test("primitives: ids, keys, limits, budget, cancel propagation, await/wait-any,
   const c2 = await cj(["spawn", runId, "--parent", supId, "--profile", "coder", "--task", "part 2", "--key", "c2", "--no-start"]);
   expect(c2.j.budget).toEqual({ usd: 1, turns: 25 });
   const c3 = await cj(["spawn", runId, "--parent", supId, "--profile", "coder", "--task", "part 3", "--key", "c3", "--no-start"]);
-  expect(c3.code).toBe(2);
+  // ADR-017: saturating maxChildren is retryable backpressure (await or cancel a child), not a hard refusal.
+  expect(c3.code).not.toBe(0);
   expect(c3.j.error.message).toContain("maxChildren=2");
+  expect(c3.j.error).toMatchObject({ reason: "backpressure", retryable: true });
   expect((await cj(["spawn", runId, "--parent", supId, "--profile", "sup", "--task", "x", "--no-start"])).j.error.message).toContain("allowedChildProfiles");
   expect((await cj(["spawn", runId, "--parent", c1.j.agentId, "--profile", "coder", "--task", "x", "--no-start"])).j.error.message).toContain("allowSpawn=false");
   expect((await cj(["spawn", runId, "--parent", supId, "--profile", "coder", "--set", "maxTurns=99", "--task", "x", "--no-start"])).code).toBe(2);

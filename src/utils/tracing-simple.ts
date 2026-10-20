@@ -86,7 +86,11 @@ export function startSpan(
   return span;
 }
 
+/** Drop a span instead of recording it (e.g. a driver call that found another driver holding the lease). */
+export function discardSpan(span: SimpleSpan) { (span as any).discard = true; }
+
 function persist(span: SimpleSpan) {
+  if ((span as any).discard) return;
   const runId = span.attributes["relay.run_id"];
   if (!runId || env("TRACE") === "off") return;
   try {

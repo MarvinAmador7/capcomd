@@ -15,7 +15,7 @@ import type { ScopeAgent } from "../actors/scope";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
-import { agentSpanId, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
+import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 
 const LEASE_MS = Number(env("DRIVER_LEASE_MS") ?? 15_000);
 const POLL_MS = Number(env("AWAIT_POLL_MS") ?? 300);
@@ -207,7 +207,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
   return withSpan("agent.run", { "relay.run_id": runId, "agent.id": agentId, "agent.parent": me?.parent ?? null, "relay.agent_id": agentId, "relay.parent_agent_id": me?.parent ?? null, "agent.profile": me?.profile ?? null, "agent.depth": me?.depth ?? 0 }, async (span) => {
     let last: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
-      try { const a = await driveOnce(runId, agentId); stampSpent(span, a); return a; } catch (e) {
+      try { const a = await driveOnce(runId, agentId); if (!TERMINAL_AGENT.has(a.status)) discardSpan(span); else stampSpent(span, a); return a; } catch (e) {
         last = e;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
         if (isBoxdAuthError(e) || e instanceof ScriptFailed) break;
@@ -299,7 +299,7 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
     await w.drainWorker({ workerId: agentId });
     if (await cancelled()) return (await s.getAgent({ agentId }))!;
     const declared = await resultOf(runId, agentId);
-    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
+    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch: !pushed.sha && vmRpc ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }
