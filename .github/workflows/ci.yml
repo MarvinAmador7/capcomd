@@ -57,10 +57,11 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: chaos:fast (strict: host stalls fail the run)
+      - name: chaos:fast (strict: any host stall fails the run; 8 workers)
         run: bun run chaos:fast
         env:
           CHAOS_STRICT: "1"
+          CHAOS_WORKERS: "8"
         timeout-minutes: 45
 
       - name: Run randomized chaos tests

@@ -105,6 +105,12 @@ Exit codes:
 | 3 | not found (run, task or trace) |
 | 4 | engine unreachable |
 
+### Trace span contract
+
+Every run's trace starts with `relay.run → cli.run` and contains actor (`actor.*`), task-ledger transition (`transition.task`), `model.generate`, `sandbox.ensure` and `git.push` spans. The same holds for both run paths (recipe default and `--legacy`).
+
+**`git.merge` appears only when something merged.** The recipe verifies a ref first (`git.verify`) and merges only a passing one (`git.merge`). A run that merges nothing, for example because every check failed, has **no** `git.merge` span. Don't infer that a merge happened from anything except `git.merge` spans and `task.merged`/`task.approved` events. (The legacy loop used to emit `git.merge` for verify-and-merge attempts that failed their checks; that span is not part of the contract.)
+
 ## Approval gate
 
 A task parks in `awaiting_approval` after verification passes when its target branch matches

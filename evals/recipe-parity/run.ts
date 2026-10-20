@@ -36,14 +36,11 @@ const cli = (env: NodeJS.ProcessEnv, args: string[]) => {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /**
- * Differences the eval reports but does not fail on. Each needs Marvin's sign-off (ADR-016).
- * git.merge on a run whose checks fail: legacy verifies and merges in one verifier call (span
- * git.merge even when checks fail first); the recipe verifies (git.verify) and only merges a
- * passing ref (git.merge), so a run that merges nothing has no git.merge span.
+ * Contract rule (docs/integration-agents.md, "Trace span contract"): a git.merge span appears only
+ * when something merged. Asserted on the recipe (the default path): merged=0 ⇒ no git.merge,
+ * merged>0 ⇒ git.merge. Legacy's git.merge on a failed verify-and-merge attempt is not contract,
+ * so the trace comparison ignores the git.merge flag and this rule checks it instead.
  */
-const KNOWN_DIFFS: Array<{ key: string; when: (l: Outcome) => boolean; why: string }> = [
-  { key: "contract.trace", when: (l) => l.merged.length === 0, why: "git.merge span absent when nothing merged (recipe verifies before merging)" },
-];
 const REQUIRED_SPANS = ["cli.run", "model.generate", "sandbox.ensure", "git.push", "git.merge"];
 
 /** The public CLI contract Hermes consumes, reduced to comparable facts (ids/timestamps dropped). */
@@ -143,14 +140,15 @@ for (const c of CASES) {
     for (const [k, lv] of Object.entries(legacy.contract)) {
       const rv = (recipe.contract as any)[k];
       if (JSON.stringify(lv) === JSON.stringify(rv)) continue;
-      const known = KNOWN_DIFFS.find((d) => d.key === `contract.${k}` && d.when(legacy));
-      if (known && k === "trace") {
-        // only the git.merge flag may differ; everything else in the trace must still match
+      if (k === "trace") {
         const strip = (x: any) => JSON.stringify({ ...x, has: { ...x.has, "git.merge": null } });
-        if (strip(lv) === strip(rv)) { console.log(`    known diff (${c.name}): ${known.why}`); continue; }
+        if (strip(lv) === strip(rv)) continue;
       }
       diffs.push(`contract.${k}: legacy=${JSON.stringify(lv)} recipe=${JSON.stringify(rv)}`);
     }
+    const recipeMergeSpan = (recipe.contract as any).trace?.has?.["git.merge"];
+    if (recipeMergeSpan !== recipe.merged.length > 0) diffs.push(`contract rule: git.merge span ${recipeMergeSpan ? "present" : "absent"} with ${recipe.merged.length} merged (must appear iff something merged)`);
+    else if (recipe.merged.length === 0) console.log(`    contract rule ok (${c.name}): 0 merged ⇒ no git.merge span`);
     if (legacy.error || recipe.error) diffs.push(`error: ${legacy.error ?? ""} ${recipe.error ?? ""}`.slice(0, 600));
     if (c.expect && legacy.merged.length !== c.expect.merged) diffs.push(`case expects ${c.expect.merged} merged, legacy merged ${legacy.merged.length}`);
     rows.push({ name: c.name, legacy, recipe, diffs });
