@@ -9,6 +9,7 @@ import { decodeAgentRef } from "../agents/profiles";
 import { awaitAgents, mergeRef, runNew, spawnAgent, verifyRef } from "../primitives/ops";
 import * as S from "../primitives/state";
 import { isProtectedBranch } from "../utils/protected";
+import { loadMergeConfig } from "../merge/config";
 
 export const RECIPE_HOLDER = "recipe:hierarchical";
 const MAX_ATTEMPTS = 4; // the legacy task machine: 1 attempt + maxRetries 3; verify failures and conflicts both retry
@@ -66,6 +67,7 @@ export async function runHierarchicalRecipe(opts: RunOptions & { budgetUsd?: num
   // 4. workers: claim → spawn → await → verify → merge --require → done (retry on fail/conflict).
   emit("tasks.executing", {}, "\n→ Executing tasks...");
   const target = opts.targetBranch;
+  const hasRepo = !!loadMergeConfig(); // without a repo merges are fake and nothing is protected (legacy parity)
   const completed: string[] = [];
   for (const t of planned) {
     if ((await runH.getRun({ runId }))?.state === "cancelled") { emit("run.cancelled", { state: "cancelled" }, "\n✗ Run cancelled"); return { runId, state: "cancelled", ok: false }; }
@@ -91,7 +93,7 @@ export async function runHierarchicalRecipe(opts: RunOptions & { budgetUsd?: num
       }
       const tgt = v.target as string;
       let operator = false;
-      if (isProtectedBranch(tgt)) {
+      if (hasRepo && isProtectedBranch(tgt)) {
         // Protected target: park until `capcomd approve <runId> <task>` writes approval/<task>.
         emit("task.awaiting_approval", { taskId: t.id, targetBranch: tgt }, `  ⏸ ${t.id} verified; merge into protected ${tgt} awaits approval (capcomd approve ${runId} ${t.id})`);
         const deadline = Date.now() + (opts.approvalTimeoutMs ?? 24 * 3600_000);

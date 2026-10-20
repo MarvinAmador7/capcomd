@@ -285,7 +285,8 @@ export async function mergeRef(o: MergeOpts) {
     if (v.data.branch !== branch || v.data.target !== target) throw new RelayError("conflict", `verification ${o.require} covers ${v.data.branch} → ${v.data.target}, not ${branch} → ${target}`, "Verify this ref against this target.");
     expectSha = (v.result?.commit as string | null) ?? undefined;
   }
-  if (isProtectedBranch(target) && !o.operator) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
+  // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
+  if (cfg && isProtectedBranch(target) && !o.operator) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
   const mrgId = stableId("mrg", `${o.runId}\0${o.ref}\0${target}`, o.key);
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null };
   const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data }).catch(asRelay);
