@@ -179,7 +179,7 @@ export function replayEvents(events: RelayEvent[], toIndex: number): GraphState 
   const snapshots: GraphSnapshot[] = [{ graph, eventIndex: 0 }];
 
   for (let i = 0; i <= toIndex && i < events.length; i++) {
-    graph = foldEvent(graph, events[i]);
+    graph = foldEvent(graph, events[i]!);
 
     if ((i + 1) % SNAPSHOT_INTERVAL === 0 || i === toIndex) {
       snapshots.push({ graph, eventIndex: i + 1 });
@@ -196,7 +196,7 @@ export function seekToEvent(state: GraphState, events: RelayEvent[], targetIndex
 
   let graph = lastSnapshot.graph;
   for (let i = lastSnapshot.eventIndex; i <= targetIndex && i < events.length; i++) {
-    graph = foldEvent(graph, events[i]);
+    graph = foldEvent(graph, events[i]!);
   }
 
   return { ...state, graph };

@@ -16,8 +16,8 @@ export function TimelineScrubber({
 
   if (events.length === 0) return null;
 
-  const startTime = events[0].at;
-  const endTime = events[events.length - 1].at;
+  const startTime = events[0]!.at;
+  const endTime = events[events.length - 1]!.at;
   const duration = endTime - startTime;
   const progress = duration > 0 ? ((currentTime - startTime) / duration) * 100 : 0;
 
@@ -45,7 +45,7 @@ export function TimelineScrubber({
   }, [isPlaying, currentTime, endTime, onSeek]);
 
   const currentEvent = events.find(
-    (e, i) => e.at <= currentTime && (i === events.length - 1 || events[i + 1].at > currentTime)
+    (e, i) => e.at <= currentTime && (i === events.length - 1 || events[i + 1]!.at > currentTime)
   );
 
   return (

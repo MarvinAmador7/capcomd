@@ -202,6 +202,6 @@ describe("Graph Folding - Property Tests", () => {
 
     // Last snapshot should be at or before index 15
     const lastSnapshot = snapshots[snapshots.length - 1];
-    expect(lastSnapshot.eventIndex).toBeLessThanOrEqual(16);
+    expect(lastSnapshot!.eventIndex).toBeLessThanOrEqual(16);
   });
 });

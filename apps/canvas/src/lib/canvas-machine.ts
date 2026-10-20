@@ -221,7 +221,7 @@ export const canvasMachine = setup({
                   currentEventIndex: ({ context }) => Math.min(context.currentEventIndex + 1, context.events.length - 1),
                   graph: ({ context }) => {
                     const nextIndex = Math.min(context.currentEventIndex + 1, context.events.length - 1);
-                    return foldEvent(context.graph, context.events[nextIndex]);
+                    return foldEvent(context.graph, context.events[nextIndex]!);
                   },
                 }),
               },
@@ -362,7 +362,7 @@ export const canvasMachine = setup({
                 onError: {
                   target: "error",
                   actions: assign({
-                    error: ({ event }) => event.error,
+                    error: ({ event }) => event.error as Error,
                   }),
                 },
               },

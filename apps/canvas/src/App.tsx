@@ -64,7 +64,7 @@ export default function App() {
     let i = 0;
     const interval = setInterval(() => {
       if (i < demoEvents.length) {
-        send({ type: "STREAM.EVENT", event: demoEvents[i] });
+        send({ type: "STREAM.EVENT", event: demoEvents[i]! });
         i++;
       } else {
         clearInterval(interval);
@@ -166,7 +166,7 @@ export default function App() {
               </button>
               <p>ID: {state.context.selectedNodeId}</p>
               <p>Status: {state.context.graph.nodes[state.context.selectedNodeId]?.data.status}</p>
-              {state.value.panel === "spans" || state.matches({ panel: { spans: "loading" } }) || state.matches({ panel: { spans: "ready" } }) || state.matches({ panel: { spans: "error" } }) ? (
+              {(state.value.panel as unknown) === "spans" || state.matches({ panel: { spans: "loading" } }) || state.matches({ panel: { spans: "ready" } }) || state.matches({ panel: { spans: "error" } }) ? (
                 <div>
                   <h4 style={{ marginBottom: 8 }}>Span waterfall</h4>
                   {state.matches({ panel: { spans: "loading" } }) && <p>Loading spans…</p>}

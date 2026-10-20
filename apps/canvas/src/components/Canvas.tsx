@@ -22,8 +22,8 @@ interface CanvasProps {
 }
 
 export function Canvas({ events: allEvents, runId, mode }: CanvasProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [currentTime, setCurrentTime] = useState(Date.now());
 

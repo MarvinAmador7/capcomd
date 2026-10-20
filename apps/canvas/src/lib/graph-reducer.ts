@@ -36,7 +36,7 @@ const STATE_COLORS: Record<string, { background: string; border: string }> = {
 };
 
 function getNodeColor(state?: string): { background: string; borderColor: string } {
-  const colors = STATE_COLORS[state || "default"] || STATE_COLORS.default;
+  const colors = STATE_COLORS[state || "default"] || STATE_COLORS.default!;
   return {
     background: colors.background,
     borderColor: colors.border,

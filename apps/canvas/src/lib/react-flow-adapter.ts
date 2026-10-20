@@ -18,13 +18,13 @@ export function graphToReactFlow(graph: RelayGraph, positions: Record<string, { 
       })),
       edges: graph.edges ?? [],
     });
-    const { nodes, edges } = toXYFlow(stately);
+    const { nodes, edges } = toXYFlow(stately as unknown as Parameters<typeof toXYFlow>[0]);
 
     // Map to React Flow format with our custom data
     // Fallback layout until ELK positions are applied: runs on row 0, other
     // nodes on row 1, spaced evenly. toXYFlow can return NaN positions.
     const rowCount: Record<number, number> = {};
-    const reactFlowNodes: Node[] = nodes.map((node) => {
+    const reactFlowNodes = nodes.map((node): Node => {
       const graphNode = graph.nodes[node.id];
       const row = graphNode?.data?.type === "run" ? 0 : 1;
       const col = (rowCount[row] = (rowCount[row] ?? -1) + 1);
@@ -36,7 +36,7 @@ export function graphToReactFlow(graph: RelayGraph, positions: Record<string, { 
       return {
         id: node.id,
         position,
-        data: graphNode?.data || { label: node.id, status: "pending", type: "task" },
+        data: (graphNode?.data as Record<string, unknown> | undefined) || { label: node.id, status: "pending", type: "task" },
         type: "default",
         style: {
           background: getStatusColor(graphNode?.data.status),
