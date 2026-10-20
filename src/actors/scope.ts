@@ -313,6 +313,15 @@ export const scopeActor = actor({
       return { changed: true, orphans, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
 
+    /** Merge fields into a finished agent's result (ADR-017: the latest verification of its branch). */
+    async annotateResult(c, params: { agentId: string; patch: Record<string, unknown> }) {
+      const r = await c.db.execute("SELECT result FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
+      const cur = r[0]!.result ? JSON.parse(r[0]!.result as string) : {};
+      await c.db.execute("UPDATE agents_v2 SET result = ? WHERE agent_id = ?", JSON.stringify({ ...cur, ...params.patch }), params.agentId);
+      return { ok: true };
+    },
+
     /** Agent liveness (ADR-017): every in-VM call and every new log line counts; `note` is free text. */
     async heartbeat(c, params: { agentId: string; note?: string }) {
       await c.db.execute("UPDATE agents_v2 SET heartbeat_at = ?, heartbeat_note = COALESCE(?, heartbeat_note) WHERE agent_id = ?", Date.now(), params.note?.slice(0, 200) ?? null, params.agentId);
@@ -369,7 +378,7 @@ export const scopeActor = actor({
     },
 
     /** Mailbox: `send` appends (idempotent by key); `inbox` reads messages after a cursor. */
-    async send(c, params: { to: string; from: string; body: string; key?: string }) {
+    async sendMessage(c, params: { to: string; from: string; body: string; key?: string }) {
       if (params.key) { const r = await c.db.execute("SELECT seq FROM messages WHERE idem_key = ?", params.key); if (r.length) return { seq: Number(r[0]!.seq), replayed: true }; }
       let seq = 0;
       await c.db.transaction(async (tx: RawAccess) => {

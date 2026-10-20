@@ -51,6 +51,12 @@ Usage:
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P] [--target T] [--key K]  → vfy-…
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
+  ADR-017 sub-agents (agents allowed to spawn get the same verbs in their VM as \`capcomd\` + MCP tools):
+  capcomd spawn … [--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N --children.allowedChildProfiles=a,b --children.budgetShare=F]
+                                       (the parent sets the child's fan-out; narrow-only, refused above the ceiling)
+  capcomd tree <runId> [--root agt]      subtree with cost/turn rollups and stuck flags
+  capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N]  ·  capcomd budget show <runId> [agt]
+  capcomd send <runId> <agt> <text> [--from agt]  ·  capcomd token revoke <runId> <jti> [--reason R]
   capcomd task add <runId> --title T [--data JSON] [--after tsk,…] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
   capcomd task renew|release|done <runId> <tsk> --holder H --epoch E [--lease-ms N] [--result JSON] [--key K]   (fenced: a stale epoch is rejected)
@@ -154,6 +160,16 @@ async function main(argv: string[]): Promise<number> {
         legacy: { type: "boolean" },
         after: { type: "string", multiple: true },
         all: { type: "boolean" },
+        // ADR-017: fan-out the parent grants a child (narrow-only)
+        "children.maxChildren": { type: "string" },
+        "children.maxDepth": { type: "string" },
+        "children.maxTotalDescendants": { type: "string" },
+        "children.allowedChildProfiles": { type: "string" },
+        "children.budgetShare": { type: "string" },
+        "children.allowSpawn": { type: "string" },
+        tail: { type: "string" },
+        root: { type: "string" },
+        from: { type: "string" },
       },
       allowPositionals: true,
       strict: true,
@@ -309,6 +325,7 @@ async function main(argv: string[]): Promise<number> {
           runId, task, ...(profile ? { profile } : {}), ...(Object.keys(set).length || values.operator ? { overrides: { set, operator: !!values.operator } } : {}),
           parent: values.parent as string | undefined, key: values.key as string | undefined, contract, budget,
           operator: !!values.operator, start: !values["no-start"],
+          grant: Object.fromEntries(Object.entries(values).filter(([k, v]) => k.startsWith("children.") && v !== undefined).map(([k, v]) => [k.slice(9), v])),
         });
         if (json) out(r); else console.log(r.agentId);
         return EXIT.ok;
@@ -358,10 +375,74 @@ async function main(argv: string[]): Promise<number> {
         return r.state === "merged" ? EXIT.ok : EXIT.run_failed;
       }
 
-      case "tree": {
-        const runId = positionals[1] ?? usage("runId required: capcomd tree <runId>");
-        const r = await (await import("../primitives/ops")).listScope(runId);
+      case "inspect": {
+        const runId = positionals[1] ?? usage("capcomd inspect <runId> <agt>");
+        const id = positionals[2] ?? usage("capcomd inspect <runId> <agt>");
+        const r: any = await (await import("../primitives/ops")).inspectAgent(runId, id, { logTail: values.tail ? Number(values.tail) : 50 });
         if (json) out(r);
+        else {
+          console.log(`${r.agentId} [${r.profile ?? "-"}] ${r.status}${r.stuck ? ` STUCK: ${r.stuck}` : ""}  parent ${r.parent ?? "(operator)"}  depth ${r.depth}`);
+          console.log(`  budget ${JSON.stringify(r.budget)} spent ${JSON.stringify(r.spent)}  subtree ${JSON.stringify(r.rollup)}`);
+          console.log(`  limits ${JSON.stringify(r.limits)}`);
+          console.log(`  vm ${JSON.stringify(r.vm)}  driver ${r.driver ?? "-"}  heartbeat ${r.heartbeatAt ? new Date(r.heartbeatAt).toISOString() : "-"} ${r.heartbeatNote ?? ""}`);
+          if (r.children.length) console.log(`  children: ${r.children.map((c: any) => `${c.agentId}(${c.status})`).join(", ")}`);
+          if (r.awaits.length) console.log(`  awaits: ${r.awaits.map((w: any) => `${w.waiter}→${w.target}`).join(", ")}`);
+          if (r.result) console.log(`  result ${JSON.stringify(r.result).slice(0, 800)}`);
+          for (const l of r.logs) console.log(`  | ${l.line}`);
+        }
+        return EXIT.ok;
+      }
+
+      case "logs": {
+        const runId = positionals[1] ?? usage("capcomd logs <runId> <agt> [--tail N]");
+        const id = positionals[2] ?? usage("capcomd logs <runId> <agt> [--tail N]");
+        const r = await (await import("../primitives/ops")).agentLogs(runId, id, values.tail ? Number(values.tail) : 200);
+        if (json) out(r); else for (const l of r.lines) console.log(`${new Date(l.at).toISOString()} ${l.stream.padEnd(6)} ${l.line}`);
+        return EXIT.ok;
+      }
+
+      case "budget": {
+        const runId = positionals[2] ?? positionals[1] ?? usage("capcomd budget show <runId> [agt]");
+        const rid = positionals[1] === "show" ? positionals[2] : positionals[1];
+        const agentId = positionals[1] === "show" ? positionals[3] : positionals[2];
+        const r = await (await import("../primitives/ops")).budgetShow(rid ?? runId, agentId);
+        if (json) out(r); else console.log(JSON.stringify(r, null, 2));
+        return EXIT.ok;
+      }
+
+      case "send": {
+        const runId = positionals[1] ?? usage("capcomd send <runId> <agt> <text> [--from agt|operator]");
+        const to = positionals[2] ?? usage("capcomd send <runId> <agt> <text>");
+        const body = positionals.slice(3).join(" ") || usage("message text required");
+        const { client: cl, assertEngine: ae } = await import("../core/relay");
+        await ae();
+        const r = await cl().scope.getOrCreate([runId]).sendMessage({ to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}) });
+        if (json) out({ runId, to, ...r }); else console.log(`sent #${r.seq} to ${to}`);
+        return EXIT.ok;
+      }
+
+      case "token": {
+        // capcomd token revoke <runId> <jti> [--reason R]: kills an in-VM token now (the pump also revokes on exit).
+        if (positionals[1] !== "revoke") usage("capcomd token revoke <runId> <jti> [--reason R]");
+        const runId = positionals[2] ?? usage("capcomd token revoke <runId> <jti>");
+        const jti = positionals[3] ?? usage("capcomd token revoke <runId> <jti>");
+        const { client: cl, assertEngine: ae } = await import("../core/relay");
+        await ae();
+        const r = await cl().scope.getOrCreate([runId]).revokeToken({ jti, reason: values.reason as string | undefined });
+        if (json) out({ runId, jti, ...r }); else console.log(`revoked ${jti}`);
+        return EXIT.ok;
+      }
+
+      case "tree": {
+        const runId = positionals[1] ?? usage("runId required: capcomd tree <runId> [--root agt]");
+        const O = await import("../primitives/ops");
+        const r: any = { ...(await O.listScope(runId)), ...(await O.treeOf(runId, values.root as string | undefined)) };
+        if (json) out(r);
+        else if (process.env.CAPCOMD_TREE_FLAT !== "1") {
+          const b = (x: Record<string, number>) => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(",") || "-";
+          console.log(`${runId}  budget ${b(r.budget)} (unallocated ${b(r.unallocated)}, spent ${b(r.spent)})  totals: ${r.totals.agents} agents $${r.totals.usd} ${r.totals.turns} turns ${r.totals.wallSeconds}s`);
+          console.log((await import("../subagents/results")).textTree(r.tree, "  "));
+        }
         else {
           const b = (x: Record<string, number>) => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(",") || "-";
           console.log(`${runId}  budget ${b(r.budget)} (unallocated ${b(r.unallocated)}, spent ${b(r.spent)})`);

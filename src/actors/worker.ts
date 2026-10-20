@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor, UserError } from "rivetkit";
@@ -345,6 +346,10 @@ export const workerActor = actor({
         workerId: string; taskId: string; epoch: number; branch: string; runId?: string; target?: string; rework?: boolean;
         /** Task goal for a real agent (claude-code). */
         goal?: string;
+        /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
+        fakePath?: string; fakeContent?: string;
+        /** ADR-017: install in-VM capcomd + skill (agents allowed to spawn). */
+        subagents?: { skill: string; kind?: string };
         conflictFiles?: string[];
         /** Agent profile name for this task. */
         agent?: string;
@@ -450,6 +455,7 @@ export const workerActor = actor({
           goal: params.goal ?? `Task ${taskId}`, rework: params.rework, conflictFiles: params.conflictFiles,
         }, loadAgentConfig(process.env, params.agent), {
           apiKey,
+          ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: readFileSync(new URL("../subagents/vm-cli.mjs", import.meta.url).pathname, "utf8"), rpcDir: "/tmp/capcomd-rpc" } } : {}),
           isCancelled: async () => {
             const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
             if (run?.state === "cancelled") return true;
@@ -471,7 +477,7 @@ export const workerActor = actor({
       // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
       // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
       if (!sha && cfg && getDependencies().fakeWork && params.runId) {
-        sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework });
+        sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework, ...(params.fakePath ? { path: params.fakePath, content: params.fakeContent ?? "" } : {}) });
       }
 
       killpoint("push.after.before_event");

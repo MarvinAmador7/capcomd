@@ -12,7 +12,10 @@ import { decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type Ov
 import { available, budgetCaps, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { stuckReason, treeView, rollups, subtree } from "../subagents/results";
 import type { ScopeAgent } from "../actors/scope";
+import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
+import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
+import { agentSpanId, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 
 const LEASE_MS = Number(env("DRIVER_LEASE_MS") ?? 15_000);
 const POLL_MS = Number(env("AWAIT_POLL_MS") ?? 300);
@@ -176,13 +179,31 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
   // Retry the (idempotent) steps; only an error that persists while the engine answers marks the
   // agent failed. If the engine is down, the last finish() throws too, and the lease expires
   // so the next await/wait-any resumes the agent.
-  let last: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try { return await driveOnce(runId, agentId); } catch (e) { last = e; if (isBoxdAuthError(e)) break; await sleep(2000 * attempt); } // a rejected credential never heals by retrying
-  }
   const s = client().scope.getOrCreate([runId]);
-  const fin = await s.finish({ agentId, status: "failed", result: { error: (last as Error)?.message?.slice(0, 500) ?? String(last) } });
-  return fin.agent;
+  const me = await s.getAgent({ agentId });
+  // Trace parenting: agent spans nest under their parent agent's span (root agents under the run).
+  return withSpan("agent.run", { "relay.run_id": runId, "agent.id": agentId, "agent.parent": me?.parent ?? null, "agent.profile": me?.profile ?? null, "agent.depth": me?.depth ?? 0 }, async (span) => {
+    let last: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try { const a = await driveOnce(runId, agentId); span.attributes["agent.status"] = a.status; return a; } catch (e) {
+        last = e;
+        // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
+        if (isBoxdAuthError(e) || e instanceof ScriptFailed) break;
+        await sleep(2000 * attempt);
+      }
+    }
+    const res = await resultOf(runId, agentId);
+    const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}) } });
+    span.attributes["agent.status"] = "failed";
+    return fin.agent;
+  }, { spanId: agentSpanId(runId, agentId), parentSpanId: me?.parent ? agentSpanId(runId, me.parent) : rootSpanIdForRun(runId) });
+}
+
+/** The structured result an agent declared with `capcomd result` (kv _result/<agt>), if any. */
+async function resultOf(runId: string, agentId: string): Promise<Record<string, unknown>> {
+  const r = await client().scope.getOrCreate([runId]).kvGet({ k: `_result/${agentId}` }).catch(() => null);
+  const v = r && !r.deleted ? (r.value as any) : null;
+  return v ? { summary: v.summary, artifacts: v.artifacts, ...(v.data !== undefined ? { data: v.data } : {}), ...(v.truncated ? { truncated: v.truncated } : {}) } : {};
 }
 
 async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
@@ -197,7 +218,8 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   // Test/eval knob: run the fake agent while profiles still govern policy (no real CLI/repo).
   // The carved budget narrows the profile: maxTurns ≤ turns, timeoutMs ≤ wallSeconds, maxBudgetUsd ≤ usd.
-  let exec = env("SPAWN_EXEC") === "fake" ? undefined : (a.ref ?? undefined);
+  const mode = env("SPAWN_EXEC");
+  let exec = mode === "fake" || mode === "script" ? undefined : (a.ref ?? undefined);
   if (exec) {
     const caps = budgetCaps(a.spec as any, a.budget);
     if (Object.keys(caps).length) {
@@ -217,7 +239,34 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
     }
     if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
     if (wk?.state === "idle") await w.assignTask({ workerId: agentId, taskId: taskLabel, epoch: 1 });
-    const pushed: any = await w.pushBranch({ workerId: agentId, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}) });
+    // ADR-017: scripted fake agents run now (with in-VM capcomd on a local spool).
+    let fakeFile: { path?: string; content?: string } = {};
+    if (mode === "script") {
+      const done = await s.getAgent({ agentId });
+      const r0 = await resultOf(runId, agentId);
+      if (!r0.summary || !done?.result) {
+        killpoint("spawn.script.before");
+        const { exitCode } = await runScripted(runId, a);
+        if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
+        if (exitCode !== 0) throw new ScriptFailed(`scripted agent exited ${exitCode}`, exitCode);
+      }
+      const r = await resultOf(runId, agentId);
+      const f = (r.data as any)?.file;
+      if (f && typeof f.path === "string") fakeFile = { path: f.path, content: String(f.content ?? "") };
+    }
+    // Handoff: my result is my successor's. Await it before finishing (finishing would reap it).
+    const ho = await s.kvGet({ k: `handoff/${agentId}` }).catch(() => null);
+    if (ho && !ho.deleted && (ho.value as any)?.to) {
+      const to = String((ho.value as any).to);
+      const [succ] = (await awaitAgents(runId, [to])).agents as any[];
+      await w.drainWorker({ workerId: agentId }).catch(() => {});
+      const st = succ.status === "done" ? "done" : "failed";
+      const fin = await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
+      return fin.agent;
+    }
+    const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
+    const push = () => w.pushBranch({ workerId: agentId, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}) });
+    const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);
     const spent: Budget = { usd: costUsd, turns: Number(rec.turns ?? 0), wallSeconds: Number(rec.wallSeconds ?? 0) };
@@ -225,7 +274,8 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
     await w.taskDone({ workerId: agentId });
     await w.drainWorker({ workerId: agentId });
     if (await cancelled()) return (await s.getAgent({ agentId }))!;
-    const fin = await s.finish({ agentId, status: "done", spent, result: { branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
+    const declared = await resultOf(runId, agentId);
+    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }
@@ -233,6 +283,23 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
   } finally {
     clearInterval(hb);
   }
+}
+
+function fakeFileParams(f: { path?: string; content?: string }) {
+  return f.path ? { fakePath: f.path, fakeContent: f.content ?? "" } : {};
+}
+
+/** Real agent allowed to spawn: token + pump on its VM; the runner installs CLI, MCP and skill. */
+async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
+  const wk: any = await w.getWorker({ workerId: agentId });
+  const vmId = wk?.context?.vmId;
+  if (!vmId) return null;
+  const { getDependencies } = await import("../dependencies");
+  const provider = getDependencies().provider;
+  const { orchestrationSkill } = await import("../subagents/skill");
+  const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
+  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true }), kind };
+  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn) };
 }
 
 export async function getAgentOrThrow(runId: string, agentId: string): Promise<ScopeAgent> {
@@ -344,7 +411,9 @@ export async function verifyRef(o: VerifyOpts) {
     checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
     ...(judge ? { judge } : {}),
   };
-  return opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
+  const fin = opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
+  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status } } } }).catch(() => {});
+  return fin;
 }
 
 export interface MergeOpts { runId: string; ref: string; require?: string; target?: string; operator?: boolean; key?: string }

@@ -38,6 +38,8 @@ export interface AgentCommandCtx {
   /** Extra per-run files (e.g. codex last message). */
   dir: string;
   cfg: AgentConfig;
+  /** ADR-017: in-VM capcomd for agents allowed to spawn (MCP server script + its config). */
+  capcomd?: { cli: string; mcpConfig: string };
 }
 
 /**

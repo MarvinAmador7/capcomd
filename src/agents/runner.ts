@@ -43,6 +43,8 @@ export interface AgentRunOptions {
   onEvent?: (e: AgentEvent) => void;
   secrets?: string[];
   now?: () => number;
+  /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
+  subagents?: { skill: string; cliSource: string; rpcDir: string };
 }
 
 export class AgentError extends Error {
@@ -215,6 +217,25 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     } else {
       promptText = [cfg.systemPrompt, promptText, cfg.appendSystemPrompt].filter(Boolean).join("\n\n");
     }
+    // ADR-017: agents allowed to spawn get capcomd (CLI on PATH + MCP server) and the skill.
+    let capcomdCtx: { cli: string; mcpConfig: string } | undefined;
+    let capcomdPrelude = "";
+    if (opts.subagents) {
+      const sa = opts.subagents;
+      const cli = `${sa.rpcDir}/bin/capcomd`;
+      const src = sa.cliSource.replace(/^#!.*\n/, `#!/usr/bin/env node\nprocess.env.CAPCOMD_RPC_DIR ||= ${JSON.stringify(sa.rpcDir)};\n`);
+      await provider.upload(vmId, cli, new TextEncoder().encode(src));
+      const mcpConfig = `${W}/capcomd-mcp.json`;
+      await provider.upload(vmId, mcpConfig, new TextEncoder().encode(JSON.stringify({ mcpServers: { capcomd: { command: "node", args: [cli, "mcp"], env: { CAPCOMD_RPC_DIR: sa.rpcDir } } } })));
+      must(await sh(`chmod 755 ${sq(cli)}`), "install capcomd", "install");
+      capcomdCtx = { cli, mcpConfig };
+      capcomdPrelude = `export PATH=${sq(`${sa.rpcDir}/bin`)}:"$PATH" CAPCOMD_RPC_DIR=${sq(sa.rpcDir)}`;
+      if (adapter.kind === "claude-code") {
+        cfg = { ...cfg, allowedTools: [...cfg.allowedTools, "Bash(capcomd:*)", "mcp__capcomd"] };
+        appendSystemFile = `${W}/append-system.txt`;
+        await provider.upload(vmId, appendSystemFile, new TextEncoder().encode([cfg.appendSystemPrompt ? r.text(cfg.appendSystemPrompt) : "", sa.skill].filter(Boolean).join("\n\n")));
+      } else promptText = [promptText, sa.skill].join("\n\n");
+    }
     await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(promptText)));
     const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`;
     const script = [
@@ -222,7 +243,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       `cd ${sq(repo)} || exit 97`,
       `echo $$ > ${sq(pidFile)}`,
       ...(prelude ? [prelude] : []),
-      `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile }, sq)}`,
+      ...(capcomdPrelude ? [capcomdPrelude] : []),
+      `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}) }, sq)}`,
       `echo $? > ${sq(exitFile)}`,
     ].join("\n");
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));

@@ -50,6 +50,12 @@ export function rootSpanIdForRun(runId: string): string {
   return hex(`root:${runId}`, 16);
 }
 
+/** ADR-017 trace parenting: an agent's span id is derived from (run, agent), so a child's span can
+ *  name its parent's span without passing context across processes or VMs. */
+export function agentSpanId(runId: string, agentId: string): string {
+  return hex(`agent:${runId}:${agentId}`, 16);
+}
+
 export function activeSpan(): SimpleSpan | null {
   return als.getStore() ?? currentSpan;
 }
@@ -158,7 +164,7 @@ export async function withSpan<T>(
   name: string,
   attributes: Record<string, any>,
   fn: (span: SimpleSpan) => Promise<T> | T,
-  opts: { spanId?: string; parent?: SimpleSpan | null } = {}
+  opts: { spanId?: string; parent?: SimpleSpan | null; parentSpanId?: string } = {}
 ): Promise<T> {
   const span = startSpan(name, attributes, opts);
   try {
