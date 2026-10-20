@@ -31,7 +31,7 @@ export async function handleRpc(req: RpcRequest, ctx: RpcContext): Promise<RpcRe
   const id = String(req?.id ?? "?");
   try {
     const claims = await authorize(req, ctx);
-    let result = await dispatch(claims, req.op as Op, req.args ?? {});
+    let result = await dispatch(claims, req.op as Op, req.args ?? {}, id);
     const js = JSON.stringify(result ?? null);
     if (Buffer.byteLength(js) > RESPONSE_MAX_BYTES) result = { truncated: [{ field: "response", bytes: Buffer.byteLength(js), kept: 0 }], hint: "Response too large; narrow the query (e.g. --tail, --limit, a subtree root)." };
     ctx.onCall?.(req.op, true);
@@ -96,8 +96,10 @@ function ids(args: Record<string, any>, key = "agents"): string[] {
   return list.map(String);
 }
 
-async function dispatch(c: Claims, op: Op, args: Record<string, any>): Promise<unknown> {
+async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: string): Promise<unknown> {
   const run = c.run;
+  // Writes are idempotent per request: the CLI retries a transient failure with the same id.
+  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task"].includes(op)) args = { ...args, key: `r:${reqId}` };
   const s = client().scope.getOrCreate([run]);
   switch (op) {
     case "spawn": {

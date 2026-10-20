@@ -4,7 +4,7 @@
 //    on this host with a scrubbed env (no host secrets, no engine endpoint) and the same CLI on a
 //    LocalSpool, so scenarios exercise exactly the in-VM code path minus boxd.
 import { spawn as spawnProc } from "child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { client } from "../core/relay";
@@ -26,7 +26,12 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   const pump = startPump({
     spool, intervalMs, refreshMs: Math.max(1000, ttlMs / 2),
     mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits), ttlMs }); jti = t.claims.jti; return t.token; },
-    handle: async (req) => { killpoint("rpc.handle.before"); const r = await handleRpc(req, { runId, agentId: a.agentId }); killpoint("rpc.handle.after"); return r; },
+    handle: async (req) => {
+      driverKillpoint(`rpc.${req.op}.before`);
+      const r = await handleRpc(req, { runId, agentId: a.agentId });
+      driverKillpoint(`rpc.${req.op}.before_reply`); // handled (e.g. child spawned) but the VM never got the answer
+      return r;
+    },
     onLog: (lines) => { s.appendLog({ agentId: a.agentId, stream: "agent", lines }).catch(() => {}); },
   });
   return {
@@ -46,38 +51,60 @@ export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: Sandb
 
 export class ScriptFailed extends Error { constructor(msg: string, readonly exitCode: number) { super(msg); } }
 
+/** Chaos: kill this driver once at `name` (marker file), simulating a host crash mid-RPC. */
+export function driverKillpoint(name: string) {
+  const want = env("DRIVER_KILLPOINT");
+  if (!want || want !== name) return;
+  const marker = env("DRIVER_KILLPOINT_MARKER");
+  if (!marker || existsSync(marker)) return;
+  writeFileSync(marker, String(process.pid));
+  console.error(`[DRIVER-KILL] ${name} pid ${process.pid}`);
+  process.kill(process.pid, "SIGKILL");
+}
+
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
 /**
- * Scripted fake agent. Env is built from scratch: PATH (with capcomd), a private HOME, the spool,
- * and task identity. Nothing else from the host leaks in.
+ * Scripted fake agent. Its "VM" is a per-agent directory that outlives the driver: a new driver
+ * (after a crash) re-attaches to the running script and drains the same spool, like a real
+ * driver re-attaching to a VM. Env is built from scratch: PATH (with capcomd), a private HOME,
+ * the spool, and task identity. Nothing else from the host leaks in.
  */
 export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitCode: number }> {
   const script = typeof a.contract?.script === "string" ? (a.contract.script as string) : `capcomd result --summary "did: ${a.task.replace(/["`$\\]/g, "")}"`;
-  const root = mkdtempSync(join(tmpdir(), `capcomd-agent-${a.agentId}-`));
+  const root = join(env("SCRIPT_VM_DIR") ?? join(tmpdir(), "capcomd-vms"), runId, a.agentId);
   const dir = join(root, "rpc"), bin = join(root, "bin"), home = join(root, "home");
+  const pidFile = join(root, "pid"), exitFile = join(root, "exit"), out = join(root, "stdout"), err = join(root, "stderr");
   mkdirSync(bin, { recursive: true }); mkdirSync(home, { recursive: true });
   writeFileSync(join(bin, "capcomd"), `#!/bin/sh\nexec node ${JSON.stringify(VM_CLI_PATH)} "$@"\n`);
   chmodSync(join(bin, "capcomd"), 0o755);
-  const spool = new LocalSpool(dir);
-  const p = pumpFor(runId, a, spool, Number(env("SCRIPT_RPC_POLL_MS") ?? 100));
-  // Token first, so the script's first call already carries it.
-  await new Promise((r) => setTimeout(r, 0));
-  const sEnv: Record<string, string> = {
-    PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`, HOME: home, CAPCOMD_RPC_DIR: dir, CAPCOMD_TOKEN_FILE: join(dir, "token"),
-    CAPCOMD_AGENT_ID: a.agentId, CAPCOMD_RUN_ID: runId, CAPCOMD_TASK: a.task, CAPCOMD_DEPTH: String(a.depth),
-    CAPCOMD_AWAIT_POLL_MS: env("SCRIPT_AWAIT_POLL_MS") ?? "150", CAPCOMD_RPC_TIMEOUT_MS: env("SCRIPT_RPC_TIMEOUT_MS") ?? "60000",
-  };
   const s = client().scope.getOrCreate([runId]);
+  const p = pumpFor(runId, a, new LocalSpool(dir, [{ file: out, stream: "stdout" }, { file: err, stream: "stderr" }]), Number(env("SCRIPT_RPC_POLL_MS") ?? 100));
   try {
-    for (let i = 0; i < 100 && !Bun.file(join(dir, "token")).size; i++) await new Promise((r) => setTimeout(r, 20));
-    killpoint("script.before_start");
-    const exitCode = await new Promise<number>((resolve) => {
-      const ch = spawnProc("sh", ["-c", script], { cwd: home, env: sEnv, stdio: ["ignore", "pipe", "pipe"] });
-      const log = (stream: string) => (b: Buffer) => { const lines = b.toString("utf8").split("\n").filter(Boolean); if (lines.length) s.appendLog({ agentId: a.agentId, stream, lines }).catch(() => {}); };
-      ch.stdout.on("data", log("stdout")); ch.stderr.on("data", log("stderr"));
-      // Cancellation propagates into the "VM": kill the script when the agent is cancelled.
-      const watch = setInterval(async () => { const cur = await s.getAgent({ agentId: a.agentId }).catch(() => null); if (cur?.status === "cancelled") ch.kill("SIGKILL"); }, 200);
-      ch.on("close", (code, sig) => { clearInterval(watch); resolve(code ?? (sig ? 137 : 1)); });
-    });
-    return { exitCode };
+    for (let i = 0; i < 100 && !(existsSync(join(dir, "token")) && statSync(join(dir, "token")).size); i++) await new Promise((r) => setTimeout(r, 20));
+    let pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
+    if (!existsSync(exitFile) && !(pid && alive(pid))) {
+      killpoint("script.before_start");
+      const sEnv: Record<string, string> = {
+        PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`, HOME: home, CAPCOMD_RPC_DIR: dir, CAPCOMD_TOKEN_FILE: join(dir, "token"),
+        CAPCOMD_AGENT_ID: a.agentId, CAPCOMD_RUN_ID: runId, CAPCOMD_TASK: a.task, CAPCOMD_DEPTH: String(a.depth),
+        CAPCOMD_AWAIT_POLL_MS: env("SCRIPT_AWAIT_POLL_MS") ?? "150", CAPCOMD_RPC_TIMEOUT_MS: env("SCRIPT_RPC_TIMEOUT_MS") ?? "60000",
+      };
+      // Detached: the "VM" keeps running if this driver dies; the exit code lands in a file.
+      const wrapper = `( ${script} ) > ${JSON.stringify(out)} 2> ${JSON.stringify(err)} < /dev/null; echo $? > ${JSON.stringify(exitFile)}.tmp; mv ${JSON.stringify(exitFile)}.tmp ${JSON.stringify(exitFile)}`;
+      const ch = spawnProc("sh", ["-c", wrapper], { cwd: home, env: sEnv, stdio: "ignore", detached: true });
+      ch.unref();
+      pid = ch.pid!;
+      writeFileSync(pidFile, String(pid));
+    }
+    // Wait for exit; cancellation propagates into the "VM" (kill its process group).
+    for (;;) {
+      if (existsSync(exitFile)) break;
+      const cur = await s.getAgent({ agentId: a.agentId }).catch(() => null);
+      if (cur?.status === "cancelled") { try { process.kill(-pid, "SIGKILL"); } catch {} return { exitCode: 137 }; }
+      if (!alive(pid) && !existsSync(exitFile)) { await new Promise((r) => setTimeout(r, 300)); if (!existsSync(exitFile)) return { exitCode: 137 }; }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return { exitCode: Number(readFileSync(exitFile, "utf8").trim() || 1) };
   } finally { await p.stop(); }
 }

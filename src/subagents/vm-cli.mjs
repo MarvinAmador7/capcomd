@@ -13,16 +13,30 @@ const RPC_TIMEOUT = Number(process.env.CAPCOMD_RPC_TIMEOUT_MS || 120000);
 const AWAIT_POLL = Number(process.env.CAPCOMD_AWAIT_POLL_MS || 1000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const TRANSIENT = new Set(["unavailable", "engine_unreachable", "internal"]);
+
+/** One logical call. Transient failures (orchestrator restarting, engine blip) are retried with
+ *  the SAME request id, which the orchestrator uses as the idempotency key for writes. */
 async function call(op, args = {}) {
+  const id = `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}`;
+  const deadline = Date.now() + RPC_TIMEOUT;
+  let r, wait = 500;
+  for (;;) {
+    r = await callOnce(id, op, args, Math.max(1000, deadline - Date.now()));
+    if (r.ok || !TRANSIENT.has(r.error?.code) || Date.now() > deadline) return r;
+    await sleep(wait); wait = Math.min(wait * 2, 5000);
+  }
+}
+
+async function callOnce(id, op, args, timeoutMs) {
   mkdirSync(join(DIR, "req"), { recursive: true });
   mkdirSync(join(DIR, "res"), { recursive: true });
-  const id = `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}`;
   const token = existsSync(TOKEN_FILE) ? readFileSync(TOKEN_FILE, "utf8").trim() : "";
   const tmp = join(DIR, "req", `.${id}.tmp`);
   writeFileSync(tmp, JSON.stringify({ id, token, op, args }));
   renameSync(tmp, join(DIR, "req", `${id}.json`));
   const res = join(DIR, "res", `${id}.json`);
-  const deadline = Date.now() + RPC_TIMEOUT;
+  const deadline = Date.now() + timeoutMs;
   let wait = 50;
   while (Date.now() < deadline) {
     if (existsSync(res)) {
@@ -30,7 +44,7 @@ async function call(op, args = {}) {
     }
     await sleep(wait); wait = Math.min(wait * 2, 500);
   }
-  return { id, ok: false, error: { code: "unavailable", message: `no answer from the orchestrator in ${RPC_TIMEOUT}ms`, hint: "Retry with the same --key; the orchestrator may be restarting." } };
+  return { id, ok: false, error: { code: "unavailable", message: `no answer from the orchestrator in ${timeoutMs}ms`, hint: "Retry with the same --key; the orchestrator may be restarting." } };
 }
 
 /** Block until the agents finish (or any, for wait-any). Polls; the orchestrator refuses deadlocks. */

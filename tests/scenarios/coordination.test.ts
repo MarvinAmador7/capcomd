@@ -27,7 +27,7 @@ test("single loop: one worker, structured result, no host secrets in its env", a
   expect(a.status).toBe("done");
   expect(a.result).toMatchObject({ summary: "wrote src/single.txt", branch: `capcomd/${run}/${id}`, verification: null });
   expect(a.result.commit).toMatch(/^[0-9a-f]{40}$/);
-  const envLine = (await w.cj(["logs", run, id])).j.lines.find((l: any) => l.stream === "stdout")?.line ?? "";
+  const envLine = (await w.cj(["logs", run, id])).j.lines.find((l: any) => l.line.includes("CAPCOMD_RPC_DIR"))?.line ?? "";
   expect(envLine).toContain("CAPCOMD_RPC_DIR");
   for (const secret of ["CAPCOMD_ENDPOINT", "CAPCOMD_RPC_KEY", "CAPCOMD_REPO", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BOXD_API_KEY", "GIT_"]) expect(envLine).not.toContain(secret);
   expect(inOrder(await types(w, run), ["RUN_NEW", "AGENT_SPAWNED", "AGENT_STARTED", "KV_PUT", "TOKEN_REVOKED", "AGENT_DONE"])).toBe(true);
@@ -184,7 +184,7 @@ capcomd result --summary "depth2 ok" --data "$($S/json lead=$l spent='{"turns":1
   expect(t.tree[0].rollup).toMatchObject({ agents: 4, turns: 6 });
   expect(t.tree[0].children[0].rollup).toMatchObject({ agents: 3, turns: 5 });
   // trace parenting: every agent.run span's parent is its parent agent's span
-  const tf = join(w.env.CAPCOMD_TRACE_DIR, `${run}.ndjson`);
+  const tf = join(w.env.CAPCOMD_TRACE_DIR!, `${run}.ndjson`);
   expect(existsSync(tf)).toBe(true);
   const spans = readFileSync(tf, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((s: any) => s.name === "agent.run");
   const byAgent = new Map(spans.map((s: any) => [s.attributes["agent.id"], s]));

@@ -22,7 +22,28 @@ export interface Spool {
 const parseReq = (raw: string): RpcRequest | null => { try { return JSON.parse(raw); } catch { return null; } };
 
 export class LocalSpool implements Spool {
-  constructor(readonly dir: string) { for (const d of ["req", "work", "res"]) mkdirSync(join(dir, d), { recursive: true }); }
+  private offsets = new Map<string, number>();
+  constructor(readonly dir: string, readonly tails: Array<{ file: string; stream: string }> = []) { for (const d of ["req", "work", "res"]) mkdirSync(join(dir, d), { recursive: true }); }
+  /** New complete lines of the tailed files (offsets persist in the spool, so a re-attached driver doesn't repeat them). */
+  async logs() {
+    const out: string[] = [];
+    for (const t of this.tails) {
+      if (!existsSync(t.file)) continue;
+      const mark = join(this.dir, `.off-${t.stream}`);
+      const off = this.offsets.get(t.file) ?? (existsSync(mark) ? Number(readFileSync(mark, "utf8")) : 0);
+      const buf = readFileSync(t.file);
+      if (buf.length <= off) continue;
+      const chunk = buf.subarray(off).toString("utf8");
+      const end = chunk.lastIndexOf("\n");
+      if (end < 0) continue;
+      const lines = chunk.slice(0, end).split("\n");
+      const next = off + Buffer.byteLength(chunk.slice(0, end + 1));
+      this.offsets.set(t.file, next);
+      writeFileSync(mark, String(next));
+      out.push(...lines.map((l) => (t.stream === "stdout" ? l : `[${t.stream}] ${l}`)));
+    }
+    return out;
+  }
   async take() {
     for (const f of readdirSync(join(this.dir, "req"))) if (f.endsWith(".json")) { try { renameSync(join(this.dir, "req", f), join(this.dir, "work", f)); } catch {} }
     return readdirSync(join(this.dir, "work")).filter((f) => f.endsWith(".json")).map((f) => { const raw = readFileSync(join(this.dir, "work", f), "utf8"); return { file: f, raw, req: parseReq(raw) }; });
