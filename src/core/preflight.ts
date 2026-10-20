@@ -50,7 +50,7 @@ export async function runPreflight(source: Record<string, string | undefined> = 
         });
         if (res.ok) out.push({ name: "anthropic", ok: true, detail: "ANTHROPIC_API_KEY accepted (GET /v1/models)" });
         else if (res.status === 401 || res.status === 403) out.push({ name: "anthropic", ok: false, detail: `ANTHROPIC_API_KEY was rejected (HTTP ${res.status}). Check the key (no quotes or whitespace) and retry.` });
-        else out.push({ name: "anthropic", ok: false, detail: `Anthropic API returned HTTP ${res.status}` });
+        else { let msg = ""; try { const j: any = await res.json(); msg = `${j?.error?.type ?? ""}: ${j?.error?.message ?? ""}`.slice(0, 300); } catch {} out.push({ name: "anthropic", ok: false, detail: `Anthropic API returned HTTP ${res.status}${msg ? ` (${msg})` : ""}` }); }
       } catch (err) {
         out.push({ name: "anthropic", ok: false, detail: `Anthropic API unreachable: ${r.text((err as Error)?.message ?? String(err)).slice(0, 300)}` });
       }
