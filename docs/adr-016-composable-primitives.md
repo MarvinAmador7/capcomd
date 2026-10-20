@@ -1,6 +1,6 @@
 # ADR-016: capcomd is primitives + harness, not a fixed hierarchy (draft)
 
-Status: accepted in part. Step 1 is built (run new, spawn, await, wait-any, cancel, tree). The rest is proposed. Supersedes the *enforcement* in ADR-001: the planner → worker → judge hierarchy becomes one composition of these primitives, and capcomd no longer mandates it.
+Status: accepted in part. Built: step 1 (run new, spawn, await, wait-any, cancel, tree) and step 2 (verify, `merge --require`). The rest is proposed. Supersedes the *enforcement* in ADR-001: the planner → worker → judge hierarchy becomes one composition of these primitives, and capcomd no longer mandates it.
 
 ## Decision
 capcomd provides durable, sandboxed, observable building blocks: agents, tasks, verification, merge, state and budgets. An orchestrator (Hermes, a script, or a capcomd agent with `children.allowSpawn`) composes them into patterns, guided by `skills/capcomd-orchestration/SKILL.md`. capcomd enforces safety, not shape: sandbox/egress, the auth rules (ADR-015 §6), children limits (§7), budgets, leases, verification-before-merge and the event log.
@@ -53,4 +53,43 @@ Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token 
   - `tests/primitives/policy.test.ts` (unit) and `tests/primitives/e2e.test.ts` (CLI with a real engine).
   - `evals/primitives/run.ts` (recipe eval with a latency baseline).
   - Chaos: in `chaos:fast`, 4 primitive killpoints per round (`scope.spawn.mid:1|3`, `scope.cancel.mid:1`, `push.mid:1` while an agent is being driven). After each kill the harness reruns the keyed scenario and audits the tree: one agent per key, cancel reached every descendant, one event per transition, contiguous seqs, no live workers.
-- **Known limits:** `CAPCOMD_SPAWN_EXEC=fake` runs the fake agent while profiles still govern the policy. If a driver dies while its worker action is still running in the engine, the replacement driver can call pushBranch again; it's idempotent only after the push is recorded. That matters only for real agents.
+- **Test knob:** `CAPCOMD_SPAWN_EXEC=fake` runs the fake agent while profiles still govern the policy.
+
+### Push lock (decision 2026-10-19)
+- The worker actor keeps a persisted `push_locks` row per push idempotency key (`worker-<id>-push-<task>-e<epoch>`): holder, engine instance id, lease, attempts, state, adopted, sha.
+  - The action holding the lock renews it while the agent runs (`CAPCOMD_PUSH_LOCK_MS`, default 30s).
+  - Any other pushBranch call for that key waits while the lock is live. So a takeover driver whose predecessor died mid-push waits for that push instead of starting a second one.
+- **Takeover** happens when the lock belongs to a dead engine process (different instance id) or its lease has expired. The new holder first runs `git ls-remote` on the task branch. If the branch is already on the remote, it adopts that commit and doesn't run the agent again.
+  - A PR isn't created at push time (verify/merge opens PRs), so checking the branch is enough there. The PR-mode merge path keeps its own CAS (ADR-013).
+- The lock row and the PUSHED event commit in one transaction, so a replay returns the recorded sha, turns and wallSeconds.
+- **Chaos coverage:**
+  - `driver.kill`: SIGKILL the driver mid-push (with the engine's push slowed down). Asserts 1 attempt, 1 PUSHED, agent done.
+  - `push.after.before_event`: kill the engine after the push reached a real bare repo. Asserts 2 attempts, `adopted`, exactly one commit on the branch.
+
+### Multi-unit budgets (decision 2026-10-19)
+- **Units:** `usd`, `turns`, `wallSeconds`. Use `--budget 5` (usd) or `--budget usd=5,turns=200,wallSeconds=3600`, on `run new` and on `spawn`; a contract can carry `{"budget":{…}}`, and `--budget` overrides it per unit.
+- **Unlimited units:** a unit the parent doesn't set is unlimited for its children.
+- **Carve and refund**, per unit: a live child holds its allocation and a finished one holds what it spent. A child gets `remaining × budgetShare`, with turns floored. Requesting more than that is rejected.
+- The default with no request is all of the remaining budget (× budgetShare), so fan-out callers should request explicitly.
+- **Enforcement:** the carved budget narrows the agent's profile: `maxTurns ≤ turns`, `timeoutMs ≤ wallSeconds`, `maxBudgetUsd ≤ usd`. The profile's own limits stay the ceiling.
+- **Charging:** agents are charged `{usd: costUsd, turns, wallSeconds}` (agent wall time). Subscription agents spend usd 0 and are charged turns + time.
+
+### Future (ADR item)
+- Drive agents from the engine with actor schedules instead of host `capcomd agent-drive` processes. That removes the dependency on the orchestrating host and the lease takeover. The host driver is fine for now.
+
+
+## Step 2 as built: verify + merge --require
+- `capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P] [--target T] [--key K]` → `vfy-…`.
+  - The verifier actor runs the checks (`--checks`, or the repo's test command) on the ref merged with the latest target (ADR-003). It records the exact branch commit it tested (`result.commit`).
+  - `--judge-profile` adds a judge verdict over the acceptance criteria, and both must pass. Step 2 uses the judge actor and its model. Running a judge *agent profile* in a VM with a read-only checkout comes later.
+  - Exit code 0 means it passed.
+- `capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]` → `mrg-…`.
+  - Without `--require` (and without `--operator`) it refuses with a usage error.
+  - The vfy must be `passed`, for the same branch and target.
+  - The merge passes `expectSha` = the verified commit. Under the target lock, a branch that moved since verification fails with "moved since verification", so only the verified commit can land.
+  - Protected targets need `--operator` (or `capcomd run` + `approve`). Merges keep ADR-013's CAS and the existing-merge detection.
+- **Records and events:** both are records in the scope actor (`ops`), idempotent by id; the same id with different params is a conflict. Events: VERIFY_STARTED/PASSED/FAILED and MERGE_STARTED/MERGED/MERGE_FAILED.
+- **Recovery:** a rerun after a crash re-enters the verifier, which reconciles against git and records an already-landed merge instead of merging twice.
+- **Tests:**
+  - `tests/primitives/verify-merge.test.ts` (real bare repo): the gate, failed checks, a judge, a cross-ref vfy, a branch moved after verify, the happy path and an idempotent repeat.
+  - Chaos case `merge.after_cas.before_event:1` (kill after the CAS push): asserts merge recorded once, exactly one task commit on trunk, contiguous events.

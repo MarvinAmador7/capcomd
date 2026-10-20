@@ -6,7 +6,7 @@ description: Compose capcomd primitives (spawn, await, send, cancel, verify, mer
 
 capcomd gives you primitives, not a workflow. Pick the **simplest** pattern that fits. Always use `--json`, keep IDs, and read `capcomd events R --follow` when debugging. See ADR-016.
 
-Built today: `run new`, `spawn <runId> …`, `await <runId> agt…`, `wait-any <runId> agt…`, `cancel <runId> [agt]`, `tree <runId>`, `events <runId>`. `verify`, `merge --require`, `send`/`handoff`, `task`, `kv` and `budget` are proposed (ADR-016), so use `capcomd run` for verify+merge until they ship. Always pass `--key` on spawn so retries after a crash are safe.
+Built today: `run new`, `spawn <runId> …`, `await <runId> agt…`, `wait-any <runId> agt…`, `cancel <runId> [agt]`, `tree <runId>`, `events <runId>`, `verify <runId> --ref agt [--checks CMD] [--judge-profile P --acceptance …]`, `merge <runId> --ref agt --require vfy`. `send`/`handoff`, `task`, `kv` and `budget` are proposed (ADR-016). Always pass `--key` on spawn so retries after a crash are safe. Budgets are multi-unit (`--budget usd=1,turns=40,wallSeconds=900`). With no request, a spawn takes everything that's left, so request explicitly when fanning out. Subscription agents are limited by turns and wall time.
 
 Ground rules: one `run new` per goal with an explicit `--budget`; nothing reaches main without `verify` + `merge --require`; write acceptance criteria as commands where possible; cancel what you no longer need (`cancel` propagates); profiles come from `capcomd agents list --json`.
 
