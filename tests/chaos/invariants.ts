@@ -108,22 +108,28 @@ export async function auditRun(runId: string, endpoint = "http://127.0.0.1:6420"
     }
   }
 
-  const workerId = `${runId}-worker-1`;
-  const worker = await client.worker.getOrCreate([runId, workerId]).getWorker({ workerId });
+  // Sandboxes: the legacy loop has one worker (<run>-worker-1); the recipe one worker per scope
+  // agent (keyed [run, agentId]). Audit whichever the run used; every one must be reaped.
+  const scopeAgents: any[] = await client.scope.getOrCreate([runId]).listAgents({}).then((r: any) => (Array.isArray(r) ? r : r?.agents ?? []), () => []);
+  const workerIds = scopeAgents.length ? scopeAgents.map((x) => String(x.agentId)) : [`${runId}-worker-1`];
   const sandboxViolations: string[] = [];
-  if (!worker) {
-    sandboxViolations.push(`worker ${workerId} missing`);
-  } else if (!WORKER_STATES.has(worker.state)) {
-    sandboxViolations.push(`worker ${workerId} in unknown state ${worker.state}`);
-  } else {
+  const runNow = await runHandle.getRun({ runId });
+  for (const workerId of workerIds) {
+    const worker = await client.worker.getOrCreate([runId, workerId]).getWorker({ workerId });
+    if (!worker) {
+      // A recipe agent that never reached provisioning (e.g. cancelled/failed before its driver ran) has no sandbox.
+      if (!scopeAgents.length) sandboxViolations.push(`worker ${workerId} missing`);
+      continue;
+    }
+    if (!WORKER_STATES.has(worker.state)) {
+      sandboxViolations.push(`worker ${workerId} in unknown state ${worker.state}`);
+      continue;
+    }
     const createdAt = Number(worker.context?.createdAt ?? Date.now());
     const ttlMs = Number(worker.context?.ttlMs ?? 3_600_000);
     const active = worker.state !== "destroyed" && worker.state !== "failed";
-    if (active && Date.now() - createdAt > ttlMs) {
-      sandboxViolations.push(`orphan sandbox ${workerId} past TTL`);
-    }
+    if (active && Date.now() - createdAt > ttlMs) sandboxViolations.push(`orphan sandbox ${workerId} past TTL`);
     // Deterministic (clock-independent) form: a finished run must have reaped its sandbox.
-    const runNow = await runHandle.getRun({ runId });
     if (active && runNow && ["completed", "failed", "cancelled"].includes(runNow.state)) {
       sandboxViolations.push(`unreaped sandbox ${workerId} (worker ${worker.state}, run ${runNow.state})`);
     }
@@ -143,7 +149,7 @@ export async function auditRun(runId: string, endpoint = "http://127.0.0.1:6420"
   const seqSources = [
     await runHandle.listEventSeqs({}),
     await client.taskBoard.getOrCreate([runId]).listEventSeqs({}),
-    await client.worker.getOrCreate([runId, workerId]).listEventSeqs({}),
+    ...(await Promise.all(workerIds.map((w) => client.worker.getOrCreate([runId, w]).listEventSeqs({})))),
     await client.planner.getOrCreate([runId, "root"]).listEventSeqs({}),
     await client.judge.getOrCreate([runId, "final"]).listEventSeqs({}),
   ];

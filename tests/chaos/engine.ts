@@ -118,6 +118,9 @@ export interface EngineOpts {
   repo?: boolean;
   /** Extra env for the engine/runner process (e.g. test knobs like CAPCOMD_FAKE_PUSH_DELAY_MS). */
   env?: Record<string, string>;
+  /** Which `capcomd run` path the client drives. Default legacy: the killpoint gate was written
+   *  against the legacy loop, so it is pinned there even though the recipe is the CLI default. */
+  runPath?: "legacy" | "recipe";
 }
 
 /** Merge env for a repo-backed case. Shared by the runner (verifier merges) and the client. */
@@ -380,7 +383,8 @@ const CLIENT_TIMEOUT_MS = 90_000;
 
 export function runClient(runId: string, opts: EngineOpts = {}): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const env: NodeJS.ProcessEnv = { ...process.env, CAPCOMD_ENDPOINT: engineEnv(opts).CAPCOMD_ENDPOINT, ...repoEnv(opts) };
+    // CAPCOMD_SPAWN_EXEC=fake: recipe agents run the fake agent (the legacy worker already does).
+    const env: NodeJS.ProcessEnv = { ...process.env, CAPCOMD_ENDPOINT: engineEnv(opts).CAPCOMD_ENDPOINT, ...repoEnv(opts), CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_AWAIT_POLL_MS: "200" };
     delete env.RELAY_ENDPOINT;
     delete env.CAPCOMD_KILLPOINT;
     delete env.RELAY_KILLPOINT;
@@ -388,7 +392,7 @@ export function runClient(runId: string, opts: EngineOpts = {}): Promise<{ code:
     // SIGKILL would hit only the wrapper, leaving bun.exe holding the pipes ('close' never fires).
     const child = spawn(
       process.execPath,
-      ["src/cli/index.ts", "run", "--run-id", runId, "ChaosGoal"],
+      ["src/cli/index.ts", "run", `--${opts.runPath ?? "legacy"}`, "--run-id", runId, "ChaosGoal"],
       {
         cwd: ROOT,
         env,

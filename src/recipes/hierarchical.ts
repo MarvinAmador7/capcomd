@@ -124,6 +124,7 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
     while (!TERMINAL.has(lt.state)) {
       if (lt.state === "pending") {
         const g: any = await ledger.grantLease({ taskId: t.id, workerId: `${runId}-recipe` });
+        await ledger.flushOutbox({}); // ack the lease's outbox events, as the legacy loop does after provisioning
         emit("task.leased", { taskId: t.id, epoch: g.epoch, workerId: `${runId}-recipe` }, `  → ${t.id} (epoch ${g.epoch})`);
         lt = await ledger.getTask({ taskId: t.id });
         continue;

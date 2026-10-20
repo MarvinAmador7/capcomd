@@ -13,3 +13,15 @@ export const KILLPOINTS = [
   "budget.charge.mid",
   "outbox.dispatch.after_send.before_ack",
 ];
+
+/**
+ * Killpoints exercised on the recipe path (`capcomd run --recipe`, the CLI default), audited
+ * with the same invariants (one landing per plan task, ledger, budget, outbox). All actor and
+ * merge killpoints apply; the recipe adds the scope primitives it composes (claim, spawn).
+ * lease.expire.mid is legacy-only: only the legacy loop expires a stale ledger lease on resume.
+ */
+export const RECIPE_KILLPOINTS = [
+  ...KILLPOINTS.filter((k) => k !== "lease.expire.mid"),
+  "board.claim.mid",
+  "scope.spawn.mid",
+];

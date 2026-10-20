@@ -8,13 +8,13 @@
  * data dir, rivet-services disabled (it binds a fixed :8642). No global pkill anywhere;
  * runner reaping is scoped by `serve --port <port>`.
  *
- * Usage: bun tests/chaos/fast.ts [--rounds 3] [--workers N] [--only killpoints|seeds]
+ * Usage: bun tests/chaos/fast.ts [--rounds 3] [--workers N] [--only killpoints|primitives|recipe|seeds]
  */
 import { classify, SLOW_FACTOR } from "./classify";
 import { env as envVar } from "../../src/utils/env";
 import { availableParallelism, freemem } from "os";
 import { mkdirSync, rmSync } from "fs";
-import { KILLPOINTS } from "./cases";
+import { KILLPOINTS, RECIPE_KILLPOINTS } from "./cases";
 import { PRIM_KILLPOINTS, survivePrimitives } from "./primitives";
 import { randomKillpoint } from "./harness";
 import { survive, type Phases } from "./survive";
@@ -39,12 +39,13 @@ if (N < 16 && !arg("workers") && !envVar("CHAOS_WORKERS"))
 const BASE_PORT = Number(envVar("CHAOS_BASE_PORT") ?? 7700);
 const DATA_ROOT = envVar("CHAOS_DATA_ROOT") ?? "/tmp/capcomd-chaos-fast";
 
-interface Job { round: number; kind: "killpoint" | "seed" | "primitive"; id: string; killpoint: string; iteration: number; requireKill: boolean }
+interface Job { round: number; kind: "killpoint" | "seed" | "primitive" | "recipe"; id: string; killpoint: string; iteration: number; requireKill: boolean }
 const jobs: Job[] = [];
 for (let round = 1; round <= rounds; round++) {
-  if (only !== "seeds" && only !== "primitives") for (const kp of KILLPOINTS) jobs.push({ round, kind: "killpoint", id: kp, killpoint: kp, iteration: 1, requireKill: true });
+  if (!only || only === "recipe") for (const kp of RECIPE_KILLPOINTS) jobs.push({ round, kind: "recipe", id: `recipe ${kp}`, killpoint: kp, iteration: 1, requireKill: true });
+  if (only !== "seeds" && only !== "primitives" && only !== "recipe") for (const kp of KILLPOINTS) jobs.push({ round, kind: "killpoint", id: kp, killpoint: kp, iteration: 1, requireKill: true });
   if (!only || only === "primitives") for (const kp of PRIM_KILLPOINTS) jobs.push({ round, kind: "primitive", id: `prim ${kp}`, killpoint: kp.split(":")[0]!, iteration: Number(kp.split(":")[1]), requireKill: true });
-  if (only !== "killpoints" && only !== "primitives") for (let seed = 1; seed <= seeds; seed++) {
+  if (only !== "killpoints" && only !== "primitives" && only !== "recipe") for (let seed = 1; seed <= seeds; seed++) {
     const pick = randomKillpoint(seed);
     jobs.push({ round, kind: "seed", id: `seed ${seed}`, killpoint: pick.killpoint, iteration: pick.iteration, requireKill: false });
   }
@@ -69,7 +70,7 @@ async function worker(slot: number) {
     const started = Date.now();
     const r = job.kind === "primitive"
       ? await survivePrimitives(`${job.killpoint}:${job.iteration}`, { port, dataDir })
-      : await survive(job.killpoint, job.iteration, job.requireKill, { port, dataDir, repo: process.env.CAPCOMD_CHAOS_REPO !== "0" }, true);
+      : await survive(job.killpoint, job.iteration, job.requireKill, { port, dataDir, repo: process.env.CAPCOMD_CHAOS_REPO !== "0", runPath: job.kind === "recipe" ? "recipe" : "legacy" }, true);
     const res: Result = { job, ok: r.ok, killed: r.killed, ms: Date.now() - started, error: r.error, phases: r.phases, slot, start: started, end: Date.now() };
     results.push(res);
     const p = r.phases;
@@ -96,7 +97,7 @@ for (const phase of ["wipe", "engineUp", "firstClient", "stop", "restart", "resu
 console.log(`  case total   ${stat(results.map((r) => r.ms))}`);
 console.log(`\n=== pass counts`);
 for (let round = 1; round <= rounds; round++) {
-  for (const kind of ["killpoint", "primitive", "seed"] as const) {
+  for (const kind of ["killpoint", "recipe", "primitive", "seed"] as const) {
     const rs = results.filter((r) => r.job.round === round && r.job.kind === kind);
     if (rs.length) console.log(`  round ${round} ${kind}s: ${rs.filter((r) => r.ok).length}/${rs.length} passed (killed ${rs.filter((r) => r.killed).length})`);
   }
