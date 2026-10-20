@@ -3,7 +3,7 @@
 // the API accepts it through boxd's substitution (GET /v1/models from inside the VM).
 import type { SandboxProvider } from "../providers/sandbox";
 import type { AgentConfig } from "../agents/config";
-import { BASE_EGRESS } from "../agents/config";
+import { egressFor, type EgressAuth, type RealAgent } from "../agents/config";
 import { ALL_ADAPTERS } from "../agents/adapters";
 import { agentHome, agentPath, detectScript, parseDetect, SECRET_PLACEHOLDER_PREFIX } from "../agents/runner";
 import { Redactor } from "../agents/redact";
@@ -14,7 +14,8 @@ export interface DoctorAgent {
   credential: { mode: "placeholder" | "plain" | "absent" | "subscription"; via: "secret" | "env" | "none" | "subscription" };
   /** Snapshot this agent's VM booted from. */
   from?: string;
-  api: { ok: boolean; status?: number; detail: string };
+  /** hint: an egress-denied diagnosis when the failure looks like a blocked host. */
+  api: { ok: boolean; status?: number; detail: string; hint?: string };
   ok: boolean;
 }
 export interface DoctorReport { vm: string; fromSnapshot?: string; bootMs: number; agents: DoctorAgent[] }
@@ -59,7 +60,9 @@ async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]):
   const src = o.source ?? process.env;
   const r = new Redactor(ALL_ADAPTERS.map((a) => src[a.secretName]));
   const t0 = now();
-  const egress = [...BASE_EGRESS, ...ALL_ADAPTERS.map((a) => a.apiHost)];
+  // Each agent's provider+auth egress set (subscription codex needs chatgpt.com, auth.openai.com, …).
+  const authOf = (k: string): EgressAuth => (o.modes?.[k] === "subscription" ? "subscription" : "apikey");
+  const egress = [...new Set(ALL_ADAPTERS.filter((a) => kinds.includes(a.kind)).flatMap((a) => egressFor(a.kind as RealAgent, authOf(a.kind))))];
   const { id } = await p.ensure({ idemKey: `capcomd-doctor-${t0}`, isolated: true, ttlSeconds: 900, egressAllow: egress, labels: { purpose: "doctor" }, ...(o.snapshot ? { fromSnapshot: o.snapshot } : {}) });
   const home = agentHome(o.cfg);
   const baseEnv = { PATH: agentPath(home), HOME: home };
@@ -74,7 +77,8 @@ async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]):
         const cli = { ok: !!bin, version: det.version, bin };
         const { verifyLogin } = await import("../auth/login");
         const v = bin ? await verifyLogin(p as any, id, a, o.cfg, bin) : { ok: false, detail: "cli missing" };
-        agents.push({ agent: a.kind, cli, credential: { mode: "subscription", via: "subscription" }, api: { ok: v.ok, detail: v.detail }, ok: cli.ok && v.ok, from: o.snapshot });
+        const hint = v.ok ? undefined : egressHint(v.detail, egress, a.kind, "subscription");
+        agents.push({ agent: a.kind, cli, credential: { mode: "subscription", via: "subscription" }, api: { ok: v.ok, detail: v.detail, ...(hint ? { hint } : {}) }, ok: cli.ok && v.ok, from: o.snapshot });
         continue;
       }
       const det = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a)], { env: baseEnv })).stdout);
@@ -94,6 +98,7 @@ async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]):
           : { ok: false, status: status || undefined, detail: status ? `HTTP ${status}${status === 401 ? " (key rejected or not substituted)" : ""}` : `request failed: ${r.text(res.stderr).slice(-200)}` };
       }
       const cli = { ok: !!det.bin, version: det.version, bin: det.bin };
+      if (!api.ok) { const hint = egressHint(api.detail, egress, a.kind, "apikey"); if (hint) api = { ...api, hint }; }
       agents.push({ agent: a.kind, cli, credential: { mode, via }, api, ok: cli.ok && api.ok, from: o.snapshot });
     }
     return { vm: id, fromSnapshot: o.snapshot, bootMs, agents };
@@ -106,6 +111,28 @@ export function formatDoctor(rep: DoctorReport): string {
   const lines = [`doctor: vm from ${rep.fromSnapshot ?? "default image"} (boot ${rep.bootMs}ms)`];
   for (const a of rep.agents) {
     lines.push(`  ${a.ok ? "ok  " : "FAIL"} ${a.agent.padEnd(12)} cli=${a.cli.ok ? `${a.cli.version ?? "?"}` : "missing"}  ${a.credential.mode === "subscription" ? `auth=subscription (${a.from ?? "image"})` : `key-in-vm=${a.credential.mode}`}  ${a.credential.mode === "subscription" ? "check" : "api"}=${a.api.detail}`);
+    if (a.api.hint) lines.push(`       hint: ${a.api.hint}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * Diagnose an egress block from a failure text: the host a request failed for (codex: "error
+ * sending request for url https://host/…", curl: "Could not resolve host: host", "Failed to
+ * connect to host"), checked against the VM's allowlist.
+ */
+export function egressHint(detail: string, allow: string[], kind: string, auth: string): string | undefined {
+  const t = detail ?? "";
+  const host =
+    /error sending request for url \(?https?:\/\/([^/\s)'"]+)/i.exec(t)?.[1] ??
+    /Could not resolve host:?\s*([A-Za-z0-9.-]+)/i.exec(t)?.[1] ??
+    /Failed to connect to ([A-Za-z0-9.-]+)/i.exec(t)?.[1] ??
+    /(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED)\s+([A-Za-z0-9.-]+)/i.exec(t)?.[1];
+  if (!host) return /failed to refresh (available )?models|egress|connection (refused|reset)|network is unreachable/i.test(t)
+    ? `looks like a network/egress block for ${kind} (${auth}); VM allowlist: ${allow.join(", ")}` : undefined;
+  const h = host.toLowerCase().replace(/:\d+$/, "");
+  const allowed = allow.some((a) => (a.startsWith("*.") ? h.endsWith(a.slice(1)) : h === a.toLowerCase()));
+  return allowed
+    ? `request to ${h} failed although it is on the egress allowlist; check boxd egress/DNS or the provider's status`
+    : `egress denied: ${h} is not on the VM allowlist for ${kind} (${auth}). Add it to PROVIDER_EGRESS in src/agents/config.ts, or for one profile set \`egress\` / CAPCOMD_AGENT_EGRESS.`;
 }

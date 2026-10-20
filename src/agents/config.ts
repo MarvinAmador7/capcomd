@@ -35,8 +35,26 @@ export function agentEgress(kind: RealAgent): string[] {
   return [...BASE_EGRESS.slice(0, 1), AGENT_API_HOST[kind], ...BASE_EGRESS.slice(1)];
 }
 
-/** ChatGPT-plan codex talks to the ChatGPT backend and refreshes via auth.openai.com (verify live). */
-export const CODEX_SUBSCRIPTION_HOSTS = ["chatgpt.com", "auth.openai.com"];
+/**
+ * ChatGPT-plan codex: model calls + model list refresh go to chatgpt.com/backend-api, token refresh
+ * to auth.openai.com, feature flags/experiments to ab.chatgpt.com (live Mac run 2026-10-20: doctor
+ * failed "error sending request for url https://chatgpt.com/backend-api/..." without them).
+ */
+export const CODEX_SUBSCRIPTION_HOSTS = ["chatgpt.com", "auth.openai.com", "ab.chatgpt.com"];
+
+export type EgressAuth = "apikey" | "subscription";
+/**
+ * Provider + auth egress sets (beyond BASE_EGRESS). One table so runs, doctor and login agree.
+ * claude subscription uses a setup-token (long-lived OAuth token) against api.anthropic.com.
+ */
+export const PROVIDER_EGRESS: Record<RealAgent, Record<EgressAuth, string[]>> = {
+  "claude-code": { apikey: ["api.anthropic.com"], subscription: ["api.anthropic.com"] },
+  codex: { apikey: ["api.openai.com"], subscription: ["api.openai.com", ...CODEX_SUBSCRIPTION_HOSTS] },
+};
+/** Full VM allowlist for one agent and auth mode: base hosts + that provider's set. */
+export function egressFor(kind: RealAgent, auth: EgressAuth): string[] {
+  return [...new Set([...BASE_EGRESS.slice(0, 1), ...PROVIDER_EGRESS[kind][auth], ...BASE_EGRESS.slice(1)])];
+}
 
 /**
  * Credential mode, strictly one of API key or subscription per agent (no fallback between them):
@@ -132,7 +150,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     workdir: envVar("AGENT_WORKDIR", source) ?? "/var/tmp/capcomd",
     claudeBin: envVar("AGENT_CLAUDE_BIN", source),
     agentBin: envVar("AGENT_BIN", source),
-    egress: list(envVar("AGENT_EGRESS", source), spec?.egress ?? (kind === "codex" ? (cred === "subscription" ? [...agentEgress("codex"), ...CODEX_SUBSCRIPTION_HOSTS] : agentEgress("codex")) : AGENT_EGRESS)),
+    egress: list(envVar("AGENT_EGRESS", source), spec?.egress ?? (isRealAgent(kind) ? egressFor(kind, cred === "subscription" ? "subscription" : "apikey") : AGENT_EGRESS)),
     codexSandbox: sandbox,
     codexUsdPerMtokIn: num("CODEX_USD_PER_MTOK_IN", 1.25),
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
