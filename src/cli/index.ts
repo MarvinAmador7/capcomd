@@ -10,7 +10,7 @@ import { loadTrace, renderTrace } from "./commands/trace";
 import { RelayError, SCHEMA, EXIT, toRelayError } from "../core/errors";
 
 /** Which `capcomd run <goal>` path runs by default (ADR-016 step 4). */
-export const DEFAULT_RUN_PATH: "recipe" | "legacy" = "legacy";
+export const DEFAULT_RUN_PATH: "recipe" | "legacy" = "recipe";
 import {
   approveTask,
   assertEngine,
@@ -381,7 +381,18 @@ async function main(argv: string[]): Promise<number> {
       case "cancel": {
         const runId = positionals[1] ?? usage("runId required: capcomd cancel <runId> [agentId]");
         const P = await import("../primitives/ops");
+        const S = await import("../primitives/state");
+        // A recipe run (planner flow over the primitives) keeps the run-level cancel contract
+        // ({runId, state, changed}); its scope agents are cancelled alongside.
         const scoped = await P.listScope(runId).then(() => true, () => false);
+        const recipeRun = !positionals[2] && scoped && await S.kvGet(runId, "recipe/plan").then((e: any) => e.version > 0, () => false);
+        if (recipeRun) {
+          const r = await cancelRun(runId);
+          if (r.changed) await P.cancelAgents(runId, undefined, (values.reason as string | undefined) ?? "run cancelled").catch(() => {});
+          if (json) out(r);
+          else console.log(r.changed ? `✓ Run ${runId} cancelled` : `Run ${runId} is ${r.state}; nothing to cancel`);
+          return EXIT.ok;
+        }
         if (positionals[2] || scoped) {
           const r = await P.cancelAgents(runId, positionals[2], values.reason as string | undefined);
           if (json) out(r);
@@ -476,15 +487,7 @@ async function main(argv: string[]): Promise<number> {
       case "approve": {
         const runId = positionals[1] ?? usage("usage: capcomd approve <runId> <taskId>");
         const taskId = positionals[2] ?? usage("usage: capcomd approve <runId> <taskId>");
-        // Recipe runs park on kv approval/<task>; legacy runs on the task board actor.
-        const S = await import("../primitives/state");
-        const recipeRun = await S.kvGet(runId, "recipe/plan").then((e: any) => e.version > 0, () => false);
-        if (recipeRun) {
-          const w: any = await S.kvWrite(runId, { k: `approval/${taskId}`, value: { approvedBy: (values.by as string | undefined) ?? "cli", at: Date.now() }, key: `approve-${taskId}` });
-          if (json) out({ runId, taskId, approved: true, recipe: true, version: w.version });
-          else console.log(`✓ Approved ${taskId}; the recipe merges it on its next poll`);
-          return EXIT.ok;
-        }
+        // Both run paths park protected merges on the task-board ledger (public contract).
         const r = await approveTask(runId, taskId, (values.by as string | undefined) ?? "cli");
         if (json) out(r);
         else console.log(r.already ? `${taskId} was already merged` : `✓ Approved ${taskId}; merging into protected branch`);

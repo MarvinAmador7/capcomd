@@ -1,3 +1,4 @@
+import { isBoxdAuthError } from "../providers/boxd-errors";
 // ADR-016 step 1: run new / spawn / await / wait-any / cancel, on top of the existing worker
 // actor. The CLI is a thin client; durable state lives in the scope actor (agent tree, keys,
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
@@ -103,7 +104,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
   // so the next await/wait-any resumes the agent.
   let last: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
-    try { return await driveOnce(runId, agentId); } catch (e) { last = e; await sleep(2000 * attempt); }
+    try { return await driveOnce(runId, agentId); } catch (e) { last = e; if (isBoxdAuthError(e)) break; await sleep(2000 * attempt); } // a rejected credential never heals by retrying
   }
   const s = client().scope.getOrCreate([runId]);
   const fin = await s.finish({ agentId, status: "failed", result: { error: (last as Error)?.message?.slice(0, 500) ?? String(last) } });
@@ -131,6 +132,9 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
     }
   }
   const branch = `capcomd/${runId}/${agentId}`;
+  // The commit's Capcomd-Task trailer names the task: the contract's planTask when set (the
+  // hierarchical recipe, so landings match the legacy `<run>/<task>` key), else the agent id.
+  const taskLabel = taskLabelOf(a, agentId);
   try {
     let wk = await w.getWorker({ workerId: agentId });
     if (!wk || wk.state === "provisioning" || wk.state === "failed") {
@@ -138,8 +142,8 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
       wk = await w.getWorker({ workerId: agentId });
     }
     if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
-    if (wk?.state === "idle") await w.assignTask({ workerId: agentId, taskId: agentId, epoch: 1 });
-    const pushed: any = await w.pushBranch({ workerId: agentId, taskId: agentId, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}) });
+    if (wk?.state === "idle") await w.assignTask({ workerId: agentId, taskId: taskLabel, epoch: 1 });
+    const pushed: any = await w.pushBranch({ workerId: agentId, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}) });
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);
     const spent: Budget = { usd: costUsd, turns: Number(rec.turns ?? 0), wallSeconds: Number(rec.wallSeconds ?? 0) };
@@ -212,15 +216,20 @@ export async function listScope(runId: string) {
 
 // ── ADR-016 step 2: verify + merge --require ────────────────────────────────────────────────
 
+function taskLabelOf(a: any, agentId: string): string {
+  const p = a?.contract?.planTask;
+  return typeof p === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(p) ? p : agentId;
+}
+
 /** A ref is an agent id (its pushed branch) or a branch name. */
-async function resolveRef(runId: string, ref: string): Promise<{ branch: string; agentId: string | null }> {
+async function resolveRef(runId: string, ref: string): Promise<{ branch: string; agentId: string | null; label: string }> {
   if (ref.startsWith("agt-")) {
     const a = await getAgentOrThrow(runId, ref);
     const branch = a.result?.branch as string | undefined;
     if (a.status !== "done" || !branch) throw new RelayError("conflict", `agent ${ref} is ${a.status}; only a done agent's branch can be verified`, `Wait with \`capcomd await ${runId} ${ref}\`.`);
-    return { branch, agentId: ref };
+    return { branch, agentId: ref, label: taskLabelOf(a, ref) };
   }
-  return { branch: ref, agentId: null };
+  return { branch: ref, agentId: null, label: ref };
 }
 
 export interface VerifyOpts { runId: string; ref: string; checks?: string; acceptance?: unknown; judgeProfile?: string; target?: string; key?: string }
@@ -238,13 +247,13 @@ export async function verifyRef(o: VerifyOpts) {
   const { loadMergeConfig } = await import("../merge/config");
   const cfg = loadMergeConfig();
   const target = o.target ?? cfg?.target ?? "main";
-  const { branch, agentId } = await resolveRef(o.runId, o.ref);
+  const { branch, agentId, label } = await resolveRef(o.runId, o.ref);
   const vfyId = stableId("vfy", `${o.runId}\0${o.ref}`, o.key);
   const data = { ref: o.ref, agentId, branch, target, checks: o.checks ?? null, acceptance: o.acceptance ?? null, judgeProfile: o.judgeProfile ?? null };
   const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   const res: any = await c.verifier.getOrCreate([o.runId, vfyId]).verify({
-    verifierId: vfyId, taskId: agentId ?? branch, branch, runId: o.runId, target, testOnly: true, ...(o.checks ? { testCommand: o.checks } : {}),
+    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(o.checks ? { testCommand: o.checks } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const checksPassed = out.status === "verified";
@@ -275,7 +284,7 @@ export async function mergeRef(o: MergeOpts) {
   const { isProtectedBranch } = await import("../utils/protected");
   const cfg = loadMergeConfig();
   const target = o.target ?? cfg?.target ?? "main";
-  const { branch, agentId } = await resolveRef(o.runId, o.ref);
+  const { branch, agentId, label } = await resolveRef(o.runId, o.ref);
   let expectSha: string | undefined;
   if (!o.require && !o.operator) throw new RelayError("usage", "merge needs --require <vfyId> (a passing `capcomd verify` of this ref)", "Run `capcomd verify <runId> --ref <ref>` first, or pass --operator to merge unverified.");
   if (o.require) {
@@ -292,7 +301,7 @@ export async function mergeRef(o: MergeOpts) {
   const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   const res: any = await c.verifier.getOrCreate([o.runId, mrgId]).verify({
-    verifierId: mrgId, taskId: agentId ?? branch, branch, runId: o.runId, target, testOnly: false, ...(expectSha ? { expectSha } : {}),
+    verifierId: mrgId, taskId: label, branch, runId: o.runId, target, testOnly: false, ...(expectSha ? { expectSha } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const merged = out.status === "merged";

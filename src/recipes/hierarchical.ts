@@ -3,9 +3,12 @@
 // run ledger), composed through the scope: run new, task add --after (plan order), task claim,
 // spawn, await, verify, merge --require, task done, judge. Every step is keyed by the run and
 // task ids, so running it again with the same runId resumes where a crash left off.
-import { client, assertEngine, type RunOptions, type RunResult } from "../core/relay";
+import { client, assertEngine, isNoopGoal, reapSandboxes, teardownRun, type RunOptions, type RunResult } from "../core/relay";
+import { withSpan } from "../utils/tracing-simple";
+import { isBoxdAuthError, BOXD_AUTH_HINT } from "../providers/boxd-errors";
+import { preflightNeeded, runPreflight } from "../core/preflight";
 import { RelayError } from "../core/errors";
-import { decodeAgentRef } from "../agents/profiles";
+import { decodeAgentRef, parseAgentDirective } from "../agents/profiles";
 import { awaitAgents, mergeRef, runNew, spawnAgent, verifyRef } from "../primitives/ops";
 import * as S from "../primitives/state";
 import { isProtectedBranch } from "../utils/protected";
@@ -19,6 +22,32 @@ interface PlannedTask { id: string; goal: string; agent?: string }
 
 export async function runHierarchicalRecipe(opts: RunOptions & { budgetUsd?: number }): Promise<RunResult> {
   await assertEngine();
+  const runId = opts.runId ?? `run-${Date.now().toString(36)}`;
+  // Same preflight, reap and auth-failure contract as the legacy path.
+  if (preflightNeeded()) {
+    const bad = (await runPreflight(process.env, {}, parseAgentDirective(opts.goal).agent)).filter((x) => !x.ok);
+    if (bad.length) throw new RelayError("config", `Preflight failed: ${bad.map((x) => x.detail).join("; ")}`, "Fix the credentials above, then rerun. (CAPCOMD_SKIP_PREFLIGHT=1 skips this check.)");
+  }
+  await reapSandboxes(client(), runId).catch(() => {});
+  let result: RunResult;
+  try {
+    // Same span shape as the legacy path (relay.run → cli.run → actor/transition/model/sandbox/git).
+    result = await withSpan("cli.run", { "relay.run_id": runId, "relay.goal": opts.goal, "relay.recipe": "hierarchical" }, () => recipeInner({ ...opts, runId }));
+  } catch (error) {
+    if (!isBoxdAuthError(error)) throw error;
+    const reason = `boxd rejected BOXD_API_KEY (invalid or expired). ${BOXD_AUTH_HINT}`;
+    await client().run.getOrCreate([runId]).configFail({ runId, reason });
+    opts.emit("run.failed", { state: "failed", reason, kind: "config", retryable: false }, `\n✗ Run failed (config): ${reason}`);
+    result = { runId, state: "failed", ok: false, feedback: reason };
+  }
+  if (["completed", "failed", "cancelled"].includes(result.state)) {
+    await teardownRun(client(), runId).catch(() => {});
+    opts.emit("worker.destroyed", { workerId: `${runId}-recipe` }, `✓ Sandbox destroyed`);
+  }
+  return result;
+}
+
+async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<RunResult> {
   const emit = opts.emit;
   const c = client();
   const runId = opts.runId ?? `run-${Date.now().toString(36)}`;
@@ -52,6 +81,7 @@ export async function runHierarchicalRecipe(opts: RunOptions & { budgetUsd?: num
     await runH.planReady({ runId, tasks: planned.map((t) => t.id), ...(Object.keys(agents).length ? { agents } : {}) });
   }
 
+  for (const t of (pctx?.tasks ?? []) as any[]) if (t && typeof t === "object" && t.agentSpec) emit("agent.resolved", { taskId: t.id, agent: t.agentSpec }, `  agent for ${t.id}: ${t.agentSpec.name ?? t.agentSpec.kind}${t.agentSpec.overridden ? " (overridden)" : ""}`);
   await S.kvWrite(runId, { k: "recipe/plan", value: { recipe: "hierarchical", tasks: planned.map((t) => t.id) }, key: "recipe-plan" });
 
   // 3. the plan as a board: each task after the previous one (the legacy path runs them in order).
@@ -64,64 +94,120 @@ export async function runHierarchicalRecipe(opts: RunOptions & { budgetUsd?: num
     prev = r.task.taskId;
   }
 
-  // 4. workers: claim → spawn → await → verify → merge --require → done (retry on fail/conflict).
+  // 4. workers. The task-board actor stays the public task ledger (status, events, approve,
+  // cancel read it; Hermes consumes that contract), so every attempt drives the same
+  // transitions the legacy loop does: lease → started → handoff → verify → merged |
+  // awaiting_approval → approved → merged, with the ledger's own retry budget (maxRetries 3).
+  // The work itself goes through the primitives: claim, spawn, await, verify, merge --require.
   emit("tasks.executing", {}, "\n→ Executing tasks...");
   const target = opts.targetBranch;
-  const hasRepo = !!loadMergeConfig(); // without a repo merges are fake and nothing is protected (legacy parity)
+  const hasRepo = !!loadMergeConfig();
+  const ledger = c.taskBoard.getOrCreate([runId]);
+  const TERMINAL = new Set(["merged", "failed", "cancelled"]);
+  for (const t of planned) {
+    if (!(await ledger.getTask({ taskId: t.id }))) await ledger.createTask({ taskId: t.id, goal: t.goal, runId, maxRetries: MAX_ATTEMPTS - 1, ...(target ? { targetBranch: target } : {}) });
+  }
   const completed: string[] = [];
   for (const t of planned) {
     if ((await runH.getRun({ runId }))?.state === "cancelled") { emit("run.cancelled", { state: "cancelled" }, "\n✗ Run cancelled"); return { runId, state: "cancelled", ok: false }; }
     const tid = boardId[t.id]!;
-    const cur: any = await S.taskGet(runId, tid);
-    if (cur.status === "done") { emit("task.skipped", { taskId: t.id, state: cur.result?.status }, `  ✓ ${t.id} already ${cur.result?.status ?? "done"}`); if (cur.result?.status === "merged") completed.push(t.id); continue; }
+    let lt: any = await ledger.getTask({ taskId: t.id });
+    if (TERMINAL.has(lt.state)) {
+      emit("task.skipped", { taskId: t.id, state: lt.state }, `  ✓ ${t.id} already ${lt.state}`);
+      if (lt.state === "merged") completed.push(t.id);
+      continue;
+    }
     const claim: any = await S.taskClaim(runId, { holder: RECIPE_HOLDER, taskId: tid, leaseMs: 6 * 3600_000, key: `claim-${t.id}` });
-    emit("task.leased", { taskId: t.id, epoch: claim.epoch }, `  → ${t.id} (epoch ${claim.epoch})`);
     const profile = t.agent ? decodeAgentRef(t.agent) : null;
-    let outcome: { status: "merged" | "failed" | "awaiting_approval"; sha?: string; reason?: string } = { status: "failed", reason: "no attempt" };
     let feedback = "";
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const k = `${t.id}-a${attempt}`;
-      const a = await spawnAgent({ runId, task: feedback ? `${t.goal}\n\nPrevious attempt failed: ${feedback}` : t.goal, key: k, contract: { planTask: t.id, attempt }, ...(profile ? { profile: profile.name, overrides: profile.overrides } : {}), budget: { usd: 1 } });
-      const done: any = await awaitAgents(runId, [a.agentId], { timeoutMs: 6 * 3600_000 });
-      if (done.agents[0].status !== "done") { feedback = `agent ${done.agents[0].status}`; continue; }
-      const v: any = await verifyRef({ runId, ref: a.agentId, key: `v-${k}`, ...(target ? { target } : {}) });
-      if (v.state !== "passed") {
-        feedback = v.result?.checks?.reason ?? v.result?.checks?.status ?? "verification failed";
-        emit(v.result?.checks?.status === "conflict" ? "task.conflict" : "task.verify_failed", { taskId: t.id, attempt, reason: feedback }, `  ✗ ${t.id} attempt ${attempt}: ${feedback}`);
-        outcome = { status: "failed", reason: feedback };
+    let lastReason = "";
+    while (!TERMINAL.has(lt.state)) {
+      if (lt.state === "pending") {
+        const g: any = await ledger.grantLease({ taskId: t.id, workerId: `${runId}-recipe` });
+        emit("task.leased", { taskId: t.id, epoch: g.epoch, workerId: `${runId}-recipe` }, `  → ${t.id} (epoch ${g.epoch})`);
+        lt = await ledger.getTask({ taskId: t.id });
         continue;
       }
-      const tgt = v.target as string;
-      let operator = false;
-      if (hasRepo && isProtectedBranch(tgt)) {
-        // Protected target: park until `capcomd approve <runId> <task>` writes approval/<task>.
-        emit("task.awaiting_approval", { taskId: t.id, targetBranch: tgt }, `  ⏸ ${t.id} verified; merge into protected ${tgt} awaits approval (capcomd approve ${runId} ${t.id})`);
+      const epoch = Number(lt.context.epoch);
+      const k = `${t.id}-e${epoch}`; // one attempt per ledger epoch: replays after a crash, fresh after a retry
+      if (lt.state === "awaiting_approval") {
+        emit("task.awaiting_approval", { taskId: t.id, targetBranch: lt.context.targetBranch ?? target ?? null }, `  ⏸ ${t.id} verified; merge into protected branch ${lt.context.targetBranch ?? target} awaits approval (capcomd approve ${runId} ${t.id})`);
         const deadline = Date.now() + (opts.approvalTimeoutMs ?? 24 * 3600_000);
-        while (!((await S.kvGet(runId, `approval/${t.id}`)) as any).value) {
-          if (Date.now() > deadline) throw new RelayError("run_failed", `Approval for ${t.id} timed out`, `Run \`capcomd approve ${runId} ${t.id}\` then resume.`);
+        while (lt.state === "awaiting_approval") {
+          if (Date.now() > deadline) throw new RelayError("run_failed", `Approval for ${t.id} timed out`, `Run \`capcomd approve ${runId} ${t.id}\` then resume with \`capcomd run --run-id ${runId} <goal>\`.`);
           await sleep(opts.approvalPollMs ?? 1000);
+          lt = await ledger.getTask({ taskId: t.id });
         }
-        operator = true; // the approval is the operator's act
+        if (lt.state === "cancelled") emit("task.cancelled", { taskId: t.id, state: lt.state }, `  ✗ ${t.id} cancelled`);
+        continue;
       }
-      const m: any = await mergeRef({ runId, ref: a.agentId, require: v.id, key: `m-${k}`, target: tgt, operator });
-      if (m.state === "merged") { outcome = { status: "merged", sha: m.result?.sha }; break; }
-      feedback = m.result?.status === "conflict" ? `merge conflict in ${(m.result.files ?? []).join(", ")}` : String(m.result?.reason ?? "merge failed");
-      emit("task.conflict", { taskId: t.id, attempt, reason: feedback }, `  ⚠ ${t.id} ${feedback}; ${attempt < MAX_ATTEMPTS ? "back to worker" : "retries exhausted"}`);
-      outcome = { status: "failed", reason: feedback };
+      const a = await spawnAgent({ runId, task: feedback ? `${t.goal}\n\nPrevious attempt failed: ${feedback}` : t.goal, key: k, contract: { planTask: t.id, epoch }, ...(profile ? { profile: profile.name, overrides: profile.overrides } : {}), budget: { usd: 1 } });
+      if (lt.state === "leased") { await ledger.workerStarted({ taskId: t.id, epoch }); lt = await ledger.getTask({ taskId: t.id }); }
+      const done: any = await awaitAgents(runId, [a.agentId], { timeoutMs: 6 * 3600_000 });
+      const ag = done.agents[0];
+      if (ag.status === "failed" && isBoxdAuthError(String(ag.result?.error ?? ""))) throw new Error(String(ag.result.error)); // non-retryable: fail the run as config
+      if (lt.state === "running") { await ledger.handoffTask({ taskId: t.id, epoch, branch: ag.result?.branch ?? "", commitSha: ag.result?.commit ?? "" }); lt = await ledger.getTask({ taskId: t.id }); }
+      if (lt.state === "handed_off") { await ledger.startVerify({ taskId: t.id }); lt = await ledger.getTask({ taskId: t.id }); }
+      if (ag.status !== "done") {
+        feedback = lastReason = `agent ${ag.status}`;
+        if (lt.state === "verifying") await ledger.verifyComplete({ taskId: t.id, passed: false, target });
+        emit("task.verify_failed", { taskId: t.id, reason: feedback }, `  ✗ ${t.id} verification failed: ${feedback}`);
+        lt = await ledger.getTask({ taskId: t.id });
+        continue;
+      }
+      const approved = lt.state === "approved";
+      const v: any = await verifyRef({ runId, ref: a.agentId, key: `v-${k}`, ...(target ? { target } : {}) });
+      if (v.state !== "passed") {
+        const conflict = v.result?.checks?.status === "conflict";
+        feedback = lastReason = v.result?.checks?.reason ?? v.result?.checks?.status ?? "verification failed";
+        if (approved) throw new RelayError("run_failed", `Merge of ${t.id} failed: ${feedback}`, `Fix the cause, then resume with \`capcomd run --run-id ${runId} <goal>\`.`);
+        if (conflict) await ledger.mergeConflict({ taskId: t.id, files: v.result?.checks?.files ?? [], epoch });
+        else await ledger.verifyComplete({ taskId: t.id, passed: false, target });
+        lt = await ledger.getTask({ taskId: t.id });
+        emit(conflict ? (lt.state === "failed" ? "task.conflict_escalated" : "task.conflict") : "task.verify_failed", { taskId: t.id, epoch, reason: feedback }, `  ✗ ${t.id} epoch ${epoch}: ${feedback}`);
+        continue;
+      }
+      // Protection follows the legacy rule: the run's target, or the repo's default when a repo is configured.
+      const tgt = v.target as string;
+      const effective = target ?? (hasRepo ? tgt : undefined);
+      if (!approved && effective && isProtectedBranch(effective)) {
+        await ledger.verifyComplete({ taskId: t.id, passed: true, commitSha: ag.result?.commit ?? undefined, target: effective });
+        lt = await ledger.getTask({ taskId: t.id });
+        continue; // → awaiting_approval
+      }
+      const m: any = await mergeRef({ runId, ref: a.agentId, require: v.id, key: `m-${k}`, target: tgt, operator: approved });
+      if (m.state !== "merged") {
+        const conflict = m.result?.status === "conflict";
+        feedback = lastReason = conflict ? `merge conflict in ${(m.result.files ?? []).join(", ")}` : String(m.result?.reason ?? "merge failed");
+        if (approved && !conflict) throw new RelayError("run_failed", `Merge of ${t.id} failed: ${feedback}`, `Fix the cause, then resume with \`capcomd run --run-id ${runId} <goal>\`.`);
+        if (conflict) await ledger.mergeConflict({ taskId: t.id, files: m.result.files ?? [], targetSha: m.result.targetSha, epoch });
+        else await ledger.verifyComplete({ taskId: t.id, passed: false, target });
+        lt = await ledger.getTask({ taskId: t.id });
+        emit(conflict ? (lt.state === "failed" ? "task.conflict_escalated" : "task.conflict") : "task.verify_failed", { taskId: t.id, epoch, reason: feedback }, `  ⚠ ${t.id} ${feedback}`);
+        continue;
+      }
+      const sha = m.result?.sha ?? null;
+      const merge = { sha, mode: m.result?.mode, strategy: m.result?.strategy, how: m.result?.how, already: m.result?.already, target: tgt, ...(m.result?.pr ? { pr: m.result.pr } : {}) };
+      if (approved) await ledger.mergeComplete({ taskId: t.id, merge });
+      else await ledger.verifyComplete({ taskId: t.id, passed: true, commitSha: sha ?? undefined, target, merge });
+      lt = await ledger.getTask({ taskId: t.id });
+      emit(approved ? "task.approved" : "task.merged", { taskId: t.id, commitSha: sha, merge, approvedBy: approved ? (lt.context.approval?.approvedBy ?? null) : null },
+        approved ? `  ✓ ${t.id} approved and merged${sha ? ` (${String(sha).slice(0, 12)})` : ""}` : `  ✓ ${t.id} verified and merged${sha ? ` (${String(sha).slice(0, 12)})` : ""}`);
     }
+    const outcome = lt.state === "merged" ? { status: "merged", sha: lt.context.merge?.sha ?? null } : { status: lt.state, reason: lastReason || lt.state };
     await S.taskFinish(runId, { taskId: tid, holder: RECIPE_HOLDER, epoch: claim.epoch, outcome: "done", result: outcome, key: `done-${t.id}` }).catch((e) => { if (!String(e?.message).includes("is done")) throw e; });
-    if (outcome.status === "merged") { completed.push(t.id); emit("task.merged", { taskId: t.id, commitSha: outcome.sha ?? null }, `  ✓ ${t.id} verified and merged${outcome.sha ? ` (${outcome.sha.slice(0, 12)})` : ""}`); }
-    else emit("task.failed", { taskId: t.id, reason: outcome.reason }, `  ✗ ${t.id} failed: ${outcome.reason}`);
+    if (lt.state === "merged") completed.push(t.id);
   }
 
   // 5. judge the goal over the completed tasks (same judge actor and ledger transitions).
   run = await runH.getRun({ runId });
+  if (run?.state === "cancelled") { emit("run.cancelled", { state: "cancelled" }, "\n✗ Run cancelled"); return { runId, state: "cancelled", ok: false }; }
   if (run?.state === "executing") { emit("run.judging", {}, "\n→ All tasks complete, judging..."); await runH.allTasksTerminal({ runId }); run = await runH.getRun({ runId }); }
   if (run?.state === "judging") {
     const judgeId = `${runId}-judge`;
     const jh = c.judge.getOrCreate([runId, "final"]);
     const ex = await jh.getJudge({ judgeId });
-    const j = ex ? { passed: ex.context.passed !== false, feedback: ex.context.feedback ?? "Goal achieved", cost: ex.context.cost ?? 0 } : await jh.judge({ judgeId, runId, goal: opts.goal, completedTasks: completed });
+    const j = ex ? { passed: ex.context.passed !== false, feedback: ex.context.feedback ?? "Goal achieved", cost: ex.context.cost ?? 0 } : await jh.judge({ judgeId, runId, goal: opts.goal, completedTasks: completed, noop: isNoopGoal(opts.goal) });
     await runH.chargeBudget({ runId, chargeId: `${runId}-judge`, amount: j.cost });
     await S.kvWrite(runId, { k: "recipe/judge", value: { passed: j.passed, feedback: j.feedback }, key: "judge-result" });
     if (j.passed) { await runH.judgePass({ runId }); emit("run.completed", { state: "completed", feedback: j.feedback }, `\n✓ Run completed successfully\n  ${j.feedback}\n\nRun ID: ${runId}`); return { runId, state: "completed", ok: true, feedback: j.feedback }; }

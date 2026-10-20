@@ -1,0 +1,7 @@
+✓ plan-3-tasks       state=completed merged=3/3 commits=3/3 time recipe=14725ms legacy=9575ms
+✓ explicit-target    state=completed merged=3/3 commits=3/3 time recipe=14718ms legacy=9527ms
+✓ protected-approve  state=completed merged=3/3 commits=3/3 time recipe=18381ms legacy=14669ms
+    known diff (checks-fail): git.merge span absent when nothing merged (recipe verifies before merging)
+✓ checks-fail        state=failed merged=0/0 commits=0/0 time recipe=35589ms legacy=23246ms
+PARITY OK (4 cases)
+EXIT 0
