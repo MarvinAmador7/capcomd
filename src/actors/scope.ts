@@ -9,6 +9,31 @@ import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
 import { checkSpawn, TERMINAL_AGENT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
+import { casOk, claimable, fence, pickNext, type BoardTask } from "../primitives/board";
+
+function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
+  return {
+    taskId: r.task_id as string, title: r.title as string, data: r.data ? JSON.parse(r.data) : null, status: r.status,
+    holder: (r.holder as string | null) ?? null, epoch: Number(r.epoch), leaseUntil: Number(r.lease_until ?? 0),
+    result: r.result ? JSON.parse(r.result) : null, key: (r.idem_key as string | null) ?? null,
+    createdAt: Number(r.created_at), updatedAt: Number(r.updated_at),
+  };
+}
+export type ScopeTask = ReturnType<typeof rowToTask>;
+const kvRow = (r: any) => ({ k: r.k as string, value: JSON.parse(r.v), version: Number(r.version), writer: (r.writer as string | null) ?? null, updatedAt: Number(r.updated_at) });
+export type KvEntry = ReturnType<typeof kvRow>;
+
+/** Replay a keyed write: same key + same params returns the recorded result; other params = conflict. */
+async function replay(tx: any, key: string | undefined, hash: string): Promise<Record<string, unknown> | null> {
+  if (!key) return null;
+  const r = await tx.execute("SELECT params_hash, result FROM idem WHERE idem_key = ?", key);
+  if (!r.length) return null;
+  if (r[0].params_hash !== hash) fail("conflict", `key ${key} was already used with different parameters`);
+  return { ...JSON.parse(r[0].result), replayed: true };
+}
+async function remember(tx: any, key: string | undefined, kind: string, hash: string, result: Record<string, unknown>) {
+  if (key) await tx.execute("INSERT INTO idem (idem_key, kind, params_hash, result, at) VALUES (?, ?, ?, ?, ?)", key, kind, hash, JSON.stringify(result), Date.now());
+}
 
 const fail = (code: string, message: string): never => { throw new UserError(message, { code }); };
 
@@ -74,6 +99,14 @@ export const scopeActor = actor({
           op_id TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, state TEXT NOT NULL,
           data TEXT NOT NULL, result TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
         )`);
+      await database.execute(`
+        CREATE TABLE IF NOT EXISTS board_tasks (
+          task_id TEXT PRIMARY KEY, title TEXT NOT NULL, data TEXT, status TEXT NOT NULL, holder TEXT,
+          epoch INTEGER NOT NULL DEFAULT 0, lease_until INTEGER, result TEXT, idem_key TEXT UNIQUE,
+          params_hash TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        )`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL, version INTEGER NOT NULL, writer TEXT, updated_at INTEGER NOT NULL)`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS idem (idem_key TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`
         CREATE TABLE IF NOT EXISTS scope_events (
           seq INTEGER PRIMARY KEY, at INTEGER NOT NULL, type TEXT NOT NULL, agent_id TEXT,
@@ -279,6 +312,139 @@ export const scopeActor = actor({
     async getOp(c, params: { opId: string }) {
       const r = await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId);
       return r.length ? opRow(r[0]) : null;
+    },
+
+    // ---- ADR-016 step 3: task board with leases ----
+    async taskAdd(c, params: { taskId: string; title: string; data?: unknown; key?: string; paramsHash: string }) {
+      const get = async (db: any) => { const r = await db.execute("SELECT * FROM board_tasks WHERE task_id = ?", params.taskId); return r.length ? rowToTask(r[0]) : null; };
+      let created = false;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const have = await tx.execute("SELECT params_hash FROM board_tasks WHERE task_id = ?", params.taskId);
+        if (have.length) { if (have[0]!.params_hash !== params.paramsHash) fail("conflict", `task ${params.taskId} already exists with different parameters`); return; }
+        const now = Date.now();
+        await tx.execute("INSERT INTO board_tasks (task_id, title, data, status, holder, epoch, lease_until, result, idem_key, params_hash, created_at, updated_at) VALUES (?, ?, ?, 'open', NULL, 0, 0, NULL, ?, ?, ?, ?)",
+          params.taskId, params.title, params.data === undefined ? null : JSON.stringify(params.data), params.key ?? null, params.paramsHash, now, now);
+        await addEvent(tx, "TASK_ADDED", null, { taskId: params.taskId, title: params.title }, `task-add-${params.taskId}`);
+        created = true;
+      }, { name: "scopeTaskAdd" });
+      return { created, task: (await get(c.db))! };
+    },
+
+    async taskClaim(c, params: { holder: string; taskId?: string; leaseMs: number; key?: string; paramsHash: string }) {
+      let out: Record<string, unknown> = {};
+      await c.db.transaction(async (tx: RawAccess) => {
+        const prev = await replay(tx, params.key, params.paramsHash);
+        if (prev) { out = prev; return; }
+        const now = Date.now();
+        let t: BoardTask | null;
+        if (params.taskId) {
+          const r = await tx.execute("SELECT * FROM board_tasks WHERE task_id = ?", params.taskId);
+          if (!r.length) fail("not_found", `task ${params.taskId} not found`);
+          t = rowToTask(r[0]);
+          const ok = claimable(t, now);
+          if (!ok.ok) fail("lease_held", ok.why);
+        } else {
+          t = pickNext((await tx.execute("SELECT * FROM board_tasks WHERE status != 'done' ORDER BY created_at, task_id")).map(rowToTask), now);
+          if (!t) { out = { claimed: false, task: null }; return; }
+        }
+        const take = claimable(t, now);
+        const takeover = take.ok ? take.takeover : null;
+        const epoch = t.epoch + 1, until = now + params.leaseMs;
+        await tx.execute("UPDATE board_tasks SET status = 'claimed', holder = ?, epoch = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND epoch = ?",
+          params.holder, epoch, until, now, t.taskId, t.epoch);
+        killpoint("board.claim.mid");
+        if (takeover) await addEvent(tx, "TASK_LEASE_EXPIRED", null, { taskId: t.taskId, holder: takeover.holder, epoch: takeover.epoch }, `task-expired-${t.taskId}-${takeover.epoch}`);
+        await addEvent(tx, "TASK_CLAIMED", null, { taskId: t.taskId, holder: params.holder, epoch, leaseUntil: until, ...(takeover ? { takeoverFrom: takeover.holder } : {}) }, `task-claim-${t.taskId}-${epoch}`);
+        out = { claimed: true, taskId: t.taskId, holder: params.holder, epoch, leaseUntil: until, takeover: takeover ?? null };
+        await remember(tx, params.key, "claim", params.paramsHash, out);
+      }, { name: "scopeTaskClaim" });
+      killpoint("board.claim.after.before_reply");
+      return out;
+    },
+
+    async taskRenew(c, params: { taskId: string; holder: string; epoch: number; leaseMs: number }) {
+      let out: Record<string, unknown> = {};
+      await c.db.transaction(async (tx: RawAccess) => {
+        const r = await tx.execute("SELECT * FROM board_tasks WHERE task_id = ?", params.taskId);
+        if (!r.length) fail("not_found", `task ${params.taskId} not found`);
+        const f = fence(rowToTask(r[0]), params.holder, params.epoch);
+        if (!f.ok) fail(f.code, f.why);
+        const until = Date.now() + params.leaseMs;
+        await tx.execute("UPDATE board_tasks SET lease_until = ?, updated_at = ? WHERE task_id = ? AND epoch = ?", until, Date.now(), params.taskId, params.epoch);
+        out = { taskId: params.taskId, holder: params.holder, epoch: params.epoch, leaseUntil: until };
+      }, { name: "scopeTaskRenew" });
+      return out; // renewals are not events: they'd flood the log
+    },
+
+    async taskFinish(c, params: { taskId: string; holder: string; epoch: number; outcome: "done" | "released"; result?: unknown; key?: string; paramsHash: string }) {
+      let out: Record<string, unknown> = {};
+      await c.db.transaction(async (tx: RawAccess) => {
+        const prev = await replay(tx, params.key, params.paramsHash);
+        if (prev) { out = prev; return; }
+        const r = await tx.execute("SELECT * FROM board_tasks WHERE task_id = ?", params.taskId);
+        if (!r.length) fail("not_found", `task ${params.taskId} not found`);
+        const t = rowToTask(r[0]);
+        // Same holder+epoch repeating done/release without a key: already applied, report it.
+        if (t.epoch === params.epoch && t.holder === params.holder && ((params.outcome === "done" && t.status === "done"))) { out = { taskId: t.taskId, status: t.status, epoch: t.epoch, replayed: true }; return; }
+        const f = fence(t, params.holder, params.epoch);
+        if (!f.ok) fail(f.code, f.why);
+        const now = Date.now();
+        if (params.outcome === "done") {
+          await tx.execute("UPDATE board_tasks SET status = 'done', result = ?, lease_until = 0, updated_at = ? WHERE task_id = ? AND epoch = ?", params.result === undefined ? null : JSON.stringify(params.result), now, t.taskId, t.epoch);
+          await addEvent(tx, "TASK_DONE", null, { taskId: t.taskId, holder: params.holder, epoch: t.epoch, ...(params.result === undefined ? {} : { result: params.result }) }, `task-done-${t.taskId}`);
+        } else {
+          await tx.execute("UPDATE board_tasks SET status = 'open', holder = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND epoch = ?", now, t.taskId, t.epoch);
+          await addEvent(tx, "TASK_RELEASED", null, { taskId: t.taskId, holder: params.holder, epoch: t.epoch }, `task-release-${t.taskId}-${t.epoch}`);
+        }
+        out = { taskId: t.taskId, status: params.outcome === "done" ? "done" : "open", epoch: t.epoch };
+        await remember(tx, params.key, params.outcome, params.paramsHash, out);
+      }, { name: "scopeTaskFinish" });
+      return out;
+    },
+
+    async taskGet(c, params: { taskId: string }) {
+      const r = await c.db.execute("SELECT * FROM board_tasks WHERE task_id = ?", params.taskId);
+      return r.length ? rowToTask(r[0]) : null;
+    },
+
+    async taskList(c, params: { status?: string }) {
+      const rows = params.status
+        ? await c.db.execute("SELECT * FROM board_tasks WHERE status = ? ORDER BY created_at, task_id", params.status)
+        : await c.db.execute("SELECT * FROM board_tasks ORDER BY created_at, task_id");
+      const now = Date.now();
+      return rows.map(rowToTask).map((t: ScopeTask) => ({ ...t, expired: t.status === "claimed" && t.leaseUntil <= now }));
+    },
+
+    // ---- ADR-016 step 3: blackboard (versioned kv) ----
+    async kvWrite(c, params: { k: string; value: unknown; expect?: number; writer?: string; key?: string; paramsHash: string }) {
+      let out: Record<string, unknown> = {};
+      await c.db.transaction(async (tx: RawAccess) => {
+        const prev = await replay(tx, params.key, params.paramsHash);
+        if (prev) { out = prev; return; }
+        const r = await tx.execute("SELECT version FROM kv WHERE k = ?", params.k);
+        const cur = r.length ? Number(r[0]!.version) : 0;
+        if (params.expect !== undefined && !casOk(cur, params.expect)) fail("cas_mismatch", `cas ${params.k}: version is ${cur}, expected ${params.expect}`);
+        const version = cur + 1, now = Date.now();
+        await tx.execute("INSERT INTO kv (k, v, version, writer, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v, version = excluded.version, writer = excluded.writer, updated_at = excluded.updated_at",
+          params.k, JSON.stringify(params.value ?? null), version, params.writer ?? null, now);
+        killpoint("kv.cas.mid");
+        await addEvent(tx, params.expect === undefined ? "KV_PUT" : "KV_CAS", null, { k: params.k, version, ...(params.writer ? { writer: params.writer } : {}) }, `kv-${params.k}-${version}`);
+        out = { k: params.k, version, ok: true };
+        await remember(tx, params.key, "kv", params.paramsHash, out);
+      }, { name: "scopeKvWrite" });
+      killpoint("kv.cas.after.before_reply");
+      return out;
+    },
+
+    async kvGet(c, params: { k: string }) {
+      const r = await c.db.execute("SELECT * FROM kv WHERE k = ?", params.k);
+      return r.length ? kvRow(r[0]) : null;
+    },
+
+    async kvList(c, params: { prefix?: string }) {
+      const p = params.prefix ?? "";
+      const rows = await c.db.execute("SELECT * FROM kv WHERE substr(k, 1, ?) = ? ORDER BY k", p.length, p);
+      return rows.map(kvRow);
     },
 
     async getAgent(c, params: { agentId: string }) {

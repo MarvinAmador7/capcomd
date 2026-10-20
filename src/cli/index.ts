@@ -47,6 +47,11 @@ Usage:
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P] [--target T] [--key K]  → vfy-…
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
+  capcomd task add <runId> --title T [--data JSON] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
+  capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
+  capcomd task renew|release|done <runId> <tsk> --holder H --epoch E [--lease-ms N] [--result JSON] [--key K]   (fenced: a stale epoch is rejected)
+  capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv list <runId> [--prefix P]
+  capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start]   (with --json: one JSON event per line)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --max-turns --budget
@@ -129,6 +134,18 @@ async function main(argv: string[]): Promise<number> {
         "judge-profile": { type: "string" },
         require: { type: "string" },
         target: { type: "string" },
+        holder: { type: "string" },
+        epoch: { type: "string" },
+        "lease-ms": { type: "string" },
+        title: { type: "string" },
+        data: { type: "string" },
+        result: { type: "string" },
+        expect: { type: "string" },
+        follow: { type: "boolean" },
+        until: { type: "string" },
+        status: { type: "string" },
+        prefix: { type: "string" },
+        "from-start": { type: "boolean" },
       },
       allowPositionals: true,
       strict: true,
@@ -143,6 +160,7 @@ async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parsed;
   const json = !!values.json;
   const command = positionals[0];
+  const jsonish = (v: unknown) => { if (typeof v !== "string") return v; try { return JSON.parse(v); } catch { return v; } };
   const out = (obj: Record<string, unknown>) => console.log(JSON.stringify({ schema: SCHEMA, ok: true, ...obj }));
 
   try {
@@ -365,9 +383,61 @@ async function main(argv: string[]): Promise<number> {
         return EXIT.ok;
       }
 
+      case "task": {
+        const S = await import("../primitives/state");
+        const sub = positionals[1];
+        const runId = positionals[2] ?? usage("usage: capcomd task add|claim|renew|release|done|list|show <runId> …");
+        const holder = () => (values.holder as string | undefined) ?? usage("--holder required (who holds the lease, e.g. your agent id)");
+        const epoch = () => { const e = Number(values.epoch); if (!Number.isInteger(e) || e < 1) usage("--epoch required: the epoch your claim returned"); return e; };
+        const lease = values["lease-ms"] !== undefined ? Number(values["lease-ms"]) : undefined;
+        const key = values.key as string | undefined;
+        let r: Record<string, unknown>;
+        if (sub === "add") r = await S.taskAdd(runId, { title: (values.title as string | undefined) ?? positionals[3] ?? usage("--title required"), data: jsonish(values.data), key });
+        else if (sub === "claim") r = await S.taskClaim(runId, { holder: holder(), taskId: positionals[3], leaseMs: lease, key });
+        else if (sub === "renew") r = await S.taskRenew(runId, { taskId: positionals[3] ?? usage("task id required"), holder: holder(), epoch: epoch(), leaseMs: lease });
+        else if (sub === "release" || sub === "done") r = await S.taskFinish(runId, { taskId: positionals[3] ?? usage("task id required"), holder: holder(), epoch: epoch(), outcome: sub === "done" ? "done" : "released", result: jsonish(values.result), key });
+        else if (sub === "list") r = await S.taskList(runId, values.status as string | undefined);
+        else if (sub === "show") r = { ...(await S.taskGet(runId, positionals[3] ?? usage("task id required"))) };
+        else return usage("usage: capcomd task add|claim|renew|release|done|list|show <runId> …");
+        if (json) out(r);
+        else if (sub === "list") for (const t of (r.tasks as any[])) console.log(`${t.taskId}  ${t.status}${t.expired ? "(expired)" : ""}  ${t.holder ?? "-"}  e${t.epoch}  ${t.title}`);
+        else console.log(JSON.stringify(r, null, 2));
+        return EXIT.ok;
+      }
+
+      case "kv": {
+        const S = await import("../primitives/state");
+        const sub = positionals[1];
+        const runId = positionals[2] ?? usage("usage: capcomd kv get|put|cas|list <runId> …");
+        const k = () => positionals[3] ?? usage("key name required");
+        const val = () => { const v = positionals[4] ?? (values.data as string | undefined); if (v === undefined) usage("value required (JSON, or a plain string)"); return jsonish(v); };
+        let r: Record<string, unknown>;
+        if (sub === "get") r = await S.kvGet(runId, k());
+        else if (sub === "put") r = await S.kvWrite(runId, { k: k(), value: val(), writer: values.holder as string | undefined, key: values.key as string | undefined });
+        else if (sub === "cas") {
+          const e = values.expect === undefined ? usage("--expect V required (the version you read; 0 = must not exist)") : Number(values.expect);
+          r = await S.kvWrite(runId, { k: k(), value: val(), expect: e, writer: values.holder as string | undefined, key: values.key as string | undefined });
+        } else if (sub === "list") r = await S.kvList(runId, values.prefix as string | undefined);
+        else return usage("usage: capcomd kv get|put|cas|list <runId> …");
+        if (json) out(r);
+        else if (sub === "list") for (const e of (r.entries as any[])) console.log(`${e.k}  v${e.version}  ${JSON.stringify(e.value)}`);
+        else console.log(JSON.stringify(r, null, 2));
+        return EXIT.ok;
+      }
+
       case "events":
       case "replay": {
         const runId = positionals[1] ?? usage(`runId required: capcomd ${command} <runId>`);
+        if (values.follow) {
+          const S = await import("../primitives/state");
+          const r = await S.followEvents(runId, {
+            until: values.until as string | undefined, fromStart: !!values["from-start"],
+            timeoutMs: values["timeout-ms"] !== undefined ? Number(values["timeout-ms"]) : undefined,
+            emit: (ev) => json ? out({ runId, event: ev }) : console.log(`[${ev.entity.padEnd(20)}] ${new Date(ev.at).toISOString()} ${JSON.stringify(ev.event)}`),
+          });
+          if (json) out({ runId, end: r });
+          return EXIT.ok;
+        }
         const limit = values.limit ? Number.parseInt(values.limit as string, 10) : 1000;
         if (!Number.isFinite(limit) || limit < 1) usage("--limit must be a positive integer");
         const all = await listEvents(runId);

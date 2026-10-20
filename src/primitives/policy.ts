@@ -174,7 +174,7 @@ export function budgetCaps(spec: { maxTurns?: number; timeoutMs?: number; maxBud
 }
 
 /** Stable IDs: a caller key always maps to the same ID; without a key the ID is random. */
-export function stableId(prefix: "run" | "agt" | "vfy" | "mrg", scope: string, key?: string): string {
+export function stableId(prefix: "run" | "agt" | "vfy" | "mrg" | "tsk", scope: string, key?: string): string {
   if (!key) return `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   return `${prefix}-k${createHash("sha256").update(`${scope}\0${key}`).digest("hex").slice(0, 16)}`;
 }

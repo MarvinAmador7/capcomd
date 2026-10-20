@@ -17,13 +17,16 @@ const POLL_MS = Number(env("AWAIT_POLL_MS") ?? 300);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Map an actor UserError (code) onto the CLI's error envelope. */
-function asRelay(e: unknown): never {
+export function asRelay(e: unknown): never {
   const err = e as { code?: string; message?: string; group?: string };
   const code = err?.code;
   const msg = err?.message ?? String(e);
   if (code === "conflict") throw new RelayError("conflict", msg, "Use a new --key, or repeat the call with the same parameters.");
   if (code === "not_found") throw new RelayError("not_found", msg, "Check ids with `capcomd agents-of <runId> --json` / `capcomd run new`.");
   if (code === "children_limit" || code === "widening") throw new RelayError("config", msg, "Spawn a profile the parent allows, narrow the overrides, or (operator) pass --operator for spec widening.");
+  if (code === "lease_held") throw new RelayError("conflict", msg, "Claim another task (omit the id to take the next free one), or wait for the lease to expire.");
+  if (code === "lease_lost" || code === "not_claimed") throw new RelayError("conflict", msg, "Your lease was taken over (its epoch moved). Stop work on this task; claim again if it is still open.");
+  if (code === "cas_mismatch") throw new RelayError("conflict", msg, "Re-read with `capcomd kv get`, recompute, and cas with the new --expect version.");
   if (code === "budget" || code === "parent_terminal") throw new RelayError("conflict", msg, "Request a smaller --budget or free budget by cancelling agents.");
   throw e;
 }
