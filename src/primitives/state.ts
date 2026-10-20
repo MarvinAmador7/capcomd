@@ -67,10 +67,12 @@ export async function kvList(runId: string, prefix?: string, all?: boolean) {
 }
 
 /** Poll the merged event log and emit each event once, in order. Stops on --until TYPE or timeout. */
-export async function followEvents(runId: string, o: { emit: (e: EventRecord) => void; until?: string; timeoutMs?: number; pollMs?: number; fromStart?: boolean }) {
+export async function followEvents(runId: string, o: { emit: (e: EventRecord) => void; until?: string; timeoutMs?: number; pollMs?: number; fromStart?: boolean; sinceSeq?: number }) {
   const seen = new Set<string>();
-  const id = (e: EventRecord) => `${e.entity}\0${e.seq}`;
-  if (!o.fromStart) for (const e of await listEvents(runId)) seen.add(id(e));
+  const id = (e: EventRecord) => `${e.entity}\0${e.entitySeq}`;
+  // --since-seq N: resume after line N (emit seq > N); --from-start: everything; default: only new events.
+  if (o.sinceSeq !== undefined) { for (const e of await listEvents(runId)) if (e.seq <= o.sinceSeq) seen.add(id(e)); }
+  else if (!o.fromStart) for (const e of await listEvents(runId)) seen.add(id(e));
   const deadline = o.timeoutMs ? Date.now() + o.timeoutMs : Infinity;
   for (;;) {
     for (const e of await listEvents(runId)) {

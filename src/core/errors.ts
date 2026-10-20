@@ -23,16 +23,21 @@ const EXIT_FOR: Record<ErrorCode, number> = {
 export class RelayError extends Error {
   readonly code: ErrorCode;
   readonly hint: string;
-  constructor(code: ErrorCode, message: string, hint: string) {
+  /** Additive detail (ADR-017): a finer reason (e.g. backpressure, deadlock, forbidden) and whether a retry may succeed. */
+  readonly reason?: string;
+  readonly retryable?: boolean;
+  constructor(code: ErrorCode, message: string, hint: string, extra?: { code?: string; retryable?: boolean }) {
     super(message);
     this.code = code;
     this.hint = hint;
+    this.reason = extra?.code;
+    this.retryable = extra?.retryable;
   }
   get exitCode(): number {
     return EXIT_FOR[this.code];
   }
   toJSON() {
-    return { schema: SCHEMA, ok: false, error: { code: this.code, message: this.message, hint: this.hint } };
+    return { schema: SCHEMA, ok: false, error: { code: this.code, message: this.message, hint: this.hint, ...(this.reason ? { reason: this.reason } : {}), ...(this.retryable ? { retryable: true } : {}) } };
   }
 }
 

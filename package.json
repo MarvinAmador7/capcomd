@@ -12,7 +12,8 @@
     "test": "bun test",
     "test:chaos": "bun test tests/chaos/*.test.ts",
     "chaos:fast": "bun tests/chaos/fast.ts",
-    "chaos:slow": "bun test tests/chaos/subprocess.test.ts"
+    "chaos:slow": "bun test tests/chaos/subprocess.test.ts",
+    "test:scenarios": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

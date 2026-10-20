@@ -51,11 +51,18 @@ Usage:
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P] [--target T] [--key K]  → vfy-…
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
+  ADR-017 sub-agents (agents allowed to spawn get the same verbs in their VM as \`capcomd\` + MCP tools):
+  capcomd spawn … [--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N --children.allowedChildProfiles=a,b --children.budgetShare=F]
+                                       (the parent sets the child's fan-out; narrow-only, refused above the ceiling)
+  capcomd tree <runId> [--root agt]      subtree with cost/turn rollups and stuck flags
+  capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N]  ·  capcomd budget show <runId> [agt]
+  capcomd send <runId> <agt> <text> [--from agt]  ·  capcomd token revoke <runId> <jti> [--reason R]
   capcomd task add <runId> --title T [--data JSON] [--after tsk,…] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
   capcomd task renew|release|done <runId> <tsk> --holder H --epoch E [--lease-ms N] [--result JSON] [--key K]   (fenced: a stale epoch is rejected)
   capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv del <runId> <k> [--expect V]  ·  kv list <runId> [--prefix P] [--all]   (values ≤ 64KB)
-  capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start]   (with --json: one JSON event per line)
+  capcomd inspect <runId> [--json] [--follow [--since-seq N] [--until TYPE]]   run bundle: status + tree + trace + events
+  capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start | --since-seq N]   (with --json: one JSON line per event; resume with --since-seq <last seq>)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --max-turns --budget
@@ -150,10 +157,21 @@ async function main(argv: string[]): Promise<number> {
         status: { type: "string" },
         prefix: { type: "string" },
         "from-start": { type: "boolean" },
+        "since-seq": { type: "string" },
         recipe: { type: "boolean" },
         legacy: { type: "boolean" },
         after: { type: "string", multiple: true },
         all: { type: "boolean" },
+        // ADR-017: fan-out the parent grants a child (narrow-only)
+        "children.maxChildren": { type: "string" },
+        "children.maxDepth": { type: "string" },
+        "children.maxTotalDescendants": { type: "string" },
+        "children.allowedChildProfiles": { type: "string" },
+        "children.budgetShare": { type: "string" },
+        "children.allowSpawn": { type: "string" },
+        tail: { type: "string" },
+        root: { type: "string" },
+        from: { type: "string" },
       },
       allowPositionals: true,
       strict: true,
@@ -258,14 +276,16 @@ async function main(argv: string[]): Promise<number> {
         if (values.recipe && values.legacy) usage("pass at most one of --recipe / --legacy");
         const runPath = values.recipe ? "recipe" : values.legacy ? "legacy" : (process.env.CAPCOMD_RUN_PATH ?? DEFAULT_RUN_PATH);
         if (runPath !== "recipe" && runPath !== "legacy") usage(`CAPCOMD_RUN_PATH must be recipe or legacy, got ${runPath}`);
+        let lineSeq = 0;
         const emit = (type: string, data: Record<string, unknown>, human: string) => {
-          if (json) console.log(JSON.stringify({ schema: SCHEMA, type, runId, ts: new Date().toISOString(), ...data }));
+          const now = Date.now();
+          if (json) console.log(JSON.stringify({ schema: SCHEMA, type, runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: (data.agentId as string | undefined) ?? null, ...data }));
           else console.log(human);
         };
         const result = runPath === "recipe"
           ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit })
           : await executeRun({ goal, runId, targetBranch, emit });
-        if (json) console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, ts: new Date().toISOString(), ok: result.ok, state: result.state }));
+        if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
         return result.ok ? EXIT.ok : EXIT.run_failed;
       }
 
@@ -309,6 +329,7 @@ async function main(argv: string[]): Promise<number> {
           runId, task, ...(profile ? { profile } : {}), ...(Object.keys(set).length || values.operator ? { overrides: { set, operator: !!values.operator } } : {}),
           parent: values.parent as string | undefined, key: values.key as string | undefined, contract, budget,
           operator: !!values.operator, start: !values["no-start"],
+          grant: Object.fromEntries(Object.entries(values).filter(([k, v]) => k.startsWith("children.") && v !== undefined).map(([k, v]) => [k.slice(9), v])),
         });
         if (json) out(r); else console.log(r.agentId);
         return EXIT.ok;
@@ -358,10 +379,113 @@ async function main(argv: string[]): Promise<number> {
         return r.state === "merged" ? EXIT.ok : EXIT.run_failed;
       }
 
-      case "tree": {
-        const runId = positionals[1] ?? usage("runId required: capcomd tree <runId>");
-        const r = await (await import("../primitives/ops")).listScope(runId);
+      case "inspect": {
+        const runId = positionals[1] ?? usage("capcomd inspect <runId> [agt] [--json] [--follow]");
+        if (!positionals[2]) {
+          // TUI contract: one bundle (status + tree + trace + events); --follow then streams event lines.
+          const bundle = async () => {
+            const P = await import("../primitives/ops");
+            const [status, tree, events] = await Promise.all([
+              getStatus(runId), P.treeOf(runId).catch(() => ({ runId, root: null, tree: [], totals: null })), listEvents(runId),
+            ]);
+            const trace = loadTrace(runId);
+            const now = Date.now();
+            return { type: "inspect.snapshot", runId, ts: new Date(now).toISOString(), epochMs: now, seq: events.length, status, tree: tree.tree, totals: tree.totals, trace, events };
+          };
+          const snap = await bundle();
+          if (!values.follow) {
+            if (json) out(snap);
+            else {
+              console.log(`Run ${runId}  ${snap.status.state}${snap.status.scope ? ` (agents ${snap.status.scope.state})` : ""}  started ${snap.status.startedAt ?? "-"}`);
+              console.log(`Goal: ${snap.status.goal}`);
+              if (snap.status.pendingApprovals.length) console.log(`Pending approvals: ${snap.status.pendingApprovals.map((p) => p.taskId).join(", ")}`);
+              console.log(`Agents: ${JSON.stringify(snap.totals)}  events ${snap.events.length}  spans ${snap.trace?.spanCount ?? 0}`);
+            }
+            return EXIT.ok;
+          }
+          const emit = (o: Record<string, unknown>) => json ? out(o) : console.log(JSON.stringify(o));
+          const sinceSeq = values["since-seq"] !== undefined ? Number(values["since-seq"]) : snap.seq;
+          emit({ ...snap, events: snap.events.filter((e) => e.seq > (values["since-seq"] !== undefined ? sinceSeq : -1)) });
+          const S = await import("../primitives/state");
+          const P = await import("../primitives/ops");
+          const r = await S.followEvents(runId, {
+            sinceSeq, until: values.until as string | undefined,
+            timeoutMs: values["timeout-ms"] !== undefined ? Number(values["timeout-ms"]) : undefined,
+            emit: (ev) => {
+              emit({ type: "event", runId, seq: ev.seq, ts: ev.ts, epochMs: ev.epochMs, agentId: ev.agentId, event: ev });
+              // Agent lifecycle changes the tree: push a fresh one so a TUI never has to re-poll.
+              if (/^AGENT_/.test(ev.type)) void P.treeOf(runId).then((t) => emit({ type: "inspect.tree", runId, seq: ev.seq, ts: new Date().toISOString(), tree: t.tree, totals: t.totals })).catch(() => {});
+            },
+          });
+          emit({ type: "inspect.end", runId, ts: new Date().toISOString(), end: r });
+          return EXIT.ok;
+        }
+        const id = positionals[2];
+        const r: any = await (await import("../primitives/ops")).inspectAgent(runId, id, { logTail: values.tail ? Number(values.tail) : 50 });
         if (json) out(r);
+        else {
+          console.log(`${r.agentId} [${r.profile ?? "-"}] ${r.status}${r.stuck ? ` STUCK: ${r.stuck}` : ""}  parent ${r.parent ?? "(operator)"}  depth ${r.depth}`);
+          console.log(`  budget ${JSON.stringify(r.budget)} spent ${JSON.stringify(r.spent)}  subtree ${JSON.stringify(r.rollup)}`);
+          console.log(`  limits ${JSON.stringify(r.limits)}`);
+          console.log(`  vm ${JSON.stringify(r.vm)}  driver ${r.driver ?? "-"}  heartbeat ${r.heartbeatAt ? new Date(r.heartbeatAt).toISOString() : "-"} ${r.heartbeatNote ?? ""}`);
+          if (r.children.length) console.log(`  children: ${r.children.map((c: any) => `${c.agentId}(${c.status})`).join(", ")}`);
+          if (r.awaits.length) console.log(`  awaits: ${r.awaits.map((w: any) => `${w.waiter}→${w.target}`).join(", ")}`);
+          if (r.result) console.log(`  result ${JSON.stringify(r.result).slice(0, 800)}`);
+          for (const l of r.logs) console.log(`  | ${l.line}`);
+        }
+        return EXIT.ok;
+      }
+
+      case "logs": {
+        const runId = positionals[1] ?? usage("capcomd logs <runId> <agt> [--tail N]");
+        const id = positionals[2] ?? usage("capcomd logs <runId> <agt> [--tail N]");
+        const r = await (await import("../primitives/ops")).agentLogs(runId, id, values.tail ? Number(values.tail) : 200);
+        if (json) out(r); else for (const l of r.lines) console.log(`${new Date(l.at).toISOString()} ${l.stream.padEnd(6)} ${l.line}`);
+        return EXIT.ok;
+      }
+
+      case "budget": {
+        const runId = positionals[2] ?? positionals[1] ?? usage("capcomd budget show <runId> [agt]");
+        const rid = positionals[1] === "show" ? positionals[2] : positionals[1];
+        const agentId = positionals[1] === "show" ? positionals[3] : positionals[2];
+        const r = await (await import("../primitives/ops")).budgetShow(rid ?? runId, agentId);
+        if (json) out(r); else console.log(JSON.stringify(r, null, 2));
+        return EXIT.ok;
+      }
+
+      case "send": {
+        const runId = positionals[1] ?? usage("capcomd send <runId> <agt> <text> [--from agt|operator]");
+        const to = positionals[2] ?? usage("capcomd send <runId> <agt> <text>");
+        const body = positionals.slice(3).join(" ") || usage("message text required");
+        const { client: cl, assertEngine: ae } = await import("../core/relay");
+        await ae();
+        const r = await cl().scope.getOrCreate([runId]).sendMessage({ to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}) });
+        if (json) out({ runId, to, ...r }); else console.log(`sent #${r.seq} to ${to}`);
+        return EXIT.ok;
+      }
+
+      case "token": {
+        // capcomd token revoke <runId> <jti> [--reason R]: kills an in-VM token now (the pump also revokes on exit).
+        if (positionals[1] !== "revoke") usage("capcomd token revoke <runId> <jti> [--reason R]");
+        const runId = positionals[2] ?? usage("capcomd token revoke <runId> <jti>");
+        const jti = positionals[3] ?? usage("capcomd token revoke <runId> <jti>");
+        const { client: cl, assertEngine: ae } = await import("../core/relay");
+        await ae();
+        const r = await cl().scope.getOrCreate([runId]).revokeToken({ jti, reason: values.reason as string | undefined });
+        if (json) out({ runId, jti, ...r }); else console.log(`revoked ${jti}`);
+        return EXIT.ok;
+      }
+
+      case "tree": {
+        const runId = positionals[1] ?? usage("runId required: capcomd tree <runId> [--root agt]");
+        const O = await import("../primitives/ops");
+        const r: any = { ...(await O.listScope(runId)), ...(await O.treeOf(runId, values.root as string | undefined)) };
+        if (json) out(r);
+        else if (process.env.CAPCOMD_TREE_FLAT !== "1") {
+          const b = (x: Record<string, number>) => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(",") || "-";
+          console.log(`${runId}  budget ${b(r.budget)} (unallocated ${b(r.unallocated)}, spent ${b(r.spent)})  totals: ${r.totals.agents} agents $${r.totals.usd} ${r.totals.turns} turns ${r.totals.wallSeconds}s`);
+          console.log((await import("../subagents/results")).textTree(r.tree, "  "));
+        }
         else {
           const b = (x: Record<string, number>) => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(",") || "-";
           console.log(`${runId}  budget ${b(r.budget)} (unallocated ${b(r.unallocated)}, spent ${b(r.spent)})`);
@@ -452,19 +576,21 @@ async function main(argv: string[]): Promise<number> {
       case "events":
       case "replay": {
         const runId = positionals[1] ?? usage(`runId required: capcomd ${command} <runId>`);
+        let sinceSeq: number | undefined;
+        if (values["since-seq"] !== undefined) { sinceSeq = Number(values["since-seq"]); if (!Number.isInteger(sinceSeq) || sinceSeq < 0) usage("--since-seq must be an integer >= 0 (the seq of the last line you saw)"); }
         if (values.follow) {
           const S = await import("../primitives/state");
           const r = await S.followEvents(runId, {
-            until: values.until as string | undefined, fromStart: !!values["from-start"],
+            until: values.until as string | undefined, fromStart: !!values["from-start"], sinceSeq,
             timeoutMs: values["timeout-ms"] !== undefined ? Number(values["timeout-ms"]) : undefined,
-            emit: (ev) => json ? out({ runId, event: ev }) : console.log(`[${ev.entity.padEnd(20)}] ${new Date(ev.at).toISOString()} ${JSON.stringify(ev.event)}`),
+            emit: (ev) => json ? out({ runId, seq: ev.seq, ts: ev.ts, epochMs: ev.epochMs, agentId: ev.agentId, type: ev.type, event: ev }) : console.log(`[${ev.entity.padEnd(20)}] ${new Date(ev.at).toISOString()} ${JSON.stringify(ev.event)}`),
           });
-          if (json) out({ runId, end: r });
+          if (json) out({ runId, end: r, ts: new Date().toISOString() });
           return EXIT.ok;
         }
         const limit = values.limit ? Number.parseInt(values.limit as string, 10) : 1000;
         if (!Number.isFinite(limit) || limit < 1) usage("--limit must be a positive integer");
-        const all = await listEvents(runId);
+        const all = (await listEvents(runId)).filter((e) => sinceSeq === undefined || e.seq > sinceSeq);
         const page = paginate(all, values.cursor as string | undefined, limit);
         if (json) out({ runId, events: page.items, nextCursor: page.nextCursor, total: page.total, truncated: page.nextCursor !== null });
         else {

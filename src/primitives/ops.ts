@@ -9,9 +9,13 @@ import { join } from "path";
 import { client, assertEngine } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
-import { budgetCaps, paramsHash, parseBudget, stableId, TERMINAL_AGENT, type Budget } from "./policy";
+import { available, budgetCaps, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
+import { stuckReason, treeView, rollups, subtree } from "../subagents/results";
 import type { ScopeAgent } from "../actors/scope";
+import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
+import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
+import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 
 const LEASE_MS = Number(env("DRIVER_LEASE_MS") ?? 15_000);
 const POLL_MS = Number(env("AWAIT_POLL_MS") ?? 300);
@@ -31,6 +35,8 @@ export function asRelay(e: unknown): never {
   if (code === "cycle") throw new RelayError("usage", msg, "A task may only depend on tasks that don't (transitively) depend on it.");
   if (code === "too_large") throw new RelayError("usage", msg, "Store large blobs elsewhere (a branch, a file in the repo) and put a reference in kv. Cap: CAPCOMD_KV_MAX_BYTES on the engine.");
   if (code === "cas_mismatch") throw new RelayError("conflict", msg, "Re-read with `capcomd kv get`, recompute, and cas with the new --expect version.");
+  if (code === "backpressure") throw new RelayError("conflict", msg, "Fan-out is at the limit your parent granted: `capcomd wait-any` for a child to finish (or cancel one), then spawn again.", { retryable: true, code: "backpressure" });
+  if (code === "deadlock") throw new RelayError("conflict", msg, "Await only your own children; never an ancestor or an agent that is waiting on you.", { code: "deadlock" });
   if (code === "budget" || code === "parent_terminal") throw new RelayError("conflict", msg, "Request a smaller --budget or free budget by cancelling agents.");
   throw e;
 }
@@ -50,6 +56,8 @@ export async function runNew(o: RunNewOpts) {
 export interface SpawnOpts {
   runId: string; task: string; profile?: string; overrides?: Overrides; parent?: string; key?: string;
   contract?: Record<string, unknown>; budget?: Budget; operator?: boolean; start?: boolean;
+  /** ADR-017: children limits the parent grants this child (narrow-only; contract.children also accepted). */
+  grant?: Grant;
 }
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
@@ -65,21 +73,112 @@ export async function spawnAgent(o: SpawnOpts) {
   // Requested budget: the contract's `budget` ({usd, turns, wallSeconds}), then --budget per unit.
   let requested: Budget;
   try { requested = { ...parseBudget(o.contract?.budget), ...(o.budget ?? {}) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Budget units: usd, turns, wallSeconds (e.g. --budget usd=2,turns=40)."); }
-  const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator });
+  let grant: Grant;
+  try { grant = { ...parseGrant(o.contract?.children), ...parseGrant(o.grant) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Grant fan-out with --children.maxChildren=N, --children.maxDepth=N, --children.maxTotalDescendants=N, --children.allowedChildProfiles=a,b, --children.budgetShare=0.5 (each may only narrow the ceiling)."); }
+  const hasGrant = Object.keys(grant).length > 0;
+  const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator, ...(hasGrant ? { grant } : {}) });
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
     profile: resolved.name, ref: ref ?? resolved.name, spec: spec ? { ...spec, kind: resolved.kind } : { kind: resolved.kind },
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
+    ...(hasGrant ? { grant } : {}),
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
+}
+
+/** TUI contract: every agent.run span ends with status, cost and turns, failed or not. */
+function stampSpent(span: { attributes: Record<string, any> }, a: ScopeAgent) {
+  const sp: any = a.spent ?? {};
+  Object.assign(span.attributes, { "agent.status": a.status, "agent.cost_usd": Number(sp.usd ?? 0), "agent.turns": Number(sp.turns ?? 0) });
 }
 
 export function view(a: ScopeAgent) {
   return {
     agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status,
     budget: a.budget, spent: a.spent, task: a.task, key: a.key, limits: a.limits, result: a.result,
+    ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...(stuckReason(a) ? { stuck: stuckReason(a) } : {}),
   };
+}
+
+/** One non-blocking look at agents (ADR-017 in-VM await polls this): kicks stale drivers. */
+const kickedAt = new Map<string, number>();
+export async function peekAgents(runId: string, ids: string[]) {
+  const out: ScopeAgent[] = [];
+  for (const id of ids) {
+    const a = await getAgentOrThrow(runId, id);
+    if (!TERMINAL_AGENT.has(a.status) && (!a.driver || a.driverUntil < Date.now()) && (kickedAt.get(id) ?? 0) < Date.now() - LEASE_MS) { startDriver(runId, id); kickedAt.set(id, Date.now()); }
+    out.push(a);
+  }
+  return out;
+}
+
+export async function treeOf(runId: string, root?: string) {
+  await assertEngine();
+  const s = client().scope.getOrCreate([runId]);
+  const all: ScopeAgent[] = await s.listAgents({});
+  if (root && !all.some((a) => a.agentId === root)) throw new RelayError("not_found", `agent ${root} not found in ${runId}`, "Check ids with `capcomd tree <runId>`.");
+  // TUI contract: per-node startedAt/endedAt (ISO, null until known), taskId (worker task label), spanId (agent.run).
+  const times = new Map<string, { s?: number; e?: number }>();
+  for (const ev of await s.getEvents({}).catch(() => [] as any[])) {
+    if (!ev.agentId) continue;
+    const t = times.get(ev.agentId) ?? {};
+    if (ev.type === "AGENT_STARTED" && t.s === undefined) t.s = ev.at;
+    if (["AGENT_DONE", "AGENT_FAILED", "AGENT_CANCELLED", "AGENT_REAPED"].includes(ev.type)) t.e = ev.at;
+    times.set(ev.agentId, t);
+  }
+  const byId = new Map(all.map((a) => [a.agentId, a]));
+  const iso = (n?: number) => (n ? new Date(n).toISOString() : null);
+  const decorate = (n: any): any => {
+    const a = byId.get(n.agentId)!; const t = times.get(n.agentId) ?? {};
+    return { ...n, parent: a.parent ?? null, createdAt: iso(a.createdAt), startedAt: iso(t.s), endedAt: TERMINAL_AGENT.has(a.status) ? iso(t.e ?? a.updatedAt) : null,
+      taskId: taskLabelOf(a, a.agentId), spanId: agentSpanId(runId, a.agentId), children: n.children.map(decorate) };
+  };
+  return { runId, root: root ?? null, tree: treeView(all, root).map(decorate), totals: rollupTotals(all, root) };
+}
+function rollupTotals(all: ScopeAgent[], root?: string) {
+  const ids = root ? subtree(all, root) : new Set(all.map((a) => a.agentId));
+  const ru = rollups(all);
+  const tops = all.filter((a) => ids.has(a.agentId) && (!a.parent || !ids.has(a.parent)));
+  const t = { agents: 0, usd: 0, turns: 0, wallSeconds: 0, byStatus: {} as Record<string, number> };
+  for (const a of tops) { const r = ru.get(a.agentId)!; t.agents += r.agents; t.usd = Math.round((t.usd + r.usd) * 1e6) / 1e6; t.turns += r.turns; t.wallSeconds = Math.round((t.wallSeconds + r.wallSeconds) * 10) / 10; for (const [k, n] of Object.entries(r.byStatus)) t.byStatus[k] = (t.byStatus[k] ?? 0) + n; }
+  return t;
+}
+
+/** Everything about one agent: record, children, awaits, ops it was verified/merged by, log tail, events. */
+export async function inspectAgent(runId: string, agentId: string, o: { logTail?: number } = {}) {
+  await assertEngine();
+  const s = client().scope.getOrCreate([runId]);
+  const a = await getAgentOrThrow(runId, agentId);
+  const all: ScopeAgent[] = await s.listAgents({});
+  const awaits = (await s.listAwaits({})).filter((w: any) => w.waiter === agentId || w.target === agentId);
+  const events = (await s.getEvents({})).filter((e: any) => e.agentId === agentId || e.data?.parent === agentId).slice(-50);
+  const logs = await s.getLogs({ agentId, tail: o.logTail ?? 50 });
+  const w = client().worker.getOrCreate([runId, agentId]);
+  const wk: any = await w.getWorker({ workerId: agentId }).catch(() => null);
+  return {
+    ...view(a), contract: a.contract, spec: a.spec, driver: a.driver, driverUntil: a.driverUntil, heartbeatNote: a.heartbeatNote,
+    children: all.filter((x) => x.parent === agentId).map((x) => ({ agentId: x.agentId, status: x.status, profile: x.profile })),
+    rollup: rollups(all).get(agentId), awaits, vm: wk ? { state: wk.state, vmId: wk.vmId ?? wk.context?.vmId ?? null } : null,
+    events, logs,
+  };
+}
+
+export async function agentLogs(runId: string, agentId: string, tail = 200) {
+  await assertEngine();
+  await getAgentOrThrow(runId, agentId);
+  return { runId, agentId, lines: await client().scope.getOrCreate([runId]).getLogs({ agentId, tail }) };
+}
+
+/** Budget of an agent (or the run): allocation, own spend, what children hold, what's left to carve, subtree rollup. */
+export async function budgetShow(runId: string, agentId?: string) {
+  await assertEngine();
+  const s = client().scope.getOrCreate([runId]);
+  const all: ScopeAgent[] = await s.listAgents({});
+  if (!agentId) { const sc = await s.getScope({}); return { runId, agentId: null, budget: sc?.budget ?? {}, spent: sc?.spent ?? {}, available: sc?.unallocated ?? {}, totals: rollupTotals(all) }; }
+  const a = await getAgentOrThrow(runId, agentId);
+  const kids = all.filter((x) => x.parent === agentId);
+  return { runId, agentId, budget: a.budget, spent: a.spent, available: available(a.budget, a.spent, kids), limits: a.limits, children: kids.length, rollup: rollups(all).get(agentId) };
 }
 
 /** Launch a detached driver process for one agent (logs in .relay/drivers/). */
@@ -102,13 +201,31 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
   // Retry the (idempotent) steps; only an error that persists while the engine answers marks the
   // agent failed. If the engine is down, the last finish() throws too, and the lease expires
   // so the next await/wait-any resumes the agent.
-  let last: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try { return await driveOnce(runId, agentId); } catch (e) { last = e; if (isBoxdAuthError(e)) break; await sleep(2000 * attempt); } // a rejected credential never heals by retrying
-  }
   const s = client().scope.getOrCreate([runId]);
-  const fin = await s.finish({ agentId, status: "failed", result: { error: (last as Error)?.message?.slice(0, 500) ?? String(last) } });
-  return fin.agent;
+  const me = await s.getAgent({ agentId });
+  // Trace parenting: agent spans nest under their parent agent's span (root agents under the run).
+  return withSpan("agent.run", { "relay.run_id": runId, "agent.id": agentId, "agent.parent": me?.parent ?? null, "relay.agent_id": agentId, "relay.parent_agent_id": me?.parent ?? null, "agent.profile": me?.profile ?? null, "agent.depth": me?.depth ?? 0 }, async (span) => {
+    let last: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try { const a = await driveOnce(runId, agentId); if (!TERMINAL_AGENT.has(a.status)) discardSpan(span); else stampSpent(span, a); return a; } catch (e) {
+        last = e;
+        // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
+        if (isBoxdAuthError(e) || e instanceof ScriptFailed) break;
+        await sleep(2000 * attempt);
+      }
+    }
+    const res = await resultOf(runId, agentId);
+    const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}) } });
+    stampSpent(span, fin.agent);
+    return fin.agent;
+  }, { spanId: agentSpanId(runId, agentId), parentSpanId: me?.parent ? agentSpanId(runId, me.parent) : rootSpanIdForRun(runId) });
+}
+
+/** The structured result an agent declared with `capcomd result` (kv _result/<agt>), if any. */
+async function resultOf(runId: string, agentId: string): Promise<Record<string, unknown>> {
+  const r = await client().scope.getOrCreate([runId]).kvGet({ k: `_result/${agentId}` }).catch(() => null);
+  const v = r && !r.deleted ? (r.value as any) : null;
+  return v ? { summary: v.summary, artifacts: v.artifacts, ...(v.data !== undefined ? { data: v.data } : {}), ...(v.truncated ? { truncated: v.truncated } : {}) } : {};
 }
 
 async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
@@ -123,7 +240,8 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   // Test/eval knob: run the fake agent while profiles still govern policy (no real CLI/repo).
   // The carved budget narrows the profile: maxTurns ≤ turns, timeoutMs ≤ wallSeconds, maxBudgetUsd ≤ usd.
-  let exec = env("SPAWN_EXEC") === "fake" ? undefined : (a.ref ?? undefined);
+  const mode = env("SPAWN_EXEC");
+  let exec = mode === "fake" || mode === "script" ? undefined : (a.ref ?? undefined);
   if (exec) {
     const caps = budgetCaps(a.spec as any, a.budget);
     if (Object.keys(caps).length) {
@@ -143,15 +261,45 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
     }
     if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
     if (wk?.state === "idle") await w.assignTask({ workerId: agentId, taskId: taskLabel, epoch: 1 });
-    const pushed: any = await w.pushBranch({ workerId: agentId, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}) });
+    // ADR-017: scripted fake agents run now (with in-VM capcomd on a local spool).
+    let fakeFile: { path?: string; content?: string } = {};
+    if (mode === "script") {
+      const done = await s.getAgent({ agentId });
+      const r0 = await resultOf(runId, agentId);
+      if (!r0.summary || !done?.result) {
+        killpoint("spawn.script.before");
+        const { exitCode } = await runScripted(runId, a);
+        if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
+        if (exitCode !== 0) throw new ScriptFailed(`scripted agent exited ${exitCode}`, exitCode);
+      }
+      const r = await resultOf(runId, agentId);
+      const f = (r.data as any)?.file;
+      if (f && typeof f.path === "string") fakeFile = { path: f.path, content: String(f.content ?? "") };
+    }
+    // Handoff: my result is my successor's. Await it before finishing (finishing would reap it).
+    const ho = await s.kvGet({ k: `handoff/${agentId}` }).catch(() => null);
+    if (ho && !ho.deleted && (ho.value as any)?.to) {
+      const to = String((ho.value as any).to);
+      const [succ] = (await awaitAgents(runId, [to])).agents as any[];
+      await w.drainWorker({ workerId: agentId }).catch(() => {});
+      const st = succ.status === "done" ? "done" : "failed";
+      const fin = await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
+      return fin.agent;
+    }
+    const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
+    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}) });
+    const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);
-    const spent: Budget = { usd: costUsd, turns: Number(rec.turns ?? 0), wallSeconds: Number(rec.wallSeconds ?? 0) };
+    let spent: Budget = { usd: costUsd, turns: Number(rec.turns ?? 0), wallSeconds: Number(rec.wallSeconds ?? 0) };
+    // Scripted fake agents simulate spend (result data.spent) so rollups and budget limits are testable.
+    if (mode === "script") { const d: any = (await resultOf(runId, agentId)).data; if (d?.spent) spent = { ...spent, ...parseBudgetLoose(d.spent) }; }
     if (costUsd > 0 && !pushed.already) await c.run.getOrCreate([runId]).chargeBudget({ runId, chargeId: `${agentId}-agent`, amount: costUsd });
     await w.taskDone({ workerId: agentId });
     await w.drainWorker({ workerId: agentId });
     if (await cancelled()) return (await s.getAgent({ agentId }))!;
-    const fin = await s.finish({ agentId, status: "done", spent, result: { branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
+    const declared = await resultOf(runId, agentId);
+    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch: !pushed.sha && vmRpc ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }
@@ -161,7 +309,26 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
   }
 }
 
-async function getAgentOrThrow(runId: string, agentId: string): Promise<ScopeAgent> {
+function parseBudgetLoose(v: unknown): Budget { try { return parseBudget(v); } catch { return {}; } }
+
+function fakeFileParams(f: { path?: string; content?: string }) {
+  return f.path ? { fakePath: f.path, fakeContent: f.content ?? "" } : {};
+}
+
+/** Real agent allowed to spawn: token + pump on its VM; the runner installs CLI, MCP and skill. */
+async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
+  const wk: any = await w.getWorker({ workerId: agentId });
+  const vmId = wk?.context?.vmId;
+  if (!vmId) return null;
+  const { getDependencies } = await import("../dependencies");
+  const provider = getDependencies().provider;
+  const { orchestrationSkill } = await import("../subagents/skill");
+  const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
+  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true }), kind };
+  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn) };
+}
+
+export async function getAgentOrThrow(runId: string, agentId: string): Promise<ScopeAgent> {
   const a = await client().scope.getOrCreate([runId]).getAgent({ agentId });
   if (!a) throw new RelayError("not_found", `agent ${agentId} not found in ${runId}`, "Check ids with `capcomd agents-of <runId> --json`.");
   return a;
@@ -270,7 +437,9 @@ export async function verifyRef(o: VerifyOpts) {
     checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
     ...(judge ? { judge } : {}),
   };
-  return opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
+  const fin = opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
+  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status } } } }).catch(() => {});
+  return fin;
 }
 
 export interface MergeOpts { runId: string; ref: string; require?: string; target?: string; operator?: boolean; key?: string }

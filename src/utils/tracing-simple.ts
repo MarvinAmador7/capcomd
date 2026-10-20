@@ -50,6 +50,12 @@ export function rootSpanIdForRun(runId: string): string {
   return hex(`root:${runId}`, 16);
 }
 
+/** ADR-017 trace parenting: an agent's span id is derived from (run, agent), so a child's span can
+ *  name its parent's span without passing context across processes or VMs. */
+export function agentSpanId(runId: string, agentId: string): string {
+  return hex(`agent:${runId}:${agentId}`, 16);
+}
+
 export function activeSpan(): SimpleSpan | null {
   return als.getStore() ?? currentSpan;
 }
@@ -80,7 +86,11 @@ export function startSpan(
   return span;
 }
 
+/** Drop a span instead of recording it (e.g. a driver call that found another driver holding the lease). */
+export function discardSpan(span: SimpleSpan) { (span as any).discard = true; }
+
 function persist(span: SimpleSpan) {
+  if ((span as any).discard) return;
   const runId = span.attributes["relay.run_id"];
   if (!runId || env("TRACE") === "off") return;
   try {
@@ -158,7 +168,7 @@ export async function withSpan<T>(
   name: string,
   attributes: Record<string, any>,
   fn: (span: SimpleSpan) => Promise<T> | T,
-  opts: { spanId?: string; parent?: SimpleSpan | null } = {}
+  opts: { spanId?: string; parent?: SimpleSpan | null; parentSpanId?: string } = {}
 ): Promise<T> {
   const span = startSpan(name, attributes, opts);
   try {

@@ -422,7 +422,15 @@ export interface RunStatus {
   goal: string;
   budget: { spent: number; maxCost: number };
   tasks: Array<{ taskId: string; state: string; targetBranch: string | null }>;
+  /** Legacy alias of pendingApprovals[].taskId. */
   awaitingApproval: string[];
+  /** TUI contract: merges parked for a human (`capcomd approve <runId> <taskId>`). */
+  pendingApprovals: Array<{ taskId: string; kind: "merge"; targetBranch: string | null; since: string | null }>;
+  /** ISO-8601 UTC of the run's first event (null if none yet); startedAtMs is the same in ms. */
+  startedAt: string | null;
+  startedAtMs: number | null;
+  /** Primitives scope runs (`capcomd run new`): agent counts and a derived state (idle|running|done|failed). */
+  scope: { state: string; agents: number; byStatus: Record<string, number> } | null;
   events: number;
 }
 
@@ -450,10 +458,31 @@ export async function getStatus(runId: string): Promise<RunStatus> {
       if (t) tasks.push({ taskId, state: t.state, targetBranch: t.context.targetBranch ?? null });
     }
   }
+  const runEvents: any[] = await c.run.get([runId]).getEvents({ runId }).catch(() => []);
+  const firstAt: number | null = runEvents.length ? Math.min(...runEvents.map((e) => Number(e.at))) : null;
+  const pending = [] as RunStatus["pendingApprovals"];
+  for (const t of tasks.filter((t) => t.state === "awaiting_approval")) {
+    const evs: any[] = await c.taskBoard.getOrCreate([runId]).getTaskEvents({ taskId: t.taskId }).catch(() => []);
+    const at = evs.filter((e) => /approval/i.test(String(e.event?.type ?? ""))).map((e) => Number(e.at)).pop();
+    pending.push({ taskId: t.taskId, kind: "merge", targetBranch: t.targetBranch, since: at ? new Date(at).toISOString() : null });
+  }
+  let scope: RunStatus["scope"] = null;
+  const agents: any[] | null = await c.scope.getOrCreate([runId]).listAgents({}).catch(() => null);
+  if (agents && agents.length) {
+    const byStatus: Record<string, number> = {};
+    for (const a of agents) byStatus[a.status] = (byStatus[a.status] ?? 0) + 1;
+    const live = agents.some((a) => !["done", "failed", "cancelled"].includes(a.status));
+    const roots = agents.filter((a) => !a.parent);
+    scope = { state: live ? "running" : roots.every((a) => a.status === "done") ? "done" : "failed", agents: agents.length, byStatus };
+  }
   return {
     runId: run.runId,
     state: run.state,
     goal: run.context.goal,
+    startedAt: firstAt ? new Date(firstAt).toISOString() : null,
+    startedAtMs: firstAt,
+    pendingApprovals: pending,
+    scope,
     budget: { spent: run.context.budget?.spent ?? 0, maxCost: run.context.budget?.maxCost ?? 0 },
     tasks,
     awaitingApproval: tasks.filter((t) => t.state === "awaiting_approval").map((t) => t.taskId),
@@ -479,34 +508,46 @@ export async function cancelRun(runId: string): Promise<{ runId: string; state: 
   return { runId, state: after?.state ?? before, changed: (after?.state ?? before) !== before };
 }
 
+/**
+ * One event in a run's merged log (output contract, docs/output-contract.md#events).
+ * seq: 1-based position in the merged, time-ordered log: resume with --since-seq.
+ * entitySeq: the per-entity counter (what `seq` meant before; kept for back-compat dedupe).
+ * ts: ISO-8601 UTC; epochMs: same instant in ms (`at` is the legacy alias of epochMs).
+ * agentId: the scope agent the event is about, or null (run/task events); always present.
+ */
 export interface EventRecord {
-  entity: string;
   seq: number;
+  entitySeq: number;
+  ts: string;
+  epochMs: number;
   at: number;
+  agentId: string | null;
+  entity: string;
   type: string;
   event: unknown;
 }
+type RawEvent = { entity: string; seq: number; at: number; type: string; agentId: string | null; event: unknown };
 
 export async function listEvents(runId: string): Promise<EventRecord[]> {
   const { c, run } = await getRunOrThrow(runId);
-  const out: EventRecord[] = [];
+  const out: RawEvent[] = [];
   for (const ev of await c.run.get([runId]).getEvents({ runId })) {
-    out.push({ entity: "run", seq: ev.seq, at: ev.at, type: ev.event?.type ?? "unknown", event: ev.event });
+    out.push({ entity: "run", seq: ev.seq, at: ev.at, type: ev.event?.type ?? "unknown", agentId: ev.event?.agentId ?? null, event: ev.event });
   }
   const ids: string[] = run.context.plan?.tasks ?? [];
   if (ids.length) {
     const board = c.taskBoard.getOrCreate([runId]);
     for (const taskId of ids) {
       for (const ev of await board.getTaskEvents({ taskId })) {
-        out.push({ entity: taskId, seq: ev.seq, at: ev.at, type: ev.event?.type ?? "unknown", event: ev.event });
+        out.push({ entity: taskId, seq: ev.seq, at: ev.at, type: ev.event?.type ?? "unknown", agentId: ev.event?.agentId ?? null, event: ev.event });
       }
     }
   }
   // Primitive scope events (spawn/start/done/cancel), when the run is a `capcomd run new` scope.
   const scopeEvents = await c.scope.getOrCreate([runId]).getEvents({}).catch(() => [] as any[]);
-  for (const ev of scopeEvents) out.push({ entity: ev.agentId ? `scope:${ev.agentId}` : "scope", seq: ev.seq, at: ev.at, type: ev.type, event: { type: ev.type, ...ev.data } });
+  for (const ev of scopeEvents) out.push({ entity: ev.agentId ? `scope:${ev.agentId}` : "scope", seq: ev.seq, at: ev.at, type: ev.type, agentId: ev.agentId ?? null, event: { type: ev.type, ...ev.data } });
   out.sort((a, b) => a.at - b.at || a.entity.localeCompare(b.entity) || a.seq - b.seq);
-  return out;
+  return out.map((e, i) => ({ seq: i + 1, entitySeq: e.seq, ts: new Date(e.at).toISOString(), epochMs: e.at, at: e.at, agentId: e.agentId, entity: e.entity, type: e.type, event: e.event }));
 }
 
 export function paginate<T>(items: T[], cursor: string | undefined, limit: number) {

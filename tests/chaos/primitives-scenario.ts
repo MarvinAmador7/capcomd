@@ -37,6 +37,32 @@ if (mode === "board") {
   console.log("✓ primitives scenario ok");
   process.exit(0);
 }
+if (mode === "subagent") {
+  // ADR-017: a scripted planner spawns 2 children and awaits them through in-VM capcomd, with no
+  // --key: retries must be idempotent by request id. Chaos kills the parent's driver after a VM
+  // spawn was handled but before the reply, at an await poll, or kills the engine mid-spawn.
+  const { writeFileSync, existsSync } = await import("fs");
+  const { join } = await import("path");
+  const { tmpdir } = await import("os");
+  const script = join(tmpdir(), `capcomd-chaos-planner-${tag}.sh`);
+  writeFileSync(script, [
+    `j() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).agentId||"")}catch{console.log("")}})'; }`,
+    `a=$(capcomd spawn --profile coder --task one | j); b=$(capcomd spawn --profile coder --task two | j)`,
+    `[ -n "$a" ] && [ -n "$b" ] || { echo "spawn failed a=$a b=$b"; exit 1; }`,
+    `capcomd await $a $b --timeout-ms 240000 > /dev/null || exit 1`,
+    `capcomd result --summary "kids=2 $a $b" > /dev/null`,
+  ].join("\n"));
+  const { runId } = await runNew({ budget: { usd: 4 }, label: `chaos ${tag}`, key: `chaos-${tag}` });
+  const sup = await spawnAgent({ runId, task: "plan", profile: "sup", key: "sup", contract: { script: `sh ${script}` } });
+  const res: any = await awaitAgents(runId, [sup.agentId], { timeoutMs: 240_000 });
+  const a = res.agents[0];
+  if (a.status !== "done") { console.log(`✗ planner ${a.status} ${JSON.stringify(a.result ?? {})}`); process.exit(1); }
+  const marker = process.env.CAPCOMD_DRIVER_KILLPOINT_MARKER;
+  if (marker && existsSync(marker)) console.log("[DRIVER-KILL] observed");
+  console.log(`PRIM ${JSON.stringify({ runId, mode, sup: sup.agentId })}`);
+  console.log("✓ primitives scenario ok");
+  process.exit(0);
+}
 if (mode === "kv") {
   // 6 writers add themselves to a set with read-cas-retry; idempotent by content (a writer that
   // finds itself in the set stops), so a reply lost to a kill is never applied twice.

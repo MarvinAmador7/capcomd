@@ -6,9 +6,12 @@ import type { AgentConfig } from "./config";
 import type { AgentAdapter, AgentEvent, AgentRunState } from "./types";
 import { Redactor } from "./redact";
 import { taskKey } from "../merge/config";
-import { addSpanEvent, setSpanAttributes, withSpan } from "../utils/tracing-simple";
+import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils/tracing-simple";
 
 export interface AgentTask {
+  /** ADR-017 / TUI contract: scope agent id and its parent (null at root), stamped on agent.* spans. */
+  agentId?: string;
+  parentAgentId?: string | null;
   runId: string;
   taskId: string;
   epoch: number;
@@ -43,6 +46,8 @@ export interface AgentRunOptions {
   onEvent?: (e: AgentEvent) => void;
   secrets?: string[];
   now?: () => number;
+  /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
+  subagents?: { skill: string; cliSource: string; rpcDir: string };
 }
 
 export class AgentError extends Error {
@@ -132,10 +137,12 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
   const key = taskKey(task.runId, task.taskId);
   const attrs = {
     "agent.kind": name, "agent.profile": cfg.profile ?? "", "relay.run_id": task.runId, "relay.task_id": task.taskId, "relay.epoch": task.epoch,
+    ...(task.agentId ? { "relay.agent_id": task.agentId, "relay.parent_agent_id": task.parentAgentId ?? null } : {}),
     "git.branch": task.branch, "agent.max_turns": cfg.maxTurns, "agent.max_budget_usd": cfg.maxBudgetUsd,
   };
 
-  return withSpan(`agent.${name.replace("-", "_")}`, attrs, async (span) => {
+  let live: AgentRunState | null = null; // for cost/turns on failed or timed-out spans (TUI contract)
+  return withSpan(`agent.${name.replace("-", "_")}`, attrs, async (span) => { try {
     must(await sh(`mkdir -p ${sq(W)} ${sq(home)}`), "mkdir");
 
     // 1. Clone.
@@ -215,6 +222,25 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     } else {
       promptText = [cfg.systemPrompt, promptText, cfg.appendSystemPrompt].filter(Boolean).join("\n\n");
     }
+    // ADR-017: agents allowed to spawn get capcomd (CLI on PATH + MCP server) and the skill.
+    let capcomdCtx: { cli: string; mcpConfig: string } | undefined;
+    let capcomdPrelude = "";
+    if (opts.subagents) {
+      const sa = opts.subagents;
+      const cli = `${sa.rpcDir}/bin/capcomd`;
+      const src = sa.cliSource.replace(/^#!.*\n/, `#!/usr/bin/env node\nprocess.env.CAPCOMD_RPC_DIR ||= ${JSON.stringify(sa.rpcDir)};\n`);
+      await provider.upload(vmId, cli, new TextEncoder().encode(src));
+      const mcpConfig = `${W}/capcomd-mcp.json`;
+      await provider.upload(vmId, mcpConfig, new TextEncoder().encode(JSON.stringify({ mcpServers: { capcomd: { command: "node", args: [cli, "mcp"], env: { CAPCOMD_RPC_DIR: sa.rpcDir } } } })));
+      must(await sh(`chmod 755 ${sq(cli)}`), "install capcomd", "install");
+      capcomdCtx = { cli, mcpConfig };
+      capcomdPrelude = `export PATH=${sq(`${sa.rpcDir}/bin`)}:"$PATH" CAPCOMD_RPC_DIR=${sq(sa.rpcDir)}`;
+      if (adapter.kind === "claude-code") {
+        cfg = { ...cfg, allowedTools: [...cfg.allowedTools, "Bash(capcomd:*)", "mcp__capcomd"] };
+        appendSystemFile = `${W}/append-system.txt`;
+        await provider.upload(vmId, appendSystemFile, new TextEncoder().encode([cfg.appendSystemPrompt ? r.text(cfg.appendSystemPrompt) : "", sa.skill].filter(Boolean).join("\n\n")));
+      } else promptText = [promptText, sa.skill].join("\n\n");
+    }
     await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(promptText)));
     const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`;
     const script = [
@@ -222,7 +248,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       `cd ${sq(repo)} || exit 97`,
       `echo $$ > ${sq(pidFile)}`,
       ...(prelude ? [prelude] : []),
-      `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile }, sq)}`,
+      ...(capcomdPrelude ? [capcomdPrelude] : []),
+      `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}) }, sq)}`,
       `echo $? > ${sq(exitFile)}`,
     ].join("\n");
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));
@@ -233,6 +260,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
     const deadline = now() + cfg.timeoutMs + 30_000;
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
+    live = state;
     let consumed = 0, exitCode: number | null = null;
     const drain = async (final: boolean) => {
       const res = await sh(`tail -n +${consumed + 1} ${sq(jsonl)} 2>/dev/null; printf '\\n__CAPCOMD_EXIT__%s' "$(cat ${sq(exitFile)} 2>/dev/null)"`);
@@ -293,7 +321,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     must(await git(["add", "-A"], repo), "git add");
     const status = await git(["status", "--porcelain"], repo);
     const ahead = await git(["rev-list", "--count", `origin/${task.target}..HEAD`], repo);
-    if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
+    if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) {
+      // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine.
+      if (opts.subagents) { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd }; }
+      throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
+    }
     if (status.stdout.trim()) {
       const subject = `${task.taskId}: ${task.goal.split("\n")[0]!.slice(0, 60)}`;
       const msg = `${subject}\n\n${r.text(state.resultText ?? "").slice(0, 1500)}\n\nCapcomd-Task: ${key}\nCapcomd-Epoch: ${task.epoch}\nCapcomd-Agent: ${name}@${version}\n`;
@@ -305,5 +337,14 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     must(await git(["push", "--porcelain", lease, "origin", `HEAD:refs/heads/${task.branch}`], repo, 300_000), "git push");
     setSpanAttributes(span, { "git.sha": sha });
     return { sha, already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd };
-  });
+  } catch (e) {
+    // Failed/timed-out spans still carry what was spent so far (subscription billing: cost 0, notional set).
+    const st = live as AgentRunState | null;
+    const sub = span.attributes["agent.billing"] === "subscription" || span.attributes["agent.credential_mode"] === "subscription";
+    setSpanAttributes(span, {
+      "agent.cost_usd": st && !sub ? st.costUsd : 0, "agent.notional_cost_usd": st?.costUsd ?? 0, "agent.turns": st?.turns ?? 0,
+      "agent.error_kind": e instanceof AgentError ? e.kind : "error", ...(span.attributes["agent.stop_reason"] ? {} : { "agent.stop_reason": e instanceof AgentError ? e.kind : "error" }),
+    });
+    throw e;
+  } }, task.agentId ? { parentSpanId: agentSpanId(task.runId, task.agentId) } : {});
 }

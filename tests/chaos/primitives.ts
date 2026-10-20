@@ -11,7 +11,10 @@ import { seedRepo, wipeEngineData } from "./survive";
 
 // "driver.kill:0" = no engine kill: the scenario kills the driver process mid-push (engine push is slowed).
 // push.after.before_event runs with a repo: the remote branch exists when the takeover runs, so it must adopt it.
-export const PRIM_KILLPOINTS = ["scope.spawn.mid:1", "scope.spawn.mid:3", "scope.cancel.mid:1", "push.mid:1", "push.after.before_event:1", "driver.kill:0", "merge.after_cas.before_event:1", "board.claim.mid:2", "board.claim.after.before_reply:4", "kv.cas.mid:3", "kv.cas.after.before_reply:4"];
+export const PRIM_KILLPOINTS = ["scope.spawn.mid:1", "scope.spawn.mid:3", "scope.cancel.mid:1", "push.mid:1", "push.after.before_event:1", "driver.kill:0", "merge.after_cas.before_event:1", "board.claim.mid:2", "board.claim.after.before_reply:4", "kv.cas.mid:3", "kv.cas.after.before_reply:4",
+  // ADR-017: spawn-from-VM and await. "vm.rpc.*:0" kill the parent's driver (not the engine);
+  // "vm.scope.spawn.mid:2" kills the engine inside the first spawn a VM asked for.
+  "vm.rpc.spawn.before_reply:0", "vm.rpc.await.before:0", "vm.scope.spawn.mid:2"];
 const ROOT = new URL("../..", import.meta.url).pathname;
 
 function agentsFile() {
@@ -44,25 +47,32 @@ function errorLines(out: string): string {
 
 export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promise<{ ok: boolean; killed: boolean; error?: string; phases: Record<string, number> }> {
   const tag = `${kp.replace(/[.:]/g, "-")}-${Date.now()}-p${baseOpts.port}`;
-  const driverKill = kp.startsWith("driver.kill");
+  const vm = kp.startsWith("vm.");
+  const vmDriver = kp.startsWith("vm.rpc.");
+  const driverKill = kp.startsWith("driver.kill") || vmDriver;
   const adopt = kp.startsWith("push.after.before_event");
   const merge = kp.startsWith("merge.");
   const board = kp.startsWith("board."), kv = kp.startsWith("kv.");
-  const mode = board ? "board" : kv ? "kv" : merge ? "merge" : driverKill || adopt ? "driverkill" : "tree";
-  const opts: EngineOpts = { ...baseOpts, ...(adopt || merge ? { repo: true } : {}), ...(driverKill ? { env: { CAPCOMD_FAKE_PUSH_DELAY_MS: "4000" } } : {}) };
+  const mode = vm ? "subagent" : board ? "board" : kv ? "kv" : merge ? "merge" : driverKill || adopt ? "driverkill" : "tree";
+  const opts: EngineOpts = { ...baseOpts, ...(adopt || merge ? { repo: true } : {}), ...(driverKill && !vm ? { env: { CAPCOMD_FAKE_PUSH_DELAY_MS: "4000" } } : {}) };
   const engine = new Engine(`prim-${tag}`, opts);
-  const extra = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1" };
+  const extra: Record<string, string> = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: vm ? "script" : "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1" };
+  if (vm) Object.assign(extra, {
+    CAPCOMD_RPC_KEY: `chaos-${tag}`, CAPCOMD_SCRIPT_RPC_TIMEOUT_MS: "240000", CAPCOMD_SCRIPT_VM_DIR: mkdtempSync(join(tmpdir(), "capcomd-chaos-vms-")),
+    ...(vmDriver ? { CAPCOMD_DRIVER_KILLPOINT: kp.slice(3).split(":")[0]!, CAPCOMD_DRIVER_KILLPOINT_MARKER: join(mkdtempSync(join(tmpdir(), "capcomd-chaos-dk-")), "fired") } : {}),
+  });
   const phases: Record<string, number> = {};
   let t = Date.now();
   const mark = (k: string) => { phases[k] = Date.now() - t; t = Date.now(); };
   await wipeEngineData(opts);
   if (opts.repo) await seedRepo(opts);
   try {
-    await engine.start(driverKill ? null : kp);
+    await engine.start(driverKill ? null : vm ? kp.slice(3) : kp);
     mark("engineUp");
     const first = await runScenario(tag, opts, extra, mode);
     mark("firstClient");
     const killed = driverKill ? first.output.includes("[DRIVER-KILL]") : engine.sawKill || first.output.includes("[KILLPOINT]");
+    if (vmDriver && !killed) return { ok: false, killed, error: `driver killpoint ${kp} never fired: ${first.output.slice(-400)}`, phases };
     let final = first;
     if (!driverKill && !(first.code === 0 && !killed)) {
       await engine.stop(); mark("stop");
@@ -73,7 +83,7 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
     if (!killed) return { ok: false, killed, error: `killpoint ${kp} never fired; client (${first.code}): ${first.output.slice(-400)}`, phases };
     if (final.code !== 0 || !final.output.includes("✓ primitives scenario ok")) return { ok: false, killed, error: `scenario failed (${final.code}): ${errorLines(final.output)} … ${final.output.slice(-400)}`, phases };
     const ids = JSON.parse(final.output.split("\n").find((l) => l.startsWith("PRIM "))!.slice(5));
-    const v = mode === "board" ? await auditBoard(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "kv" ? await auditKv(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "merge" ? await auditMerge(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, opts) : mode === "driverkill" ? await auditPush(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, { driverKill, adopt, opts }) : await audit(ids, engineEnv(opts).CAPCOMD_ENDPOINT!);
+    const v = mode === "subagent" ? await auditSubagent(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "board" ? await auditBoard(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "kv" ? await auditKv(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "merge" ? await auditMerge(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, opts) : mode === "driverkill" ? await auditPush(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, { driverKill, adopt, opts }) : await audit(ids, engineEnv(opts).CAPCOMD_ENDPOINT!);
     mark("audit");
     return v.length ? { ok: false, killed, error: v.join("; "), phases } : { ok: true, killed, phases };
   } catch (e) {
@@ -103,6 +113,30 @@ async function audit(ids: { runId: string; sup: string; c1: string; c2: string; 
   const sup = agents.find((a) => a.agentId === ids.sup);
   const held = agents.filter((a) => a.parent === ids.sup).reduce((x, a) => x + (a.budget.usd ?? 0), 0);
   if (held > (sup.budget.usd ?? 0) * 1.000001) v.push(`children hold $${held} > parent $${sup.budget.usd}`);
+  for (const a of agents) {
+    const w = await c.worker.getOrCreate([ids.runId, a.agentId]).getWorker({ workerId: a.agentId });
+    if (w && w.state !== "destroyed") v.push(`worker ${a.agentId} still ${w.state}`);
+  }
+  return v;
+}
+
+/** Spawn-from-VM: exactly two children (no duplicates from retried requests), all done, awaits cleared, tokens revoked. */
+async function auditSubagent(ids: { runId: string; sup: string }, endpoint: string): Promise<string[]> {
+  const c: any = createClient({ endpoint });
+  const s = c.scope.getOrCreate([ids.runId]);
+  const v: string[] = [];
+  const agents: any[] = await s.listAgents({});
+  const kids = agents.filter((a) => a.parent === ids.sup);
+  if (agents.length !== 3 || kids.length !== 2) v.push(`expected sup + 2 children, got ${agents.length} agents (${kids.length} children)`);
+  for (const a of agents) if (a.status !== "done") v.push(`${a.agentId} is ${a.status}`);
+  const sup = agents.find((a) => a.agentId === ids.sup);
+  for (const k of kids) if (!String(sup?.result?.summary ?? "").includes(k.agentId)) v.push(`sup result doesn't name child ${k.agentId}: ${sup?.result?.summary}`);
+  const evs: any[] = await s.getEvents({});
+  evs.forEach((e, i) => { if (e.seq !== i + 1) v.push(`scope event gap at ${i + 1} (seq ${e.seq})`); });
+  for (const a of agents) { const n = evs.filter((e) => e.type === "AGENT_SPAWNED" && e.agentId === a.agentId).length; if (n !== 1) v.push(`${a.agentId} AGENT_SPAWNED×${n}`); }
+  if (evs.some((e) => e.type === "DEADLOCK_DETECTED")) v.push("spurious DEADLOCK_DETECTED");
+  const aw: any[] = await s.listAwaits({});
+  if (aw.length) v.push(`stale await edges ${JSON.stringify(aw)}`);
   for (const a of agents) {
     const w = await c.worker.getOrCreate([ids.runId, a.agentId]).getWorker({ workerId: a.agentId });
     if (w && w.state !== "destroyed") v.push(`worker ${a.agentId} still ${w.state}`);
