@@ -1,4 +1,5 @@
 import { isBoxdAuthError } from "../providers/boxd-errors";
+import { resolveEnvSnapshot } from "../env/resolve";
 // ADR-016 step 1: run new / spawn / await / wait-any / cancel, on top of the existing worker
 // actor. The CLI is a thin client; durable state lives in the scope actor (agent tree, keys,
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
@@ -70,6 +71,8 @@ export async function spawnAgent(o: SpawnOpts) {
   const scope = o.parent ?? "operator";
   const agentId = stableId("agt", `${o.runId}\0${scope}`, o.key);
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
+  const envProblem = envSnapshotProblem(spec?.provider);
+  if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
   // Requested budget: the contract's `budget` ({usd, turns, wallSeconds}), then --budget per unit.
   let requested: Budget;
   try { requested = { ...parseBudget(o.contract?.budget), ...(o.budget ?? {}) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Budget units: usd, turns, wallSeconds (e.g. --budget usd=2,turns=40)."); }
@@ -91,6 +94,17 @@ export async function spawnAgent(o: SpawnOpts) {
 function stampSpent(span: { attributes: Record<string, any> }, a: ScopeAgent) {
   const sp: any = a.spent ?? {};
   Object.assign(span.attributes, { "agent.status": a.status, "agent.cost_usd": Number(sp.usd ?? 0), "agent.turns": Number(sp.turns ?? 0) });
+}
+
+export class EnvSnapshotMissing extends Error { readonly code = "env_snapshot_missing"; }
+/** Real CLI agents on boxd boot from the capcomd env snapshot; without one the CLI isn't installed. */
+export function envSnapshotProblem(provider: unknown, source: Record<string, string | undefined> = process.env): string | null {
+  if (provider !== "claude" && provider !== "codex") return null;
+  if ((source.CAPCOMD_SANDBOX ?? "") !== "boxd") return null;
+  if ((source.CAPCOMD_SPAWN_EXEC ?? "") === "fake" || (source.CAPCOMD_SPAWN_EXEC ?? "") === "script") return null;
+  if ((source.CAPCOMD_ENV ?? "").toLowerCase() === "image") return null;
+  if (resolveEnvSnapshot(source)) return null;
+  return `no capcomd env snapshot for this env (the ${provider} CLI would be missing in the VM); run \`capcomd env build\` first`;
 }
 
 export function view(a: ScopeAgent) {
@@ -210,7 +224,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
       try { const a = await driveOnce(runId, agentId); if (!TERMINAL_AGENT.has(a.status)) discardSpan(span); else stampSpent(span, a); return a; } catch (e) {
         last = e;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
-        if (isBoxdAuthError(e) || e instanceof ScriptFailed) break;
+        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing) break;
         await sleep(2000 * attempt);
       }
     }
@@ -249,6 +263,9 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
       exec = encodeAgentRef(d.name, { set: { ...(d.overrides?.set ?? {}), ...caps }, operator: d.overrides?.operator });
     }
   }
+  // Fail fast (no retries, no driverless "running"): a real agent on boxd needs the env snapshot.
+  const envProblem = exec ? envSnapshotProblem((a.spec as any)?.provider) : null;
+  if (envProblem) { clearInterval(hb); throw new EnvSnapshotMissing(envProblem); }
   const branch = `capcomd/${runId}/${agentId}`;
   // The commit's Capcomd-Task trailer names the task: the contract's planTask when set (the
   // hierarchical recipe, so landings match the legacy `<run>/<task>` key), else the agent id.

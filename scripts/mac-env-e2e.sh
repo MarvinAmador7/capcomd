@@ -53,7 +53,7 @@ done
 t=$(ms); bun src/cli/index.ts auth status || die "a saved login is invalid: rerun capcomd auth login <agent>"; step auth_status $(( $(ms) - t ))
 
 echo "######## 4. capcomd doctor"
-t=$(ms); bun src/cli/index.ts doctor || echo "   (doctor reported failures; continuing so the runs show where)"; step doctor $(( $(ms) - t ))
+t=$(ms); bun src/cli/index.ts doctor --strict || die "doctor reported a failure (see ✗ above); not starting runs that would hang"; step doctor $(( $(ms) - t ))
 
 echo "######## 5. mac-e2e from the auth snapshots"
 for p in $PROVIDERS; do

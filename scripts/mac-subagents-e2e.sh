@@ -44,6 +44,10 @@ export CAPCOMD_RPC_KEY_FILE="$WORK/rpc.key"   # per-run token signing key (host 
 PORT=$(bun -e 'const { testPort } = await import("./tests/helpers/engine.ts"); console.log(await testPort())') || die "no free engine port"
 export CAPCOMD_ENDPOINT="http://127.0.0.1:$PORT"
 
+echo "== 0a. env snapshot (capcomd env build: idempotent, no VM when the snapshot for this env hash exists)"
+bun src/cli/index.ts env build || die "capcomd env build failed"
+echo "== 0b. doctor --strict (aborts on any ✗: claude and codex must both be usable)"
+bun src/cli/index.ts doctor --strict || die "doctor reported a failure (see ✗ above); fix it before spawning agents"
 echo "== 0. preflight (credentials checked, never printed)"
 for a in planner claude-worker codex-worker; do CAPCOMD_AGENT=$a bun scripts/preflight.ts >/dev/null || die "preflight failed for $a (capcomd auth status)"; done
 

@@ -43,7 +43,8 @@ export async function envCommand(command: string, pos: string[], values: Record<
       if (m === "subscription") { modes[k] = "subscription"; const pr = profileFor(k); if (pr?.snapshot) snapshots[k] = pr.snapshot; }
     }
     const rep = await doctor(p, { cfg: toolCfg(), snapshot, modes, snapshots });
-    const ok = rep.agents.some((a) => a.ok);
+    // --strict (scripts): every checked agent must pass; default: at least one usable agent.
+    const ok = values.strict ? rep.agents.length > 0 && rep.agents.every((a) => a.ok) : rep.agents.some((a) => a.ok);
     emit(json, { ok, ...rep }, formatDoctor(rep));
     return ok ? 0 : 1;
   }

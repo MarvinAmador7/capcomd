@@ -157,6 +157,7 @@ async function main(argv: string[]): Promise<number> {
         status: { type: "string" },
         prefix: { type: "string" },
         "from-start": { type: "boolean" },
+        strict: { type: "boolean" },
         "since-seq": { type: "string" },
         recipe: { type: "boolean" },
         legacy: { type: "boolean" },
