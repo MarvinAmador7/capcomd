@@ -12,6 +12,7 @@ export interface EnvPlatform {
   /** Value is sent once to boxd and never returned or logged. */
   secretSet(name: string, value: string, opts: { domains: string[]; scope: "private" | "org" }): Promise<void>;
   secretList(): Promise<SecretInfo[]>;
+  secretDelete?(name: string, scope?: "private" | "org"): Promise<void>;
 }
 
 export function isEnvPlatform(p: unknown): p is EnvPlatform {

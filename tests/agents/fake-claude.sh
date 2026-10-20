@@ -5,6 +5,7 @@ prompt=""; args=("$@")
 while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; *) shift;; esac; done
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
 printf '%s' "$ANTHROPIC_API_KEY" > ../keyseen.txt
+echo "oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} apikey=${ANTHROPIC_API_KEY:+set}" > ../authseen.txt
 emit() { printf '%s\n' "$1"; }
 emit '{"type":"system","subtype":"init","session_id":"s1","tools":["Read","Edit"],"model":"fake"}'
 case "$prompt" in *"[leak]"*)

@@ -5,6 +5,7 @@ args=("$@"); prompt="${args[$((${#args[@]}-1))]}"; out=""
 for ((i=0;i<${#args[@]};i++)); do [ "${args[$i]}" = "-o" ] && out="${args[$((i+1))]}"; done
 { printf '%s\n' "${args[@]}"; [ -n "$CODEX_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
 printf '%s' "$CODEX_API_KEY" > ../keyseen.txt
+echo "codex_home=${CODEX_HOME:+set} apikey=${CODEX_API_KEY:+set}${OPENAI_API_KEY:+set}" > ../authseen.txt
 e() { printf '%s\n' "$1"; }
 e '{"type":"thread.started","thread_id":"th_1"}'
 e '{"type":"turn.started"}'

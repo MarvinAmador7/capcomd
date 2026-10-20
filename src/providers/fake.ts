@@ -66,10 +66,31 @@ export class FakeProvider implements SandboxProvider {
   async snapshotList() { return [...this.snapshots.values()].map((s) => ({ name: s.name, status: s.status, id: `snap-${s.name}` })); }
   async snapshotDelete(name: string) { this.snapshots.delete(name); }
   async secretSet(name: string, value: string, o: { domains: string[]; scope: string }) {
+    if (this.secretsDenied) { const { mapBoxdError } = await import("./boxd-errors"); class PermissionDeniedError extends Error {} throw mapBoxdError(new PermissionDeniedError("secrets require a member credential"), undefined, "secrets.set"); }
     const h = new Bun.CryptoHasher("sha256").update(name + value).digest("hex").slice(0, 24);
     this.secrets.set(name, { value, scope: o.scope, domains: [...o.domains], placeholder: `bxds_${h}` });
   }
-  async secretList() { return [...this.secrets.entries()].map(([name, s]) => ({ name, scope: s.scope, domains: s.domains })); }
+  async secretDelete(name: string) { this.secrets.delete(name); }
+  /** Test hook: make secrets.* fail like an org-scoped boxd key does. */
+  public secretsDenied = false;
+  /** Interactive exec: host process with piped stdio (hostExec mode). */
+  streamExec(id: VmId, cmd: string[], opts: { env?: Record<string, string> } = {}) {
+    const vm = this.vms.get(id);
+    if (!vm || vm.state !== "ready") throw new Error(`VM ${id} not ready`);
+    if (!this.opts.hostExec) throw new Error("FakeProvider.streamExec needs hostExec");
+    this.opts.log?.push({ cmd, envKeys: Object.keys(opts.env ?? {}), env: opts.env });
+    const env: Record<string, string> = {};
+    for (const k of this.opts.inheritEnv ?? []) if (process.env[k] !== undefined) env[k] = process.env[k]!;
+    Object.assign(env, this.machineEnv(), opts.env ?? {});
+    const proc = Bun.spawn(cmd, { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    async function* merged() { for await (const c of proc.stdout as any) yield c as Uint8Array; }
+    return {
+      write: (d: string | Uint8Array) => { proc.stdin.write(d); proc.stdin.flush(); },
+      end: () => proc.stdin.end(), close: () => proc.kill(), output: merged(), wait: () => proc.exited,
+    };
+  }
+
+  async secretList() { if (this.secretsDenied) throw new Error("PermissionDenied: secrets require a member credential"); return [...this.secrets.entries()].map(([name, s]) => ({ name, scope: s.scope, domains: s.domains })); }
   specOf(id: VmId): VmSpec | undefined { return this.vms.get(id)?.spec; }
 
   async ensure(spec: VmSpec): Promise<{ id: VmId; created: boolean }> {

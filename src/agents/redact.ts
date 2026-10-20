@@ -4,6 +4,7 @@ const PATTERNS: RegExp[] = [
   /sk-ant-[A-Za-z0-9_\-]{8,}/g,             // Anthropic API keys
   /sk-proj-[A-Za-z0-9_\-]{8,}/g,            // OpenAI project keys
   /gh[pousr]_[A-Za-z0-9]{20,}/g,            // GitHub tokens
+  /eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}/g, // JWTs (ChatGPT/codex access tokens)
   /github_pat_[A-Za-z0-9_]{20,}/g,
   /(x-access-token:)[^@\s]+(@)/g,           // tokens embedded in git URLs
 ];

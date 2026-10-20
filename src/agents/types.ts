@@ -32,6 +32,9 @@ export interface AgentCommandCtx {
   /** Where stdout (the JSON event stream) must go. */
   jsonl: string;
   errFile: string;
+  /** Files with the profile's system prompt / append (claude flags). */
+  systemFile?: string;
+  appendSystemFile?: string;
   /** Extra per-run files (e.g. codex last message). */
   dir: string;
   cfg: AgentConfig;
@@ -62,6 +65,16 @@ export interface AgentAdapter {
   parse(line: string, r: Redactor, state: AgentRunState, cfg: AgentConfig): AgentEvent | null;
   /** Reason to stop the agent now (turn/budget guard), or null. */
   guard(state: AgentRunState, cfg: AgentConfig): string | null;
+  /** Subscription mode (ADR-015 §5). Shell that prints "secret" and/or "file" when a plan login is present. */
+  subscriptionCheck(home: string, q: (s: string) => string): string;
+  /** Lines run in run.sh before the agent: drop API keys, load the plan login. */
+  subscriptionPrelude(home: string, q: (s: string) => string): string;
+  /** Interactive login argv (run in a PTY in the login VM). */
+  loginCommand(bin: string): string[];
+  /** Hosts the login VM may reach. */
+  loginEgress: string[];
+  /** Cheap headless call proving the login works; exit 0 + stdout containing "ok". */
+  verifyCommand(bin: string, q: (s: string) => string): string;
   /** Interpret the finished run. */
   outcome(state: AgentRunState, exitCode: number): { ok: boolean; stopReason: string };
 }

@@ -31,6 +31,7 @@ export interface BoxdLike {
     delete(id: string): Promise<void>;
     waitUntilReady(id: string, p?: { timeout?: number; pollInterval?: number }): Promise<BoxdMachine>;
     exec(id: string, p: { command: string | string[]; env?: Record<string, string>; cwd?: string; timeout?: number }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+    streamExec?(id: string, p: { command: string | string[]; env?: Record<string, string>; tty?: boolean; cols?: number; rows?: number }): any;
     setEgressAllow(id: string, entries: string[]): Promise<string[]>;
     pause(id: string): Promise<unknown>;
     resume(id: string): Promise<unknown>;
@@ -329,6 +330,21 @@ export class BoxdProvider implements SandboxProvider {
     await this.client.secrets.set(name, value, { scope: opts.scope, domains: opts.domains, ...(this.org ? { org: this.org } : {}) })
       .catch((e) => { const m = mapBoxdError(e, undefined, "secrets.set"); m.message = m.message.split(value).join("[REDACTED]"); throw m; });
   }
+  async secretDelete(name: string, scope: "private" | "org" = "private") {
+    if (!this.client.secrets?.delete) throw new SandboxConfigError("boxd SDK lacks secrets.delete");
+    await this.client.secrets.delete(name, { scope }).catch((e) => { throw mapBoxdError(e, undefined, "secrets.delete"); });
+  }
+
+  /** Interactive PTY exec (capcomd auth login). */
+  streamExec(id: VmId, cmd: string[], opts: { env?: Record<string, string>; tty?: boolean; cols?: number; rows?: number } = {}) {
+    if (!this.client.machines.streamExec) throw new SandboxConfigError("boxd SDK lacks machines.streamExec");
+    const st = this.client.machines.streamExec(id, { command: cmd, env: opts.env, tty: opts.tty ?? true, cols: opts.cols ?? 200, rows: opts.rows ?? 40 });
+    return {
+      write: (d: string | Uint8Array) => st.write(d), end: () => st.end(), close: () => st.close(),
+      resize: (c: number, r: number) => st.resize(c, r), output: st as AsyncIterable<Uint8Array>, wait: () => st.wait() as Promise<number>,
+    };
+  }
+
   async secretList() {
     if (!this.client.secrets) return [];
     const xs = await this.client.secrets.list().catch((e) => { throw mapBoxdError(e, undefined, "secrets.list"); });

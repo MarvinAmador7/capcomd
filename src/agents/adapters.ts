@@ -26,6 +26,8 @@ export const claudeAdapter: AgentAdapter = {
     ` --max-turns ${ctx.cfg.maxTurns} --max-budget-usd ${ctx.cfg.maxBudgetUsd}` +
     ` --allowedTools ${q(ctx.cfg.allowedTools.join(","))} --disallowedTools ${q(ctx.cfg.disallowedTools.join(","))}` +
     (ctx.cfg.model ? ` --model ${q(ctx.cfg.model)}` : "") +
+    (ctx.systemFile ? ` --system-prompt "$(cat ${q(ctx.systemFile)})"` : "") +
+    (ctx.appendSystemFile ? ` --append-system-prompt "$(cat ${q(ctx.appendSystemFile)})"` : "") +
     ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)} < /dev/null`,
   parse(line, r, state) {
     const raw = parseJson(line, r);
@@ -49,6 +51,13 @@ export const claudeAdapter: AgentAdapter = {
     }
     return ev;
   },
+  // `claude setup-token` prints a one-year CLAUDE_CODE_OAUTH_TOKEN (https://code.claude.com/docs/en/authentication).
+  // It ranks below ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN, so those are unset first.
+  subscriptionCheck: (home, q) => `case "$(printenv CLAUDE_CODE_OAUTH_TOKEN)" in bxds_*) echo secret;; esac; [ -s ${q(`${home}/.capcomd-auth/claude.env`)} ] && echo file; [ -s ${q(`${home}/.claude/.credentials.json`)} ] && echo file; true`,
+  subscriptionPrelude: (home, q) => `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; [ -s ${q(`${home}/.capcomd-auth/claude.env`)} ] && . ${q(`${home}/.capcomd-auth/claude.env`)}; export CLAUDE_CODE_OAUTH_TOKEN`,
+  loginCommand: (bin) => [bin, "setup-token"],
+  loginEgress: ["api.anthropic.com", "console.anthropic.com", "platform.claude.com", "claude.ai", "claude.com"],
+  verifyCommand: (bin, q) => `${q(bin)} -p 'Reply with exactly the word ok' --max-turns 1 --output-format text < /dev/null`,
   // --max-turns / --max-budget-usd are enforced by the CLI itself.
   guard: () => null,
   outcome(state, exitCode) {
@@ -108,9 +117,17 @@ export const codexAdapter: AgentAdapter = {
     }
     return ev;
   },
+  // ChatGPT-plan login: `codex login --device-auth` writes $CODEX_HOME/auth.json when
+  // cli_auth_credentials_store = "file" (https://learn.chatgpt.com/docs/auth).
+  subscriptionCheck: (home, q) => `[ -s ${q(`${home}/.codex/auth.json`)} ] && echo file; true`,
+  subscriptionPrelude: (home, q) => `unset CODEX_API_KEY OPENAI_API_KEY; export CODEX_HOME=${q(`${home}/.codex`)}`,
+  loginCommand: (bin) => [bin, "login", "--device-auth"],
+  loginEgress: ["auth.openai.com", "chatgpt.com", "api.openai.com"],
+  verifyCommand: (bin, q) => `${q(bin)} exec --json --color never --ephemeral --skip-git-repo-check --sandbox read-only 'Reply with exactly the word ok' < /dev/null | grep -q '"turn.completed"' && echo ok`,
   guard(state, cfg) {
     if (state.turns > cfg.maxTurns) return `max_turns (${state.turns} > ${cfg.maxTurns} tool steps)`;
-    if (state.costUsd > cfg.maxBudgetUsd) return `max_budget_usd (~$${state.costUsd.toFixed(3)} > $${cfg.maxBudgetUsd})`;
+    // On a plan login the token cost is notional; the turn guard and timeout still apply.
+    if (cfg.credentialMode !== "subscription" && state.costUsd > cfg.maxBudgetUsd) return `max_budget_usd (~$${state.costUsd.toFixed(3)} > $${cfg.maxBudgetUsd})`;
     return null;
   },
   outcome(state, exitCode) {
