@@ -27,6 +27,7 @@ beforeAll(async () => {
     CAPCOMD_AGENT_POLL_MS: "100",
     CAPCOMD_TRACE_DIR: traceDir,
     ANTHROPIC_API_KEY: KEY,
+    CAPCOMD_ENV: "image",
   };
   Object.assign(process.env, env); // the engine (actors) inherits process.env
   engine = new Engine("agent-e2e", { port: PORT, dataDir: mkdtempSync(join(tmpdir(), "capcomd-agent-eng-")) });

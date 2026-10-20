@@ -15,13 +15,22 @@ import { loadMergeConfig } from "../merge/config";
 import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
-import { agentFromEnv, loadAgentConfig } from "../agents/config";
-import { runClaudeCode } from "../agents/claude-code";
+import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
+import { runAgent } from "../agents/runner";
+import { adapterFor } from "../agents/adapters";
+import { resolveEnvSnapshot } from "../env/resolve";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
 /** claude-code VMs may reach only GitHub, the Anthropic API and the package registries the bootstrap needs. */
+/** Real-agent VMs boot from the `capcomd env build` snapshot when one exists (else the default image). */
+function snapshotSpec(): { fromSnapshot?: string } {
+  if (!isRealAgent(agentFromEnv())) return {};
+  const snap = resolveEnvSnapshot();
+  return snap ? { fromSnapshot: snap } : {};
+}
+
 function egressAllow(): string[] {
-  return agentFromEnv() === "claude-code" ? loadAgentConfig().egress : LEGACY_EGRESS;
+  return isRealAgent(agentFromEnv()) ? loadAgentConfig().egress : LEGACY_EGRESS;
 }
 
 
@@ -158,6 +167,7 @@ export const workerActor = actor({
           isolated: true,
           ttlSeconds: 3600,
           egressAllow: egressAllow(),
+        ...snapshotSpec(),
           labels: {
             runId,
             workerId,
@@ -323,6 +333,7 @@ export const workerActor = actor({
         isolated: true,
         ttlSeconds: 3600,
         egressAllow: egressAllow(),
+        ...snapshotSpec(),
         labels: { workerId, taskId, epoch: String(epoch) },
       }).catch((error) => {
         if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
@@ -333,14 +344,16 @@ export const workerActor = actor({
       let sha = "";
       let costUsd = 0;
       const cfg = loadMergeConfig();
-      if (agentFromEnv() === "claude-code") {
-        // Real worker: Claude Code edits the repo in the VM, commits with trailers, pushes the task branch.
-        if (!cfg) throw new Error("CAPCOMD_AGENT=claude-code needs a repo: set CAPCOMD_REPO");
-        if (!params.runId) throw new Error("pushBranch needs runId for claude-code");
-        const apiKey = process.env.ANTHROPIC_API_KEY;
-        if (!apiKey) throw new Error("CAPCOMD_AGENT=claude-code needs ANTHROPIC_API_KEY");
+      const agent = agentFromEnv();
+      if (isRealAgent(agent)) {
+        // Real worker: the agent edits the repo in the VM, commits with trailers, pushes the task branch.
+        if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
+        if (!params.runId) throw new Error(`pushBranch needs runId for ${agent}`);
+        const adapter = adapterFor(agent);
+        // Optional: with a boxd host-bound secret the VM holds a bxds_ placeholder and this is unused.
+        const apiKey = process.env[adapter.secretName];
         const runId = params.runId;
-        const res = await runClaudeCode(provider, vmId, {
+        const res = await runAgent(adapter, provider, vmId, {
           runId, taskId, epoch, branch, target: params.target ?? cfg.target, repoUrl: cfg.remote,
           goal: params.goal ?? `Task ${taskId}`, rework: params.rework, conflictFiles: params.conflictFiles,
         }, loadAgentConfig(), {
