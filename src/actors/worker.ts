@@ -23,6 +23,25 @@ import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord } from "../agents/profiles";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
+
+// Push-in-progress lock (ADR-016): one persisted lock per push idempotency key. The action that
+// holds it renews it while the agent runs. A caller that finds a live lock (e.g. a takeover driver
+// whose predecessor died mid-push) waits for that push instead of starting a second one. A lock
+// from a dead engine process (other instance id) or one past its lease can be taken over, and
+// the new holder first checks the remote branch and adopts a push that already landed.
+const ENGINE_INSTANCE = crypto.randomUUID();
+const PUSH_LOCK_MS = () => Number(process.env.CAPCOMD_PUSH_LOCK_MS ?? 30_000);
+const PUSH_LOCKS_SQL = `CREATE TABLE IF NOT EXISTS push_locks (
+  idem_key TEXT PRIMARY KEY, holder TEXT NOT NULL, instance TEXT NOT NULL, until INTEGER NOT NULL,
+  attempts INTEGER NOT NULL, state TEXT NOT NULL, adopted INTEGER NOT NULL DEFAULT 0, sha TEXT, updated_at INTEGER NOT NULL)`;
+
+async function remoteBranchSha(remote: string, branch: string): Promise<string | null> {
+  const p = Bun.spawn(["git", "ls-remote", remote, `refs/heads/${branch}`], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+  if (code !== 0) throw new Error(`git ls-remote ${branch} failed (exit ${code})`);
+  const sha = out.trim().split(/\s+/)[0];
+  return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
 /** claude-code VMs may reach only GitHub, the Anthropic API and the package registries the bootstrap needs. */
 /** Real-agent VMs boot from the `capcomd env build` snapshot when one exists (else the default image). */
 function snapshotSpec(profile?: string): { fromSnapshot?: string } {
@@ -110,10 +129,20 @@ export const workerActor = actor({
   db: db({
     onMigrate: async (database) => {
       await setupLifecycleTables(database);
+      await database.execute(PUSH_LOCKS_SQL);
     },
   }),
 
   actions: traceActions("worker", {
+    /** Push lock rows (attempts, adopted, state) for audits and the takeover chaos case. */
+    async getPushes(c, _p: Record<string, never>) {
+      await c.db.execute(PUSH_LOCKS_SQL);
+      return (await c.db.execute("SELECT * FROM push_locks ORDER BY idem_key")).map((r: any) => ({
+        idemKey: r.idem_key as string, state: r.state as string, attempts: Number(r.attempts), adopted: !!Number(r.adopted),
+        sha: (r.sha as string | null) ?? null, live: r.state === "running" && r.instance === ENGINE_INSTANCE && Number(r.until) > Date.now(),
+      }));
+    },
+
     async provisionWorker(
       c,
       params: {
@@ -328,9 +357,9 @@ export const workerActor = actor({
       );
       if (already.length > 0) {
         // Replay: return what the first push recorded (a resumed driver needs the commit).
-        let prev: { sha?: string; costUsd?: number } = {};
+        let prev: { sha?: string; costUsd?: number; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
         try { prev = JSON.parse(String(already[0]!.event)); } catch {}
-        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0 };
+        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0 }, ...(prev.adopted ? { adopted: true } : {}) };
       }
 
       const workerLife = await getLifecycle(c.db, workerId);
@@ -340,6 +369,41 @@ export const workerActor = actor({
       };
       const { provider } = getDependencies();
       const vmKey = workerContext.idemKey ?? `relay-worker-${workerId}`;
+
+      // Acquire the push lock (or wait out a live push by another call).
+      await c.db.execute(PUSH_LOCKS_SQL);
+      const holder = crypto.randomUUID();
+      let takeover = false;
+      for (let waited = 0; ; waited += 500) {
+        const done = await c.db.execute("SELECT event FROM lifecycle_events WHERE idem_key = ?", idemKey);
+        if (done.length) {
+          let prev: { sha?: string; costUsd?: number; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
+          try { prev = JSON.parse(String(done[0]!.event)); } catch {}
+          return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0 }, ...(prev.adopted ? { adopted: true } : {}) };
+        }
+        const now = Date.now();
+        const rows = await c.db.execute("SELECT * FROM push_locks WHERE idem_key = ?", idemKey);
+        const lk: any = rows[0];
+        const live = lk && lk.state === "running" && lk.instance === ENGINE_INSTANCE && Number(lk.until) > now;
+        if (!live) {
+          takeover = !!lk && lk.state === "running";
+          await c.db.execute(
+            `INSERT INTO push_locks (idem_key, holder, instance, until, attempts, state, updated_at) VALUES (?, ?, ?, ?, 1, 'running', ?)
+             ON CONFLICT(idem_key) DO UPDATE SET holder = excluded.holder, instance = excluded.instance, until = excluded.until,
+               attempts = push_locks.attempts + 1, state = 'running', updated_at = excluded.updated_at
+             WHERE NOT (push_locks.state = 'running' AND push_locks.instance = ? AND push_locks.until > ?)`,
+            idemKey, holder, ENGINE_INSTANCE, now + PUSH_LOCK_MS(), now, ENGINE_INSTANCE, now
+          );
+          const mine = await c.db.execute("SELECT holder FROM push_locks WHERE idem_key = ?", idemKey);
+          if (mine[0]?.holder === holder) break;
+        }
+        if (waited > 60 * 60_000) throw new UserError(`push ${idemKey} still in progress after 1h`, { code: "push_in_progress" });
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      const renew = setInterval(() => {
+        c.db.execute("UPDATE push_locks SET until = ?, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now() + PUSH_LOCK_MS(), Date.now(), idemKey, holder).catch(() => {});
+      }, Math.max(200, PUSH_LOCK_MS() / 3));
+      try {
 
       killpoint("push.mid");
 
@@ -358,9 +422,21 @@ export const workerActor = actor({
 
       let sha = "";
       let costUsd = 0;
+      let turns = 0;
+      let billing: string | undefined;
+      let adopted = false;
       const cfg = loadMergeConfig();
       const agent = agentFromEnv(process.env, params.agent);
-      if (isRealAgent(agent)) {
+      // Takeover: a push that reached the remote before its holder died is adopted, not redone.
+      if (takeover && cfg) {
+        const remote = await remoteBranchSha(cfg.remote, branch).catch(() => null);
+        if (remote) { sha = remote; adopted = true; }
+      }
+      const pushStarted = Date.now();
+      const fakeDelay = Number(process.env.CAPCOMD_FAKE_PUSH_DELAY_MS ?? 0);
+      if (adopted) {
+        // nothing to run: the branch is already on the remote
+      } else if (isRealAgent(agent)) {
         // Real worker: the agent edits the repo in the VM, commits with trailers, pushes the task branch.
         if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
         if (!params.runId) throw new Error(`pushBranch needs runId for ${agent}`);
@@ -384,7 +460,10 @@ export const workerActor = actor({
         });
         sha = res.sha;
         costUsd = res.costUsd;
+        turns = res.turns;
+        billing = res.billing;
       } else {
+        if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
         await provider.exec(vmId, ["git", "push", "origin", branch]);
       }
 
@@ -395,6 +474,7 @@ export const workerActor = actor({
       }
 
       killpoint("push.after.before_event");
+      const wallSeconds = Math.round((Date.now() - pushStarted) / 100) / 10;
 
       await c.db.transaction(async (tx) => {
         await transitionLifecycle(
@@ -403,13 +483,21 @@ export const workerActor = actor({
           "worker",
           workerLife.state,
           { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
+          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(adopted ? { adopted: true } : {}), ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
           idemKey,
           []
         );
+        await tx.execute("UPDATE push_locks SET state = 'done', sha = ?, adopted = ?, until = 0, updated_at = ? WHERE idem_key = ?", sha || null, adopted ? 1 : 0, Date.now(), idemKey);
       }, { name: "pushBranch" });
 
-      return { workerId, taskId, pushed: true, already: false, sha, costUsd };
+      return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}) };
+      } catch (error) {
+        // Release so a retry can take over at once (the attempt count records the retry).
+        await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});
+        throw error;
+      } finally {
+        clearInterval(renew);
+      }
     },
 
     async flushOutbox(c, _params: Record<string, never>) {

@@ -116,6 +116,8 @@ export interface EngineOpts {
   dataDir?: string;
   /** Real git merges: a bare repo under dataDir/git (direct mode, target `trunk`). Needs dataDir. */
   repo?: boolean;
+  /** Extra env for the engine/runner process (e.g. test knobs like CAPCOMD_FAKE_PUSH_DELAY_MS). */
+  env?: Record<string, string>;
 }
 
 /** Merge env for a repo-backed case. Shared by the runner (verifier merges) and the client. */
@@ -144,6 +146,7 @@ export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
     env.RIVET_RUN_SERVICES = "0";
   }
   Object.assign(env, repoEnv(opts));
+  if (opts.env) Object.assign(env, opts.env);
   if (opts.dataDir) {
     env.RIVET_ENGINE_BINARY = `${ROOT}/tests/chaos/engine-wrapper.sh`;
     env.CAPCOMD_CHAOS_REAL_ENGINE = REAL_ENGINE;
