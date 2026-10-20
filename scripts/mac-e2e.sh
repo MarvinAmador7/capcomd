@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 OWNER="${CAPCOMD_E2E_OWNER:-MarvinAmador7}"
-PORT="${CAPCOMD_E2E_PORT:-6420}"
+export BOXD_NO_UPDATE_NOTICE=1   # the SDK's "new version available" notice is noise in scripts
 TS="$(date +%s)"
 AGENT="${CAPCOMD_AGENT:-claude-code}"
 AUTH="${CAPCOMD_AUTH:-}"
@@ -26,7 +26,9 @@ RUN_ID="run-e2e-$TS"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/capcomd-e2e.XXXXXX")"
 LOG="$WORK/capcomd-run.ndjson"
 
-die() { echo "mac-e2e: $*" >&2; exit 1; }
+# Every exit (including early aborts) prints one CAPCOMD_TIMING line with the reason, so the
+# mac-env-e2e table can say why an agent did not run.
+die() { echo "mac-e2e: $*" >&2; REASON="$*" AGENT="$AGENT" bun -e 'console.log("CAPCOMD_TIMING " + JSON.stringify({ agent: process.env.AGENT, rc: 1, reason: process.env.REASON }))' 2>/dev/null || true; exit 1; }
 [ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
 if [ "$AUTH" = apikey ] && [ "${CAPCOMD_CREDENTIALS:-auto}" != secret ]; then [ -n "${!KEYVAR:-}" ] || die "$KEYVAR is not set (agent $AGENT uses auth=apikey)"; fi
 # (subscription / inferred auth is checked by preflight below: exactly one credential per agent.)
@@ -47,10 +49,19 @@ export CAPCOMD_MERGE_STRATEGY=squash
 export CAPCOMD_MERGE_TARGET=main
 export CAPCOMD_TEST_COMMAND="bun test"
 export CAPCOMD_WORKDIR="$WORK/merge"
-export CAPCOMD_ENDPOINT="http://127.0.0.1:$PORT"
 export CAPCOMD_TRACE_DIR="$WORK/traces"
 export CAPCOMD_AGENT_MAX_TURNS="${CAPCOMD_AGENT_MAX_TURNS:-20}"
 export CAPCOMD_AGENT_MAX_BUDGET_USD="${CAPCOMD_AGENT_MAX_BUDGET_USD:-1}"
+
+# Engine port (the engine also binds port+1 and port+10): CAPCOMD_E2E_PORT if set (must be free),
+# else a free block picked automatically, so an old engine on :6420 never aborts the run.
+if [ -n "${CAPCOMD_E2E_PORT:-}" ]; then
+  PORT="$CAPCOMD_E2E_PORT"
+  curl -s -m 1 "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && die "port $PORT is busy (CAPCOMD_E2E_PORT); stop the old engine or unset CAPCOMD_E2E_PORT to auto-pick"
+else
+  PORT=$(bun -e 'const { testPort } = await import("./tests/helpers/engine.ts"); console.log(await testPort())') || die "could not find a free engine port"
+fi
+export CAPCOMD_ENDPOINT="http://127.0.0.1:$PORT"
 
 echo "== 0. preflight (credentials are checked, never printed)"
 bun scripts/preflight.ts || die "preflight failed; nothing was created"
@@ -88,7 +99,7 @@ echo "   https://github.com/$REPO"
 (cd "$SRC" && bun test >/dev/null 2>&1) && die "fixture test unexpectedly passes" || echo "   fixture test fails as intended"
 
 echo "== 2. engine on :$PORT"
-curl -s -m 1 "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && die "port $PORT is busy; stop the old engine or set CAPCOMD_E2E_PORT"
+curl -s -m 1 "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && die "port $PORT became busy before the engine started"
 bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
 ENGINE_PID=$!
 cleanup() { [ -n "${RUN_PID:-}" ] && kill "$RUN_PID" 2>/dev/null; pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
@@ -137,7 +148,7 @@ TRACE_FILE="$CAPCOMD_TRACE_DIR/$RUN_ID.ndjson" SPAN="$SPAN" KEYVAR="$KEYVAR" T_R
   const key = process.env[process.env.KEYVAR];
   console.log(`   api key in trace: ${key && text.includes(key) ? "YES (BUG)" : "no"}`);
   const install = spans.find((s) => s.name === "agent.install");
-  const t = { agent: process.env.AGENT, billing: a?.attributes["agent.billing"] ?? null, rc: Number(process.env.RC), run_s: Number(process.env.T_RUN),
+  const t = { reason: Number(process.env.RC) === 0 ? null : "run failed (exit " + process.env.RC + "); see run.err", agent: process.env.AGENT, billing: a?.attributes["agent.billing"] ?? null, rc: Number(process.env.RC), run_s: Number(process.env.T_RUN),
     vm_boot_ms: sum(/^sandbox\.(ensure|waitReady)$/), install_ms: d(install), installed: !!install,
     agent_ms: d(a), cost_usd: a?.attributes["agent.cost_usd"] ?? null, turns: a?.attributes["agent.turns"] ?? null,
     credential: a?.attributes["agent.credential_mode"] ?? null };
