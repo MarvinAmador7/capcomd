@@ -1,64 +1,77 @@
 #!/usr/bin/env bash
-# Live env e2e on the Mac: env build → secrets sync → doctor → mac-e2e (claude-code, codex) from the
-# snapshot, plus fresh-image baseline run(s), then a timing table.
-# Needs what scripts/mac-e2e.sh needs, plus ANTHROPIC_API_KEY and OPENAI_API_KEY in env for
-# `secrets sync` (read from env, never printed). Agent runs then use CAPCOMD_CREDENTIALS=secret, so
-# the VMs only ever hold bxds_ placeholders.
-#   CAPCOMD_ENV_E2E_AGENTS   agents to run from the snapshot   (default "claude-code codex")
-#   CAPCOMD_ENV_E2E_BASELINE agents to also run on the image   (default "claude-code"; "none" to skip)
-# Each agent run creates one private repo (like mac-e2e.sh); delete them afterwards (printed).
+# Live e2e on the Mac with NO inference API keys: workers use Claude Code / Codex logged in with
+# Marvin's subscriptions. Steps: validate → env build (no VM if up to date) → auth login if missing
+# (interactive: open the printed URL / enter the code) → auth status → doctor → mac-e2e with a
+# claude and a codex subscription profile → timing table.
+# Needs only BOXD_API_KEY (+ bun, gh logged in). ANTHROPIC_API_KEY / OPENAI_API_KEY are unset here.
+#   CAPCOMD_ENV_E2E_AGENTS  providers to run (default "claude codex")
+#   CAPCOMD_E2E_CODEX_SANDBOX codex --sandbox for the e2e profile (default workspace-write)
+# Each run creates one private GitHub repo (like mac-e2e.sh); delete them afterwards (printed).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.bun/bin:$PATH"
 die() { echo "mac-env-e2e: $*" >&2; exit 1; }
+ms() { bun -e 'console.log(Date.now())'; }
+
+echo "######## 0. validate (before any VM boots)"
 [ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
+command -v bun >/dev/null || die "bun not on PATH"
+command -v gh >/dev/null || die "gh not installed"
+gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
+for k in ANTHROPIC_API_KEY OPENAI_API_KEY CAPCOMD_CREDENTIALS CAPCOMD_AUTH CAPCOMD_AGENT; do
+  [ -n "${!k:-}" ] && echo "   unsetting $k for this run (subscription-only)"; unset "$k"
+done
+[ -d node_modules ] || bun install
 export CAPCOMD_SANDBOX=boxd
-AGENTS="${CAPCOMD_ENV_E2E_AGENTS:-claude-code codex}"
-BASELINE="${CAPCOMD_ENV_E2E_BASELINE:-claude-code}"; [ "$BASELINE" = none ] && BASELINE=""
+CAPCOMD_AGENT=fake bun scripts/preflight.ts >/dev/null || die "BOXD_API_KEY rejected by boxd"
+echo "   ok: BOXD_API_KEY accepted, gh logged in, no inference API keys in env"
+PROVIDERS="${CAPCOMD_ENV_E2E_AGENTS:-claude codex}"
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/capcomd-env-e2e.XXXXXX")"
 TIMINGS="$OUT/timings.ndjson"; : > "$TIMINGS"
-now() { bun -e 'console.log(Date.now())'; }
-[ -d node_modules ] || bun install
+STEPS="$OUT/steps.ndjson"; : > "$STEPS"
+step() { echo "{\"step\":\"$1\",\"ms\":$2}" >> "$STEPS"; }
 
-echo "######## 1. capcomd env build"
-t0=$(now)
-bun src/cli/index.ts env build
-BUILD_MS=$(( $(now) - t0 ))
-bun src/cli/index.ts env status
+echo "######## 1. capcomd env build (skips the VM when the snapshot is up to date)"
+t=$(ms); bun src/cli/index.ts env build; step env_build $(( $(ms) - t ))
 
-echo "######## 2. capcomd secrets sync"
-bun src/cli/index.ts secrets sync || die "secrets sync failed"
+echo "######## 2. agent profiles (subscription auth only)"
+export CAPCOMD_AGENTS_FILE="$OUT/agents.json"
+bun src/cli/index.ts agents add e2e-claude --provider claude --auth subscription --max-turns 20 --description "mac-env-e2e claude (plan login)" >/dev/null
+bun src/cli/index.ts agents add e2e-codex --provider codex --auth subscription --max-turns 20 --sandbox "${CAPCOMD_E2E_CODEX_SANDBOX:-workspace-write}" --description "mac-env-e2e codex (plan login)" >/dev/null
+bun src/cli/index.ts agents list
 
-echo "######## 3. capcomd doctor (VM from the snapshot)"
-t0=$(now)
-bun src/cli/index.ts doctor || echo "   (doctor reported failures; continuing so the runs show where)"
-DOCTOR_MS=$(( $(now) - t0 ))
+echo "######## 3. auth login where missing, then verify"
+for p in $PROVIDERS; do
+  if bun src/cli/index.ts auth status "$p" --quick --json 2>/dev/null | grep -q '"present":true'; then
+    echo "   $p: profile present"
+  else
+    echo "   $p: no login yet → interactive login (open the URL; tokens are never printed)"
+    t=$(ms); bun src/cli/index.ts auth login "$p" || die "auth login $p failed"; step "login_$p" $(( $(ms) - t ))
+  fi
+done
+t=$(ms); bun src/cli/index.ts auth status || die "a saved login is invalid: rerun capcomd auth login <agent>"; step auth_status $(( $(ms) - t ))
 
-run() { # $1 agent  $2 env-label (snapshot|image)
-  local agent="$1" envl="$2" log="$OUT/e2e-$1-$2.log"
-  echo "######## 4. mac-e2e agent=$agent env=$envl"
-  set +e
-  if [ "$envl" = image ]; then CAPCOMD_ENV=image CAPCOMD_AGENT="$agent" CAPCOMD_CREDENTIALS=secret bash scripts/mac-e2e.sh 2>&1 | tee "$log"
-  else CAPCOMD_AGENT="$agent" CAPCOMD_CREDENTIALS=secret bash scripts/mac-e2e.sh 2>&1 | tee "$log"; fi
-  set -e
-  grep '^CAPCOMD_TIMING ' "$log" | sed "s/^CAPCOMD_TIMING {/{\"env\":\"$envl\",/" >> "$TIMINGS" || echo "{\"env\":\"$envl\",\"agent\":\"$agent\",\"rc\":-1}" >> "$TIMINGS"
-}
-for a in $AGENTS; do run "$a" snapshot; done
-for a in $BASELINE; do run "$a" image; done
+echo "######## 4. capcomd doctor"
+t=$(ms); bun src/cli/index.ts doctor || echo "   (doctor reported failures; continuing so the runs show where)"; step doctor $(( $(ms) - t ))
+
+echo "######## 5. mac-e2e from the auth snapshots"
+for p in $PROVIDERS; do
+  log="$OUT/e2e-$p.log"
+  set +e; CAPCOMD_AGENT="e2e-$p" bash scripts/mac-e2e.sh 2>&1 | tee "$log"; set -e
+  grep '^CAPCOMD_TIMING ' "$log" | sed 's/^CAPCOMD_TIMING //' >> "$TIMINGS" || echo "{\"agent\":\"e2e-$p\",\"rc\":-1}" >> "$TIMINGS"
+done
 
 echo
 echo "######## timings"
-BUILD_MS=$BUILD_MS DOCTOR_MS=$DOCTOR_MS TIMINGS="$TIMINGS" bun -e '
-  const rows = require("fs").readFileSync(process.env.TIMINGS, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
-  console.log(`env build: ${(process.env.BUILD_MS/1000).toFixed(1)}s   doctor: ${(process.env.DOCTOR_MS/1000).toFixed(1)}s`);
-  const f = (ms) => ms ? (ms/1000).toFixed(1) + "s" : "-";
-  console.log("agent        env       rc  run     vm-boot  install  agent    turns  cost     credential");
-  for (const r of rows) console.log(`${String(r.agent).padEnd(12)} ${r.env.padEnd(9)} ${String(r.rc).padEnd(3)} ${(r.run_s ? r.run_s + "s" : "-").padEnd(7)} ${f(r.vm_boot_ms).padEnd(8)} ${(r.installed ? f(r.install_ms) : "skipped").padEnd(8)} ${f(r.agent_ms).padEnd(8)} ${String(r.turns ?? "-").padEnd(6)} ${String(r.cost_usd != null ? "$" + Number(r.cost_usd).toFixed(3) : "-").padEnd(8)} ${r.credential ?? "-"}`);
-  for (const a of new Set(rows.map((r) => r.agent))) {
-    const s = rows.find((r) => r.agent === a && r.env === "snapshot"), i = rows.find((r) => r.agent === a && r.env === "image");
-    if (s && i && s.run_s && i.run_s) console.log(`${a}: snapshot ${s.run_s}s vs image ${i.run_s}s → ${i.run_s - s.run_s >= 0 ? "saved" : "lost"} ${Math.abs(i.run_s - s.run_s)}s (install ${f(i.install_ms)} → ${s.installed ? f(s.install_ms) : "skipped"})`);
-  }
-  const bad = rows.filter((r) => r.rc !== 0); if (bad.length) { console.log(`FAILED: ${bad.map((r) => r.agent + "/" + r.env).join(", ")}`); process.exit(1); }
+TIMINGS="$TIMINGS" STEPS="$STEPS" bun -e '
+  const fs = require("fs"); const rd = (p) => fs.readFileSync(p, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  const s = (ms) => (ms ? (ms / 1000).toFixed(1) + "s" : "-");
+  for (const x of rd(process.env.STEPS)) console.log(`${x.step.padEnd(14)} ${s(x.ms)}`);
+  console.log("\nagent        rc  run     vm-boot  install  agent    turns  billing");
+  const rows = rd(process.env.TIMINGS);
+  for (const r of rows) console.log(`${String(r.agent).padEnd(12)} ${String(r.rc).padEnd(3)} ${(r.run_s ? r.run_s + "s" : "-").padEnd(7)} ${s(r.vm_boot_ms).padEnd(8)} ${(r.installed ? s(r.install_ms) : "skipped").padEnd(8)} ${s(r.agent_ms).padEnd(8)} ${String(r.turns ?? "-").padEnd(6)} ${r.billing ?? "-"}`);
+  console.log("\nreference: first e2e (API key, fresh image, claude) = 51s total, 9 turns");
+  const bad = rows.filter((r) => r.rc !== 0); if (bad.length) { console.log("FAILED: " + bad.map((r) => r.agent).join(", ")); process.exit(1); }
 '
 echo "logs: $OUT"
 echo "repos created: gh repo list MarvinAmador7 --limit 20 | grep capcomd-e2e   (delete with gh repo delete <repo> --yes)"

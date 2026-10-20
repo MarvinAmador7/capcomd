@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Real end-to-end: GitHub repo → capcomd run (boxd VM + agent, PR mode) → merged PR.
-# CAPCOMD_AGENT=claude-code (default) | codex. CAPCOMD_ENV=image forces the default boxd image;
-# otherwise workers boot from the `capcomd env build` snapshot when one exists.
-# Needs: bun, gh (logged in as MarvinAmador7), BOXD_API_KEY, and ANTHROPIC_API_KEY (claude-code) or
-# OPENAI_API_KEY (codex) in env, unless CAPCOMD_CREDENTIALS=secret (keys live in boxd secrets).
+# CAPCOMD_AGENT = an agent profile name (capcomd agents list) or claude-code (default) | codex.
+# CAPCOMD_ENV=image forces the default boxd image; otherwise workers boot from the env snapshot,
+# or from the auth profile snapshot for subscription logins.
+# Needs: bun, gh (logged in as MarvinAmador7), BOXD_API_KEY. API keys only for auth=apikey agents.
 # Secrets are read from env only and never echoed (no `set -x`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -12,8 +12,15 @@ OWNER="${CAPCOMD_E2E_OWNER:-MarvinAmador7}"
 PORT="${CAPCOMD_E2E_PORT:-6420}"
 TS="$(date +%s)"
 AGENT="${CAPCOMD_AGENT:-claude-code}"
-case "$AGENT" in claude-code) KEYVAR=ANTHROPIC_API_KEY; SPAN=agent.claude_code;; codex) KEYVAR=OPENAI_API_KEY; SPAN=agent.codex;; *) echo "mac-e2e: CAPCOMD_AGENT must be claude-code or codex" >&2; exit 2;; esac
-SUFFIX=""; [ "$AGENT" = codex ] && SUFFIX="-codex"
+AUTH="${CAPCOMD_AUTH:-}"
+case "$AGENT" in
+  claude-code|codex) PROVIDER="$AGENT";;
+  *) SPEC=$(bun src/cli/index.ts agents show "$AGENT" --json 2>/dev/null) || { echo "mac-e2e: unknown agent profile $AGENT (capcomd agents list)" >&2; exit 2; }
+     PROVIDER=$(printf '%s' "$SPEC" | bun -e 'const j=JSON.parse(await Bun.stdin.text()); console.log(j.spec.provider==="codex"?"codex":"claude-code")')
+     AUTH=$(printf '%s' "$SPEC" | bun -e 'const j=JSON.parse(await Bun.stdin.text()); console.log(j.spec.auth)');;
+esac
+case "$PROVIDER" in claude-code) KEYVAR=ANTHROPIC_API_KEY; SPAN=agent.claude_code;; *) KEYVAR=OPENAI_API_KEY; SPAN=agent.codex;; esac
+SUFFIX=""; [ "$PROVIDER" = codex ] && SUFFIX="-codex"
 REPO="$OWNER/capcomd-e2e$SUFFIX-$TS"
 RUN_ID="run-e2e-$TS"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/capcomd-e2e.XXXXXX")"
@@ -21,7 +28,8 @@ LOG="$WORK/capcomd-run.ndjson"
 
 die() { echo "mac-e2e: $*" >&2; exit 1; }
 [ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
-if [ "${CAPCOMD_CREDENTIALS:-auto}" != secret ]; then [ -n "${!KEYVAR:-}" ] || die "$KEYVAR is not set (or run capcomd secrets sync and set CAPCOMD_CREDENTIALS=secret)"; fi
+if [ "$AUTH" = apikey ] && [ "${CAPCOMD_CREDENTIALS:-auto}" != secret ]; then [ -n "${!KEYVAR:-}" ] || die "$KEYVAR is not set (agent $AGENT uses auth=apikey)"; fi
+# (subscription / inferred auth is checked by preflight below: exactly one credential per agent.)
 command -v bun >/dev/null || die "bun not on PATH (try: export PATH=\$HOME/.bun/bin:\$PATH)"
 command -v gh >/dev/null || die "gh not installed"
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
@@ -123,13 +131,13 @@ TRACE_FILE="$CAPCOMD_TRACE_DIR/$RUN_ID.ndjson" SPAN="$SPAN" KEYVAR="$KEYVAR" T_R
   const a = spans.find((s) => s.name === process.env.SPAN);
   const d = (s) => (s && s.endTime ? s.endTime - s.startTime : 0);
   const sum = (re) => spans.filter((s) => re.test(s.name)).reduce((n, s) => n + d(s), 0);
-  if (a) console.log(`   agent: ${a.attributes["agent.stop_reason"]} turns=${a.attributes["agent.turns"]} cost=$${a.attributes["agent.cost_usd"]} version=${a.attributes["agent.version"]} credential=${a.attributes["agent.credential_mode"]} deps_reused=${a.attributes["agent.deps_reused"]} events=${a.events.length} sha=${a.attributes["git.sha"]}`);
+  if (a) console.log(`   agent: profile=${a.attributes["agent.profile"] || "-"} billing=${a.attributes["agent.billing"]} ${a.attributes["agent.stop_reason"]} turns=${a.attributes["agent.turns"]} cost=$${a.attributes["agent.cost_usd"]} version=${a.attributes["agent.version"]} credential=${a.attributes["agent.credential_mode"]} deps_reused=${a.attributes["agent.deps_reused"]} events=${a.events.length} sha=${a.attributes["git.sha"]}`);
   const tools = {}; for (const e of a?.events ?? []) if (e.attributes?.["agent.tool"]) tools[e.attributes["agent.tool"]] = (tools[e.attributes["agent.tool"]] ?? 0) + 1;
   console.log(`   tools: ${JSON.stringify(tools)}`);
   const key = process.env[process.env.KEYVAR];
   console.log(`   api key in trace: ${key && text.includes(key) ? "YES (BUG)" : "no"}`);
   const install = spans.find((s) => s.name === "agent.install");
-  const t = { agent: process.env.AGENT, rc: Number(process.env.RC), run_s: Number(process.env.T_RUN),
+  const t = { agent: process.env.AGENT, billing: a?.attributes["agent.billing"] ?? null, rc: Number(process.env.RC), run_s: Number(process.env.T_RUN),
     vm_boot_ms: sum(/^sandbox\.(ensure|waitReady)$/), install_ms: d(install), installed: !!install,
     agent_ms: d(a), cost_usd: a?.attributes["agent.cost_usd"] ?? null, turns: a?.attributes["agent.turns"] ?? null,
     credential: a?.attributes["agent.credential_mode"] ?? null };
