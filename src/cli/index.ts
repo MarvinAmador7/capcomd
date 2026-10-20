@@ -2,7 +2,7 @@
 import "./quiet";
 import { parseArgs } from "util";
 import { spawn } from "child_process";
-import { mkdirSync, openSync } from "fs";
+import { mkdirSync, openSync, readFileSync } from "fs";
 import { join, resolve } from "path";
 import { serve } from "./commands/serve";
 import { ui } from "./commands/ui";
@@ -40,6 +40,11 @@ Usage:
   capcomd env build [--force]            Bake agent CLIs + repo deps into a boxd snapshot (no secrets)
   capcomd env status | env rm [name|all] List / delete env snapshots
   capcomd agents list|show|add|set|rm|schema|validate
+  Primitives (ADR-016; all --json, stable ids, --key idempotent):
+  capcomd run new [--budget USD] [--label L] [--key K]                     → runId (a scope; plans nothing)
+  capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget USD] [--contract JSON|file] [--no-start] [--operator]
+  capcomd await <runId> <agt…> [--timeout-ms N]  ·  capcomd wait-any <runId> <agt…>
+  capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --max-turns --budget
@@ -109,6 +114,13 @@ async function main(argv: string[]): Promise<number> {
         default: { type: "boolean" },
         spec: { type: "string" },
         unset: { type: "string" },
+        task: { type: "string" },
+        parent: { type: "string" },
+        key: { type: "string" },
+        contract: { type: "string" },
+        reason: { type: "string" },
+        label: { type: "string" },
+        "no-start": { type: "boolean" },
       },
       allowPositionals: true,
       strict: true,
@@ -158,6 +170,14 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case "run": {
+        if (positionals[1] === "new" && positionals.length === 2) {
+          const budget = values.budget === undefined ? 10 : Number(values.budget);
+          if (!Number.isFinite(budget) || budget <= 0) usage("--budget must be a positive number (USD)");
+          const P = await import("../primitives/ops");
+          const r = await P.runNew({ budgetUsd: budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined });
+          if (json) out(r); else console.log(r.runId);
+          return EXIT.ok;
+        }
         const rawGoal = positionals[1];
         if (!rawGoal) usage("goal required: capcomd run <goal>");
         // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
@@ -228,8 +248,78 @@ async function main(argv: string[]): Promise<number> {
         return EXIT.ok;
       }
 
+      case "spawn": {
+        const runId = positionals[1] ?? usage("runId required: capcomd spawn <runId> --task TEXT [--profile P] [--parent agt] [--key K]");
+        const task = (values.task as string | undefined) ?? positionals[2] ?? usage("--task required");
+        const profile = (values.profile ?? values.agent) as string | undefined;
+        const sets = (values.set as string[] | undefined) ?? [];
+        let set: Record<string, unknown> = {};
+        try {
+          if (values.overrides) set = JSON.parse(values.overrides as string);
+          set = deepMerge(set, (await import("../agents/profiles")).parseSetPairs(sets));
+        } catch (e) { usage(`bad override: ${(e as Error).message}`); }
+        if ((Object.keys(set).length) && !profile) usage("--set/--overrides need --profile NAME");
+        let contract: Record<string, unknown> | undefined;
+        if (values.contract) {
+          const raw = String(values.contract);
+          try { contract = JSON.parse(raw.trim().startsWith("{") ? raw : readFileSync(raw, "utf8")); } catch (e) { usage(`bad --contract (JSON or a JSON file): ${(e as Error).message}`); }
+        }
+        const budget = values.budget === undefined ? undefined : Number(values.budget);
+        if (budget !== undefined && (!Number.isFinite(budget) || budget <= 0)) usage("--budget must be a positive number (USD)");
+        const P = await import("../primitives/ops");
+        const r = await P.spawnAgent({
+          runId, task, ...(profile ? { profile } : {}), ...(Object.keys(set).length || values.operator ? { overrides: { set, operator: !!values.operator } } : {}),
+          parent: values.parent as string | undefined, key: values.key as string | undefined, contract, budgetUsd: budget,
+          operator: !!values.operator, start: !values["no-start"],
+        });
+        if (json) out(r); else console.log(r.agentId);
+        return EXIT.ok;
+      }
+
+      case "await":
+      case "wait-any": {
+        const runId = positionals[1] ?? usage(`runId required: capcomd ${command} <runId> <agentId…>`);
+        const ids = positionals.slice(2);
+        if (!ids.length) usage(`agent ids required: capcomd ${command} <runId> <agentId…>`);
+        const timeoutMs = values["timeout-ms"] ? Number(values["timeout-ms"]) : undefined;
+        const P = await import("../primitives/ops");
+        const r: any = await P.awaitAgents(runId, ids, { timeoutMs, any: command === "wait-any" });
+        if (json) out(r);
+        else for (const a of r.agents) console.log(`${a.agentId}: ${a.status}${a.result?.commit ? ` ${String(a.result.commit).slice(0, 12)}` : ""}${a.result?.error ? ` (${a.result.error})` : ""}`);
+        if (r.timeout) return EXIT.run_failed;
+        const relevant = command === "wait-any" ? [r.first] : r.agents;
+        return relevant.every((a: any) => a.status === "done") ? EXIT.ok : EXIT.run_failed;
+      }
+
+      case "tree": {
+        const runId = positionals[1] ?? usage("runId required: capcomd tree <runId>");
+        const r = await (await import("../primitives/ops")).listScope(runId);
+        if (json) out(r);
+        else {
+          console.log(`${runId}  budget $${r.budgetUsd} (unallocated $${r.unallocatedUsd}, spent $${r.spentUsd})`);
+          for (const a of r.agents) console.log(`${"  ".repeat(a.depth + 1)}${a.agentId} [${a.profile ?? "-"}] ${a.status} $${a.budgetUsd}${a.parent ? ` ← ${a.parent}` : ""}`);
+        }
+        return EXIT.ok;
+      }
+
+      case "agent-drive": {
+        const runId = positionals[1] ?? usage("capcomd agent-drive <runId> <agentId>");
+        const agentId = positionals[2] ?? usage("capcomd agent-drive <runId> <agentId>");
+        const a = await (await import("../primitives/ops")).driveAgent(runId, agentId);
+        if (json) out({ agent: a }); else console.log(`${agentId}: ${a.status}`);
+        return a.status === "done" ? EXIT.ok : EXIT.run_failed;
+      }
+
       case "cancel": {
-        const runId = positionals[1] ?? usage("runId required: capcomd cancel <runId>");
+        const runId = positionals[1] ?? usage("runId required: capcomd cancel <runId> [agentId]");
+        const P = await import("../primitives/ops");
+        const scoped = await P.listScope(runId).then(() => true, () => false);
+        if (positionals[2] || scoped) {
+          const r = await P.cancelAgents(runId, positionals[2], values.reason as string | undefined);
+          if (json) out(r);
+          else console.log(r.cancelled.length ? `✓ cancelled ${r.cancelled.join(", ")}` : `nothing to cancel (${r.affected.map((a) => `${a.agentId}=${a.status}`).join(", ") || "no agents"})`);
+          return EXIT.ok;
+        }
         const r = await cancelRun(runId);
         if (json) out(r);
         else console.log(r.changed ? `✓ Run ${runId} cancelled` : `Run ${runId} is ${r.state}; nothing to cancel`);

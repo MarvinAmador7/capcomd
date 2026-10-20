@@ -489,6 +489,9 @@ export async function listEvents(runId: string): Promise<EventRecord[]> {
       }
     }
   }
+  // Primitive scope events (spawn/start/done/cancel), when the run is a `capcomd run new` scope.
+  const scopeEvents = await c.scope.getOrCreate([runId]).getEvents({}).catch(() => [] as any[]);
+  for (const ev of scopeEvents) out.push({ entity: ev.agentId ? `scope:${ev.agentId}` : "scope", seq: ev.seq, at: ev.at, type: ev.type, event: { type: ev.type, ...ev.data } });
   out.sort((a, b) => a.at - b.at || a.entity.localeCompare(b.entity) || a.seq - b.seq);
   return out;
 }

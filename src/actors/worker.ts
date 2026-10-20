@@ -323,11 +323,14 @@ export const workerActor = actor({
       const { workerId, taskId, epoch, branch } = params;
       const idemKey = `worker-${workerId}-push-${taskId}-e${epoch}`;
       const already = await c.db.execute(
-        "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
+        "SELECT idem_key, event FROM lifecycle_events WHERE idem_key = ?",
         idemKey
       );
       if (already.length > 0) {
-        return { workerId, taskId, pushed: true, already: true };
+        // Replay: return what the first push recorded (a resumed driver needs the commit).
+        let prev: { sha?: string; costUsd?: number } = {};
+        try { prev = JSON.parse(String(already[0]!.event)); } catch {}
+        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0 };
       }
 
       const workerLife = await getLifecycle(c.db, workerId);
@@ -372,7 +375,11 @@ export const workerActor = actor({
           apiKey,
           isCancelled: async () => {
             const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
-            return run?.state === "cancelled";
+            if (run?.state === "cancelled") return true;
+            // Spawned agents (ADR-016): the worker id is the agent id in the run's scope actor.
+            if (!workerId.startsWith("agt-")) return false;
+            const a = await (c as any).client().scope.getOrCreate([runId]).getAgent({ agentId: workerId }).catch(() => null);
+            return a?.status === "cancelled";
           },
         });
         sha = res.sha;

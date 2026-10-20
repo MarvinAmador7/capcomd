@@ -5,6 +5,7 @@ import { taskBoardActor } from "./actors/taskboard";
 import { workerActor } from "./actors/worker";
 import { verifierActor } from "./actors/verifier";
 import { judgeActor } from "./actors/judge";
+import { scopeActor } from "./actors/scope";
 
 export const registry = setup({
   use: {
@@ -14,6 +15,7 @@ export const registry = setup({
     worker: workerActor,
     verifier: verifierActor,
     judge: judgeActor,
+    scope: scopeActor,
   },
 });
 
