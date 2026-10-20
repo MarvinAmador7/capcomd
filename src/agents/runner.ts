@@ -315,7 +315,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     must(await git(["add", "-A"], repo), "git add");
     const status = await git(["status", "--porcelain"], repo);
     const ahead = await git(["rev-list", "--count", `origin/${task.target}..HEAD`], repo);
-    if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
+    if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) {
+      // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine.
+      if (opts.subagents) { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd }; }
+      throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
+    }
     if (status.stdout.trim()) {
       const subject = `${task.taskId}: ${task.goal.split("\n")[0]!.slice(0, 60)}`;
       const msg = `${subject}\n\n${r.text(state.resultText ?? "").slice(0, 1500)}\n\nCapcomd-Task: ${key}\nCapcomd-Epoch: ${task.epoch}\nCapcomd-Agent: ${name}@${version}\n`;

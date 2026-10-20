@@ -277,7 +277,7 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
     await w.drainWorker({ workerId: agentId });
     if (await cancelled()) return (await s.getAgent({ agentId }))!;
     const declared = await resultOf(runId, agentId);
-    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
+    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }
