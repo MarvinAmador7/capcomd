@@ -70,33 +70,66 @@ Boots a VM like a worker (snapshot or image, both API hosts allowed) and per age
 path/version, whether the key in the VM is a `placeholder`, `plain` or `absent`, and `GET /v1/models`
 from inside the VM through the substitution (HTTP status only). Destroys the VM.
 
-## 5. Opt-in subscription auth profiles (design only, not built)
+## 5. Subscription auth profiles (built): `capcomd auth login|status|logout`
 
-Goal: let a user run workers on a Claude Pro/Max or ChatGPT plan login instead of API keys.
-Strictly opt-in (`CAPCOMD_AUTH_PROFILE=<name>`); API keys stay the default.
+Workers can run Claude Code / Codex on Marvin's plan login with **no inference API key**.
 
-- **Login VM.** `capcomd auth login <profile> --agent claude-code|codex` boots a dedicated VM from
-  the env snapshot with egress limited to the vendor's auth + API hosts, runs the CLI's own login
-  (`claude /login`, `codex login --device-auth`) and relays the device-code URL to the user's
-  terminal. The user completes it in their own browser; capcomd never sees the password.
-- **Capture.** After login, read the credential file only (`~/.claude/.credentials.json`,
-  `~/.codex/auth.json`), store it encrypted at rest (local keychain or a boxd private secret
-  holding the blob), record profile metadata (agent, account email hash, created, expiry), and
-  destroy the login VM. Never put it in a snapshot; env build's scrub check would reject it.
-- **Per-worker inject.** Upload the blob to the worker VM's agent HOME with 0600 right before
-  start, delete it in the same exec chain after the agent exits (and on cancel/timeout kill);
-  the VM `deleteAfter` TTL is the backstop. It never appears in env, argv, trace or logs; the
-  Redactor learns the token values.
-- **Concurrency cap.** Subscriptions are per-person and rate-limited: a profile carries
-  `maxConcurrent` (default 1, hard max small); the run actor holds a profile semaphore so excess
-  tasks queue rather than fan out, and a 429/usage-limit result marks the profile cooling-down
-  until its reset time instead of retrying hot.
-- **Refresh-token risk.** The file holds a long-lived refresh token, so each worker VM holds a
-  credential that can mint access tokens beyond the task's life. Mitigations: one profile = one
-  worker at a time; egress allowlist limits where it can be sent; agents can't read it via the
-  disallowed tools (best effort, not a guarantee); delete after the run; detect refresh (file
-  changed) and write back the newest blob serialized under the semaphore so parallel refreshes
-  don't invalidate each other; `capcomd auth revoke` = delete blob + instruct the vendor-side
-  logout. Residual risk: a compromised agent run could exfiltrate the refresh token to an allowed
-  host; that is why it stays opt-in and why vendor terms for automated use must be checked
-  before enabling it for anything beyond personal use.
+- **Login.** `capcomd auth login claude|codex` boots a VM from the env snapshot (building it if
+  missing) with egress = base + vendor login hosts and runs the CLI's own login over a boxd PTY
+  (`machines.streamExec`, tty, 500 cols): `claude setup-token` (one-year OAuth token, Pro/Max/Team/
+  Enterprise; docs: https://code.claude.com/docs/en/authentication) and `codex login --device-auth`
+  with `cli_auth_credentials_store = "file"` (docs: https://developers.openai.com/codex/auth/ci-cd-auth/,
+  https://learn.chatgpt.com/docs/auth; device-code login must be enabled in ChatGPT settings). The URL/code
+  stream to the user's terminal; local stdin is relayed raw. A `TokenFilter` masks token-shaped
+  output (`sk-ant-oat…`, JWTs) as `[token captured — hidden]`, holding partial lines so a token can
+  never be printed split.
+- **Store.** Claude: the captured token goes to a boxd private secret `CLAUDE_CODE_OAUTH_TOKEN` bound to
+  `api.anthropic.com` when the boxd key allows `secrets.*`; org-scoped keys can't (member credential
+  needed), so it falls back to `~/.capcomd-auth/claude.env` (0600) inside the auth snapshot.
+  Codex: `$CODEX_HOME/auth.json` stays in the snapshot (shape-checked with booleans only).
+  Then verify (`claude -p 'Reply with exactly the word ok' --max-turns 1`; `codex exec --json …`
+  → `turn.completed`), delete shell histories only, snapshot as private
+  `capcomd-auth-<agent>-<envhash>`, record it in `.relay/auths.json` (0600, no secrets), destroy the VM.
+- **Run.** Subscription agents boot from that snapshot; the run script unsets
+  `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` (they outrank the OAuth token) or `OPENAI_API_KEY`/
+  `CODEX_API_KEY`, and no credential env is injected. Never `--bare` (it ignores the token). Cost is
+  reported as `billing=subscription`, `costUsd=0`, with turns/time (`notionalCostUsd` when the CLI gives one);
+  the USD budget guard is skipped for codex in this mode.
+- **status/logout.** `auth status [agent] [--quick]` checks the snapshot and (non-quick) boots it and
+  re-runs verify. `auth logout <agent>` deletes the snapshot and the secret.
+- **Refresh risk (codex).** Codex refreshes after ~8 days and writes new tokens to auth.json; VMs
+  booted from one snapshot share one refresh token, so a refresh in one VM can invalidate the
+  others. Mitigations: run one codex subscription worker at a time; when `auth status` fails,
+  log in again. Claude's setup-token doesn't refresh (it expires after a year). A compromised
+  agent could still exfiltrate the token to an allowed host; that is why the egress is narrow.
+- **secrets sync** is optional and never fatal: `unavailable` (with the member-credential reason)
+  is reported and the CLI exits 0.
+
+## 6. Agent profiles and strict per-agent auth
+
+`.capcomd/agents.json` (`CAPCOMD_AGENTS_FILE`, schema `capcomd.agents/v1`, export with
+`capcomd agents schema`) holds named profiles: `provider` (claude|codex), `auth` (apikey|subscription,
+**exactly one**), `model`, `maxTurns`, `budgetUsd`, `timeoutMs`, `sandbox`, `egress`, `systemPrompt`,
+`appendSystemPrompt`, `allowedTools`, `disallowedTools`, `description`, `children`. Unknown fields are
+rejected. CLI: `capcomd agents list|show|add|set|rm|schema|validate`, all with `--json` (Hermes can
+also pass `--spec '<json>'`). Selection order: `run --profile/--agent` (goal directive
+`[agent:REF]`, carried planner → task → worker) → `CAPCOMD_AGENT` (kind or profile name; override)
+→ file `default` → fake. Credentials are strict: auth comes from `CAPCOMD_CREDENTIALS` override,
+then the profile, then `CAPCOMD_AUTH`. When none of those set it, it is inferred, and having both a
+local key and a login, or neither, is a config error. There is no silent fallback. Preflight and
+doctor check only that profile's one credential.
+
+## 7. Children policy, overrides, effective-spec log
+
+`children`: `allowSpawn` (default false), `maxDepth`, `maxChildren` (concurrent),
+`maxTotalDescendants`, `allowedChildProfiles`, `budgetShare` ∈ (0,1]. Rules: `allowSpawn` requires
+allowed profiles, `maxChildren ≤ maxTotalDescendants`, and child profiles must exist and be no wider than the
+parent (`widenings()`: tools ⊆, egress ⊆, limits ≤, sandbox no looser, no spawning beyond). Child budget is
+`budgetShare × parent remaining`, never more. Runtime spawning is not built yet.
+Overrides per run: `capcomd run --profile X --set children.maxDepth=2` (repeatable) or
+`--overrides '<json>'`. They may only narrow the profile; a widening is a config error (exit 2)
+unless `--operator`. The ref is encoded as `name;ov=<base64url json>[;op=1]`. The effective,
+credential-free resolved spec is logged as the `agent.resolved` CLI event, in the run's
+`PLAN_READY` event (`agents{taskId: spec}`), and on the worker's PROVISIONING/PUSHED events.
+
+Framing (ADR-016): profiles, auth and `children` limits are primitives that any composition can use. They are not tied to the planner hierarchy; `children` caps whatever spawns an agent (a planner, a supervisor or Hermes).
