@@ -44,7 +44,17 @@ export interface BoxdLike {
       restore(id: string, name: string): Promise<void>;
     };
   };
-  snapshots: { create(machine: string, name: string): Promise<unknown> };
+  snapshots: {
+    create(machine: string, name: string): Promise<unknown>;
+    get?(name: string): Promise<any>;
+    list?(): Promise<any[]>;
+    delete?(name: string): Promise<void>;
+  };
+  secrets?: {
+    set(name: string, value: string, opts?: { scope?: string; domains?: string[]; org?: string }): Promise<unknown>;
+    list(opts?: Record<string, unknown>): Promise<Array<{ name: string; scope?: string; domains?: string[] }>>;
+    delete?(name: string, opts?: { scope?: string }): Promise<void>;
+  };
   close?(): Promise<void>;
 }
 
@@ -287,6 +297,42 @@ export class BoxdProvider implements SandboxProvider {
 
   async snapshot(id: VmId, name: string): Promise<void> {
     await this.client.snapshots.create(id, name).catch((e) => { throw mapBoxdError(e, id, "snapshot"); });
+  }
+
+  // ---- EnvPlatform (capcomd env|secrets|doctor) ----
+  private snapInfo(x: any, name: string) {
+    const st = String(x?.status ?? "unknown");
+    return { name: String(x?.name ?? name), id: x?.id ? String(x.id) : undefined, status: (["pending", "ready", "failed"].includes(st) ? st : "unknown") as any, createdAt: x?.createdAt ? String(x.createdAt) : undefined };
+  }
+  async snapshotCreate(id: VmId, name: string) {
+    const r = await this.client.snapshots.create(id, name).catch((e) => { throw mapBoxdError(e, id, "snapshots.create"); });
+    return this.snapInfo(r, name);
+  }
+  async snapshotGet(name: string) {
+    if (!this.client.snapshots.get) throw new SandboxConfigError("boxd SDK lacks snapshots.get (need @boxd-sh/sdk >= 0.2.17)");
+    try { return this.snapInfo(await this.client.snapshots.get(name), name); }
+    catch (e) { if ((e as any)?.constructor?.name === "NotFoundError" || /not.?found/i.test(String((e as Error)?.message))) return null; throw mapBoxdError(e, undefined, "snapshots.get"); }
+  }
+  async snapshotList() {
+    if (!this.client.snapshots.list) return [];
+    const xs = await this.client.snapshots.list().catch((e) => { throw mapBoxdError(e, undefined, "snapshots.list"); });
+    return xs.map((x) => this.snapInfo(x, String(x?.name)));
+  }
+  async snapshotDelete(name: string) {
+    if (!this.client.snapshots.delete) throw new SandboxConfigError("boxd SDK lacks snapshots.delete");
+    await this.client.snapshots.delete(name).catch((e) => { throw mapBoxdError(e, undefined, "snapshots.delete"); });
+  }
+  async secretSet(name: string, value: string, opts: { domains: string[]; scope: "private" | "org" }) {
+    if (!this.client.secrets) throw new SandboxConfigError("boxd SDK lacks secrets (need @boxd-sh/sdk >= 0.2.17)");
+    if (!opts.domains.length) throw new SandboxConfigError(`refusing to set ${name} without bound domains`);
+    // Never let the value reach an error message.
+    await this.client.secrets.set(name, value, { scope: opts.scope, domains: opts.domains, ...(this.org ? { org: this.org } : {}) })
+      .catch((e) => { const m = mapBoxdError(e, undefined, "secrets.set"); m.message = m.message.split(value).join("[REDACTED]"); throw m; });
+  }
+  async secretList() {
+    if (!this.client.secrets) return [];
+    const xs = await this.client.secrets.list().catch((e) => { throw mapBoxdError(e, undefined, "secrets.list"); });
+    return xs.map((x) => ({ name: x.name, scope: String(x.scope ?? ""), domains: [...(x.domains ?? [])] }));
   }
 
   async suspend(id: VmId): Promise<void> {

@@ -28,6 +28,8 @@ export interface FakeProviderOptions {
   log?: Array<{ cmd: string[]; envKeys: string[]; env?: Record<string, string> }>;
   /** Test hook: make ensure() fail like boxd does for a bad key ("auth"). */
   failEnsure?: "auth";
+  /** Machine env every VM sees (exec env overrides it), e.g. simulated boxd secret placeholders. */
+  vmEnv?: Record<string, string>;
 }
 
 export class FakeProvider implements SandboxProvider {
@@ -35,7 +37,40 @@ export class FakeProvider implements SandboxProvider {
   private nextId = 1;
   public clock: number = Date.now();
   public egress = new Map<VmId, string[]>();
+  /** Simulated boxd snapshots and host-bound secrets (values kept only to assert they never leak). */
+  public snapshots = new Map<string, { name: string; status: "pending" | "ready" | "failed"; fromVm: VmId; polls: number }>();
+  public secrets = new Map<string, { value: string; scope: string; domains: string[]; placeholder: string }>();
+  /** Polls of snapshotGet before a snapshot reports ready (simulates boxd's async build). */
+  public snapshotReadyAfter = 1;
   constructor(readonly opts: FakeProviderOptions = {}) {}
+
+  /** What a VM's own environment holds: vmEnv plus a bxds_ placeholder per bound secret (never the value). */
+  machineEnv(): Record<string, string> {
+    const env: Record<string, string> = { ...(this.opts.vmEnv ?? {}) };
+    for (const [name, s] of this.secrets) env[name] = s.placeholder;
+    return env;
+  }
+
+  async snapshotCreate(vmId: VmId, name: string) {
+    const vm = this.vms.get(vmId);
+    if (!vm || vm.state !== "ready") throw new Error(`VM ${vmId} must be running to snapshot`);
+    this.snapshots.set(name, { name, status: "pending", fromVm: vmId, polls: 0 });
+    return { name, status: "pending" as const, id: `snap-${name}` };
+  }
+  async snapshotGet(name: string) {
+    const s = this.snapshots.get(name);
+    if (!s) return null;
+    if (s.status === "pending" && ++s.polls >= this.snapshotReadyAfter) s.status = "ready";
+    return { name, status: s.status, id: `snap-${name}` };
+  }
+  async snapshotList() { return [...this.snapshots.values()].map((s) => ({ name: s.name, status: s.status, id: `snap-${s.name}` })); }
+  async snapshotDelete(name: string) { this.snapshots.delete(name); }
+  async secretSet(name: string, value: string, o: { domains: string[]; scope: string }) {
+    const h = new Bun.CryptoHasher("sha256").update(name + value).digest("hex").slice(0, 24);
+    this.secrets.set(name, { value, scope: o.scope, domains: [...o.domains], placeholder: `bxds_${h}` });
+  }
+  async secretList() { return [...this.secrets.entries()].map(([name, s]) => ({ name, scope: s.scope, domains: s.domains })); }
+  specOf(id: VmId): VmSpec | undefined { return this.vms.get(id)?.spec; }
 
   async ensure(spec: VmSpec): Promise<{ id: VmId; created: boolean }> {
     if (this.opts.failEnsure === "auth") {
@@ -103,7 +138,7 @@ export class FakeProvider implements SandboxProvider {
     if (this.opts.hostExec) {
       const env: Record<string, string> = {};
       for (const k of this.opts.inheritEnv ?? []) if (process.env[k] !== undefined) env[k] = process.env[k]!;
-      Object.assign(env, opts?.env ?? {});
+      Object.assign(env, this.machineEnv(), opts?.env ?? {});
       const proc = Bun.spawn(cmd, { cwd: opts?.cwd, env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
       const timer = opts?.timeoutMs ? setTimeout(() => proc.kill("SIGKILL"), opts.timeoutMs) : null;
       const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
@@ -166,6 +201,7 @@ export class FakeProvider implements SandboxProvider {
   async snapshot(id: VmId, name: string): Promise<void> {
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
+    this.snapshots.set(name, { name, status: "ready", fromVm: id, polls: 0 });
   }
 
   async suspend(id: VmId): Promise<void> {
