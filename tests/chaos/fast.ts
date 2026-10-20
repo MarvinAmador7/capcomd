@@ -64,7 +64,7 @@ async function worker(slot: number) {
   const dataDir = `${DATA_ROOT}/w${slot}`;
   mkdirSync(DATA_ROOT, { recursive: true });
   while (next < jobs.length) {
-    const job = jobs[next++];
+    const job = jobs[next++]!;
     const started = Date.now();
     const r = job.kind === "primitive"
       ? await survivePrimitives(`${job.killpoint}:${job.iteration}`, { port, dataDir })

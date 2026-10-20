@@ -88,7 +88,7 @@ describe("capcomd mcp", () => {
     const names: string[] = [];
     let tc: string | null = null;
     do {
-      const pg = (await call("capcomd_trace", { runId, limit: 1000, ...(tc ? { cursor: tc } : {}) })).body;
+      const pg: any = (await call("capcomd_trace", { runId, limit: 1000, ...(tc ? { cursor: tc } : {}) })).body;
       names.push(...pg.spans.map((s: any) => s.name));
       expect(pg.truncated).toBe(pg.nextCursor !== null);
       tc = pg.nextCursor;

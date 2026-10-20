@@ -155,8 +155,8 @@ describe("BoxdProvider (mocked SDK)", () => {
     await q.exec(id, ["git", "push", "origin", "b"]);
     await q.exec(id, ["ls"]);
     const execs = sdk.calls.filter((c) => c[0] === "exec");
-    expect(execs[0][2].env).toEqual({ GIT_ASKPASS_TOKEN: "short-lived" });
-    expect(execs[1][2].env).toBeUndefined();
+    expect(execs[0]![2].env).toEqual({ GIT_ASKPASS_TOKEN: "short-lived" });
+    expect(execs[1]![2].env).toBeUndefined();
     expect(seen[0].labels).toEqual({ taskId: "task-1" });
   });
 

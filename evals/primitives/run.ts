@@ -54,7 +54,7 @@ await run("best-of-3 + cancel rest", async () => {
   const rest = ids.filter((i) => i !== r.first.agentId);
   for (const id of rest) await P.cancelAgents(runId, id, "lost");
   const t = await P.listScope(runId);
-  const ok = rest.every((id) => ["cancelled", "done"].includes(t.agents.find((a) => a.agentId === id)!.status));
+  const ok = rest.every((id) => ["cancelled", "done"].includes(t.agents.find((a: { agentId: string }) => a.agentId === id)!.status));
   if (!ok) return "losers not terminal";
 });
 await run("nested supervisor + cancel propagation", async () => {

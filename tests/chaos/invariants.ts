@@ -1,4 +1,5 @@
 import { createClient } from "rivetkit/client";
+import type { Registry } from "../../src/registry";
 
 export interface SeqRow {
   entityId: string;
@@ -70,7 +71,7 @@ export function eventGapViolations(rows: SeqRow[]): string[] {
  *               target for a task that is not recorded `merged`.
  */
 export async function auditRun(runId: string, endpoint = "http://127.0.0.1:6420", repo?: { bare: string; target: string }): Promise<InvariantReport> {
-  const client = createClient({ endpoint });
+  const client = createClient<Registry>({ endpoint });
   const violations: string[] = [];
 
   const runHandle = client.run.getOrCreate([runId]);

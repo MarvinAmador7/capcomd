@@ -26,7 +26,7 @@ function agentsFile() {
 function runScenario(tag: string, opts: EngineOpts, extra: Record<string, string>, mode = "tree"): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
     const { CAPCOMD_ENDPOINT, ...rest } = engineEnv(opts);
-    const env = { ...process.env, ...extra, ...(opts.repo ? rest : {}), CAPCOMD_ENDPOINT };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...extra, ...(opts.repo ? rest : {}), CAPCOMD_ENDPOINT };
     delete env.CAPCOMD_KILLPOINT;
     const child = spawn(process.execPath, ["tests/chaos/primitives-scenario.ts", tag, mode], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";

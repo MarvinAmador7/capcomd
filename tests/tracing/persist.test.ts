@@ -27,7 +27,7 @@ describe("trace persistence", () => {
       async getThing() { return 1; },
     });
     expect(await actions.doThing({ key: ["x"] }, { runId: "run-p1", taskId: "task-1" })).toBe("task-1");
-    await actions.getThing({});
+    await (actions.getThing as (c: unknown) => Promise<number>)({});
 
     const lines = readFileSync(t.tracePath("run-p1"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(lines.map((s) => s.name).sort()).toEqual(["actor.demo.doThing", "model.generate", "transition.task"]);

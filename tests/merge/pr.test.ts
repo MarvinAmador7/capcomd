@@ -88,7 +88,7 @@ describe("pr mode against a fake GitHub (backed by a real bare repo)", () => {
       expect(again.code).toBe(0);
       const out = JSON.parse(again.out.trim().split("\n").pop()!);
       expect(out).toMatchObject({ status: "merged", already: mergedBeforeCrash, pr: 1 });
-      expect(out.sha).toBe(gh.pulls[0].merge_commit_sha);
+      expect(out.sha).toBe(gh.pulls[0]!.merge_commit_sha);
       expect(gh.pulls.length).toBe(1);
       expect(gh.calls.filter((c) => c.endsWith("/merge")).length).toBe(1);
       expect(await r.landings(taskKey("p6", "t"))).toBe(1);

@@ -67,7 +67,7 @@ describe("Run Machine - Transition Table", () => {
         tasks: ["task-1"],
       });
 
-      const event = { type: "BUDGET_EXCEEDED" as const };
+      const event = { type: "BUDGET_EXCEEDED" } as unknown as Parameters<typeof execSnapshot.can>[0];
       expect(execSnapshot.can(event)).toBe(false);
     });
   });
@@ -136,7 +136,7 @@ describe("Run Machine - Transition Table", () => {
 
       expect(completed.value).toBe("completed");
       expect(completed.can({ type: "PLAN_READY", tasks: [] })).toBe(false);
-      expect(completed.can({ type: "BUDGET_EXCEEDED" })).toBe(false);
+      expect(completed.can({ type: "BUDGET_EXCEEDED" } as unknown as Parameters<typeof completed.can>[0])).toBe(false);
     });
 
     test("failed is final", () => {

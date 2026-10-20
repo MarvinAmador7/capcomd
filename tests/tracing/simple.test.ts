@@ -33,8 +33,8 @@ describe("Simple Tracing", () => {
 
     const finished = getFinishedSpans();
     expect(finished.length).toBe(1);
-    expect(finished[0].name).toBe("test-operation");
-    expect(finished[0].endTime).toBeDefined();
+    expect(finished[0]!.name).toBe("test-operation");
+    expect(finished[0]!.endTime).toBeDefined();
   });
 
   test("withSpan helper works", async () => {
@@ -51,7 +51,7 @@ describe("Simple Tracing", () => {
 
     const finished = getFinishedSpans();
     expect(finished.length).toBe(1);
-    expect(finished[0].status.code).toBe(1); // OK
+    expect(finished[0]!.status.code).toBe(1); // OK
   });
 
   test("can record state transitions", () => {
@@ -66,7 +66,7 @@ describe("Simple Tracing", () => {
     expect(span.attributes["relay.event_type"]).toBe("START");
     expect(span.attributes["relay.machine_version"]).toBe(1);
     expect(span.events.length).toBe(1);
-    expect(span.events[0].name).toBe("state_transition");
+    expect(span.events[0]!.name).toBe("state_transition");
 
     endSpan(span);
   });
@@ -110,7 +110,7 @@ describe("Simple Tracing", () => {
 
     const finished = getFinishedSpans();
     expect(finished.length).toBe(1);
-    expect(finished[0].status.code).toBe(2); // ERROR
-    expect(finished[0].status.message).toBe("Test error");
+    expect(finished[0]!.status.code).toBe(2); // ERROR
+    expect(finished[0]!.status.message).toBe("Test error");
   });
 });

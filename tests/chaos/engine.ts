@@ -380,7 +380,7 @@ const CLIENT_TIMEOUT_MS = 90_000;
 
 export function runClient(runId: string, opts: EngineOpts = {}): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const env = { ...process.env, CAPCOMD_ENDPOINT: engineEnv(opts).CAPCOMD_ENDPOINT, ...repoEnv(opts) };
+    const env: NodeJS.ProcessEnv = { ...process.env, CAPCOMD_ENDPOINT: engineEnv(opts).CAPCOMD_ENDPOINT, ...repoEnv(opts) };
     delete env.RELAY_ENDPOINT;
     delete env.CAPCOMD_KILLPOINT;
     delete env.RELAY_KILLPOINT;

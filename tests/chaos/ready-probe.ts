@@ -1,8 +1,9 @@
 import { createClient } from "rivetkit/client";
+import type { Registry } from "../../src/registry";
 
 const port = Number(process.argv[2] ?? "6420");
 const deadline = Date.now() + 45_000;
-const client = createClient({ endpoint: `http://127.0.0.1:${port}` });
+const client = createClient<Registry>({ endpoint: `http://127.0.0.1:${port}` });
 let last = "actor endpoint not ready";
 
 while (Date.now() < deadline) {
