@@ -6,7 +6,7 @@ description: Compose capcomd primitives (spawn, await, send, cancel, verify, mer
 
 capcomd gives you primitives, not a workflow. Pick the **simplest** pattern that fits. Always use `--json`, keep IDs, and read `capcomd events R --follow` when debugging. See ADR-016.
 
-Built today: `run new`, `spawn <runId> …`, `await <runId> agt…`, `wait-any <runId> agt…`, `cancel <runId> [agt]`, `tree <runId>`, `events <runId>`, `verify <runId> --ref agt [--checks CMD] [--judge-profile P --acceptance …]`, `merge <runId> --ref agt --require vfy`. `send`/`handoff`, `task`, `kv` and `budget` are proposed (ADR-016). Always pass `--key` on spawn so retries after a crash are safe. Budgets are multi-unit (`--budget usd=1,turns=40,wallSeconds=900`). With no request, a spawn takes everything that's left, so request explicitly when fanning out. Subscription agents are limited by turns and wall time.
+Built today: `run new`, `spawn <runId> …`, `await <runId> agt…`, `wait-any <runId> agt…`, `cancel <runId> [agt]`, `tree <runId>`, `events <runId>`, `verify <runId> --ref agt [--checks CMD] [--judge-profile P --acceptance …]`, `merge <runId> --ref agt --require vfy`. Shared state: `task add|claim|renew|release|done|list <runId>` (leases with epochs: pass back the `--epoch` your claim returned, and stop working if you get "lease lost"), `kv get|put|cas|list <runId>` (read the version, then `cas --expect` it; on conflict re-read and retry), and `events <runId> --follow --until TYPE --json`. `send`/`handoff` and `budget` are still proposed (ADR-016). Always pass `--key` on spawn so retries after a crash are safe. Budgets are multi-unit (`--budget usd=1,turns=40,wallSeconds=900`). With no request, a spawn takes everything that's left, so request explicitly when fanning out. Subscription agents are limited by turns and wall time.
 
 Ground rules: one `run new` per goal with an explicit `--budget`; nothing reaches main without `verify` + `merge --require`; write acceptance criteria as commands where possible; cancel what you no longer need (`cancel` propagates); profiles come from `capcomd agents list --json`.
 
@@ -19,7 +19,7 @@ Use for: one coherent change. Skip it when the work splits cleanly and the speed
 Use for: independent subtasks. Avoid it when tasks touch the same files (merge conflicts), or with N > budget / subscription concurrency (codex subscription = 1).
 
 ## 3. Supervisor / worker
-A supervisor agent (profile with `children.allowSpawn`, `maxDepth:1`) uses `task claim/done` + `kv` for shared decisions; workers lease tasks, and expired leases are re-claimed.
+A supervisor agent (profile with `children.allowSpawn`, `maxDepth:1`) uses `task claim/done` + `kv` for shared decisions; workers loop `task claim --holder <agt> --lease-ms 120000 --key <agt>-<n>` → work, `task renew` about every lease/3 → `task done --epoch E`. A crashed worker's lease expires and the next claim takes it over (the epoch bump fences the old worker out). Put shared decisions in `kv cas`, never in plain `put` when two agents may write the same key.
 Use for: a long queue of dynamic work. Avoid it for short goals; the supervisor's turns are pure overhead.
 
 ## 4. Critic loop

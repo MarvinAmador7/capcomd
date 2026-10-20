@@ -17,9 +17,9 @@ IDs: `run-…` (scope/budget root), `agt-…` (agent instance), `tsk-…`, `vfy-
 | cancel | `capcomd cancel <runId> [agt] [--reason]` | propagates to all descendants; leases released; VMs destroyed |
 | verify | `capcomd verify --ref branch|commit [--checks "bun test"] [--judge-profile J] --acceptance file → vfy {pass, checks[], judge{verdict, reasons}}` | commands run in a fresh VM (ADR-003); an optional judge agent scores against the criteria |
 | merge | `capcomd merge --ref B --target main [--require vfy] [--strategy squash] → mrg` | requires a passing `vfy` for that exact commit unless `--operator` (ADR-013 CAS) |
-| board | `capcomd task add|claim|renew|release|done|list --run R` | leases with epochs (fencing), as the actors have today |
-| blackboard | `capcomd kv get|put|cas|list --run R key [--if-version n]` | versioned and CAS-protected, so concurrent writers can't lose an update; values ≤64KB |
-| events | `capcomd events R [--follow] [--since cursor] [--type …]` | read or subscribe (NDJSON); includes the per-actor `agent.resolved` record |
+| board | `capcomd task add|claim|renew|release|done|list|show <runId> …` (built, step 3) | leases with fencing epochs; expired leases are taken over |
+| blackboard | `capcomd kv get|put|cas|list <runId> key [value] [--expect n]` (built, step 3) | versioned and CAS-protected, so concurrent writers can't lose an update |
+| events | `capcomd events R [--follow [--until TYPE] [--timeout-ms N] [--from-start]]` (follow built, step 3) | read or subscribe (NDJSON); includes the per-actor `agent.resolved` record |
 | budget | `capcomd budget show|carve|charge R` | tree of allocations; a child is never > the parent's remaining budget × `budgetShare` |
 
 Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token limited to their run and subtree), so nesting needs no special mechanism, only `children` limits.
@@ -93,3 +93,23 @@ Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token 
 - **Tests:**
   - `tests/primitives/verify-merge.test.ts` (real bare repo): the gate, failed checks, a judge, a cross-ref vfy, a branch moved after verify, the happy path and an idempotent repeat.
   - Chaos case `merge.after_cas.before_event:1` (kill after the CAS push): asserts merge recorded once, exactly one task commit on trunk, contiguous events.
+
+## Step 3 as built: task board, blackboard, events --follow
+Both live in the run's scope actor (one SQLite transaction per write, engine clock for leases). They are separate from the legacy `taskBoard` actor that `capcomd run` uses.
+- **Task board**
+  - `task add <runId> --title T [--data JSON] [--key K]` → `tsk-…`. A keyed add is idempotent; the same key with other params is a conflict.
+  - `task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]` → `{claimed, taskId, epoch, leaseUntil, takeover}`. With no id it takes the next free task: open tasks first, then the longest-expired lease. Each claim bumps the task's **epoch** (fencing token). Taking an expired lease records TASK_LEASE_EXPIRED then TASK_CLAIMED with `takeoverFrom`.
+  - `task renew|release|done <runId> <tsk> --holder H --epoch E` are **fenced**: a stale epoch fails with "lease lost" (`conflict`). Until someone else claims, a holder whose lease ran out can still renew or finish, because its epoch still matches.
+  - Renewals are not logged as events (they would flood the log). The events are TASK_ADDED, TASK_CLAIMED, TASK_LEASE_EXPIRED, TASK_RELEASED and TASK_DONE.
+- **Blackboard**
+  - `kv get` returns `{value, version}`; a missing key reads as version 0.
+  - `kv put` is unconditional. `kv cas --expect V` writes only if the current version is V (0 = must not exist); otherwise it fails with `conflict` "version is N".
+  - Every successful write bumps the version and records KV_PUT or KV_CAS (key and version; the value is not in the log).
+- **Idempotent writes:** claim, done/release and kv put/cas take `--key`. Repeating the key returns the recorded result with `replayed: true`. Only successful writes are recorded, so a failed cas or claim can simply be retried.
+- **Follow:** `events <runId> --follow` polls the merged log (run, legacy tasks, scope) and emits each event once. With `--json` it prints one envelope per line, `{event}`, then `{end:{stopped}}` when `--until TYPE` matches or `--timeout-ms` passes.
+- **Tests:**
+  - Unit: `tests/primitives/board.test.ts`.
+  - End to end: `tests/primitives/state-e2e.test.ts` covers fencing, expiry takeover, keyed replay, a 6-writer cas counter race, and `--follow --until`.
+  - Chaos: `board.claim.mid:2`, `board.claim.after.before_reply:4`, `kv.cas.mid:3`, `kv.cas.after.before_reply:4`. Audits check the takeover epoch, that the late holder is fenced, one claim per task among 4 concurrent racers, a set of 6 cas writers at exactly version 6, a keyed put applied once, and contiguous event seqs.
+  - Negative control: with claim replay removed, `board.claim.after.before_reply:4` fails.
+- **Not built:** task dependencies, kv value size cap, kv delete, server-push subscribe (follow polls).
