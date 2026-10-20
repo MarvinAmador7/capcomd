@@ -6,9 +6,12 @@ import type { AgentConfig } from "./config";
 import type { AgentAdapter, AgentEvent, AgentRunState } from "./types";
 import { Redactor } from "./redact";
 import { taskKey } from "../merge/config";
-import { addSpanEvent, setSpanAttributes, withSpan } from "../utils/tracing-simple";
+import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils/tracing-simple";
 
 export interface AgentTask {
+  /** ADR-017 / TUI contract: scope agent id and its parent (null at root), stamped on agent.* spans. */
+  agentId?: string;
+  parentAgentId?: string | null;
   runId: string;
   taskId: string;
   epoch: number;
@@ -134,10 +137,12 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
   const key = taskKey(task.runId, task.taskId);
   const attrs = {
     "agent.kind": name, "agent.profile": cfg.profile ?? "", "relay.run_id": task.runId, "relay.task_id": task.taskId, "relay.epoch": task.epoch,
+    ...(task.agentId ? { "relay.agent_id": task.agentId, "relay.parent_agent_id": task.parentAgentId ?? null } : {}),
     "git.branch": task.branch, "agent.max_turns": cfg.maxTurns, "agent.max_budget_usd": cfg.maxBudgetUsd,
   };
 
-  return withSpan(`agent.${name.replace("-", "_")}`, attrs, async (span) => {
+  let live: AgentRunState | null = null; // for cost/turns on failed or timed-out spans (TUI contract)
+  return withSpan(`agent.${name.replace("-", "_")}`, attrs, async (span) => { try {
     must(await sh(`mkdir -p ${sq(W)} ${sq(home)}`), "mkdir");
 
     // 1. Clone.
@@ -255,6 +260,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
     const deadline = now() + cfg.timeoutMs + 30_000;
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
+    live = state;
     let consumed = 0, exitCode: number | null = null;
     const drain = async (final: boolean) => {
       const res = await sh(`tail -n +${consumed + 1} ${sq(jsonl)} 2>/dev/null; printf '\\n__CAPCOMD_EXIT__%s' "$(cat ${sq(exitFile)} 2>/dev/null)"`);
@@ -331,5 +337,14 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     must(await git(["push", "--porcelain", lease, "origin", `HEAD:refs/heads/${task.branch}`], repo, 300_000), "git push");
     setSpanAttributes(span, { "git.sha": sha });
     return { sha, already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd };
-  });
+  } catch (e) {
+    // Failed/timed-out spans still carry what was spent so far (subscription billing: cost 0, notional set).
+    const st = live as AgentRunState | null;
+    const sub = span.attributes["agent.billing"] === "subscription" || span.attributes["agent.credential_mode"] === "subscription";
+    setSpanAttributes(span, {
+      "agent.cost_usd": st && !sub ? st.costUsd : 0, "agent.notional_cost_usd": st?.costUsd ?? 0, "agent.turns": st?.turns ?? 0,
+      "agent.error_kind": e instanceof AgentError ? e.kind : "error", ...(span.attributes["agent.stop_reason"] ? {} : { "agent.stop_reason": e instanceof AgentError ? e.kind : "error" }),
+    });
+    throw e;
+  } }, task.agentId ? { parentSpanId: agentSpanId(task.runId, task.agentId) } : {});
 }

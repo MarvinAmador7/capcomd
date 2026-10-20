@@ -87,6 +87,12 @@ export async function spawnAgent(o: SpawnOpts) {
   return { ...view(res.agent), created: res.created };
 }
 
+/** TUI contract: every agent.run span ends with status, cost and turns, failed or not. */
+function stampSpent(span: { attributes: Record<string, any> }, a: ScopeAgent) {
+  const sp: any = a.spent ?? {};
+  Object.assign(span.attributes, { "agent.status": a.status, "agent.cost_usd": Number(sp.usd ?? 0), "agent.turns": Number(sp.turns ?? 0) });
+}
+
 export function view(a: ScopeAgent) {
   return {
     agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status,
@@ -182,10 +188,10 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
   const s = client().scope.getOrCreate([runId]);
   const me = await s.getAgent({ agentId });
   // Trace parenting: agent spans nest under their parent agent's span (root agents under the run).
-  return withSpan("agent.run", { "relay.run_id": runId, "agent.id": agentId, "agent.parent": me?.parent ?? null, "agent.profile": me?.profile ?? null, "agent.depth": me?.depth ?? 0 }, async (span) => {
+  return withSpan("agent.run", { "relay.run_id": runId, "agent.id": agentId, "agent.parent": me?.parent ?? null, "relay.agent_id": agentId, "relay.parent_agent_id": me?.parent ?? null, "agent.profile": me?.profile ?? null, "agent.depth": me?.depth ?? 0 }, async (span) => {
     let last: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
-      try { const a = await driveOnce(runId, agentId); span.attributes["agent.status"] = a.status; return a; } catch (e) {
+      try { const a = await driveOnce(runId, agentId); stampSpent(span, a); return a; } catch (e) {
         last = e;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
         if (isBoxdAuthError(e) || e instanceof ScriptFailed) break;
@@ -194,7 +200,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
     }
     const res = await resultOf(runId, agentId);
     const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}) } });
-    span.attributes["agent.status"] = "failed";
+    stampSpent(span, fin.agent);
     return fin.agent;
   }, { spanId: agentSpanId(runId, agentId), parentSpanId: me?.parent ? agentSpanId(runId, me.parent) : rootSpanIdForRun(runId) });
 }
@@ -265,7 +271,7 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
       return fin.agent;
     }
     const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
-    const push = () => w.pushBranch({ workerId: agentId, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}) });
+    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}) });
     const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);

@@ -343,7 +343,7 @@ export const workerActor = actor({
     async pushBranch(
       c,
       params: {
-        workerId: string; taskId: string; epoch: number; branch: string; runId?: string; target?: string; rework?: boolean;
+        workerId: string; taskId: string; epoch: number; branch: string; runId?: string; parentAgentId?: string | null; target?: string; rework?: boolean;
         /** Task goal for a real agent (claude-code). */
         goal?: string;
         /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
@@ -452,7 +452,8 @@ export const workerActor = actor({
         const runId = params.runId;
         const res = await runAgent(adapter, provider, vmId, {
           runId, taskId, epoch, branch, target: params.target ?? cfg.target, repoUrl: cfg.remote,
-          goal: params.goal ?? `Task ${taskId}`, rework: params.rework, conflictFiles: params.conflictFiles,
+          goal: params.goal ?? `Task ${taskId}`, rework: params.rework,
+          ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
         }, loadAgentConfig(process.env, params.agent), {
           apiKey,
           ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: readFileSync(new URL("../subagents/vm-cli.mjs", import.meta.url).pathname, "utf8"), rpcDir: "/tmp/capcomd-rpc" } } : {}),
