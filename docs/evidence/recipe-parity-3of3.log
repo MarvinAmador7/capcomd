@@ -1,0 +1,6 @@
+✓ plan-3-tasks       state=completed merged=3/3 commits=3/3 time recipe=12117ms legacy=9321ms
+    refusing to kill pid 1887644: not owned by engine :7701
+✓ explicit-target    state=completed merged=3/3 commits=3/3 time recipe=12160ms legacy=9432ms
+✓ checks-fail        state=completed merged=0/0 commits=0/0 time recipe=26110ms legacy=23241ms
+PARITY OK (3 cases)
+EXIT 0

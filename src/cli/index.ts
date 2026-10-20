@@ -8,6 +8,9 @@ import { serve } from "./commands/serve";
 import { ui } from "./commands/ui";
 import { loadTrace, renderTrace } from "./commands/trace";
 import { RelayError, SCHEMA, EXIT, toRelayError } from "../core/errors";
+
+/** Which `capcomd run <goal>` path runs by default (ADR-016 step 4). */
+export const DEFAULT_RUN_PATH: "recipe" | "legacy" = "legacy";
 import {
   approveTask,
   assertEngine,
@@ -41,6 +44,7 @@ Usage:
   capcomd env status | env rm [name|all] List / delete env snapshots
   capcomd agents list|show|add|set|rm|schema|validate
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
+  capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH; recipe = planner→worker→judge composed from primitives)
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K]                     → runId (a scope; plans nothing)
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N]  ·  capcomd wait-any <runId> <agt…>
@@ -146,6 +150,8 @@ async function main(argv: string[]): Promise<number> {
         status: { type: "string" },
         prefix: { type: "string" },
         "from-start": { type: "boolean" },
+        recipe: { type: "boolean" },
+        legacy: { type: "boolean" },
         after: { type: "string", multiple: true },
         all: { type: "boolean" },
       },
@@ -247,15 +253,18 @@ async function main(argv: string[]): Promise<number> {
         }
 
         initDependencies();
-        const result = await executeRun({
-          goal,
-          runId,
-          targetBranch,
-          emit: (type, data, human) => {
-            if (json) console.log(JSON.stringify({ schema: SCHEMA, type, runId, ts: new Date().toISOString(), ...data }));
-            else console.log(human);
-          },
-        });
+        // ADR-016 step 4: the planner→worker→judge flow as a recipe over the primitives, or the
+        // legacy hard-wired loop. --recipe/--legacy, else CAPCOMD_RUN_PATH, else the default.
+        if (values.recipe && values.legacy) usage("pass at most one of --recipe / --legacy");
+        const runPath = values.recipe ? "recipe" : values.legacy ? "legacy" : (process.env.CAPCOMD_RUN_PATH ?? DEFAULT_RUN_PATH);
+        if (runPath !== "recipe" && runPath !== "legacy") usage(`CAPCOMD_RUN_PATH must be recipe or legacy, got ${runPath}`);
+        const emit = (type: string, data: Record<string, unknown>, human: string) => {
+          if (json) console.log(JSON.stringify({ schema: SCHEMA, type, runId, ts: new Date().toISOString(), ...data }));
+          else console.log(human);
+        };
+        const result = runPath === "recipe"
+          ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit })
+          : await executeRun({ goal, runId, targetBranch, emit });
         if (json) console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, ts: new Date().toISOString(), ok: result.ok, state: result.state }));
         return result.ok ? EXIT.ok : EXIT.run_failed;
       }
@@ -467,6 +476,15 @@ async function main(argv: string[]): Promise<number> {
       case "approve": {
         const runId = positionals[1] ?? usage("usage: capcomd approve <runId> <taskId>");
         const taskId = positionals[2] ?? usage("usage: capcomd approve <runId> <taskId>");
+        // Recipe runs park on kv approval/<task>; legacy runs on the task board actor.
+        const S = await import("../primitives/state");
+        const recipeRun = await S.kvGet(runId, "recipe/plan").then((e: any) => e.version > 0, () => false);
+        if (recipeRun) {
+          const w: any = await S.kvWrite(runId, { k: `approval/${taskId}`, value: { approvedBy: (values.by as string | undefined) ?? "cli", at: Date.now() }, key: `approve-${taskId}` });
+          if (json) out({ runId, taskId, approved: true, recipe: true, version: w.version });
+          else console.log(`✓ Approved ${taskId}; the recipe merges it on its next poll`);
+          return EXIT.ok;
+        }
         const r = await approveTask(runId, taskId, (values.by as string | undefined) ?? "cli");
         if (json) out(r);
         else console.log(r.already ? `${taskId} was already merged` : `✓ Approved ${taskId}; merging into protected branch`);
