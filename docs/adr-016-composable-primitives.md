@@ -120,3 +120,17 @@ Both live in the run's scope actor (one SQLite transaction per write, engine clo
   - Deleting a missing or already-deleted key without `--expect` is a no-op (`noop:true`).
 - **kv size cap:** values are limited to 64KB of UTF-8 JSON (`CAPCOMD_KV_MAX_BYTES`). The CLI and the actor both check it, and an oversized value fails with "value is N bytes, cap is 65536" (`usage`).
 - **Not built:** server-push subscribe (`--follow` polls, by decision).
+
+## Step 4 as built: `capcomd run` as a recipe (default)
+
+`src/recipes/hierarchical.ts` runs planner → workers → judge as a composition of the primitives: `run new`, the planner actor, `task add --after` (plan order), `task claim`, `spawn`/`await`, `verify`, `merge --require`, `task done`, the judge actor. It is the default path. `--legacy` (or `CAPCOMD_RUN_PATH=legacy`) keeps the old loop until it is removed. The MCP server spawns `capcomd run`, so it follows the same default.
+
+**The CLI output is a public contract (Hermes consumes it).** So the recipe keeps the task-board actor as the public task ledger and drives the same transitions as legacy: lease → started → handoff → verify → merged | awaiting_approval → approved → merged, with the ledger's retry budget (maxRetries 3, so 4 attempts). As a result, `status` (tasks, `awaitingApproval`), `events` (VERIFIED_AWAITING_APPROVAL, APPROVED, …), `approve` (conflict on a task that isn't waiting) and `cancel` (`{runId, state, changed}`) are identical on both paths. The stream emits the same events (`agent.resolved`, `task.awaiting_approval`, `task.approved`, `task.merged`, `task.verify_failed`). The trace has `relay.run → cli.run` with actor, transition, model, sandbox and git spans. Preflight, sandbox reaping and the boxd auth failure (`run.failed` with `kind: config`, `retryable: false`) work the same way. Spawn keys are `<task>-e<epoch>`, so a resumed run replays the attempt it crashed in, and a retried task gets a fresh agent. `contract.planTask` names the commit trailer, giving `Capcomd-Task: <run>/<task>`, so landings and exactly-once audits match legacy.
+
+**Judge rule (both paths, fake and real):** a run with 0 merged tasks fails, unless its goal is tagged `[noop]`. The judge sees only merged tasks.
+
+**Parity eval** (`evals/recipe-parity/run.ts`) uses one engine and one bare repo per case. Cases: 3-task plan, explicit target, protected target with the approval flow driven through the CLI, and checks that fail. It compares the run outcome (state, judge, merged tasks, landed files, commits, failed attempts) and the CLI contract: status keys, states and tasks, `awaitingApproval`, `cancel` on a finished run, ledger event counts, stream event types, required trace spans, and the early-approve conflict. One known difference is reported but not failed: in a run where nothing merges, legacy still has a `git.merge` span, because its verifier verifies and merges in one call. The recipe verifies first (`git.verify`) and only merges a passing ref.
+
+**Chaos:** the killpoint gate's client is pinned to `--legacy`. `RECIPE_KILLPOINTS` reruns every actor and merge killpoint (except legacy-only `lease.expire.mid`) plus `board.claim.mid` and `scope.spawn.mid` on `--recipe`, with the same audit (one landing per plan task, ledger, budget, outbox).
+
+**Later (perf):** the recipe uses one VM per agent (the isolation default), which is about 25–45% slower than legacy's single worker on fakes. A warm pool or VM reuse is a follow-up; nothing changes now.

@@ -30,8 +30,11 @@ Use for: quality bar not expressible as tests. Avoid it when tests already decid
 `spawn` n coders (the same task, different profiles/models; budget ÷ n) → `await` all → `verify --checks` each → `verify --judge-profile judge` comparing the passing branches → `merge` the winner, `cancel` the rest.
 Use for: high-variance, high-value changes. Avoid it when cost matters or the first attempt usually passes.
 
-## 6. Nested planner (what `capcomd run` does)
-planner `spawn` → it `task add`s the plan → recursive sub-planners only for big tasks (`maxDepth` ≤2, `maxTotalDescendants` cap, `budgetShare` ≤0.5) → workers → verify/merge → judge on main.
+## 6. Hierarchical planner (what `capcomd run` does — `src/recipes/hierarchical.ts`)
+`capcomd run <goal>` is this recipe over the primitives (`--legacy` keeps the old hard-wired loop):
+planner actor → `task add` each plan task `--after` the previous one → per task: `task claim` → `spawn` (contract `{planTask, epoch}`; the commit trailer is `Capcomd-Task: <run>/<task>`) → `await` → `verify` → protected target? park in `awaiting_approval` until `capcomd approve <run> <task>` → `merge --require <vfy>` → `task done` → judge over the merged tasks.
+Every step is keyed by the run, task and ledger epoch, so rerunning with the same `--run-id` resumes after a crash. The task-board ledger keeps the public contract (`status`, `events`, `approve`, `cancel` are the same as legacy). Up to 4 attempts per task; a failed check or a conflict retries with the failure in the task. A run that merges nothing fails unless its goal is tagged `[noop]`.
+Nesting: for big tasks, spawn sub-planners (`maxDepth` ≤2, `maxTotalDescendants` cap, `budgetShare` ≤0.5).
 Use for: big multi-area goals. Avoid it for anything a single loop can do; every level multiplies cost and latency.
 
 ## Failure handling
