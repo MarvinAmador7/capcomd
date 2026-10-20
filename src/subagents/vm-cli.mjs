@@ -95,7 +95,7 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
   status [agt…]   tree [--root agt]   inspect <agt> [--tail N]   logs <agt> [--tail N]
   cancel <agt> [--reason R]   send <agt|parent> <text> [--key K]   inbox [--after N]
   handoff --task T [--profile P] [--context JSON]
-  events [--follow] [--after N] [--until TYPE] [--timeout-ms N]
+  events [--follow] [--after N | --since-seq N] [--until TYPE] [--timeout-ms N]
   budget [show]   heartbeat [note]
   result --summary S [--artifact name=ref]… [--data JSON]
   task add --title T [--data JSON] [--after tsk,…] [--key K] | list [--status S] | show <tsk>
@@ -126,7 +126,7 @@ export function toCall(argv) {
     case "send": if (pos.length < 2) usage("send <agt|parent> <text>"); return { op: "send", args: { to: pos[0], body: pos.slice(1).join(" "), key } };
     case "inbox": return { op: "inbox", args: { after: fl.after } };
     case "handoff": if (!fl.task) usage("handoff needs --task"); return { op: "handoff", args: { task: fl.task, profile: fl.profile, context: json(fl.context, "--context") } };
-    case "events": return { op: "events", args: { follow: fl.follow === "true", after: fl.after, until: fl.until, timeoutMs }, events: true };
+    case "events": return { op: "events", args: { follow: fl.follow === "true", after: fl.after ?? fl["since-seq"], until: fl.until, timeoutMs }, events: true };
     case "budget": return { op: "budget", args: {} };
     case "heartbeat": return { op: "heartbeat", args: { note: pos.join(" ") || undefined } };
     case "result": return { op: "result", args: { summary: fl.summary ?? pos.join(" "), artifacts: arr(fl.artifact).map((a) => { const [name, ref] = String(a).split(/=(.*)/s); return { name, ref: ref ?? name }; }), data: json(fl.data, "--data") } };

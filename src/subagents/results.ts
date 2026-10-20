@@ -7,6 +7,8 @@ export const RESULT_MAX_BYTES = Number(env("RESULT_MAX_BYTES") ?? 8192);
 export const MESSAGE_MAX_BYTES = Number(env("MESSAGE_MAX_BYTES") ?? 16384);
 export const MAX_ARTIFACTS = 50;
 export const STUCK_AFTER_MS = Number(env("STUCK_AFTER_MS") ?? 5 * 60_000);
+/** Read at call time so an operator (or a scenario) can tune it without a restart of the importing module. */
+export const stuckAfterMs = () => Number(env("STUCK_AFTER_MS") ?? 5 * 60_000);
 
 export interface Truncation { field: string; bytes: number; kept: number }
 
@@ -80,7 +82,7 @@ export function rollups(agents: TreeAgent[]): Map<string, Rollup> {
 const round = (x: number) => Math.round(x * 1e6) / 1e6;
 
 /** Running agent with no heartbeat (in-VM call / log line) for STUCK_AFTER_MS, or no live driver. */
-export function stuckReason(a: TreeAgent, now = Date.now(), after = STUCK_AFTER_MS): string | null {
+export function stuckReason(a: TreeAgent, now = Date.now(), after = stuckAfterMs()): string | null {
   if (TERMINAL_AGENT.has(a.status) || a.status === "pending") return null;
   if ((a.driverUntil ?? 0) < now) return "no live driver (lease expired); the next await takes it over";
   const last = a.heartbeatAt || a.createdAt || 0;
