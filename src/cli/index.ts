@@ -61,7 +61,7 @@ Usage:
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
   capcomd task renew|release|done <runId> <tsk> --holder H --epoch E [--lease-ms N] [--result JSON] [--key K]   (fenced: a stale epoch is rejected)
   capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv del <runId> <k> [--expect V]  ·  kv list <runId> [--prefix P] [--all]   (values ≤ 64KB)
-  capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start]   (with --json: one JSON event per line)
+  capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start | --since-seq N]   (with --json: one JSON line per event; resume with --since-seq <last seq>)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --max-turns --budget
@@ -156,6 +156,7 @@ async function main(argv: string[]): Promise<number> {
         status: { type: "string" },
         prefix: { type: "string" },
         "from-start": { type: "boolean" },
+        "since-seq": { type: "string" },
         recipe: { type: "boolean" },
         legacy: { type: "boolean" },
         after: { type: "string", multiple: true },
@@ -274,14 +275,16 @@ async function main(argv: string[]): Promise<number> {
         if (values.recipe && values.legacy) usage("pass at most one of --recipe / --legacy");
         const runPath = values.recipe ? "recipe" : values.legacy ? "legacy" : (process.env.CAPCOMD_RUN_PATH ?? DEFAULT_RUN_PATH);
         if (runPath !== "recipe" && runPath !== "legacy") usage(`CAPCOMD_RUN_PATH must be recipe or legacy, got ${runPath}`);
+        let lineSeq = 0;
         const emit = (type: string, data: Record<string, unknown>, human: string) => {
-          if (json) console.log(JSON.stringify({ schema: SCHEMA, type, runId, ts: new Date().toISOString(), ...data }));
+          const now = Date.now();
+          if (json) console.log(JSON.stringify({ schema: SCHEMA, type, runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: (data.agentId as string | undefined) ?? null, ...data }));
           else console.log(human);
         };
         const result = runPath === "recipe"
           ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit })
           : await executeRun({ goal, runId, targetBranch, emit });
-        if (json) console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, ts: new Date().toISOString(), ok: result.ok, state: result.state }));
+        if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
         return result.ok ? EXIT.ok : EXIT.run_failed;
       }
 
@@ -533,19 +536,21 @@ async function main(argv: string[]): Promise<number> {
       case "events":
       case "replay": {
         const runId = positionals[1] ?? usage(`runId required: capcomd ${command} <runId>`);
+        let sinceSeq: number | undefined;
+        if (values["since-seq"] !== undefined) { sinceSeq = Number(values["since-seq"]); if (!Number.isInteger(sinceSeq) || sinceSeq < 0) usage("--since-seq must be an integer >= 0 (the seq of the last line you saw)"); }
         if (values.follow) {
           const S = await import("../primitives/state");
           const r = await S.followEvents(runId, {
-            until: values.until as string | undefined, fromStart: !!values["from-start"],
+            until: values.until as string | undefined, fromStart: !!values["from-start"], sinceSeq,
             timeoutMs: values["timeout-ms"] !== undefined ? Number(values["timeout-ms"]) : undefined,
-            emit: (ev) => json ? out({ runId, event: ev }) : console.log(`[${ev.entity.padEnd(20)}] ${new Date(ev.at).toISOString()} ${JSON.stringify(ev.event)}`),
+            emit: (ev) => json ? out({ runId, seq: ev.seq, ts: ev.ts, epochMs: ev.epochMs, agentId: ev.agentId, type: ev.type, event: ev }) : console.log(`[${ev.entity.padEnd(20)}] ${new Date(ev.at).toISOString()} ${JSON.stringify(ev.event)}`),
           });
-          if (json) out({ runId, end: r });
+          if (json) out({ runId, end: r, ts: new Date().toISOString() });
           return EXIT.ok;
         }
         const limit = values.limit ? Number.parseInt(values.limit as string, 10) : 1000;
         if (!Number.isFinite(limit) || limit < 1) usage("--limit must be a positive integer");
-        const all = await listEvents(runId);
+        const all = (await listEvents(runId)).filter((e) => sinceSeq === undefined || e.seq > sinceSeq);
         const page = paginate(all, values.cursor as string | undefined, limit);
         if (json) out({ runId, events: page.items, nextCursor: page.nextCursor, total: page.total, truncated: page.nextCursor !== null });
         else {

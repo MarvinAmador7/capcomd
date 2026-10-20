@@ -479,34 +479,46 @@ export async function cancelRun(runId: string): Promise<{ runId: string; state: 
   return { runId, state: after?.state ?? before, changed: (after?.state ?? before) !== before };
 }
 
+/**
+ * One event in a run's merged log (output contract, docs/output-contract.md#events).
+ * seq: 1-based position in the merged, time-ordered log: resume with --since-seq.
+ * entitySeq: the per-entity counter (what `seq` meant before; kept for back-compat dedupe).
+ * ts: ISO-8601 UTC; epochMs: same instant in ms (`at` is the legacy alias of epochMs).
+ * agentId: the scope agent the event is about, or null (run/task events); always present.
+ */
 export interface EventRecord {
-  entity: string;
   seq: number;
+  entitySeq: number;
+  ts: string;
+  epochMs: number;
   at: number;
+  agentId: string | null;
+  entity: string;
   type: string;
   event: unknown;
 }
+type RawEvent = { entity: string; seq: number; at: number; type: string; agentId: string | null; event: unknown };
 
 export async function listEvents(runId: string): Promise<EventRecord[]> {
   const { c, run } = await getRunOrThrow(runId);
-  const out: EventRecord[] = [];
+  const out: RawEvent[] = [];
   for (const ev of await c.run.get([runId]).getEvents({ runId })) {
-    out.push({ entity: "run", seq: ev.seq, at: ev.at, type: ev.event?.type ?? "unknown", event: ev.event });
+    out.push({ entity: "run", seq: ev.seq, at: ev.at, type: ev.event?.type ?? "unknown", agentId: ev.event?.agentId ?? null, event: ev.event });
   }
   const ids: string[] = run.context.plan?.tasks ?? [];
   if (ids.length) {
     const board = c.taskBoard.getOrCreate([runId]);
     for (const taskId of ids) {
       for (const ev of await board.getTaskEvents({ taskId })) {
-        out.push({ entity: taskId, seq: ev.seq, at: ev.at, type: ev.event?.type ?? "unknown", event: ev.event });
+        out.push({ entity: taskId, seq: ev.seq, at: ev.at, type: ev.event?.type ?? "unknown", agentId: ev.event?.agentId ?? null, event: ev.event });
       }
     }
   }
   // Primitive scope events (spawn/start/done/cancel), when the run is a `capcomd run new` scope.
   const scopeEvents = await c.scope.getOrCreate([runId]).getEvents({}).catch(() => [] as any[]);
-  for (const ev of scopeEvents) out.push({ entity: ev.agentId ? `scope:${ev.agentId}` : "scope", seq: ev.seq, at: ev.at, type: ev.type, event: { type: ev.type, ...ev.data } });
+  for (const ev of scopeEvents) out.push({ entity: ev.agentId ? `scope:${ev.agentId}` : "scope", seq: ev.seq, at: ev.at, type: ev.type, agentId: ev.agentId ?? null, event: { type: ev.type, ...ev.data } });
   out.sort((a, b) => a.at - b.at || a.entity.localeCompare(b.entity) || a.seq - b.seq);
-  return out;
+  return out.map((e, i) => ({ seq: i + 1, entitySeq: e.seq, ts: new Date(e.at).toISOString(), epochMs: e.at, at: e.at, agentId: e.agentId, entity: e.entity, type: e.type, event: e.event }));
 }
 
 export function paginate<T>(items: T[], cursor: string | undefined, limit: number) {

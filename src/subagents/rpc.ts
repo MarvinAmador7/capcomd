@@ -168,7 +168,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       const { ids: vis } = await readable(c);
       const evs = (await s.getEvents({ since: Number(args.after ?? 0) })).filter((e: any) => e.agentId && vis.has(e.agentId));
       const limit = Math.min(Number(args.limit ?? 200), 1000);
-      return { events: evs.slice(0, limit).map((e: any) => ({ seq: e.seq, at: e.at, type: e.type, agentId: e.agentId, data: e.agentId === c.sub ? e.data : redactEvent(e) })), more: evs.length > limit };
+      return { events: evs.slice(0, limit).map((e: any) => ({ seq: e.seq, ts: new Date(e.at).toISOString(), epochMs: e.at, at: e.at, type: e.type, agentId: e.agentId ?? null, data: e.agentId === c.sub ? e.data : redactEvent(e) })), more: evs.length > limit };
     }
     case "budget": return O.budgetShow(run, c.sub);
     case "inspect": {
