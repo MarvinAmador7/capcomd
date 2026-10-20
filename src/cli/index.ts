@@ -33,6 +33,10 @@ Usage:
                                        List lifecycle events (alias: replay)
   capcomd trace <runId>                  Show the span waterfall
   capcomd approve <runId> <taskId>       Approve a merge parked in awaiting_approval
+  capcomd env build [--force]            Bake agent CLIs + repo deps into a boxd snapshot (no secrets)
+  capcomd env status | env rm [name|all] List / delete env snapshots
+  capcomd secrets sync                   Store local ANTHROPIC/OPENAI keys as boxd host-bound secrets
+  capcomd doctor                         Check agents + credentials inside a snapshot VM
   capcomd mcp                            Serve the capcomd tools over MCP (stdio)
   capcomd ui                             Launch the web UI
 
@@ -63,6 +67,7 @@ async function main(argv: string[]): Promise<number> {
         cursor: { type: "string" },
         limit: { type: "string" },
         by: { type: "string" },
+        force: { type: "boolean" },
       },
       allowPositionals: true,
       strict: true,
@@ -86,6 +91,12 @@ async function main(argv: string[]): Promise<number> {
     }
 
     switch (command) {
+      case "env":
+      case "secrets":
+      case "doctor": {
+        const { envCommand } = await import("./commands/env");
+        return await envCommand(command, positionals, values as any);
+      }
       case "serve":
         await serve({ port: parseInt(values.port as string, 10) });
         return EXIT.ok;
