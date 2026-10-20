@@ -35,5 +35,6 @@ export const familyColor = (fam: string): string =>
 export const statusColor = (s: string): string =>
   /fail|error|cancel/.test(s) ? c.err : /await|pending|stuck|block/.test(s) ? c.warn : /done|ok|complet|merged|success/.test(s) ? c.ok : /run|exec|leas/.test(s) ? c.accent : c.dim;
 
+/** Status marks from the approved glyph set (single-width, East-Asian-Width N). */
 export const statusGlyph = (s: string): string =>
-  /fail|error/.test(s) ? "✕" : /cancel/.test(s) ? "⊘" : /await|block/.test(s) ? "◐" : /done|complet|success/.test(s) ? "✓" : /run|exec|leas/.test(s) ? "●" : "○";
+  /fail|error/.test(s) ? "✗" : /cancel|reap/.test(s) ? "⊘" : /await|block|pending_approval/.test(s) ? "⋯" : /done|complet|success/.test(s) ? "✓" : /run|exec|leas/.test(s) ? "▸" : "∘";

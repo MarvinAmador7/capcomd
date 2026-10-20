@@ -27,8 +27,14 @@ export interface Trace {
 export interface RunEvent {
   at: number; // epoch ms
   type: string;
-  entity: string; // "run", a task id, an agent id
+  entity: string; // source entity ("run", a task id, "scope:agt-x")
   data: Record<string, unknown>;
+  /** Global position in the run's merged log (contract: `seq`). */
+  seq?: number;
+  /** Per-entity counter; (entity, entitySeq) is the dedupe key. */
+  entitySeq?: number;
+  /** Scope agent the event is about, or null for run/task events. */
+  agentId?: string | null;
 }
 
 export interface Spend { usd?: number; turns?: number; wallSeconds?: number; [unit: string]: number | undefined }
@@ -42,8 +48,18 @@ export interface AgentNode {
   budget: Spend;
   rollup?: { agents: number; usd: number; turns: number; wallSeconds: number; byStatus: Record<string, number> };
   stuck?: string;
+  parent?: string | null;
+  taskId?: string;
+  /** The agent's `agent.run` span id (tree → trace join). */
+  spanId?: string;
+  startedAt?: number;
+  endedAt?: number | null;
+  /** agent.error_kind from the agent's CLI span, when it failed. */
+  errorKind?: string;
   children: AgentNode[];
 }
+
+export interface PendingApproval { taskId: string; kind?: string; targetBranch?: string; since: number }
 
 export interface RunData {
   runId: string;
@@ -55,4 +71,6 @@ export interface RunData {
   agents: AgentNode[];
   /** Agents came from `capcomd tree` (true) or were inferred from trace spans (false). */
   agentsFromTree: boolean;
+  /** From `status.pendingApprovals[]`. */
+  pendingApprovals: PendingApproval[];
 }

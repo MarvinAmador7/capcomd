@@ -1,15 +1,15 @@
 import { Box, Text, useInput } from "ink";
 import { useMemo, useState } from "react";
 import { type Cell, laneCells, lanesOf } from "../adapters/lanes";
-import type { RunEvent, Trace } from "../adapters/types";
+import type { AgentNode, PendingApproval, RunEvent, Trace } from "../adapters/types";
 import { axis, dur, pad } from "../format";
 import { c } from "../theme";
 import { Empty, type ViewProps, windowed } from "./common";
 
 const COLOR: Record<Cell["kind"], string> = { idle: c.faint, infra: c.dim, git: c.fg, agent: c.accent, wait: c.warn, error: c.err };
 
-export function Timeline({ trace, events, width, height, active }: ViewProps & { trace: Trace | null; events: RunEvent[] }) {
-  const lanes = useMemo(() => (trace ? lanesOf(trace, events) : []), [trace, events]);
+export function Timeline({ trace, events, agents = [], pending = [], width, height, active }: ViewProps & { trace: Trace | null; events: RunEvent[]; agents?: AgentNode[]; pending?: PendingApproval[] }) {
+  const lanes = useMemo(() => (trace ? lanesOf(trace, events, agents, pending) : []), [trace, events, agents, pending]);
   const [sel, setSel] = useState(0);
   useInput((input, key) => {
     if (key.downArrow || input === "j") setSel((s) => Math.min(lanes.length - 1, s + 1));
@@ -17,7 +17,7 @@ export function Timeline({ trace, events, width, height, active }: ViewProps & {
   }, { isActive: active });
   if (!trace) return <Empty>No trace for this run.</Empty>;
 
-  const labelW = Math.min(22, Math.max(12, ...lanes.map((l) => l.label.length + 2)));
+  const labelW = Math.min(30, Math.max(12, ...lanes.map((l) => l.label.length + 2)));
   const trackW = Math.max(10, width - labelW - 14);
   const rows = Math.max(2, Math.floor((height - 8) / 2));
   const { start, slice } = windowed(lanes, sel, rows);
@@ -36,6 +36,7 @@ export function Timeline({ trace, events, width, height, active }: ViewProps & {
               <Text color={on ? c.fg : c.dim} bold={on}>{pad(l.label, labelW)}</Text>
               {runs(cells).map((r, k) => <Text key={k} color={COLOR[r.kind]}>{r.text}</Text>)}
               <Text color={l.errors ? c.err : c.dim}>{"  " + (l.busyMs ? dur(l.busyMs) : "")}</Text>
+              {l.errorKind ? <Text color={c.err}>{"  ✗ " + l.errorKind}</Text> : null}
             </Text>
             <Text> </Text>
           </Box>
@@ -43,7 +44,7 @@ export function Timeline({ trace, events, width, height, active }: ViewProps & {
       })}
       <Text>
         <Text color={c.accent}>█ agent  </Text><Text color={c.fg}>▓ git  </Text><Text color={c.dim}>▒ sandbox  ╌ actor  </Text>
-        <Text color={c.warn}>░ awaiting approval  </Text><Text color={c.err}>✕ error</Text>
+        <Text color={c.warn}>░ awaiting approval  </Text><Text color={c.err}>✗ error</Text>
       </Text>
       {cur ? (
         <Text color={c.dim} wrap="truncate">

@@ -7,7 +7,7 @@ import { c, familyColor } from "../theme";
 import { Empty, type ViewProps, windowed } from "./common";
 import { type IconSet, SETS, iconStatus, kindColor, kindOf, statusIconColor } from "../icons";
 
-const DETAIL_KEYS = ["relay.task_id", "relay.agent_id", "agent.profile", "agent.turns", "agent.cost_usd", "agent.billing", "agent.stop_reason", "git.sha", "git.ref", "git.operation", "relay.state_from", "relay.state_to", "sandbox.vm_id", "relay.actor"];
+const DETAIL_KEYS = ["relay.task_id", "relay.agent_id", "agent.profile", "agent.turns", "agent.cost_usd", "agent.billing", "agent.stop_reason", "agent.error_kind", "relay.parent_agent_id", "agent.status", "git.sha", "git.ref", "git.operation", "relay.state_from", "relay.state_to", "sandbox.vm_id", "relay.actor"];
 
 export function Waterfall({ trace, width, height, active, icons = "none", initialSel = 0 }: ViewProps & { trace: Trace | null; icons?: IconSet; initialSel?: number }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -78,7 +78,7 @@ function Detail({ row, traceStart, width }: { row: ReturnType<typeof waterfallRo
       <Text>
         <Text bold color={c.fg}>{s.name}</Text>
         {row.count > 1 ? <Text color={c.dim}>{`  ${row.count} calls · ${dur(row.durationMs)} busy · enter to unfold`}</Text> : null}
-        <Text color={row.errors ? c.err : c.ok}>{row.errors ? `  ✕ ${row.errors > 1 ? row.errors + " errors" : "error"}` : "  ✓ ok"}</Text>
+        <Text color={row.errors ? c.err : c.ok}>{row.errors ? `  ✗ ${row.errors > 1 ? row.errors + " errors" : "error"}` : "  ✓ ok"}</Text>
       </Text>
       <Text color={c.dim}>{`starts +${dur(row.start - traceStart)}  ·  lasts ${dur(row.end - row.start)}  ·  ${s.events.length} events  ·  span ${s.id}`}</Text>
       <Text color={c.dim} wrap="truncate">{kv.join("   ") || " "}</Text>

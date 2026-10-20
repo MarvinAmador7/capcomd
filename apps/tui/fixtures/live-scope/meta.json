@@ -1,0 +1,5 @@
+{
+  "runId": "run-kb8d01553ce44fc12",
+  "source": "real: scripted capcomd run via tests/scenarios/harness (scripts/capture-live.ts)",
+  "note": "inspect --follow stream recorded live, plus a final inspect snapshot"
+}

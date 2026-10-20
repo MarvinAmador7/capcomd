@@ -57,12 +57,12 @@ describe("events adapter", () => {
     expect(filterEvents(d.events, "problems").map((e) => e.type)).toEqual(["cli.error"]);
   });
   test("reads `events --json` pages and `--follow --json` lines", () => {
-    const page = JSON.stringify({ schema: "relay.v1", ok: true, runId: "r", events: [{ entity: "task-1", seq: 1, at: 5, type: "task.leased", event: { type: "task.leased", workerId: "w" } }] });
-    const follow = [JSON.stringify({ ok: true, runId: "r", event: { entity: "run", seq: 2, at: 9, type: "run.result", event: { type: "run.result", ok: true, state: "completed" } } }), JSON.stringify({ ok: true, end: { reason: "until" } })].join("\n");
+    const page = JSON.stringify({ schema: "relay.v1", ok: true, runId: "r", events: [{ entity: "task-1", seq: 1, entitySeq: 1, at: 5, epochMs: 5, ts: "1970-01-01T00:00:00.005Z", agentId: null, type: "task.leased", event: { type: "task.leased", workerId: "w" } }] });
+    const follow = [JSON.stringify({ ok: true, runId: "r", seq: 2, ts: "x", epochMs: 9, agentId: null, type: "run.result", event: { entity: "run", seq: 2, entitySeq: 4, at: 9, epochMs: 9, agentId: null, type: "run.result", event: { type: "run.result", ok: true, state: "completed" } } }), JSON.stringify({ ok: true, runId: "r", end: { stopped: "until" } })].join("\n");
     const evs = [...parseEvents(page), ...parseEvents(follow)];
     expect(evs).toEqual([
-      { at: 5, type: "task.leased", entity: "task-1", data: { workerId: "w" } },
-      { at: 9, type: "run.result", entity: "run", data: { ok: true, state: "completed" } },
+      { at: 5, type: "task.leased", entity: "task-1", data: { workerId: "w" }, seq: 1, entitySeq: 1, agentId: null },
+      { at: 9, type: "run.result", entity: "run", data: { ok: true, state: "completed" }, seq: 2, entitySeq: 4, agentId: null },
     ]);
   });
   test("filters by family and free text", () => {

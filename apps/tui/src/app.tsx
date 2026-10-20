@@ -27,16 +27,15 @@ export interface AppProps {
   initialTab?: TabKey;
   width?: number;
   height?: number;
-  /** Re-fetch for live runs; called every `pollMs`. */
-  reload?: () => Promise<RunData>;
-  pollMs?: number;
+  /** Live runs: subscribe to updates; returns an unsubscribe. */
+  subscribe?: (set: (d: RunData) => void) => () => void;
   replayT?: number;
   icons?: IconSet;
   waterfallSel?: number;
   eventsFamily?: Parameters<typeof Events>[0]["initialFamily"];
 }
 
-export function App({ data: initial, initialTab = "waterfall", width: w, height: h, reload, pollMs = 2000, replayT, eventsFamily, icons = "glyph", waterfallSel }: AppProps) {
+export function App({ data: initial, initialTab = "waterfall", width: w, height: h, subscribe, replayT, eventsFamily, icons = "glyph", waterfallSel }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [data, setData] = useState(initial);
@@ -45,13 +44,7 @@ export function App({ data: initial, initialTab = "waterfall", width: w, height:
   const width = w ?? Math.max(80, (stdout?.columns ?? 120) - 2);
   const height = h ?? Math.max(24, (stdout?.rows ?? 36) - 1);
 
-  useEffect(() => {
-    if (!reload) return;
-    let stop = false;
-    const tick = async () => { try { const d = await reload(); if (!stop) setData(d); } catch {} };
-    const id = setInterval(tick, pollMs);
-    return () => { stop = true; clearInterval(id); };
-  }, [reload, pollMs]);
+  useEffect(() => (subscribe ? subscribe(setData) : undefined), [subscribe]);
 
   useInput((input, key) => {
     if (typing) return;
@@ -66,7 +59,7 @@ export function App({ data: initial, initialTab = "waterfall", width: w, height:
   const body = height - 5;
   const vp = { width, height: body, active: !typing || tab === "events" };
   const { total } = rollupStats(data);
-  const state = data.state ?? (reload ? "running" : "finished");
+  const state = data.state ?? (subscribe ? "running" : "finished");
   const cur = TABS.find((t) => t.key === tab)!;
 
   return (
@@ -90,9 +83,9 @@ export function App({ data: initial, initialTab = "waterfall", width: w, height:
         </Box>
         <Text color={c.faint}>{"─".repeat(width - 2)}</Text>
         <Box flexDirection="column" height={body} overflow="hidden">
-          {tab === "live" && <Live data={data} {...vp} live={!!reload} />}
+          {tab === "live" && <Live data={data} {...vp} live={!!subscribe} />}
           {tab === "waterfall" && <Waterfall trace={data.trace} {...vp} icons={icons} initialSel={waterfallSel} />}
-          {tab === "timeline" && <Timeline trace={data.trace} events={data.events} {...vp} />}
+          {tab === "timeline" && <Timeline trace={data.trace} events={data.events} agents={data.agents} pending={data.pendingApprovals} {...vp} />}
           {tab === "rollups" && <Rollups data={data} {...vp} />}
           {tab === "events" && <Events events={data.events} {...vp} active onTyping={setTyping} initialFamily={eventsFamily} />}
           {tab === "replay" && <Replay data={data} {...vp} initialT={replayT} />}

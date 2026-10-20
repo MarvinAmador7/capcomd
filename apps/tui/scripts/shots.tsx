@@ -14,6 +14,10 @@ mkdirSync(out, { recursive: true });
 
 const shots: Array<[string, string, TabKey, Record<string, unknown>?]> = [
   ["1-live", "demo-3-tasks", "live"],
+  ["1b-live-real-subagents", "live-scope", "live"],
+  ["3c-timeline-real-subagents", "live-scope", "timeline"],
+  ["2c-waterfall-real-scope", "live-scope", "waterfall"],
+  ["5d-events-real-scope", "live-scope", "events"],
   ["2-waterfall", "demo-3-tasks", "waterfall"],
   ["2b-waterfall-real-timeout", "task-timeout", "waterfall"],
   ["3-timeline", "demo-3-tasks", "timeline"],
