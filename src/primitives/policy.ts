@@ -112,17 +112,69 @@ export interface SpawnCheck {
   runBudget: Budget;
   /** Bypass narrow-only spec checks (not limits or budget). */
   operator?: boolean;
+  /** ADR-017: children limits the PARENT grants this child at spawn time (narrow-only). */
+  grant?: Grant;
+}
+
+/** Fan-out a parent grants a child at spawn time. Each field may only narrow the ceiling
+ *  (the child's own profile, narrowed by everything above it); a wider value is refused. */
+export interface Grant { allowSpawn?: boolean; maxDepth?: number; maxChildren?: number; maxTotalDescendants?: number; allowedChildProfiles?: string[]; budgetShare?: number }
+export const GRANT_KEYS = ["allowSpawn", "maxDepth", "maxChildren", "maxTotalDescendants", "allowedChildProfiles", "budgetShare"] as const;
+
+export function parseGrant(raw: unknown): Grant {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("children grant must be an object");
+  const g: Grant = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(GRANT_KEYS as readonly string[]).includes(k)) throw new Error(`unknown children grant "${k}" (expected ${GRANT_KEYS.join(", ")})`);
+    if (k === "allowSpawn") g.allowSpawn = v === true || v === "true";
+    else if (k === "allowedChildProfiles") g.allowedChildProfiles = Array.isArray(v) ? v.map(String) : String(v).split(",").map((x) => x.trim()).filter(Boolean);
+    else {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) throw new Error(`children.${k} must be a non-negative number`);
+      if (k === "budgetShare" && (n <= 0 || n > 1)) throw new Error("children.budgetShare must be in (0, 1]");
+      (g as any)[k] = k === "budgetShare" ? n : Math.floor(n);
+    }
+  }
+  return g;
+}
+
+/** Apply a parent's grant to the ceiling. Returns the narrowed limits or the first widening. */
+export function applyGrant(ceiling: Limits, g: Grant | undefined): { ok: true; limits: Limits } | { ok: false; error: string } {
+  if (!g || !Object.keys(g).length) return { ok: true, limits: ceiling };
+  const L = { ...ceiling, allowedChildProfiles: [...ceiling.allowedChildProfiles] };
+  const over = (k: string, want: number | string, max: number | string | undefined) => `grant children.${k}=${want} exceeds the ceiling ${max ?? "(none: spawning not allowed)"}`;
+  if (g.allowSpawn === true && !ceiling.allowSpawn) return { ok: false, error: over("allowSpawn", "true", "false") };
+  if (g.allowSpawn === false) L.allowSpawn = false;
+  if (g.maxDepth !== undefined) { if (g.maxDepth > ceiling.maxDepth) return { ok: false, error: over("maxDepth", g.maxDepth, ceiling.maxDepth) }; L.maxDepth = g.maxDepth; }
+  for (const k of ["maxChildren", "maxTotalDescendants"] as const) {
+    const want = g[k]; if (want === undefined) continue;
+    if (!ceiling.allowSpawn) return { ok: false, error: over(k, want, undefined) };
+    if (ceiling[k] !== undefined && want > ceiling[k]!) return { ok: false, error: over(k, want, ceiling[k]) };
+    L[k] = want;
+  }
+  if (g.allowedChildProfiles) {
+    const extra = g.allowedChildProfiles.filter((p) => !ceiling.allowedChildProfiles.includes(p));
+    if (extra.length) return { ok: false, error: over("allowedChildProfiles", extra.join(","), `[${ceiling.allowedChildProfiles.join(",")}]`) };
+    L.allowedChildProfiles = [...g.allowedChildProfiles];
+  }
+  if (g.budgetShare !== undefined) { if (g.budgetShare > ceiling.budgetShare) return { ok: false, error: over("budgetShare", g.budgetShare, ceiling.budgetShare) }; L.budgetShare = g.budgetShare; }
+  if (L.maxDepth < 1 || !L.allowedChildProfiles.length || L.maxChildren === 0 || L.maxTotalDescendants === 0) L.allowSpawn = false;
+  if (!L.allowSpawn) L.maxDepth = 0;
+  return { ok: true, limits: L };
 }
 
 export type SpawnDecision =
   | { ok: true; budget: Budget; limits: Limits; depth: number }
-  | { ok: false; code: "children_limit" | "budget" | "widening" | "parent_terminal"; error: string };
+  | { ok: false; code: "children_limit" | "budget" | "widening" | "parent_terminal" | "backpressure"; error: string; retryable?: boolean };
 
 export function checkSpawn(x: SpawnCheck): SpawnDecision {
   const own = x.childSpec?.children;
   if (!x.parent) {
     const avail = available(x.runBudget, {}, x.siblings);
-    return carve(avail, 1, x.requested, () => ({ limits: rootLimits(own), depth: 0 }), "run");
+    const g = applyGrant(rootLimits(own), x.grant);
+    if (!g.ok) return { ok: false, code: "children_limit", error: g.error };
+    return carve(avail, 1, x.requested, () => ({ limits: g.limits, depth: 0 }), "run");
   }
   const p = x.parent;
   if (TERMINAL_AGENT.has(p.status)) return { ok: false, code: "parent_terminal", error: `parent ${p.agentId} is ${p.status}` };
@@ -133,7 +185,7 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
     return { ok: false, code: "children_limit", error: `profile ${x.childProfile ?? "(none)"} is not in ${p.agentId}'s children.allowedChildProfiles [${L.allowedChildProfiles.join(", ")}]` };
   const active = x.siblings.filter((s) => !TERMINAL_AGENT.has(s.status)).length;
   if (L.maxChildren !== undefined && active >= L.maxChildren)
-    return { ok: false, code: "children_limit", error: `children.maxChildren=${L.maxChildren} reached at ${p.agentId} (${active} active)` };
+    return { ok: false, code: "backpressure", retryable: true, error: `children.maxChildren=${L.maxChildren} reached at ${p.agentId} (${active} active); await or cancel a child, then retry` };
   for (let i = 0; i < x.ancestors.length; i++) {
     const a = x.ancestors[i]!;
     const max = a.limits.maxTotalDescendants;
@@ -145,7 +197,9 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
     if (w.length) return { ok: false, code: "widening", error: `child spec widens parent ${p.agentId}: ${w.join("; ")} (pass --operator to allow)` };
   }
   const avail = available(p.budget, p.spent, x.siblings);
-  return carve(avail, L.budgetShare, x.requested, () => ({ limits: childLimits(L, own), depth: p.depth + 1 }), p.agentId);
+  const g = applyGrant(childLimits(L, own), x.grant);
+  if (!g.ok) return { ok: false, code: "children_limit", error: `${g.error} (set by ${p.agentId}'s limits and the child profile)` };
+  return carve(avail, L.budgetShare, x.requested, () => ({ limits: g.limits, depth: p.depth + 1 }), p.agentId);
 }
 
 const fmt = (u: Unit, n: number) => (u === "usd" ? `$${n}` : `${n} ${u}`);

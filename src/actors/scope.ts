@@ -7,7 +7,7 @@ import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
-import { checkSpawn, TERMINAL_AGENT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
+import { checkSpawn, type Grant, TERMINAL_AGENT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
@@ -66,6 +66,8 @@ function rowToAgent(r: any) {
     updatedAt: Number(r.updated_at),
     driver: (r.driver as string | null) ?? null,
     driverUntil: Number(r.driver_until ?? 0),
+    heartbeatAt: Number(r.heartbeat_at ?? 0),
+    heartbeatNote: (r.heartbeat_note as string | null) ?? null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -88,6 +90,54 @@ async function addEvent(tx: any, type: string, agentId: string | null, data: Rec
     "INSERT INTO scope_events (seq, at, type, agent_id, data, idem_key) VALUES (?, ?, ?, ?, ?, ?)",
     seq, Date.now(), type, agentId, JSON.stringify(data), idemKey
   );
+}
+
+function findPath(edges: Map<string, string[]>, from: string, to: string, seen = new Set<string>()): string[] | null {
+  if (from === to) return [to];
+  if (seen.has(from)) return null;
+  seen.add(from);
+  for (const n of edges.get(from) ?? []) { const p = findPath(edges, n, to, seen); if (p) return [from, ...p]; }
+  return null;
+}
+
+/**
+ * A finished parent's live children are orphans (ADR-017). Policy from the parent's contract
+ * `orphans`: "reap" (default: cancel each orphan subtree) or "adopt" (re-parent to the nearest
+ * live ancestor, or the run's top level). Drivers see the cancel and tear the VMs down.
+ */
+async function reapOrphans(c: any, parent: ScopeAgent): Promise<{ reaped: string[]; adopted: string[] }> {
+  const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
+  const kids = all.filter((a) => a.parent === parent.agentId && !TERMINAL_AGENT.has(a.status));
+  const out = { reaped: [] as string[], adopted: [] as string[] };
+  if (!kids.length) return out;
+  const policy = parent.contract?.orphans === "adopt" ? "adopt" : "reap";
+  const byId = new Map(all.map((a) => [a.agentId, a]));
+  let heir: string | null = parent.parent;
+  while (heir && TERMINAL_AGENT.has(byId.get(heir)?.status ?? "done")) heir = byId.get(heir)?.parent ?? null;
+  const children = new Map<string, ScopeAgent[]>();
+  for (const a of all) if (a.parent) children.set(a.parent, [...(children.get(a.parent) ?? []), a]);
+  for (const k of kids) {
+    if (policy === "adopt") {
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("UPDATE agents_v2 SET parent = ?, updated_at = ? WHERE agent_id = ?", heir, Date.now(), k.agentId);
+        await addEvent(tx, "AGENT_ADOPTED", k.agentId, { from: parent.agentId, to: heir }, `adopt-${k.agentId}-${parent.agentId}`);
+      }, { name: "scopeAdopt" });
+      out.adopted.push(k.agentId);
+      continue;
+    }
+    const order: ScopeAgent[] = [];
+    const walk = (a: ScopeAgent) => { order.push(a); for (const g of children.get(a.agentId) ?? []) walk(g); };
+    walk(k);
+    for (const a of order) {
+      if (TERMINAL_AGENT.has(a.status)) continue;
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("UPDATE agents_v2 SET status = 'cancelled', driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')", Date.now(), a.agentId);
+        await addEvent(tx, "AGENT_REAPED", a.agentId, { orphanOf: parent.agentId, parentStatus: parent.status === "running" ? "finished" : parent.status }, `reap-${a.agentId}`);
+      }, { name: "scopeReap" });
+      out.reaped.push(a.agentId);
+    }
+  }
+  return out;
 }
 
 export const scopeActor = actor({
@@ -116,6 +166,13 @@ export const scopeActor = actor({
       await database.execute(`CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL, version INTEGER NOT NULL, writer TEXT, updated_at INTEGER NOT NULL)`);
       await addColumn(database, "board_tasks", "after_ids", "TEXT");
       await addColumn(database, "kv", "deleted", "INTEGER NOT NULL DEFAULT 0");
+      // ADR-017: agent heartbeats, await edges (deadlock detection), token revocation, mailbox, logs.
+      await addColumn(database, "agents_v2", "heartbeat_at", "INTEGER");
+      await addColumn(database, "agents_v2", "heartbeat_note", "TEXT");
+      await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS agent_logs (seq INTEGER PRIMARY KEY, agent_id TEXT NOT NULL, at INTEGER NOT NULL, stream TEXT NOT NULL, line TEXT NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS idem (idem_key TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`
         CREATE TABLE IF NOT EXISTS scope_events (
@@ -162,7 +219,7 @@ export const scopeActor = actor({
       params: {
         runId: string; agentId: string; key?: string; paramsHash: string; parent?: string | null;
         profile: string | null; ref: string | null; spec: Record<string, unknown> | null;
-        task: string; contract?: Record<string, unknown> | null; budget?: Budget; operator?: boolean;
+        task: string; contract?: Record<string, unknown> | null; budget?: Budget; operator?: boolean; grant?: Grant;
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -201,7 +258,7 @@ export const scopeActor = actor({
         const d = checkSpawn({
           parent: parent as AgentRow | null, ancestors: ancestors as AgentRow[], descendantCounts: ancestors.map((a) => countDesc(a.agentId)),
           siblings: siblings as AgentRow[], childProfile: params.profile, childSpec: (params.spec as unknown as AgentSpec) ?? null,
-          requested: params.budget, runBudget, operator: params.operator,
+          requested: params.budget, runBudget, operator: params.operator, grant: params.grant,
         });
         if (!d.ok) fail(d.code, d.error);
         if (!d.ok) return;
@@ -217,6 +274,7 @@ export const scopeActor = actor({
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
           agent: params.spec, task: params.task.slice(0, 500), key: params.key ?? null, operator: !!params.operator,
+          ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}),
         }, `spawn-${params.agentId}`);
         out = await get(params.agentId);
         created = true;
@@ -249,8 +307,96 @@ export const scopeActor = actor({
         await tx.execute("UPDATE agents_v2 SET status = ?, result = ?, spent = ?, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
           params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? {}), Date.now(), params.agentId);
         await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? {}, budget: a.budget }, `finish-${params.agentId}`);
+        await tx.execute("DELETE FROM awaits WHERE waiter = ?", params.agentId);
       }, { name: "scopeFinish" });
-      return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+      const orphans = await reapOrphans(c, { ...a, status: params.status });
+      return { changed: true, orphans, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+    },
+
+    /** Agent liveness (ADR-017): every in-VM call and every new log line counts; `note` is free text. */
+    async heartbeat(c, params: { agentId: string; note?: string }) {
+      await c.db.execute("UPDATE agents_v2 SET heartbeat_at = ?, heartbeat_note = COALESCE(?, heartbeat_note) WHERE agent_id = ?", Date.now(), params.note?.slice(0, 200) ?? null, params.agentId);
+      return { ok: true };
+    },
+
+    /**
+     * Register that `waiter` is blocked on `targets`. Refuses (code deadlock) when a target is
+     * (transitively) waiting on the waiter, or is the waiter's ancestor: neither can ever finish.
+     */
+    async awaitBegin(c, params: { waiter: string; targets: string[] }) {
+      const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
+      const byId = new Map(all.map((a) => [a.agentId, a]));
+      const live = (id: string) => { const a = byId.get(id); return !!a && !TERMINAL_AGENT.has(a.status); };
+      for (let p = byId.get(params.waiter)?.parent; p; p = byId.get(p)?.parent ?? null)
+        if (params.targets.includes(p) && live(p)) fail("deadlock", `deadlock: ${params.waiter} awaits its ancestor ${p}, which cannot finish before its descendants`);
+      const edges = new Map<string, string[]>();
+      for (const r of (await c.db.execute("SELECT waiter, target FROM awaits")) as any[]) {
+        if (!live(r.waiter) || r.waiter === params.waiter) continue;
+        edges.set(r.waiter, [...(edges.get(r.waiter) ?? []), r.target]);
+      }
+      // Path target → … → waiter means the new edges close a cycle.
+      for (const t of params.targets) {
+        if (!live(t)) continue;
+        const path = findPath(edges, t, params.waiter);
+        if (path) {
+          await c.db.transaction(async (tx: RawAccess) => { await addEvent(tx, "DEADLOCK_DETECTED", params.waiter, { cycle: [params.waiter, ...path] }, `deadlock-${params.waiter}-${t}-${Date.now()}`); }, { name: "scopeDeadlock" });
+          fail("deadlock", `deadlock: await cycle ${[params.waiter, ...path].join(" → ")}`);
+        }
+      }
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("DELETE FROM awaits WHERE waiter = ?", params.waiter);
+        for (const t of params.targets) await tx.execute("INSERT OR REPLACE INTO awaits (waiter, target, since) VALUES (?, ?, ?)", params.waiter, t, Date.now());
+      }, { name: "scopeAwaitBegin" });
+      return { ok: true };
+    },
+    async awaitEnd(c, params: { waiter: string }) {
+      await c.db.execute("DELETE FROM awaits WHERE waiter = ?", params.waiter);
+      return { ok: true };
+    },
+    async listAwaits(c, _p: Record<string, never>) {
+      return ((await c.db.execute("SELECT waiter, target, since FROM awaits ORDER BY since")) as any[]).map((r) => ({ waiter: r.waiter as string, target: r.target as string, since: Number(r.since) }));
+    },
+
+    async revokeToken(c, params: { jti: string; reason?: string }) {
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("INSERT OR IGNORE INTO revoked (jti, reason, at) VALUES (?, ?, ?)", params.jti, params.reason ?? null, Date.now());
+        await addEvent(tx, "TOKEN_REVOKED", null, { jti: params.jti, reason: params.reason ?? null }, `revoke-${params.jti}`);
+      }, { name: "scopeRevoke" });
+      return { revoked: true };
+    },
+    async isRevoked(c, params: { jti: string }) {
+      return { revoked: (await c.db.execute("SELECT 1 FROM revoked WHERE jti = ?", params.jti)).length > 0 };
+    },
+
+    /** Mailbox: `send` appends (idempotent by key); `inbox` reads messages after a cursor. */
+    async send(c, params: { to: string; from: string; body: string; key?: string }) {
+      if (params.key) { const r = await c.db.execute("SELECT seq FROM messages WHERE idem_key = ?", params.key); if (r.length) return { seq: Number(r[0]!.seq), replayed: true }; }
+      let seq = 0;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const m = await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM messages");
+        seq = Number(m[0]!.m) + 1;
+        await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key) VALUES (?, ?, ?, ?, ?, ?)", seq, params.to, params.from, params.body, Date.now(), params.key ?? null);
+        await addEvent(tx, "MESSAGE_SENT", params.from, { to: params.to, seq, bytes: params.body.length }, `msg-${seq}`);
+      }, { name: "scopeSend" });
+      return { seq };
+    },
+    async inbox(c, params: { agentId: string; after?: number }) {
+      return ((await c.db.execute("SELECT * FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, params.after ?? 0)) as any[])
+        .map((r) => ({ seq: Number(r.seq), from: r.from_agent as string, body: r.body as string, at: Number(r.at) }));
+    },
+
+    async appendLog(c, params: { agentId: string; stream: string; lines: string[] }) {
+      if (!params.lines.length) return { ok: true };
+      await c.db.transaction(async (tx: RawAccess) => {
+        const now = Date.now();
+        for (const l of params.lines) await tx.execute("INSERT INTO agent_logs (agent_id, at, stream, line) VALUES (?, ?, ?, ?)", params.agentId, now, params.stream, l.slice(0, 4000));
+        await tx.execute("UPDATE agents_v2 SET heartbeat_at = ? WHERE agent_id = ?", now, params.agentId);
+      }, { name: "scopeLog" });
+      return { ok: true };
+    },
+    async getLogs(c, params: { agentId: string; tail?: number }) {
+      const rows = (await c.db.execute("SELECT * FROM (SELECT * FROM agent_logs WHERE agent_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq", params.agentId, params.tail ?? 200)) as any[];
+      return rows.map((r) => ({ seq: Number(r.seq), at: Number(r.at), stream: r.stream as string, line: r.line as string }));
     },
 
     /**

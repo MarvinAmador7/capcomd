@@ -74,3 +74,29 @@ test("multi-unit budgets: per-unit carve/refund, unlimited units, caps narrow th
   expect(budgetCaps({ maxTurns: 20, timeoutMs: 600_000 }, { turns: 12, wallSeconds: 900, usd: 1 })).toEqual({ maxTurns: 12, maxBudgetUsd: 1 });
   expect(budgetCaps({ maxTurns: 5 }, { turns: 12 })).toEqual({});
 });
+
+// ADR-017: the parent sets the child's fan-out at spawn time; it may only narrow the ceiling.
+import { applyGrant, parseGrant } from "../../src/primitives/policy";
+test("grants: parent narrows child fan-out; above the ceiling is refused, not clamped", () => {
+  const ceiling = { allowSpawn: true, maxDepth: 2, maxChildren: 4, maxTotalDescendants: 8, allowedChildProfiles: ["coder", "sup"], budgetShare: 0.5 };
+  const g = applyGrant(ceiling, parseGrant({ maxChildren: "2", maxDepth: 1, allowedChildProfiles: "coder" }));
+  expect(g).toMatchObject({ ok: true, limits: { maxChildren: 2, maxDepth: 1, allowedChildProfiles: ["coder"], maxTotalDescendants: 8 } });
+  expect(applyGrant(ceiling, { maxChildren: 5 })).toMatchObject({ ok: false, error: expect.stringContaining("children.maxChildren=5 exceeds the ceiling 4") });
+  expect(applyGrant(ceiling, { maxDepth: 3 })).toMatchObject({ ok: false });
+  expect(applyGrant(ceiling, { allowedChildProfiles: ["admin"] })).toMatchObject({ ok: false, error: expect.stringContaining("admin") });
+  expect(applyGrant(ceiling, { budgetShare: 0.9 })).toMatchObject({ ok: false });
+  const none = { ...ceiling, allowSpawn: false, maxDepth: 0, allowedChildProfiles: [] };
+  expect(applyGrant(none, { allowSpawn: true })).toMatchObject({ ok: false });
+  expect(applyGrant(none, { maxChildren: 1 })).toMatchObject({ ok: false });
+  expect(applyGrant(ceiling, { maxChildren: 0 })).toMatchObject({ ok: true, limits: { allowSpawn: false, maxDepth: 0 } });
+  expect(() => parseGrant({ maxKids: 1 })).toThrow(/unknown children grant/);
+});
+
+test("maxChildren saturation is backpressure (retryable), not a hard refusal", () => {
+  const r = checkSpawn({
+    parent: row("sup-a", sup, { budget: { usd: 4 } }), ancestors: [row("sup-a", sup, { budget: { usd: 4 } })], descendantCounts: [2],
+    siblings: [row("c1", coder, { parent: "sup-a", budget: { usd: 1 } }), row("c2", coder, { parent: "sup-a", budget: { usd: 1 } })],
+    childProfile: "coder", childSpec: coder, runBudget: {},
+  });
+  expect(r).toMatchObject({ ok: false, code: "backpressure", retryable: true });
+});
