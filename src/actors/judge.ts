@@ -5,6 +5,11 @@ import { db } from "rivetkit/db";
 import { setupLifecycleTables } from "../utils/lifecycle";
 import { getDependencies } from "../dependencies";
 
+/** The hard rule ahead of any judge model: nothing merged fails the run, unless the contract says no-op. */
+export function zeroMergedVerdict(completedTasks: string[], noop?: boolean): { passed: false; feedback: string } | null {
+  return completedTasks.length === 0 && !noop ? { passed: false, feedback: "No tasks merged; a run must land at least one task unless its goal is tagged [noop]" } : null;
+}
+
 export const judgeActor = actor({
   db: db({
     onMigrate: async (database) => {
@@ -20,12 +25,17 @@ export const judgeActor = actor({
         runId: string;
         goal: string;
         completedTasks: string[];
+        /** The contract marks the run a no-op: landing nothing is acceptable. */
+        noop?: boolean;
       }
     ) {
       const { judgeId, runId, goal, completedTasks } = params;
       const { model } = getDependencies();
 
-      const response = await model.generate([
+      // Hard rule ahead of any model (fake or real): a run that merged nothing failed,
+      // unless its contract says it is a no-op.
+      const forced = zeroMergedVerdict(completedTasks, params.noop);
+      const response = forced ? { content: JSON.stringify(forced), cost: 0 } : await model.generate([
         {
           role: "system",
           content:

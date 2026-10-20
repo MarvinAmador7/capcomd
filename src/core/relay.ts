@@ -382,7 +382,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
             feedback: existingJudge.context.feedback ?? "Goal achieved",
             cost: existingJudge.context.cost ?? 0,
           }
-        : await judgeHandle.judge({ judgeId, runId, goal: opts.goal, completedTasks: tasks });
+        : await judgeHandle.judge({ judgeId, runId, goal: opts.goal, completedTasks: await mergedTaskIds(c, runId, tasks), noop: isNoopGoal(opts.goal) });
 
       await runHandle.chargeBudget({ runId, chargeId: `${runId}-judge`, amount: judgeResult.cost });
 
@@ -424,6 +424,19 @@ export interface RunStatus {
   tasks: Array<{ taskId: string; state: string; targetBranch: string | null }>;
   awaitingApproval: string[];
   events: number;
+}
+
+/** Tasks that actually landed (merged on the board). The judge sees only these. */
+export async function mergedTaskIds(c: ReturnType<typeof client>, runId: string, ids: string[]): Promise<string[]> {
+  const board = c.taskBoard.getOrCreate([runId]);
+  const out: string[] = [];
+  for (const taskId of ids) if ((await board.getTask({ taskId }))?.state === "merged") out.push(taskId);
+  return out;
+}
+
+/** A goal tagged `[noop]` declares that landing nothing is a valid outcome (judge then may pass with 0 merged). */
+export function isNoopGoal(goal: string): boolean {
+  return /\[noop\]/i.test(goal);
 }
 
 export async function getStatus(runId: string): Promise<RunStatus> {
