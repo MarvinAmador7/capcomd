@@ -14,7 +14,7 @@ const call = async (name: string, args: Record<string, unknown>) => {
 beforeAll(async () => {
   engine = await ensureEngine("mcp");
   mcp = new Client({ name: "hermes-test", version: "0.0.1" });
-  await mcp.connect(new StdioClientTransport({ command: "bun", args: [CLI, "mcp"], cwd: REPO, stderr: "ignore" }));
+  await mcp.connect(new StdioClientTransport({ command: "bun", args: [CLI, "mcp"], cwd: REPO, stderr: "ignore", env: { ...process.env } as Record<string, string> }));
 }, 120_000);
 
 afterAll(async () => {

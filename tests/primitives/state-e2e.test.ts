@@ -7,11 +7,11 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { spawn } from "child_process";
 import { Engine } from "../chaos/engine";
-import { capcomd } from "../helpers/engine";
+import { capcomd, testPort } from "../helpers/engine";
 import { primitivesAgentsFile } from "./helpers";
 import { stableId } from "../../src/primitives/policy";
 
-const PORT = 7681;
+let PORT = 0;
 let engine: Engine;
 let env: Record<string, string>;
 const saved = { ...process.env };
@@ -20,6 +20,7 @@ const ROOT = new URL("../..", import.meta.url).pathname;
 beforeAll(async () => {
   env = { CAPCOMD_AGENTS_FILE: primitivesAgentsFile(), CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_SKIP_PREFLIGHT: "1" };
   Object.assign(process.env, env);
+  PORT = await testPort();
   engine = new Engine("primitives-state-e2e", { port: PORT, dataDir: mkdtempSync(join(tmpdir(), "capcomd-state-eng-")) });
   await engine.start(null);
   env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${PORT}`;

@@ -4,13 +4,14 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../chaos/engine";
-import { capcomd } from "../helpers/engine";
+import { capcomd, testPort } from "../helpers/engine";
 
-const PORT = 7660;
+let PORT = 0;
 let engine: Engine;
 const saved = process.env.CAPCOMD_FAKE_ENSURE_ERROR;
 beforeAll(async () => {
   process.env.CAPCOMD_FAKE_ENSURE_ERROR = "auth";
+  PORT = await testPort();
   engine = new Engine("auth-fail", { port: PORT, dataDir: mkdtempSync(join(tmpdir(), "capcomd-authfail-")) });
   await engine.start(null);
 }, 120_000);

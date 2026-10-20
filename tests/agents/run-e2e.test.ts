@@ -5,11 +5,11 @@ import { mkdtempSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../chaos/engine";
-import { capcomd } from "../helpers/engine";
+import { capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 
 const KEY = "sk-ant-api03-E2EKEY-abcdefghijklmnopqrstuvwxyz0123456789";
-const PORT = 7640;
+let PORT = 0;
 let engine: Engine;
 let r: Awaited<ReturnType<typeof bareRepo>>;
 let env: Record<string, string>;
@@ -30,6 +30,7 @@ beforeAll(async () => {
     CAPCOMD_ENV: "image",
   };
   Object.assign(process.env, env); // the engine (actors) inherits process.env
+  PORT = await testPort();
   engine = new Engine("agent-e2e", { port: PORT, dataDir: mkdtempSync(join(tmpdir(), "capcomd-agent-eng-")) });
   await engine.start(null);
 }, 120_000);

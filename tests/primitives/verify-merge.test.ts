@@ -5,12 +5,12 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../chaos/engine";
-import { capcomd } from "../helpers/engine";
+import { capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 import { Git } from "../../src/merge/git";
 import { primitivesAgentsFile } from "./helpers";
 
-const PORT = 7671;
+let PORT = 0;
 let engine: Engine;
 let env: Record<string, string>;
 let r: Awaited<ReturnType<typeof bareRepo>>;
@@ -21,6 +21,7 @@ beforeAll(async () => {
   await r.seed.ok(["push", "-q", "origin", "main:trunk"]);
   env = { ...r.env, CAPCOMD_AGENTS_FILE: primitivesAgentsFile(), CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_AWAIT_POLL_MS: "100", CAPCOMD_DRIVER_LEASE_MS: "3000", CAPCOMD_SKIP_PREFLIGHT: "1" };
   Object.assign(process.env, env);
+  PORT = await testPort();
   engine = new Engine("primitives-vm", { port: PORT, dataDir: mkdtempSync(join(tmpdir(), "capcomd-prim-vm-")) });
   await engine.start(null);
   env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${PORT}`;
