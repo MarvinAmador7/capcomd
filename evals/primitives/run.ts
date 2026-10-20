@@ -27,28 +27,28 @@ async function run(name: string, fn: () => Promise<string | void>) {
 const tag = Date.now().toString(36);
 
 await run("single-loop", async () => {
-  const { runId } = await P.runNew({ budgetUsd: 2, key: `single-${tag}` });
+  const { runId } = await P.runNew({ budget: { usd: 2 }, key: `single-${tag}` });
   const a = await P.spawnAgent({ runId, profile: "coder", task: "fix", key: "a" });
   const r: any = await P.awaitAgents(runId, [a.agentId], { timeoutMs: 60_000 });
   if (r.agents[0].status !== "done") return `status ${r.agents[0].status}`;
 });
 await run("fan-out-4/fan-in", async () => {
-  const { runId } = await P.runNew({ budgetUsd: 4, key: `fan-${tag}` });
+  const { runId } = await P.runNew({ budget: { usd: 4 }, key: `fan-${tag}` });
   const ids = [];
-  for (let i = 0; i < 4; i++) ids.push((await P.spawnAgent({ runId, profile: "coder", task: `part ${i}`, key: `p${i}`, budgetUsd: 1, start: false })).agentId);
+  for (let i = 0; i < 4; i++) ids.push((await P.spawnAgent({ runId, profile: "coder", task: `part ${i}`, key: `p${i}`, budget: { usd: 1 }, start: false })).agentId);
   // all $4 held by active agents: a 5th is rejected; finished agents release what they didn't spend
-  const over = await P.spawnAgent({ runId, profile: "coder", task: "x", key: "over", budgetUsd: 1, start: false }).then(() => "accepted", (e) => (/exceeds|no budget/.test(String(e.message)) ? null : String(e.message)));
+  const over = await P.spawnAgent({ runId, profile: "coder", task: "x", key: "over", budget: { usd: 1 }, start: false }).then(() => "accepted", (e) => (/exceeds|no budget/.test(String(e.message)) ? null : String(e.message)));
   if (over) return `5th spawn while $4 held: ${over}`;
   const r: any = await P.awaitAgents(runId, ids, { timeoutMs: 90_000 });
   const bad = r.agents.filter((a: any) => a.status !== "done");
   if (bad.length) return `${bad.length} not done`;
-  const after = await P.spawnAgent({ runId, profile: "coder", task: "x", key: "after", budgetUsd: 1, start: false }).then(() => null, (e) => String(e.message));
+  const after = await P.spawnAgent({ runId, profile: "coder", task: "x", key: "after", budget: { usd: 1 }, start: false }).then(() => null, (e) => String(e.message));
   if (after) return `spawn after release rejected: ${after}`;
 });
 await run("best-of-3 + cancel rest", async () => {
-  const { runId } = await P.runNew({ budgetUsd: 3, key: `best-${tag}` });
+  const { runId } = await P.runNew({ budget: { usd: 3 }, key: `best-${tag}` });
   const ids = [];
-  for (let i = 0; i < 3; i++) ids.push((await P.spawnAgent({ runId, profile: "coder", task: "same", key: `n${i}`, budgetUsd: 1, start: i === 0 })).agentId);
+  for (let i = 0; i < 3; i++) ids.push((await P.spawnAgent({ runId, profile: "coder", task: "same", key: `n${i}`, budget: { usd: 1 }, start: i === 0 })).agentId);
   const r: any = await P.awaitAgents(runId, ids, { timeoutMs: 60_000, any: true });
   if (r.first?.status !== "done") return `first ${r.first?.status}`;
   const rest = ids.filter((i) => i !== r.first.agentId);
@@ -58,18 +58,18 @@ await run("best-of-3 + cancel rest", async () => {
   if (!ok) return "losers not terminal";
 });
 await run("nested supervisor + cancel propagation", async () => {
-  const { runId } = await P.runNew({ budgetUsd: 8, key: `nest-${tag}` });
-  const root = await P.spawnAgent({ runId, profile: "sup", task: "plan", key: "root", budgetUsd: 8, start: false });
+  const { runId } = await P.runNew({ budget: { usd: 8 }, key: `nest-${tag}` });
+  const root = await P.spawnAgent({ runId, profile: "sup", task: "plan", key: "root", budget: { usd: 8 }, start: false });
   const mid = await P.spawnAgent({ runId, parent: root.agentId, profile: "sup", task: "sub", key: "mid", start: false });
   const leaf = await P.spawnAgent({ runId, parent: mid.agentId, profile: "coder", task: "leaf", key: "leaf", start: false });
-  if (mid.budgetUsd !== 4 || leaf.budgetUsd !== 2) return `carve ${mid.budgetUsd}/${leaf.budgetUsd}`;
+  if (mid.budget.usd !== 4 || leaf.budget.usd !== 2) return `carve ${mid.budget.usd}/${leaf.budget.usd}`;
   const deep = await P.spawnAgent({ runId, parent: leaf.agentId, profile: "coder", task: "too deep", start: false }).then(() => "accepted", () => null);
   if (deep) return "depth limit not enforced";
   const c = await P.cancelAgents(runId, root.agentId);
   if (c.cancelled.length !== 3) return `cancelled ${c.cancelled.length}/3`;
 });
 await run("idempotent spawn ×5", async () => {
-  const { runId } = await P.runNew({ budgetUsd: 1, key: `idem-${tag}` });
+  const { runId } = await P.runNew({ budget: { usd: 1 }, key: `idem-${tag}` });
   const xs = await Promise.all(Array.from({ length: 5 }, () => P.spawnAgent({ runId, profile: "coder", task: "t", key: "same", start: false })));
   if (new Set(xs.map((x) => x.agentId)).size !== 1) return "different ids";
   if (xs.filter((x) => x.created).length !== 1) return `created ×${xs.filter((x) => x.created).length}`;

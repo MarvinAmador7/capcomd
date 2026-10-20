@@ -17,6 +17,29 @@ export interface Limits {
   budgetShare: number;         // of remaining budget per child
 }
 
+/** Budget units. A unit a parent doesn't set is unlimited for its children. */
+export const UNITS = ["usd", "turns", "wallSeconds"] as const;
+export type Unit = (typeof UNITS)[number];
+export type Budget = Partial<Record<Unit, number>>;
+
+export function parseBudget(raw: unknown): Budget {
+  if (raw === undefined || raw === null || raw === "") return {};
+  if (typeof raw === "number") return { usd: raw };
+  if (typeof raw === "object") {
+    const b: Budget = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (!(UNITS as readonly string[]).includes(k)) throw new Error(`unknown budget unit "${k}" (expected ${UNITS.join(", ")})`);
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) throw new Error(`budget ${k} must be a positive number`);
+      b[k as Unit] = n;
+    }
+    return b;
+  }
+  const str = String(raw).trim();
+  if (/^[0-9.]+$/.test(str)) return parseBudget(Number(str));
+  return parseBudget(Object.fromEntries(str.split(",").map((kv) => { const [k, v] = kv.split("="); return [k!.trim(), v]; })));
+}
+
 export interface AgentRow {
   agentId: string;
   parent: string | null;
@@ -25,8 +48,8 @@ export interface AgentRow {
   spec: AgentSpec | null;
   limits: Limits;
   status: AgentStatus;
-  budgetUsd: number;
-  spentUsd: number;
+  budget: Budget;
+  spent: Budget;
 }
 
 const minDef = (a: number | undefined, b: number | undefined) => (a === undefined ? b : b === undefined ? a : Math.min(a, b));
@@ -59,10 +82,17 @@ export function childLimits(parent: Limits, own: ChildrenSpec | undefined): Limi
   };
 }
 
-/** Budget a parent still controls: its allocation minus its own spend minus what its children hold. */
-export function available(budget: number, spent: number, children: Array<Pick<AgentRow, "status" | "budgetUsd" | "spentUsd">>): number {
-  const held = children.reduce((a, c) => a + (TERMINAL_AGENT.has(c.status) ? c.spentUsd : c.budgetUsd), 0);
-  return Math.max(0, round(budget - spent - held));
+/** Per unit, what a parent still controls: its allocation − its own spend − what children hold
+ *  (a live child holds its allocation; a finished one only what it spent). Units the parent
+ *  doesn't limit are absent (unlimited). */
+export function available(budget: Budget, spent: Budget, children: Array<Pick<AgentRow, "status" | "budget" | "spent">>): Budget {
+  const out: Budget = {};
+  for (const u of UNITS) {
+    if (budget[u] === undefined) continue;
+    const held = children.reduce((a, c) => a + ((TERMINAL_AGENT.has(c.status) ? c.spent[u] : c.budget[u] ?? c.spent[u]) ?? 0), 0);
+    out[u] = Math.max(0, round(budget[u]! - (spent[u] ?? 0) - held));
+  }
+  return out;
 }
 const round = (x: number) => Math.round(x * 1e6) / 1e6;
 
@@ -77,22 +107,22 @@ export interface SpawnCheck {
   siblings: AgentRow[];
   childProfile: string | null;
   childSpec: AgentSpec | null;
-  requestedBudgetUsd?: number;
+  requested?: Budget;
   /** Run budget, used when the parent is the operator. */
-  runBudgetUsd: number;
+  runBudget: Budget;
   /** Bypass narrow-only spec checks (not limits or budget). */
   operator?: boolean;
 }
 
 export type SpawnDecision =
-  | { ok: true; budgetUsd: number; limits: Limits; depth: number }
+  | { ok: true; budget: Budget; limits: Limits; depth: number }
   | { ok: false; code: "children_limit" | "budget" | "widening" | "parent_terminal"; error: string };
 
 export function checkSpawn(x: SpawnCheck): SpawnDecision {
   const own = x.childSpec?.children;
   if (!x.parent) {
-    const avail = available(x.runBudgetUsd, 0, x.siblings);
-    return carve(avail, 1, x.requestedBudgetUsd, () => ({ limits: rootLimits(own), depth: 0 }), "run");
+    const avail = available(x.runBudget, {}, x.siblings);
+    return carve(avail, 1, x.requested, () => ({ limits: rootLimits(own), depth: 0 }), "run");
   }
   const p = x.parent;
   if (TERMINAL_AGENT.has(p.status)) return { ok: false, code: "parent_terminal", error: `parent ${p.agentId} is ${p.status}` };
@@ -114,21 +144,37 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
     const w = widenings(p.spec, x.childSpec).filter((s) => !s.startsWith("provider ") && !s.startsWith("auth "));
     if (w.length) return { ok: false, code: "widening", error: `child spec widens parent ${p.agentId}: ${w.join("; ")} (pass --operator to allow)` };
   }
-  const avail = available(p.budgetUsd, p.spentUsd, x.siblings);
-  return carve(avail, L.budgetShare, x.requestedBudgetUsd, () => ({ limits: childLimits(L, own), depth: p.depth + 1 }), p.agentId);
+  const avail = available(p.budget, p.spent, x.siblings);
+  return carve(avail, L.budgetShare, x.requested, () => ({ limits: childLimits(L, own), depth: p.depth + 1 }), p.agentId);
 }
 
-function carve(avail: number, share: number, requested: number | undefined, rest: () => { limits: Limits; depth: number }, from: string): SpawnDecision {
-  const cap = round(avail * share);
-  if (requested !== undefined && requested > cap)
-    return { ok: false, code: "budget", error: `requested budget $${requested} exceeds $${cap} available from ${from} (remaining $${avail} × budgetShare ${share})` };
-  const budgetUsd = requested ?? cap;
-  if (budgetUsd <= 0) return { ok: false, code: "budget", error: `no budget left in ${from}` };
-  return { ok: true, budgetUsd, ...rest() };
+const fmt = (u: Unit, n: number) => (u === "usd" ? `$${n}` : `${n} ${u}`);
+function carve(avail: Budget, share: number, requested: Budget | undefined, rest: () => { limits: Limits; depth: number }, from: string): SpawnDecision {
+  const budget: Budget = {};
+  for (const u of UNITS) {
+    const req = requested?.[u];
+    if (avail[u] === undefined) { if (req !== undefined) budget[u] = req; continue; }
+    const cap = u === "turns" ? Math.floor(avail[u]! * share) : round(avail[u]! * share);
+    if (req !== undefined && req > cap)
+      return { ok: false, code: "budget", error: `requested ${fmt(u, req)} exceeds ${fmt(u, cap)} available from ${from} (remaining ${fmt(u, avail[u]!)} × budgetShare ${share})` };
+    budget[u] = req ?? cap;
+    if (budget[u]! <= 0) return { ok: false, code: "budget", error: `no ${u} budget left in ${from}` };
+  }
+  return { ok: true, budget, ...rest() };
+}
+
+/** Effective agent limits from a carved budget: the profile's own limits, narrowed. */
+export function budgetCaps(spec: { maxTurns?: number; timeoutMs?: number; maxBudgetUsd?: number } | null, b: Budget): Record<string, number> {
+  const out: Record<string, number> = {};
+  const min = (a: number | undefined, c: number | undefined) => (a === undefined ? c : c === undefined ? a : Math.min(a, c));
+  const t = min(spec?.maxTurns, b.turns); if (t !== undefined && t !== spec?.maxTurns) out.maxTurns = Math.max(1, Math.floor(t));
+  const w = min(spec?.timeoutMs, b.wallSeconds === undefined ? undefined : b.wallSeconds * 1000); if (w !== undefined && w !== spec?.timeoutMs) out.timeoutMs = Math.max(1000, Math.floor(w));
+  const d = min(spec?.maxBudgetUsd, b.usd); if (d !== undefined && d !== spec?.maxBudgetUsd) out.maxBudgetUsd = d;
+  return out;
 }
 
 /** Stable IDs: a caller key always maps to the same ID; without a key the ID is random. */
-export function stableId(prefix: "run" | "agt", scope: string, key?: string): string {
+export function stableId(prefix: "run" | "agt" | "vfy" | "mrg", scope: string, key?: string): string {
   if (!key) return `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   return `${prefix}-k${createHash("sha256").update(`${scope}\0${key}`).digest("hex").slice(0, 16)}`;
 }

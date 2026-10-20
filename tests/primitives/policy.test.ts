@@ -4,17 +4,17 @@ import type { AgentSpec } from "../../src/agents/profiles";
 
 const sup: AgentSpec = { provider: "claude", auth: "subscription", maxTurns: 40, children: { allowSpawn: true, maxDepth: 2, maxChildren: 2, maxTotalDescendants: 3, allowedChildProfiles: ["coder", "sup"], budgetShare: 0.5 } } as AgentSpec;
 const coder: AgentSpec = { provider: "claude", auth: "subscription", maxTurns: 20 } as AgentSpec;
-const row = (id: string, spec: AgentSpec, o: Partial<AgentRow> = {}): AgentRow => ({ agentId: id, parent: null, depth: 0, profile: id.split("-")[0]!, spec, limits: rootLimits(spec.children), status: "running", budgetUsd: 4, spentUsd: 0, ...o });
-const base = { ancestors: [] as AgentRow[], descendantCounts: [] as number[], siblings: [] as AgentRow[], runBudgetUsd: 10 };
+const row = (id: string, spec: AgentSpec, o: Partial<AgentRow> = {}): AgentRow => ({ agentId: id, parent: null, depth: 0, profile: id.split("-")[0]!, spec, limits: rootLimits(spec.children), status: "running", budget: { usd: 4 }, spent: {}, ...o });
+const base = { ancestors: [] as AgentRow[], descendantCounts: [] as number[], siblings: [] as AgentRow[], runBudget: { usd: 10 } };
 
 test("operator spawn carves from the run budget; explicit budget above it is rejected", () => {
   const d = checkSpawn({ ...base, parent: null, childProfile: "sup", childSpec: sup });
-  expect(d).toMatchObject({ ok: true, budgetUsd: 10, depth: 0 });
-  const held = [row("sup-a", sup, { budgetUsd: 7 })];
-  expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: coder, requestedBudgetUsd: 4 })).toMatchObject({ ok: false, code: "budget" });
-  expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budgetUsd: 3 });
+  expect(d).toMatchObject({ ok: true, budget: { usd: 10 }, depth: 0 });
+  const held = [row("sup-a", sup, { budget: { usd: 7 } })];
+  expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: coder, requested: { usd: 4 } })).toMatchObject({ ok: false, code: "budget" });
+  expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { usd: 3 } });
   // a finished sibling only holds what it spent
-  expect(available(10, 0, [{ status: "done", budgetUsd: 7, spentUsd: 1 }])).toBe(9);
+  expect(available({ usd: 10 }, {}, [{ status: "done", budget: { usd: 7 }, spent: { usd: 1 } }])).toEqual({ usd: 9 });
 });
 
 test("children limits: allowSpawn, allowedChildProfiles, maxChildren, maxTotalDescendants, depth", () => {
@@ -24,9 +24,9 @@ test("children limits: allowSpawn, allowedChildProfiles, maxChildren, maxTotalDe
   const at = (siblings: AgentRow[] = [], desc = 0, profile = "coder", spec = coder) => checkSpawn({ ...base, parent: p, ancestors: [p], descendantCounts: [desc], siblings, childProfile: profile, childSpec: spec });
   expect(at([], 0, "critic")).toMatchObject({ ok: false, code: "children_limit" });
   const ok = at();
-  expect(ok).toMatchObject({ ok: true, budgetUsd: 2, depth: 1 }); // 4 × budgetShare 0.5
-  expect(at([row("coder-b", coder, { parent: "sup-a", budgetUsd: 1 }), row("coder-c", coder, { parent: "sup-a", budgetUsd: 1 })])).toMatchObject({ ok: false, error: expect.stringContaining("maxChildren=2") });
-  expect(at([row("coder-b", coder, { status: "done", parent: "sup-a", budgetUsd: 1, spentUsd: 1 })], 3)).toMatchObject({ ok: false, error: expect.stringContaining("maxTotalDescendants=3") });
+  expect(ok).toMatchObject({ ok: true, budget: { usd: 2 }, depth: 1 }); // 4 × budgetShare 0.5
+  expect(at([row("coder-b", coder, { parent: "sup-a", budget: { usd: 1 } }), row("coder-c", coder, { parent: "sup-a", budget: { usd: 1 } })])).toMatchObject({ ok: false, error: expect.stringContaining("maxChildren=2") });
+  expect(at([row("coder-b", coder, { status: "done", parent: "sup-a", budget: { usd: 1 }, spent: { usd: 1 } })], 3)).toMatchObject({ ok: false, error: expect.stringContaining("maxTotalDescendants=3") });
   // nested supervisor gets narrowed limits: depth 2→1, descendants 3→2, allowed ∩
   const child = childLimits(p.limits, sup.children);
   expect(child).toMatchObject({ allowSpawn: true, maxDepth: 1, maxTotalDescendants: 2, maxChildren: 2 });
@@ -53,4 +53,24 @@ test("stable ids and params hash", () => {
   expect(stableId("agt", "r", "k")).toMatch(/^agt-k[0-9a-f]{16}$/);
   expect(stableId("run", "run")).not.toBe(stableId("run", "run"));
   expect(paramsHash({ a: 1, b: [1, { c: 2 }] })).toBe(paramsHash({ b: [1, { c: 2 }], a: 1, z: undefined }));
+});
+
+import { budgetCaps, parseBudget } from "../../src/primitives/policy";
+test("multi-unit budgets: per-unit carve/refund, unlimited units, caps narrow the profile", () => {
+  expect(parseBudget("5")).toEqual({ usd: 5 });
+  expect(parseBudget("usd=2,turns=100,wallSeconds=600")).toEqual({ usd: 2, turns: 100, wallSeconds: 600 });
+  expect(() => parseBudget("tokens=5")).toThrow(/unknown budget unit/);
+  const run = { usd: 10, turns: 100, wallSeconds: 3600 };
+  const sib = [row("coder-a", coder, { budget: { usd: 5, turns: 60, wallSeconds: 600 } }), row("coder-b", coder, { status: "done", budget: { usd: 3, turns: 30, wallSeconds: 600 }, spent: { usd: 0, turns: 12, wallSeconds: 90 } })];
+  expect(available(run, {}, sib)).toEqual({ usd: 5, turns: 28, wallSeconds: 2910 });
+  const d = checkSpawn({ ...base, runBudget: run, parent: null, siblings: sib, childProfile: "coder", childSpec: coder, requested: { turns: 20 } });
+  expect(d).toMatchObject({ ok: true, budget: { usd: 5, turns: 20, wallSeconds: 2910 } });
+  expect(checkSpawn({ ...base, runBudget: run, parent: null, siblings: sib, childProfile: "coder", childSpec: coder, requested: { turns: 29 } })).toMatchObject({ ok: false, code: "budget", error: expect.stringContaining("29 turns exceeds 28 turns") });
+  // a unit the run doesn't limit stays unlimited unless requested
+  expect(checkSpawn({ ...base, runBudget: { turns: 50 }, parent: null, childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { turns: 50 } });
+  // subscription parent: turns × share, floored
+  const p = row("sup-a", sup, { budget: { turns: 41 }, spent: { turns: 0 } });
+  expect(checkSpawn({ ...base, parent: p, ancestors: [p], descendantCounts: [0], childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { turns: 20 } });
+  expect(budgetCaps({ maxTurns: 20, timeoutMs: 600_000 }, { turns: 12, wallSeconds: 900, usd: 1 })).toEqual({ maxTurns: 12, maxBudgetUsd: 1 });
+  expect(budgetCaps({ maxTurns: 5 }, { turns: 12 })).toEqual({});
 });
