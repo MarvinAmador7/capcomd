@@ -14,6 +14,7 @@ import { env as envVar } from "../../src/utils/env";
 import { availableParallelism, freemem } from "os";
 import { mkdirSync, rmSync } from "fs";
 import { KILLPOINTS } from "./cases";
+import { PRIM_KILLPOINTS, survivePrimitives } from "./primitives";
 import { randomKillpoint } from "./harness";
 import { survive, type Phases } from "./survive";
 
@@ -37,17 +38,18 @@ if (N < 16 && !arg("workers") && !envVar("CHAOS_WORKERS"))
 const BASE_PORT = Number(envVar("CHAOS_BASE_PORT") ?? 7700);
 const DATA_ROOT = envVar("CHAOS_DATA_ROOT") ?? "/tmp/capcomd-chaos-fast";
 
-interface Job { round: number; kind: "killpoint" | "seed"; id: string; killpoint: string; iteration: number; requireKill: boolean }
+interface Job { round: number; kind: "killpoint" | "seed" | "primitive"; id: string; killpoint: string; iteration: number; requireKill: boolean }
 const jobs: Job[] = [];
 for (let round = 1; round <= rounds; round++) {
-  if (only !== "seeds") for (const kp of KILLPOINTS) jobs.push({ round, kind: "killpoint", id: kp, killpoint: kp, iteration: 1, requireKill: true });
-  if (only !== "killpoints") for (let seed = 1; seed <= seeds; seed++) {
+  if (only !== "seeds" && only !== "primitives") for (const kp of KILLPOINTS) jobs.push({ round, kind: "killpoint", id: kp, killpoint: kp, iteration: 1, requireKill: true });
+  if (!only || only === "primitives") for (const kp of PRIM_KILLPOINTS) jobs.push({ round, kind: "primitive", id: `prim ${kp}`, killpoint: kp.split(":")[0]!, iteration: Number(kp.split(":")[1]), requireKill: true });
+  if (only !== "killpoints" && only !== "primitives") for (let seed = 1; seed <= seeds; seed++) {
     const pick = randomKillpoint(seed);
     jobs.push({ round, kind: "seed", id: `seed ${seed}`, killpoint: pick.killpoint, iteration: pick.iteration, requireKill: false });
   }
 }
 // Longest-first-ish: killpoint cases always crash+restart, start them first.
-jobs.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "killpoint" ? -1 : 1));
+jobs.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "seed" ? 1 : b.kind === "seed" ? -1 : 0));
 
 interface Result { job: Job; ok: boolean; killed: boolean; ms: number; error?: string; phases: Partial<Phases>; slot: number }
 const results: Result[] = [];
@@ -64,7 +66,9 @@ async function worker(slot: number) {
   while (next < jobs.length) {
     const job = jobs[next++];
     const started = Date.now();
-    const r = await survive(job.killpoint, job.iteration, job.requireKill, { port, dataDir, repo: process.env.CAPCOMD_CHAOS_REPO !== "0" }, true);
+    const r = job.kind === "primitive"
+      ? await survivePrimitives(`${job.killpoint}:${job.iteration}`, { port, dataDir })
+      : await survive(job.killpoint, job.iteration, job.requireKill, { port, dataDir, repo: process.env.CAPCOMD_CHAOS_REPO !== "0" }, true);
     const res: Result = { job, ok: r.ok, killed: r.killed, ms: Date.now() - started, error: r.error, phases: r.phases, slot };
     results.push(res);
     const p = r.phases;
@@ -91,7 +95,7 @@ for (const phase of ["wipe", "engineUp", "firstClient", "stop", "restart", "resu
 console.log(`  case total   ${stat(results.map((r) => r.ms))}`);
 console.log(`\n=== pass counts`);
 for (let round = 1; round <= rounds; round++) {
-  for (const kind of ["killpoint", "seed"] as const) {
+  for (const kind of ["killpoint", "primitive", "seed"] as const) {
     const rs = results.filter((r) => r.job.round === round && r.job.kind === kind);
     if (rs.length) console.log(`  round ${round} ${kind}s: ${rs.filter((r) => r.ok).length}/${rs.length} passed (killed ${rs.filter((r) => r.killed).length})`);
   }

@@ -1,0 +1,30 @@
+{
+  "at": "2026-10-20T03:17:51.063Z",
+  "cases": [
+    {
+      "name": "single-loop",
+      "ok": true,
+      "ms": 1602
+    },
+    {
+      "name": "fan-out-4/fan-in",
+      "ok": true,
+      "ms": 2838
+    },
+    {
+      "name": "best-of-3 + cancel rest",
+      "ok": true,
+      "ms": 2458
+    },
+    {
+      "name": "nested supervisor + cancel propagation",
+      "ok": true,
+      "ms": 1152
+    },
+    {
+      "name": "idempotent spawn ×5",
+      "ok": true,
+      "ms": 588
+    }
+  ]
+}
