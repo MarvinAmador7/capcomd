@@ -26,6 +26,11 @@ jobs:
       - name: Run unit tests
         run: bun test tests/machines/*.test.ts
 
+      # ADR-017 regression gate: agentic scenarios (scripted agents driving in-VM capcomd), tokens, MCP, skill gating.
+      - name: Sub-agent scenario suite (regression gate)
+        run: bun run test:scenarios
+        timeout-minutes: 20
+
       - name: Run chaos tests - deterministic killpoints
         run: |
           export RELAY_KILLPOINT=tx.mid:1
