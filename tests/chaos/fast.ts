@@ -107,7 +107,8 @@ const stalled = results.map((r, i) => ({ r, v: verdicts[i]! })).filter(({ v }) =
 // Host stalls do not fail the run unless strict, or unless they are frequent
 // enough (>5% of cases) that the box itself is the problem worth surfacing.
 const stallLimit = Math.max(1, Math.floor(results.length * 0.05));
-const strict = process.env.CHAOS_STRICT === "1";
+// Strict by default in CI (CI=true); locally a stall rate up to 5% is tolerated. CHAOS_STRICT=0|1 overrides.
+const strict = process.env.CHAOS_STRICT !== undefined ? process.env.CHAOS_STRICT === "1" : process.env.CI === "true";
 const exitCode = failed.length || (stalled.length && (strict || stalled.length > stallLimit)) ? 1 : 0;
 console.log(`  TOTAL: ${results.length - failed.length - stalled.length}/${results.length} passed, ${failed.length} failed, ${stalled.length} host-stall (limit ${stallLimit}${strict ? ", strict" : ""}); serial-equivalent case time ${Math.round(results.reduce((a, r) => a + r.ms, 0) / 1000)}s`);
 for (const f of failed) console.log(`  FAILED r${f.job.round} ${f.job.id} ${f.job.killpoint}:${f.job.iteration}: ${f.error}`);

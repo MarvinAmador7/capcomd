@@ -21,7 +21,7 @@ jobs:
         run: bun install
 
       - name: Type check
-        run: bun check
+        run: bun run typecheck
 
       - name: Run unit tests
         run: bun test tests/machines/*.test.ts
@@ -56,6 +56,12 @@ jobs:
 
       - name: Install dependencies
         run: bun install
+
+      - name: chaos:fast (strict: host stalls fail the run)
+        run: bun run chaos:fast
+        env:
+          CHAOS_STRICT: "1"
+        timeout-minutes: 45
 
       - name: Run randomized chaos tests
         run: |
