@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Real end-to-end: GitHub repo → capcomd run (boxd VM + Claude Code, PR mode) → merged PR.
-# Needs: bun, gh (logged in as MarvinAmador7), BOXD_API_KEY and ANTHROPIC_API_KEY in env.
+# Real end-to-end: GitHub repo → capcomd run (boxd VM + agent, PR mode) → merged PR.
+# CAPCOMD_AGENT=claude-code (default) | codex. CAPCOMD_ENV=image forces the default boxd image;
+# otherwise workers boot from the `capcomd env build` snapshot when one exists.
+# Needs: bun, gh (logged in as MarvinAmador7), BOXD_API_KEY, and ANTHROPIC_API_KEY (claude-code) or
+# OPENAI_API_KEY (codex) in env, unless CAPCOMD_CREDENTIALS=secret (keys live in boxd secrets).
 # Secrets are read from env only and never echoed (no `set -x`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -8,14 +11,17 @@ ROOT="$PWD"
 OWNER="${CAPCOMD_E2E_OWNER:-MarvinAmador7}"
 PORT="${CAPCOMD_E2E_PORT:-6420}"
 TS="$(date +%s)"
-REPO="$OWNER/capcomd-e2e-$TS"
+AGENT="${CAPCOMD_AGENT:-claude-code}"
+case "$AGENT" in claude-code) KEYVAR=ANTHROPIC_API_KEY; SPAN=agent.claude_code;; codex) KEYVAR=OPENAI_API_KEY; SPAN=agent.codex;; *) echo "mac-e2e: CAPCOMD_AGENT must be claude-code or codex" >&2; exit 2;; esac
+SUFFIX=""; [ "$AGENT" = codex ] && SUFFIX="-codex"
+REPO="$OWNER/capcomd-e2e$SUFFIX-$TS"
 RUN_ID="run-e2e-$TS"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/capcomd-e2e.XXXXXX")"
 LOG="$WORK/capcomd-run.ndjson"
 
 die() { echo "mac-e2e: $*" >&2; exit 1; }
 [ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
-[ -n "${ANTHROPIC_API_KEY:-}" ] || die "ANTHROPIC_API_KEY is not set"
+if [ "${CAPCOMD_CREDENTIALS:-auto}" != secret ]; then [ -n "${!KEYVAR:-}" ] || die "$KEYVAR is not set (or run capcomd secrets sync and set CAPCOMD_CREDENTIALS=secret)"; fi
 command -v bun >/dev/null || die "bun not on PATH (try: export PATH=\$HOME/.bun/bin:\$PATH)"
 command -v gh >/dev/null || die "gh not installed"
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
@@ -25,7 +31,7 @@ gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="credential.https://github.com.helper" GIT_CONFIG_VALUE_0='!gh auth git-credential'
 
 export CAPCOMD_SANDBOX=boxd
-export CAPCOMD_AGENT=claude-code
+export CAPCOMD_AGENT="$AGENT"
 export CAPCOMD_REPO="https://github.com/$REPO.git"
 export CAPCOMD_GITHUB_REPO="$REPO"
 export CAPCOMD_MERGE_MODE=pr
@@ -40,6 +46,8 @@ export CAPCOMD_AGENT_MAX_BUDGET_USD="${CAPCOMD_AGENT_MAX_BUDGET_USD:-1}"
 
 echo "== 0. preflight (credentials are checked, never printed)"
 bun scripts/preflight.ts || die "preflight failed; nothing was created"
+
+echo "   agent: $AGENT   env: $(bun src/cli/index.ts env status 2>/dev/null | tail -1 | sed 's/^workers use: //' || echo '?')${CAPCOMD_ENV:+ (CAPCOMD_ENV=$CAPCOMD_ENV)}"
 
 echo "== 1. throwaway private repo $REPO"
 SRC="$WORK/src"; mkdir -p "$SRC/src" "$SRC/test"
@@ -80,6 +88,7 @@ trap cleanup EXIT
 bun tests/chaos/ready-probe.ts "$PORT" >/dev/null || die "engine not ready (see $WORK/engine.log)"
 
 echo "== 3. capcomd run 'make the failing test pass' (run $RUN_ID)"
+T_RUN0=$(date +%s)
 # main counts as protected: the task parks in awaiting_approval after verification.
 # Approve exactly once, only when status says task-1 is awaiting approval; stop when the run exits.
 bun src/cli/index.ts run --json --run-id "$RUN_ID" 'make the failing test pass' > "$LOG" 2> "$WORK/run.err" &
@@ -96,6 +105,7 @@ set +e
 wait "$RUN_PID"
 RC=$?
 set -e
+T_RUN=$(( $(date +%s) - T_RUN0 ))
 grep -o '"type":"[a-z_.]*"' "$LOG" | cut -d'"' -f4 | uniq | tr '\n' ' '; echo
 [ "$RC" = 0 ] || { tail -5 "$WORK/run.err" >&2; echo "run failed (exit $RC); log $LOG" >&2; }
 
@@ -106,15 +116,24 @@ echo "   main: $(gh api "repos/$REPO/commits/main" -q .sha)"
 
 echo "== 5. trace summary"
 bun src/cli/index.ts trace "$RUN_ID" 2>/dev/null | head -60 || true
-TRACE_FILE="$CAPCOMD_TRACE_DIR/$RUN_ID.ndjson" bun -e '
+TRACE_FILE="$CAPCOMD_TRACE_DIR/$RUN_ID.ndjson" SPAN="$SPAN" KEYVAR="$KEYVAR" T_RUN="$T_RUN" AGENT="$AGENT" RC="$RC" bun -e '
   const fs = require("fs"); const p = process.env.TRACE_FILE;
-  const spans = fs.readFileSync(p, "utf8").trim().split("\n").map(JSON.parse);
-  const a = spans.find((s) => s.name === "agent.claude_code");
-  if (a) console.log(`   agent: ${a.attributes["agent.stop_reason"]} turns=${a.attributes["agent.turns"]} cost=$${a.attributes["agent.cost_usd"]} events=${a.events.length} sha=${a.attributes["git.sha"]}`);
+  const text = fs.readFileSync(p, "utf8");
+  const spans = text.trim().split("\n").map(JSON.parse);
+  const a = spans.find((s) => s.name === process.env.SPAN);
+  const d = (s) => (s && s.endTime ? s.endTime - s.startTime : 0);
+  const sum = (re) => spans.filter((s) => re.test(s.name)).reduce((n, s) => n + d(s), 0);
+  if (a) console.log(`   agent: ${a.attributes["agent.stop_reason"]} turns=${a.attributes["agent.turns"]} cost=$${a.attributes["agent.cost_usd"]} version=${a.attributes["agent.version"]} credential=${a.attributes["agent.credential_mode"]} deps_reused=${a.attributes["agent.deps_reused"]} events=${a.events.length} sha=${a.attributes["git.sha"]}`);
   const tools = {}; for (const e of a?.events ?? []) if (e.attributes?.["agent.tool"]) tools[e.attributes["agent.tool"]] = (tools[e.attributes["agent.tool"]] ?? 0) + 1;
   console.log(`   tools: ${JSON.stringify(tools)}`);
-  const leak = fs.readFileSync(p, "utf8").includes(process.env.ANTHROPIC_API_KEY);
-  console.log(`   api key in trace: ${leak ? "YES (BUG)" : "no"}`);
+  const key = process.env[process.env.KEYVAR];
+  console.log(`   api key in trace: ${key && text.includes(key) ? "YES (BUG)" : "no"}`);
+  const install = spans.find((s) => s.name === "agent.install");
+  const t = { agent: process.env.AGENT, rc: Number(process.env.RC), run_s: Number(process.env.T_RUN),
+    vm_boot_ms: sum(/^sandbox\.(ensure|waitReady)$/), install_ms: d(install), installed: !!install,
+    agent_ms: d(a), cost_usd: a?.attributes["agent.cost_usd"] ?? null, turns: a?.attributes["agent.turns"] ?? null,
+    credential: a?.attributes["agent.credential_mode"] ?? null };
+  console.log("CAPCOMD_TIMING " + JSON.stringify(t));
 '  || true
 
 echo "== 6. VM cleanup check"
