@@ -9,9 +9,9 @@ import { type IconSet, SETS, iconStatus, kindColor, kindOf, statusIconColor } fr
 
 const DETAIL_KEYS = ["relay.task_id", "relay.agent_id", "agent.profile", "agent.turns", "agent.cost_usd", "agent.billing", "agent.stop_reason", "git.sha", "git.ref", "git.operation", "relay.state_from", "relay.state_to", "sandbox.vm_id", "relay.actor"];
 
-export function Waterfall({ trace, width, height, active, icons = "none" }: ViewProps & { trace: Trace | null; icons?: IconSet }) {
+export function Waterfall({ trace, width, height, active, icons = "none", initialSel = 0 }: ViewProps & { trace: Trace | null; icons?: IconSet; initialSel?: number }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [sel, setSel] = useState(0);
+  const [sel, setSel] = useState(initialSel);
   const rows = useMemo(() => (trace ? waterfallRows(trace, expanded) : []), [trace, expanded]);
 
   useInput((input, key) => {

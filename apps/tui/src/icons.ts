@@ -4,8 +4,9 @@ import { c } from "./theme";
 /** What a span *is*. One symbol per kind and one per status; they never share a glyph. */
 export type SpanKind = "agent" | "llm" | "tool" | "git" | "sandbox" | "approval" | "run" | "state";
 export type IconStatus = "ok" | "error" | "wait" | "running";
-export type IconSet = "glyph" | "nerd" | "minimal" | "none";
-export const ICON_SETS: IconSet[] = ["glyph", "nerd", "minimal", "none"];
+export type IconSet = "glyph" | "nerd" | "minimal" | "none" | "glyph-b" | "glyph-v1";
+/** glyph-b and glyph-v1 are kept for comparison (scripts/glyph-compare.tsx). */
+export const ICON_SETS: IconSet[] = ["glyph", "nerd", "minimal", "none", "glyph-b", "glyph-v1"];
 
 export function kindOf(s: Pick<Span, "name" | "attrs">): SpanKind {
   const n = s.name;
@@ -22,10 +23,27 @@ export function kindOf(s: Pick<Span, "name" | "attrs">): SpanKind {
 interface Set_ { kind: Record<SpanKind, string>; status: Record<IconStatus, string>; note: string }
 
 export const SETS: Record<Exclude<IconSet, "none">, Set_> = {
+  /**
+   * Fill tells you the role: filled = an actor doing work (agent ◉, run/plan ▪), hollow = a call it
+   * makes (llm ▹, tool ▫), line-drawn = infrastructure (git ⌥, sandbox ⊡, bookkeeping ∙), and ◔ is
+   * the one clock. Status marks are strokes (✓ ✗ ⋯ ▸), never shapes, so they can't read as a type.
+   * Every char is East-Asian-Width "N" (never double in CJK terminals) and is in both JetBrains Mono
+   * and DejaVu Sans Mono, so nothing falls back to another font with a different width or baseline.
+   */
   glyph: {
+    kind: { agent: "◉", llm: "▹", tool: "▫", git: "⌥", sandbox: "⊡", approval: "◔", run: "▪", state: "∙" },
+    status: { ok: "✓", error: "✗", wait: "⋯", running: "▸" },
+    note: "Single-width Unicode, in JetBrains Mono and DejaVu Sans Mono; filled = actor, hollow = call, line = infra.",
+  },
+  "glyph-b": {
+    kind: { agent: "▸", llm: "▹", tool: "▫", git: "⌥", sandbox: "⊟", approval: "◔", run: "▪", state: "∙" },
+    status: { ok: "✓", error: "✗", wait: "⋯", running: "▴" },
+    note: "Candidate B: triangles for agents and calls, squares for structure.",
+  },
+  "glyph-v1": {
     kind: { agent: "◆", llm: "◇", tool: "▪", git: "⎇", sandbox: "▸", approval: "◷", run: "◎", state: "·" },
     status: { ok: "✓", error: "✕", wait: "◌", running: "●" },
-    note: "Unicode geometric shapes; render in any modern terminal font.",
+    note: "Previous set: ◆ ◇ ◎ · ● are ambiguous width; ⎇ ◷ are missing from JetBrains Mono.",
   },
   nerd: {
     // Nerd Fonts v3 codepoints (Font Awesome / Material Design / Octicons ranges).
@@ -34,8 +52,8 @@ export const SETS: Record<Exclude<IconSet, "none">, Set_> = {
     note: "Needs a Nerd Font (v3). Without one these show as tofu boxes; use --icons glyph.",
   },
   minimal: {
-    kind: { agent: "A", llm: "L", tool: "T", git: "G", sandbox: "S", approval: "W", run: "R", state: "·" },
-    status: { ok: "•", error: "•", wait: "•", running: "•" },
+    kind: { agent: "A", llm: "L", tool: "T", git: "G", sandbox: "S", approval: "W", run: "R", state: "∙" },
+    status: { ok: "◉", error: "◉", wait: "◉", running: "◉" },
     note: "Status is a colored dot, kind is a letter. Plain ASCII except the dot.",
   },
 };

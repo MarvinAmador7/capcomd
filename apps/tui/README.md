@@ -69,14 +69,16 @@ Each row shows a kind icon before the name and a status mark after the duration.
 
 | kind | glyph | nerd | minimal |
 |---|---|---|---|
-| agent | ◆ | 󰚩 | A |
-| llm / turn | ◇ | 󰧑 | L |
-| tool | ▪ |  | T |
-| git | ⎇ |  | G |
-| sandbox | ▸ |  | S |
-| approval | ◷ | 󰔟 | W |
-| run / plan | ◎ |  | R |
-| actor / transition | · |  | · |
-| status ok · error · wait · running | ✓ ✕ ◌ ● |     | • (colored) |
+| agent | ◉ | 󰚩 | A |
+| llm / turn | ▹ | 󰧑 | L |
+| tool | ▫ |  | T |
+| git | ⌥ |  | G |
+| sandbox | ⊡ |  | S |
+| approval | ◔ | 󰔟 | W |
+| run / plan | ▪ |  | R |
+| actor / transition | ∙ |  | · |
+| status ok · error · wait · running | ✓ ✗ ⋯ ▸ |     | ◉ (colored) |
 
 `nerd` needs a Nerd Font v3. Without one, the icons show as empty boxes. `FORCE_COLOR=3 bun scripts/icon-shots.tsx` renders all three.
+
+The glyph set uses fill to show role: filled = an actor (◉ ▪), hollow = a call it makes (▹ ▫), line-drawn = infrastructure (⌥ ⊡ ∙). Status marks are strokes (✓ ✗ ⋯ ▸). Every character has East Asian Width "N" (`test/glyph-width.test.ts`) and exists in both JetBrains Mono and DejaVu Sans Mono, so no glyph falls back to another font. `scripts/glyph-compare.tsx` renders the old set (`--icons glyph-v1`) next to the two candidates (`glyph`, `glyph-b`).

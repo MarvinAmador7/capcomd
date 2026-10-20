@@ -32,10 +32,11 @@ export interface AppProps {
   pollMs?: number;
   replayT?: number;
   icons?: IconSet;
+  waterfallSel?: number;
   eventsFamily?: Parameters<typeof Events>[0]["initialFamily"];
 }
 
-export function App({ data: initial, initialTab = "waterfall", width: w, height: h, reload, pollMs = 2000, replayT, eventsFamily, icons = "glyph" }: AppProps) {
+export function App({ data: initial, initialTab = "waterfall", width: w, height: h, reload, pollMs = 2000, replayT, eventsFamily, icons = "glyph", waterfallSel }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [data, setData] = useState(initial);
@@ -90,7 +91,7 @@ export function App({ data: initial, initialTab = "waterfall", width: w, height:
         <Text color={c.faint}>{"─".repeat(width - 2)}</Text>
         <Box flexDirection="column" height={body} overflow="hidden">
           {tab === "live" && <Live data={data} {...vp} live={!!reload} />}
-          {tab === "waterfall" && <Waterfall trace={data.trace} {...vp} icons={icons} />}
+          {tab === "waterfall" && <Waterfall trace={data.trace} {...vp} icons={icons} initialSel={waterfallSel} />}
           {tab === "timeline" && <Timeline trace={data.trace} events={data.events} {...vp} />}
           {tab === "rollups" && <Rollups data={data} {...vp} />}
           {tab === "events" && <Events events={data.events} {...vp} active onTyping={setTyping} initialFamily={eventsFamily} />}
