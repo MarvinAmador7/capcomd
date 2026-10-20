@@ -14,3 +14,6 @@
 - Where the memory went: the box is shared. During the run, `free` showed 13.7GB used of 16GB, while this cgroup held only about 2.5GB anon + 1.7GB file. The rest is other sessions and processes on the box, e.g. sand-host at 1.2GB and a canvas vite dev server at 0.8GB, and a dev `capcomd serve :6420` that has been running since 20:07 (not started by the chaos harness). Not killed, because they aren't ours to kill.
 - No new startup code path is involved: auth, profiles and the agents file aren't touched by the fake-agent chaos cases. Ports (7700+) and data dirs (/tmp/capcomd-chaos-fast/<slot>) are unchanged and per slot.
 - Fix: none needed in capcomd. The harness now prints a `⚠ memory-limited` line with the reason. With ≥5.1GB available it runs 16 workers again (~9 min).
+
+## Re-run after memory recovered (with ADR-016 primitives added)
+`chaos-fast-primitives-16w.log`: 16 workers (MemAvailable 6761MB), 198/198 passed (186 existing plus 12 new primitive cases), wall 555.6s (9.3 min), serial-equivalent 8510s. This confirms that the 1202s run came from the host having less free memory.
