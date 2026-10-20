@@ -40,8 +40,15 @@ See `docs/` for detailed design documents:
 
 ## Installation
 
+A fresh clone has three package roots: the CLI/engine, the canvas UI and the terminal debugger (apps/tui).
+Install all three, or `bun run typecheck` fails (it checks apps/canvas and apps/tui too):
+
 ```bash
 bun install
+(cd apps/canvas && bun install)
+(cd apps/tui && bun install)
+# or, equivalently:
+bun run setup
 ```
 
 ## Usage

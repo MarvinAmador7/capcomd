@@ -8,6 +8,7 @@
     "capcomd": "./src/cli/index.ts"
   },
   "scripts": {
+    "setup": "bun install && cd apps/canvas && bun install && cd ../tui && bun install",
     "typecheck": "tsc --noEmit && tsc --noEmit -p apps/canvas && tsc --noEmit -p apps/tui",
     "test": "bun test",
     "test:chaos": "bun test tests/chaos/*.test.ts",
