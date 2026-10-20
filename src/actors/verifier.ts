@@ -31,6 +31,8 @@ export const verifierActor = actor({
         runId: string;
         target?: string;
         testOnly?: boolean;
+        testCommand?: string;
+        expectSha?: string;
       }
     ) {
       const { verifierId, taskId, branch, runId } = params;
@@ -50,7 +52,7 @@ export const verifierActor = actor({
       const outcome = await withSpan(
         params.testOnly ? "git.verify" : "git.merge",
         { "relay.run_id": runId, "git.operation": params.testOnly ? "verify" : "merge", "git.ref": branch, "git.target": params.target ?? "" },
-        () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly })
+        () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}) })
       );
 
       const state = outcome.status === "merged" || outcome.status === "verified" ? "passed" : outcome.status === "conflict" ? "conflict" : "failed";

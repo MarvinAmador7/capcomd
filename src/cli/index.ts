@@ -2,7 +2,7 @@
 import "./quiet";
 import { parseArgs } from "util";
 import { spawn } from "child_process";
-import { mkdirSync, openSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, openSync, readFileSync } from "fs";
 import { join, resolve } from "path";
 import { serve } from "./commands/serve";
 import { ui } from "./commands/ui";
@@ -41,10 +41,12 @@ Usage:
   capcomd env status | env rm [name|all] List / delete env snapshots
   capcomd agents list|show|add|set|rm|schema|validate
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
-  capcomd run new [--budget USD] [--label L] [--key K]                     → runId (a scope; plans nothing)
-  capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget USD] [--contract JSON|file] [--no-start] [--operator]
+  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K]                     → runId (a scope; plans nothing)
+  capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N]  ·  capcomd wait-any <runId> <agt…>
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
+  capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P] [--target T] [--key K]  → vfy-…
+  capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --max-turns --budget
@@ -121,6 +123,12 @@ async function main(argv: string[]): Promise<number> {
         reason: { type: "string" },
         label: { type: "string" },
         "no-start": { type: "boolean" },
+        ref: { type: "string" },
+        checks: { type: "string" },
+        acceptance: { type: "string" },
+        "judge-profile": { type: "string" },
+        require: { type: "string" },
+        target: { type: "string" },
       },
       allowPositionals: true,
       strict: true,
@@ -171,10 +179,11 @@ async function main(argv: string[]): Promise<number> {
 
       case "run": {
         if (positionals[1] === "new" && positionals.length === 2) {
-          const budget = values.budget === undefined ? 10 : Number(values.budget);
-          if (!Number.isFinite(budget) || budget <= 0) usage("--budget must be a positive number (USD)");
+          const { parseBudget } = await import("../primitives/policy");
+          let budget: Record<string, number> = { usd: 10 };
+          try { if (values.budget !== undefined) budget = parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message} (e.g. 5 or usd=5,turns=200,wallSeconds=3600)`); }
           const P = await import("../primitives/ops");
-          const r = await P.runNew({ budgetUsd: budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined });
+          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined });
           if (json) out(r); else console.log(r.runId);
           return EXIT.ok;
         }
@@ -264,12 +273,12 @@ async function main(argv: string[]): Promise<number> {
           const raw = String(values.contract);
           try { contract = JSON.parse(raw.trim().startsWith("{") ? raw : readFileSync(raw, "utf8")); } catch (e) { usage(`bad --contract (JSON or a JSON file): ${(e as Error).message}`); }
         }
-        const budget = values.budget === undefined ? undefined : Number(values.budget);
-        if (budget !== undefined && (!Number.isFinite(budget) || budget <= 0)) usage("--budget must be a positive number (USD)");
+        let budget: Record<string, number> | undefined;
+        try { if (values.budget !== undefined) budget = (await import("../primitives/policy")).parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message}`); }
         const P = await import("../primitives/ops");
         const r = await P.spawnAgent({
           runId, task, ...(profile ? { profile } : {}), ...(Object.keys(set).length || values.operator ? { overrides: { set, operator: !!values.operator } } : {}),
-          parent: values.parent as string | undefined, key: values.key as string | undefined, contract, budgetUsd: budget,
+          parent: values.parent as string | undefined, key: values.key as string | undefined, contract, budget,
           operator: !!values.operator, start: !values["no-start"],
         });
         if (json) out(r); else console.log(r.agentId);
@@ -291,13 +300,43 @@ async function main(argv: string[]): Promise<number> {
         return relevant.every((a: any) => a.status === "done") ? EXIT.ok : EXIT.run_failed;
       }
 
+      case "verify": {
+        const runId = positionals[1] ?? usage("runId required: capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P]");
+        const ref = (values.ref as string | undefined) ?? positionals[2] ?? usage("--ref required (an agent id or a branch)");
+        let acceptance: unknown;
+        if (values.acceptance) {
+          const raw = String(values.acceptance);
+          try { acceptance = raw.trim().startsWith("{") || raw.trim().startsWith("[") ? JSON.parse(raw) : existsSync(raw) ? JSON.parse(readFileSync(raw, "utf8")) : raw; } catch (e) { usage(`bad --acceptance: ${(e as Error).message}`); }
+        }
+        const r: any = await (await import("../primitives/ops")).verifyRef({
+          runId, ref, checks: values.checks as string | undefined, acceptance, judgeProfile: values["judge-profile"] as string | undefined,
+          target: values.target as string | undefined, key: values.key as string | undefined,
+        });
+        if (json) out(r);
+        else console.log(`${r.id}: ${r.state}${r.result?.commit ? ` (${String(r.result.commit).slice(0, 12)})` : ""}${r.result?.checks?.reason ? ` ${r.result.checks.reason}` : ""}`);
+        return r.state === "passed" ? EXIT.ok : EXIT.run_failed;
+      }
+
+      case "merge": {
+        const runId = positionals[1] ?? usage("runId required: capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T]");
+        const ref = (values.ref as string | undefined) ?? positionals[2] ?? usage("--ref required (an agent id or a branch)");
+        const r: any = await (await import("../primitives/ops")).mergeRef({
+          runId, ref, require: values.require as string | undefined, target: values.target as string | undefined,
+          operator: !!values.operator, key: values.key as string | undefined,
+        });
+        if (json) out(r);
+        else console.log(`${r.id}: ${r.state}${r.result?.sha ? ` ${String(r.result.sha).slice(0, 12)}` : ""}${r.result?.reason ? ` ${r.result.reason}` : ""}`);
+        return r.state === "merged" ? EXIT.ok : EXIT.run_failed;
+      }
+
       case "tree": {
         const runId = positionals[1] ?? usage("runId required: capcomd tree <runId>");
         const r = await (await import("../primitives/ops")).listScope(runId);
         if (json) out(r);
         else {
-          console.log(`${runId}  budget $${r.budgetUsd} (unallocated $${r.unallocatedUsd}, spent $${r.spentUsd})`);
-          for (const a of r.agents) console.log(`${"  ".repeat(a.depth + 1)}${a.agentId} [${a.profile ?? "-"}] ${a.status} $${a.budgetUsd}${a.parent ? ` ← ${a.parent}` : ""}`);
+          const b = (x: Record<string, number>) => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(",") || "-";
+          console.log(`${runId}  budget ${b(r.budget)} (unallocated ${b(r.unallocated)}, spent ${b(r.spent)})`);
+          for (const a of r.agents) console.log(`${"  ".repeat(a.depth + 1)}${a.agentId} [${a.profile ?? "-"}] ${a.status} budget ${b(a.budget)} spent ${b(a.spent)}${a.parent ? ` ← ${a.parent}` : ""}`);
         }
         return EXIT.ok;
       }

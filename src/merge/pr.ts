@@ -33,14 +33,15 @@ export async function prMerge(baseCfg: MergeConfig, req: MergeRequest, gh: GitHu
   if (existing) return { status: "merged", sha: existing.sha, already: true, how: existing.how, strategy: baseCfg.strategy, mode: "pr", attempts: 0, pr: existingPr?.number };
   if (!taskSha) return { status: "failed", reason: `task branch ${req.branch} not pushed` };
 
+  if (req.expectSha && taskSha !== req.expectSha) return { status: "failed", reason: `branch ${req.branch} moved since verification (${req.expectSha.slice(0, 12)} → ${taskSha.slice(0, 12)})` };
   await git.ok(["checkout", "-q", "--detach", "-f", targetSha]);
   const cfg = withRepoFile(baseCfg, git.cwd);
   const subject = (await git.ok(["log", "-1", "--format=%s", taskSha])) || `capcomd ${key}`;
   const trial = await integrate(git, cfg, cfg.strategy, targetSha, taskSha, key, subject);
   if (!trial.ok) return { status: "conflict", files: trial.files, targetSha, taskSha };
-  const tests = await runTests(git, cfg.testCommand, { CAPCOMD_RUN_ID: req.runId, CAPCOMD_TASK_ID: req.taskId, CAPCOMD_TARGET: req.target });
+  const tests = await runTests(git, req.testCommand ?? cfg.testCommand, { CAPCOMD_RUN_ID: req.runId, CAPCOMD_TASK_ID: req.taskId, CAPCOMD_TARGET: req.target });
   if (!tests.passed) return { status: "failed", reason: "tests failed on branch merged with latest target", output: tests.output };
-  if (req.testOnly) return { status: "verified", sha: trial.head, output: tests.output };
+  if (req.testOnly) return { status: "verified", sha: trial.head, output: tests.output, taskSha };
 
   let pr: PullRequest = existingPr && existingPr.state === "open"
     ? existingPr

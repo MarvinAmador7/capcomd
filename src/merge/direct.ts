@@ -33,6 +33,7 @@ export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, clone
     }
     if (!taskSha) return { status: "failed", reason: `task branch ${req.branch} not found on ${baseCfg.remote}` };
 
+    if (req.expectSha && taskSha !== req.expectSha) return { status: "failed", reason: `branch ${req.branch} moved since verification (${req.expectSha.slice(0, 12)} → ${taskSha.slice(0, 12)})` };
     await git.ok(["checkout", "-q", "--detach", "-f", targetSha]);
     const cfg = withRepoFile(baseCfg, git.cwd);
     killpoint("merge.after_fetch.before_integrate");
@@ -41,9 +42,9 @@ export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, clone
     const merged = await integrate(git, cfg, cfg.strategy, targetSha, taskSha, key, subject);
     if (!merged.ok) return { status: "conflict", files: merged.files, targetSha, taskSha };
 
-    const tests = await runTests(git, cfg.testCommand, { CAPCOMD_RUN_ID: req.runId, CAPCOMD_TASK_ID: req.taskId, CAPCOMD_TARGET: req.target });
+    const tests = await runTests(git, req.testCommand ?? cfg.testCommand, { CAPCOMD_RUN_ID: req.runId, CAPCOMD_TASK_ID: req.taskId, CAPCOMD_TARGET: req.target });
     if (!tests.passed) return { status: "failed", reason: "tests failed on branch merged with latest target", output: tests.output };
-    if (req.testOnly) return { status: "verified", sha: merged.head, output: tests.output };
+    if (req.testOnly) return { status: "verified", sha: merged.head, output: tests.output, taskSha };
     if (merged.head === targetSha) {
       return { status: "merged", sha: targetSha, already: true, how: "noop", strategy: cfg.strategy, mode: "direct", attempts };
     }
