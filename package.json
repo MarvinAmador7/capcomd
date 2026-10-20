@@ -22,7 +22,7 @@
     "typescript": "^7"
   },
   "dependencies": {
-    "@boxd-sh/sdk": "^0.2.17",
+    "@boxd-sh/sdk": "^0.2.18",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@xyflow/react": "^12.12.0",
     "commander": "^15.0.0",
