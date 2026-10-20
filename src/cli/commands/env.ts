@@ -38,8 +38,7 @@ export async function envCommand(command: string, pos: string[], values: Record<
   const sub = pos[1];
   if (sub === "build") {
     const repo = loadMergeConfig();
-    if (!repo) throw new RelayError("config", "env build needs CAPCOMD_REPO (the repo whose deps to bake in)", "export CAPCOMD_REPO=owner/name");
-    const res = await envBuild(platform(), { repoUrl: repo.remote, cfg: loadAgentConfig(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[] });
+    const res = await envBuild(platform(), { repoUrl: repo?.remote, cfg: loadAgentConfig(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[] });
     const v = Object.entries(res.record.versions).map(([k, x]) => `${k}=${x.version}(${x.source})`).join(" ");
     emit(json, { name: res.name, cached: res.cached, record: res.record }, `${res.cached ? "up to date" : "built"}: ${res.name}  ${v}${res.record.buildMs ? `  ${res.record.buildMs}ms` : ""}`);
     return 0;

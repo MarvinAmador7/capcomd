@@ -11,9 +11,10 @@ export interface EnvManifest {
   schema: number;
   /** Pinned versions requested (what installs when the image lacks a tool). */
   pins: { claude: string; codex: string; node: string };
-  /** sha256 of the repo lockfile, or "none". */
+  /** sha256 of the repo lockfile, or "none" (no repo given, or no lockfile). */
   lockHash: string;
   lockFile: string;
+  /** Repo whose deps were baked in ("" when none). */
   repo: string;
 }
 export interface EnvRecord {
@@ -29,7 +30,8 @@ export interface EnvLedger { current?: EnvRecord; history: EnvRecord[] }
 
 /** Content hash of pins + lockfile; same inputs → same snapshot name → build is skipped. */
 export function envName(m: EnvManifest): string {
-  const canon = JSON.stringify({ schema: m.schema, pins: m.pins, lockHash: m.lockHash, repo: m.repo.replace(/\.git$/, "").toLowerCase() });
+  // Repo is informational only: any repo with the same lockfile (or none) shares the snapshot.
+  const canon = JSON.stringify({ schema: m.schema, pins: m.pins, lockHash: m.lockHash });
   return ENV_PREFIX + createHash("sha256").update(canon).digest("hex").slice(0, 16);
 }
 
@@ -53,10 +55,6 @@ export function resolveEnvSnapshot(source: Record<string, string | undefined> = 
   if ((envVar("ENV", source) ?? "").toLowerCase() === "image") return undefined;
   const explicit = envVar("ENV_SNAPSHOT", source);
   if (explicit) return explicit;
-  const cur = readLedger(ledgerPath(source)).current;
-  if (!cur) return undefined;
-  const repo = envVar("REPO", source);
-  if (repo && cur.manifest.repo && norm(repo) !== norm(cur.manifest.repo)) return undefined;
-  return cur.name;
+  // Lockfile mismatch only means the worker installs deps itself; CLIs + git config still apply.
+  return readLedger(ledgerPath(source)).current?.name;
 }
-const norm = (u: string) => u.replace(/\.git$/, "").replace(/^git@github\.com:/, "https://github.com/").toLowerCase();

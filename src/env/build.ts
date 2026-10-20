@@ -14,7 +14,8 @@ export const LOCKFILES = ["bun.lock", "bun.lockb", "package-lock.json", "pnpm-lo
 export const SECRET_SHAPES = "sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|bxd_[A-Za-z0-9]{16,}";
 
 export interface BuildOptions {
-  repoUrl: string;
+  /** Repo whose dependencies to bake in; omit for CLIs + git config only. */
+  repoUrl?: string;
   cfg: AgentConfig;
   ledgerPath?: string;
   /** Rebuild even if a ready snapshot with this content hash exists. */
@@ -52,11 +53,14 @@ export async function envBuild(p: SandboxProvider & EnvPlatform, o: BuildOptions
 
     // 1. Repo + lockfile hash (the snapshot name depends on it).
     await must("clean template", `rm -rf ${sq(T)}`);
-    const clone = await p.exec(id, ["git", "clone", "--depth", "1", "--no-tags", o.repoUrl, T], { env: baseEnv, timeoutMs: 300_000 });
-    if (clone.code !== 0) throw new Error(`env build: git clone failed: ${r.text(clone.stderr).slice(-400)}`);
-    const lock = (await sh(`cd ${sq(T)} && for f in ${LOCKFILES.join(" ")}; do [ -f "$f" ] && { echo "$f $(sha256sum "$f" | cut -c1-64)"; break; }; done; true`)).stdout.trim();
-    const [lockFile = "none", lockHash = "none"] = lock ? lock.split(/\s+/) : [];
-    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash, lockFile, repo: o.repoUrl };
+    let lockFile = "none", lockHash = "none";
+    if (o.repoUrl) {
+      const clone = await p.exec(id, ["git", "clone", "--depth", "1", "--no-tags", o.repoUrl, T], { env: baseEnv, timeoutMs: 300_000 });
+      if (clone.code !== 0) throw new Error(`env build: git clone failed: ${r.text(clone.stderr).slice(-400)}`);
+      const lock = (await sh(`cd ${sq(T)} && for f in ${LOCKFILES.join(" ")}; do [ -f "$f" ] && { echo "$f $(sha256sum "$f" | cut -c1-64)"; break; }; done; true`)).stdout.trim();
+      if (lock) [lockFile, lockHash] = lock.split(/\s+/) as [string, string];
+    } else log("no repo given: baking CLIs + git config only (set CAPCOMD_REPO to bake deps)");
+    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash, lockFile, repo: o.repoUrl ?? "" };
     const name = envName(manifest);
     log(`content hash → ${name} (lockfile ${lockFile})`);
 
@@ -103,7 +107,7 @@ export async function envBuild(p: SandboxProvider & EnvPlatform, o: BuildOptions
 
     // 5. Scrub check: no credential-shaped strings or known local key values anywhere we wrote, or in env.
     await sh(`rm -f ${sq(home)}/.bash_history /root/.bash_history ${sq(T)}/.git/FETCH_HEAD 2>/dev/null; true`);
-    const scan = await sh(`{ env; cat ${sq(home)}/.gitconfig 2>/dev/null; cat ${sq(T)}/.git/config; } | grep -cE '${SECRET_SHAPES}'; grep -rIlE --exclude-dir=node_modules --exclude-dir=node --exclude-dir=npm --exclude-dir=.git '${SECRET_SHAPES}' ${sq(home)} 2>/dev/null | head -5; true`);
+    const scan = await sh(`{ env; cat ${sq(home)}/.gitconfig 2>/dev/null; cat ${sq(T)}/.git/config 2>/dev/null; } | grep -cE '${SECRET_SHAPES}'; grep -rIlE --exclude-dir=node_modules --exclude-dir=node --exclude-dir=npm --exclude-dir=.git '${SECRET_SHAPES}' ${sq(home)} 2>/dev/null | head -5; true`);
     const hits = Number(scan.stdout.split("\n")[0]?.trim() || 0);
     const files = scan.stdout.split("\n").slice(1).filter(Boolean);
     if (hits > 0 || files.length) throw new Error(`env build: refusing to snapshot, credential-shaped data found (${hits} in env/git config${files.length ? `; files: ${files.join(", ")}` : ""})`);

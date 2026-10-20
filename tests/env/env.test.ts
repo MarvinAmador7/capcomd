@@ -91,11 +91,22 @@ describe("capcomd env build|status|rm", () => {
     expect(g.provider.snapshots.size).toBe(0);
   }, 60_000);
 
+  test("no repo: CLIs + git config only; name depends on pins + lockfile, not the repo", async () => {
+    const f = await fixture({ lock: false });
+    const a = await envBuild(f.provider, { cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1 });
+    expect(a.record.manifest).toMatchObject({ lockFile: "none", lockHash: "none", repo: "" });
+    expect(a.record.depsInstalled).toBe(false);
+    const b = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1 });
+    expect(b).toMatchObject({ cached: true, name: a.name }); // lockfile-less repo → same snapshot
+    const pinned = await envBuild(f.provider, { cfg: loadAgentConfig({ CAPCOMD_AGENT_WORKDIR: f.workdir, CAPCOMD_CODEX_VERSION: "0.164.0" }), ledgerPath: f.ledger, pollMs: 1 });
+    expect(pinned.name).not.toBe(a.name);
+  }, 60_000);
+
   test("workers resolve the snapshot: ledger, explicit name, or forced image", async () => {
     const f = await fixture();
     const res = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1 });
     expect(resolveEnvSnapshot({ CAPCOMD_ENV_LEDGER: f.ledger, CAPCOMD_REPO: f.r.bare })).toBe(res.name);
-    expect(resolveEnvSnapshot({ CAPCOMD_ENV_LEDGER: f.ledger, CAPCOMD_REPO: "/some/other.git" })).toBeUndefined();
+    expect(resolveEnvSnapshot({ CAPCOMD_ENV_LEDGER: f.ledger, CAPCOMD_REPO: "/some/other.git" })).toBe(res.name);
     expect(resolveEnvSnapshot({ CAPCOMD_ENV_LEDGER: f.ledger, CAPCOMD_ENV: "image" })).toBeUndefined();
     expect(resolveEnvSnapshot({ CAPCOMD_ENV_LEDGER: join(f.workdir, "nope.json"), CAPCOMD_ENV_SNAPSHOT: "capcomd-env-x" })).toBe("capcomd-env-x");
     expect(resolveEnvSnapshot({ CAPCOMD_ENV_LEDGER: join(f.workdir, "nope.json") })).toBeUndefined();
