@@ -2,6 +2,7 @@ import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { useEffect, useState } from "react";
 import { ThemeContext } from "@/hooks/use-theme";
 import type { RunData } from "./adapters/types";
+import type { IconSet } from "./icons";
 import { dur, usd } from "./format";
 import { c, capcomTheme, statusColor, statusGlyph } from "./theme";
 import { Events } from "./views/Events";
@@ -30,10 +31,11 @@ export interface AppProps {
   reload?: () => Promise<RunData>;
   pollMs?: number;
   replayT?: number;
+  icons?: IconSet;
   eventsFamily?: Parameters<typeof Events>[0]["initialFamily"];
 }
 
-export function App({ data: initial, initialTab = "waterfall", width: w, height: h, reload, pollMs = 2000, replayT, eventsFamily }: AppProps) {
+export function App({ data: initial, initialTab = "waterfall", width: w, height: h, reload, pollMs = 2000, replayT, eventsFamily, icons = "glyph" }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [data, setData] = useState(initial);
@@ -88,7 +90,7 @@ export function App({ data: initial, initialTab = "waterfall", width: w, height:
         <Text color={c.faint}>{"─".repeat(width - 2)}</Text>
         <Box flexDirection="column" height={body} overflow="hidden">
           {tab === "live" && <Live data={data} {...vp} live={!!reload} />}
-          {tab === "waterfall" && <Waterfall trace={data.trace} {...vp} />}
+          {tab === "waterfall" && <Waterfall trace={data.trace} {...vp} icons={icons} />}
           {tab === "timeline" && <Timeline trace={data.trace} events={data.events} {...vp} />}
           {tab === "rollups" && <Rollups data={data} {...vp} />}
           {tab === "events" && <Events events={data.events} {...vp} active onTyping={setTyping} initialFamily={eventsFamily} />}

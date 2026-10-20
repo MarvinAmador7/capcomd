@@ -45,6 +45,13 @@ for (const k of tasks) {
     ...a, "agent.profile": "coder", "agent.turns": k.turns, "agent.cost_usd": k.usd, "agent.billing": "subscription",
     "agent.max_turns": 30, "agent.max_budget_usd": 2, ...(k.sha ? { "git.sha": k.sha } : {}),
   }, k.fail);
+  if (k.t === "task-1") {
+    // Synthetic detail so every icon kind appears: model calls, a tool call, the approval gate.
+    span("gen_ai.chat", ag, k.s + 7_000, 21_000, { "gen_ai.request.model": "claude-sonnet", "gen_ai.usage.input_tokens": 18_204, "gen_ai.usage.output_tokens": 1_120 });
+    span("tool.Edit", ag, k.s + 28_500, 900, { "agent.tool": "Edit" });
+    span("gen_ai.chat", ag, k.s + 30_000, 17_000, { "gen_ai.request.model": "claude-sonnet" });
+    span("approval.await", root, 192_700, 62_300, { ...a, "relay.entity_id": k.t });
+  }
   if (k.t === "task-2") {
     span("agent.claude_code", ag, k.s + 90_000, 64_000, { "relay.agent_id": "agt-task-2-review", "relay.task_id": "task-2", "agent.profile": "reviewer", "agent.turns": 7, "agent.cost_usd": 0.18, "agent.billing": "subscription" });
   }

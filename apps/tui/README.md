@@ -62,3 +62,21 @@ The registry is configured in `components.json`:
 Installed with `npx shadcn@latest add @termcn/ink/bar-chart @termcn/ink/sparkline @termcn/ink/badge` into `src/components/ui/`, with their hooks and lib. The app passes its own theme (`src/theme.ts`) through termcn's `ThemeContext`. Add more with `npx shadcn@latest add @termcn/ink/<name>`.
 
 **MCP (optional, for your editor):** run `npx shadcn@latest mcp init` in `apps/tui`, pick your client (Cursor, Claude Code, VS Code…), then enable the server in that client. The shadcn MCP server can then browse and install `@termcn/*` items from this `components.json`. See https://www.termcn.dev/docs/mcp.
+
+## Waterfall icons (`--icons glyph|nerd|minimal|none`, default `glyph`)
+
+Each row shows a kind icon before the name and a status mark after the duration. Within a set, no symbol has two meanings. Kind icons are grey, and only the selected row's icon takes the accent. Status uses the semantic colors, and `ok` is drawn faint.
+
+| kind | glyph | nerd | minimal |
+|---|---|---|---|
+| agent | ◆ | 󰚩 | A |
+| llm / turn | ◇ | 󰧑 | L |
+| tool | ▪ |  | T |
+| git | ⎇ |  | G |
+| sandbox | ▸ |  | S |
+| approval | ◷ | 󰔟 | W |
+| run / plan | ◎ |  | R |
+| actor / transition | · |  | · |
+| status ok · error · wait · running | ✓ ✕ ◌ ● |     | • (colored) |
+
+`nerd` needs a Nerd Font v3. Without one, the icons show as empty boxes. `FORCE_COLOR=3 bun scripts/icon-shots.tsx` renders all three.

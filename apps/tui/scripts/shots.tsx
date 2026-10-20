@@ -7,6 +7,8 @@ import { join } from "node:path";
 import type { TabKey } from "../src/app";
 import { renderView } from "./render";
 
+if (import.meta.main) await main();
+async function main() {
 const out = Bun.argv[2] ?? "/workspace/capcomd-tui-shots";
 mkdirSync(out, { recursive: true });
 
@@ -31,7 +33,9 @@ for (const [name, fixture, tab, extra] of shots) {
   console.log(name);
 }
 
-function toHtml(ansi: string): string {
+}
+
+export function toHtml(ansi: string): string {
   let html = "", fg = "", bold = false, dim = false, ul = false, open = false;
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const flush = () => { if (open) html += "</span>"; open = false; };
@@ -56,6 +60,6 @@ function toHtml(ansi: string): string {
   flush();
   return `<!doctype html><meta charset="utf-8"><style>
 body{margin:0;background:#15171a}
-pre{margin:0;padding:22px 26px;color:#E6E6E6;font:13px/1.32 "DejaVu Sans Mono","JetBrains Mono",Menlo,monospace;display:inline-block;white-space:pre}
+pre{margin:0;padding:22px 26px;color:#E6E6E6;font:13px/1.32 "JetBrainsMono NFM","DejaVu Sans Mono","JetBrains Mono",Menlo,monospace;display:inline-block;white-space:pre}
 </style><pre>${html}</pre>`;
 }
