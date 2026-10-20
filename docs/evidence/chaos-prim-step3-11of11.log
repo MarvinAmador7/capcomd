@@ -1,0 +1,41 @@
+=== chaos:fast start 2026-10-20T04:58:34.292Z rounds=1 jobs=11 workers=16 (cores=8 freeMB=10106 perWorkerMB=250)
+    refusing to kill pid 1684665: not owned by engine :7760
+    refusing to kill pid 1684663: not owned by engine :7900
+    refusing to kill pid 1684750: not owned by engine :7820
+    refusing to kill pid 1684662: not owned by engine :7840
+    refusing to kill pid 1684626: not owned by engine :7700
+    refusing to kill pid 1684664: not owned by engine :7720
+    refusing to kill pid 1684666: not owned by engine :7740
+    refusing to kill pid 1684659: not owned by engine :7880
+[8.2s] ✓ r1 prim driver.kill:0 driver.kill:0 w5 killed=true 8203ms [up=2025 first=5818 stop=- restart=- resume=- audit=238]
+    refusing to kill pid 1684624: not owned by engine :7860
+    refusing to kill pid 1684741: not owned by engine :7780
+    refusing to kill pid 1685680: not owned by engine :7760
+[44.5s] ✓ r1 prim push.mid:1 push.mid:1 w3 killed=true 44462ms [up=2014 first=1304 stop=90 restart=39153 resume=1223 audit=557]
+    refusing to kill pid 1685759: not owned by engine :7900
+[45.3s] ✓ r1 prim kv.cas.after.before_reply:4 kv.cas.after.before_reply:4 w10 killed=true 45329ms [up=2026 first=1906 stop=90 restart=39238 resume=1686 audit=276]
+[45.6s] ✓ r1 prim merge.after_cas.before_event:1 merge.after_cas.before_event:1 w6 killed=true 45577ms [up=2049 first=2861 stop=87 restart=39147 resume=1133 audit=189]
+    refusing to kill pid 1685941: not owned by engine :7840
+[47.2s] ✓ r1 prim board.claim.mid:2 board.claim.mid:2 w7 killed=true 47190ms [up=2019 first=2986 stop=77 restart=39139 resume=2686 audit=192]
+    refusing to kill pid 1686262: not owned by engine :7700
+[47.7s] ✓ r1 prim scope.spawn.mid:1 scope.spawn.mid:1 w0 killed=true 47713ms [up=6021 first=417 stop=153 restart=39148 resume=1309 audit=564]
+[48.1s] ✓ r1 prim scope.spawn.mid:3 scope.spawn.mid:3 w1 killed=true 48040ms [up=6029 first=660 stop=80 restart=39126 resume=1547 audit=521]
+[48.5s] ✓ r1 prim scope.cancel.mid:1 scope.cancel.mid:1 w2 killed=true 48473ms [up=6034 first=848 stop=101 restart=39140 resume=1719 audit=568]
+[49.6s] ✓ r1 prim kv.cas.mid:3 kv.cas.mid:3 w9 killed=true 49592ms [up=6020 first=1407 stop=123 restart=39135 resume=2571 audit=274]
+[51.6s] ✓ r1 prim board.claim.after.before_reply:4 board.claim.after.before_reply:4 w8 killed=true 51541ms [up=6010 first=3710 stop=90 restart=39158 resume=2339 audit=183]
+[73.9s] ✓ r1 prim push.after.before_event:1 push.after.before_event:1 w4 killed=true 73887ms [up=2041 first=20883 stop=160 restart=19883 resume=30594 audit=280]
+
+=== per-phase timing (ms, per case)
+  wipe         n=0
+  engineUp     n=11 mean=3844 p50=2049 max=6034 sum=42288
+  firstClient  n=11 mean=3891 p50=1906 max=20883 sum=42800
+  stop         n=10 mean=105 p50=90 max=160 sum=1051
+  restart      n=10 mean=37227 p50=39147 max=39238 sum=372267
+  resume       n=10 mean=4681 p50=1719 max=30594 sum=46807
+  audit        n=11 mean=349 p50=276 max=568 sum=3842
+  case total   n=11 mean=46364 p50=47713 max=73887 sum=510007
+
+=== pass counts
+  round 1 primitives: 11/11 passed (killed 11)
+  TOTAL: 11/11 passed, 0 failed, 0 host-stall (limit 1); serial-equivalent case time 510s
+=== chaos:fast end 2026-10-20T04:59:48.194Z wall=73.9s exit=0

@@ -11,7 +11,7 @@ import { seedRepo, wipeEngineData } from "./survive";
 
 // "driver.kill:0" = no engine kill: the scenario kills the driver process mid-push (engine push is slowed).
 // push.after.before_event runs with a repo: the remote branch exists when the takeover runs, so it must adopt it.
-export const PRIM_KILLPOINTS = ["scope.spawn.mid:1", "scope.spawn.mid:3", "scope.cancel.mid:1", "push.mid:1", "push.after.before_event:1", "driver.kill:0", "merge.after_cas.before_event:1"];
+export const PRIM_KILLPOINTS = ["scope.spawn.mid:1", "scope.spawn.mid:3", "scope.cancel.mid:1", "push.mid:1", "push.after.before_event:1", "driver.kill:0", "merge.after_cas.before_event:1", "board.claim.mid:2", "board.claim.after.before_reply:4", "kv.cas.mid:3", "kv.cas.after.before_reply:4"];
 const ROOT = new URL("../..", import.meta.url).pathname;
 
 function agentsFile() {
@@ -42,7 +42,8 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
   const driverKill = kp.startsWith("driver.kill");
   const adopt = kp.startsWith("push.after.before_event");
   const merge = kp.startsWith("merge.");
-  const mode = merge ? "merge" : driverKill || adopt ? "driverkill" : "tree";
+  const board = kp.startsWith("board."), kv = kp.startsWith("kv.");
+  const mode = board ? "board" : kv ? "kv" : merge ? "merge" : driverKill || adopt ? "driverkill" : "tree";
   const opts: EngineOpts = { ...baseOpts, ...(adopt || merge ? { repo: true } : {}), ...(driverKill ? { env: { CAPCOMD_FAKE_PUSH_DELAY_MS: "4000" } } : {}) };
   const engine = new Engine(`prim-${tag}`, opts);
   const extra = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1" };
@@ -67,7 +68,7 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
     if (!killed) return { ok: false, killed, error: `killpoint ${kp} never fired; client (${first.code}): ${first.output.slice(-400)}`, phases };
     if (final.code !== 0 || !final.output.includes("✓ primitives scenario ok")) return { ok: false, killed, error: `scenario failed (${final.code}): ${final.output.slice(-600)}`, phases };
     const ids = JSON.parse(final.output.split("\n").find((l) => l.startsWith("PRIM "))!.slice(5));
-    const v = mode === "merge" ? await auditMerge(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, opts) : mode === "driverkill" ? await auditPush(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, { driverKill, adopt, opts }) : await audit(ids, engineEnv(opts).CAPCOMD_ENDPOINT!);
+    const v = mode === "board" ? await auditBoard(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "kv" ? await auditKv(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "merge" ? await auditMerge(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, opts) : mode === "driverkill" ? await auditPush(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, { driverKill, adopt, opts }) : await audit(ids, engineEnv(opts).CAPCOMD_ENDPOINT!);
     mark("audit");
     return v.length ? { ok: false, killed, error: v.join("; "), phases } : { ok: true, killed, phases };
   } catch (e) {
@@ -142,5 +143,50 @@ async function auditMerge(ids: { runId: string; d: string; vfy: string; mrg: str
   const log = Bun.spawnSync(["git", "-C", bare, "log", "--format=%B", "trunk"]).stdout.toString();
   const n = log.split("Capcomd-Task:").length - 1;
   if (n !== 1) v.push(`trunk has ${n} task commits (want 1)`);
+  return v;
+}
+
+/** Board: t1 taken over exactly once (epoch 2, done by w2, late w1 fenced); t2/t3 each claimed once and done once. */
+async function auditBoard(ids: { runId: string; t1: string; t2: string; t3: string }, endpoint: string): Promise<string[]> {
+  const c: any = createClient({ endpoint });
+  const s = c.scope.getOrCreate([ids.runId]);
+  const v: string[] = [];
+  const tasks: any[] = await s.taskList({});
+  if (tasks.length !== 3) v.push(`expected 3 tasks, got ${tasks.length}`);
+  const t1 = tasks.find((t) => t.taskId === ids.t1);
+  if (t1?.status !== "done" || t1?.holder !== "w2" || t1?.epoch !== 2 || t1?.result?.by !== "w2") v.push(`t1 ${JSON.stringify(t1)}`);
+  for (const id of [ids.t2, ids.t3]) {
+    const t = tasks.find((x) => x.taskId === id);
+    if (t?.status !== "done" || t?.epoch !== 1 || t?.result?.by !== t?.holder) v.push(`${id} ${JSON.stringify(t)} (want done at epoch 1 by its only claimer)`);
+  }
+  const evs: any[] = await s.getEvents({});
+  evs.forEach((e, i) => { if (e.seq !== i + 1) v.push(`scope event gap at ${i + 1}`); });
+  const n = (type: string, id: string) => evs.filter((e) => e.type === type && e.data.taskId === id).length;
+  if (n("TASK_CLAIMED", ids.t1) !== 2) v.push(`t1 TASK_CLAIMED×${n("TASK_CLAIMED", ids.t1)} (want 2)`);
+  if (n("TASK_LEASE_EXPIRED", ids.t1) !== 1) v.push(`t1 TASK_LEASE_EXPIRED×${n("TASK_LEASE_EXPIRED", ids.t1)}`);
+  for (const id of [ids.t1, ids.t2, ids.t3]) {
+    if (n("TASK_ADDED", id) !== 1) v.push(`${id} TASK_ADDED×${n("TASK_ADDED", id)}`);
+    if (n("TASK_DONE", id) !== 1) v.push(`${id} TASK_DONE×${n("TASK_DONE", id)}`);
+  }
+  for (const id of [ids.t2, ids.t3]) if (n("TASK_CLAIMED", id) !== 1) v.push(`${id} TASK_CLAIMED×${n("TASK_CLAIMED", id)} (double claim)`);
+  const holders = [ids.t2, ids.t3].map((id) => tasks.find((x) => x.taskId === id)?.holder);
+  if (new Set(holders).size !== 2) v.push(`one racer holds both tasks: ${holders}`);
+  return v;
+}
+
+/** Kv: all 6 writers in the set, version 6 (no double apply), 6 KV_CAS events, keyed put applied once. */
+async function auditKv(ids: { runId: string }, endpoint: string): Promise<string[]> {
+  const c: any = createClient({ endpoint });
+  const s = c.scope.getOrCreate([ids.runId]);
+  const v: string[] = [];
+  const m = await s.kvGet({ k: "members" });
+  if (JSON.stringify(m?.value) !== "[0,1,2,3,4,5]") v.push(`members ${JSON.stringify(m?.value)}`);
+  if (m?.version !== 6) v.push(`members version ${m?.version} (want 6: one cas per writer)`);
+  const cfg = await s.kvGet({ k: "cfg" });
+  if (cfg?.version !== 1) v.push(`cfg version ${cfg?.version} (keyed put applied ${cfg?.version}×)`);
+  const evs: any[] = await s.getEvents({});
+  evs.forEach((e, i) => { if (e.seq !== i + 1) v.push(`scope event gap at ${i + 1}`); });
+  const cas = evs.filter((e) => e.type === "KV_CAS" && e.data.k === "members").map((e) => e.data.version);
+  if (JSON.stringify(cas) !== "[1,2,3,4,5,6]") v.push(`KV_CAS versions ${JSON.stringify(cas)}`);
   return v;
 }

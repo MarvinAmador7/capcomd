@@ -5,6 +5,53 @@ import { runNew, spawnAgent, cancelAgents, awaitAgents, verifyRef, mergeRef } fr
 
 const tag = process.argv[2] ?? "default";
 const mode = process.argv[3] ?? "tree";
+if (mode === "board") {
+  // Lease expiry + takeover, fencing of the late holder, and 4 concurrent "claim next" racers.
+  // Every write is keyed, so a rerun after an engine kill replays instead of re-applying.
+  const S = await import("../../src/primitives/state");
+  const { runId } = await runNew({ budget: { usd: 1 }, label: `chaos ${tag}`, key: `chaos-${tag}` });
+  const ids: string[] = [];
+  for (const n of ["t1", "t2", "t3"]) ids.push(((await S.taskAdd(runId, { title: n, key: n })) as any).task.taskId);
+  const t1 = ids[0]!;
+  const w1: any = await S.taskClaim(runId, { holder: "w1", taskId: t1, leaseMs: 1500, key: "c-w1" });
+  if (w1.epoch !== 1) { console.log(`✗ w1 claim ${JSON.stringify(w1)}`); process.exit(1); }
+  const cur: any = await S.taskGet(runId, t1);
+  if (cur.epoch < 2) await new Promise((r) => setTimeout(r, Math.max(0, cur.leaseUntil - Date.now()) + 300));
+  const w2: any = await S.taskClaim(runId, { holder: "w2", taskId: t1, leaseMs: 60_000, key: "c-w2" });
+  if (w2.epoch !== 2 || w2.takeover?.holder !== "w1") { console.log(`✗ w2 takeover ${JSON.stringify(w2)}`); process.exit(1); }
+  const late = await S.taskFinish(runId, { taskId: t1, holder: "w1", epoch: 1, outcome: "done", result: "stale" }).then(() => "accepted", (e) => String(e?.message));
+  if (!late.includes("lease lost") && !late.includes("is done")) { console.log(`✗ late w1 done: ${late}`); process.exit(1); }
+  await S.taskFinish(runId, { taskId: t1, holder: "w2", epoch: 2, outcome: "done", result: { by: "w2" }, key: "d-w2" });
+  const racers = ["r1", "r2", "r3", "r4"];
+  const got: any[] = await Promise.all(racers.map((h) => S.taskClaim(runId, { holder: h, leaseMs: 60_000, key: `c-${h}` })));
+  for (const g of got) if (g.claimed) await S.taskFinish(runId, { taskId: g.taskId, holder: g.holder, epoch: g.epoch, outcome: "done", result: { by: g.holder }, key: `d-${g.holder}` });
+  console.log(`PRIM ${JSON.stringify({ runId, mode, t1, t2: ids[1], t3: ids[2] })}`);
+  console.log("✓ primitives scenario ok");
+  process.exit(0);
+}
+if (mode === "kv") {
+  // 6 writers add themselves to a set with read-cas-retry; idempotent by content (a writer that
+  // finds itself in the set stops), so a reply lost to a kill is never applied twice.
+  const S = await import("../../src/primitives/state");
+  const { runId } = await runNew({ budget: { usd: 1 }, label: `chaos ${tag}`, key: `chaos-${tag}` });
+  await S.kvWrite(runId, { k: "cfg", value: { v: 1 }, key: "cfg-put" });
+  const writer = async (i: number) => {
+    for (let n = 0; n < 200; n++) {
+      const cur: any = await S.kvGet(runId, "members");
+      const set: number[] = cur.value ?? [];
+      if (set.includes(i)) return;
+      const ok = await S.kvWrite(runId, { k: "members", value: [...set, i].sort((a, b) => a - b), expect: cur.version, writer: `w${i}` }).then(() => true, (e) => {
+        if (String(e?.message).includes("cas members")) return false; throw e;
+      });
+      if (ok) return;
+    }
+    throw new Error(`writer ${i} starved`);
+  };
+  await Promise.all([0, 1, 2, 3, 4, 5].map(writer));
+  console.log(`PRIM ${JSON.stringify({ runId, mode })}`);
+  console.log("✓ primitives scenario ok");
+  process.exit(0);
+}
 if (mode === "merge") {
   // spawn → await → verify → merge --require; the engine is killed inside the merge.
   const { runId } = await runNew({ budget: { usd: 2 }, label: `chaos ${tag}`, key: `chaos-${tag}` });
