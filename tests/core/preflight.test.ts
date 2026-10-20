@@ -37,7 +37,7 @@ describe("preflight", () => {
     expect(r.find((c) => c.name === "anthropic")).toMatchObject({ ok: false });
     expect(r.find((c) => c.name === "anthropic")!.detail).toContain("ANTHROPIC_API_KEY was rejected (HTTP 401)");
     const m = await runPreflight({ CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "claude-code" }, { boxdList: async () => [], fetch: okFetch });
-    expect(m.map((c) => c.detail)).toEqual(["BOXD_API_KEY is not set", "ANTHROPIC_API_KEY is not set"]);
+    expect(m.map((c) => c.detail)).toEqual(["BOXD_API_KEY is not set", "ANTHROPIC_API_KEY is not set (or run `capcomd secrets sync` and set CAPCOMD_CREDENTIALS=secret)"]);
     expect(JSON.stringify(r)).not.toContain(ANTH);
   });
 
@@ -60,3 +60,20 @@ describe("boxd auth errors are non-retryable config errors", () => {
   });
 });
 
+
+describe("preflight: codex + host-bound secrets", () => {
+  test("codex checks OPENAI_API_KEY against /v1/models; secret mode allows no local key", async () => {
+    const seen: string[] = [];
+    const f = (async (url: string, init: any) => { seen.push(url); return new Response("{}", { status: init.headers.Authorization === "Bearer sk-proj-good-0123456789" ? 200 : 401 }); }) as any;
+    const base = { CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "codex", BOXD_API_KEY: "bxd_x" };
+    const ok = await runPreflight({ ...base, OPENAI_API_KEY: "sk-proj-good-0123456789" }, { boxdList: async () => [], fetch: f });
+    expect(ok.find((c) => c.name === "openai")).toMatchObject({ ok: true });
+    expect(seen).toEqual(["https://api.openai.com/v1/models"]);
+    const bad = await runPreflight({ ...base, OPENAI_API_KEY: "sk-proj-bad-0123456789" }, { boxdList: async () => [], fetch: f });
+    expect(bad.find((c) => c.name === "openai")!.detail).toContain("OPENAI_API_KEY was rejected (HTTP 401)");
+    expect(JSON.stringify(bad)).not.toContain("sk-proj-bad");
+    const sec = await runPreflight({ ...base, CAPCOMD_CREDENTIALS: "secret" }, { boxdList: async () => [], fetch: f });
+    expect(sec.find((c) => c.name === "openai")).toMatchObject({ ok: true });
+    expect(sec.find((c) => c.name === "openai")!.detail).toContain("host-bound secret");
+  });
+});

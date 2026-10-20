@@ -40,19 +40,28 @@ export async function runPreflight(source: Record<string, string | undefined> = 
     }
   }
 
-  if ((envVar("AGENT", source) ?? "fake").toLowerCase() === "claude-code") {
-    if (!anthKey) out.push({ name: "anthropic", ok: false, detail: "ANTHROPIC_API_KEY is not set" });
-    else {
+  const agent = (envVar("AGENT", source) ?? "fake").toLowerCase();
+  const credMode = (envVar("CREDENTIALS", source) ?? "auto").toLowerCase();
+  const spec = agent === "claude-code"
+    ? { name: "anthropic", env: "ANTHROPIC_API_KEY", label: "Anthropic", url: "https://api.anthropic.com/v1/models?limit=1", headers: (k: string) => ({ "x-api-key": k, "anthropic-version": "2023-06-01" }) }
+    : agent === "codex"
+      ? { name: "openai", env: "OPENAI_API_KEY", label: "OpenAI", url: "https://api.openai.com/v1/models", headers: (k: string) => ({ Authorization: `Bearer ${k}` }) }
+      : null;
+  if (spec) {
+    const key = source[spec.env]?.trim();
+    r.add(key);
+    if (!key) {
+      // With boxd host-bound secrets the key need not exist locally; doctor verifies it inside a VM.
+      if (credMode === "secret") out.push({ name: spec.name, ok: true, detail: `${spec.env} not set locally; using the boxd host-bound secret (verify: capcomd doctor)` });
+      else out.push({ name: spec.name, ok: false, detail: `${spec.env} is not set (or run \`capcomd secrets sync\` and set CAPCOMD_CREDENTIALS=secret)` });
+    } else {
       try {
-        const res = await (deps.fetch ?? fetch)("https://api.anthropic.com/v1/models?limit=1", {
-          headers: { "x-api-key": anthKey, "anthropic-version": "2023-06-01" },
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (res.ok) out.push({ name: "anthropic", ok: true, detail: "ANTHROPIC_API_KEY accepted (GET /v1/models)" });
-        else if (res.status === 401 || res.status === 403) out.push({ name: "anthropic", ok: false, detail: `ANTHROPIC_API_KEY was rejected (HTTP ${res.status}). Check the key (no quotes or whitespace) and retry.` });
-        else { let msg = ""; try { const j: any = await res.json(); msg = `${j?.error?.type ?? ""}: ${j?.error?.message ?? ""}`.slice(0, 300); } catch {} out.push({ name: "anthropic", ok: false, detail: `Anthropic API returned HTTP ${res.status}${msg ? ` (${msg})` : ""}` }); }
+        const res = await (deps.fetch ?? fetch)(spec.url, { headers: spec.headers(key), signal: AbortSignal.timeout(15_000) });
+        if (res.ok) out.push({ name: spec.name, ok: true, detail: `${spec.env} accepted (GET /v1/models)` });
+        else if (res.status === 401 || res.status === 403) out.push({ name: spec.name, ok: false, detail: `${spec.env} was rejected (HTTP ${res.status}). Check the key (no quotes or whitespace) and retry.` });
+        else { let msg = ""; try { const j: any = await res.json(); msg = `${j?.error?.type ?? j?.error?.code ?? ""}: ${j?.error?.message ?? ""}`.slice(0, 300); } catch {} out.push({ name: spec.name, ok: false, detail: `${spec.label} API returned HTTP ${res.status}${msg ? ` (${msg})` : ""}` }); }
       } catch (err) {
-        out.push({ name: "anthropic", ok: false, detail: `Anthropic API unreachable: ${r.text((err as Error)?.message ?? String(err)).slice(0, 300)}` });
+        out.push({ name: spec.name, ok: false, detail: `${spec.label} API unreachable: ${r.text((err as Error)?.message ?? String(err)).slice(0, 300)}` });
       }
     }
   }

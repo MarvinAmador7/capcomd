@@ -1,4 +1,4 @@
-import { agentFromEnv } from "../agents/config";
+import { agentFromEnv, isRealAgent } from "../agents/config";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -35,7 +35,7 @@ export const plannerActor = actor({
       }
 
       // Real agent (claude-code): one goal becomes one task; the agent does its own decomposition.
-      if (agentFromEnv() === "claude-code") {
+      if (isRealAgent(agentFromEnv())) {
         const tasks = [{ id: "task-1", goal }];
         await c.db.execute(
           `INSERT INTO lifecycle (entity_id, machine, version, state, context, seq)

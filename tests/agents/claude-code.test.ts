@@ -104,7 +104,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(err).toBeInstanceOf(AgentError);
     expect(err.kind).toBe("timeout");
     expect(Date.now() - t0).toBeLessThan(40_000);
-    const pid = Number(readFileSync(join(s.W, "claude.pid"), "utf8"));
+    const pid = Number(readFileSync(join(s.W, "agent.pid"), "utf8"));
     await Bun.sleep(1500);
     expect(existsSync(`/proc/${pid}`)).toBe(false);
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBeNull();
@@ -115,7 +115,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     let polls = 0;
     const err = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY, isCancelled: async () => ++polls >= 3 }).catch((e) => e);
     expect(err.kind).toBe("cancelled");
-    const pid = Number(readFileSync(join(s.W, "claude.pid"), "utf8"));
+    const pid = Number(readFileSync(join(s.W, "agent.pid"), "utf8"));
     await Bun.sleep(1500);
     expect(existsSync(`/proc/${pid}`)).toBe(false);
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBeNull();
