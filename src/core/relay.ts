@@ -1,4 +1,6 @@
 // Data-returning operations shared by the CLI (`--json` and human output) and `capcomd mcp`.
+import { preflightNeeded, runPreflight } from "./preflight";
+import { BOXD_AUTH_HINT, isBoxdAuthError } from "../providers/boxd-errors";
 import { createClient } from "rivetkit/client";
 import type { Registry } from "../registry";
 import { RelayError, SCHEMA, toRelayError } from "./errors";
@@ -107,8 +109,23 @@ export interface RunResult {
 export async function executeRun(opts: RunOptions): Promise<RunResult> {
   const runId = opts.runId ?? generateRunId();
   // Recovery reap: a crashed earlier attempt may have left a sandbox behind.
+  // Real sandbox: validate credentials before creating the run (fail fast, never print keys).
+  if (preflightNeeded()) {
+    const bad = (await runPreflight()).filter((x) => !x.ok);
+    if (bad.length) throw new RelayError("config", `Preflight failed: ${bad.map((x) => x.detail).join("; ")}`, "Fix the credentials above, then rerun. (CAPCOMD_SKIP_PREFLIGHT=1 skips this check.)");
+  }
   await reapSandboxes(client(), runId).catch(() => {});
-  const result = await executeRunInner({ ...opts, runId });
+  let result: RunResult;
+  try {
+    result = await executeRunInner({ ...opts, runId });
+  } catch (error) {
+    // A rejected sandbox credential is a non-retryable config error: fail the run with a clear reason.
+    if (!isBoxdAuthError(error)) throw error;
+    const reason = `boxd rejected BOXD_API_KEY (invalid or expired). ${BOXD_AUTH_HINT}`;
+    await client().run.getOrCreate([runId]).configFail({ runId, reason });
+    opts.emit("run.failed", { state: "failed", reason, kind: "config", retryable: false }, `\n✗ Run failed (config): ${reason}`);
+    result = { runId, state: "failed", ok: false, feedback: reason };
+  }
   if (["completed", "failed", "cancelled"].includes(result.state)) {
     await teardownRun(client(), runId);
     opts.emit("worker.destroyed", { workerId: `${runId}-worker-1` }, `✓ Sandbox destroyed`);

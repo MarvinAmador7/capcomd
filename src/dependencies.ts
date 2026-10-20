@@ -59,7 +59,7 @@ export function providerFromEnv(env: Record<string, string | undefined> = proces
   // Test sandbox: exec runs on this host (agent adapter e2e with a fake claude binary).
   if (kind === "fake-host") return new FakeProvider({ hostExec: true });
   if (kind !== "fake") throw new Error(`Unknown CAPCOMD_SANDBOX=${kind} (expected fake|boxd)`);
-  return new FakeProvider();
+  return new FakeProvider(env.CAPCOMD_FAKE_ENSURE_ERROR === "auth" ? { failEnsure: "auth" } : {});
 }
 
 export function initDependencies(config?: { model?: ModelClient; provider?: SandboxProvider }) {

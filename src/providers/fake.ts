@@ -26,6 +26,8 @@ export interface FakeProviderOptions {
   inheritEnv?: string[];
   /** Records every exec (cmd + env names, never values) for assertions. */
   log?: Array<{ cmd: string[]; envKeys: string[]; env?: Record<string, string> }>;
+  /** Test hook: make ensure() fail like boxd does for a bad key ("auth"). */
+  failEnsure?: "auth";
 }
 
 export class FakeProvider implements SandboxProvider {
@@ -36,6 +38,11 @@ export class FakeProvider implements SandboxProvider {
   constructor(readonly opts: FakeProviderOptions = {}) {}
 
   async ensure(spec: VmSpec): Promise<{ id: VmId; created: boolean }> {
+    if (this.opts.failEnsure === "auth") {
+      const { mapBoxdError } = await import("./boxd-errors");
+      class AuthenticationError extends Error {}
+      throw mapBoxdError(new AuthenticationError("invalid or expired API key"), undefined, "machines.create");
+    }
     const existing = Array.from(this.vms.values()).find(
       (vm) => vm.name === spec.idemKey && vm.state !== "destroyed"
     );

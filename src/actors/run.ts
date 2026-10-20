@@ -215,6 +215,21 @@ export const runActor = actor({
       }, { name: "judgeFail" });
     },
 
+    /** Fail the run for a non-retryable configuration problem (e.g. BOXD_API_KEY rejected). Idempotent. */
+    async configFail(c, params: { runId: string; reason: string }) {
+      const { runId, reason } = params;
+      const runLife = await getLifecycle(c.db, runId);
+      if (!runLife) return { state: null };
+      const snap = runMachine.resolveState({ value: runLife.state, context: JSON.parse(runLife.context) });
+      const event = { type: "CONFIG_ERROR" as const, reason };
+      if (!snap.can(event)) return { state: runLife.state };
+      const [next] = transition(runMachine, snap, event);
+      await c.db.transaction(async (tx) => {
+        await transitionLifecycle(tx, runId, "run", next.value as string, next.context, event, `run-${runId}-config-fail`, []);
+      }, { name: "configFail" });
+      return { state: next.value as string };
+    },
+
     async cancel(c, params: { runId: string }) {
       const { runId } = params;
 

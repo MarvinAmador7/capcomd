@@ -1,5 +1,6 @@
 import { traceActions } from "../utils/tracing-simple";
-import { actor } from "rivetkit";
+import { actor, UserError } from "rivetkit";
+import { isBoxdAuthError } from "../providers/boxd-errors";
 import { db } from "rivetkit/db";
 import { workerMachine, type WorkerContext } from "../machines/worker";
 import { initialTransition, transition } from "xstate";
@@ -232,6 +233,8 @@ export const workerActor = actor({
           );
         }, { name: "vmFailed" });
 
+        // Cross the actor boundary with a readable, typed error (plain errors are masked as "internal error").
+        if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
         throw error;
       }
     },
@@ -321,6 +324,9 @@ export const workerActor = actor({
         ttlSeconds: 3600,
         egressAllow: egressAllow(),
         labels: { workerId, taskId, epoch: String(epoch) },
+      }).catch((error) => {
+        if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
+        throw error;
       });
       await provider.waitReady(vmId, 90_000);
 

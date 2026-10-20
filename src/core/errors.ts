@@ -8,7 +8,7 @@ export const EXIT = {
   engine_unreachable: 4,
 } as const;
 
-export type ErrorCode = "run_failed" | "usage" | "not_found" | "engine_unreachable" | "conflict";
+export type ErrorCode = "run_failed" | "usage" | "not_found" | "engine_unreachable" | "conflict" | "config";
 
 const EXIT_FOR: Record<ErrorCode, number> = {
   run_failed: EXIT.run_failed,
@@ -16,6 +16,7 @@ const EXIT_FOR: Record<ErrorCode, number> = {
   not_found: EXIT.not_found,
   engine_unreachable: EXIT.engine_unreachable,
   conflict: EXIT.run_failed,
+  config: EXIT.usage,
 };
 
 /** An error with a stable code, an exit code and a next step for the caller. */

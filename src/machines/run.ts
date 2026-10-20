@@ -12,6 +12,8 @@ export interface RunContext {
     version: number;
   };
   providerOutages: number;
+  /** Set when the run failed for a non-retryable reason (e.g. sandbox credentials rejected). */
+  failure?: { kind: "config"; reason: string; retryable: false };
 }
 
 export type RunEvent =
@@ -22,7 +24,8 @@ export type RunEvent =
   | { type: "JUDGE_FAIL"; reason: string }
   | { type: "CANCEL" }
   | { type: "PROVIDER_OUTAGE" }
-  | { type: "PROVIDER_RECOVERED" };
+  | { type: "PROVIDER_RECOVERED" }
+  | { type: "CONFIG_ERROR"; reason: string };
 
 export const runMachine = setup({
   types: {
@@ -54,6 +57,9 @@ export const runMachine = setup({
     incrementOutages: assign({
       providerOutages: ({ context }) => context.providerOutages + 1,
     }),
+    storeFailure: assign({
+      failure: ({ event }) => ({ kind: "config" as const, reason: event.type === "CONFIG_ERROR" ? event.reason : "config error", retryable: false as const }),
+    }),
   },
 }).createMachine({
   id: "run",
@@ -70,12 +76,14 @@ export const runMachine = setup({
           actions: ["storePlan"],
         },
         CANCEL: "cancelled",
+        CONFIG_ERROR: { target: "failed", actions: ["storeFailure"] },
       },
     },
     executing: {
       on: {
         ALL_TASKS_TERMINAL: "judging",
         CANCEL: "cancelled",
+        CONFIG_ERROR: { target: "failed", actions: ["storeFailure"] },
         PROVIDER_OUTAGE: {
           target: "degraded",
           actions: ["incrementOutages"],
@@ -85,6 +93,7 @@ export const runMachine = setup({
     degraded: {
       on: {
         PROVIDER_RECOVERED: "executing",
+        CONFIG_ERROR: { target: "failed", actions: ["storeFailure"] },
         CANCEL: "cancelled",
       },
     },
