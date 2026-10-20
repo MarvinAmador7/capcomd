@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { casOk, checkKey, claimable, fence, leaseMs, pickNext, type BoardTask } from "../../src/primitives/board";
+import { blockers, casOk, checkKey, claimable, fence, findCycle, leaseMs, pickNext, valueBytes, type BoardTask } from "../../src/primitives/board";
 
 const t = (o: Partial<BoardTask>): BoardTask => ({ taskId: "tsk-1", title: "x", data: null, status: "open", holder: null, epoch: 0, leaseUntil: 0, result: null, ...o });
 
@@ -45,5 +45,23 @@ describe("blackboard", () => {
     expect(checkKey("plan/v1:step-2")).toBe("plan/v1:step-2");
     expect(() => checkKey("has space")).toThrow();
     expect(() => checkKey("")).toThrow();
+  });
+});
+
+describe("dependencies", () => {
+  test("blockers lists deps not done; pickNext skips blocked tasks", () => {
+    const a = t({ taskId: "a", status: "done" }), b = t({ taskId: "b", after: ["a"] }), c = t({ taskId: "c", after: ["a", "b"] });
+    expect(blockers(c, new Set(["a"]))).toEqual(["b"]);
+    expect(pickNext([c, b, a], 0)?.taskId).toBe("b");
+    expect(pickNext([c, t({ taskId: "b", after: ["a"], status: "claimed", holder: "x", epoch: 1, leaseUntil: 99 }), a], 0)).toBeNull();
+  });
+  test("findCycle finds self, 2- and 3-cycles; DAGs pass", () => {
+    expect(findCycle(new Map([["a", ["a"]]]))).toEqual(["a", "a"]);
+    expect(findCycle(new Map([["a", ["b"]], ["b", ["c"]], ["c", ["a"]]]))).toEqual(["a", "b", "c", "a"]);
+    expect(findCycle(new Map([["a", []], ["b", ["a"]], ["c", ["a", "b"]]]))).toBeNull();
+  });
+  test("valueBytes is UTF-8 JSON size", () => {
+    expect(valueBytes({ a: 1 })).toBe(7);
+    expect(valueBytes("é")).toBe(4);
   });
 });

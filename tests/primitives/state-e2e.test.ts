@@ -9,6 +9,7 @@ import { spawn } from "child_process";
 import { Engine } from "../chaos/engine";
 import { capcomd } from "../helpers/engine";
 import { primitivesAgentsFile } from "./helpers";
+import { stableId } from "../../src/primitives/policy";
 
 const PORT = 7681;
 let engine: Engine;
@@ -115,3 +116,44 @@ test("blackboard: put, cas, replay, race, list; events --follow", async () => {
   expect(types.at(-1)).toBe("KV_PUT");
   expect(lines.at(-1)).toMatchObject({ end: { stopped: "until", type: "KV_PUT" } });
 }, 180_000);
+
+test("dependencies, kv delete tombstones, kv size cap", async () => {
+  const runId = (await cj(["run", "new", "--budget", "usd=1", "--key", `dep-${Date.now()}`])).j.runId;
+  const a = (await cj(["task", "add", runId, "--title", "schema", "--key", "a"])).j.task.taskId;
+  const b = (await cj(["task", "add", runId, "--title", "api", "--after", a, "--key", "b"])).j.task.taskId;
+  const c = (await cj(["task", "add", runId, "--title", "ui", "--after", `${a},${b}`, "--key", "c"])).j.task.taskId;
+  expect((await cj(["task", "add", runId, "--title", "x", "--after", "tsk-nope", "--key", "x"])).j).toMatchObject({ ok: false, error: { code: "not_found" } });
+  // self-dependency: the id is a pure function of (runId, key), so a task can name itself
+  const loopId = stableId("tsk", runId, "loop");
+  const loop = await cj(["task", "add", runId, "--title", "loop", "--key", "loop", "--after", loopId]);
+  expect(loop.j).toMatchObject({ ok: false, error: { code: "usage" } });
+  expect(loop.j.error.message).toContain(`cycle: ${loopId} -> ${loopId}`);
+  const selfId = (await cj(["task", "add", runId, "--title", "probe", "--key", "self"])).j.task.taskId;
+  expect((await cj(["task", "list", runId])).j.tasks.find((t: any) => t.taskId === c).blockedBy.sort()).toEqual([a, b].sort());
+  expect((await cj(["task", "claim", runId, b, "--holder", "w"])).j).toMatchObject({ ok: false, error: { code: "conflict" } });
+  // claim-next skips blocked: a then the probe, never b/c
+  const n1 = (await cj(["task", "claim", runId, "--holder", "w1"])).j;
+  expect(n1.taskId).toBe(a);
+  expect((await cj(["task", "done", runId, a, "--holder", "w1", "--epoch", "1"])).j).toMatchObject({ status: "done" });
+  const n2 = (await cj(["task", "claim", runId, "--holder", "w2"])).j;
+  expect(n2.taskId).toBe(b);
+  const n3 = (await cj(["task", "claim", runId, "--holder", "w3"])).j;
+  expect(n3.taskId).toBe(selfId); // c is still blocked by b
+  await cj(["task", "done", runId, b, "--holder", "w2", "--epoch", "1"]);
+  expect((await cj(["task", "claim", runId, "--holder", "w4"])).j.taskId).toBe(c);
+
+  expect((await cj(["kv", "put", runId, "k", '"v1"'])).j).toMatchObject({ version: 1 });
+  expect((await cj(["kv", "del", runId, "k", "--expect", "0"])).j).toMatchObject({ ok: false, error: { code: "conflict" } });
+  expect((await cj(["kv", "del", runId, "k", "--expect", "1", "--key", "d1"])).j).toMatchObject({ version: 2, deleted: true });
+  expect((await cj(["kv", "del", runId, "k", "--expect", "1", "--key", "d1"])).j).toMatchObject({ version: 2, replayed: true });
+  expect((await cj(["kv", "get", runId, "k"])).j).toMatchObject({ value: null, version: 2, deleted: true });
+  expect((await cj(["kv", "list", runId])).j.entries).toHaveLength(0);
+  expect((await cj(["kv", "list", runId, "--all"])).j.entries).toHaveLength(1);
+  expect((await cj(["kv", "del", runId, "k"])).j).toMatchObject({ noop: true, version: 2 });
+  expect((await cj(["kv", "cas", runId, "k", '"v3"', "--expect", "2"])).j).toMatchObject({ version: 3 });
+  expect((await cj(["kv", "get", runId, "k"])).j).toMatchObject({ value: "v3", version: 3, deleted: false });
+  const big = JSON.stringify("x".repeat(70_000));
+  const tooBig = await cj(["kv", "put", runId, "big", big]);
+  expect(tooBig.j).toMatchObject({ ok: false, error: { code: "usage" } });
+  expect(tooBig.j.error.message).toContain("cap is 65536");
+}, 120_000);

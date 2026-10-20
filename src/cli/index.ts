@@ -47,10 +47,10 @@ Usage:
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P] [--target T] [--key K]  → vfy-…
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
-  capcomd task add <runId> --title T [--data JSON] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
+  capcomd task add <runId> --title T [--data JSON] [--after tsk,…] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
   capcomd task renew|release|done <runId> <tsk> --holder H --epoch E [--lease-ms N] [--result JSON] [--key K]   (fenced: a stale epoch is rejected)
-  capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv list <runId> [--prefix P]
+  capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv del <runId> <k> [--expect V]  ·  kv list <runId> [--prefix P] [--all]   (values ≤ 64KB)
   capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start]   (with --json: one JSON event per line)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
@@ -146,6 +146,8 @@ async function main(argv: string[]): Promise<number> {
         status: { type: "string" },
         prefix: { type: "string" },
         "from-start": { type: "boolean" },
+        after: { type: "string", multiple: true },
+        all: { type: "boolean" },
       },
       allowPositionals: true,
       strict: true,
@@ -392,7 +394,7 @@ async function main(argv: string[]): Promise<number> {
         const lease = values["lease-ms"] !== undefined ? Number(values["lease-ms"]) : undefined;
         const key = values.key as string | undefined;
         let r: Record<string, unknown>;
-        if (sub === "add") r = await S.taskAdd(runId, { title: (values.title as string | undefined) ?? positionals[3] ?? usage("--title required"), data: jsonish(values.data), key });
+        if (sub === "add") r = await S.taskAdd(runId, { title: (values.title as string | undefined) ?? positionals[3] ?? usage("--title required"), data: jsonish(values.data), key, after: ((values.after as string[] | undefined) ?? []).flatMap((x) => x.split(",")).map((x) => x.trim()).filter(Boolean) });
         else if (sub === "claim") r = await S.taskClaim(runId, { holder: holder(), taskId: positionals[3], leaseMs: lease, key });
         else if (sub === "renew") r = await S.taskRenew(runId, { taskId: positionals[3] ?? usage("task id required"), holder: holder(), epoch: epoch(), leaseMs: lease });
         else if (sub === "release" || sub === "done") r = await S.taskFinish(runId, { taskId: positionals[3] ?? usage("task id required"), holder: holder(), epoch: epoch(), outcome: sub === "done" ? "done" : "released", result: jsonish(values.result), key });
@@ -400,7 +402,7 @@ async function main(argv: string[]): Promise<number> {
         else if (sub === "show") r = { ...(await S.taskGet(runId, positionals[3] ?? usage("task id required"))) };
         else return usage("usage: capcomd task add|claim|renew|release|done|list|show <runId> …");
         if (json) out(r);
-        else if (sub === "list") for (const t of (r.tasks as any[])) console.log(`${t.taskId}  ${t.status}${t.expired ? "(expired)" : ""}  ${t.holder ?? "-"}  e${t.epoch}  ${t.title}`);
+        else if (sub === "list") for (const t of (r.tasks as any[])) console.log(`${t.taskId}  ${t.status}${t.expired ? "(expired)" : ""}${t.blockedBy?.length ? `(blocked by ${t.blockedBy.join(",")})` : ""}  ${t.holder ?? "-"}  e${t.epoch}  ${t.title}`);
         else console.log(JSON.stringify(r, null, 2));
         return EXIT.ok;
       }
@@ -417,8 +419,10 @@ async function main(argv: string[]): Promise<number> {
         else if (sub === "cas") {
           const e = values.expect === undefined ? usage("--expect V required (the version you read; 0 = must not exist)") : Number(values.expect);
           r = await S.kvWrite(runId, { k: k(), value: val(), expect: e, writer: values.holder as string | undefined, key: values.key as string | undefined });
-        } else if (sub === "list") r = await S.kvList(runId, values.prefix as string | undefined);
-        else return usage("usage: capcomd kv get|put|cas|list <runId> …");
+        } else if (sub === "del" || sub === "delete") {
+          r = await S.kvWrite(runId, { k: k(), value: null, del: true, ...(values.expect !== undefined ? { expect: Number(values.expect) } : {}), writer: values.holder as string | undefined, key: values.key as string | undefined });
+        } else if (sub === "list") r = await S.kvList(runId, values.prefix as string | undefined, !!values.all);
+        else return usage("usage: capcomd kv get|put|cas|del|list <runId> …");
         if (json) out(r);
         else if (sub === "list") for (const e of (r.entries as any[])) console.log(`${e.k}  v${e.version}  ${JSON.stringify(e.value)}`);
         else console.log(JSON.stringify(r, null, 2));

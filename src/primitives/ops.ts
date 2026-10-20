@@ -26,6 +26,9 @@ export function asRelay(e: unknown): never {
   if (code === "children_limit" || code === "widening") throw new RelayError("config", msg, "Spawn a profile the parent allows, narrow the overrides, or (operator) pass --operator for spec widening.");
   if (code === "lease_held") throw new RelayError("conflict", msg, "Claim another task (omit the id to take the next free one), or wait for the lease to expire.");
   if (code === "lease_lost" || code === "not_claimed") throw new RelayError("conflict", msg, "Your lease was taken over (its epoch moved). Stop work on this task; claim again if it is still open.");
+  if (code === "blocked") throw new RelayError("conflict", msg, "Finish its --after tasks first, or claim without an id to get the next ready task.");
+  if (code === "cycle") throw new RelayError("usage", msg, "A task may only depend on tasks that don't (transitively) depend on it.");
+  if (code === "too_large") throw new RelayError("usage", msg, "Store large blobs elsewhere (a branch, a file in the repo) and put a reference in kv. Cap: CAPCOMD_KV_MAX_BYTES on the engine.");
   if (code === "cas_mismatch") throw new RelayError("conflict", msg, "Re-read with `capcomd kv get`, recompute, and cas with the new --expect version.");
   if (code === "budget" || code === "parent_terminal") throw new RelayError("conflict", msg, "Request a smaller --budget or free budget by cancelling agents.");
   throw e;

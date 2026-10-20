@@ -9,18 +9,26 @@ import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
 import { checkSpawn, TERMINAL_AGENT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
-import { casOk, claimable, fence, pickNext, type BoardTask } from "../primitives/board";
+import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
   return {
     taskId: r.task_id as string, title: r.title as string, data: r.data ? JSON.parse(r.data) : null, status: r.status,
     holder: (r.holder as string | null) ?? null, epoch: Number(r.epoch), leaseUntil: Number(r.lease_until ?? 0),
     result: r.result ? JSON.parse(r.result) : null, key: (r.idem_key as string | null) ?? null,
+    after: r.after_ids ? (JSON.parse(r.after_ids) as string[]) : [],
     createdAt: Number(r.created_at), updatedAt: Number(r.updated_at),
   };
 }
 export type ScopeTask = ReturnType<typeof rowToTask>;
-const kvRow = (r: any) => ({ k: r.k as string, value: JSON.parse(r.v), version: Number(r.version), writer: (r.writer as string | null) ?? null, updatedAt: Number(r.updated_at) });
+const kvRow = (r: any) => ({ k: r.k as string, value: JSON.parse(r.v), version: Number(r.version), deleted: Number(r.deleted ?? 0) === 1, writer: (r.writer as string | null) ?? null, updatedAt: Number(r.updated_at) });
+const KV_MAX_BYTES = Number(process.env.CAPCOMD_KV_MAX_BYTES ?? DEFAULT_KV_MAX_BYTES);
+
+/** Columns added after a table first shipped: add them if missing (existing scope actors). */
+async function addColumn(db: any, table: string, col: string, decl: string) {
+  const cols = await db.execute(`PRAGMA table_info(${table})`);
+  if (!cols.some((c: any) => c.name === col)) await db.execute(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+}
 export type KvEntry = ReturnType<typeof kvRow>;
 
 /** Replay a keyed write: same key + same params returns the recorded result; other params = conflict. */
@@ -106,6 +114,8 @@ export const scopeActor = actor({
           params_hash TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
         )`);
       await database.execute(`CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL, version INTEGER NOT NULL, writer TEXT, updated_at INTEGER NOT NULL)`);
+      await addColumn(database, "board_tasks", "after_ids", "TEXT");
+      await addColumn(database, "kv", "deleted", "INTEGER NOT NULL DEFAULT 0");
       await database.execute(`CREATE TABLE IF NOT EXISTS idem (idem_key TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`
         CREATE TABLE IF NOT EXISTS scope_events (
@@ -315,16 +325,25 @@ export const scopeActor = actor({
     },
 
     // ---- ADR-016 step 3: task board with leases ----
-    async taskAdd(c, params: { taskId: string; title: string; data?: unknown; key?: string; paramsHash: string }) {
+    async taskAdd(c, params: { taskId: string; title: string; data?: unknown; after?: string[]; key?: string; paramsHash: string }) {
       const get = async (db: any) => { const r = await db.execute("SELECT * FROM board_tasks WHERE task_id = ?", params.taskId); return r.length ? rowToTask(r[0]) : null; };
       let created = false;
       await c.db.transaction(async (tx: RawAccess) => {
         const have = await tx.execute("SELECT params_hash FROM board_tasks WHERE task_id = ?", params.taskId);
         if (have.length) { if (have[0]!.params_hash !== params.paramsHash) fail("conflict", `task ${params.taskId} already exists with different parameters`); return; }
+        const after = [...new Set(params.after ?? [])];
+        const all = (await tx.execute("SELECT task_id, after_ids FROM board_tasks")) as any[];
+        const known = new Set(all.map((r) => r.task_id as string));
+        const missing = after.filter((d) => d !== params.taskId && !known.has(d));
+        if (missing.length) fail("not_found", `--after: unknown task(s) ${missing.join(", ")}`);
+        const graph = new Map<string, string[]>(all.map((r) => [r.task_id as string, r.after_ids ? JSON.parse(r.after_ids) : []]));
+        graph.set(params.taskId, after);
+        const cycle = findCycle(graph);
+        if (cycle) fail("cycle", `--after would create a dependency cycle: ${cycle.join(" -> ")}`);
         const now = Date.now();
-        await tx.execute("INSERT INTO board_tasks (task_id, title, data, status, holder, epoch, lease_until, result, idem_key, params_hash, created_at, updated_at) VALUES (?, ?, ?, 'open', NULL, 0, 0, NULL, ?, ?, ?, ?)",
-          params.taskId, params.title, params.data === undefined ? null : JSON.stringify(params.data), params.key ?? null, params.paramsHash, now, now);
-        await addEvent(tx, "TASK_ADDED", null, { taskId: params.taskId, title: params.title }, `task-add-${params.taskId}`);
+        await tx.execute("INSERT INTO board_tasks (task_id, title, data, status, holder, epoch, lease_until, result, idem_key, params_hash, created_at, updated_at, after_ids) VALUES (?, ?, ?, 'open', NULL, 0, 0, NULL, ?, ?, ?, ?, ?)",
+          params.taskId, params.title, params.data === undefined ? null : JSON.stringify(params.data), params.key ?? null, params.paramsHash, now, now, after.length ? JSON.stringify(after) : null);
+        await addEvent(tx, "TASK_ADDED", null, { taskId: params.taskId, title: params.title, ...(after.length ? { after } : {}) }, `task-add-${params.taskId}`);
         created = true;
       }, { name: "scopeTaskAdd" });
       return { created, task: (await get(c.db))! };
@@ -343,8 +362,11 @@ export const scopeActor = actor({
           t = rowToTask(r[0]);
           const ok = claimable(t, now);
           if (!ok.ok) fail("lease_held", ok.why);
+          const done = new Set(((await tx.execute("SELECT task_id FROM board_tasks WHERE status = 'done'")) as any[]).map((x) => x.task_id as string));
+          const b = blockers(t, done);
+          if (b.length) fail("blocked", `task ${t.taskId} is blocked by ${b.join(", ")} (not done yet)`);
         } else {
-          t = pickNext((await tx.execute("SELECT * FROM board_tasks WHERE status != 'done' ORDER BY created_at, task_id")).map(rowToTask), now);
+          t = pickNext((await tx.execute("SELECT * FROM board_tasks ORDER BY created_at, task_id")).map(rowToTask), now);
           if (!t) { out = { claimed: false, task: null }; return; }
         }
         const take = claimable(t, now);
@@ -412,24 +434,27 @@ export const scopeActor = actor({
         ? await c.db.execute("SELECT * FROM board_tasks WHERE status = ? ORDER BY created_at, task_id", params.status)
         : await c.db.execute("SELECT * FROM board_tasks ORDER BY created_at, task_id");
       const now = Date.now();
-      return rows.map(rowToTask).map((t: ScopeTask) => ({ ...t, expired: t.status === "claimed" && t.leaseUntil <= now }));
+      const done = new Set(((await c.db.execute("SELECT task_id FROM board_tasks WHERE status = 'done'")) as any[]).map((x) => x.task_id as string));
+      return rows.map(rowToTask).map((t: ScopeTask) => ({ ...t, expired: t.status === "claimed" && t.leaseUntil <= now, blockedBy: t.status === "done" ? [] : blockers(t, done) }));
     },
 
     // ---- ADR-016 step 3: blackboard (versioned kv) ----
-    async kvWrite(c, params: { k: string; value: unknown; expect?: number; writer?: string; key?: string; paramsHash: string }) {
+    async kvWrite(c, params: { k: string; value: unknown; expect?: number; writer?: string; key?: string; paramsHash: string; del?: boolean }) {
+      if (!params.del && valueBytes(params.value) > KV_MAX_BYTES) fail("too_large", `kv ${params.k}: value is ${valueBytes(params.value)} bytes, cap is ${KV_MAX_BYTES}`);
       let out: Record<string, unknown> = {};
       await c.db.transaction(async (tx: RawAccess) => {
         const prev = await replay(tx, params.key, params.paramsHash);
         if (prev) { out = prev; return; }
-        const r = await tx.execute("SELECT version FROM kv WHERE k = ?", params.k);
+        const r = await tx.execute("SELECT version, deleted FROM kv WHERE k = ?", params.k);
         const cur = r.length ? Number(r[0]!.version) : 0;
+        if (params.del && (!r.length || Number(r[0]!.deleted) === 1) && params.expect === undefined) { out = { k: params.k, version: cur, ok: true, deleted: true, noop: true }; return; }
         if (params.expect !== undefined && !casOk(cur, params.expect)) fail("cas_mismatch", `cas ${params.k}: version is ${cur}, expected ${params.expect}`);
         const version = cur + 1, now = Date.now();
-        await tx.execute("INSERT INTO kv (k, v, version, writer, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v, version = excluded.version, writer = excluded.writer, updated_at = excluded.updated_at",
-          params.k, JSON.stringify(params.value ?? null), version, params.writer ?? null, now);
+        await tx.execute("INSERT INTO kv (k, v, version, writer, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v, version = excluded.version, writer = excluded.writer, updated_at = excluded.updated_at, deleted = excluded.deleted",
+          params.k, JSON.stringify(params.del ? null : (params.value ?? null)), version, params.writer ?? null, now, params.del ? 1 : 0);
         killpoint("kv.cas.mid");
-        await addEvent(tx, params.expect === undefined ? "KV_PUT" : "KV_CAS", null, { k: params.k, version, ...(params.writer ? { writer: params.writer } : {}) }, `kv-${params.k}-${version}`);
-        out = { k: params.k, version, ok: true };
+        await addEvent(tx, params.del ? "KV_DELETE" : params.expect === undefined ? "KV_PUT" : "KV_CAS", null, { k: params.k, version, ...(params.writer ? { writer: params.writer } : {}) }, `kv-${params.k}-${version}`);
+        out = { k: params.k, version, ok: true, ...(params.del ? { deleted: true } : {}) };
         await remember(tx, params.key, "kv", params.paramsHash, out);
       }, { name: "scopeKvWrite" });
       killpoint("kv.cas.after.before_reply");
@@ -441,9 +466,9 @@ export const scopeActor = actor({
       return r.length ? kvRow(r[0]) : null;
     },
 
-    async kvList(c, params: { prefix?: string }) {
+    async kvList(c, params: { prefix?: string; all?: boolean }) {
       const p = params.prefix ?? "";
-      const rows = await c.db.execute("SELECT * FROM kv WHERE substr(k, 1, ?) = ? ORDER BY k", p.length, p);
+      const rows = await c.db.execute(`SELECT * FROM kv WHERE substr(k, 1, ?) = ? ${params.all ? "" : "AND deleted = 0"} ORDER BY k`, p.length, p);
       return rows.map(kvRow);
     },
 

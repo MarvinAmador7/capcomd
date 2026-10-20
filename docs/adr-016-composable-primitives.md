@@ -112,4 +112,11 @@ Both live in the run's scope actor (one SQLite transaction per write, engine clo
   - End to end: `tests/primitives/state-e2e.test.ts` covers fencing, expiry takeover, keyed replay, a 6-writer cas counter race, and `--follow --until`.
   - Chaos: `board.claim.mid:2`, `board.claim.after.before_reply:4`, `kv.cas.mid:3`, `kv.cas.after.before_reply:4`. Audits check the takeover epoch, that the late holder is fenced, one claim per task among 4 concurrent racers, a set of 6 cas writers at exactly version 6, a keyed put applied once, and contiguous event seqs.
   - Negative control: with claim replay removed, `board.claim.after.before_reply:4` fails.
-- **Not built:** task dependencies, kv value size cap, kv delete, server-push subscribe (follow polls).
+- **Dependencies:** `task add --after tsk,…`. A task is blocked until all its deps are done.
+  - Claim-next skips blocked tasks; an explicit claim of a blocked task fails with "blocked by …" (`conflict`). `task list` shows `blockedBy`.
+  - Deps are fixed when the task is added and must already exist (unknown = `not_found`). So the only cycle that can reach the board is a task naming itself (its id is a pure function of run and key). Add still runs a full cycle check (`findCycle`) and rejects with "dependency cycle: a -> … -> a" (`usage`), so the check holds if forward references are ever allowed.
+- **kv delete:** `kv del <runId> <k> [--expect V] [--key K]` writes a versioned **tombstone**: the version goes up, `get` returns `{value:null, deleted:true, version}`, `list` hides it unless `--all`, and KV_DELETE is logged.
+  - A tombstone is cas-able like any version: recreate with `cas --expect <tombstone version>`.
+  - Deleting a missing or already-deleted key without `--expect` is a no-op (`noop:true`).
+- **kv size cap:** values are limited to 64KB of UTF-8 JSON (`CAPCOMD_KV_MAX_BYTES`). The CLI and the actor both check it, and an oversized value fails with "value is N bytes, cap is 65536" (`usage`).
+- **Not built:** server-push subscribe (`--follow` polls, by decision).

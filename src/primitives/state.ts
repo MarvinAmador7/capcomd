@@ -4,7 +4,7 @@
 // the reply can retry safely; the same key with other parameters is a conflict.
 import { client, assertEngine, listEvents, type EventRecord } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { checkKey, leaseMs } from "./board";
+import { checkKey, DEFAULT_KV_MAX_BYTES, leaseMs, valueBytes } from "./board";
 import { paramsHash, stableId } from "./policy";
 import { asRelay } from "./ops";
 
@@ -19,10 +19,11 @@ async function scope(runId: string) {
 }
 const lease = (v: unknown) => { try { return leaseMs(v); } catch (e) { return usage(e, "--lease-ms between 100 and 86400000"); } };
 
-export async function taskAdd(runId: string, o: { title: string; data?: unknown; key?: string; id?: string }) {
+export async function taskAdd(runId: string, o: { title: string; data?: unknown; after?: string[]; key?: string; id?: string }) {
   const s = await scope(runId);
   const taskId = o.id ?? stableId("tsk", runId, o.key);
-  return s.taskAdd({ taskId, title: o.title, data: o.data, key: o.key, paramsHash: paramsHash({ title: o.title, data: o.data ?? null }) }).catch(asRelay);
+  const after = o.after?.length ? [...new Set(o.after)].sort() : undefined;
+  return s.taskAdd({ taskId, title: o.title, data: o.data, after, key: o.key, paramsHash: paramsHash({ title: o.title, data: o.data ?? null, ...(after ? { after } : {}) }) }).catch(asRelay);
 }
 export async function taskClaim(runId: string, o: { holder: string; taskId?: string; leaseMs?: number; key?: string }) {
   const s = await scope(runId);
@@ -52,15 +53,17 @@ export async function kvGet(runId: string, k: string) {
   const s = await scope(runId);
   return (await s.kvGet({ k })) ?? { k, value: null, version: 0, writer: null, updatedAt: 0 };
 }
-export async function kvWrite(runId: string, o: { k: string; value: unknown; expect?: number; writer?: string; key?: string }) {
+export async function kvWrite(runId: string, o: { k: string; value: unknown; expect?: number; writer?: string; key?: string; del?: boolean }) {
   try { checkKey(o.k); } catch (e) { usage(e, "Keys: letters, digits and . _ : / - (max 200)."); }
+  const cap = Number(process.env.CAPCOMD_KV_MAX_BYTES ?? DEFAULT_KV_MAX_BYTES);
+  if (!o.del && valueBytes(o.value) > cap) throw new RelayError("usage", `kv ${o.k}: value is ${valueBytes(o.value)} bytes, cap is ${cap}`, "Store large blobs elsewhere (a branch, a file in the repo) and put a reference in kv.");
   if (o.expect !== undefined && !(Number.isInteger(o.expect) && o.expect >= 0)) usage(new Error(`--expect must be a version >= 0, got ${o.expect}`), "0 means the key must not exist yet.");
   const s = await scope(runId);
-  return s.kvWrite({ ...o, paramsHash: paramsHash({ k: o.k, value: o.value ?? null, expect: o.expect ?? null }) }).catch(asRelay);
+  return s.kvWrite({ ...o, paramsHash: paramsHash({ k: o.k, value: o.del ? null : (o.value ?? null), expect: o.expect ?? null, ...(o.del ? { del: true } : {}) }) }).catch(asRelay);
 }
-export async function kvList(runId: string, prefix?: string) {
+export async function kvList(runId: string, prefix?: string, all?: boolean) {
   const s = await scope(runId);
-  return { runId, entries: await s.kvList({ ...(prefix ? { prefix } : {}) }) };
+  return { runId, entries: await s.kvList({ ...(prefix ? { prefix } : {}), ...(all ? { all: true } : {}) }) };
 }
 
 /** Poll the merged event log and emit each event once, in order. Stops on --until TYPE or timeout. */
