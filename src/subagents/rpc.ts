@@ -204,7 +204,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>): Promise<u
       const holder = c.sub; // a VM agent can only hold leases as itself
       const key = args.key ? `${c.sub}:${args.key}` : undefined;
       if (action === "add") return S.taskAdd(run, { title: String(args.title ?? ""), data: args.data, after: args.after, key });
-      if (action === "list") return { tasks: await S.taskList(run, args.status) };
+      if (action === "list") return { tasks: (await S.taskList(run, args.status)).tasks };
       if (action === "show") return S.taskGet(run, String(args.task));
       if (action === "claim") return S.taskClaim(run, { holder, taskId: args.task, leaseMs: args.leaseMs, key });
       if (action === "renew") return S.taskRenew(run, { taskId: String(args.task), holder, epoch: Number(args.epoch), leaseMs: args.leaseMs });

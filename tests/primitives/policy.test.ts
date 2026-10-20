@@ -88,6 +88,7 @@ test("grants: parent narrows child fan-out; above the ceiling is refused, not cl
   const none = { ...ceiling, allowSpawn: false, maxDepth: 0, allowedChildProfiles: [] };
   expect(applyGrant(none, { allowSpawn: true })).toMatchObject({ ok: false });
   expect(applyGrant(none, { maxChildren: 1 })).toMatchObject({ ok: false });
+  expect(applyGrant(none, { maxChildren: 0 })).toMatchObject({ ok: true });
   expect(applyGrant(ceiling, { maxChildren: 0 })).toMatchObject({ ok: true, limits: { allowSpawn: false, maxDepth: 0 } });
   expect(() => parseGrant({ maxKids: 1 })).toThrow(/unknown children grant/);
 });

@@ -269,7 +269,9 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
     const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);
-    const spent: Budget = { usd: costUsd, turns: Number(rec.turns ?? 0), wallSeconds: Number(rec.wallSeconds ?? 0) };
+    let spent: Budget = { usd: costUsd, turns: Number(rec.turns ?? 0), wallSeconds: Number(rec.wallSeconds ?? 0) };
+    // Scripted fake agents simulate spend (result data.spent) so rollups and budget limits are testable.
+    if (mode === "script") { const d: any = (await resultOf(runId, agentId)).data; if (d?.spent) spent = { ...spent, ...parseBudgetLoose(d.spent) }; }
     if (costUsd > 0 && !pushed.already) await c.run.getOrCreate([runId]).chargeBudget({ runId, chargeId: `${agentId}-agent`, amount: costUsd });
     await w.taskDone({ workerId: agentId });
     await w.drainWorker({ workerId: agentId });
@@ -284,6 +286,8 @@ async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
     clearInterval(hb);
   }
 }
+
+function parseBudgetLoose(v: unknown): Budget { try { return parseBudget(v); } catch { return {}; } }
 
 function fakeFileParams(f: { path?: string; content?: string }) {
   return f.path ? { fakePath: f.path, fakeContent: f.content ?? "" } : {};

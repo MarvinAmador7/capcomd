@@ -149,6 +149,7 @@ export function applyGrant(ceiling: Limits, g: Grant | undefined): { ok: true; l
   if (g.maxDepth !== undefined) { if (g.maxDepth > ceiling.maxDepth) return { ok: false, error: over("maxDepth", g.maxDepth, ceiling.maxDepth) }; L.maxDepth = g.maxDepth; }
   for (const k of ["maxChildren", "maxTotalDescendants"] as const) {
     const want = g[k]; if (want === undefined) continue;
+    if (!ceiling.allowSpawn && want === 0) { L[k] = 0; continue; } // narrowing to none is always fine
     if (!ceiling.allowSpawn) return { ok: false, error: over(k, want, undefined) };
     if (ceiling[k] !== undefined && want > ceiling[k]!) return { ok: false, error: over(k, want, ceiling[k]) };
     L[k] = want;

@@ -93,7 +93,7 @@ export function startPump(o: PumpOpts): { stop: () => Promise<void>; handled: ()
       const answers = await Promise.all(items.map(async (it) => ({ file: it.file, res: it.req ? await o.handle(it.req) : ({ id: it.file.replace(/\.json$/, ""), ok: false, error: { code: "usage", message: "malformed request" } } as RpcResponse) })));
       await o.spool.answer(answers);
       n += items.length;
-      o.onLog?.(answers.map((a, i) => `[capcomd] ${items[i]!.req?.op ?? "?"} → ${a.res.ok ? "ok" : `error ${(a.res as any).error.reason ?? (a.res as any).error.code}`}`));
+      o.onLog?.(answers.map((a, i) => `[capcomd] ${items[i]!.req?.op ?? "?"} → ${a.res.ok ? "ok" : `error ${(a.res as any).error.reason ?? (a.res as any).error.code}: ${String((a.res as any).error.message).slice(0, 300)}`}`));
     }
     if (o.spool.logs) { const l = await o.spool.logs(); if (l.length) o.onLog?.(l); }
   };
