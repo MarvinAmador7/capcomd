@@ -1,0 +1,145 @@
+{
+  "schema": "relay.v1",
+  "ok": true,
+  "runId": "run-demo-3tasks",
+  "root": null,
+  "tree": [
+    {
+      "agentId": "agt-planner",
+      "profile": "planner",
+      "depth": 0,
+      "status": "done",
+      "budget": {
+        "usd": 2,
+        "turns": 30
+      },
+      "spent": {
+        "usd": 0.041,
+        "turns": 4,
+        "wallSeconds": 9.5
+      },
+      "rollup": {
+        "agents": 5,
+        "byStatus": {
+          "done": 1
+        },
+        "usd": 1.811,
+        "turns": 57,
+        "wallSeconds": 598.5
+      },
+      "children": [
+        {
+          "agentId": "agt-task-1",
+          "profile": "coder",
+          "depth": 1,
+          "status": "done",
+          "budget": {
+            "usd": 2,
+            "turns": 30
+          },
+          "spent": {
+            "usd": 0.62,
+            "turns": 18,
+            "wallSeconds": 176
+          },
+          "rollup": {
+            "agents": 1,
+            "byStatus": {
+              "done": 1
+            },
+            "usd": 0.62,
+            "turns": 18,
+            "wallSeconds": 176
+          },
+          "children": []
+        },
+        {
+          "agentId": "agt-task-2",
+          "profile": "coder",
+          "depth": 1,
+          "status": "done",
+          "budget": {
+            "usd": 2,
+            "turns": 30
+          },
+          "spent": {
+            "usd": 0.76,
+            "turns": 19,
+            "wallSeconds": 235
+          },
+          "rollup": {
+            "agents": 2,
+            "byStatus": {
+              "done": 1
+            },
+            "usd": 0.94,
+            "turns": 26,
+            "wallSeconds": 299
+          },
+          "children": [
+            {
+              "agentId": "agt-task-2-review",
+              "profile": "reviewer",
+              "depth": 2,
+              "status": "done",
+              "budget": {
+                "usd": 2,
+                "turns": 30
+              },
+              "spent": {
+                "usd": 0.18,
+                "turns": 7,
+                "wallSeconds": 64
+              },
+              "rollup": {
+                "agents": 1,
+                "byStatus": {
+                  "done": 1
+                },
+                "usd": 0.18,
+                "turns": 7,
+                "wallSeconds": 64
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "agentId": "agt-task-3",
+          "profile": "coder",
+          "depth": 1,
+          "status": "failed",
+          "budget": {
+            "usd": 2,
+            "turns": 30
+          },
+          "spent": {
+            "usd": 0.21,
+            "turns": 9,
+            "wallSeconds": 114
+          },
+          "rollup": {
+            "agents": 1,
+            "byStatus": {
+              "failed": 1
+            },
+            "usd": 0.21,
+            "turns": 9,
+            "wallSeconds": 114
+          },
+          "children": []
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "agents": 5,
+    "usd": 1.811,
+    "turns": 57,
+    "wallSeconds": 598.5,
+    "byStatus": {
+      "done": 4,
+      "failed": 1
+    }
+  }
+}
