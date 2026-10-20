@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2023", "lib": ["ES2023", "DOM"], "module": "ESNext", "moduleResolution": "bundler",
     "jsx": "react-jsx", "strict": true, "skipLibCheck": true, "noEmit": true,
-    "types": ["bun"], "paths": { "@/*": ["./src/*"] }
+    "types": ["bun"], "paths": { "@/*": ["./src/*"], "string-width": ["./node_modules/string-width"] }
   },
   "include": ["src", "test", "scripts"]
 }
