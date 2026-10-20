@@ -17,14 +17,22 @@ if (mode === "board") {
   if (w1.epoch !== 1) { console.log(`✗ w1 claim ${JSON.stringify(w1)}`); process.exit(1); }
   const cur: any = await S.taskGet(runId, t1);
   if (cur.epoch < 2) await new Promise((r) => setTimeout(r, Math.max(0, cur.leaseUntil - Date.now()) + 300));
-  const w2: any = await S.taskClaim(runId, { holder: "w2", taskId: t1, leaseMs: 60_000, key: "c-w2" });
+  const w2: any = await S.taskClaim(runId, { holder: "w2", taskId: t1, leaseMs: 600_000, key: "c-w2" });
   if (w2.epoch !== 2 || w2.takeover?.holder !== "w1") { console.log(`✗ w2 takeover ${JSON.stringify(w2)}`); process.exit(1); }
   const late = await S.taskFinish(runId, { taskId: t1, holder: "w1", epoch: 1, outcome: "done", result: "stale" }).then(() => "accepted", (e) => String(e?.message));
   if (!late.includes("lease lost") && !late.includes("is done")) { console.log(`✗ late w1 done: ${late}`); process.exit(1); }
   await S.taskFinish(runId, { taskId: t1, holder: "w2", epoch: 2, outcome: "done", result: { by: "w2" }, key: "d-w2" });
   const racers = ["r1", "r2", "r3", "r4"];
-  const got: any[] = await Promise.all(racers.map((h) => S.taskClaim(runId, { holder: h, leaseMs: 60_000, key: `c-${h}` })));
-  for (const g of got) if (g.claimed) await S.taskFinish(runId, { taskId: g.taskId, holder: g.holder, epoch: g.epoch, outcome: "done", result: { by: g.holder }, key: `d-${g.holder}` });
+  // Leases outlast a normal engine restart (~40s); a stall longer than that can still expire one,
+  // and then a racer's done is fenced ("lease lost"/"is done"): correct, and the audit checks it.
+  const fenced = (e: any) => { const m = String(e?.message); if (m.includes("lease lost") || m.includes("is done")) return null; throw e; };
+  const got: any[] = await Promise.all(racers.map((h) => S.taskClaim(runId, { holder: h, leaseMs: 600_000, key: `c-${h}` })));
+  for (const g of got) if (g.claimed) await S.taskFinish(runId, { taskId: g.taskId, holder: g.holder, epoch: g.epoch, outcome: "done", result: { by: g.holder }, key: `d-${g.holder}` }).catch(fenced);
+  // A racer whose claim replays a lease that was taken over finds the task done; claim-next picks up anything left.
+  for (const h of racers) {
+    const g: any = await S.taskClaim(runId, { holder: h, leaseMs: 600_000 });
+    if (g.claimed) await S.taskFinish(runId, { taskId: g.taskId, holder: h, epoch: g.epoch, outcome: "done", result: { by: h } }).catch(fenced);
+  }
   console.log(`PRIM ${JSON.stringify({ runId, mode, t1, t2: ids[1], t3: ids[2] })}`);
   console.log("✓ primitives scenario ok");
   process.exit(0);

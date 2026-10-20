@@ -37,6 +37,11 @@ function runScenario(tag: string, opts: EngineOpts, extra: Record<string, string
   });
 }
 
+/** The lines that say what failed (error/code/message), which a raw stack tail often cuts off. */
+function errorLines(out: string): string {
+  return out.split("\n").filter((l) => /error|code:|message|✗/i.test(l) && !/^\s*at /.test(l)).slice(-6).map((l) => l.trim()).join(" | ").slice(0, 600);
+}
+
 export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promise<{ ok: boolean; killed: boolean; error?: string; phases: Record<string, number> }> {
   const tag = `${kp.replace(/[.:]/g, "-")}-${Date.now()}-p${baseOpts.port}`;
   const driverKill = kp.startsWith("driver.kill");
@@ -66,7 +71,7 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
       mark("resume");
     }
     if (!killed) return { ok: false, killed, error: `killpoint ${kp} never fired; client (${first.code}): ${first.output.slice(-400)}`, phases };
-    if (final.code !== 0 || !final.output.includes("✓ primitives scenario ok")) return { ok: false, killed, error: `scenario failed (${final.code}): ${final.output.slice(-600)}`, phases };
+    if (final.code !== 0 || !final.output.includes("✓ primitives scenario ok")) return { ok: false, killed, error: `scenario failed (${final.code}): ${errorLines(final.output)} … ${final.output.slice(-400)}`, phases };
     const ids = JSON.parse(final.output.split("\n").find((l) => l.startsWith("PRIM "))!.slice(5));
     const v = mode === "board" ? await auditBoard(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "kv" ? await auditKv(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "merge" ? await auditMerge(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, opts) : mode === "driverkill" ? await auditPush(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, { driverKill, adopt, opts }) : await audit(ids, engineEnv(opts).CAPCOMD_ENDPOINT!);
     mark("audit");
@@ -155,9 +160,11 @@ async function auditBoard(ids: { runId: string; t1: string; t2: string; t3: stri
   if (tasks.length !== 3) v.push(`expected 3 tasks, got ${tasks.length}`);
   const t1 = tasks.find((t) => t.taskId === ids.t1);
   if (t1?.status !== "done" || t1?.holder !== "w2" || t1?.epoch !== 2 || t1?.result?.by !== "w2") v.push(`t1 ${JSON.stringify(t1)}`);
+  // t2/t3: done once, by the holder of the final epoch. A lease that expired during a long
+  // engine outage may be taken over (that's correct); every extra claim must be such a takeover.
   for (const id of [ids.t2, ids.t3]) {
     const t = tasks.find((x) => x.taskId === id);
-    if (t?.status !== "done" || t?.epoch !== 1 || t?.result?.by !== t?.holder) v.push(`${id} ${JSON.stringify(t)} (want done at epoch 1 by its only claimer)`);
+    if (t?.status !== "done" || t?.result?.by !== t?.holder) v.push(`${id} ${JSON.stringify(t)} (want done by the final holder)`);
   }
   const evs: any[] = await s.getEvents({});
   evs.forEach((e, i) => { if (e.seq !== i + 1) v.push(`scope event gap at ${i + 1}`); });
@@ -168,9 +175,14 @@ async function auditBoard(ids: { runId: string; t1: string; t2: string; t3: stri
     if (n("TASK_ADDED", id) !== 1) v.push(`${id} TASK_ADDED×${n("TASK_ADDED", id)}`);
     if (n("TASK_DONE", id) !== 1) v.push(`${id} TASK_DONE×${n("TASK_DONE", id)}`);
   }
-  for (const id of [ids.t2, ids.t3]) if (n("TASK_CLAIMED", id) !== 1) v.push(`${id} TASK_CLAIMED×${n("TASK_CLAIMED", id)} (double claim)`);
-  const holders = [ids.t2, ids.t3].map((id) => tasks.find((x) => x.taskId === id)?.holder);
-  if (new Set(holders).size !== 2) v.push(`one racer holds both tasks: ${holders}`);
+  for (const id of [ids.t1, ids.t2, ids.t3]) {
+    const claims = evs.filter((e) => e.type === "TASK_CLAIMED" && e.data.taskId === id);
+    const epochs = claims.map((e) => e.data.epoch);
+    if (JSON.stringify(epochs) !== JSON.stringify(epochs.map((_, i) => i + 1))) v.push(`${id} claim epochs ${JSON.stringify(epochs)} (want 1..n, no duplicate epoch)`);
+    if (claims.length !== 1 + n("TASK_LEASE_EXPIRED", id) + n("TASK_RELEASED", id)) v.push(`${id} ${claims.length} claims but ${n("TASK_LEASE_EXPIRED", id)} expiries (a claim on a live lease)`);
+    const t = tasks.find((x) => x.taskId === id);
+    if (t && t.epoch !== claims.length) v.push(`${id} epoch ${t.epoch} != ${claims.length} claims`);
+  }
   return v;
 }
 
