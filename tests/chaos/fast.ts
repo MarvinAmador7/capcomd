@@ -32,6 +32,8 @@ const seeds = Number(arg("seeds") ?? 50);
 const PER_WORKER_MB = Number(envVar("CHAOS_PER_WORKER_MB") ?? 250);
 const autoN = Math.max(1, Math.min(availableParallelism() * 2, Math.floor((freemem() / 1048576 - 1024) / PER_WORKER_MB), 16));
 const N = Number(arg("workers") ?? envVar("CHAOS_WORKERS") ?? autoN);
+if (N < 16 && !arg("workers") && !envVar("CHAOS_WORKERS"))
+  console.log(`⚠ chaos:fast memory-limited: ${N} workers (MemAvailable ${Math.round(freemem() / 1048576)}MB, ~${PER_WORKER_MB}MB each + 1GB reserve); wall ≈ serial/${N}. 16 workers need ~${16 * PER_WORKER_MB + 1024}MB.`);
 const BASE_PORT = Number(envVar("CHAOS_BASE_PORT") ?? 7700);
 const DATA_ROOT = envVar("CHAOS_DATA_ROOT") ?? "/tmp/capcomd-chaos-fast";
 

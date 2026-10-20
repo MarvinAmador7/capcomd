@@ -1,0 +1,43 @@
+=== chaos:fast start 2026-10-20T03:06:11.312Z rounds=1 jobs=12 workers=7 (cores=8 freeMB=2851 perWorkerMB=250)
+    refusing to kill pid 1236624: not owned by engine :7700
+    refusing to kill pid 1236628: not owned by engine :7720
+    refusing to kill pid 1236620: not owned by engine :7760
+    refusing to kill pid 1236627: not owned by engine :7800
+    refusing to kill pid 1236659: not owned by engine :7740
+    refusing to kill pid 1236633: not owned by engine :7820
+    refusing to kill pid 1236626: not owned by engine :7780
+    refusing to kill pid 1237284: not owned by engine :7720
+[50.6s] ✓ r1 model.after_return.before_commit model.after_return.before_commit:1 w1 killed=true 50597ms [up=1961 first=784 stop=56 restart=39165 resume=6811 audit=1546]
+[50.7s] ✓ r1 tx.mid tx.mid:1 w0 killed=true 50686ms [up=1973 first=434 stop=57 restart=39239 resume=7189 audit=1521]
+[52.2s] ✓ r1 merge.after_fetch.before_integrate merge.after_fetch.before_integrate:1 w5 killed=true 52153ms [up=1958 first=4127 stop=111 restart=39140 resume=5001 audit=1515]
+[52.2s] ✓ r1 merge.before_cas merge.before_cas:1 w2 killed=true 52155ms [up=1969 first=4109 stop=146 restart=39145 resume=4953 audit=1533]
+[52.2s] ✓ r1 merge.after_cas.before_event merge.after_cas.before_event:1 w3 killed=true 52156ms [up=1970 first=4117 stop=148 restart=39140 resume=5017 audit=1508]
+    refusing to kill pid 1239536: not owned by engine :7700
+    refusing to kill pid 1239893: not owned by engine :7740
+    refusing to kill pid 1239507: not owned by engine :7720
+    refusing to kill pid 1238009: not owned by engine :7820
+[56.2s] ✓ r1 merge.lock.acquired merge.lock.acquired:1 w4 killed=true 56127ms [up=6022 first=4077 stop=93 restart=39143 resume=5053 audit=1504]
+[56.2s] ✓ r1 push.mid push.mid:1 w6 killed=true 56171ms [up=6025 first=3567 stop=70 restart=39163 resume=5606 audit=1512]
+    refusing to kill pid 1239854: not owned by engine :7760
+    refusing to kill pid 1239894: not owned by engine :7800
+[102.2s] ✓ r1 vm.create.after_request.before_record vm.create.after_request.before_record:1 w0 killed=true 51485ms [up=1821 first=2304 stop=59 restart=39240 resume=6392 audit=1521]
+    refusing to kill pid 1240578: not owned by engine :7720
+[102.6s] ✓ r1 push.after.before_event push.after.before_event:1 w1 killed=true 51937ms [up=1844 first=3530 stop=76 restart=39138 resume=5661 audit=1515]
+[102.8s] ✓ r1 budget.charge.mid budget.charge.mid:1 w2 killed=true 50585ms [up=1859 first=793 stop=56 restart=39147 resume=7076 audit=1496]
+[103.8s] ✓ r1 outbox.dispatch.after_send.before_ack outbox.dispatch.after_send.before_ack:1 w3 killed=true 51620ms [up=1860 first=2588 stop=61 restart=39167 resume=6293 audit=1519]
+[106.9s] ✓ r1 lease.expire.mid lease.expire.mid:1 w5 killed=true 54698ms [up=5839 first=1775 stop=54 restart=39049 resume=6338 audit=1495]
+
+=== per-phase timing (ms, per case)
+  wipe         n=12 mean=126 p50=154 max=164 sum=1510
+  engineUp     n=12 mean=2925 p50=1969 max=6025 sum=35101
+  firstClient  n=12 mean=2684 p50=3530 max=4127 sum=32205
+  stop         n=12 mean=82 p50=70 max=148 sum=987
+  restart      n=12 mean=39156 p50=39147 max=39240 sum=469876
+  resume       n=12 mean=5949 p50=6293 max=7189 sum=71390
+  audit        n=12 mean=1515 p50=1515 max=1546 sum=18185
+  case total   n=12 mean=52531 p50=52153 max=56171 sum=630370
+
+=== pass counts
+  round 1 killpoints: 12/12 passed (killed 12)
+  TOTAL: 12/12 passed, 0 failed; serial-equivalent case time 630s
+=== chaos:fast end 2026-10-20T03:07:58.218Z wall=106.9s exit=0
