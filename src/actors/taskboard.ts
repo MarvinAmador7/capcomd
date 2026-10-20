@@ -1,3 +1,4 @@
+import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { isProtectedBranch } from "../utils/protected";
 import type { MergeRecord } from "../machines/task";
@@ -38,7 +39,7 @@ export const taskBoardActor = actor({
         ...(targetBranch ? { targetBranch } : {}),
       });
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           taskId,
@@ -105,7 +106,7 @@ export const taskBoardActor = actor({
 
       const [newLeaseSnapshot] = transition(leaseMachine, leaseSnapshot, leaseEvent);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           taskId,
@@ -185,7 +186,7 @@ export const taskBoardActor = actor({
 
       const [newSnapshot] = transition(leaseMachine, leaseSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           leaseId,
@@ -234,7 +235,7 @@ export const taskBoardActor = actor({
 
       const [newSnapshot] = transition(taskMachine, taskSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           taskId,
@@ -255,6 +256,8 @@ export const taskBoardActor = actor({
       params: {
         taskId: string;
         epoch: number;
+        branch?: string;
+        commitSha?: string;
       }
     ) {
       const { taskId, epoch } = params;
@@ -278,7 +281,7 @@ export const taskBoardActor = actor({
 
       const [newSnapshot] = transition(taskMachine, taskSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           taskId,
@@ -321,7 +324,7 @@ export const taskBoardActor = actor({
 
       const [newSnapshot] = transition(taskMachine, taskSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           taskId,
@@ -376,7 +379,7 @@ export const taskBoardActor = actor({
 
       const [newSnapshot] = transition(taskMachine, taskSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           taskId,
@@ -414,7 +417,7 @@ export const taskBoardActor = actor({
 
       const [newSnapshot] = transition(taskMachine, taskSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           taskId,
@@ -440,7 +443,7 @@ export const taskBoardActor = actor({
       const snapshot = taskMachine.resolveState({ value: taskLife.state, context: taskContext });
       const event = { type: "APPROVED" as const, approvedBy: params.approvedBy ?? "cli", approvedAt: Date.now() };
       const [next] = transition(taskMachine, snapshot, event);
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx, taskId, "task", next.value as string, next.context, event,
           `task-${taskId}-approved`, []
@@ -458,7 +461,7 @@ export const taskBoardActor = actor({
       const event = { type: "MERGED" as const, merge: params.merge };
       if (!snapshot.can(event)) throw new Error(`Task ${params.taskId} cannot accept MERGED from state ${taskLife.state}`);
       const [next] = transition(taskMachine, snapshot, event);
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-merged`, []);
       }, { name: "mergeComplete" });
       return { taskId: params.taskId, state: next.value as string, already: false };
@@ -474,7 +477,7 @@ export const taskBoardActor = actor({
       const event = { type: "MERGE_CONFLICT" as const, files: params.files, targetSha: params.targetSha, at: Date.now() };
       if (!snapshot.can(event)) return { taskId: params.taskId, state: taskLife.state, changed: false };
       const [next] = transition(taskMachine, snapshot, event);
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-conflict-e${params.epoch}`, []);
       }, { name: "mergeConflict" });
       return { taskId: params.taskId, state: next.value as string, changed: true };
@@ -487,7 +490,7 @@ export const taskBoardActor = actor({
       const event = { type: "CANCEL" as const };
       if (!snapshot.can(event)) return { taskId: params.taskId, state: taskLife.state, changed: false };
       const [next] = transition(taskMachine, snapshot, event);
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-cancel`, []);
       }, { name: "cancelTask" });
       return { taskId: params.taskId, state: next.value as string, changed: true };
@@ -510,7 +513,7 @@ export const taskBoardActor = actor({
         "SELECT entity_id, state FROM lifecycle WHERE machine = 'task'"
       );
 
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         taskId: row.entity_id as string,
         state: row.state as string,
       }));
@@ -522,7 +525,7 @@ export const taskBoardActor = actor({
         params.taskId
       );
 
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         seq: row.seq as number,
         event: JSON.parse(row.event as string),
         at: row.at as number,
@@ -541,7 +544,7 @@ export const taskBoardActor = actor({
       const rows = await c.db.execute(
         "SELECT entity_id, seq FROM lifecycle_events ORDER BY entity_id, seq"
       );
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         entityId: row.entity_id as string,
         seq: Number(row.seq),
       }));

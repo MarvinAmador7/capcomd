@@ -185,7 +185,7 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
   const s = c.scope.getOrCreate([runId]);
   const res = await s.cancel({ ...(agentId ? { agentId } : {}), ...(reason ? { reason } : {}) }).catch(asRelay);
   const all = await s.listAgents({});
-  const affected = all.filter((a) => res.affected.includes(a.agentId));
+  const affected = all.filter((a: { agentId: string; status: string }) => res.affected.includes(a.agentId));
   for (const a of affected) {
     if (a.status !== "cancelled") continue;
     const w = c.worker.getOrCreate([runId, a.agentId]);
@@ -193,7 +193,7 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
     if (wk && wk.state !== "destroyed") await w.drainWorker({ workerId: a.agentId });
   }
   if (!agentId) await c.run.getOrCreate([runId]).cancel({ runId });
-  return { runId, target: agentId ?? null, cancelled: res.cancelled, affected: affected.map((a) => ({ agentId: a.agentId, status: a.status })) };
+  return { runId, target: agentId ?? null, cancelled: res.cancelled, affected: affected.map((a: { agentId: string; status: string }) => ({ agentId: a.agentId, status: a.status })) };
 }
 
 export async function listScope(runId: string) {

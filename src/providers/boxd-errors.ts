@@ -2,7 +2,7 @@
 // the orchestrator never depends on @boxd-sh/sdk directly.
 export class SandboxError extends Error {
   readonly kind: string = "sandbox";
-  constructor(message: string, readonly vmId?: string, readonly cause?: unknown) {
+  constructor(message: string, readonly vmId?: string, override readonly cause?: unknown) {
     super(message);
     this.name = new.target.name;
   }

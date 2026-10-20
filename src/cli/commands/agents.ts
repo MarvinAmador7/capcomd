@@ -1,7 +1,7 @@
 // capcomd agents add|set|list|show|rm|schema|validate — named agent profiles (.capcomd/agents.json).
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
-import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, readAgentsFile, validateSpec, writeAgentsFile, type AgentSpec } from "../../agents/profiles";
+import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, readAgentsFile, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../../agents/profiles";
 import { credentialModeFor, loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -93,7 +93,7 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
       for (const k of list(values.unset) ?? []) delete next[k];
       const errs = validateSpec(n, next);
       if (errs.length) throw new RelayError("config", errs.join("; "), "Each agent needs provider (claude|codex) and exactly one auth (apikey|subscription).");
-      const file = { ...f, schema: AGENTS_SCHEMA, agents: { ...f.agents, [n]: next as unknown as AgentSpec } };
+      const file: AgentsFile = { ...f, schema: AGENTS_SCHEMA, agents: { ...f.agents, [n]: next as unknown as AgentSpec } };
       if (values.default || !file.default) file.default = n;
       guard(() => writeAgentsFile(file, path));
       out({ name: n, spec: next, default: file.default === n, file: path }, `${sub === "add" ? "added" : "updated"} ${n}${file.default === n ? " (default)" : ""} → ${path}`);

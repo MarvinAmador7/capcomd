@@ -1,3 +1,4 @@
+import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor, UserError } from "rivetkit";
 import { isBoxdAuthError } from "../providers/boxd-errors";
@@ -85,7 +86,7 @@ async function drainWorkerImpl(c: any, workerId: string) {
         ? [workerSnapshot]
         : transition(workerMachine, workerSnapshot, drainEvent);
 
-      if (!resuming) await c.db.transaction(async (tx) => {
+      if (!resuming) await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           workerId,
@@ -108,7 +109,7 @@ async function drainWorkerImpl(c: any, workerId: string) {
           destroyEvent
         );
 
-        await c.db.transaction(async (tx) => {
+        await c.db.transaction(async (tx: RawAccess) => {
           await transitionLifecycle(
             tx,
             workerId,
@@ -175,7 +176,7 @@ export const workerActor = actor({
           idemKey,
         });
 
-        await c.db.transaction(async (tx) => {
+        await c.db.transaction(async (tx: RawAccess) => {
           await transitionLifecycle(
             tx,
             workerId,
@@ -238,7 +239,7 @@ export const workerActor = actor({
         const event = { type: "VM_READY" as const, vmId };
         const [newSnapshot] = transition(workerMachine, workerSnapshot, event);
 
-        await c.db.transaction(async (tx) => {
+        await c.db.transaction(async (tx: RawAccess) => {
           await transitionLifecycle(
             tx,
             workerId,
@@ -269,7 +270,7 @@ export const workerActor = actor({
 
         const [newSnapshot] = transition(workerMachine, workerSnapshot, event);
 
-        await c.db.transaction(async (tx) => {
+        await c.db.transaction(async (tx: RawAccess) => {
           await transitionLifecycle(
             tx,
             workerId,
@@ -322,7 +323,7 @@ export const workerActor = actor({
 
       const [newSnapshot] = transition(workerMachine, workerSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           workerId,
@@ -476,7 +477,7 @@ export const workerActor = actor({
       killpoint("push.after.before_event");
       const wallSeconds = Math.round((Date.now() - pushStarted) / 100) / 10;
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           workerId,
@@ -512,7 +513,7 @@ export const workerActor = actor({
       const rows = await c.db.execute(
         "SELECT entity_id, seq FROM lifecycle_events ORDER BY entity_id, seq"
       );
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         entityId: row.entity_id as string,
         seq: Number(row.seq),
       }));
@@ -536,7 +537,7 @@ export const workerActor = actor({
 
       const [newSnapshot] = transition(workerMachine, workerSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           workerId,

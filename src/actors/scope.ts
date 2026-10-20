@@ -2,6 +2,7 @@
 // idempotency keys and the primitive event log. Every spawn and cancel is a single
 // transaction, so children limits and the budget carve can't be raced, and a crash
 // either leaves the whole spawn or none of it.
+import type { RawAccess } from "rivetkit/db";
 import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
@@ -89,7 +90,7 @@ export const scopeActor = actor({
         if (prev.paramsHash !== params.paramsHash) fail("conflict", `run ${params.runId} already exists with different parameters (budget ${JSON.stringify(prev.budget)})`);
         return { runId: params.runId, created: false, budget: prev.budget as Budget };
       }
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, paramsHash: params.paramsHash, createdAt: Date.now() }));
         await addEvent(tx, "RUN_NEW", null, { budget: params.budget, label: params.label ?? null }, `run-new`);
       }, { name: "scopeInit" });
@@ -100,7 +101,7 @@ export const scopeActor = actor({
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (!have.length) return null;
       const meta = JSON.parse(have[0]!.v as string);
-      const all = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
+      const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
       const roots = all.filter((a) => !a.parent);
       const spent: Budget = {}, unallocated: Budget = {};
       for (const u of UNITS) {
@@ -133,7 +134,7 @@ export const scopeActor = actor({
 
       let out: ScopeAgent | null = null;
       let created = false;
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         const again = await tx.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
         if (again.length) {
           if (again[0]!.params_hash !== params.paramsHash) fail("conflict", `--key already used for ${params.agentId} with different parameters`);
@@ -188,7 +189,7 @@ export const scopeActor = actor({
       if (TERMINAL_AGENT.has(a.status)) return { ok: false, agent: a };
       const now = Date.now();
       if (a.driver && a.driver !== params.driver && a.driverUntil > now) return { ok: false, agent: a };
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("UPDATE agents_v2 SET driver = ?, driver_until = ?, status = CASE WHEN status = 'pending' THEN 'running' ELSE status END, updated_at = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')",
           params.driver, now + params.ttlMs, now, params.agentId);
         if (a.status === "pending") await addEvent(tx, "AGENT_STARTED", params.agentId, {}, `start-${params.agentId}`);
@@ -201,7 +202,7 @@ export const scopeActor = actor({
       if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
       const a = rowToAgent(r[0]);
       if (TERMINAL_AGENT.has(a.status)) return { changed: false, agent: a };
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("UPDATE agents_v2 SET status = ?, result = ?, spent = ?, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
           params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? {}), Date.now(), params.agentId);
         await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? {}, budget: a.budget }, `finish-${params.agentId}`);
@@ -215,7 +216,7 @@ export const scopeActor = actor({
      * so a crash mid-way leaves a prefix that the retried (idempotent) call completes.
      */
     async cancel(c, params: { agentId?: string; reason?: string }) {
-      const all = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
+      const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
       const kids = new Map<string | null, ScopeAgent[]>();
       for (const a of all) kids.set(a.parent, [...(kids.get(a.parent) ?? []), a]);
       let targets: ScopeAgent[];
@@ -231,7 +232,7 @@ export const scopeActor = actor({
       let i = 0;
       for (const a of order) {
         if (TERMINAL_AGENT.has(a.status)) continue;
-        await c.db.transaction(async (tx) => {
+        await c.db.transaction(async (tx: RawAccess) => {
           await tx.execute("UPDATE agents_v2 SET status = 'cancelled', driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')", Date.now(), a.agentId);
           await addEvent(tx, "AGENT_CANCELLED", a.agentId, { reason: params.reason ?? null, by: params.agentId ?? "run" }, `cancel-${a.agentId}`);
         }, { name: "scopeCancel" });
@@ -250,7 +251,7 @@ export const scopeActor = actor({
         return { created: false, op: have };
       }
       let created = false;
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         const again = await tx.execute("SELECT params_hash FROM ops WHERE op_id = ?", params.opId);
         if (again.length) { if (again[0]!.params_hash !== params.paramsHash) fail("conflict", `${params.opId} already exists with different parameters`); return; }
         const now = Date.now();
@@ -268,7 +269,7 @@ export const scopeActor = actor({
       const op = opRow(r[0]);
       if (op.state !== "running") return op;
       const type = op.kind === "verify" ? (params.state === "passed" ? "VERIFY_PASSED" : "VERIFY_FAILED") : params.state === "merged" ? "MERGED" : "MERGE_FAILED";
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("UPDATE ops SET state = ?, result = ?, updated_at = ? WHERE op_id = ? AND state = 'running'", params.state, JSON.stringify(params.result), Date.now(), params.opId);
         await addEvent(tx, type, (op.data.agentId as string) ?? null, { id: params.opId, ...params.result }, `finish-${params.opId}`);
       }, { name: "scopeFinishOp" });

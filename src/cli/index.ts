@@ -356,7 +356,7 @@ async function main(argv: string[]): Promise<number> {
         if (positionals[2] || scoped) {
           const r = await P.cancelAgents(runId, positionals[2], values.reason as string | undefined);
           if (json) out(r);
-          else console.log(r.cancelled.length ? `✓ cancelled ${r.cancelled.join(", ")}` : `nothing to cancel (${r.affected.map((a) => `${a.agentId}=${a.status}`).join(", ") || "no agents"})`);
+          else console.log(r.cancelled.length ? `✓ cancelled ${r.cancelled.join(", ")}` : `nothing to cancel (${r.affected.map((a: { agentId: string; status: string }) => `${a.agentId}=${a.status}`).join(", ") || "no agents"})`);
           return EXIT.ok;
         }
         const r = await cancelRun(runId);

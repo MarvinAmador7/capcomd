@@ -2,6 +2,8 @@ import { setup, assign } from "xstate";
 
 export interface TaskContext {
   taskId: string;
+  /** Set by the task board when the task is created for a run. */
+  runId?: string;
   goal: string;
   epoch: number;
   workerId?: string;
@@ -43,8 +45,8 @@ export type TaskEvent =
   | { type: "VERIFIED_AND_MERGED"; commitSha?: string; merge?: MergeRecord }
   | { type: "MERGED"; merge: MergeRecord }
   | { type: "MERGE_CONFLICT"; files: string[]; targetSha?: string; at: number }
-  | { type: "VERIFY_FAILED"; reason: string }
-  | { type: "VERIFIED_AWAITING_APPROVAL" }
+  | { type: "VERIFY_FAILED"; reason?: string }
+  | { type: "VERIFIED_AWAITING_APPROVAL"; commitSha?: string; targetBranch?: string }
   | { type: "APPROVED"; approvedBy: string; approvedAt: number }
   | { type: "CANCEL" };
 

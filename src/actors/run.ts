@@ -1,3 +1,4 @@
+import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -54,7 +55,7 @@ export const runActor = actor({
         },
       });
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           runId,
@@ -102,7 +103,7 @@ export const runActor = actor({
 
       const [newSnapshot] = transition(runMachine, runSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           runId,
@@ -136,7 +137,7 @@ export const runActor = actor({
 
       const [newSnapshot] = transition(runMachine, runSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           runId,
@@ -168,7 +169,7 @@ export const runActor = actor({
 
       const [newSnapshot] = transition(runMachine, runSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           runId,
@@ -203,7 +204,7 @@ export const runActor = actor({
 
       const [newSnapshot] = transition(runMachine, runSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           runId,
@@ -226,7 +227,7 @@ export const runActor = actor({
       const event = { type: "CONFIG_ERROR" as const, reason };
       if (!snap.can(event)) return { state: runLife.state };
       const [next] = transition(runMachine, snap, event);
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(tx, runId, "run", next.value as string, next.context, event, `run-${runId}-config-fail`, []);
       }, { name: "configFail" });
       return { state: next.value as string };
@@ -250,7 +251,7 @@ export const runActor = actor({
 
       const [newSnapshot] = transition(runMachine, runSnapshot, event);
 
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx,
           runId,
@@ -284,7 +285,7 @@ export const runActor = actor({
       }
 
       let newSpent = 0;
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         const again = await tx.execute(
           "SELECT charge_id FROM budget_charges WHERE charge_id = ?",
           chargeId
@@ -338,7 +339,7 @@ export const runActor = actor({
         params.runId
       );
 
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         seq: row.seq as number,
         event: JSON.parse(row.event as string),
         at: row.at as number,
@@ -350,7 +351,7 @@ export const runActor = actor({
         "SELECT charge_id, run_id, amount FROM budget_charges WHERE run_id = ? ORDER BY charged_at",
         params.runId
       );
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         chargeId: row.charge_id as string,
         runId: row.run_id as string,
         amount: row.amount as number,
@@ -361,7 +362,7 @@ export const runActor = actor({
       const rows = await c.db.execute(
         "SELECT entity_id, seq FROM lifecycle_events ORDER BY entity_id, seq"
       );
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         entityId: row.entity_id as string,
         seq: Number(row.seq),
       }));
@@ -372,7 +373,7 @@ export const runActor = actor({
       
       const idemKey = `run-${runId}-task-${taskId}-${event.type}-${Date.now()}`;
       
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         const existing = await tx.execute(
           "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
           idemKey
@@ -405,7 +406,7 @@ export const runActor = actor({
       
       const idemKey = `run-${runId}-lease-${leaseId}-${event.type}-${Date.now()}`;
       
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         const existing = await tx.execute(
           "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
           idemKey
@@ -438,7 +439,7 @@ export const runActor = actor({
       
       const idemKey = `run-${runId}-worker-${workerId}-${event.type}-${Date.now()}`;
       
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         const existing = await tx.execute(
           "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
           idemKey

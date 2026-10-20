@@ -29,7 +29,7 @@ const als = new AsyncLocalStorage<SimpleSpan>();
 
 export function traceDir(): string {
   return env("TRACE_DIR")
-    ? resolve(env("TRACE_DIR"))
+    ? resolve(env("TRACE_DIR")!)
     : resolve(new URL("../..", import.meta.url).pathname, ".traces");
 }
 

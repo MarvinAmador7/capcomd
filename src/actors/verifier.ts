@@ -1,3 +1,4 @@
+import type { RawAccess } from "rivetkit/db";
 import { traceActions, withSpan } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -44,7 +45,7 @@ export const verifierActor = actor({
       }
 
       if (!existing) {
-        await c.db.transaction(async (tx) => {
+        await c.db.transaction(async (tx: RawAccess) => {
           await transitionLifecycle(tx, verifierId, "verifier", "verifying", { taskId, branch, runId, target: params.target, testOnly: !!params.testOnly }, { type: "START_VERIFY" }, `verifier-${verifierId}-start`, []);
         }, { name: "startVerify" });
       }
@@ -57,7 +58,7 @@ export const verifierActor = actor({
 
       const state = outcome.status === "merged" || outcome.status === "verified" ? "passed" : outcome.status === "conflict" ? "conflict" : "failed";
       const commitSha = "sha" in outcome ? outcome.sha : "";
-      await c.db.transaction(async (tx) => {
+      await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx, verifierId, "verifier", state,
           { taskId, branch, runId, target: params.target, commitSha, passed: state === "passed", outcome, verifiedAt: Date.now() },
@@ -105,7 +106,7 @@ export const verifierActor = actor({
       const rows = await c.db.execute(
         "SELECT entity_id, seq FROM lifecycle_events ORDER BY entity_id, seq"
       );
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         entityId: row.entity_id as string,
         seq: Number(row.seq),
       }));

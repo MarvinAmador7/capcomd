@@ -1,3 +1,4 @@
+import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -99,7 +100,7 @@ export const judgeActor = actor({
       const rows = await c.db.execute(
         "SELECT entity_id, seq FROM lifecycle_events ORDER BY entity_id, seq"
       );
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         entityId: row.entity_id as string,
         seq: Number(row.seq),
       }));

@@ -1,3 +1,4 @@
+import type { RawAccess } from "rivetkit/db";
 import { agentFromEnv, isRealAgent } from "../agents/config";
 import { effectiveAgentRecord, parseAgentDirective } from "../agents/profiles";
 import { traceActions } from "../utils/tracing-simple";
@@ -125,7 +126,7 @@ export const plannerActor = actor({
       const rows = await c.db.execute(
         "SELECT entity_id, seq FROM lifecycle_events ORDER BY entity_id, seq"
       );
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         entityId: row.entity_id as string,
         seq: Number(row.seq),
       }));
