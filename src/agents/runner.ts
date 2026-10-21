@@ -229,6 +229,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       const sa = opts.subagents;
       const cli = `${sa.rpcDir}/bin/capcomd`;
       const src = sa.cliSource.replace(/^#!.*\n/, `#!/usr/bin/env node\nprocess.env.CAPCOMD_RPC_DIR ||= ${JSON.stringify(sa.rpcDir)};\n`);
+      // boxd's file upload does not create parent dirs (fakes did, hiding this): make them first.
+      must(await sh(`mkdir -p ${sq(`${sa.rpcDir}/bin`)} && chmod 700 ${sq(sa.rpcDir)}`), "mkdir capcomd rpc dir", "install");
       await provider.upload(vmId, cli, new TextEncoder().encode(src));
       const mcpConfig = `${W}/capcomd-mcp.json`;
       await provider.upload(vmId, mcpConfig, new TextEncoder().encode(JSON.stringify({ mcpServers: { capcomd: { command: "node", args: [cli, "mcp"], env: { CAPCOMD_RPC_DIR: sa.rpcDir } } } })));
