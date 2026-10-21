@@ -9,7 +9,7 @@ crash-safe primitives: spawn an agent, await it, verify its branch with real che
 commit that was verified. Agents can orchestrate too: a planner agent in its VM spawns, verifies and merges
 its own children through the same verbs, limited by capability tokens and narrow-only fan-out.
 
-For what works today and what's still open, see [STATUS.md](STATUS.md).
+For what works today, see [STATUS.md](STATUS.md); for what's left, [ROADMAP.md](ROADMAP.md).
 
 **Key features:**
 - Composable primitives: `run new`, `spawn`, `await`/`wait-any`, `verify`, `merge --require`, a task board
@@ -96,10 +96,16 @@ VFY=$(bun capcomd verify $RUN --ref $AGT --json | jq -r .id)
 bun capcomd merge $RUN --ref $AGT --require $VFY
 bun capcomd tree $RUN            # cost/turn rollups and stuck flags
 # add a reviewer agent to every verify: run new … --reviewer <profile>  (both checks and review must pass)
+# land on a staging branch instead of the configured target: run new … --target staging --target-from main
+# read-only work (research, triage): spawn … --report   (the final message is the result; nothing is pushed)
+# an agent's merge into a protected branch waits for you: capcomd approve <runId> <mrgId> [--deny --reason R]
 ```
 
 A profile with `children.allowSpawn` gets the same verbs inside its VM, so a planner agent can run this loop
 itself. `scripts/mac-subagents-e2e.sh` is a complete live example.
+
+With real agents (`CAPCOMD_SANDBOX=boxd`), checks run in a throwaway VM, so agent-written code never runs on
+the orchestrator host.
 
 ### Run a goal
 

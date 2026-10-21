@@ -1,6 +1,6 @@
 # capcomd status
 
-**Updated:** 2026-10-21. This file replaces the October 17–18 session logs (`BLOCKING.md`, `PROGRESS.md`,
+**Updated:** 2026-10-21. What's left, with proposed approaches, is in [ROADMAP.md](ROADMAP.md). This file replaces the October 17–18 session logs (`BLOCKING.md`, `PROGRESS.md`,
 `FINAL-STATUS.md`, and the old `STATUS.md`); they are in git history. Design decisions live in `docs/adr-*.md`.
 
 ## Summary
@@ -21,6 +21,10 @@ review by an agent (`run new --reviewer`) is built.
 | `verify` (checks on the ref merged with the latest target) and `merge --require` (only the verified commit lands; merge re-runs the same checks) | Built | `tests/primitives/verify-merge.test.ts` |
 | Operator-named checks: `run new --checks-set name='cmd'`, pinned per child with `spawn --check NAME` | Built | `tests/scenarios/named-checks.test.ts` |
 | Reviewer: `run new --reviewer P` (operator-set); after the checks pass, verify spawns a reviewer agent on the commit (read-only, never pushes); both must pass, no verdict = fail | Built, not yet run live | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
+| Checks in a VM: with `CAPCOMD_SANDBOX=boxd`, verify and merge run the check command in a throwaway VM (env snapshot, no credentials, registry-only egress, the archived tree, destroyed after); fakes run it on the host | Built, not yet run live | `tests/merge/checks-vm.test.ts` |
+| Report mode: `spawn --report` gives a leaf a read-only checkout; its final message is its result, nothing is pushed (research, triage) | Built | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
+| Protected targets from agents: an in-VM merge into a protected branch is parked (`awaiting_approval`, listed in `status` `pendingApprovals`); `approve <runId> <mrgId>` lands it, `--deny` fails it | Built | `tests/scenarios/approvals.test.ts` |
+| Per-run staging target: `run new --target T [--target-from BASE]`; children branch from it, verify and merge default to it | Built | `tests/scenarios/approvals.test.ts` |
 | Sub-agents in VMs (ADR-017): capability tokens, narrow-only fan-out, in-VM `capcomd` CLI and MCP tools, fencing of agent text | Built | `bun run test:scenarios` |
 | Real agents: Claude Code and Codex adapters, agent profiles, subscription logins (`auth login`), boxd host-bound secrets, env snapshots (`env build`), `doctor` | Built | `tests/agents`, `tests/env`, `tests/auth`, live `doctor --strict` |
 | Git: direct and PR merge modes, protected branches parked for `approve` | Built | `tests/merge` |
@@ -35,38 +39,15 @@ the full suite on the result and confirms no VM is left behind. Last run, 2026-1
 
 ## Open work
 
-In rough order of importance.
+The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The biggest items:
 
-1. **The `capcomd run` recipe's planner and run-level judge use a fake model.** `src/models/` has only
-   `FakeModelClient`, and nothing injects a real one. So the recipe's planner plans the same three generic
-   tasks for any goal, and its judge always answers "passed" (`src/actors/judge.ts` also treats a reply that
-   isn't JSON as a pass). Fix: make the recipe spawn a planner profile, as the sub-agent e2e already does,
-   and judge the run with an agent too; keep the fake model for offline tests only. The per-branch evaluation
-   is done: `verify` runs the run's reviewer agent (next table row), and the old `--judge-profile` no longer
-   takes a canned verdict.
-2. **Live spend.** A real agent's cost is known only when it finishes, so a budget can't stop it mid-run;
-   spawn-time checks use the carved budget (ADR-017). The notional cost of a failed or timed-out agent is
-   also not carried into the tree yet (successful runs only).
-3. **Agent logs.** `capcomd logs` doesn't stream a real agent's own output; spans carry its events
-   (ADR-017).
-4. **Legacy run path.** `capcomd run --legacy` still exists next to the recipe and has its own chaos
-   pinning. It is meant to be removed once the recipe covers everything.
-5. **Performance.** The recipe uses one VM per agent, about 25–45% slower than the legacy single worker on
-   fakes. A warm pool or VM reuse is not built (ADR-016).
-6. **Distribution and deployment.** `bun build --compile` fails on rivetkit's native module. The engine runs
-   locally only (Rivet Cloud deferred, ADR-009). There is no reaper that reconciles stale VM-ledger rows in
-   `.relay/boxd.sqlite`.
-7. **CI.** Until 2026-10-21 the workflow file was invalid YAML (an unquoted `: ` in a step name), so GitHub
-   ran no CI job at all: every run "failed because of a workflow file issue". It parses now. The `test` job
-   runs the typecheck, `tests/machines` and the scenario suite; its killpoint steps end in `|| true`, so they
-   can't fail the build. The strict crash gate is `chaos:fast` in the `chaos-nightly` job. A randomized-chaos
-   step that called a nonexistent `tests/chaos/random.test.ts` was removed. CI does not run the live e2e,
-   `tests/agents` or `tests/env`. Some `tests/env` cases fail on hosts that have `codex` installed (for example
-   boxd VMs), because they probe the host as if it were a fresh image.
-
-Smaller known issues:
-- `verify` on a branch that has already merged reports `status: "merged", pass: false`.
-- `docs/open-questions.md` is a low-confidence reconstruction and needs re-research.
+1. The `capcomd run` recipe's planner and run-level judge still answer from a fake model (per-branch review
+   by an agent is built: `run new --reviewer`).
+2. Live spend: a real agent's cost is known only when it finishes.
+3. Patterns that aren't possible yet: stacked work in parallel, verifying and landing several branches
+   together, lead → team branch → main hierarchies, comparing candidates.
+4. The reviewer, checks in a VM, report mode, staging targets and approval requests pass their tests but
+   haven't had a live boxd run yet.
 
 ## How to check it yourself
 
