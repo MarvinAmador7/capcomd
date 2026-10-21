@@ -45,7 +45,8 @@ PORT=$(bun -e 'const { testPort } = await import("./tests/helpers/engine.ts"); c
 export CAPCOMD_ENDPOINT="http://127.0.0.1:$PORT"
 
 echo "== 0a. env snapshot (capcomd env build: idempotent, no VM when the snapshot for this env hash exists)"
-bun src/cli/index.ts env build || die "capcomd env build failed"
+# The throwaway repo does not exist yet (and is private): bake CLIs only. Repo is not part of the env hash.
+env -u CAPCOMD_REPO bun src/cli/index.ts env build || die "capcomd env build failed"
 echo "== 0b. doctor --strict (aborts on any ✗: claude and codex must both be usable)"
 bun src/cli/index.ts doctor --strict || die "doctor reported a failure (see ✗ above); fix it before spawning agents"
 echo "== 0. preflight (credentials checked, never printed)"
