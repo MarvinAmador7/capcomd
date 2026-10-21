@@ -9,7 +9,8 @@ import { githubToken } from "../merge/github";
 export function githubGitCredentials(getToken: () => Promise<string> = githubToken): GitCredentialHook {
   return async ({ cmd }) => {
     if (!["clone", "fetch", "push", "ls-remote", "pull"].includes(cmd[1] ?? "")) return null;
-    const token = await getToken();
+    let token: string;
+    try { token = await getToken(); } catch { return null; } // no token: public repos still work; private ones fail with git's own error
     return {
       CAPCOMD_GIT_TOKEN: token,
       GIT_TERMINAL_PROMPT: "0",

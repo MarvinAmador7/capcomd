@@ -48,13 +48,11 @@ export function providerFromEnv(env: Record<string, string | undefined> = proces
   const kind = (envVar("SANDBOX", env) ?? "fake").toLowerCase();
   if (kind === "boxd") {
     const { BoxdProvider } = require("./providers/boxd") as typeof import("./providers/boxd");
-    // Real agents push from the VM: give git execs a short-lived GitHub credential (env of that exec only).
-    const { agentFromEnv } = require("./agents/config") as typeof import("./agents/config");
-    if (agentFromEnv(env) !== "fake") {
-      const { githubGitCredentials } = require("./agents/credentials") as typeof import("./agents/credentials");
-      return new BoxdProvider({ gitCredentials: githubGitCredentials() });
-    }
-    return new BoxdProvider();
+    // Agents push from the VM: give git network execs a short-lived GitHub credential (env of that exec only).
+    // Always on for boxd: the agent kind now comes from per-agent profiles, not CAPCOMD_AGENT, so gating on
+    // agentFromEnv() left profile-driven (spawn/recipe) agents with no credential for private repos.
+    const { githubGitCredentials } = require("./agents/credentials") as typeof import("./agents/credentials");
+    return new BoxdProvider({ gitCredentials: githubGitCredentials() });
   }
   // Test sandbox: exec runs on this host (agent adapter e2e with a fake claude binary).
   if (kind === "fake-host") return new FakeProvider({ hostExec: true });
