@@ -125,7 +125,7 @@ doctor check only that profile's one credential.
 `maxTotalDescendants`, `allowedChildProfiles`, `budgetShare` ∈ (0,1]. Rules: `allowSpawn` requires
 allowed profiles, `maxChildren ≤ maxTotalDescendants`, and child profiles must exist and be no wider than the
 parent (`widenings()`: tools ⊆, egress ⊆, limits ≤, sandbox no looser, no spawning beyond). Child budget is
-`budgetShare × parent remaining`, never more. Runtime spawning is not built yet.
+`budgetShare × parent remaining`, never more. Runtime spawning was built later; see ADR-017.
 Overrides per run: `capcomd run --profile X --set children.maxDepth=2` (repeatable) or
 `--overrides '<json>'`. They may only narrow the profile; a widening is a config error (exit 2)
 unless `--operator`. The ref is encoded as `name;ov=<base64url json>[;op=1]`. The effective,

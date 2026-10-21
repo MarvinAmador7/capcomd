@@ -1,119 +1,85 @@
-# Relay v0 - Current Status
+# capcomd status
 
-**Updated:** 2026-10-18 03:45 UTC
+**Updated:** 2026-10-21. This file replaces the October 17–18 session logs (`BLOCKING.md`, `PROGRESS.md`,
+`FINAL-STATUS.md`, and the old `STATUS.md`); they are in git history. Design decisions live in `docs/adr-*.md`.
 
-Work stopped here on purpose. Chaos run 2 was killed after its named killpoints passed and while seeded iterations were still running. The engine on port 6420 was stopped with it. Do not treat this tree as a finished 3-run chaos gate.
+## Summary
 
-## 1. Chaos
+The orchestration primitives and in-VM sub-agents work end to end with real agents: Claude Code and
+Codex run in boxd VMs on API keys or subscription logins, and every merge is gated by operator-set checks.
+Most of the remaining work is in the `capcomd run "<goal>"` recipe: its planner and its judge still answer
+from a fake model, so that path doesn't do real planning or real evaluation yet (see Open work, item 1).
 
-**Gate asked for:** process-group kill, wait until port 6420 and the engine data lock are free, invariant checks that fail when the audit cannot read data, then 10/10 named killpoints and 50/50 seeds on 3 consecutive runs.
+## What works
 
-**What is in the tree**
+| Area | State | Verified by |
+|---|---|---|
+| Lifecycle actors and state machines (run, task, lease, worker) | Built | `tests/machines`, chaos killpoints |
+| Crash safety: outbox, epochs, exactly-once merge | Built | `tests/chaos` (named killpoints and seeded runs), `chaos:fast` |
+| Primitives (ADR-016): `run new`, `spawn`, `await`, `wait-any`, `cancel`, `tree`, task board with fenced leases, versioned kv, `events --follow` | Built | `tests/primitives`, chaos `board.*` / `kv.*` killpoints |
+| `verify` (checks on the ref merged with the latest target) and `merge --require` (only the verified commit lands; merge re-runs the same checks) | Built | `tests/primitives/verify-merge.test.ts` |
+| Operator-named checks: `run new --checks-set name='cmd'`, pinned per child with `spawn --check NAME` | Built | `tests/scenarios/named-checks.test.ts` |
+| Sub-agents in VMs (ADR-017): capability tokens, narrow-only fan-out, in-VM `capcomd` CLI and MCP tools, fencing of agent text | Built | `bun run test:scenarios` |
+| Real agents: Claude Code and Codex adapters, agent profiles, subscription logins (`auth login`), boxd host-bound secrets, env snapshots (`env build`), `doctor` | Built | `tests/agents`, `tests/env`, `tests/auth`, live `doctor --strict` |
+| Git: direct and PR merge modes, protected branches parked for `approve` | Built | `tests/merge` |
+| CLI JSON contract (`--json`, schema `relay.v1`, exit codes), MCP server | Built | `tests/cli`, `tests/mcp`, `docs/output-contract.md` |
+| Tracing, `inspect --follow`, TUI (`apps/tui`) | Built | `tests/tracing`, `apps/tui` tests |
+| Costs: billed USD, plus the API-price estimate for subscription work (`notionalUsd`, shown as `~$0.04`) | Built | `tests/subagents/unit.test.ts`, `apps/tui/test/cost.test.ts` |
 
-- `tests/chaos/engine.ts` spawns `relay serve` detached in its own process group. `stop()` records descendant pids, sends SIGKILL to the group, then polls for up to 8s until nothing is listening on 6420 and nothing still holds the recorded db fds.
-- Readiness is not a fixed sleep. HTTP `/` must answer, then `tests/chaos/ready-probe.ts` loops `run.getRun("__ready__")` until the default runner exists or 45s elapses. A single `no_runner_config_configured` is not readiness. The parent kills the probe at 50s.
-- Each case wipes `/home/ubuntu/.rivetkit/var/engine` before the first start only. The resume start reuses that directory. Wiping between the kill and the resume makes the test meaningless. A final SIGKILL of a live engine can leave RocksDB returning "An internal error occurred" on the next open, which is why the wipe happens before the first start.
-- Named cases require a kill: exit 137, `[KILLPOINT]` in the client output, or `[KILLPOINT]` in the serve log. `stop()` sets a flag so the cleanup SIGKILL is not counted as the killpoint.
-- `tests/chaos/invariants.ts` `auditRun` throws if the run, tasks, or charges cannot be read. It does not catch that and pass. The five checks are: no double `VERIFIED_AND_MERGED`, every task state is a known task state, no sandbox still active past its TTL, no duplicate charge id, event seqs are gap-free `1..n` per entity.
-- `src/cli/commands/run.ts` resumes with `--run-id`. Planner, verifier, worker provision, push, budget charge, and outbox flush are idempotent enough to continue after `process.exit(137)`. Verifier `passed` is the constant `true`. Lease TTL is 24h so a scheduled expire does not fire mid-suite.
-- Killpoints on the happy path: `tx.mid`, `model.after_return.before_commit`, `merge.before_cas`, `merge.after_cas.before_event`, `push.mid`, `push.after.before_event`, `vm.create.after_request.before_record`, `lease.expire.mid`, `budget.charge.mid`, `outbox.dispatch.after_send.before_ack`.
+**Live end-to-end:** `scripts/mac-subagents-e2e.sh` runs a planner agent that splits a three-file fix across
+two Claude workers and one Codex worker, verifies each against its own named check, merges all three, runs
+the full suite on the result and confirms no VM is left behind. Last run, 2026-10-21: `E2E PASS`, 3/3 merged,
+165s, about $0.23 in API-equivalent cost on subscription billing. This script is manual; it is not in CI.
 
-**Runs**
+## Open work
 
-Run 1, 2026-10-18 02:48:52Z to 03:30:46Z, exit 0. `bun test tests/chaos/subprocess.test.ts`.
+In rough order of importance.
 
-```
-✓ tx.mid killed=true (51266ms)
-✓ model.after_return.before_commit killed=true (51198ms)
-✓ merge.before_cas killed=true (52108ms)
-✓ merge.after_cas.before_event killed=true (52345ms)
-✓ push.mid killed=true (58364ms)
-✓ push.after.before_event killed=true (51298ms)
-✓ vm.create.after_request.before_record killed=true (55839ms)
-✓ lease.expire.mid killed=true (51117ms)
-✓ budget.charge.mid killed=true (51010ms)
-✓ outbox.dispatch.after_send.before_ack killed=true (51830ms)
-Total: 10/10 passed
-(pass) survives all 10 named killpoints [526374.95ms]
-Completed 50/50 seeds (50 passed, 0 failed)
-Final: 50/50 passed, 0/50 failed
-(pass) survives 50 seeded killpoint iterations [1986886.23ms]
-3 pass
-0 fail
-Ran 3 tests across 1 file. [2513.55s]
-```
+1. **The `capcomd run` recipe's planner and judge use a fake model.** `src/models/` has only
+   `FakeModelClient`, and nothing injects a real one. So the planner plans the same three generic tasks for
+   any goal, and the judge always answers "passed". `verify --judge-profile P` records the profile name and
+   takes the same canned verdict, and `src/actors/judge.ts` treats a reply that isn't JSON as a pass. Fix:
+   run the evaluation in `verify` as an agent profile in a VM with a read-only checkout (fail closed on a
+   missing or malformed verdict), then make the recipe spawn a planner profile, as the sub-agent e2e already
+   does. Keep the fake model for offline tests only.
+2. **Live spend.** A real agent's cost is known only when it finishes, so a budget can't stop it mid-run;
+   spawn-time checks use the carved budget (ADR-017). The notional cost of a failed or timed-out agent is
+   also not carried into the tree yet (successful runs only).
+3. **Agent logs.** `capcomd logs` doesn't stream a real agent's own output; spans carry its events
+   (ADR-017).
+4. **Legacy run path.** `capcomd run --legacy` still exists next to the recipe and has its own chaos
+   pinning. It is meant to be removed once the recipe covers everything.
+5. **Performance.** The recipe uses one VM per agent, about 25–45% slower than the legacy single worker on
+   fakes. A warm pool or VM reuse is not built (ADR-016).
+6. **Distribution and deployment.** `bun build --compile` fails on rivetkit's native module. The engine runs
+   locally only (Rivet Cloud deferred, ADR-009). There is no reaper that reconciles stale VM-ledger rows in
+   `.relay/boxd.sqlite`.
+7. **CI.** Until 2026-10-21 the workflow file was invalid YAML (an unquoted `: ` in a step name), so GitHub
+   ran no CI job at all: every run "failed because of a workflow file issue". It parses now. The `test` job
+   runs the typecheck, `tests/machines` and the scenario suite; its killpoint steps end in `|| true`, so they
+   can't fail the build. The strict crash gate is `chaos:fast` in the `chaos-nightly` job. A randomized-chaos
+   step that called a nonexistent `tests/chaos/random.test.ts` was removed. CI does not run the live e2e,
+   `tests/agents` or `tests/env`. Some `tests/env` cases fail on hosts that have `codex` installed (for example
+   boxd VMs), because they probe the host as if it were a fresh image.
 
-Run 2 started 03:30:46Z. Named killpoints passed again (`Total: 10/10 passed`, 522272.47ms, same ten names, each `killed=true`). Seeded iterations had completed 7 cases with no failure line and were inside the 8th engine start when the suite was killed. Run 3 never started.
+Smaller known issues:
+- `verify` on a branch that has already merged reports `status: "merged", pass: false`.
+- `docs/open-questions.md` is a low-confidence reconstruction and needs re-research.
 
-`tests/chaos/killpoints.test.ts` is the old in-process file. It does not run these five checks. Use `tests/chaos/subprocess.test.ts`.
-
-**Next**
-
-1. Confirm nothing is listening on 6420 (`lsof -nP -iTCP:6420 -sTCP:LISTEN`).
-2. Run `~/.bun/bin/bun test tests/chaos/subprocess.test.ts` three times in a row. Timeouts in the file are 1_200_000ms for the named test and 4_500_000ms for seeds. One full file is about 42 minutes.
-3. Paste all three raw summaries. The gate is 10/10 and 50/50 on each run, with `killed=true` on every named killpoint.
-
-## 2. Tracing
-
-**Done**
-
-- `src/cli/commands/trace.ts` parses and prints a waterfall from `.traces/<runId>.ndjson`. The commander-wrapper syntax error is already on main (`7788090`).
-- `src/utils/tracing-simple.ts` is the Bun-safe span helper. The OTel SDK path in `src/utils/tracing.ts` builds an `NDJSONFileExporter` and never registers it as a span processor. `initTracing` is not called from the CLI or the actors. `docs/adr-010-tracing.md` still says the project uses the OTel SDK. On Bun, `BasicTracerProvider.addSpanProcessor` and `Resource` exports from the SDK do not work, which is why `tracing-simple.ts` exists.
-
-**Not done**
-
-- No fresh run has written `.traces/<runId>.ndjson`.
-- No real `relay trace <runId>` output has been captured.
-
-**Next**
-
-1. Emit spans from a real `relay run` (actor actions, state transitions, model, sandbox, git) through `tracing-simple`, including `relay.run_id`.
-2. Flush `.traces/<runId>.ndjson` at the end of the run.
-3. Run a new run and paste `relay trace <runId>`.
-4. Note in `docs/adr-010-tracing.md` why the SDK was not used on Bun, and whether OTLP is actually connected.
-
-## 3. JSON, exit codes, MCP, approval
-
-**Not started.** `src/cli/index.ts` has `serve`, `run`, `status`, `cancel`, `replay`, `trace`, and `ui`. `--run-id` exists. There is no `--json`, no `--detach`, no `relay mcp`, and no `relay approve`.
-
-Usage errors still exit 1. There is no versioned JSON schema.
-
-**Next, in this order**
-
-1. `--json` on `run`, `status`, `cancel`, `replay`, and `trace`, one versioned schema.
-2. Exit codes: 0 ok, 1 run failed, 2 usage, 3 not found, 4 engine unreachable.
-3. `relay run --json --detach` prints `{runId}` and returns. Without `--detach`, stream NDJSON events.
-4. `relay mcp` on stdio with tools `relay_run`, `relay_status`, `relay_cancel`, `relay_trace`, `relay_events` (cursor pagination). Truncate tool results and set `truncated: true`. Errors must say what to do next.
-5. Protected-branch merges park in `awaiting_approval` until `relay approve <runId> <taskId>`. Same action as an MCP tool. Current happy-path branches are `task/<taskId>/e<epoch>`, not protected, so this must not change the chaos merge path.
-6. Tests for each command, plus an MCP client test that drives a full run.
-7. `docs/integration-agents.md`, using Hermes as the example caller.
-
-## 4. Canvas
-
-**Done in this tree, not screenshotted**
-
-- `apps/canvas/tests/canvas-machine.test.ts`: 8 pass, 0 fail (`bun test tests/canvas-machine.test.ts` from `apps/canvas`).
-- The three failures were one bug. `@statelyai/graph` stores `nodes` as an array. `foldEvent` indexed `graph.nodes[id]`, missed the task `PLAN_READY` had already inserted, and `TASK_CREATED` threw `Node "task-1" already exists`. That error stopped the machine, so `MODE.SWITCH_TO_REPLAY` never landed, and `data.status` stayed unset. `graph-fold.ts` now materializes a Stately graph for updates and publishes `nodes` as an id record.
-- `buildWaterfall` in `canvas-machine.ts` fills `context.traceData.spans` when the panel spans state reaches ready. `App.tsx` renders those bars.
-- Mode switches also assign `context.mode`, which the toolbar reads.
-
-**Not done**
-
-- No browser pass. No screenshots in `/opt/cursor/artifacts`.
-- Layout positions from the ELK worker are still not applied back onto the React Flow nodes.
-
-**Next**
-
-1. `cd apps/canvas && bun run dev --host 127.0.0.1 --port 43123`.
-2. Open the canvas, let the demo events finish, open a node, click View Spans, and confirm the waterfall.
-3. Save screenshots under `/opt/cursor/artifacts`.
-
-## Resume commands
+## How to check it yourself
 
 ```bash
-# chaos, from /workspace, after confirming :6420 is free
-~/.bun/bin/bun test tests/chaos/subprocess.test.ts
-
-# canvas tests
-cd apps/canvas && ~/.bun/bin/bun test tests/canvas-machine.test.ts
+bun run setup                  # installs the CLI/engine, apps/canvas and apps/tui
+bun run typecheck
+bun run test:scenarios         # CI's regression suite, about 3.5 min on macOS, 6.5 min on Linux
+bun test tests/agents tests/primitives tests/merge
+(cd apps/tui && bun test)
+bun run test:chaos             # long: the killpoint and seed suites
+scripts/mac-subagents-e2e.sh   # live: needs BOXD_API_KEY, gh, and working claude + codex logins
 ```
+
+The engine-backed tests run on macOS and Linux; Linux uses `/proc` and macOS uses `ps`/`lsof`. On a Mac,
+run long suites under `caffeinate -i`: if the machine sleeps mid-run, tests time out and can leave an
+orphaned `rivet-engine` behind.
+
+Other reports: `CANVAS_REFACTOR.md` (the `apps/canvas` XState refactor), `docs/evidence/` (chaos logs).

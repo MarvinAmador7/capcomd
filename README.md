@@ -4,32 +4,43 @@ Agent orchestration CLI built on Rivet Actors and XState state machines.
 
 ## Overview
 
-`capcomd` is a v0 implementation of an agent orchestration system that coordinates planners, workers, and verifiers through explicit lifecycle state machines. It demonstrates crash-safe execution using Rivet Actors' SQLite persistence and XState v5 for pure transitions.
+`capcomd` runs coding agents (Claude Code and Codex) in isolated boxd VMs and coordinates them through
+crash-safe primitives: spawn an agent, await it, verify its branch with real checks, and merge only the
+commit that was verified. Agents can orchestrate too: a planner agent in its VM spawns, verifies and merges
+its own children through the same verbs, limited by capability tokens and narrow-only fan-out.
+
+For what works today and what's still open, see [STATUS.md](STATUS.md).
 
 **Key features:**
-- Crash-safe lifecycle management with atomic state transitions
-- Epoch-based lease management to prevent stale worker reports
-- Outbox pattern for reliable side effects
-- Fake model client and sandbox provider for offline development
-- Comprehensive chaos testing suite
+- Composable primitives: `run new`, `spawn`, `await`/`wait-any`, `verify`, `merge --require`, a task board
+  with fenced leases, a versioned kv blackboard, and `events --follow` (ADR-016)
+- Sub-agents in VMs: an in-VM `capcomd` CLI and MCP tools, capability tokens, narrow-only fan-out and
+  budgets (ADR-017)
+- Verification from execution, never self-report: checks run on the branch merged with the latest target,
+  and the operator names the checks an agent may use (ADR-003)
+- Real agents on API keys or subscription logins, with env snapshots and host-bound secrets (ADR-014, ADR-015)
+- Crash-safe lifecycles: atomic transitions, epoch-fenced leases, an outbox, exactly-once merges, and a
+  chaos killpoint suite (ADR-008, ADR-012)
+- A versioned JSON contract for every command (`--json`, schema `relay.v1`), an MCP server, traces and a
+  terminal debugger (`apps/tui`)
 
 ## Architecture
 
-See `docs/` for detailed design documents:
-- `actors-v1.md` - Actor topology and responsibilities
-- `adr-008-lifecycle-state-machines.md` - State machine design
-- `durability.md` - Failure scenarios and recovery
-- `rivet-sqlite.md` - Persistence layer details
-- `boxd.md` - Sandbox provider integration
+Design documents live in `docs/`. Start with:
+- `adr-016-composable-primitives.md` - the primitives and the `capcomd run` recipe
+- `adr-017-subagents-in-vm.md` - agents orchestrating agents from inside their VMs
+- `adr-015-agent-envs-secrets-codex.md` - agent profiles, credentials, env snapshots
+- `actors-v1.md`, `adr-008-lifecycle-state-machines.md`, `durability.md` - actors, state machines, failure handling
+- `output-contract.md` - the JSON, events and spans that callers can rely on
+- `boxd.md` - the sandbox provider
 
 ### Actors
 
-- **RunActor**: Manages run lifecycle, budget, and event log
-- **PlannerActor**: Creates task plans (fake model calls)
-- **TaskBoardActor**: Task and lease lifecycle management
-- **WorkerActor**: VM provisioning and task execution
-- **VerifierActor**: Verifies handoffs and merges
-- **JudgeActor**: Evaluates run completion
+- **RunActor**: run lifecycle, budget ledger, event log
+- **ScopeActor**: the primitives' scope: agents, budgets and carve-outs, ops (verify/merge), tokens, kv, task board
+- **WorkerActor**: VM provisioning and the agent run; pushes the task branch
+- **VerifierActor**: runs checks on a branch merged with the latest target; merges a verified commit
+- **PlannerActor**, **TaskBoardActor**, **JudgeActor**: the `capcomd run` recipe's plan, task ledger and verdict
 
 ### State Machines
 
@@ -53,60 +64,81 @@ bun run setup
 
 ## Usage
 
-### Start the Rivet engine
+`bun capcomd …` runs the CLI from the repo (`bun src/cli/index.ts …` works too). `capcomd --help` lists
+every command; add `--json` for machine-readable output.
 
-```bash
-bun run src/cli/index.ts serve
-```
-
-Or use the CLI directly:
+### Start the engine
 
 ```bash
 bun capcomd serve
 ```
 
-### Run a task
+### Set up real agents (boxd)
 
-In a separate terminal:
+```bash
+export BOXD_API_KEY=…            # and CAPCOMD_SANDBOX=boxd
+bun capcomd env build            # bake the agent CLIs into a boxd snapshot (idempotent, no secrets)
+bun capcomd auth login claude    # or codex: log in with your plan inside a VM
+bun capcomd doctor --strict      # check each agent and credential inside a snapshot VM
+```
+
+API keys work too: `bun capcomd secrets sync` stores local `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` as boxd
+host-bound secrets. Agent profiles (provider, auth, model, limits, tools, children policy) are managed with
+`bun capcomd agents …`.
+
+### Orchestrate with the primitives
+
+```bash
+RUN=$(bun capcomd run new --budget usd=6,turns=200 --checks-set unit='bun test' --json | jq -r .runId)
+AGT=$(bun capcomd spawn $RUN --profile claude-worker --task "Fix src/add.ts" --check unit --key add --json | jq -r .agentId)
+bun capcomd await $RUN $AGT
+VFY=$(bun capcomd verify $RUN --ref $AGT --json | jq -r .id)
+bun capcomd merge $RUN --ref $AGT --require $VFY
+bun capcomd tree $RUN            # cost/turn rollups and stuck flags
+```
+
+A profile with `children.allowSpawn` gets the same verbs inside its VM, so a planner agent can run this loop
+itself. `scripts/mac-subagents-e2e.sh` is a complete live example.
+
+### Run a goal
 
 ```bash
 bun capcomd run "Build a todo app"
-```
-
-### Check status
-
-```bash
 bun capcomd status <runId>
-```
-
-### Cancel a run
-
-```bash
 bun capcomd cancel <runId>
+bun capcomd events <runId>
+bun capcomd trace <runId>
 ```
 
-### Replay events
+`capcomd run` is a recipe built from the primitives: planner → workers → judge. Its planner and judge still
+answer from a fake model, so it doesn't plan or evaluate for real yet; see STATUS.md.
+
+### Watch a run
 
 ```bash
-bun capcomd replay <runId>
+cd apps/tui && bun run start --run <runId>    # set CAPCOMD_ENDPOINT if the engine isn't on :6420
 ```
 
 ## Testing
 
-### Unit tests (state machines)
-
 ```bash
-bun test tests/machines/
+bun run typecheck
+bun test tests/machines/       # state machine transition tables
+bun run test:scenarios         # sub-agent scenarios, primitives policy (the CI regression suite)
+bun test tests/agents tests/primitives tests/merge
+(cd apps/tui && bun test)
 ```
+
+The engine-backed tests run on macOS and Linux.
 
 ### Chaos tests
 
 ```bash
-# Run all chaos tests
-bun test tests/chaos/
+bun run test:chaos             # named killpoints and seeded iterations (long)
+bun run chaos:fast             # parallel workers; strict when CI=true
 
-# Run with specific killpoint
-CAPCOMD_KILLPOINT=tx.mid:1 bun test tests/chaos/
+# Run with a specific killpoint
+CAPCOMD_KILLPOINT=tx.mid:1 bun test tests/chaos/killpoints.test.ts
 ```
 
 ### Named killpoints
@@ -115,59 +147,45 @@ CAPCOMD_KILLPOINT=tx.mid:1 bun test tests/chaos/
 - `model.after_return.before_commit` - Kill after model call
 - `merge.before_cas` - Kill before merge CAS
 - `merge.after_cas.before_event` - Kill after CAS, before event
+- `push.mid`, `push.after.before_event` - Kill during or after a branch push
 - `vm.create.after_request.before_record` - Kill during VM creation
 - `lease.expire.mid` - Kill during lease expiry
 - `budget.charge.mid` - Kill during budget charge
 - `outbox.dispatch.after_send.before_ack` - Kill during outbox dispatch
 
-## Known Limitations (v0)
-
-- **No real VM execution**: Uses FakeProvider for testing
-- **BoxdProvider stubbed**: Requires BOXD_API_KEY (not implemented)
-- **No bun build --compile**: rivetkit's native module doesn't survive compilation
-- **Fake model client**: No actual LLM calls
-- **No real git operations**: Simulated in FakeProvider
-- **Local engine only**: Rivet Cloud deferred
-
-## Development
-
-Type check:
-```bash
-bun check
-```
-
-Run all tests:
-```bash
-bun test
-```
-
 ## Project Structure
 
 ```
 src/
-  actors/       - Rivet actor implementations
+  actors/       - Rivet actors (run, scope, worker, verifier, planner, taskboard, judge)
+  agents/       - Claude Code / Codex adapters, profiles, credentials, the agent runner
+  auth/         - subscription logins (auth login/status/logout)
   cli/          - CLI commands
+  core/         - client, errors, preflight, VM cleanup checks
+  engine/       - engine launcher (per-port data dir, pid file)
+  env/          - env snapshots, secrets sync, doctor
   machines/     - XState state machines
-  models/       - Model client (fake)
-  providers/    - Sandbox providers (fake, boxd stub)
-  utils/        - Lifecycle, killpoint utilities
-tests/
-  machines/     - Transition table tests
-  chaos/        - Crash recovery tests
-docs/           - Design documents and ADRs
+  mcp/          - MCP server
+  merge/        - git: direct and PR merge modes, verification runs
+  models/       - model client (fake only, see STATUS.md)
+  primitives/   - ADR-016 operations, policy, task board, kv
+  providers/    - sandbox providers (boxd, fake)
+  recipes/      - `capcomd run` composed from the primitives
+  subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results
+  utils/        - lifecycle, killpoints, tracing
+apps/
+  canvas/       - web UI (capcomd ui)
+  tui/          - terminal debugger
+tests/          - unit, scenario, chaos, agent and merge suites
+scripts/        - live e2e scripts (boxd + GitHub) and helpers
+docs/           - design documents and ADRs
 ```
 
-## Contributing
+## Known limitations
 
-This is a v0 implementation for demonstration and testing purposes. Production use requires:
-- Real BoxdProvider implementation
-- Actual model client integration
-- Git operations through sandboxes
-- Backup and restore procedures
-- Monitoring and observability
-- Production-grade error handling
-
-See `docs/durability.md` for the full failure matrix and recovery procedures.
+See [STATUS.md](STATUS.md) for the full list. The main ones: the `capcomd run` recipe's planner and judge
+use a fake model, a real agent's spend is known only when it finishes, `bun build --compile` doesn't survive
+rivetkit's native module, and the engine runs locally only (Rivet Cloud deferred).
 
 ## Naming (renamed from relay)
 
