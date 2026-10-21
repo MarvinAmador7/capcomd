@@ -16,9 +16,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
 
       - name: Install dependencies (CLI/engine, apps/canvas, apps/tui)
         run: bun run setup
@@ -26,30 +26,15 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
-      - name: Run unit tests
-        run: bun test tests/machines/*.test.ts
+      - name: Unit, CLI, setup and config, state machines, TUI
+        run: |
+          bun run test:fast
+          (cd apps/tui && bun test)
 
       # ADR-017 regression gate: agentic scenarios (scripted agents driving in-VM capcomd), tokens, MCP, skill gating.
       - name: Sub-agent scenario suite (regression gate)
         run: bun run test:scenarios
         timeout-minutes: 20
-
-      - name: Run chaos tests - deterministic killpoints
-        run: |
-          export RELAY_KILLPOINT=tx.mid:1
-          bun test tests/chaos/killpoints.test.ts || true
-          
-          export RELAY_KILLPOINT=model.after_return.before_commit:1
-          bun test tests/chaos/killpoints.test.ts || true
-          
-          export RELAY_KILLPOINT=budget.charge.mid:1
-          bun test tests/chaos/killpoints.test.ts || true
-          
-          export RELAY_KILLPOINT=vm.create.after_request.before_record:1
-          bun test tests/chaos/killpoints.test.ts || true
-          
-          export RELAY_KILLPOINT=lease.expire.mid:1
-          bun test tests/chaos/killpoints.test.ts || true
 
   # Crash-safety gate (chaos:fast, strict), sharded so each suite gets its own runner: on one 2-vCPU runner the
   # 258 cases took ~45 min, right at the timeout. On push: one round (a regression check, ~10-15 min per shard);
@@ -66,9 +51,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install

@@ -88,7 +88,7 @@ docs/           - design documents and ADRs
 
 ```bash
 bun run typecheck
-bun test tests/machines/       # state machine transition tables
+bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP (~1 min)
 bun run test:scenarios         # sub-agent scenarios, primitives policy (the CI regression suite)
 bun test tests/agents tests/primitives tests/merge
 (cd apps/tui && bun test)
@@ -129,12 +129,21 @@ Named killpoints:
 
 ## Cutting a release
 
-1. Bump `version` in `package.json` and add a section to `CHANGELOG.md`.
-2. `bun run typecheck`, `bun run test:scenarios`, the TUI tests, and the live e2e.
-3. Pack and install in isolation (an installed package ignores `bun.lock`, so runtime deps are pinned exactly in
-   `package.json`): `bun pm pack`, then `bun add -g <tgz>` with a fresh `HOME` and `BUN_INSTALL`, start
-   `capcomd serve`, and drive `run new` / `spawn` / `await` / `trace`. State must land in `~/.capcomd` only.
-4. Tag `vX.Y.Z` and create the GitHub release from the changelog section.
+CI builds releases (`.github/workflows/release.yml`). By hand, before tagging:
+
+1. Bump `version` in `package.json`; in `CHANGELOG.md`, turn the Unreleased entries into a dated section,
+   `## X.Y.Z (YYYY-MM-DD)`. `bun scripts/release-notes.ts vX.Y.Z` prints the release notes, or why it can't.
+2. Run the live e2e (`scripts/mac-subagents-e2e.sh`, `E2E PASS`); CI can't (it needs boxd, GitHub and agent logins).
+   Optionally `bun pm pack && scripts/release-smoke.sh capcomd-X.Y.Z.tgz X.Y.Z` (the install check CI runs).
+3. Commit to `main`, let CI pass, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+The tag runs the release workflow: it checks the tag is on `main`, matches `package.json` and has a changelog
+section; runs typecheck, `test:fast`, the TUI tests and `test:scenarios` on Linux and macOS, and one strict chaos
+round; packs the package and installs it with a fresh `HOME` on both (`scripts/release-smoke.sh`: `setup demo`, a run
+with fake agents, `setup check`, the service definition, state only in `~/.capcomd`); then publishes the GitHub
+release with `capcomd-X.Y.Z.tgz`, its `.sha256` and the changelog section. Any failure publishes nothing; fix, then
+re-run the workflow (Actions → Release → Run workflow, with the tag), which updates the release in place. Moving a
+tag that's already published needs `git push --force origin vX.Y.Z` and is best avoided: cut X.Y.Z+1 instead.
 
 `"private": true` stays while releases are private previews (it blocks an accidental `npm publish`; git installs
 work). A standalone binary (`bun build --compile`) builds, but `serve` doesn't work compiled yet (ROADMAP.md).

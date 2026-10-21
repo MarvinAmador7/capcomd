@@ -1,0 +1,207 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (X.Y.Z = package.json's version, with a dated CHANGELOG.md section) builds and publishes a
+# GitHub release: the tests on Linux and macOS, one strict chaos round, the package (`bun pm pack`) installed the
+# way a user installs it and driven with fake agents (scripts/release-smoke.sh), then the release with the package,
+# its SHA-256 and the changelog section as notes. Re-running for the same tag updates that release in place.
+# The live boxd/GitHub/agents e2e (scripts/mac-subagents-e2e.sh) stays a manual step before tagging (DEVELOPMENT.md).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.3.0)"
+        required: true
+      publish:
+        description: "Publish the release (off: build and test only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  prepare:
+    name: Check the tag and write the notes
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.notes.outputs.version }}
+      title: ${{ steps.notes.outputs.title }}
+      prerelease: ${{ steps.notes.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: The tag is a commit on main
+        run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$(git rev-parse "$TAG^{commit}")" origin/main \
+            || { echo "::error::$TAG is not on main"; exit 1; }
+
+      - name: Notes from CHANGELOG.md (tag matches package.json, dated section)
+        id: notes
+        run: bun scripts/release-notes.ts "$TAG" "$GITHUB_REPOSITORY" > release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  test:
+    name: Tests (${{ matrix.os }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install (CLI/engine, apps/canvas, apps/tui)
+        run: bun run setup
+
+      - name: Type check
+        run: bun run typecheck
+
+      - name: Unit, CLI, setup and config, state machines, TUI
+        run: |
+          bun run test:fast
+          (cd apps/tui && bun test)
+
+      - name: Sub-agent scenario suite
+        run: bun run test:scenarios
+        timeout-minutes: 25
+
+  chaos:
+    name: Chaos (${{ matrix.suite }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [killpoints, recipe, primitives, seeds]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - run: bun install
+
+      - name: chaos:fast ${{ matrix.suite }} (strict, one round)
+        run: bun tests/chaos/fast.ts --only ${{ matrix.suite }} --rounds 1
+        env:
+          CHAOS_STRICT: "1"
+          CHAOS_WORKERS: "4"
+        timeout-minutes: 45
+
+  package:
+    name: Package
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: bun pm pack
+        run: |
+          mkdir dist
+          bun pm pack --destination dist
+          F=capcomd-${{ needs.prepare.outputs.version }}.tgz
+          test -f "dist/$F" || { echo "::error::expected dist/$F"; ls dist; exit 1; }
+          (cd dist && sha256sum "$F" > "$F.sha256" && cat "$F.sha256")
+          tar -tzf "dist/$F" | grep -q '^package/src/cli/index.ts$' || { echo "::error::the package has no CLI"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: dist/
+
+  smoke:
+    name: Install and run (${{ matrix.os }})
+    needs: [prepare, package]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: |
+            scripts
+            .bun-version
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: dist
+
+      - name: Install the package with a fresh HOME and drive it (fake agents)
+        run: scripts/release-smoke.sh "dist/capcomd-${{ needs.prepare.outputs.version }}.tgz" "${{ needs.prepare.outputs.version }}"
+
+  publish:
+    name: Publish the release
+    needs: [prepare, test, chaos, smoke]
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create or update the GitHub release
+        run: |
+          F=artifacts/package/capcomd-${{ needs.prepare.outputs.version }}.tgz
+          FLAGS=(); [ "${{ needs.prepare.outputs.prerelease }}" = "true" ] && FLAGS+=(--prerelease) || FLAGS+=(--latest)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "${{ needs.prepare.outputs.title }}" --notes-file artifacts/release-notes/release-notes.md "${FLAGS[@]}"
+            gh release upload "$TAG" "$F" "$F.sha256" --clobber
+          else
+            gh release create "$TAG" --verify-tag --title "${{ needs.prepare.outputs.title }}" \
+              --notes-file artifacts/release-notes/release-notes.md "${FLAGS[@]}" "$F" "$F.sha256"
+          fi
+          gh release view "$TAG" --json url,isPrerelease,assets --jq '{url, isPrerelease, assets: [.assets[].name]}'

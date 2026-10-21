@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-21), private preview
+
+Guided setup (`capcomd setup`), the engine as a background service, and releases built and tested by CI.
 
 - **`capcomd setup`**: a guided setup, re-runnable and scriptable (`--yes`). An optional local demo with fake agents
   (no accounts), then the boxd key (validated, kept in the OS keychain: macOS Keychain or Linux Secret Service),
@@ -17,7 +19,13 @@
   and one engine can serve runs on different repositories.
 - `kv list` leaves out reserved `_` keys (the run's settings), as it already did inside VMs; `--prefix _` lists
   them and `kv get` reads them.
+- **Releases from CI**: pushing a `vX.Y.Z` tag runs the tests on Linux and macOS and a strict chaos round, packs the
+  package, installs it the way a user does (fresh `HOME`, fake agents: `setup demo`, a run, `setup check`, the
+  service definition, state only in `~/.capcomd`) on both, then publishes the GitHub release with the package, its
+  SHA-256 and this changelog's section as notes (`.github/workflows/release.yml`, `scripts/release-smoke.sh`).
 - CI: the crash suite runs as four parallel jobs (one round per push, three nightly): ~8 minutes instead of ~45.
+  Bun is pinned (`.bun-version`, 1.4.3) instead of `latest`; `test:fast` (unit, CLI, setup/config, tracing, auth, env, MCP) and the TUI tests run on every push; the
+  old killpoint step, which could never fail, is gone (the chaos jobs cover it).
 
 ## 0.2.0 (2026-10-21), private preview
 

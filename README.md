@@ -7,7 +7,7 @@ nothing reaches your repository until it has passed checks you defined, been rev
 merged as the exact commit that was tested. Agents can break work down and delegate to other agents, within
 limits you set.
 
-> **Private preview (v0.2.0).** The orchestration primitives, sub-agents, verification and review are built and
+> **Private preview (v0.3.0).** The orchestration primitives, sub-agents, verification and review are built and
 > verified live. `capcomd run "<goal>"` is experimental. See [STATUS.md](STATUS.md) and [ROADMAP.md](ROADMAP.md).
 
 ## Why
@@ -90,14 +90,17 @@ Claude and/or ChatGPT plan (or Anthropic/OpenAI API keys).
 **1. Install** (private preview: needs read access to this repository)
 
 ```bash
-bun add -g git+ssh://git@github.com/MarvinAmador7/capcomd.git#v0.2.0
+bun add -g git+ssh://git@github.com/MarvinAmador7/capcomd.git#v0.3.0
 capcomd --version
 ```
+
+Or install the package attached to each [release](https://github.com/MarvinAmador7/capcomd/releases):
+`gh release download v0.3.0 --repo MarvinAmador7/capcomd --pattern 'capcomd-*.tgz' && bun add -g ./capcomd-0.3.0.tgz`.
 
 State lives in `~/.capcomd` (set `CAPCOMD_HOME` to move it); a project's own `.capcomd/agents.json` is used when
 you run capcomd from that project.
 
-**2. Set up, guided** (run it inside the repository the agents should work on; on `main`, next release)
+**2. Set up, guided** (run it inside the repository the agents should work on)
 
 ```bash
 cd ~/code/app
@@ -112,7 +115,7 @@ for Claude Code, and can run the engine as a background service (launchd / syste
 `~/.capcomd/config.json` and your project's `.capcomd/config.json`. `--yes` takes the defaults without prompting,
 so an agent can run it too; `capcomd setup project` (or `accounts`, `agent`, `service`, `demo`) runs one part.
 
-<details><summary>On 0.2.0, or by hand</summary>
+<details><summary>By hand</summary>
 
 ```bash
 export BOXD_API_KEY=…  CAPCOMD_SANDBOX=boxd

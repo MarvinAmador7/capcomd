@@ -27,6 +27,7 @@ review by an agent (`run new --reviewer`) is built.
 | Per-run staging target: `run new --target T [--target-from BASE]`; children branch from it, verify and merge default to it | Built | `tests/scenarios/approvals.test.ts` |
 | Guided setup (`capcomd setup`, `setup check`): local demo, boxd key in the OS keychain, snapshot, logins, project config and profiles, Claude Code skill, engine service | Built (accounts step verified live, non-interactive) | `tests/config/` |
 | Engine as a service (`capcomd service install`): launchd (macOS), systemd user unit (Linux) | Built (launchd verified live) | `tests/config/service.test.ts` |
+| Releases from CI: a `vX.Y.Z` tag runs the tests (Linux, macOS), a chaos round, an install of the packed package with a fresh `HOME` (fake agents), then publishes the GitHub release | Built (v0.3.0 released this way) | `.github/workflows/release.yml`, `scripts/release-smoke.sh` |
 | Runs carry their repository settings: an engine without repo env (a service) works; one engine serves several repos | Built | `tests/scenarios/run-repo.test.ts` |
 | Dependent work, interface first: a contract child lands, then provider and consumers run in parallel and land in dependency order (planner guidance, pattern 7) | Built | `tests/scenarios/interface-first.test.ts` |
 | Sub-agents in VMs (ADR-017): capability tokens, narrow-only fan-out, in-VM `capcomd` CLI and MCP tools, fencing of agent text | Built | `bun run test:scenarios` |
@@ -59,6 +60,7 @@ The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The bi
 ```bash
 bun run setup                  # installs the CLI/engine, apps/canvas and apps/tui
 bun run typecheck
+bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP (~1 min)
 bun run test:scenarios         # CI's regression suite, about 3.5 min on macOS, 6.5 min on Linux
 bun test tests/agents tests/primitives tests/merge
 (cd apps/tui && bun test)

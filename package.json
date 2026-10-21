@@ -1,6 +1,6 @@
 {
   "name": "capcomd",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "capcomd: agent orchestration CLI built on Rivet Actors",
   "type": "module",
   "private": true,
@@ -26,6 +26,7 @@
     "test:chaos": "bun test tests/chaos/*.test.ts",
     "chaos:fast": "bun tests/chaos/fast.ts",
     "chaos:slow": "bun test tests/chaos/subprocess.test.ts",
+    "test:fast": "bun test tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers",
     "test:scenarios": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts"
   },
   "devDependencies": {
