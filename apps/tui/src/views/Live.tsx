@@ -50,13 +50,31 @@ export function Live({ data, width, height, live }: ViewProps & { data: RunData;
   );
 }
 
+const UNIT_MARK: Record<string, string> = { usd: "$", turns: "t", wallSeconds: "s" };
+
+/**
+ * How much of its budget an agent has used, in the unit closest to its limit (the one that stops
+ * it). Subscription agents spend $0, so a USD-only meter would stay empty while turns run out.
+ */
+export function budgetUse(a: Pick<AgentNode, "spent" | "budget">): { frac: number; unit: string } | null {
+  let best: { frac: number; unit: string } | null = null;
+  for (const unit of ["turns", "wallSeconds", "usd"]) { // ties (e.g. nothing used yet) read as turns
+    const cap = a.budget[unit];
+    if (!cap || cap <= 0) continue;
+    const frac = Math.min(1, (a.spent[unit] ?? 0) / cap);
+    if (!best || frac > best.frac) best = { frac, unit };
+  }
+  return best;
+}
+
 function AgentRow({ a, width, win }: { a: AgentNode; width: number; win: { t0: number; t1: number } | null }) {
   const indent = a.depth > 0 ? "  ".repeat(a.depth - 1) + "└ " : "";
   const laneW = win ? 14 : 0;
-  const nameW = Math.max(16, width - 46 - (win ? laneW + 9 : 0));
-  const frac = a.budget.usd ? Math.min(1, (a.spent.usd ?? 0) / a.budget.usd) : 0;
+  const nameW = Math.max(16, width - 48 - (win ? laneW + 9 : 0));
+  const use = budgetUse(a);
+  const frac = use?.frac ?? 0;
   const meterW = 8;
-  const filled = Math.round(frac * meterW);
+  const filled = frac > 0 ? Math.max(1, Math.round(frac * meterW)) : 0; // any use shows (3% would round to nothing)
   return (
     <Box flexDirection="column">
       <Text wrap="truncate">
@@ -67,7 +85,7 @@ function AgentRow({ a, width, win }: { a: AgentNode; width: number; win: { t0: n
         <Text color={c.fg}>{lpad(usd(a.spent.usd), 7)}</Text>
         <Text color={c.dim}>{lpad(`${a.spent.turns ?? 0}t`, 5)}  </Text>
         {win && a.startedAt ? <AgentLane a={a} win={win} w={laneW} /> : win ? <Text>{" ".repeat(laneW + 9)}</Text> : null}
-        {a.budget.usd ? <Text><Text color={frac > 0.8 ? c.warn : c.accent}>{"▰".repeat(filled)}</Text><Text color={c.faint}>{"▱".repeat(meterW - filled)}</Text></Text> : null}
+        {use ? <Text><Text color={frac > 0.8 ? c.warn : c.accent}>{"▰".repeat(filled)}</Text><Text color={c.faint}>{"▱".repeat(meterW - filled)} {UNIT_MARK[use.unit]}</Text></Text> : null}
       </Text>
       {a.stuck ? <Text color={c.warn}>{"    " + a.stuck}</Text> : null}
       {a.errorKind ? <Text color={c.err}>{"    ✗ " + a.errorKind}</Text> : null}
