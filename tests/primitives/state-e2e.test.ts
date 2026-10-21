@@ -108,6 +108,8 @@ test("blackboard: put, cas, replay, race, list; events --follow", async () => {
   expect((await cj(["kv", "put", runId, "done", "true"])).j).toMatchObject({ version: 1 });
   expect((await cj(["kv", "list", runId])).j.entries.map((e: any) => e.k)).toEqual(["counter", "done", "plan"]);
   expect((await cj(["kv", "list", runId, "--prefix", "pl"])).j.entries).toHaveLength(1);
+  // Run settings (`_trace`, `_repo`, ... from `run new`) stay out of the blackboard listing; asked for by prefix they're there.
+  expect((await cj(["kv", "list", runId, "--prefix", "_"])).j.entries.map((e: any) => e.k)).toContain("_trace");
   expect((await cj(["kv", "put", runId, "bad key", "1"])).j).toMatchObject({ ok: false, error: { code: "usage" } });
 
   expect(await followed).toBe(0);

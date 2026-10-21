@@ -39,7 +39,7 @@ export interface World {
   repo: Awaited<ReturnType<typeof bareRepo>>;
 }
 
-export async function world(name: string, extraEnv: Record<string, string> = {}): Promise<World> {
+export async function world(name: string, extraEnv: Record<string, string> = {}, opts: { engineOmit?: string[] } = {}): Promise<World> {
   const repo = await bareRepo({ mode: "direct", extraEnv: { CAPCOMD_MERGE_TARGET: "trunk" } });
   await repo.seed.ok(["push", "-q", "origin", "main:trunk"]);
   const dir = mkdtempSync(join(tmpdir(), `capcomd-scn-${name}-`));
@@ -58,7 +58,11 @@ export async function world(name: string, extraEnv: Record<string, string> = {})
   // The engine process reads the same env (kv caps, fake sandbox, repo).
   const saved = { ...process.env };
   Object.assign(process.env, env);
+  // An engine started without some settings (e.g. a background service without CAPCOMD_REPO); the CLI keeps them.
+  const omitted: Record<string, string | undefined> = {};
+  for (const k of opts.engineOmit ?? []) { omitted[k] = process.env[k]; delete process.env[k]; }
   await engine.start(null);
+  for (const [k, v] of Object.entries(omitted)) if (v !== undefined) process.env[k] = v;
   env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${port}`;
   process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
   const cj = async (args: string[]) => {

@@ -53,7 +53,8 @@ export const verifierActor = actor({
       const outcome = await withSpan(
         params.testOnly ? "git.verify" : "git.merge",
         { "relay.run_id": runId, "git.operation": params.testOnly ? "verify" : "merge", "git.ref": branch, "git.target": params.target ?? "" },
-        () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}) })
+        async () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}) },
+          await (await import("../merge/run-config")).mergeConfigFor(runId)) // the run's repository, not the engine's env
       );
 
       const state = outcome.status === "merged" || outcome.status === "verified" ? "passed" : outcome.status === "conflict" ? "conflict" : "failed";

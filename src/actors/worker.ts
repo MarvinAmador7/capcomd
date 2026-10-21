@@ -14,7 +14,6 @@ import {
   getUndispatchedOutbox,
   markOutboxDispatched,
 } from "../utils/lifecycle";
-import { loadMergeConfig } from "../merge/config";
 import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
@@ -438,7 +437,8 @@ export const workerActor = actor({
       let notionalCostUsd = 0; // subscription billing: what the CLI says the tokens would cost at API prices
       let resultText: string | undefined; // a reviewer's final message (its verdict)
       let adopted = false;
-      const cfg = loadMergeConfig();
+      // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
+      const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
       const agent = agentFromEnv(process.env, params.agent);
       // Takeover: a push that reached the remote before its holder died is adopted, not redone.
       if (takeover && cfg) {

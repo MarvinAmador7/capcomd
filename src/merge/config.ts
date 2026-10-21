@@ -30,6 +30,19 @@ export interface MergeConfig {
   workdir: string;
   /** GitHub (pr mode). */
   github: { repo: string | null; api: string; pollMs: number; timeoutMs: number };
+  /** The repo settings this config was built from (re-applied when `.capcomd.json` is read from a target tree). */
+  sourceEnv?: Record<string, string>;
+}
+
+/** The settings a run's repository needs (CAPCOMD_<key>); `run new` records them so the engine needn't have them. */
+export const REPO_ENV_KEYS = ["REPO", "MERGE_MODE", "MERGE_STRATEGY", "MERGE_TARGET", "MERGE_MAX_RETRIES", "TEST_COMMAND", "SIGN_COMMITS",
+  "GITHUB_REPO", "GITHUB_API", "GITHUB_POLL_MS", "GITHUB_TIMEOUT_MS", "PROTECTED_BRANCHES", "WORKDIR"] as const;
+
+/** The repo settings present in `source`, as CAPCOMD_* names (deprecated RELAY_* aliases resolved). */
+export function repoEnvOf(source: Record<string, string | undefined> = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of REPO_ENV_KEYS) { const v = envVar(k, source); if (v !== undefined) out[`CAPCOMD_${k}`] = v; }
+  return out;
 }
 
 export function repoConfigured(source: Record<string, string | undefined> = process.env): boolean {
@@ -63,11 +76,12 @@ export function loadMergeConfig(source: Record<string, string | undefined> = pro
       pollMs: Number(envVar("GITHUB_POLL_MS", source) ?? 5000),
       timeoutMs: Number(envVar("GITHUB_TIMEOUT_MS", source) ?? 30 * 60_000),
     },
+    sourceEnv: repoEnvOf(source),
   };
 }
 
 /** Re-read config with `.capcomd.json` from a checked-out target tree (env still wins). */
-export function withRepoFile(base: MergeConfig, worktree: string, source: Record<string, string | undefined> = process.env): MergeConfig {
+export function withRepoFile(base: MergeConfig, worktree: string, source: Record<string, string | undefined> = { ...process.env, ...(base.sourceEnv ?? {}) }): MergeConfig {
   const path = join(worktree, ".capcomd.json");
   if (!existsSync(path)) return base;
   try {

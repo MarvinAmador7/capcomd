@@ -63,7 +63,10 @@ export async function kvWrite(runId: string, o: { k: string; value: unknown; exp
 }
 export async function kvList(runId: string, prefix?: string, all?: boolean) {
   const s = await scope(runId);
-  return { runId, entries: await s.kvList({ ...(prefix ? { prefix } : {}), ...(all ? { all: true } : {}) }) };
+  const entries = await s.kvList({ ...(prefix ? { prefix } : {}), ...(all ? { all: true } : {}) });
+  // Reserved `_` keys are run settings (checks, reviewer, target, repo, trace), not blackboard data: listed only
+  // when asked for by prefix (`--prefix _`); `kv get` reads them either way.
+  return { runId, entries: prefix?.startsWith("_") ? entries : entries.filter((e: any) => !String(e.k).startsWith("_")) };
 }
 
 /** Poll the merged event log and emit each event once, in order. Stops on --until TYPE or timeout. */

@@ -120,6 +120,10 @@ export async function runNew(o: RunNewOpts) {
   if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from main.");
   const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, paramsHash: ph }).catch(asRelay);
+  // The run carries its repository settings, so the engine (e.g. a background service) needn't have them.
+  const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
+  const repoEnv = repoEnvOf(process.env);
+  if (Object.keys(repoEnv).length) await (await import("./state")).kvWrite(runId, { k: RUN_REPO_KV, value: repoEnv, writer: "operator" }).catch(() => {});
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
   if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
@@ -615,8 +619,7 @@ async function verifyOnce(o: VerifyOpts) {
   await assertEngine();
   const c = client();
   const s = c.scope.getOrCreate([o.runId]);
-  const { loadMergeConfig } = await import("../merge/config");
-  const cfg = loadMergeConfig();
+  const cfg = await (await import("../merge/run-config")).mergeConfigFor(o.runId);
   const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
   const { branch, agentId, label, pinnedCheck } = await resolveRef(o.runId, o.ref);
   if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
@@ -662,9 +665,10 @@ export async function mergeRef(o: MergeOpts) {
   await assertEngine();
   const c = client();
   const s = c.scope.getOrCreate([o.runId]);
-  const { loadMergeConfig } = await import("../merge/config");
   const { isProtectedBranch } = await import("../utils/protected");
-  const cfg = loadMergeConfig();
+  const RC = await import("../merge/run-config");
+  const runEnv = await RC.runEnv(o.runId);
+  const cfg = (await import("../merge/config")).loadMergeConfig(runEnv);
   const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
   const { branch, agentId } = await resolveRef(o.runId, o.ref);
   let expectSha: string | undefined;
@@ -677,7 +681,7 @@ export async function mergeRef(o: MergeOpts) {
     expectSha = (v.result?.commit as string | null) ?? undefined;
   }
   // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
-  const needsApproval = !!cfg && isProtectedBranch(target) && !o.operator;
+  const needsApproval = !!cfg && isProtectedBranch(target, runEnv) && !o.operator;
   if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
   const mrgId = stableId("mrg", `${o.runId}\0${o.ref}\0${target}`, o.key);
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
