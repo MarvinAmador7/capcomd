@@ -1,4 +1,5 @@
 import { readFileSync } from "fs";
+import { redactShapes } from "../agents/redact";
 import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor, UserError } from "rivetkit";
@@ -472,6 +473,7 @@ export const workerActor = actor({
         billing = res.billing;
       } else {
         if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
+        if (process.env.CAPCOMD_FAKE_PUSH_FAIL) throw new Error(process.env.CAPCOMD_FAKE_PUSH_FAIL); // test knob: a push that always fails
         await provider.exec(vmId, ["git", "push", "origin", branch]);
       }
 
@@ -502,7 +504,10 @@ export const workerActor = actor({
       } catch (error) {
         // Release so a retry can take over at once (the attempt count records the retry).
         await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});
-        throw error;
+        // rivetkit masks plain errors as "An internal error occurred": surface the (redacted) cause.
+        if (error instanceof UserError) throw error;
+        const kind = String((error as any)?.kind ?? (error as any)?.code ?? "push_failed");
+        throw new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind } });
       } finally {
         clearInterval(renew);
       }

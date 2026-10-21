@@ -220,9 +220,18 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
   // Trace parenting: agent spans nest under their parent agent's span (root agents under the run).
   return withSpan("agent.run", { "relay.run_id": runId, "agent.id": agentId, "agent.parent": me?.parent ?? null, "relay.agent_id": agentId, "relay.parent_agent_id": me?.parent ?? null, "agent.profile": me?.profile ?? null, "agent.depth": me?.depth ?? 0 }, async (span) => {
     let last: unknown;
+    // One driver id for every attempt in this process, so a retry re-claims its own lease (a fresh id
+    // used to find the lease still held, return "running" and exit: an endless silent loop).
+    const driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    const maxSame = Number(env("DRIVE_MAX_FAILURES") ?? 3);
     for (let attempt = 1; attempt <= 3; attempt++) {
-      try { const a = await driveOnce(runId, agentId); if (!TERMINAL_AGENT.has(a.status)) discardSpan(span); else stampSpent(span, a); return a; } catch (e) {
+      try { const a = await driveOnce(runId, agentId, driver); if (!TERMINAL_AGENT.has(a.status)) discardSpan(span); else stampSpent(span, a); return a; } catch (e) {
         last = e;
+        // Every failed attempt is visible (DRIVE_FAILED, redacted) and counted across driver processes;
+        // N identical failures in a row fail the agent instead of looping.
+        const kind = String((e as any)?.code ?? (e as any)?.kind ?? (e as Error)?.name ?? "error");
+        const df = await s.driveFailed({ agentId, kind, message: String((e as Error)?.message ?? e), attempt, driver }).catch(() => null);
+        if (df && df.consecutive >= maxSame) break;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
         if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing) break;
         await sleep(2000 * attempt);
@@ -242,10 +251,9 @@ async function resultOf(runId: string, agentId: string): Promise<Record<string, 
   return v ? { summary: v.summary, artifacts: v.artifacts, ...(v.data !== undefined ? { data: v.data } : {}), ...(v.truncated ? { truncated: v.truncated } : {}) } : {};
 }
 
-async function driveOnce(runId: string, agentId: string): Promise<ScopeAgent> {
+async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`): Promise<ScopeAgent> {
   const c = client();
   const s = c.scope.getOrCreate([runId]);
-  const driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   const claim = await s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(asRelay);
   if (!claim.ok) return claim.agent;
   const a = claim.agent;

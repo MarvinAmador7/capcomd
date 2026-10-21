@@ -38,7 +38,7 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
     stop: async () => {
       await pump.stop();
       // The agent is done with its token: revoke it so a copy left in the VM is dead now, not at exp.
-      if (jti) await s.revokeToken({ jti, reason: `agent ${a.agentId} finished` }).catch(() => {});
+      if (jti) await s.revokeToken({ jti, agentId: a.agentId, reason: `agent ${a.agentId} finished` }).catch(() => {});
     },
   };
 }

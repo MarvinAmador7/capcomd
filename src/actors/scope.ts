@@ -367,10 +367,28 @@ export const scopeActor = actor({
       return ((await c.db.execute("SELECT waiter, target, since FROM awaits ORDER BY since")) as any[]).map((r) => ({ waiter: r.waiter as string, target: r.target as string, since: Number(r.since) }));
     },
 
-    async revokeToken(c, params: { jti: string; reason?: string }) {
+    /** A drive attempt failed: record it (redacted) and say how many identical failures are in a row. */
+    async driveFailed(c, params: { agentId: string; kind: string; message: string; attempt: number; driver: string }) {
+      const message = redactShapes(params.message).slice(0, 1000);
+      let consecutive = 1;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const evs = await tx.execute("SELECT type, data FROM scope_events WHERE agent_id = ? ORDER BY seq DESC LIMIT 50", params.agentId);
+        for (const e of evs as any[]) {
+          if (e.type === "TOKEN_REVOKED" || e.type === "MESSAGE_SENT") continue;
+          if (e.type !== "DRIVE_FAILED") break;
+          const d = JSON.parse(String(e.data));
+          if (d.kind === params.kind && d.message === message) consecutive++; else break;
+        }
+        await addEvent(tx, "DRIVE_FAILED", params.agentId, { kind: params.kind, error_kind: params.kind, message, attempt: params.attempt, driver: params.driver, consecutive }, `drivefail-${params.driver}-${params.attempt}`);
+        // The driver is gone for now: let the next attempt (this process or another) claim at once.
+        await tx.execute("UPDATE agents_v2 SET driver = NULL, driver_until = 0 WHERE agent_id = ? AND driver = ?", params.agentId, params.driver);
+      }, { name: "scopeDriveFailed" });
+      return { consecutive };
+    },
+    async revokeToken(c, params: { jti: string; reason?: string; agentId?: string }) {
       await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("INSERT OR IGNORE INTO revoked (jti, reason, at) VALUES (?, ?, ?)", params.jti, params.reason ?? null, Date.now());
-        await addEvent(tx, "TOKEN_REVOKED", null, { jti: params.jti, reason: params.reason ?? null }, `revoke-${params.jti}`);
+        await addEvent(tx, "TOKEN_REVOKED", params.agentId ?? null, { jti: params.jti, reason: params.reason ?? null }, `revoke-${params.jti}`);
       }, { name: "scopeRevoke" });
       return { revoked: true };
     },
