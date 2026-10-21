@@ -5,7 +5,7 @@ import { join } from "path";
 import { bareRepo } from "../merge/gitfixture";
 import { FakeProvider } from "../../src/providers/fake";
 import { loadAgentConfig, CODEX_VERSION } from "../../src/agents/config";
-import { envBuild, envRm, envStatus } from "../../src/env/build";
+import { envBuild, envRm, envStatus, lastVersion } from "../../src/env/build";
 import { envName, readLedger, resolveEnvSnapshot, ENV_PREFIX } from "../../src/env/resolve";
 import { doctor, formatDoctor } from "../../src/env/doctor";
 import { secretsSync } from "../../src/env/secrets";
@@ -146,3 +146,11 @@ describe("capcomd doctor", () => {
     expect(await f.provider.list("")).toEqual([]);
   }, 30_000);
 });
+
+test("installed CLI version is the transcript's last x.y.z (node's download version comes first)", () => {
+  const transcript = "fetching https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.gz\nadded 3 packages in 2s\n2.1.286 (Claude Code)\n";
+  expect(lastVersion(transcript)).toBe("2.1.286");
+  expect(lastVersion("v26.12.0\n")).toBe("26.12.0");
+  expect(lastVersion("Executed: sh -c command -v node >/dev/null && node -v; true")).toBeUndefined();
+});
+

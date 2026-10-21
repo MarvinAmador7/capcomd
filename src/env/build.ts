@@ -13,6 +13,14 @@ export const LOCKFILES = ["bun.lock", "bun.lockb", "package-lock.json", "pnpm-lo
 /** Shapes that must never be in a snapshot. */
 export const SECRET_SHAPES = "sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|bxd_[A-Za-z0-9]{16,}";
 
+/**
+ * The CLI's version from an install transcript: the LAST x.y.z, because the script ends with
+ * `<bin> --version` and earlier output (node download, npm) can carry other versions.
+ */
+export function lastVersion(text: string): string | undefined {
+  return text.match(/\d+\.\d+\.\d+/g)?.at(-1);
+}
+
 export interface BuildOptions {
   /** Repo whose dependencies to bake in; omit for CLIs + git config only. */
   repoUrl?: string;
@@ -94,11 +102,11 @@ export async function envBuild(p: SandboxProvider & EnvPlatform, o: BuildOptions
       if (det.bin) { versions[a.bin] = { version: det.version ?? "unknown", source: "image" }; log(`${a.bin}: found ${det.version} at ${det.bin} (kept)`); continue; }
       log(`${a.bin}: missing → installing ${a.npmPackage}@${a.pinnedVersion(o.cfg)}`);
       const out = await must(`${a.bin} install`, installScript(o.cfg, home, a), 600_000);
-      versions[a.bin] = { version: /\d+\.\d+\.\d+/.exec(out.stdout)?.[0] ?? a.pinnedVersion(o.cfg), source: "installed" };
+      versions[a.bin] = { version: lastVersion(out.stdout) ?? a.pinnedVersion(o.cfg), source: "installed" };
     }
     if (!versions.node) {
-      const n = (await sh(`command -v node >/dev/null && node -v; true`)).stdout.trim();
-      versions.node = n ? { version: n.replace(/^v/, ""), source: "installed" } : { version: "", source: "missing" };
+      const n = lastVersion((await sh(`command -v node >/dev/null && node -v; true`)).stdout);
+      versions.node = n ? { version: n, source: "installed" } : { version: "", source: "missing" };
     }
 
     // 3. Git identity (commits use -c too; this covers agent-run git).
