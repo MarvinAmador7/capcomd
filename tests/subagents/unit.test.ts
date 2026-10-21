@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { mint, verifyToken, opsFor } from "../../src/subagents/token";
-import { capText, fence, normalizeResult, rollups, stuckReason, treeView, subtree } from "../../src/subagents/results";
+import { capText, fence, normalizeResult, rollups, stuckReason, textTree, treeView, subtree } from "../../src/subagents/results";
 import { LocalSpool, VmSpool, startPump } from "../../src/subagents/spool";
 import { orchestrationSkill } from "../../src/subagents/skill";
 import { FakeProvider } from "../../src/providers/fake";
@@ -57,6 +57,28 @@ test("rollups, subtree, stuck detection", () => {
   expect(stuckReason(agents[0] as any, now)).toBeNull();
   const t = treeView(agents as any, undefined, now);
   expect(t[0].children[0].stuck).toBeTruthy();
+});
+
+test("subscription work: notional (API-price) cost rolls up separately from billed usd", () => {
+  const agents = [
+    { agentId: "p", parent: null, status: "done", spent: { turns: 7, usd: 0 }, budget: { usd: 6 }, result: { billing: "subscription", notionalCostUsd: 0.089 } },
+    { agentId: "a", parent: "p", status: "done", spent: { turns: 5, usd: 0 }, budget: {}, result: { billing: "subscription", notionalCostUsd: 0.039 } },
+    { agentId: "b", parent: "p", status: "done", spent: { turns: 5, usd: 0.02 }, budget: {}, result: { billing: "api" } },
+  ];
+  const r = rollups(agents as any).get("p")!;
+  expect(r).toMatchObject({ usd: 0.02, notionalUsd: 0.128, turns: 17 }); // never mixed into billed usd
+  const t = treeView(agents as any);
+  expect(t[0]).toMatchObject({ notionalUsd: 0.089, billing: "subscription" });
+  expect(t[0].children.find((c: any) => c.agentId === "b").notionalUsd).toBeUndefined();
+  expect(textTree(t)).toContain("self: $0 (~$0.089 api-equiv) 7t  subtree(3): $0.02 (~$0.128 api-equiv) 17t");
+});
+
+test("claude result: tokens include cache reads/writes; cost is total_cost_usd", async () => {
+  const { claudeAdapter } = await import("../../src/agents/adapters");
+  const { Redactor } = await import("../../src/agents/redact");
+  const st = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
+  claudeAdapter.parse(JSON.stringify({ type: "result", subtype: "success", num_turns: 5, total_cost_usd: 0.0387, usage: { input_tokens: 12, cache_creation_input_tokens: 3000, cache_read_input_tokens: 40000, output_tokens: 450 } }), new Redactor([]), st as any, {} as any);
+  expect(st).toMatchObject({ turns: 5, costUsd: 0.0387, inputTokens: 43012, outputTokens: 450, done: true });
 });
 
 test("in-VM CLI argv → op mapping (incl. parent-set children grants)", async () => {

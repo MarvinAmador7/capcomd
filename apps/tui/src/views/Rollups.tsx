@@ -3,8 +3,8 @@ import { BarChart } from "@/components/ui/bar-chart";
 import { Sparkline } from "@/components/ui/sparkline";
 import { familyOf } from "../adapters/trace";
 import { flattenAgents } from "../adapters/tree";
-import type { RunData } from "../adapters/types";
-import { dur, usd } from "../format";
+import type { AgentNode, RunData } from "../adapters/types";
+import { cost, dur, usd } from "../format";
 import { c, familyColor } from "../theme";
 import { Section, type ViewProps } from "./common";
 
@@ -16,6 +16,7 @@ export function rollupStats(data: RunData) {
   const total = {
     wallMs: data.trace?.durationMs ?? (data.events.length ? data.events[data.events.length - 1]!.at - data.events[0]!.at : 0),
     usd: agents.reduce((a, n) => a + (n.spent.usd ?? 0), 0),
+    notionalUsd: agents.reduce((a, n) => a + (n.notionalUsd ?? 0), 0),
     turns: agents.reduce((a, n) => a + (n.spent.turns ?? 0), 0),
     agents: agents.length,
     spans: spans.length,
@@ -28,10 +29,13 @@ export function Rollups({ data, width }: ViewProps & { data: RunData }) {
   const { agents, families, total } = rollupStats(data);
   const half = Math.max(30, Math.floor((width - 4) / 2));
   const kpis: Array<[string, string, string?]> = [
-    ["wall time", dur(total.wallMs)], ["cost", usd(total.usd)], ["turns", String(total.turns)],
+    ["wall time", dur(total.wallMs)], ["cost", cost(total.usd, total.notionalUsd)], ["turns", String(total.turns)],
     ["agents", String(total.agents)], ["spans", String(total.spans)], ["errors", String(total.errors), total.errors ? c.err : undefined],
   ];
-  const top = agents.slice().sort((a, b) => (b.spent.usd ?? 0) - (a.spent.usd ?? 0)).slice(0, 8);
+  // Billed spend when there is any; else the API-price estimate of subscription-billed work.
+  const billed = total.usd > 0;
+  const costOf = (a: AgentNode) => (billed ? a.spent.usd ?? 0 : a.notionalUsd ?? 0);
+  const top = agents.slice().sort((a, b) => costOf(b) - costOf(a)).slice(0, 8);
   const buckets = spark(data, 48);
   return (
     <Box flexDirection="column" gap={1}>
@@ -45,8 +49,8 @@ export function Rollups({ data, width }: ViewProps & { data: RunData }) {
       </Box>
       <Box gap={4}>
         <Box width={half} flexDirection="column">
-          <Section title="Cost by agent" hint={data.agentsFromTree ? "capcomd tree" : "from agent.cost_usd spans"}>
-            {total.usd > 0 ? <BarChart width={half - 4} data={top.map((a) => ({ label: a.agentId, value: round(a.spent.usd ?? 0) }))} /> : <Text color={c.dim}>No agent.cost_usd recorded for this run.</Text>}
+          <Section title="Cost by agent" hint={!billed && total.notionalUsd > 0 ? "~ API-price estimate · subscription-billed $0" : data.agentsFromTree ? "capcomd tree" : "from agent.cost_usd spans"}>
+            {billed || total.notionalUsd > 0 ? <BarChart width={half - 4} data={top.map((a) => ({ label: a.agentId, value: round(costOf(a)) }))} /> : <Text color={c.dim}>No agent.cost_usd recorded for this run.</Text>}
           </Section>
         </Box>
         <Box width={half} flexDirection="column">

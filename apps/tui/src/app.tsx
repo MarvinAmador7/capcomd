@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { ThemeContext } from "@/hooks/use-theme";
 import type { RunData } from "./adapters/types";
 import type { IconSet } from "./icons";
-import { dur, usd } from "./format";
+import { cost, dur, usd } from "./format";
 import { c, capcomTheme, statusColor, statusGlyph } from "./theme";
 import { Events } from "./views/Events";
 import { Live } from "./views/Live";
@@ -71,7 +71,7 @@ export function App({ data: initial, initialTab = "waterfall", width: w, height:
             <Text color={c.dim}>{"  " + data.runId + "  "}</Text>
             <Text color={statusColor(state)}>{statusGlyph(state)} {state}</Text>
           </Text>
-          <Text color={c.dim}>{`${dur(total.wallMs)} · ${usd(total.usd)} · ${total.turns} turns   `}<Text color={c.faint}>{data.source}</Text></Text>
+          <Text color={c.dim}>{`${dur(total.wallMs)} · ${cost(total.usd, total.notionalUsd)} · ${total.turns} turns   `}<Text color={c.faint}>{data.source}</Text></Text>
         </Box>
         <Box gap={3}>
           {TABS.map((t, i) => (

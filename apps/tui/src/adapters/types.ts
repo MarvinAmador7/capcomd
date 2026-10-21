@@ -46,7 +46,9 @@ export interface AgentNode {
   depth: number;
   spent: Spend;
   budget: Spend;
-  rollup?: { agents: number; usd: number; turns: number; wallSeconds: number; byStatus: Record<string, number> };
+  /** Subscription billing: what the agent's tokens would cost at API prices (billed spend stays $0). */
+  notionalUsd?: number;
+  rollup?: { agents: number; usd: number; notionalUsd?: number; turns: number; wallSeconds: number; byStatus: Record<string, number> };
   stuck?: string;
   parent?: string | null;
   taskId?: string;

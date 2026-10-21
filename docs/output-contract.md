@@ -35,6 +35,9 @@ In-VM `capcomd events` (ADR-017) returns scope events with `seq`, `ts`, `epochMs
 plus `createdAt`, `startedAt` (first AGENT_STARTED), `endedAt` (terminal event, null while live),
 `taskId` (worker task label; the plan task id for recipe agents, else the agent id), and
 `spanId` (the agent's `agent.run` span id, deterministic: `agentSpanId(runId, agentId)`).
+Cost: `spent.usd` is billed spend (0 under subscription billing). A subscription-billed agent whose CLI
+reported a cost also has `notionalUsd` (the API-price estimate) and `billing`; `rollup.notionalUsd` and
+`totals.notionalUsd` sum it over the subtree / run. It is never added to `usd` and never counts against a budget.
 
 ## Status: `capcomd status <runId> --json` → `{run}`
 
@@ -62,6 +65,7 @@ With `--follow`, the lines are:
 - `agent.run` (one per scope agent; spanId = `agentSpanId(run, agent)`, parent = the parent agent's span):
   `relay.agent_id`, `relay.parent_agent_id` (null at root), `agent.id`/`agent.parent` (**aliases**),
   `agent.profile`, `agent.depth`, `agent.status`, `agent.cost_usd`, `agent.turns`. These are always stamped, including failed runs.
+  Subscription-billed agents also get `agent.billing` and `agent.notional_cost_usd` when the CLI reported a cost.
 - `agent.claude_code` / `agent.codex` (the CLI run in the VM): carry `relay.agent_id` and `relay.parent_agent_id`, parented
   under the agent's `agent.run`. On success they have `agent.cost_usd`, `agent.turns`, `agent.stop_reason`, `agent.billing`. On
   failure or timeout they still have `agent.cost_usd` (0 under subscription billing), `agent.notional_cost_usd`,

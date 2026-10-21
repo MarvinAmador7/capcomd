@@ -32,6 +32,8 @@ beforeAll(async () => {
     CAPCOMD_AGENT_WORKDIR: mkdtempSync(join(tmpdir(), "capcomd-agent-vm-")),
     CAPCOMD_AGENT_POLL_MS: "100",
     CAPCOMD_TRACE_DIR: traceDir,
+    CAPCOMD_AUTH_LEDGER: join(traceDir, "auths.json"), // never the checkout's real .relay/ ledgers
+    CAPCOMD_ENV_LEDGER: join(traceDir, "envs.json"),
     OPENAI_API_KEY: KEY,
     CAPCOMD_ENV: "image",
   };

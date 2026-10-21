@@ -487,7 +487,7 @@ async function main(argv: string[]): Promise<number> {
         if (json) out(r);
         else if (process.env.CAPCOMD_TREE_FLAT !== "1") {
           const b = (x: Record<string, number>) => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(",") || "-";
-          console.log(`${runId}  budget ${b(r.budget)} (unallocated ${b(r.unallocated)}, spent ${b(r.spent)})  totals: ${r.totals.agents} agents $${r.totals.usd} ${r.totals.turns} turns ${r.totals.wallSeconds}s`);
+          console.log(`${runId}  budget ${b(r.budget)} (unallocated ${b(r.unallocated)}, spent ${b(r.spent)})  totals: ${r.totals.agents} agents $${r.totals.usd}${(await import("../subagents/results")).notional(r.totals.notionalUsd)} ${r.totals.turns} turns ${r.totals.wallSeconds}s`);
           console.log((await import("../subagents/results")).textTree(r.tree, "  "));
         }
         else {

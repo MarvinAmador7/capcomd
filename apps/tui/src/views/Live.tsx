@@ -2,7 +2,7 @@ import { Box, Text } from "ink";
 import { Badge } from "@/components/ui/badge";
 import { flattenAgents } from "../adapters/tree";
 import type { AgentNode, RunData } from "../adapters/types";
-import { bar, clock, dur, lpad, pad, usd } from "../format";
+import { bar, clock, cost, dur, lpad, pad, usd } from "../format";
 import { c, statusColor, statusGlyph } from "../theme";
 import { Empty, Section, type ViewProps, compact } from "./common";
 import { eventColor } from "./Events";
@@ -82,7 +82,7 @@ function AgentRow({ a, width, win }: { a: AgentNode; width: number; win: { t0: n
         <Text color={c.faint}>{indent}</Text>
         <Text color={c.fg}>{pad(a.agentId, nameW - indent.length - 1)} </Text>
         <Text color={c.dim}>{pad(a.profile ?? "", 10)}</Text>
-        <Text color={c.fg}>{lpad(usd(a.spent.usd), 7)}</Text>
+        <Text color={a.spent.usd ? c.fg : c.dim}>{lpad(cost(a.spent.usd, a.notionalUsd), 7)}</Text>
         <Text color={c.dim}>{lpad(`${a.spent.turns ?? 0}t`, 5)}  </Text>
         {win && a.startedAt ? <AgentLane a={a} win={win} w={laneW} /> : win ? <Text>{" ".repeat(laneW + 9)}</Text> : null}
         {use ? <Text><Text color={frac > 0.8 ? c.warn : c.accent}>{"▰".repeat(filled)}</Text><Text color={c.faint}>{"▱".repeat(meterW - filled)} {UNIT_MARK[use.unit]}</Text></Text> : null}

@@ -20,7 +20,7 @@ function node(n: any, depth: number): AgentNode {
   return {
     agentId: String(n.agentId), profile: n.profile ?? null, status: String(n.status ?? "unknown"),
     depth: typeof n.depth === "number" ? n.depth : depth, spent: n.spent ?? {}, budget: n.budget ?? {},
-    rollup: n.rollup, stuck: n.stuck, parent: n.parent ?? null, taskId: n.taskId, spanId: n.spanId,
+    ...(Number(n.notionalUsd) > 0 ? { notionalUsd: Number(n.notionalUsd) } : {}), rollup: n.rollup, stuck: n.stuck, parent: n.parent ?? null, taskId: n.taskId, spanId: n.spanId,
     startedAt: ms(n.startedAt) ?? undefined, endedAt: n.endedAt === null ? null : ms(n.endedAt) ?? undefined,
     children: (n.children ?? []).map((c: any) => node(c, depth + 1)),
   };
@@ -51,7 +51,14 @@ function fromAgentRuns(trace: Trace, runs: Trace["spans"]): AgentNode[] {
     add(cur.spent, "usd", num(s.attrs["agent.cost_usd"]));
     add(cur.spent, "turns", num(s.attrs["agent.turns"]));
     add(cur.spent, "wallSeconds", s.durationMs / 1000);
+    addNotional(cur, num(s.attrs["agent.notional_cost_usd"]));
     by.set(id, cur);
+  }
+  // Older traces stamp the notional cost only on the CLI span (agent.claude_code / agent.codex).
+  for (const s of trace.spans) {
+    if (!/^agent\.(claude_code|codex)$/.test(s.name)) continue;
+    const a = by.get(String(s.attrs["relay.agent_id"] ?? s.attrs["agent.id"] ?? ""));
+    if (a && !a.notionalUsd) addNotional(a, num(s.attrs["agent.notional_cost_usd"]));
   }
   attachErrorKinds(trace, by);
   return nest([...by.values()]);
@@ -69,6 +76,7 @@ function fromCliSpans(trace: Trace): AgentNode[] {
     add(cur.spent, "usd", num(s.attrs["agent.cost_usd"]));
     add(cur.spent, "turns", num(s.attrs["agent.turns"]));
     add(cur.spent, "wallSeconds", s.durationMs / 1000);
+    addNotional(cur, num(s.attrs["agent.notional_cost_usd"]));
     if (s.attrs["agent.max_budget_usd"] !== undefined) cur.budget.usd = num(s.attrs["agent.max_budget_usd"]);
     if (s.attrs["agent.max_turns"] !== undefined) cur.budget.turns = num(s.attrs["agent.max_turns"]);
     if (s.status === "error") cur.status = "failed";
@@ -76,6 +84,10 @@ function fromCliSpans(trace: Trace): AgentNode[] {
     by.set(id, cur);
   }
   return [...by.values()];
+}
+
+function addNotional(a: AgentNode, n: number | undefined) {
+  if (n && n > 0) a.notionalUsd = Math.round(((a.notionalUsd ?? 0) + n) * 1e6) / 1e6;
 }
 
 /** The latest agent.error_kind on any of an agent's spans. */

@@ -57,7 +57,14 @@ export interface TreeAgent {
   agentId: string; parent: string | null; status: string; spent: Budget; budget: Budget;
   heartbeatAt?: number; driverUntil?: number; createdAt?: number; result?: any; depth?: number; profile?: string | null;
 }
-export interface Rollup { agents: number; byStatus: Record<string, number>; spent: Budget; turns: number; usd: number; wallSeconds: number }
+/** usd is billed spend; notionalUsd is the API-price estimate of subscription-billed work (never billed, never budgeted). */
+export interface Rollup { agents: number; byStatus: Record<string, number>; spent: Budget; turns: number; usd: number; notionalUsd: number; wallSeconds: number }
+
+/** An agent's own notional (API-price) cost under subscription billing, from its result. */
+export function notionalOf(a: Pick<TreeAgent, "result">): number {
+  const n = Number(a.result?.notionalCostUsd ?? 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 /** Sum spend and status counts over each node's subtree (self included). */
 export function rollups(agents: TreeAgent[]): Map<string, Rollup> {
@@ -65,12 +72,13 @@ export function rollups(agents: TreeAgent[]): Map<string, Rollup> {
   for (const a of agents) kids.set(a.parent, [...(kids.get(a.parent) ?? []), a]);
   const out = new Map<string, Rollup>();
   const visit = (a: TreeAgent): Rollup => {
-    const r: Rollup = { agents: 1, byStatus: { [a.status]: 1 }, spent: { ...a.spent }, turns: 0, usd: 0, wallSeconds: 0 };
+    const r: Rollup = { agents: 1, byStatus: { [a.status]: 1 }, spent: { ...a.spent }, turns: 0, usd: 0, notionalUsd: notionalOf(a), wallSeconds: 0 };
     for (const k of kids.get(a.agentId) ?? []) {
       const kr = visit(k);
       r.agents += kr.agents;
       for (const [s, n] of Object.entries(kr.byStatus)) r.byStatus[s] = (r.byStatus[s] ?? 0) + n;
       for (const u of UNITS) if (kr.spent[u]) r.spent[u] = round((r.spent[u] ?? 0) + kr.spent[u]!);
+      r.notionalUsd = round(r.notionalUsd + kr.notionalUsd);
     }
     r.turns = r.spent.turns ?? 0; r.usd = r.spent.usd ?? 0; r.wallSeconds = r.spent.wallSeconds ?? 0;
     out.set(a.agentId, r);
@@ -99,6 +107,7 @@ export function treeView(agents: TreeAgent[], root?: string, now = Date.now()) {
     const stuck = stuckReason(a, now);
     return {
       agentId: a.agentId, profile: a.profile ?? null, depth: a.depth ?? 0, status: a.status, budget: a.budget, spent: a.spent,
+      ...(notionalOf(a) ? { notionalUsd: notionalOf(a), billing: a.result?.billing ?? null } : {}),
       rollup: ru.get(a.agentId), ...(stuck ? { stuck } : {}), children: (kids.get(a.agentId) ?? []).map(node),
     };
   };
@@ -114,10 +123,13 @@ export function subtree(agents: Array<{ agentId: string; parent: string | null }
   return out;
 }
 
+/** " (~$0.0389 api-equiv)" when subscription work has a notional cost; "" otherwise. */
+export const notional = (n?: number) => (n && n > 0 ? ` (~$${Math.round(n * 1e4) / 1e4} api-equiv)` : "");
+
 export function textTree(nodes: any[], indent = ""): string {
   return nodes.map((n) => {
     const r = n.rollup;
-    const line = `${indent}${n.agentId} [${n.profile ?? "-"}] ${n.status}${n.stuck ? ` STUCK(${n.stuck})` : ""}  self: $${n.spent.usd ?? 0} ${n.spent.turns ?? 0}t  subtree(${r.agents}): $${r.usd} ${r.turns}t ${r.wallSeconds}s`;
+    const line = `${indent}${n.agentId} [${n.profile ?? "-"}] ${n.status}${n.stuck ? ` STUCK(${n.stuck})` : ""}  self: $${n.spent.usd ?? 0}${notional(n.notionalUsd)} ${n.spent.turns ?? 0}t  subtree(${r.agents}): $${r.usd}${notional(r.notionalUsd)} ${r.turns}t ${r.wallSeconds}s`;
     return [line, textTree(n.children, indent + "  ")].filter(Boolean).join("\n");
   }).join("\n");
 }

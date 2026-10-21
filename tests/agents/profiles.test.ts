@@ -64,7 +64,8 @@ describe("agent profiles", () => {
 
   test("CLI: agents add/set/list/show/rm/schema/validate with --json (orchestrator-friendly)", () => {
     const path = join(mkdtempSync(join(tmpdir(), "capcomd-agcli-")), "agents.json");
-    const env = { CAPCOMD_AGENTS_FILE: path, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "" };
+    // Own ledgers: "ready" reads the auth ledger, and the checkout's real .relay/ must not leak in.
+    const env = { CAPCOMD_AGENTS_FILE: path, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(path, "..", "auths.json"), CAPCOMD_ENV_LEDGER: join(path, "..", "envs.json") };
     const add = cli(["agents", "add", "reviewer", "--json", "--spec", JSON.stringify({ provider: "claude", auth: "apikey", model: "opus", appendSystemPrompt: "Be terse." })], env);
     expect(add.code).toBe(0);
     expect(JSON.parse(add.out)).toMatchObject({ ok: true, name: "reviewer", default: true });

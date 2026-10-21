@@ -10,6 +10,8 @@ export function dur(ms: number): string {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 export const usd = (x: number | undefined) => (x === undefined ? "—" : x < 0.01 && x > 0 ? `$${x.toFixed(4)}` : `$${x.toFixed(2)}`);
+/** Billed USD; "~$0.04" (API-price estimate) when subscription-billed work cost $0 but has a notional cost. */
+export const cost = (billed: number | undefined, notional?: number) => (!billed && notional && notional > 0 ? `~${usd(notional)}` : usd(billed));
 export const pad = (s: string, n: number) => (s.length > n ? s.slice(0, Math.max(0, n - 1)) + "…" : s.padEnd(n));
 export const lpad = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s.padStart(n));
 export const clock = (ms: number) => `+${dur(ms)}`;

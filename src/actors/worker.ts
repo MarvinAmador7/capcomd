@@ -364,9 +364,9 @@ export const workerActor = actor({
       );
       if (already.length > 0) {
         // Replay: return what the first push recorded (a resumed driver needs the commit).
-        let prev: { sha?: string; costUsd?: number; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
+        let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
         try { prev = JSON.parse(String(already[0]!.event)); } catch {}
-        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0 }, ...(prev.adopted ? { adopted: true } : {}) };
+        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
       }
 
       const workerLife = await getLifecycle(c.db, workerId);
@@ -384,9 +384,9 @@ export const workerActor = actor({
       for (let waited = 0; ; waited += 500) {
         const done = await c.db.execute("SELECT event FROM lifecycle_events WHERE idem_key = ?", idemKey);
         if (done.length) {
-          let prev: { sha?: string; costUsd?: number; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
+          let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
           try { prev = JSON.parse(String(done[0]!.event)); } catch {}
-          return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0 }, ...(prev.adopted ? { adopted: true } : {}) };
+          return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
         }
         const now = Date.now();
         const rows = await c.db.execute("SELECT * FROM push_locks WHERE idem_key = ?", idemKey);
@@ -431,6 +431,7 @@ export const workerActor = actor({
       let costUsd = 0;
       let turns = 0;
       let billing: string | undefined;
+      let notionalCostUsd = 0; // subscription billing: what the CLI says the tokens would cost at API prices
       let adopted = false;
       const cfg = loadMergeConfig();
       const agent = agentFromEnv(process.env, params.agent);
@@ -471,6 +472,7 @@ export const workerActor = actor({
         costUsd = res.costUsd;
         turns = res.turns;
         billing = res.billing;
+        notionalCostUsd = res.notionalCostUsd ?? 0;
       } else {
         if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
         if (process.env.CAPCOMD_FAKE_PUSH_FAIL) throw new Error(process.env.CAPCOMD_FAKE_PUSH_FAIL); // test knob: a push that always fails
@@ -493,14 +495,14 @@ export const workerActor = actor({
           "worker",
           workerLife.state,
           { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(adopted ? { adopted: true } : {}), ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
+          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(adopted ? { adopted: true } : {}), ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
           idemKey,
           []
         );
         await tx.execute("UPDATE push_locks SET state = 'done', sha = ?, adopted = ?, until = 0, updated_at = ? WHERE idem_key = ?", sha || null, adopted ? 1 : 0, Date.now(), idemKey);
       }, { name: "pushBranch" });
 
-      return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}) };
+      return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}) };
       } catch (error) {
         // Release so a retry can take over at once (the attempt count records the retry).
         await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});

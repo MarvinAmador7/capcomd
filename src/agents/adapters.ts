@@ -47,6 +47,10 @@ export const claudeAdapter: AgentAdapter = {
       state.done = true;
       state.costUsd = Number(raw.total_cost_usd ?? 0);
       state.turns = Number(raw.num_turns ?? 0);
+      // Tokens processed, cache reads/writes included (they are input the model consumed).
+      const u = raw.usage ?? {};
+      state.inputTokens = Number(u.input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0) + Number(u.cache_read_input_tokens ?? 0);
+      state.outputTokens = Number(u.output_tokens ?? 0);
       state.stopReason = String(raw.subtype ?? "result");
       if (raw.is_error) state.error = state.stopReason;
     }

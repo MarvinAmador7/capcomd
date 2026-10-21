@@ -133,7 +133,9 @@ export async function spawnAgent(o: SpawnOpts) {
 /** TUI contract: every agent.run span ends with status, cost and turns, failed or not. */
 function stampSpent(span: { attributes: Record<string, any> }, a: ScopeAgent) {
   const sp: any = a.spent ?? {};
-  Object.assign(span.attributes, { "agent.status": a.status, "agent.cost_usd": Number(sp.usd ?? 0), "agent.turns": Number(sp.turns ?? 0) });
+  const r: any = a.result ?? {};
+  Object.assign(span.attributes, { "agent.status": a.status, "agent.cost_usd": Number(sp.usd ?? 0), "agent.turns": Number(sp.turns ?? 0),
+    ...(Number(r.notionalCostUsd) > 0 ? { "agent.notional_cost_usd": Number(r.notionalCostUsd) } : {}), ...(r.billing ? { "agent.billing": String(r.billing) } : {}) });
 }
 
 export class EnvSnapshotMissing extends Error { readonly code = "env_snapshot_missing"; }
@@ -194,8 +196,8 @@ function rollupTotals(all: ScopeAgent[], root?: string) {
   const ids = root ? subtree(all, root) : new Set(all.map((a) => a.agentId));
   const ru = rollups(all);
   const tops = all.filter((a) => ids.has(a.agentId) && (!a.parent || !ids.has(a.parent)));
-  const t = { agents: 0, usd: 0, turns: 0, wallSeconds: 0, byStatus: {} as Record<string, number> };
-  for (const a of tops) { const r = ru.get(a.agentId)!; t.agents += r.agents; t.usd = Math.round((t.usd + r.usd) * 1e6) / 1e6; t.turns += r.turns; t.wallSeconds = Math.round((t.wallSeconds + r.wallSeconds) * 10) / 10; for (const [k, n] of Object.entries(r.byStatus)) t.byStatus[k] = (t.byStatus[k] ?? 0) + n; }
+  const t = { agents: 0, usd: 0, notionalUsd: 0, turns: 0, wallSeconds: 0, byStatus: {} as Record<string, number> };
+  for (const a of tops) { const r = ru.get(a.agentId)!; t.agents += r.agents; t.usd = Math.round((t.usd + r.usd) * 1e6) / 1e6; t.notionalUsd = Math.round((t.notionalUsd + r.notionalUsd) * 1e6) / 1e6; t.turns += r.turns; t.wallSeconds = Math.round((t.wallSeconds + r.wallSeconds) * 10) / 10; for (const [k, n] of Object.entries(r.byStatus)) t.byStatus[k] = (t.byStatus[k] ?? 0) + n; }
   return t;
 }
 
@@ -364,7 +366,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     await w.drainWorker({ workerId: agentId });
     if (await cancelled()) return (await s.getAgent({ agentId }))!;
     const declared = await resultOf(runId, agentId);
-    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch: !pushed.sha && vmRpc ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(pushed.adopted ? { adopted: true } : {}) } });
+    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch: !pushed.sha && vmRpc ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }
