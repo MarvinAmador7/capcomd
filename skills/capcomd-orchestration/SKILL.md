@@ -37,6 +37,23 @@ Every step is keyed by the run, task and ledger epoch, so rerunning with the sam
 Nesting: for big tasks, spawn sub-planners (`maxDepth` ≤2, `maxTotalDescendants` cap, `budgetShare` ≤0.5).
 Use for: big multi-area goals. Avoid it for anything a single loop can do; every level multiplies cost and latency.
 
+## 7. Interface first (dependent work, in parallel)
+When B needs something A builds, don't stack B on A's unmerged branch: split the dependency out.
+1. **Contract:** one small child adds only the seam both sides need (types, a function signature, a stub that
+   throws, a flag that is off) → `verify` → `merge`. Keep it tiny: it gates everything after it.
+2. **Implementations in parallel:** spawn the provider (A) and the consumers (B, …) together; they all branch
+   from the target, which now has the contract. Pin each a check it can pass alone (A: its own tests; B: tests
+   that don't need A's behavior, or the contract's type check).
+3. **Land in dependency order:** `verify` + `merge` the provider first. A consumer's `verify` runs against the
+   target as it is then, so pin the consumer an integration check (the suite that needs both) and verify it
+   only after its provider landed; verifying it earlier fails for the wrong reason.
+4. Record the order on the board when you use it: `task add --title B --after <A's task>`.
+
+If the contract keeps changing while A and B run, the split was wrong: cancel, re-plan the seam, start again.
+Use for: a dependency between parts of one goal. Avoid it when the parts are independent (fan-out is enough)
+or when the seam isn't stable yet (do a single loop first, split later). Stacked branches are not supported
+(see ROADMAP.md, "Stacked work").
+
 ## Sizing fan-out (ADR-017: the parent decides, per child, at spawn time)
 The profile/operator limits are a ceiling; a parent narrows them for each child with
 `--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N --children.allowedChildProfiles=a,b --children.budgetShare=F`.

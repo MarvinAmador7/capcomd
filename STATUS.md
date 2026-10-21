@@ -25,6 +25,7 @@ review by an agent (`run new --reviewer`) is built.
 | Report mode: `spawn --report` gives a leaf a read-only checkout; its final message is its result, nothing is pushed (research, triage) | Built | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
 | Protected targets from agents: an in-VM merge into a protected branch is parked (`awaiting_approval`, listed in `status` `pendingApprovals`); `approve <runId> <mrgId>` lands it, `--deny` fails it | Built | `tests/scenarios/approvals.test.ts` |
 | Per-run staging target: `run new --target T [--target-from BASE]`; children branch from it, verify and merge default to it | Built | `tests/scenarios/approvals.test.ts` |
+| Dependent work, interface first: a contract child lands, then provider and consumers run in parallel and land in dependency order (planner guidance, pattern 7) | Built | `tests/scenarios/interface-first.test.ts` |
 | Sub-agents in VMs (ADR-017): capability tokens, narrow-only fan-out, in-VM `capcomd` CLI and MCP tools, fencing of agent text | Built | `bun run test:scenarios` |
 | Real agents: Claude Code and Codex adapters, agent profiles, subscription logins (`auth login`), boxd host-bound secrets, env snapshots (`env build`), `doctor` | Built | `tests/agents`, `tests/env`, `tests/auth`, live `doctor --strict` |
 | Git: direct and PR merge modes, protected branches parked for `approve` | Built | `tests/merge` |
@@ -44,8 +45,8 @@ The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The bi
 1. The `capcomd run` recipe's planner and run-level judge still answer from a fake model (per-branch review
    by an agent is built: `run new --reviewer`).
 2. Live spend: a real agent's cost is known only when it finishes.
-3. Patterns that aren't possible yet: stacked work in parallel, verifying and landing several branches
-   together, lead → team branch → main hierarchies, comparing candidates.
+3. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
+   verifying and landing several branches together, lead → team branch → main hierarchies, comparing candidates.
 4. The reviewer, checks in a VM, report mode, staging targets and approval requests pass their tests but
    haven't had a live boxd run yet.
 

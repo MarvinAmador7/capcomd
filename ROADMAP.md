@@ -39,7 +39,7 @@ These pass their tests on fakes; the next `scripts/mac-subagents-e2e.sh` run exe
 
 | Pattern | Why not | Approach | Size |
 |---|---|---|---|
-| Stacked or dependent work in parallel (B builds on A's unmerged branch) | children always branch from the target; verify is "merged with the latest target" | in tiers, see "Stacked work" below | S → L |
+| Stacked or dependent work in parallel (B builds on A's unmerged branch) | children always branch from the target; verify is "merged with the latest target" | in tiers, see "Stacked work" below; tier 1 (interface first) is done | L |
 | Changes split across children that only pass together; atomic landing of several branches | `verify` and `merge` take one ref | a `verify --refs a,b,c` over their combined merge, and `merge --require` landing them as one commit | L |
 | Lead → team branch → main hierarchies | one target per run (operator-set); agents can't choose another | an operator allowlist of targets per run (`--targets team/*,main`), so a lead lands on its team branch and the planner verifies and lands the whole | M |
 | Comparing candidates (best-of-n) | verify judges one ref; there is no compare op | a `compare --refs …` op: a judge agent ranks the passing refs and returns the winner and reasons | M |
@@ -53,10 +53,11 @@ Three tiers, modelled on stacked diffs (Gerrit, Sapling, Jujutsu, Graphite), spe
 GitHub merge queue, Bors) and interface-first splitting (branch by abstraction). Do tier 1 first; build tier 2
 only when real runs show work that can't be split by interface.
 
-1. **Interface first** (S). The planner splits dependent work into a small contract change (interface, types,
-   a stub behind a flag) that lands first, then independent implementations in parallel against the target.
-   This uses today's model and the task board's ordering (`task add --after`); it needs planner guidance in the
-   skill and an e2e scenario.
+1. **Interface first** (done 2026-10-21). The planner splits dependent work into a small contract change
+   (interface, types, a stub behind a flag) that lands first, then the provider and consumers in parallel
+   against the target, landed in dependency order with an integration check on the consumer. Guidance:
+   pattern 7 in `skills/capcomd-orchestration/SKILL.md` and the in-VM skill. Proof:
+   `tests/scenarios/interface-first.test.ts`. Left: a live e2e with real agents (S).
 2. **Speculative stacks** (L). `spawn --base <agt>` branches B from A's latest verified commit. Each change
    carries a stable `Capcomd-Change` trailer across rebases. B is verified against target + A + B, and the vfy
    record pins the parent commit. If A is reworked or its verify fails, B's verification goes stale: capcomd

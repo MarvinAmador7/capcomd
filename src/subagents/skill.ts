@@ -53,6 +53,9 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   \`result.review.reasons\`: send them to the child or retry with them.
 - A failed child: read \`capcomd inspect <agt>\` / \`capcomd logs <agt>\`, then retry with a clearer task or cancel.
 - Best-of-n: spawn n, verify each as it finishes, merge the best, \`capcomd cancel\` the rest.
+- Dependent work (B needs what A builds): don't wait for A to finish before starting B, and don't build B on A's
+  branch. First land a tiny contract child (the shared interface, a stub, or a flag that is off), then spawn A and
+  B in parallel. Merge A first; verify B only after A landed, with a check that needs both.
 - Coordinate peers with \`capcomd kv cas\` (versioned) and \`capcomd task\` (leases with epochs).
 - Report progress with \`capcomd heartbeat "<note>"\` on long steps; silent agents are flagged stuck.
 - \`capcomd handoff --task …\` passes the rest of your task to a successor; then exit.
