@@ -52,6 +52,15 @@ describe("inspect --follow (real recorded run)", () => {
     expect(s.data().events.length).toBe(n);
     expect(s.lastSeq).toBe(Math.max(...(seqs as number[])));
   });
+  test("a trace that arrives after the snapshot (inspect.trace) fills Waterfall/Timeline data", () => {
+    const snap = JSON.parse(raw.find((l: string) => l.includes('"type":"inspect.snapshot"'))!);
+    const s = new InspectState("r", "live");
+    s.line(JSON.stringify({ ...snap, trace: null })); // attached before any span was written
+    expect(s.data().trace).toBeNull();
+    expect(s.line(JSON.stringify({ type: "inspect.trace", runId: snap.runId, ts: snap.ts, trace: snap.trace }))).toBe(true);
+    expect(s.data().trace!.spans.length).toBe(snap.trace.spans.length);
+    expect(s.data().trace!.spans.length).toBeGreaterThan(0);
+  });
   test("sub-agents nest and get their own lanes under the parent", () => {
     const d = loadFixture("live-scope");
     const flat = flattenAgents(d.agents);

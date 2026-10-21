@@ -49,6 +49,14 @@ export const CHECKS_KV = "_checks";
 export const REVIEWER_KV = "_reviewer";
 /** The run's merge target (`run new --target T`): the default for every verify and merge in the run. */
 export const TARGET_KV = "_target";
+/** Where the run's spans are written (CAPCOMD_TRACE_DIR when the run was created), for readers in other shells. */
+export const TRACE_KV = "_trace";
+
+/** The run's recorded trace directory, if any. */
+export async function runTraceDir(runId: string): Promise<string | undefined> {
+  const v: any = (await client().scope.getOrCreate([runId]).kvGet({ k: TRACE_KV }).catch(() => null))?.value;
+  return typeof v?.dir === "string" ? v.dir : undefined;
+}
 
 /** The run's target branch, if the operator set one. */
 export async function runTarget(runId: string): Promise<string | undefined> {
@@ -116,6 +124,7 @@ export async function runNew(o: RunNewOpts) {
     if (o.targetFrom) await ensureBranch(runId, o.target, o.targetFrom);
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
+  if (res.created) await (await import("./state")).kvWrite(runId, { k: TRACE_KV, value: { dir: (await import("../utils/tracing-simple")).traceDir() }, writer: "operator" }).catch(() => {});
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
   return { runId, created: res.created, budget: res.budget };

@@ -10,8 +10,8 @@ export interface TraceTree {
 }
 
 /** Load a run's spans and order them depth-first under a (possibly synthesized) root. */
-export function loadTrace(runId: string): TraceTree | null {
-  const path = tracePath(runId);
+export function loadTrace(runId: string, dir?: string): TraceTree | null {
+  const path = tracePath(runId, dir);
   if (!existsSync(path)) return null;
   const raw = readTrace(readFileSync(path, "utf8"));
   if (raw.length === 0) return null;

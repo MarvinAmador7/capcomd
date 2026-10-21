@@ -13,7 +13,7 @@ bun run start --view rollups             # open on a view
 bun run typecheck && bun test
 ```
 
-`--run` keeps one `inspect --follow` stream open. When the stream closes, it reconnects with `--since-seq <last seq>` and dedupes events on (entity, entitySeq). The new snapshot also refreshes the trace, tree, and status. It shells out to `bun <repo>/src/cli/index.ts`. Set `CAPCOMD_BIN="capcomd"` to use an installed CLI instead.
+`--run` keeps one `inspect --follow` stream open; it also carries the trace as it grows (spans are written as they end), so Waterfall and Timeline fill in while the run executes, even when the run writes its trace to another directory. When the stream closes, it reconnects with `--since-seq <last seq>` and dedupes events on (entity, entitySeq). The new snapshot also refreshes the trace, tree, and status. It shells out to `bun <repo>/src/cli/index.ts`. Set `CAPCOMD_BIN="capcomd"` to use an installed CLI instead.
 
 ## Views
 

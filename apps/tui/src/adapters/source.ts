@@ -84,6 +84,8 @@ export class InspectState {
       return true;
     }
     if (v.type === "inspect.tree") { this.tree = nodesFrom(v); return true; }
+    // Spans are written as they end: the follow stream re-sends the trace whenever it grows.
+    if (v.type === "inspect.trace" && v.trace) { this.trace = parseTrace(JSON.stringify({ trace: v.trace }), this.runId); return true; }
     if (v.type === "inspect.end") { this.ended = true; return true; }
     if (v.type === "event" && v.event) {
       this.add(parseEvents(JSON.stringify({ events: [v.event] })));

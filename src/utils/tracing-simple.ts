@@ -33,8 +33,8 @@ export function traceDir(): string {
     : resolve(new URL("../..", import.meta.url).pathname, ".traces");
 }
 
-export function tracePath(runId: string): string {
-  return join(traceDir(), `${runId.replace(/[^a-zA-Z0-9._-]/g, "_")}.ndjson`);
+export function tracePath(runId: string, dir = traceDir()): string {
+  return join(dir, `${runId.replace(/[^a-zA-Z0-9._-]/g, "_")}.ndjson`);
 }
 
 function hex(input: string, len: number): string {

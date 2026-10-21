@@ -15,7 +15,7 @@ export function Timeline({ trace, events, agents = [], pending = [], width, heig
     if (key.downArrow || input === "j") setSel((s) => Math.min(lanes.length - 1, s + 1));
     if (key.upArrow || input === "k") setSel((s) => Math.max(0, s - 1));
   }, { isActive: active });
-  if (!trace) return <Empty>No trace for this run.</Empty>;
+  if (!trace) return <Empty>No spans yet. Spans appear as they finish (a live view updates every few seconds).</Empty>;
 
   const labelW = Math.min(30, Math.max(12, ...lanes.map((l) => l.label.length + 2)));
   const trackW = Math.max(10, width - labelW - 14);

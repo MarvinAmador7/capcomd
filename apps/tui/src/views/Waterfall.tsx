@@ -28,7 +28,7 @@ export function Waterfall({ trace, width, height, active, icons = "none", initia
     if (input === "z") setExpanded(new Set());
   }, { isActive: active });
 
-  if (!trace) return <Empty>No trace for this run. Traces are written to .traces/&lt;runId&gt;.ndjson while a run executes.</Empty>;
+  if (!trace) return <Empty>No spans yet. Spans appear as they finish (a live view updates every few seconds); runs created before 2026-10-21 in another shell need that shell's CAPCOMD_TRACE_DIR.</Empty>;
 
   const nameW = Math.min(38, Math.max(24, Math.floor(width * 0.3)));
   const durW = 8;

@@ -68,7 +68,11 @@ With `--follow`, the lines are:
 1. a snapshot (with `--since-seq N`, `events` holds only seq > N)
 2. `{type:"event", runId, seq, ts, epochMs, agentId, event}` per new event
 3. `{type:"inspect.tree", runId, seq, ts, tree, totals}` after each `AGENT_*` event
-4. `{type:"inspect.end", runId, ts, end}` to close
+4. `{type:"inspect.trace", runId, ts, trace}` whenever the run's trace file grows (checked every
+   `CAPCOMD_INSPECT_TRACE_MS`, default 2s): spans are written as they end, so this is how a view attached
+   early gets them. The trace is found where the run wrote it (`CAPCOMD_TRACE_DIR` at `run new`, kept in
+   kv `_trace`), so `inspect` and `trace` work from a shell with a different (or no) trace dir.
+5. `{type:"inspect.end", runId, ts, end}` to close
 
 `capcomd inspect <runId> <agt>` (one agent: record, children, awaits, logs) is unchanged.
 

@@ -2,8 +2,8 @@
 import "./quiet";
 import { parseArgs } from "util";
 import { spawn } from "child_process";
-import { existsSync, mkdirSync, openSync, readFileSync } from "fs";
-import { join, resolve } from "path";
+import { existsSync, mkdirSync, openSync, readFileSync, statSync } from "fs";
+import { dirname, join, resolve } from "path";
 import { serve } from "./commands/serve";
 import { ui } from "./commands/ui";
 import { loadTrace, renderTrace } from "./commands/trace";
@@ -399,7 +399,7 @@ async function main(argv: string[]): Promise<number> {
             const [status, tree, events] = await Promise.all([
               getStatus(runId), P.treeOf(runId).catch(() => ({ runId, root: null, tree: [], totals: null })), listEvents(runId),
             ]);
-            const trace = loadTrace(runId);
+            const trace = loadTrace(runId) ?? (await runTraceAt(runId));
             const now = Date.now();
             return { type: "inspect.snapshot", runId, ts: new Date(now).toISOString(), epochMs: now, seq: events.length, status, tree: tree.tree, totals: tree.totals, trace, events };
           };
@@ -419,6 +419,20 @@ async function main(argv: string[]): Promise<number> {
           emit({ ...snap, events: snap.events.filter((e) => e.seq > (values["since-seq"] !== undefined ? sinceSeq : -1)) });
           const S = await import("../primitives/state");
           const P = await import("../primitives/ops");
+          // Spans are appended as they end, so a TUI attached early would never see them: push the trace
+          // again whenever its file grows (checked every CAPCOMD_INSPECT_TRACE_MS, default 2s).
+          const traceFile = async () => { const { tracePath } = await import("../utils/tracing-simple"); const own = tracePath(runId); if (existsSync(own)) return own; const d = await P.runTraceDir(runId); return d ? tracePath(runId, d) : own; };
+          let traceSize = await traceFile().then((f) => (existsSync(f) ? statSync(f).size : 0)).catch(() => -1); // the snapshot already has this much
+          const tracePoll = setInterval(async () => {
+            try {
+              const f = await traceFile();
+              const size = existsSync(f) ? statSync(f).size : 0;
+              if (size === traceSize) return;
+              traceSize = size;
+              const t = loadTrace(runId, dirname(f));
+              if (t) emit({ type: "inspect.trace", runId, ts: new Date().toISOString(), trace: t });
+            } catch { /* next tick */ }
+          }, Number(process.env.CAPCOMD_INSPECT_TRACE_MS ?? 2000));
           const r = await S.followEvents(runId, {
             sinceSeq, until: values.until as string | undefined,
             timeoutMs: values["timeout-ms"] !== undefined ? Number(values["timeout-ms"]) : undefined,
@@ -428,6 +442,7 @@ async function main(argv: string[]): Promise<number> {
               if (/^AGENT_/.test(ev.type)) void P.treeOf(runId).then((t) => emit({ type: "inspect.tree", runId, seq: ev.seq, ts: new Date().toISOString(), tree: t.tree, totals: t.totals })).catch(() => {});
             },
           });
+          clearInterval(tracePoll);
           emit({ type: "inspect.end", runId, ts: new Date().toISOString(), end: r });
           return EXIT.ok;
         }
@@ -614,7 +629,7 @@ async function main(argv: string[]): Promise<number> {
 
       case "trace": {
         const runId = positionals[1] ?? usage("runId required: capcomd trace <runId>");
-        const tree = loadTrace(runId);
+        const tree = loadTrace(runId) ?? (await runTraceAt(runId));
         if (!tree) throw new RelayError("not_found", `No trace found for run ${runId}`, "Traces are written to .traces/<runId>.ndjson while a run executes; start one with `capcomd run`.");
         if (json) out({ trace: tree });
         else console.log(renderTrace(tree));
@@ -648,6 +663,12 @@ async function main(argv: string[]): Promise<number> {
     else console.error(`\n✗ ${err.message}\n  ${err.hint}`);
     return err.exitCode;
   }
+}
+
+/** A run's trace from where the run wrote it (its CAPCOMD_TRACE_DIR at `run new`), when this shell's dir has none. */
+async function runTraceAt(runId: string) {
+  const dir = await (await import("../primitives/ops")).runTraceDir(runId).catch(() => undefined);
+  return dir ? loadTrace(runId, dir) : null;
 }
 
 const code = await main(process.argv.slice(2));
