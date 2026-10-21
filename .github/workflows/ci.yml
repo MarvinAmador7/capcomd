@@ -20,6 +20,9 @@ jobs:
         with:
           bun-version-file: .bun-version
 
+      - name: CHANGELOG.md has an Unreleased section and agrees with package.json's version
+        run: bun scripts/release-notes.ts --check
+
       - name: Install dependencies (CLI/engine, apps/canvas, apps/tui)
         run: bun run setup
 

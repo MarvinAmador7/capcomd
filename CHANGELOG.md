@@ -1,5 +1,10 @@
 # Changelog
 
+All notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org); while capcomd is 0.x,
+minor versions may break things (marked **Breaking:**). Releases are built by CI from tags (DEVELOPMENT.md).
+
+## Unreleased
+
 ## 0.3.0 (2026-10-21), private preview
 
 Guided setup (`capcomd setup`), the engine as a background service, and releases built and tested by CI.
@@ -25,7 +30,10 @@ Guided setup (`capcomd setup`), the engine as a background service, and releases
   SHA-256 and this changelog's section as notes (`.github/workflows/release.yml`, `scripts/release-smoke.sh`).
 - CI: the crash suite runs as four parallel jobs (one round per push, three nightly): ~8 minutes instead of ~45.
   Bun is pinned (`.bun-version`, 1.4.3) instead of `latest`; `test:fast` (unit, CLI, setup/config, tracing, auth, env, MCP) and the TUI tests run on every push; the
-  old killpoint step, which could never fail, is gone (the chaos jobs cover it).
+  old killpoint step, which could never fail, is gone (the chaos jobs cover it). CI also checks that CHANGELOG.md
+  and the package version agree.
+- `AGENTS.md` (and `CLAUDE.md`): the rules coding agents follow here: changes through PRs with a changelog entry,
+  Semantic Versioning, releases only from a tag on `main` through CI, never by hand.
 
 ## 0.2.0 (2026-10-21), private preview
 

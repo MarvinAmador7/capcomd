@@ -129,13 +129,16 @@ Named killpoints:
 
 ## Cutting a release
 
-CI builds releases (`.github/workflows/release.yml`). By hand, before tagging:
+CI builds releases (`.github/workflows/release.yml`); [AGENTS.md](AGENTS.md) has the rules (Semantic Versioning,
+the changelog, what never to do by hand). By hand, before tagging:
 
-1. Bump `version` in `package.json`; in `CHANGELOG.md`, turn the Unreleased entries into a dated section,
-   `## X.Y.Z (YYYY-MM-DD)`. `bun scripts/release-notes.ts vX.Y.Z` prints the release notes, or why it can't.
+1. In a `release: vX.Y.Z` commit, bump `version` in `package.json`; in `CHANGELOG.md`, rename `## Unreleased` to
+   `## X.Y.Z (YYYY-MM-DD)` and add a new empty `## Unreleased` above it (CI checks both stay in step:
+   `bun scripts/release-notes.ts --check`). `bun scripts/release-notes.ts vX.Y.Z` prints the release notes, or why
+   it can't.
 2. Run the live e2e (`scripts/mac-subagents-e2e.sh`, `E2E PASS`); CI can't (it needs boxd, GitHub and agent logins).
    Optionally `bun pm pack && scripts/release-smoke.sh capcomd-X.Y.Z.tgz X.Y.Z` (the install check CI runs).
-3. Commit to `main`, let CI pass, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. Merge to `main`, let CI pass, then tag that commit: `git tag -a vX.Y.Z -m "capcomd X.Y.Z" <sha> && git push origin vX.Y.Z`.
 
 The tag runs the release workflow: it checks the tag is on `main`, matches `package.json` and has a changelog
 section; runs typecheck, `test:fast`, the TUI tests and `test:scenarios` on Linux and macOS, and one strict chaos

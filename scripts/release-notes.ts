@@ -3,18 +3,31 @@
 // Checks that the tag is `v` + package.json's version and that CHANGELOG.md has a dated section for it (not just
 // "Unreleased"); prints that section with relative links pointed at the tag, plus install lines. Exits 1 with the
 // reason otherwise. With GITHUB_OUTPUT set (in Actions), also writes version, title and prerelease there.
+// `--check` (CI, every push): CHANGELOG.md starts with `## Unreleased`, every other section is `## X.Y.Z (YYYY-MM-DD)`,
+// and package.json's version is the newest released section (the version only changes in a release commit).
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const fail = (m: string): never => { console.error(`release-notes: ${m}`); process.exit(1); };
 
-const tag = process.argv[2] ?? fail("usage: bun scripts/release-notes.ts vX.Y.Z [owner/repo]");
+const tag = process.argv[2] ?? fail("usage: bun scripts/release-notes.ts vX.Y.Z [owner/repo] | --check");
 const repo = process.argv[3] ?? process.env.GITHUB_REPOSITORY ?? "MarvinAmador7/capcomd";
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const lines = readFileSync(join(root, "CHANGELOG.md"), "utf8").split("\n");
+
+if (tag === "--check") {
+  const heads = lines.filter((l) => /^## /.test(l));
+  if (heads[0] !== "## Unreleased") fail(`CHANGELOG.md must start with "## Unreleased" (found "${heads[0] ?? "no sections"}")`);
+  const released = heads.slice(1);
+  for (const h of released) if (!/^## \d+\.\d+\.\d+(-[0-9A-Za-z.]+)? \(\d{4}-\d{2}-\d{2}\)/.test(h)) fail(`CHANGELOG.md heading "${h}" isn't "## X.Y.Z (YYYY-MM-DD)"`);
+  const newest = released[0]?.split(" ")[1];
+  if (newest !== pkg.version) fail(`package.json version ${pkg.version} isn't the newest CHANGELOG.md release (${newest}): change it only in a release commit`);
+  console.log(`CHANGELOG.md and package.json agree (${pkg.version}; ${released.length} releases)`);
+  process.exit(0);
+}
 if (tag !== `v${pkg.version}`) fail(`tag ${tag} doesn't match package.json version ${pkg.version} (expected v${pkg.version})`);
 
-const lines = readFileSync(join(root, "CHANGELOG.md"), "utf8").split("\n");
 const esc = pkg.version.replace(/\./g, "\\.");
 const start = lines.findIndex((l) => new RegExp(`^## ${esc}( |$)`).test(l));
 if (start < 0) fail(`CHANGELOG.md has no "## ${pkg.version} (date)" section (move the Unreleased entries under one)`);
