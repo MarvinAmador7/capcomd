@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.4.0 (2026-10-21)
+
+First public release: capcomd is open source under the MIT license and installs from npm.
+
 - **Open source, MIT licensed.** capcomd is published to npm (`bun add -g capcomd`); the release workflow publishes
   the package it tested, with provenance. The package no longer pulls in TypeScript (it was a peer dependency) and
   ships the design docs without the chaos logs.
