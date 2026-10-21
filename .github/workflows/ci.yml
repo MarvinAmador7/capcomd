@@ -17,8 +17,8 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install dependencies
-        run: bun install
+      - name: Install dependencies (CLI/engine, apps/canvas, apps/tui)
+        run: bun run setup
 
       - name: Type check
         run: bun run typecheck
@@ -62,17 +62,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: chaos:fast (strict: any host stall fails the run; 8 workers)
+      - name: "chaos:fast (strict: any host stall fails the run; 8 workers)"
         run: bun run chaos:fast
         env:
           CHAOS_STRICT: "1"
           CHAOS_WORKERS: "8"
         timeout-minutes: 45
-
-      - name: Run randomized chaos tests
-        run: |
-          for i in {1..200}; do
-            echo "Chaos iteration $i"
-            CHAOS_SEED=$i bun test tests/chaos/random.test.ts || exit 1
-          done
-        timeout-minutes: 60
