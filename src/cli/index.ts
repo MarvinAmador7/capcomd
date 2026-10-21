@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import "./apply-config";
 import "./quiet";
 import { parseArgs } from "util";
 import { spawn } from "child_process";
@@ -63,7 +64,7 @@ Usage:
   capcomd task add <runId> --title T [--data JSON] [--after tsk,…] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
   capcomd task renew|release|done <runId> <tsk> --holder H --epoch E [--lease-ms N] [--result JSON] [--key K]   (fenced: a stale epoch is rejected)
-  capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv del <runId> <k> [--expect V]  ·  kv list <runId> [--prefix P] [--all]   (values ≤ 64KB)
+  capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv del <runId> <k> [--expect V]  ·  kv list <runId> [--prefix P] [--all]   (values ≤ 64KB; _ keys are run settings, listed with --prefix _)
   capcomd inspect <runId> [--json] [--follow [--since-seq N] [--until TYPE]]   run bundle: status + tree + trace + events
   capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start | --since-seq N]   (with --json: one JSON line per event; resume with --since-seq <last seq>)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
@@ -77,6 +78,12 @@ Usage:
   capcomd secrets sync                   Store local ANTHROPIC/OPENAI keys as boxd host-bound secrets
   capcomd doctor                         Check agents + credentials inside a snapshot VM
   capcomd mcp                            Serve the capcomd tools over MCP (stdio)
+  capcomd setup [demo|accounts|project|agent|service]   Guided setup (interactive; --yes for defaults)
+        [--yes] [--demo|--skip-demo] [--agents claude,codex] [--auth subscription|apikey] [--repo URL]
+        [--mode pr|direct] [--target B] [--check CMD] [--service|--no-service] [--no-skill] [--no-store]
+  capcomd setup check                    What's configured and working (changes nothing)
+  capcomd service install|uninstall|status [--port N] [--dry-run]
+                                       The engine as a background service (launchd / systemd user unit)
   capcomd ui                             Launch the web UI
 
 Options:
@@ -145,6 +152,18 @@ async function main(argv: string[]): Promise<number> {
         label: { type: "string" },
         "no-start": { type: "boolean" },
         report: { type: "boolean" },
+        "dry-run": { type: "boolean" },
+        yes: { type: "boolean", short: "y" },
+        demo: { type: "boolean" },
+        "skip-demo": { type: "boolean" },
+        agents: { type: "string" },
+        repo: { type: "string" },
+        mode: { type: "string" },
+        service: { type: "boolean" },
+        "no-service": { type: "boolean" },
+        "no-skill": { type: "boolean" },
+        "no-store": { type: "boolean" },
+        relogin: { type: "boolean" },
         deny: { type: "boolean" },
         "target-from": { type: "string" },
         ref: { type: "string" },
@@ -245,8 +264,12 @@ async function main(argv: string[]): Promise<number> {
           let budget: Record<string, number> = { usd: 10 };
           try { if (values.budget !== undefined) budget = parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message} (e.g. 5 or usd=5,turns=200,wallSeconds=3600)`); }
           const P = await import("../primitives/ops");
-          const checks = P.parseCheckSet((values["checks-set"] as string[] | undefined) ?? []);
-          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(values.reviewer ? { reviewer: values.reviewer as string } : {}), ...(values.target ? { target: values.target as string } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) });
+          // Flags win; else the project's `capcomd setup` defaults (.capcomd/config.json "run").
+          const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
+          const checks = values["checks-set"] ? P.parseCheckSet(values["checks-set"] as string[]) : (d.checks ?? {});
+          const reviewer = (values.reviewer as string | undefined) ?? d.reviewer;
+          const target = (values.target as string | undefined) ?? d.target;
+          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}), ...(target ? { target } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) });
           if (json) out(r); else console.log(r.runId);
           return EXIT.ok;
         }
@@ -644,6 +667,44 @@ async function main(argv: string[]): Promise<number> {
         if (json) out({ trace: tree });
         else console.log(renderTrace(tree));
         return EXIT.ok;
+      }
+
+      case "setup": {
+        const S = await import("./commands/setup");
+        const part = positionals[1];
+        if (part === "check") {
+          const steps = await S.checkSetup();
+          if (json) out({ steps, ok: steps.every((s) => s.ok) }); else console.log(`capcomd setup check\n${S.formatSteps(steps)}`);
+          return steps.every((s) => s.ok) ? EXIT.ok : EXIT.run_failed;
+        }
+        if (part && !["all", "demo", "accounts", "project", "agent", "service"].includes(part)) usage("usage: capcomd setup [demo|accounts|project|agent|service|check] [--yes] [flags]");
+        const v = { ...values, ...(values.agents === undefined ? {} : { agents: values.agents }) } as Record<string, unknown>;
+        const steps = await S.setup(part, v, json ? () => {} : (l) => console.log(l));
+        const ok = steps.every((s) => s.ok);
+        if (json) out({ steps, ok });
+        else console.log(`\n${S.formatSteps(steps)}\n${ok ? "\nReady. Next: `capcomd setup check` any time; README Quickstart step 4 to run agents." : "\nSome steps need attention (see → above). Re-run `capcomd setup` (finished steps are skipped or kept)."}`);
+        return ok ? EXIT.ok : EXIT.run_failed;
+      }
+
+      case "service": {
+        const S = await import("./commands/service");
+        const sub = positionals[1] ?? "status";
+        const port = parseInt(values.port as string, 10);
+        if (sub === "install") {
+          const r: any = await S.serviceInstall({ port, dryRun: !!values["dry-run"] });
+          if (json) out(r);
+          else if (r.dryRun) console.log(`would write ${r.path}:\n\n${r.body}`);
+          else console.log(`✓ engine service installed (${r.path}); ${r.running ? `running on :${r.port}` : `not answering on :${r.port} yet; see ${r.log}`}`);
+          return r.dryRun || r.running ? EXIT.ok : EXIT.run_failed;
+        }
+        if (sub === "uninstall") { const r = S.serviceUninstall(); if (json) out(r); else console.log(r.uninstalled ? `✓ removed ${r.path}` : "no engine service was installed"); return EXIT.ok; }
+        if (sub === "status") {
+          const r = await S.serviceStatus({ port });
+          if (json) out(r); else console.log(`service: ${r.installed ? (r.loaded ? "installed, loaded" : "installed, not loaded") : "not installed"}; engine on :${r.port}: ${r.running ? "running" : "not running"}  (log: ${r.log})`);
+          return EXIT.ok;
+        }
+        usage("usage: capcomd service install|uninstall|status [--port N] [--dry-run]");
+        return EXIT.usage;
       }
 
       case "approve": {

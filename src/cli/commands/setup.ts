@@ -1,0 +1,264 @@
+// `capcomd setup`: from install to a working setup in one guided pass, and `capcomd setup --check` to verify it.
+//   0. demo      try it locally with fake agents (no accounts), optional
+//   1. accounts  boxd key (validated, kept in the OS keychain), env snapshot, Claude/Codex logins, doctor
+//   2. project   repository, target branch, PR or direct merges, a default check, worker/reviewer/planner profiles
+//   3. agent     the orchestration skill for Claude Code, and a prompt to try
+//   4. service   the engine as a background service
+// Each step also runs alone (`capcomd setup project`). Without a terminal, or with --yes, prompts take their
+// defaults and flags, so agents and scripts can run setup too. Settings land in ~/.capcomd/config.json (user)
+// and <project>/.capcomd/config.json; the boxd key never sits in a file unless there is no keychain and you agree.
+import { spawnSync } from "child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
+import { join } from "path";
+import { capcomdHome, PACKAGE_ROOT } from "../../utils/home";
+import { projectConfigPath, readConfig, userConfigPath, writeConfig } from "../../config/store";
+import { keychainGet, keychainKind, keychainSet } from "../../config/keychain";
+import { prompter, type Prompter } from "../prompt";
+
+export interface Step { step: string; ok: boolean; detail: string; hint?: string }
+type Values = Record<string, unknown>;
+const CLI = join(PACKAGE_ROOT, "src", "cli", "index.ts");
+
+/** Run this CLI as a subprocess (inheriting the terminal for interactive steps like a login). */
+/** process.env with `extra` on top; an `undefined` value removes the variable. */
+function envWith(extra: Record<string, string | undefined> = {}): Record<string, string> {
+  const e: Record<string, string | undefined> = { ...process.env, ...extra };
+  for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
+  return e as Record<string, string>;
+}
+function self(args: string[], o: { env?: Record<string, string | undefined>; inherit?: boolean; cwd?: string } = {}) {
+  const r = spawnSync(process.execPath, [CLI, ...args], { env: envWith(o.env), cwd: o.cwd, stdio: o.inherit ? "inherit" : "pipe", encoding: "utf8" });
+  return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+const json = (s: string): any => { try { return JSON.parse(s.trim().split("\n").pop() ?? ""); } catch { return null; } };
+const sh = (cmd: string, args: string[], cwd?: string) => { const r = spawnSync(cmd, args, { cwd, encoding: "utf8" }); return { code: r.status ?? 1, out: (r.stdout ?? "").trim() }; };
+
+// ── pure helpers (tested) ─────────────────────────────────────────────────────────────────────
+/** git@github.com:o/r.git → https://github.com/o/r.git (VMs clone over https with a per-push credential). */
+export function httpsRemote(url: string): string {
+  const m = /^git@([^:]+):(.+?)(\.git)?$/.exec(url.trim());
+  if (m) return `https://${m[1]}/${m[2]}.git`;
+  const s = /^ssh:\/\/git@([^/]+)\/(.+?)(\.git)?$/.exec(url.trim());
+  return s ? `https://${s[1]}/${s[2]}.git` : url.trim();
+}
+/** owner/repo for a GitHub remote, else null. */
+export function githubRepoOf(url: string): string | null {
+  const m = /github\.com[/:]([^/]+)\/([^/]+?)(\.git)?$/.exec(url.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+/** A test command from the project's files: package.json "test" (bun or npm), else null. */
+export function suggestCheck(dir: string): string | null {
+  const pj = join(dir, "package.json");
+  if (!existsSync(pj)) return null;
+  try {
+    const p = JSON.parse(readFileSync(pj, "utf8"));
+    const usesBun = existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"));
+    if (p.scripts?.test) return usesBun ? "bun run test" : "npm test";
+    return usesBun ? "bun test" : null;
+  } catch { return null; }
+}
+
+// ── steps ─────────────────────────────────────────────────────────────────────────────────────
+/** 0. A real run on a private engine with fake agents: no accounts, about a minute. */
+export async function demoStep(log: (s: string) => void): Promise<Step> {
+  const home = mkdtempSync(join(tmpdir(), "capcomd-demo-"));
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  const env = { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_SANDBOX: "fake", CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_SKIP_PREFLIGHT: "1",
+    CAPCOMD_ENDPOINT: `http://127.0.0.1:${port}`, CAPCOMD_ENGINE_DATA: join(home, "engine"), CAPCOMD_REPO: undefined, CAPCOMD_AGENTS_FILE: join(home, "agents.json") };
+  const engine = Bun.spawn([process.execPath, CLI, "serve", "--port", String(port)], { env: envWith(env), stdout: "ignore", stderr: "ignore" });
+  try {
+    log("  starting a private engine with fake agents…");
+    let run = "";
+    for (let i = 0; i < 60 && !run; i++) { run = json(self(["run", "new", "--budget", "usd=1,turns=50", "--label", "demo", "--json"], { env }).stdout)?.runId ?? ""; if (!run) await Bun.sleep(1000); }
+    if (!run) return { step: "demo", ok: false, detail: "the local engine didn't start", hint: "Run `capcomd serve` yourself and look at its output." };
+    const ids: string[] = [];
+    for (const t of ["write the parser", "write the tests", "write the docs"]) ids.push(json(self(["spawn", run, "--task", t, "--key", t.split(" ")[2]!, "--budget", "usd=0.2,turns=10", "--json"], { env }).stdout)?.agentId);
+    log(`  run ${run}: 3 agents in parallel…`);
+    const aw = json(self(["await", run, ...ids, "--timeout-ms", "60000", "--json"], { env }).stdout);
+    const done = (aw?.agents ?? []).filter((a: any) => a.status === "done").length;
+    log(self(["tree", run], { env }).stdout.split("\n").map((l) => `    ${l}`).join("\n"));
+    return { step: "demo", ok: done === 3, detail: `${done}/3 fake agents finished in a real (local) run` };
+  } finally {
+    engine.kill();
+    await engine.exited.catch(() => {});
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+async function validBoxdKey(key: string): Promise<boolean> {
+  try {
+    const { BoxdProvider } = await import("../../providers/boxd");
+    const p = new BoxdProvider({ apiKey: key, keepaliveMs: 0, dbPath: ":memory:" } as any);
+    try { await p.list("relay-"); return true; } finally { await (p as any).close?.(); }
+  } catch { return false; }
+}
+
+/** 1a. The boxd key: from the environment, the keychain, or asked for; validated; kept in the keychain. */
+export async function boxdKeyStep(p: Prompter, v: Values): Promise<Step> {
+  let key = process.env.BOXD_API_KEY ?? "";
+  let from = key ? "environment" : "";
+  if (!key) { const k = keychainGet(); if (k) { key = k; from = "keychain"; } }
+  if (!key) {
+    if (!p.interactive) return { step: "boxd key", ok: false, detail: "no BOXD_API_KEY", hint: "Export BOXD_API_KEY (create one with `boxd auth keys create capcomd`) and run setup again." };
+    key = await p.secret("boxd API key (bxd_…; create one with `boxd auth keys create capcomd`)");
+    from = "entered";
+  }
+  if (!(await validBoxdKey(key))) return { step: "boxd key", ok: false, detail: `the key (${from}) was rejected by boxd`, hint: "Check it with `boxd auth keys list`, or create a new one." };
+  process.env.BOXD_API_KEY = key;
+  let stored = from === "keychain" ? "keychain" : "";
+  if (!stored && v["no-store"] !== true) {
+    const kc = keychainKind();
+    if (kc && await p.confirm(`Keep the key in the ${kc === "macos" ? "macOS Keychain" : "Secret Service"}?`, true)) { keychainSet(key); stored = "keychain"; }
+    else if (!kc && p.interactive && await p.confirm(`No OS keychain found. Store the key in ${join(capcomdHome(), "credentials")} (readable only by you)?`, false)) {
+      mkdirSync(capcomdHome(), { recursive: true });
+      writeFileSync(join(capcomdHome(), "credentials"), JSON.stringify({ BOXD_API_KEY: key }) + "\n", { mode: 0o600 });
+      stored = "file";
+    }
+  }
+  writeConfig(userConfigPath(), { env: { CAPCOMD_SANDBOX: "boxd" }, ...(stored ? { boxdKey: stored as "keychain" | "file" } : {}) });
+  return { step: "boxd key", ok: true, detail: `valid (${from})${stored ? `, kept in the ${stored}` : ", not stored: export BOXD_API_KEY in each shell"}` };
+}
+
+/** 1b-d. The env snapshot, agent logins (plan or API key) and doctor. */
+export async function agentAccountsStep(p: Prompter, v: Values, log: (s: string) => void): Promise<Step[]> {
+  const steps: Step[] = [];
+  const env = { CAPCOMD_SANDBOX: "boxd" };
+  log("  building the agent environment snapshot (once; skipped when current)…");
+  const b = self(["env", "build"], { env, inherit: p.interactive });
+  steps.push({ step: "env snapshot", ok: b.code === 0, detail: b.code === 0 ? "ready" : "env build failed", ...(b.code ? { hint: "Run `capcomd env build` to see why." } : {}) });
+  if (b.code) return steps;
+  const which = String(v.agents ?? await p.choose("Which coding agents?", [{ value: "claude", label: "Claude Code" }, { value: "codex", label: "Codex" }, { value: "claude,codex", label: "Both" }], "claude"));
+  const agents = which.split(",").map((s) => s.trim()).filter((a) => a === "claude" || a === "codex");
+  const status = json(self(["auth", "status", "--json"], { env }).stdout)?.profiles ?? [];
+  for (const a of agents) {
+    const id = a === "claude" ? "claude-code" : "codex";
+    const keyVar = a === "claude" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+    const auth = String(v.auth ?? await p.choose(`${a === "claude" ? "Claude Code" : "Codex"}: log in with`, [{ value: "subscription", label: a === "claude" ? "my Claude plan" : "my ChatGPT plan" }, { value: "apikey", label: `an API key (${keyVar})` }], "subscription"));
+    if (auth === "apikey") {
+      if (!process.env[keyVar]) { steps.push({ step: `${a} login`, ok: false, detail: `${keyVar} is not set`, hint: `Export ${keyVar}, then \`capcomd secrets sync\`.` }); continue; }
+      const s = self(["secrets", "sync"], { env });
+      steps.push({ step: `${a} login`, ok: s.code === 0, detail: s.code === 0 ? `API key stored as a boxd host-bound secret` : "secrets sync failed" });
+      continue;
+    }
+    const have = status.find((x: any) => x.agent === id);
+    if (have?.present && have.valid !== false && v["relogin"] !== true) { steps.push({ step: `${a} login`, ok: true, detail: `already logged in (${have.store})` }); continue; }
+    if (!p.interactive) { steps.push({ step: `${a} login`, ok: false, detail: "not logged in", hint: `Run \`capcomd auth login ${a}\` in a terminal (it opens a browser login).` }); continue; }
+    log(`  logging in ${a} with your plan (a browser window or a code to enter)…`);
+    const l = self(["auth", "login", a], { env, inherit: true });
+    steps.push({ step: `${a} login`, ok: l.code === 0, detail: l.code === 0 ? "logged in" : "login didn't finish", ...(l.code ? { hint: `Retry with \`capcomd auth login ${a}\`.` } : {}) });
+  }
+  log("  checking each agent inside a VM (doctor)…");
+  const d = self(["doctor", "--strict"], { env, inherit: p.interactive });
+  steps.push({ step: "doctor", ok: d.code === 0, detail: d.code === 0 ? "every agent answered from a VM" : "an agent didn't work", ...(d.code ? { hint: "Run `capcomd doctor` for details." } : {}) });
+  writeConfig(userConfigPath(), { env: { CAPCOMD_SANDBOX: "boxd" } });
+  (v as any)._agents = agents;
+  return steps;
+}
+
+/** 2. The project: repository, target, merge mode, a default check and reviewer, and the agent profiles. */
+export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): Promise<Step[]> {
+  const root = sh("git", ["rev-parse", "--show-toplevel"], cwd);
+  const dir = root.code === 0 ? root.out : cwd;
+  const origin = sh("git", ["remote", "get-url", "origin"], dir).out;
+  const repo = httpsRemote(String(v.repo ?? await p.ask("Repository the agents work on", origin)));
+  if (!repo) return [{ step: "project", ok: false, detail: "no repository", hint: "Run setup inside a git checkout, or pass --repo <url>." }];
+  const head = sh("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], dir).out.replace(/^origin\//, "");
+  const gh = githubRepoOf(repo);
+  const ghOk = !!gh && sh("gh", ["auth", "status"]).code === 0;
+  const mode = String(v.mode ?? await p.choose("How should verified work land?", [{ value: "pr", label: "as a pull request merged by capcomd (GitHub)" }, { value: "direct", label: "pushed directly to the target branch" }], ghOk ? "pr" : "direct"));
+  const target = String(v.target ?? await p.ask("Target branch (agent merges into protected branches like main wait for `capcomd approve`)", head || "main"));
+  const check = String(v.check ?? await p.ask("The check every change must pass (a command; empty for none)", suggestCheck(dir) ?? ""));
+  const cfgPath = join(dir, ".capcomd", "config.json");
+  writeConfig(cfgPath, {
+    env: { CAPCOMD_REPO: repo, CAPCOMD_MERGE_MODE: mode, CAPCOMD_MERGE_TARGET: target, ...(gh ? { CAPCOMD_GITHUB_REPO: gh } : {}) },
+    run: { ...(check ? { checks: { unit: check } } : {}), reviewer: "reviewer" },
+  });
+  // Profiles: one worker per chosen agent, a read-only reviewer, a planner that may spawn workers.
+  const agents: string[] = (v as any)._agents ?? String(v.agents ?? "claude").split(",");
+  const provider = agents.includes("claude") ? "claude" : "codex";
+  const auth = String(v.auth ?? "subscription");
+  const af = join(dir, ".capcomd", "agents.json");
+  const workers = agents.map((a) => (a === provider ? "worker" : `${a}-worker`));
+  const profiles: Array<[string, Record<string, unknown>]> = [
+    ...agents.map((a, i): [string, Record<string, unknown>] => [workers[i]!, { provider: a, auth, maxTurns: 25, timeoutMs: 900_000 }]),
+    ["reviewer", { provider, auth, maxTurns: 15, timeoutMs: 600_000, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...(check ? [`Bash(${check.split(" ").slice(0, 2).join(" ")}:*)`] : [])] }],
+    ["planner", { provider, auth, maxTurns: 60, timeoutMs: 2_400_000, children: { allowSpawn: true, maxDepth: 1, maxChildren: 3, maxTotalDescendants: 6, allowedChildProfiles: workers, budgetShare: 0.34 } }],
+  ];
+  const made: string[] = [], kept: string[] = [];
+  for (const [name, spec] of profiles) {
+    const r = self(["agents", "add", name, "--spec", JSON.stringify(spec)], { env: { CAPCOMD_AGENTS_FILE: af } });
+    (r.code === 0 ? made : kept).push(name);
+  }
+  return [
+    { step: "project", ok: true, detail: `${repo} → ${target} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on; saved to ${cfgPath}` },
+    { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${af})` },
+  ];
+}
+
+/** 3. The orchestration skill for Claude Code (an agent then drives capcomd for you). */
+export async function agentIntegrationStep(p: Prompter, v: Values): Promise<Step> {
+  const dest = join(homedir(), ".claude", "skills", "capcomd-orchestration");
+  const src = join(PACKAGE_ROOT, "skills", "capcomd-orchestration");
+  if (v["no-skill"] === true || !(await p.confirm("Install the capcomd orchestration skill for Claude Code?", true))) return { step: "agent skill", ok: true, detail: "skipped" };
+  if (!existsSync(join(src, "SKILL.md"))) return { step: "agent skill", ok: false, detail: `skill not found in ${src}` };
+  mkdirSync(join(homedir(), ".claude", "skills"), { recursive: true });
+  cpSync(src, dest, { recursive: true });
+  return { step: "agent skill", ok: true, detail: `installed in ${dest}. Try, in Claude Code: "Use capcomd to fix the failing tests: one worker per file, each verified and reviewed, then merged."` };
+}
+
+/** 4. The engine as a background service. */
+export async function serviceStep(p: Prompter, v: Values): Promise<Step> {
+  if (v["no-service"] === true || !(v.service === true || await p.confirm("Run the capcomd engine in the background (starts at login)?", true))) return { step: "engine", ok: true, detail: "not installed as a service: run `capcomd serve` when you need it" };
+  const S = await import("./service");
+  const r: any = await S.serviceInstall({});
+  return { step: "engine", ok: !!r.running, detail: r.running ? `background service on :${r.port} (${r.path})` : `service installed but not answering yet; see ${r.log}`, ...(r.running ? {} : { hint: "Check `capcomd service status`." }) };
+}
+
+/** `capcomd setup --check`: what's configured and working, without changing anything. */
+export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
+  const out: Step[] = [];
+  const user = readConfig(userConfigPath());
+  const projPath = projectConfigPath(cwd);
+  const proj = readConfig(projPath);
+  out.push({ step: "user config", ok: !!user.env?.CAPCOMD_SANDBOX, detail: existsSync(userConfigPath()) ? `${userConfigPath()} (sandbox ${user.env?.CAPCOMD_SANDBOX ?? "unset"})` : "none", ...(user.env?.CAPCOMD_SANDBOX ? {} : { hint: "Run `capcomd setup`." }) });
+  const keyFrom = process.env.BOXD_API_KEY ? (user.boxdKey === "keychain" && keychainGet() === process.env.BOXD_API_KEY ? "keychain" : "environment") : null;
+  out.push({ step: "boxd key", ok: !!keyFrom && (await validBoxdKey(process.env.BOXD_API_KEY!)), detail: keyFrom ? `from the ${keyFrom}` : "none", ...(keyFrom ? {} : { hint: "Run `capcomd setup accounts`." }) });
+  const auth = json(self(["auth", "status", "--json"]).stdout)?.profiles ?? [];
+  for (const a of auth) out.push({ step: `${a.agent} login`, ok: !!a.present && a.valid !== false, detail: a.detail ?? (a.present ? a.store : "not logged in") });
+  out.push({ step: "project", ok: !!proj.env?.CAPCOMD_REPO, detail: projPath ? `${proj.env?.CAPCOMD_REPO ?? "no repo"} → ${proj.env?.CAPCOMD_MERGE_TARGET ?? "main"} (${projPath})` : "no .capcomd/config.json here or above", ...(proj.env?.CAPCOMD_REPO ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
+  out.push({ step: "agent skill", ok: existsSync(join(homedir(), ".claude", "skills", "capcomd-orchestration", "SKILL.md")), detail: "Claude Code skill" });
+  const S = await import("./service");
+  const st: any = await S.serviceStatus({});
+  out.push({ step: "engine", ok: st.running, detail: st.running ? `running on :${st.port}${st.installed ? " (service)" : ""}` : `not running${st.installed ? " (service installed)" : ""}`, ...(st.running ? {} : { hint: "`capcomd service install`, or `capcomd serve`." }) });
+  return out;
+}
+
+export function formatSteps(steps: Step[]): string {
+  return steps.map((s) => `  ${s.ok ? "✓" : "✗"} ${s.step.padEnd(16)} ${s.detail}${s.hint && !s.ok ? `\n      → ${s.hint}` : ""}`).join("\n");
+}
+
+/** The whole wizard (or one part: demo | accounts | project | agent | service). */
+export async function setup(part: string | undefined, v: Values, log: (s: string) => void = (s) => console.log(s)): Promise<Step[]> {
+  const p = prompter({ yes: v.yes === true });
+  const all = !part || part === "all";
+  const steps: Step[] = [];
+  const section = (t: string) => log(`\n── ${t}`);
+  if (part === "demo" || (all && v["skip-demo"] !== true && (v.demo === true || await p.confirm("Try capcomd locally first (fake agents, no accounts, about a minute)?", p.interactive)))) {
+    section("Try it locally");
+    steps.push(await demoStep(log));
+    if (part === "demo") return steps;
+    if (p.interactive && !(await p.confirm("Continue with the real setup (boxd, Claude/Codex logins, your repository)?", true))) return steps;
+  }
+  if (all || part === "accounts") {
+    section("Accounts");
+    const k = await boxdKeyStep(p, v);
+    steps.push(k);
+    if (k.ok) steps.push(...(await agentAccountsStep(p, v, log)));
+    if (!k.ok && all) return steps;
+  }
+  if (all || part === "project") { section("Project"); steps.push(...(await projectStep(p, v))); }
+  if (all || part === "agent") { section("Agent integration"); steps.push(await agentIntegrationStep(p, v)); }
+  if (all || part === "service") { section("Engine"); steps.push(await serviceStep(p, v)); }
+  return steps;
+}
