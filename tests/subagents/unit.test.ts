@@ -81,6 +81,20 @@ test("claude result: tokens include cache reads/writes; cost is total_cost_usd",
   expect(st).toMatchObject({ turns: 5, costUsd: 0.0387, inputTokens: 43012, outputTokens: 450, done: true });
 });
 
+test("reviewer verdicts fail closed: only an explicit boolean `passed` counts; the last one wins", async () => {
+  const { parseVerdict, reviewBrief } = await import("../../src/primitives/review");
+  expect(parseVerdict({ passed: false, reasons: ["missing test"] })).toEqual({ passed: false, reasons: ["missing test"] });
+  expect(parseVerdict(null, 'Looks right.\n{"passed": true, "reasons": ["adds a + b"]}')).toEqual({ passed: true, reasons: ["adds a + b"] });
+  expect(parseVerdict(null, 'Review:\n```json\n{"passed": false, "reason": "returns a - b"}\n```')).toEqual({ passed: false, reasons: ["returns a - b"] });
+  expect(parseVerdict(null, 'fn f() { return {a: 1}; }\n{"passed": true}')).toEqual({ passed: true, reasons: [] });
+  expect(parseVerdict(null, '{"passed": true}\nno, wait\n{"passed": false, "reasons": ["broke shout"]}')).toEqual({ passed: false, reasons: ["broke shout"] });
+  for (const t of ["I think it passes.", '{"passed": "yes"}', '{"verdict": "pass"}', ""]) expect(parseVerdict(null, t)).toBeNull();
+  expect(parseVerdict({ summary: "fine" }, undefined)).toBeNull();
+  const brief = reviewBrief({ criteria: ["file exists", "tests pass"], childTask: "Fix src/add.ts" });
+  expect(brief).toBe("Acceptance criteria:\n- file exists\n- tests pass\n\nThe change was made for this task:\nFix src/add.ts");
+  expect(reviewBrief({})).toContain("does what the task below asks");
+});
+
 test("in-VM CLI argv → op mapping (incl. parent-set children grants)", async () => {
   const { toCall } = await import(CLI);
   expect(toCall(["spawn", "--task", "t", "--profile", "worker", "--children.maxChildren=2", "--children.allowedChildProfiles", "a,b", "--budget", "turns=5"]))

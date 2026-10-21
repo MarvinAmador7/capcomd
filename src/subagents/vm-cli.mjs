@@ -58,6 +58,16 @@ async function awaitLoop(op, args) {
   }
 }
 
+/** verify answers "running" while a review is in progress: poll with the same key until it settles. */
+async function verifyLoop(args) {
+  const deadline = Date.now() + 2 * 60 * 60000;
+  for (;;) {
+    const r = await call("verify", args);
+    if (!r.ok || r.result?.state !== "running" || Date.now() > deadline) return r;
+    await sleep(Math.max(AWAIT_POLL, 2000));
+  }
+}
+
 async function followEvents(args, emit) {
   let after = Number(args.after ?? 0);
   const deadline = Date.now() + Number(args.timeoutMs ?? 10 * 60000);
@@ -147,7 +157,13 @@ export function toCall(argv) {
       if (action === "list") return { op: "kv", args: { action, prefix: fl.prefix } };
       return usage("kv get|put|cas|del|list");
     }
-    case "verify": if (!fl.ref) usage("verify needs --ref <agt>"); return { op: "verify", args: { ref: fl.ref, check: fl.check, acceptance: json(fl.acceptance, "--acceptance"), key, ...(fl.checks !== undefined ? { checks: fl.checks } : {}) } }; // raw --checks: forwarded so the orchestrator refuses it loudly
+    case "verify": {
+      if (!fl.ref) usage("verify needs --ref <agt>");
+      // Polled until done (a review takes minutes), so the key must be stable across polls.
+      const vkey = key ?? `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const extra = { ...(fl.checks !== undefined ? { checks: fl.checks } : {}), ...(fl["review-profile"] !== undefined ? { reviewProfile: fl["review-profile"] } : {}), ...(fl["judge-profile"] !== undefined ? { judgeProfile: fl["judge-profile"] } : {}) }; // forwarded so the orchestrator refuses them loudly
+      return { op: "verify", args: { ref: fl.ref, check: fl.check, acceptance: json(fl.acceptance, "--acceptance"), key: vkey, ...extra }, verifyLoop: true };
+    }
     case "merge": if (!fl.ref || !fl.require) usage("merge needs --ref <agt> --require <vfy>"); return { op: "merge", args: { ref: fl.ref, require: fl.require, key } };
   }
   return usage(cmd ? `unknown command ${cmd}` : "no command");
@@ -197,7 +213,7 @@ async function mcp() {
       else if (m.method === "tools/call") {
         const name = String(m.params?.name ?? "").replace(/^capcomd_/, "").replace("wait_any", "wait-any");
         const args = m.params?.arguments ?? {};
-        const r = name === "await" || name === "wait-any" ? await awaitLoop(name, args) : await call(name, args);
+        const r = name === "await" || name === "wait-any" ? await awaitLoop(name, args) : name === "verify" ? await verifyLoop({ ...args, key: args.key ?? `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }) : await call(name, args);
         send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: JSON.stringify(r.ok ? r.result : r.error) }], isError: !r.ok } });
       } else if (m.method === "ping") send({ jsonrpc: "2.0", id: m.id, result: {} });
       else send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: `unknown method ${m.method}` } });
@@ -213,7 +229,7 @@ async function main() {
   try { c = toCall(argv); } catch (e) { console.log(JSON.stringify({ ok: false, error: { code: "usage", message: e.message } })); return 2; }
   let r;
   if (c.events) r = await followEvents(c.args, (e) => console.log(JSON.stringify({ event: e })));
-  else r = c.loop ? await awaitLoop(c.op, c.args) : await call(c.op, c.args);
+  else r = c.loop ? await awaitLoop(c.op, c.args) : c.verifyLoop ? await verifyLoop(c.args) : await call(c.op, c.args);
   console.log(JSON.stringify(r.ok ? { ok: true, ...(r.result && typeof r.result === "object" ? r.result : { result: r.result }) } : { ok: false, error: r.error }));
   return exitFor(r);
 }

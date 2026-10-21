@@ -220,7 +220,7 @@ export const scopeActor = actor({
       params: {
         runId: string; agentId: string; key?: string; paramsHash: string; parent?: string | null;
         profile: string | null; ref: string | null; spec: Record<string, unknown> | null;
-        task: string; contract?: Record<string, unknown> | null; budget?: Budget; operator?: boolean; grant?: Grant;
+        task: string; contract?: Record<string, unknown> | null; budget?: Budget; operator?: boolean; grant?: Grant; review?: boolean;
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -259,7 +259,7 @@ export const scopeActor = actor({
         const d = checkSpawn({
           parent: parent as AgentRow | null, ancestors: ancestors as AgentRow[], descendantCounts: ancestors.map((a) => countDesc(a.agentId)),
           siblings: siblings as AgentRow[], childProfile: params.profile, childSpec: (params.spec as unknown as AgentSpec) ?? null,
-          requested: params.budget, runBudget, operator: params.operator, grant: params.grant,
+          requested: params.budget, runBudget, operator: params.operator, grant: params.grant, review: params.review,
         });
         if (!d.ok) fail(d.code, d.error);
         if (!d.ok) return;
@@ -274,7 +274,7 @@ export const scopeActor = actor({
         killpoint("scope.spawn.mid");
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
-          agent: params.spec, task: params.task.slice(0, 500), key: params.key ?? null, operator: !!params.operator,
+          agent: params.spec, task: params.task.slice(0, 500), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
           ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}),
         }, `spawn-${params.agentId}`);
         out = await get(params.agentId);

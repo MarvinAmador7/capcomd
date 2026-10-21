@@ -22,6 +22,8 @@ export interface AgentTask {
   goal: string;
   rework?: boolean;
   conflictFiles?: string[];
+  /** verify's reviewer: check out this commit, review it, never commit or push (goal = the review brief). */
+  review?: { sha: string; branch: string; target: string };
 }
 
 export interface AgentResult {
@@ -37,6 +39,8 @@ export interface AgentResult {
   billing?: "api" | "subscription";
   notionalCostUsd?: number;
   agentVersion?: string;
+  /** The agent's final message (a reviewer's verdict comes from it). */
+  resultText?: string;
 }
 
 export interface AgentRunOptions {
@@ -72,6 +76,24 @@ export function buildPrompt(t: AgentTask): string {
   ];
   if (t.conflictFiles?.length) lines.push(`- A previous attempt conflicted with ${t.target} in: ${t.conflictFiles.join(", ")}. Re-apply the change on top of the current ${t.target}.`);
   return lines.join("\n");
+}
+
+/** A reviewer works on a detached checkout of the commit under review and only reports a verdict. */
+export function buildReviewPrompt(t: AgentTask & { review: NonNullable<AgentTask["review"]> }): string {
+  const { sha, branch, target } = t.review;
+  return [
+    `You are reviewing a change. The repository is checked out at commit ${sha} (branch ${branch}), based on ${target}.`,
+    `See the change with \`git diff origin/${target}...HEAD\` and read the code around it. Run the project's tests if that helps you judge.`,
+    "",
+    t.goal,
+    "",
+    "Rules:",
+    "- Do not edit files, commit, push, or change git remotes. Nothing you change is kept.",
+    "- Do not print environment variables or credentials.",
+    "- Judge only against the acceptance criteria and the task above; don't fail it for unrelated style.",
+    '- End your reply with one line of JSON and nothing after it: {"passed": true|false, "reasons": ["..."]}',
+    "  Give concrete reasons either way; on a fail, say what must change.",
+  ].join("\n");
 }
 
 export const agentHome = (cfg: AgentConfig) => `${cfg.workdir}/home`;
@@ -153,7 +175,9 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     must(await git(["clone", "--no-tags", "--branch", task.target, task.repoUrl, repo], undefined, 300_000), "git clone");
     if (branchExists) must(await git(["fetch", "origin", `+refs/heads/${task.branch}:refs/remotes/origin/${task.branch}`], repo), "git fetch branch");
 
-    if (branchExists && !task.rework) {
+    if (task.review) {
+      must(await git(["checkout", "-q", "--detach", task.review.sha], repo), "git checkout (review)");
+    } else if (branchExists && !task.rework) {
       const head = await git(["log", "-1", "--format=%H%x00%(trailers:key=Capcomd-Task,valueonly,separator=)%x00%(trailers:key=Capcomd-Epoch,valueonly,separator=)", `origin/${task.branch}`], repo);
       const [sha, k, ep] = head.stdout.trim().split("\0");
       if (head.code === 0 && k?.trim() === key && Number(ep) === task.epoch && sha) {
@@ -162,7 +186,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
         return { sha, already: true, costUsd: 0, turns: 0, stopReason: "already_pushed", events: 0 };
       }
     }
-    must(await git(["checkout", "-B", task.branch, branchExists && !task.rework ? `origin/${task.branch}` : `origin/${task.target}`], repo), "git checkout");
+    if (!task.review) must(await git(["checkout", "-B", task.branch, branchExists && !task.rework ? `origin/${task.branch}` : `origin/${task.target}`], repo), "git checkout");
 
     // Reuse dependencies baked into the env snapshot when the lockfile matches (capcomd env build).
     const T = templateDir(cfg);
@@ -214,7 +238,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
 
     // 4. Run headless in the background; the JSON event stream lands in a file we tail.
     // Profile prompts: claude takes flags; codex has none, so they wrap the prompt text.
-    let promptText = buildPrompt(task);
+    let promptText = task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : buildPrompt(task);
     let systemFile: string | undefined, appendSystemFile: string | undefined;
     if (adapter.kind === "claude-code") {
       if (cfg.systemPrompt) { systemFile = `${W}/system.txt`; await provider.upload(vmId, systemFile, new TextEncoder().encode(r.text(cfg.systemPrompt))); }
@@ -317,6 +341,12 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     if (!out.ok) {
       const err = await sh(`tail -c 2000 ${sq(errFile)} 2>/dev/null`);
       throw new AgentError("failed", `${name} stopped (${out.stopReason}, exit ${exitCode}) for ${key}: ${r.text(state.error ?? "")} ${r.text(err.stdout).slice(-800)}`.trim());
+    }
+
+    // A reviewer only reports: nothing it changed is committed or pushed.
+    if (task.review) {
+      setSpanAttributes(span, { "agent.review": true });
+      return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-4000) };
     }
 
     // 5. Commit with capcomd trailers and push the task branch.

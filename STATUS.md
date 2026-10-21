@@ -8,7 +8,8 @@
 The orchestration primitives and in-VM sub-agents work end to end with real agents: Claude Code and
 Codex run in boxd VMs on API keys or subscription logins, and every merge is gated by operator-set checks.
 Most of the remaining work is in the `capcomd run "<goal>"` recipe: its planner and its judge still answer
-from a fake model, so that path doesn't do real planning or real evaluation yet (see Open work, item 1).
+from a fake model, so that path doesn't plan or judge for real yet (see Open work, item 1). Per-branch
+review by an agent (`run new --reviewer`) is built.
 
 ## What works
 
@@ -19,6 +20,7 @@ from a fake model, so that path doesn't do real planning or real evaluation yet 
 | Primitives (ADR-016): `run new`, `spawn`, `await`, `wait-any`, `cancel`, `tree`, task board with fenced leases, versioned kv, `events --follow` | Built | `tests/primitives`, chaos `board.*` / `kv.*` killpoints |
 | `verify` (checks on the ref merged with the latest target) and `merge --require` (only the verified commit lands; merge re-runs the same checks) | Built | `tests/primitives/verify-merge.test.ts` |
 | Operator-named checks: `run new --checks-set name='cmd'`, pinned per child with `spawn --check NAME` | Built | `tests/scenarios/named-checks.test.ts` |
+| Reviewer: `run new --reviewer P` (operator-set); after the checks pass, verify spawns a reviewer agent on the commit (read-only, never pushes); both must pass, no verdict = fail | Built, not yet run live | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
 | Sub-agents in VMs (ADR-017): capability tokens, narrow-only fan-out, in-VM `capcomd` CLI and MCP tools, fencing of agent text | Built | `bun run test:scenarios` |
 | Real agents: Claude Code and Codex adapters, agent profiles, subscription logins (`auth login`), boxd host-bound secrets, env snapshots (`env build`), `doctor` | Built | `tests/agents`, `tests/env`, `tests/auth`, live `doctor --strict` |
 | Git: direct and PR merge modes, protected branches parked for `approve` | Built | `tests/merge` |
@@ -35,13 +37,13 @@ the full suite on the result and confirms no VM is left behind. Last run, 2026-1
 
 In rough order of importance.
 
-1. **The `capcomd run` recipe's planner and judge use a fake model.** `src/models/` has only
-   `FakeModelClient`, and nothing injects a real one. So the planner plans the same three generic tasks for
-   any goal, and the judge always answers "passed". `verify --judge-profile P` records the profile name and
-   takes the same canned verdict, and `src/actors/judge.ts` treats a reply that isn't JSON as a pass. Fix:
-   run the evaluation in `verify` as an agent profile in a VM with a read-only checkout (fail closed on a
-   missing or malformed verdict), then make the recipe spawn a planner profile, as the sub-agent e2e already
-   does. Keep the fake model for offline tests only.
+1. **The `capcomd run` recipe's planner and run-level judge use a fake model.** `src/models/` has only
+   `FakeModelClient`, and nothing injects a real one. So the recipe's planner plans the same three generic
+   tasks for any goal, and its judge always answers "passed" (`src/actors/judge.ts` also treats a reply that
+   isn't JSON as a pass). Fix: make the recipe spawn a planner profile, as the sub-agent e2e already does,
+   and judge the run with an agent too; keep the fake model for offline tests only. The per-branch evaluation
+   is done: `verify` runs the run's reviewer agent (next table row), and the old `--judge-profile` no longer
+   takes a canned verdict.
 2. **Live spend.** A real agent's cost is known only when it finishes, so a budget can't stop it mid-run;
    spawn-time checks use the carved budget (ADR-017). The notional cost of a failed or timed-out agent is
    also not carried into the tree yet (successful runs only).

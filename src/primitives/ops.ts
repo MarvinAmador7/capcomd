@@ -16,6 +16,7 @@ import type { ScopeAgent } from "../actors/scope";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
+import { parseVerdict, reviewBrief } from "./review";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 
 const LEASE_MS = Number(env("DRIVER_LEASE_MS") ?? 15_000);
@@ -44,6 +45,8 @@ export function asRelay(e: unknown): never {
 
 /** Operator-named checks (`run new --checks-set name=CMD`) live here; VMs can read `_` keys, never write them. */
 export const CHECKS_KV = "_checks";
+/** The run's reviewer profile (`run new --reviewer P`): every verify of the run is also reviewed by it. */
+export const REVIEWER_KV = "_reviewer";
 const CHECK_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
 /** `name=command` pairs → { name: command }. Names: letters, digits, . _ - (max 64). */
@@ -71,16 +74,18 @@ export async function namedCheck(runId: string, name: string): Promise<string> {
   return cmd;
 }
 
-export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string; checks?: Record<string, string> }
+export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string }
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
   const runId = o.runId ?? stableId("run", "run", o.key);
   const c = client();
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
-  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}) });
+  if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
+  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, paramsHash: ph }).catch(asRelay);
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
   if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
+  if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
   return { runId, created: res.created, budget: res.budget };
@@ -91,6 +96,8 @@ export interface SpawnOpts {
   contract?: Record<string, unknown>; budget?: Budget; operator?: boolean; start?: boolean;
   /** Pin one of the run's operator-named checks to this child (contract.check); its verify then uses it. */
   check?: string;
+  /** verify's reviewer (host-side only; RPC spawns never set it): exempt from fan-out limits, see reviewSpawn. */
+  review?: boolean;
   /** ADR-017: children limits the parent grants this child (narrow-only; contract.children also accepted). */
   grant?: Grant;
 }
@@ -119,12 +126,12 @@ export async function spawnAgent(o: SpawnOpts) {
   let grant: Grant;
   try { grant = { ...parseGrant(o.contract?.children), ...parseGrant(o.grant) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Grant fan-out with --children.maxChildren=N, --children.maxDepth=N, --children.maxTotalDescendants=N, --children.allowedChildProfiles=a,b, --children.budgetShare=0.5 (each may only narrow the ceiling)."); }
   const hasGrant = Object.keys(grant).length > 0;
-  const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator, ...(hasGrant ? { grant } : {}) });
+  const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator, ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}) });
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
     profile: resolved.name, ref: ref ?? resolved.name, spec: spec ? { ...spec, kind: resolved.kind } : { kind: resolved.kind },
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
-    ...(hasGrant ? { grant } : {}),
+    ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
@@ -286,6 +293,12 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
   }, { spanId: agentSpanId(runId, agentId), parentSpanId: me?.parent ? agentSpanId(runId, me.parent) : rootSpanIdForRun(runId) });
 }
 
+/** A reviewer's review target (set by verify in the contract; RPC spawns can't set it). */
+function reviewOf(a: ScopeAgent): { sha: string; branch: string; target: string } | null {
+  const r: any = (a.contract as any)?.review;
+  return r && typeof r.sha === "string" && typeof r.branch === "string" && typeof r.target === "string" ? { sha: r.sha, branch: r.branch, target: r.target } : null;
+}
+
 /** The structured result an agent declared with `capcomd result` (kv _result/<agt>), if any. */
 async function resultOf(runId: string, agentId: string): Promise<Record<string, unknown>> {
   const r = await client().scope.getOrCreate([runId]).kvGet({ k: `_result/${agentId}` }).catch(() => null);
@@ -354,7 +367,8 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
       return fin.agent;
     }
     const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
-    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}) });
+    const review = reviewOf(a);
+    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}) });
     const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);
@@ -366,7 +380,8 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     await w.drainWorker({ workerId: agentId });
     if (await cancelled()) return (await s.getAgent({ agentId }))!;
     const declared = await resultOf(runId, agentId);
-    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, verification: null, branch: !pushed.sha && vmRpc ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
+    const verdictOf = review ? { verdict: parseVerdict(declared.data, rec.resultText) } : {};
+    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, ...verdictOf, verification: null, branch: review || (!pushed.sha && vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }
@@ -467,15 +482,78 @@ async function resolveRef(runId: string, ref: string): Promise<{ branch: string;
   return { branch: ref, agentId: null, label: ref };
 }
 
-export interface VerifyOpts { runId: string; ref: string; checks?: string; check?: string; acceptance?: unknown; judgeProfile?: string; target?: string; key?: string }
+export interface VerifyOpts {
+  runId: string; ref: string; checks?: string; check?: string; acceptance?: unknown; target?: string; key?: string;
+  /** Reviewer profile; default: the run's (`run new --reviewer`). In-VM verify never sets it. */
+  reviewProfile?: string;
+  /** Deprecated alias of reviewProfile. */
+  judgeProfile?: string;
+  /** In-VM verify: the calling agent, which pays for the reviewer (the operator's verify: the run). */
+  reviewParent?: string;
+}
+
+export const verifyIdFor = (runId: string, ref: string, key?: string) => stableId("vfy", `${runId}\0${ref}`, key);
+/** A verify with a review runs for minutes; calls for the same vfy while it runs share one run. */
+const inflightVerify = new Map<string, Promise<any>>();
 
 /**
  * Run checks (the repo's test command, --checks, or the operator-named --check) on the ref merged with the latest target, in
  * the verifier actor (ADR-003: the result comes from running it, never from the agent's report).
- * With --judge-profile, a judge also scores the acceptance criteria; both must pass.
+ * With a reviewer (the run's, or --review-profile), a reviewer agent then reads the commit against the
+ * acceptance criteria; both must pass, and no verdict is a fail.
  * Records vfy-… with the exact branch commit tested, which `merge --require` checks.
  */
-export async function verifyRef(o: VerifyOpts) {
+export function verifyRef(o: VerifyOpts): Promise<any> {
+  const id = verifyIdFor(o.runId, o.ref, o.key);
+  const live = inflightVerify.get(id);
+  if (live) return live;
+  const p = verifyOnce(o).finally(() => inflightVerify.delete(id));
+  inflightVerify.set(id, p);
+  return p;
+}
+
+/** The run's reviewer profile, if the operator set one. */
+export async function runReviewer(runId: string): Promise<string | undefined> {
+  const v: any = (await client().scope.getOrCreate([runId]).kvGet({ k: REVIEWER_KV }).catch(() => null))?.value;
+  return typeof v?.profile === "string" ? v.profile : undefined;
+}
+
+/** A reviewer profile's resolved spec (unknown profiles are a config error). */
+function reviewerSpec(profile: string): Record<string, any> | null {
+  try { return (resolveAgent(encodeAgentRef(profile)).spec as any) ?? null; } catch (e) {
+    if (e instanceof AgentConfigError) throw new RelayError("config", `reviewer: ${e.message}`, "Name an agent profile (`capcomd agents list`), e.g. --reviewer reviewer.");
+    throw e;
+  }
+}
+
+interface Review { profile: string; agentId: string | null; passed: boolean; reasons: string[]; error?: string }
+
+/** Spawn the reviewer for this verification (keyed: a retry reuses it), await it, read its verdict. Fails closed. */
+async function reviewRef(o: { runId: string; vfyId: string; profile: string; branch: string; sha: string; target: string; agentId: string | null; acceptance?: unknown; parent?: string }): Promise<Review> {
+  let reviewer: string | null = null;
+  try {
+    const spec = reviewerSpec(o.profile);
+    const childTask = o.agentId ? (await getAgentOrThrow(o.runId, o.agentId)).task : null;
+    const requested: Budget = {};
+    if (spec?.maxTurns) requested.turns = spec.maxTurns;
+    if (spec?.timeoutMs) requested.wallSeconds = Math.ceil(spec.timeoutMs / 1000);
+    if (spec?.maxBudgetUsd) requested.usd = spec.maxBudgetUsd;
+    const r = await spawnAgent({
+      runId: o.runId, task: reviewBrief({ criteria: o.acceptance, childTask }), profile: o.profile, key: `review-${o.vfyId}`,
+      ...(o.parent ? { parent: o.parent } : {}), contract: { review: { sha: o.sha, branch: o.branch, target: o.target, of: o.agentId ?? o.branch } },
+      ...(Object.keys(requested).length ? { budget: requested } : {}), review: true,
+    });
+    reviewer = r.agentId;
+    const [a] = (await awaitAgents(o.runId, [r.agentId], { timeoutMs: (spec?.timeoutMs ?? 30 * 60_000) + 10 * 60_000 })).agents as any[];
+    const v = a?.status === "done" ? (a.result?.verdict ?? null) : null;
+    if (v) return { profile: o.profile, agentId: reviewer, passed: v.passed === true, reasons: v.reasons ?? [] };
+    return { profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "reasons": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };
+  } catch (e) {
+    return { profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: `review failed: ${String((e as Error)?.message ?? e).slice(0, 300)}` };
+  }
+}
+
+async function verifyOnce(o: VerifyOpts) {
   await assertEngine();
   const c = client();
   const s = c.scope.getOrCreate([o.runId]);
@@ -487,9 +565,11 @@ export async function verifyRef(o: VerifyOpts) {
   // A child pinned to a check at spawn is verified with it unless the caller names another.
   if (o.check === undefined && !o.checks && pinnedCheck) o = { ...o, check: pinnedCheck };
   const checks = o.check !== undefined ? await namedCheck(o.runId, o.check) : o.checks;
-  const vfyId = stableId("vfy", `${o.runId}\0${o.ref}`, o.key);
+  const vfyId = verifyIdFor(o.runId, o.ref, o.key);
+  const reviewProfile = o.reviewProfile ?? o.judgeProfile ?? (await runReviewer(o.runId));
+  if (reviewProfile) reviewerSpec(reviewProfile); // an unknown reviewer is refused before anything runs
   // The record names the check and the exact command it ran; merge --require re-runs that command.
-  const data = { ref: o.ref, agentId, branch, target, ...(o.check !== undefined ? { check: o.check } : {}), checks: checks ?? null, acceptance: o.acceptance ?? null, judgeProfile: o.judgeProfile ?? null };
+  const data = { ref: o.ref, agentId, branch, target, ...(o.check !== undefined ? { check: o.check } : {}), checks: checks ?? null, acceptance: o.acceptance ?? null, reviewProfile: reviewProfile ?? null };
   const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   const res: any = await c.verifier.getOrCreate([o.runId, vfyId]).verify({
@@ -497,21 +577,19 @@ export async function verifyRef(o: VerifyOpts) {
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const checksPassed = out.status === "verified";
-  let judge: Record<string, unknown> | null = null;
-  if (checksPassed && o.judgeProfile) {
-    // Step 2: the judge actor scores the criteria with the configured model. Running a judge
-    // *agent profile* in a VM (read-only checkout) comes in a later step.
-    const j: any = await c.judge.getOrCreate([o.runId, vfyId]).judge({ judgeId: `${vfyId}-judge`, runId: o.runId, goal: `Acceptance criteria: ${JSON.stringify(o.acceptance ?? "the task is done")}`, completedTasks: [branch] });
-    judge = { profile: o.judgeProfile, passed: !!j.passed, feedback: String(j.feedback ?? "").slice(0, 1000) };
-  }
-  const pass = checksPassed && (judge ? judge.passed === true : true);
+  // Checks first (cheap, deterministic); the reviewer only reads a commit that already passes them.
+  const review = checksPassed && reviewProfile && out.status === "verified" && out.taskSha
+    ? await reviewRef({ runId: o.runId, vfyId, profile: reviewProfile, branch, sha: out.taskSha, target, agentId, acceptance: o.acceptance, ...(o.reviewParent ? { parent: o.reviewParent } : {}) })
+    : null;
+  const pass = checksPassed && (review ? review.passed : true);
   const result = {
     pass, branch, target, commit: out.status === "verified" ? (out.taskSha ?? null) : null,
     checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
-    ...(judge ? { judge } : {}),
+    // `judge` mirrors `review` for callers of the old --judge-profile contract.
+    ...(review ? { review, judge: { profile: review.profile, passed: review.passed, feedback: (review.error ?? review.reasons.join("; ")).slice(0, 1000) } } : {}),
   };
   const fin = opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
-  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status } } } }).catch(() => {});
+  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status }, ...(review ? { review: { passed: review.passed, agentId: review.agentId } } : {}) } } }).catch(() => {});
   return fin;
 }
 

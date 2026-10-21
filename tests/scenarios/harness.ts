@@ -16,6 +16,8 @@ export const PROFILES = {
     lead: { provider: "claude", auth: "subscription", maxTurns: 40, children: { allowSpawn: true, maxDepth: 1, maxChildren: 3, maxTotalDescendants: 6, allowedChildProfiles: ["worker"], budgetShare: 0.5 } },
     worker: { provider: "claude", auth: "subscription", maxTurns: 20 },
     critic: { provider: "claude", auth: "subscription", maxTurns: 10 },
+    // verify's reviewer: deliberately NOT in any allowedChildProfiles (reviewers are exempt from fan-out).
+    reviewer: { provider: "claude", auth: "subscription", maxTurns: 8 },
   },
 };
 

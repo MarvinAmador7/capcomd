@@ -21,6 +21,8 @@ export type RpcResponse = { id: string; ok: true; result: unknown } | { id: stri
 
 const RESERVED_KV = ["_", "approval/", "recipe/", "handoff/"];
 const RESPONSE_MAX_BYTES = 256 * 1024;
+/** Hold an in-VM verify this long before answering "running" (below the CLI's 120s RPC timeout). */
+const VERIFY_HOLD_MS = Number(process.env.CAPCOMD_VERIFY_HOLD_MS ?? 90_000);
 
 const deny = (message: string, hint = "Your token only covers your own subtree and the ops your parent granted."): never => {
   throw new RelayError("conflict", message, hint, { code: "forbidden" });
@@ -107,7 +109,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     case "spawn": {
       // Parent is always the caller; never operator; contracts can't carry host-side checks.
       const contract = { ...(args.contract ?? {}) };
-      delete contract.checks; delete contract.orphansPolicyOverride;
+      delete contract.checks; delete contract.orphansPolicyOverride; delete contract.review; // review mode is verify's alone
       const a = await O.spawnAgent({
         runId: run, parent: c.sub, task: String(args.task ?? ""), profile: args.profile, key: args.key ? `${c.sub}:${args.key}` : undefined,
         budget: args.budget !== undefined ? parseBudget(args.budget) : undefined, contract, grant: args.children, operator: false,
@@ -216,6 +218,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       throw new RelayError("usage", `task action ${action}?`, "add|list|show|claim|renew|release|done");
     }
     case "verify": {
+      if (args.reviewProfile !== undefined || args.judgeProfile !== undefined) deny("in-VM verify cannot choose a reviewer: the operator sets it per run (`run new --reviewer P`)", "Verify with just --ref; the run's reviewer, if any, reviews every verification.");
       if (args.checks !== undefined) deny("in-VM verify cannot set --checks: test commands come only from the operator", "Pin one of the run's operator-named checks when spawning (`capcomd spawn … --check NAME`; `capcomd kv get _checks` lists them), then verify with just --ref.");
       const ref = String(args.ref ?? "");
       if (!ref.startsWith("agt-")) deny("in-VM verify takes a child agent id, not a branch");
@@ -228,7 +231,13 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
         deny(pinned ? `${ref} was pinned to check "${pinned}" at spawn; it can't be verified with "${args.check}"` : `${ref} has no pinned check; named checks are pinned at spawn`,
           pinned ? "Verify with just --ref: it uses the pinned check." : "Spawn the child with --check NAME, then verify with just --ref.");
       }
-      return O.verifyRef({ runId: run, ref, ...(pinned ? { check: pinned } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key: args.key ? `${c.sub}:${args.key}` : undefined });
+      const key = args.key ? `${c.sub}:${args.key}` : undefined;
+      // A review takes minutes, longer than one RPC: answer "running" after VERIFY_HOLD_MS; the CLI polls
+      // with the same key, and the in-flight verify is shared (never re-run) until it finishes.
+      const p = O.verifyRef({ runId: run, ref, ...(pinned ? { check: pinned } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key, reviewParent: c.sub });
+      p.catch(() => {}); // a later poll gets the error
+      const held = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), VERIFY_HOLD_MS))]);
+      return held ?? { id: O.verifyIdFor(run, ref, key), kind: "verify", state: "running", ref };
     }
     case "merge": {
       const ref = String(args.ref ?? "");

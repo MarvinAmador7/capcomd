@@ -39,6 +39,15 @@ Cost: `spent.usd` is billed spend (0 under subscription billing). A subscription
 reported a cost also has `notionalUsd` (the API-price estimate) and `billing`; `rollup.notionalUsd` and
 `totals.notionalUsd` sum it over the subtree / run. It is never added to `usd` and never counts against a budget.
 
+## Verify: `capcomd verify <runId> --ref <agt|branch> --json` → `{id, kind:"verify", state, …data, result}`
+
+`state` is `passed` | `failed`, or `running` while an in-VM verify waits on its reviewer (poll with the
+same `--key`; the CLI does). The data echoes `ref, agentId, branch, target, check?, checks, acceptance,
+reviewProfile`. `result`: `pass` (checks and, when a reviewer is set, the review), `commit` (the branch
+commit that was tested), `checks {passed, status, reason?, files?, output}`, and with a reviewer
+`review {profile, agentId, passed, reasons[], error?}` plus `judge {profile, passed, feedback}`, a mirror
+for callers of the old `--judge-profile` contract. A review with no verdict has `passed: false` and an `error`.
+
 ## Status: `capcomd status <runId> --json` → `{run}`
 
 `runId, state` (run lifecycle), `goal`, `startedAt`/`startedAtMs` (first run event), `budget{spent,maxCost}`,

@@ -101,3 +101,15 @@ test("maxChildren saturation is backpressure (retryable), not a hard refusal", (
   });
   expect(r).toMatchObject({ ok: false, code: "backpressure", retryable: true });
 });
+
+test("verify's reviewer: exempt from the caller's fan-out, paid from its budget (clamped), never spawns", () => {
+  const leaf = row("coder-1", coder, { limits: rootLimits(undefined), budget: { usd: 2, turns: 20 }, spent: { turns: 4 } });
+  const reviewer = { provider: "claude", auth: "subscription", maxTurns: 8 } as AgentSpec;
+  // A normal child of a leaf (allowSpawn=false) is refused; the reviewer is not.
+  expect(checkSpawn({ ...base, parent: leaf, ancestors: [leaf], descendantCounts: [0], childProfile: "reviewer", childSpec: reviewer })).toMatchObject({ ok: false, code: "children_limit" });
+  const d = checkSpawn({ ...base, parent: leaf, ancestors: [leaf], descendantCounts: [0], childProfile: "reviewer", childSpec: reviewer, review: true, requested: { turns: 50 } });
+  expect(d).toMatchObject({ ok: true, depth: 1, budget: { turns: 16 }, limits: { allowSpawn: false, maxChildren: 0, allowedChildProfiles: [] } }); // 20 - 4 left, request clamped
+  // Operator verify: top level, paid by the run; a finished caller can't pay.
+  expect(checkSpawn({ ...base, parent: null, childProfile: "reviewer", childSpec: reviewer, review: true, requested: { usd: 1 } })).toMatchObject({ ok: true, depth: 0, budget: { usd: 1 } });
+  expect(checkSpawn({ ...base, parent: { ...leaf, status: "done" }, ancestors: [leaf], descendantCounts: [0], childProfile: "reviewer", childSpec: reviewer, review: true })).toMatchObject({ ok: false, code: "parent_terminal" });
+});

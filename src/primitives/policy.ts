@@ -114,6 +114,8 @@ export interface SpawnCheck {
   operator?: boolean;
   /** ADR-017: children limits the PARENT grants this child at spawn time (narrow-only). */
   grant?: Grant;
+  /** verify's reviewer (set host-side only, never from a VM): see reviewSpawn. */
+  review?: boolean;
 }
 
 /** Fan-out a parent grants a child at spawn time. Each field may only narrow the ceiling
@@ -170,6 +172,7 @@ export type SpawnDecision =
   | { ok: false; code: "children_limit" | "budget" | "widening" | "parent_terminal" | "backpressure"; error: string; retryable?: boolean };
 
 export function checkSpawn(x: SpawnCheck): SpawnDecision {
+  if (x.review) return reviewSpawn(x);
   const own = x.childSpec?.children;
   if (!x.parent) {
     const avail = available(x.runBudget, {}, x.siblings);
@@ -201,6 +204,27 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
   const g = applyGrant(childLimits(L, own), x.grant);
   if (!g.ok) return { ok: false, code: "children_limit", error: `${g.error} (set by ${p.agentId}'s limits and the child profile)` };
   return carve(avail, L.budgetShare, x.requested, () => ({ limits: g.limits, depth: p.depth + 1 }), p.agentId);
+}
+
+/** A reviewer can never spawn. */
+export const NO_SPAWN: Limits = { allowSpawn: false, maxDepth: 0, maxChildren: 0, maxTotalDescendants: 0, allowedChildProfiles: [], budgetShare: 1 };
+
+/**
+ * verify's reviewer is part of the verify op, not a child the caller chose to spawn: the caller's
+ * fan-out limits and allowed profiles don't apply. It is paid from the caller's budget (the run's when
+ * the operator verifies), its request clamped to what is left, and it can never spawn.
+ */
+function reviewSpawn(x: SpawnCheck): SpawnDecision {
+  const p = x.parent;
+  if (p && TERMINAL_AGENT.has(p.status)) return { ok: false, code: "parent_terminal", error: `parent ${p.agentId} is ${p.status}` };
+  const avail = p ? available(p.budget, p.spent, x.siblings) : available(x.runBudget, {}, x.siblings);
+  const req: Budget = {};
+  for (const u of UNITS) {
+    const r = x.requested?.[u];
+    if (r === undefined) continue;
+    req[u] = avail[u] === undefined ? r : Math.min(r, u === "turns" ? Math.floor(avail[u]!) : avail[u]!);
+  }
+  return carve(avail, 1, req, () => ({ limits: NO_SPAWN, depth: p ? p.depth + 1 : 0 }), p?.agentId ?? "run");
 }
 
 const fmt = (u: Unit, n: number) => (u === "usd" ? `$${n}` : `${n} ${u}`);

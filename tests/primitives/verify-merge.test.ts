@@ -57,8 +57,15 @@ test("verify + merge --require: gate, exact-commit check, idempotency, events", 
   const bad = await cj(["verify", runId, "--ref", a, "--checks", "exit 3", "--key", "bad"]);
   expect(bad.code).toBe(1);
   expect(bad.j).toMatchObject({ state: "failed", result: { pass: false, checks: { passed: false } } });
-  const judged = await cj(["verify", runId, "--ref", a, "--checks", CHECK, "--judge-profile", "critic", "--acceptance", '["tasks file exists"]', "--key", "judged"]);
-  expect(judged.j.result.judge).toMatchObject({ profile: "critic" });
+  // The reviewer is a real agent profile: an unknown one is refused before anything runs; a fake-exec
+  // reviewer gives no verdict, so the verify fails closed (the judge field mirrors the review).
+  const unknown = await cj(["verify", runId, "--ref", a, "--checks", CHECK, "--review-profile", "critic", "--key", "rv-unknown"]);
+  expect(unknown.j.error).toMatchObject({ code: "config" });
+  expect(unknown.j.error.message).toContain('unknown agent profile "critic"');
+  const judged = await cj(["verify", runId, "--ref", a, "--checks", CHECK, "--judge-profile", "coder", "--acceptance", '["tasks file exists"]', "--key", "judged"]);
+  expect(judged.j).toMatchObject({ state: "failed", reviewProfile: "coder", result: { pass: false, checks: { passed: true }, review: { profile: "coder", passed: false } } });
+  expect(judged.j.result.review.error).toContain("no verdict");
+  expect(judged.j.result.judge).toMatchObject({ profile: "coder", passed: false });
 
   // merge gate
   expect((await cj(["merge", runId, "--ref", a])).code).toBe(2);

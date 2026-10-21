@@ -4,7 +4,8 @@
 # verifies and merges each child's branch, and reports. Prints the tree, rollups and timings.
 # The GitHub repo is NOT deleted (inspect it; the delete command is printed at the end).
 # Needs: bun, gh (logged in), BOXD_API_KEY, working claude + codex logins (capcomd auth status).
-# Override profiles with CAPCOMD_PLANNER_SPEC / CAPCOMD_CLAUDE_WORKER_SPEC / CAPCOMD_CODEX_WORKER_SPEC (JSON).
+# Override profiles with CAPCOMD_PLANNER_SPEC / CAPCOMD_CLAUDE_WORKER_SPEC / CAPCOMD_CODEX_WORKER_SPEC /
+# CAPCOMD_REVIEWER_SPEC (JSON). Every verify is also reviewed by the read-only `reviewer` profile.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OWNER="${CAPCOMD_E2E_OWNER:-MarvinAmador7}"
@@ -26,8 +27,10 @@ AGENTS="$WORK/agents.json"
 DEF_P='{"provider":"claude","auth":"subscription","maxTurns":60,"timeoutMs":2400000,"children":{"allowSpawn":true,"maxDepth":1,"maxChildren":3,"maxTotalDescendants":6,"allowedChildProfiles":["claude-worker","codex-worker"],"budgetShare":0.34}}'
 DEF_C='{"provider":"claude","auth":"subscription","maxTurns":25,"timeoutMs":900000}'
 DEF_X='{"provider":"codex","auth":"subscription","maxTurns":25,"timeoutMs":900000}'
-P="${CAPCOMD_PLANNER_SPEC:-$DEF_P}"; C="${CAPCOMD_CLAUDE_WORKER_SPEC:-$DEF_C}"; X="${CAPCOMD_CODEX_WORKER_SPEC:-$DEF_X}"
-printf '{"schema":"capcomd.agents/v1","agents":{"planner":%s,"claude-worker":%s,"codex-worker":%s}}\n' "$P" "$C" "$X" > "$AGENTS"
+# Read-only reviewer: may read and run the tests, never edit (verify never pushes its tree anyway).
+DEF_R='{"provider":"claude","auth":"subscription","maxTurns":15,"timeoutMs":600000,"allowedTools":["Read","Glob","Grep","LS","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(bun test:*)","Bash(cat:*)","Bash(ls:*)"]}'
+P="${CAPCOMD_PLANNER_SPEC:-$DEF_P}"; C="${CAPCOMD_CLAUDE_WORKER_SPEC:-$DEF_C}"; X="${CAPCOMD_CODEX_WORKER_SPEC:-$DEF_X}"; R="${CAPCOMD_REVIEWER_SPEC:-$DEF_R}"
+printf '{"schema":"capcomd.agents/v1","agents":{"planner":%s,"claude-worker":%s,"codex-worker":%s,"reviewer":%s}}\n' "$P" "$C" "$X" "$R" > "$AGENTS"
 export CAPCOMD_AGENTS_FILE="$AGENTS"
 
 export CAPCOMD_SANDBOX=boxd
@@ -50,7 +53,7 @@ env -u CAPCOMD_REPO bun src/cli/index.ts env build || die "capcomd env build fai
 echo "== 0b. doctor --strict (aborts on any ✗: claude and codex must both be usable)"
 bun src/cli/index.ts doctor --strict || die "doctor reported a failure (see ✗ above); fix it before spawning agents"
 echo "== 0. preflight (credentials checked, never printed)"
-for a in planner claude-worker codex-worker; do CAPCOMD_AGENT=$a bun scripts/preflight.ts >/dev/null || die "preflight failed for $a (capcomd auth status)"; done
+for a in planner claude-worker codex-worker reviewer; do CAPCOMD_AGENT=$a bun scripts/preflight.ts >/dev/null || die "preflight failed for $a (capcomd auth status)"; done
 
 echo "== 1. private repo $REPO (3 broken files, one test each)"
 SRC="$WORK/src"; mkdir -p "$SRC/src" "$SRC/test"
@@ -81,13 +84,14 @@ C="bun src/cli/index.ts"
 # Operator-named checks (a VM can't pass --checks): one per file, since the other files stay broken
 # until their branches merge. The planner pins one per child at spawn; merge re-runs the same command.
 RUN=$($C run new --budget usd=6,turns=200,wallSeconds=3600 --label "subagents e2e $TS" \
-  --checks-set add='bun test ./test/add.test.ts' --checks-set mul='bun test ./test/mul.test.ts' --checks-set shout='bun test ./test/shout.test.ts' --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).runId)')
+  --checks-set add='bun test ./test/add.test.ts' --checks-set mul='bun test ./test/mul.test.ts' --checks-set shout='bun test ./test/shout.test.ts' \
+  --reviewer reviewer --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).runId)')
 GOAL="Three functions are broken, each with its own failing test: src/add.ts (test/add.test.ts), src/mul.ts (test/mul.test.ts), src/shout.ts (test/shout.test.ts).
 You are the planner. Do NOT edit files yourself. Use the capcomd command (see the orchestration skill in your instructions):
 1. Spawn exactly three leaf children in parallel, one per file, each with --children.maxChildren=0 and a budget of turns=20:
    add and mul with --profile claude-worker, shout with --profile codex-worker. Give each a self-contained task naming its file and test, and tell it to change only that file.
    Pin each child's check with --check <file> (add, mul or shout: the operator's check that runs only that file's test).
-2. capcomd await all three. For each child: capcomd verify --ref <agt> (it runs the pinned check); if it passes, capcomd merge --ref <agt> --require <vfyId>.
+2. capcomd await all three. For each child: capcomd verify --ref <agt> --key v-<file> --acceptance '[\"src/<file>.ts is fixed so test/<file>.test.ts passes\", \"no other file changed\"]' (it runs the pinned check, then the run's reviewer agent reads the change: give the command a 10-minute timeout, and if it is cut off, run the same command again); if it passes, capcomd merge --ref <agt> --require <vfyId>. If the review fails, its reasons are in result.review.reasons.
    If a child failed or its verify failed, spawn one replacement with the failure in the task, then verify and merge it.
 3. Finish with: capcomd result --summary \"<per file: child id, profile, verified?, merged?>\""
 echo "== 3. planner (run $RUN)"
@@ -127,6 +131,8 @@ if git clone -q --branch integration "https://github.com/$REPO.git" "$FINAL" 2>/
 sed 's/^/   /' "$WORK/final-test.log" 2>/dev/null | grep -E '(pass|fail)$|^ *\(fail\)' | head -10 || true
 echo "== 9. VM cleanup"
 bun scripts/vm-cleanup-check.ts "$RUN" && VMS=clean || { [ $? = 1 ] && VMS=leaked || VMS=unchecked; }
+REVIEWERS=$($C tree "$RUN" --json 2>/dev/null | bun -e 'const walk=(n)=>[n,...(n.children??[]).flatMap(walk)]; try { const t=JSON.parse(await Bun.stdin.text()); console.log(t.tree.flatMap(walk).filter((n)=>n.profile==="reviewer"&&n.status==="done").length) } catch { console.log(0) }')
+echo "   reviewers done: $REVIEWERS"
 PSTATUS=$(bun -e 'try { const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(j.agents?.[0]?.status ?? "unknown") } catch { console.log("unknown") }' "$WORK/await.json")
 echo
 echo "timings: total $(( $(date +%s) - T0 ))s, planner run ${T_RUN}s"
@@ -137,7 +143,8 @@ FAILS=""
 [ "$RC" = 0 ] || FAILS="$FAILS await-exit=$RC"
 [ "$PSTATUS" = done ] || FAILS="$FAILS planner=$PSTATUS"
 [ "$MERGED" = 3 ] || FAILS="$FAILS merged=$MERGED/3"
+[ "$REVIEWERS" -ge 3 ] || FAILS="$FAILS reviewers=$REVIEWERS/3"
 [ "$SUITE" = pass ] || FAILS="$FAILS integration-suite=fail"
 [ "$VMS" = clean ] || FAILS="$FAILS vms=$VMS"
 if [ -n "$FAILS" ]; then echo "E2E FAIL:$FAILS"; exit 1; fi
-echo "E2E PASS: planner done, 3/3 merged, integration suite green, no VMs left"
+echo "E2E PASS: planner done, 3/3 reviewed and merged, integration suite green, no VMs left"

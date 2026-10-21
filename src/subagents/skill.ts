@@ -42,6 +42,11 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
 - Test commands come only from the operator: you can't pass --checks. \`capcomd kv get _checks\` lists the run's
   named checks. Pin the one that fits a child when you spawn it (\`spawn … --check NAME\`); its verify then runs
   that check, and it can't be switched later. Unpinned children are verified with the run's default checks.
+- If the operator set a reviewer for the run, every verify that passes its checks is also reviewed by a reviewer
+  agent (you can't choose or skip it); verify then takes minutes. Run it with a long command timeout (about 10
+  minutes) and a --key (e.g. --key v-<child>), so a retry joins the same verification instead of starting another.
+  Pass --acceptance '["criterion", …]' to say what the child had to achieve. A failed review returns
+  \`result.review.reasons\`: send them to the child or retry with them.
 - A failed child: read \`capcomd inspect <agt>\` / \`capcomd logs <agt>\`, then retry with a clearer task or cancel.
 - Best-of-n: spawn n, verify each as it finishes, merge the best, \`capcomd cancel\` the rest.
 - Coordinate peers with \`capcomd kv cas\` (versioned) and \`capcomd task\` (leases with epochs).

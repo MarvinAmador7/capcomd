@@ -95,6 +95,7 @@ bun capcomd await $RUN $AGT
 VFY=$(bun capcomd verify $RUN --ref $AGT --json | jq -r .id)
 bun capcomd merge $RUN --ref $AGT --require $VFY
 bun capcomd tree $RUN            # cost/turn rollups and stuck flags
+# add a reviewer agent to every verify: run new … --reviewer <profile>  (both checks and review must pass)
 ```
 
 A profile with `children.allowSpawn` gets the same verbs inside its VM, so a planner agent can run this loop
@@ -110,7 +111,7 @@ bun capcomd events <runId>
 bun capcomd trace <runId>
 ```
 
-`capcomd run` is a recipe built from the primitives: planner → workers → judge. Its planner and judge still
+`capcomd run` is a recipe built from the primitives: planner → workers → judge. Its planner and run-level judge still
 answer from a fake model, so it doesn't plan or evaluate for real yet; see STATUS.md.
 
 ### Watch a run

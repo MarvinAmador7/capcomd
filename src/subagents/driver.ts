@@ -72,7 +72,9 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
  * the spool, and task identity. Nothing else from the host leaks in.
  */
 export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitCode: number }> {
-  const script = typeof a.contract?.script === "string" ? (a.contract.script as string) : `capcomd result --summary "did: ${a.task.replace(/["`$\\]/g, "")}"`;
+  // verify spawns a reviewer itself (no contract script): scripted runs take CAPCOMD_SCRIPT_REVIEWER.
+  const reviewerScript = (a.contract as any)?.review ? env("SCRIPT_REVIEWER") : undefined;
+  const script = typeof a.contract?.script === "string" ? (a.contract.script as string) : reviewerScript ?? `capcomd result --summary "did: ${a.task.replace(/["`$\\]/g, "")}"`;
   const root = join(env("SCRIPT_VM_DIR") ?? join(tmpdir(), "capcomd-vms"), runId, a.agentId);
   const dir = join(root, "rpc"), bin = join(root, "bin"), home = join(root, "home");
   const pidFile = join(root, "pid"), exitFile = join(root, "exit"), out = join(root, "stdout"), err = join(root, "stderr");

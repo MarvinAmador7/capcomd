@@ -354,6 +354,8 @@ export const workerActor = actor({
         conflictFiles?: string[];
         /** Agent profile name for this task. */
         agent?: string;
+        /** verify's reviewer: review this commit; nothing is committed or pushed. */
+        review?: { sha: string; branch: string; target: string };
       }
     ) {
       const { workerId, taskId, epoch, branch } = params;
@@ -364,9 +366,9 @@ export const workerActor = actor({
       );
       if (already.length > 0) {
         // Replay: return what the first push recorded (a resumed driver needs the commit).
-        let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
+        let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
         try { prev = JSON.parse(String(already[0]!.event)); } catch {}
-        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
+        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
       }
 
       const workerLife = await getLifecycle(c.db, workerId);
@@ -384,9 +386,9 @@ export const workerActor = actor({
       for (let waited = 0; ; waited += 500) {
         const done = await c.db.execute("SELECT event FROM lifecycle_events WHERE idem_key = ?", idemKey);
         if (done.length) {
-          let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
+          let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
           try { prev = JSON.parse(String(done[0]!.event)); } catch {}
-          return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
+          return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
         }
         const now = Date.now();
         const rows = await c.db.execute("SELECT * FROM push_locks WHERE idem_key = ?", idemKey);
@@ -432,6 +434,7 @@ export const workerActor = actor({
       let turns = 0;
       let billing: string | undefined;
       let notionalCostUsd = 0; // subscription billing: what the CLI says the tokens would cost at API prices
+      let resultText: string | undefined; // a reviewer's final message (its verdict)
       let adopted = false;
       const cfg = loadMergeConfig();
       const agent = agentFromEnv(process.env, params.agent);
@@ -453,8 +456,8 @@ export const workerActor = actor({
         const apiKey = process.env[adapter.secretName];
         const runId = params.runId;
         const res = await runAgent(adapter, provider, vmId, {
-          runId, taskId, epoch, branch, target: params.target ?? cfg.target, repoUrl: cfg.remote,
-          goal: params.goal ?? `Task ${taskId}`, rework: params.rework,
+          runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
+          goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.review ? { review: params.review } : {}),
           ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
         }, loadAgentConfig(process.env, params.agent), {
           apiKey,
@@ -473,6 +476,9 @@ export const workerActor = actor({
         turns = res.turns;
         billing = res.billing;
         notionalCostUsd = res.notionalCostUsd ?? 0;
+        resultText = res.resultText;
+      } else if (params.review) {
+        // Fake sandbox reviewer: nothing to run or push (a scripted reviewer declares its verdict itself).
       } else {
         if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
         if (process.env.CAPCOMD_FAKE_PUSH_FAIL) throw new Error(process.env.CAPCOMD_FAKE_PUSH_FAIL); // test knob: a push that always fails
@@ -481,7 +487,7 @@ export const workerActor = actor({
 
       // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
       // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
-      if (!sha && cfg && getDependencies().fakeWork && params.runId) {
+      if (!sha && !params.review && cfg && getDependencies().fakeWork && params.runId) {
         sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework, ...(params.fakePath ? { path: params.fakePath, content: params.fakeContent ?? "" } : {}) });
       }
 
@@ -495,14 +501,14 @@ export const workerActor = actor({
           "worker",
           workerLife.state,
           { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(adopted ? { adopted: true } : {}), ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
+          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(adopted ? { adopted: true } : {}), ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
           idemKey,
           []
         );
         await tx.execute("UPDATE push_locks SET state = 'done', sha = ?, adopted = ?, until = 0, updated_at = ? WHERE idem_key = ?", sha || null, adopted ? 1 : 0, Date.now(), idemKey);
       }, { name: "pushBranch" });
 
-      return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}) };
+      return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(resultText ? { resultText } : {}) };
       } catch (error) {
         // Release so a retry can take over at once (the attempt count records the retry).
         await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});

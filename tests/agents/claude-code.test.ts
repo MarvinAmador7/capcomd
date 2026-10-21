@@ -64,6 +64,23 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(readFileSync(join(s.W, "prompt.txt"), "utf8")).not.toContain(KEY);
   });
 
+  test("review mode: detached at the reviewed commit, review prompt, final message returned, nothing pushed", async () => {
+    const s = await setup("make the failing test pass");
+    const pushed = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
+    const review = { sha: pushed.sha, branch: s.task.branch, target: s.task.target };
+    const rv = { ...s.task, taskId: "rev-1", goal: "Acceptance criteria:\n- sum adds", review };
+    const res = await runClaudeCode(s.provider, s.id, rv, s.cfg, { apiKey: KEY });
+    expect(res).toMatchObject({ sha: "", already: false, stopReason: "success", resultText: "fixed sum" });
+    expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBe(pushed.sha); // the fake edited a file; nothing was pushed
+    const W = join(s.workdir, "rev-1-e1");
+    const prompt = readFileSync(join(W, "prompt.txt"), "utf8");
+    expect(prompt).toContain(`You are reviewing a change. The repository is checked out at commit ${pushed.sha}`);
+    expect(prompt).toContain("Acceptance criteria:\n- sum adds");
+    expect(prompt).toContain('{"passed": true|false, "reasons": ["..."]}');
+    expect((await new Git(join(W, "repo")).ok(["rev-parse", "HEAD"])).trim()).toBe(pushed.sha);
+    expect(getFinishedSpans().some((x) => x.name === "agent.claude_code" && x.attributes["agent.review"] === true)).toBe(true);
+  });
+
   test("redaction: a leaking agent never puts the key into trace, events, commit or errors", async () => {
     const s = await setup("[leak] do it");
     const events: any[] = [];
