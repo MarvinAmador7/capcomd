@@ -88,7 +88,7 @@ const arr = (v) => (v === undefined ? [] : [].concat(v));
 function usage(msg) { const e = new Error(msg); e.usage = true; throw e; }
 
 export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is JSON.
-  spawn --task T [--profile P] [--key K] [--budget usd=1,turns=20,wallSeconds=600]
+  spawn --task T [--profile P] [--key K] [--budget usd=1,turns=20,wallSeconds=600] [--check NAME]
         [--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N
          --children.allowedChildProfiles=a,b --children.budgetShare=0.5] [--contract JSON]
   await <agt…> [--timeout-ms N]   wait-any <agt…> [--timeout-ms N]
@@ -101,7 +101,7 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
   task add --title T [--data JSON] [--after tsk,…] [--key K] | list [--status S] | show <tsk>
        | claim [tsk] [--lease-ms N] | renew|release|done <tsk> --epoch E [--result JSON]
   kv get <k> | put <k> <json> [--key K] | cas <k> <json> --expect V | del <k> [--expect V] | list [--prefix P]
-  verify --ref <agt> [--check NAME] [--acceptance JSON] [--key K]   merge --ref <agt> --require <vfy> [--key K]
+  verify --ref <agt> [--acceptance JSON] [--key K]  (uses the check pinned at spawn)   merge --ref <agt> --require <vfy> [--key K]
   mcp   (serve these as MCP tools over stdio)`;
 
 export function toCall(argv) {
@@ -116,7 +116,7 @@ export function toCall(argv) {
       for (const [k, v] of Object.entries(fl)) if (k.startsWith("children.")) children[k.slice(9)] = v;
       const set = {};
       for (const s of arr(fl.set)) { const [k, v] = String(s).split(/=(.*)/s); set[k] = isNaN(Number(v)) ? v : Number(v); }
-      return { op: "spawn", args: { task: fl.task, profile: fl.profile, key, budget: fl.budget, contract: json(fl.contract, "--contract"), ...(Object.keys(children).length ? { children } : {}), ...(Object.keys(set).length ? { set } : {}) } };
+      return { op: "spawn", args: { task: fl.task, profile: fl.profile, key, budget: fl.budget, check: fl.check, contract: json(fl.contract, "--contract"), ...(Object.keys(children).length ? { children } : {}), ...(Object.keys(set).length ? { set } : {}) } };
     }
     case "await": case "wait-any": if (!pos.length) usage(`${cmd} needs agent ids`); return { op: cmd, args: { agents: pos, timeoutMs }, loop: true };
     case "status": return { op: "status", args: pos.length ? { agents: pos } : {} };
@@ -159,7 +159,7 @@ function exitFor(r) { return r.ok ? 0 : r.error?.retryable ? 75 : r.error?.code 
 const S = (props, req = []) => ({ type: "object", properties: props, required: req });
 const str = { type: "string" }, num = { type: "number" }, ids = { type: "array", items: { type: "string" } };
 export const TOOLS = [
-  ["spawn", "Spawn a child agent under you. Set its fan-out with `children` (narrow-only, ≤ your own limits).", S({ task: str, profile: str, key: str, budget: str, contract: { type: "object" }, children: S({ maxChildren: num, maxDepth: num, maxTotalDescendants: num, allowedChildProfiles: ids, budgetShare: num }) }, ["task"])],
+  ["spawn", "Spawn a child agent under you. Set its fan-out with `children` (narrow-only, ≤ your own limits).", S({ task: str, profile: str, key: str, budget: str, check: str, contract: { type: "object" }, children: S({ maxChildren: num, maxDepth: num, maxTotalDescendants: num, allowedChildProfiles: ids, budgetShare: num }) }, ["task"])],
   ["await", "Block until all given children finish; returns their structured results (fenced).", S({ agents: ids, timeoutMs: num }, ["agents"])],
   ["wait_any", "Block until any given child finishes.", S({ agents: ids, timeoutMs: num }, ["agents"])],
   ["status", "Status of agents (default: you).", S({ agents: ids })],
@@ -172,7 +172,7 @@ export const TOOLS = [
   ["budget", "Your budget, spend, what is left to give children, and subtree rollup.", S({})],
   ["task", "Shared task board: action add|list|show|claim|renew|release|done.", S({ action: str, title: str, task: str, epoch: num, leaseMs: num, after: ids, data: {}, result: {}, status: str, key: str }, ["action"])],
   ["kv", "Shared blackboard: action get|put|cas|del|list (cas needs expect=version).", S({ action: str, k: str, value: {}, expect: num, prefix: str, key: str }, ["action"])],
-  ["verify", "Run the run's checks on a child's branch (never self-reported). check: one of the operator-named checks (kv _checks).", S({ ref: str, check: str, acceptance: {}, key: str }, ["ref"])],
+  ["verify", "Run the run's checks on a child's branch (never self-reported); a child pinned with spawn check uses that check.", S({ ref: str, check: str, acceptance: {}, key: str }, ["ref"])],
   ["merge", "Merge a child's verified commit (needs require=vfy id).", S({ ref: str, require: str, key: str }, ["ref", "require"])],
   ["inspect", "Everything about one agent: record, children, awaits, VM, logs, events.", S({ agent: str, tail: num }, ["agent"])],
   ["logs", "Tail an agent's logs (fenced).", S({ agent: str, tail: num }, ["agent"])],

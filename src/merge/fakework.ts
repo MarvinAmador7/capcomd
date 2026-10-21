@@ -11,7 +11,9 @@ import { openClone } from "./repo";
  * (after a merge conflict), which re-cuts from the latest target and force-pushes with a lease.
  */
 export async function produceFakeWork(cfg: MergeConfig, p: { runId: string; taskId: string; branch: string; target: string; epoch: number; rework?: boolean; content?: string; path?: string }): Promise<string> {
-  const git = await openClone(cfg, `${p.runId}-worker`);
+  // One clone per task: agents finish concurrently, and a shared clone let one task's checkout/add
+  // interleave with another's (a commit picked up the other task's file).
+  const git = await openClone(cfg, `${p.runId}-worker-${p.taskId}`);
   const existing = await git.revParse(`refs/remotes/origin/${p.branch}`);
   if (existing && !p.rework) return existing;
   const base = await git.revParse(`refs/remotes/origin/${p.target}`);

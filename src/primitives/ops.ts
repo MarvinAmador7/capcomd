@@ -89,11 +89,19 @@ export async function runNew(o: RunNewOpts) {
 export interface SpawnOpts {
   runId: string; task: string; profile?: string; overrides?: Overrides; parent?: string; key?: string;
   contract?: Record<string, unknown>; budget?: Budget; operator?: boolean; start?: boolean;
+  /** Pin one of the run's operator-named checks to this child (contract.check); its verify then uses it. */
+  check?: string;
   /** ADR-017: children limits the parent grants this child (narrow-only; contract.children also accepted). */
   grant?: Grant;
 }
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
+  const pin = o.check ?? o.contract?.check;
+  if (pin !== undefined) {
+    if (typeof pin !== "string") throw new RelayError("usage", "contract.check must be a check name", "Pin a check with --check NAME (one of the run's --checks-set names).");
+    await namedCheck(o.runId, pin); // unknown names are refused here, not at verify time
+    o = { ...o, contract: { ...(o.contract ?? {}), check: pin } };
+  }
   let resolved;
   const ref = o.profile ? encodeAgentRef(o.profile, o.overrides) : null;
   try { resolved = resolveAgent(ref); } catch (e) {
@@ -446,12 +454,13 @@ function taskLabelOf(a: any, agentId: string): string {
 }
 
 /** A ref is an agent id (its pushed branch) or a branch name. */
-async function resolveRef(runId: string, ref: string): Promise<{ branch: string; agentId: string | null; label: string }> {
+async function resolveRef(runId: string, ref: string): Promise<{ branch: string; agentId: string | null; label: string; pinnedCheck?: string }> {
   if (ref.startsWith("agt-")) {
     const a = await getAgentOrThrow(runId, ref);
     const branch = a.result?.branch as string | undefined;
     if (a.status !== "done" || !branch) throw new RelayError("conflict", `agent ${ref} is ${a.status}; only a done agent's branch can be verified`, `Wait with \`capcomd await ${runId} ${ref}\`.`);
-    return { branch, agentId: ref, label: taskLabelOf(a, ref) };
+    const pin = a.contract?.check;
+    return { branch, agentId: ref, label: taskLabelOf(a, ref), ...(typeof pin === "string" ? { pinnedCheck: pin } : {}) };
   }
   return { branch: ref, agentId: null, label: ref };
 }
@@ -471,8 +480,10 @@ export async function verifyRef(o: VerifyOpts) {
   const { loadMergeConfig } = await import("../merge/config");
   const cfg = loadMergeConfig();
   const target = o.target ?? cfg?.target ?? "main";
-  const { branch, agentId, label } = await resolveRef(o.runId, o.ref);
+  const { branch, agentId, label, pinnedCheck } = await resolveRef(o.runId, o.ref);
   if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
+  // A child pinned to a check at spawn is verified with it unless the caller names another.
+  if (o.check === undefined && !o.checks && pinnedCheck) o = { ...o, check: pinnedCheck };
   const checks = o.check !== undefined ? await namedCheck(o.runId, o.check) : o.checks;
   const vfyId = stableId("vfy", `${o.runId}\0${o.ref}`, o.key);
   // The record names the check and the exact command it ran; merge --require re-runs that command.

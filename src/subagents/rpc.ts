@@ -111,7 +111,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       const a = await O.spawnAgent({
         runId: run, parent: c.sub, task: String(args.task ?? ""), profile: args.profile, key: args.key ? `${c.sub}:${args.key}` : undefined,
         budget: args.budget !== undefined ? parseBudget(args.budget) : undefined, contract, grant: args.children, operator: false,
-        overrides: args.set ? { set: args.set } : undefined,
+        overrides: args.set ? { set: args.set } : undefined, ...(args.check !== undefined ? { check: String(args.check) } : {}),
       });
       return { agentId: a.agentId, status: a.status, depth: a.depth, budget: a.budget, limits: a.limits, created: a.created };
     }
@@ -216,14 +216,19 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       throw new RelayError("usage", `task action ${action}?`, "add|list|show|claim|renew|release|done");
     }
     case "verify": {
-      if (args.checks !== undefined) deny("in-VM verify cannot set --checks: test commands come only from the operator", "Pick one of the run's operator-named checks with --check NAME (`capcomd kv get _checks` lists them), or pass only --ref for the default.");
+      if (args.checks !== undefined) deny("in-VM verify cannot set --checks: test commands come only from the operator", "Pin one of the run's operator-named checks when spawning (`capcomd spawn … --check NAME`; `capcomd kv get _checks` lists them), then verify with just --ref.");
       const ref = String(args.ref ?? "");
       if (!ref.startsWith("agt-")) deny("in-VM verify takes a child agent id, not a branch");
       await assertWritable(c, ref, true);
-      // Checks never come from the VM: an operator-named check picked by name, else the run's root
-      // contract (operator-set), else the repo's test command.
-      const check = args.check !== undefined ? String(args.check) : undefined;
-      return O.verifyRef({ runId: run, ref, ...(check !== undefined ? { check } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key: args.key ? `${c.sub}:${args.key}` : undefined });
+      // Checks never come from the VM: the operator-named check pinned to the child at spawn, else
+      // the run's root contract (operator-set), else the repo's test command. A pin can't be swapped
+      // after the fact (no shopping for an easier check once one fails).
+      const pinned = (await O.getAgentOrThrow(run, ref)).contract?.check as string | undefined;
+      if (args.check !== undefined && String(args.check) !== pinned) {
+        deny(pinned ? `${ref} was pinned to check "${pinned}" at spawn; it can't be verified with "${args.check}"` : `${ref} has no pinned check; named checks are pinned at spawn`,
+          pinned ? "Verify with just --ref: it uses the pinned check." : "Spawn the child with --check NAME, then verify with just --ref.");
+      }
+      return O.verifyRef({ runId: run, ref, ...(pinned ? { check: pinned } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key: args.key ? `${c.sub}:${args.key}` : undefined });
     }
     case "merge": {
       const ref = String(args.ref ?? "");

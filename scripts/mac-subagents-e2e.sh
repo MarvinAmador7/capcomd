@@ -79,14 +79,15 @@ kill -0 "$ENGINE_PID" 2>/dev/null || die "engine exited: $(tail -3 "$WORK/engine
 
 C="bun src/cli/index.ts"
 # Operator-named checks (a VM can't pass --checks): one per file, since the other files stay broken
-# until their branches merge. The planner picks one by name; merge re-runs the same command.
+# until their branches merge. The planner pins one per child at spawn; merge re-runs the same command.
 RUN=$($C run new --budget usd=6,turns=200,wallSeconds=3600 --label "subagents e2e $TS" \
   --checks-set add='bun test ./test/add.test.ts' --checks-set mul='bun test ./test/mul.test.ts' --checks-set shout='bun test ./test/shout.test.ts' --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).runId)')
 GOAL="Three functions are broken, each with its own failing test: src/add.ts (test/add.test.ts), src/mul.ts (test/mul.test.ts), src/shout.ts (test/shout.test.ts).
 You are the planner. Do NOT edit files yourself. Use the capcomd command (see the orchestration skill in your instructions):
 1. Spawn exactly three leaf children in parallel, one per file, each with --children.maxChildren=0 and a budget of turns=20:
    add and mul with --profile claude-worker, shout with --profile codex-worker. Give each a self-contained task naming its file and test, and tell it to change only that file.
-2. capcomd await all three. For each child: capcomd verify --ref <agt> --check <file> (add, mul or shout: the operator's check that runs only that file's test); if it passes, capcomd merge --ref <agt> --require <vfyId>.
+   Pin each child's check with --check <file> (add, mul or shout: the operator's check that runs only that file's test).
+2. capcomd await all three. For each child: capcomd verify --ref <agt> (it runs the pinned check); if it passes, capcomd merge --ref <agt> --require <vfyId>.
    If a child failed or its verify failed, spawn one replacement with the failure in the task, then verify and merge it.
 3. Finish with: capcomd result --summary \"<per file: child id, profile, verified?, merged?>\""
 echo "== 3. planner (run $RUN)"
