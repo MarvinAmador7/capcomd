@@ -47,6 +47,30 @@ export function asRelay(e: unknown): never {
 export const CHECKS_KV = "_checks";
 /** The run's reviewer profile (`run new --reviewer P`): every verify of the run is also reviewed by it. */
 export const REVIEWER_KV = "_reviewer";
+/** The run's merge target (`run new --target T`): the default for every verify and merge in the run. */
+export const TARGET_KV = "_target";
+
+/** The run's target branch, if the operator set one. */
+export async function runTarget(runId: string): Promise<string | undefined> {
+  const v: any = (await client().scope.getOrCreate([runId]).kvGet({ k: TARGET_KV }).catch(() => null))?.value;
+  return typeof v?.branch === "string" ? v.branch : undefined;
+}
+
+const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,200}(?<![./])$/;
+/** Create `branch` on the remote from `from` if it doesn't exist yet (a per-run staging branch). */
+async function ensureBranch(runId: string, branch: string, from: string): Promise<{ created: boolean }> {
+  const { loadMergeConfig } = await import("../merge/config");
+  const cfg = loadMergeConfig();
+  if (!cfg) throw new RelayError("config", "--target-from needs a repository (CAPCOMD_REPO)", "Set CAPCOMD_REPO, or create the branch yourself and pass only --target.");
+  const { openClone } = await import("../merge/repo");
+  const git = await openClone(cfg, `${runId}-setup`);
+  if (await git.revParse(`refs/remotes/origin/${branch}`)) return { created: false };
+  const base = await git.revParse(`refs/remotes/origin/${from}`);
+  if (!base) throw new RelayError("not_found", `--target-from ${from}: branch not found on ${cfg.remote}`, "Name an existing branch to cut the target from.");
+  const push = await git.run(["push", "--porcelain", "origin", `${base}:refs/heads/${branch}`]);
+  if (push.code !== 0 && !(await git.ok(["ls-remote", "--heads", "origin", branch]).catch(() => ""))) throw new RelayError("conflict", `could not create ${branch}: ${(push.stdout + push.stderr).trim().slice(-300)}`, "Check push access to the repository.");
+  return { created: true };
+}
 const CHECK_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
 /** `name=command` pairs → { name: command }. Names: letters, digits, . _ - (max 64). */
@@ -74,18 +98,24 @@ export async function namedCheck(runId: string, name: string): Promise<string> {
   return cmd;
 }
 
-export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string }
+export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string }
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
   const runId = o.runId ?? stableId("run", "run", o.key);
   const c = client();
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
-  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}) });
+  if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
+  if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from main.");
+  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, paramsHash: ph }).catch(asRelay);
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
   if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
+  if (o.target) {
+    if (o.targetFrom) await ensureBranch(runId, o.target, o.targetFrom);
+    await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
+  }
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
   return { runId, created: res.created, budget: res.budget };
@@ -98,11 +128,15 @@ export interface SpawnOpts {
   check?: string;
   /** verify's reviewer (host-side only; RPC spawns never set it): exempt from fan-out limits, see reviewSpawn. */
   review?: boolean;
+  /** Report mode: read-only work; the agent's final message is its result and nothing is pushed (contract.report). */
+  report?: boolean;
   /** ADR-017: children limits the parent grants this child (narrow-only; contract.children also accepted). */
   grant?: Grant;
 }
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
+  if (o.report) o = { ...o, contract: { ...(o.contract ?? {}), report: true } };
+  if (o.contract?.report !== undefined && o.contract.report !== true) throw new RelayError("usage", "contract.report must be true", "Spawn a read-only reporting agent with --report.");
   const pin = o.check ?? o.contract?.check;
   if (pin !== undefined) {
     if (typeof pin !== "string") throw new RelayError("usage", "contract.check must be a check name", "Pin a check with --check NAME (one of the run's --checks-set names).");
@@ -368,7 +402,10 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     }
     const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
     const review = reviewOf(a);
-    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}) });
+    const report = (a.contract as any)?.report === true;
+    // Children branch from the run's target (a staging branch) when the operator set one.
+    const target = await runTarget(runId);
+    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(target ? { target } : {}) });
     const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);
@@ -381,7 +418,10 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     if (await cancelled()) return (await s.getAgent({ agentId }))!;
     const declared = await resultOf(runId, agentId);
     const verdictOf = review ? { verdict: parseVerdict(declared.data, rec.resultText) } : {};
-    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, ...verdictOf, verification: null, branch: review || (!pushed.sha && vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
+    // Report mode: the agent's final message is its result (a scripted one declares its summary itself).
+    const reportText = report && typeof rec.resultText === "string" ? rec.resultText.slice(0, 8000) : null;
+    const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
+    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, ...verdictOf, ...reportOf, verification: null, branch: review || report || (!pushed.sha && vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }
@@ -559,7 +599,7 @@ async function verifyOnce(o: VerifyOpts) {
   const s = c.scope.getOrCreate([o.runId]);
   const { loadMergeConfig } = await import("../merge/config");
   const cfg = loadMergeConfig();
-  const target = o.target ?? cfg?.target ?? "main";
+  const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
   const { branch, agentId, label, pinnedCheck } = await resolveRef(o.runId, o.ref);
   if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
   // A child pinned to a check at spawn is verified with it unless the caller names another.
@@ -593,7 +633,11 @@ async function verifyOnce(o: VerifyOpts) {
   return fin;
 }
 
-export interface MergeOpts { runId: string; ref: string; require?: string; target?: string; operator?: boolean; key?: string }
+export interface MergeOpts {
+  runId: string; ref: string; require?: string; target?: string; operator?: boolean; key?: string;
+  /** In-VM merges: a protected target parks the merge for `capcomd approve <runId> <mrgId>` instead of refusing. */
+  requestApproval?: boolean;
+}
 
 /** Land a ref. Requires a passing vfy for that exact commit and target, unless --operator. */
 export async function mergeRef(o: MergeOpts) {
@@ -603,9 +647,9 @@ export async function mergeRef(o: MergeOpts) {
   const { loadMergeConfig } = await import("../merge/config");
   const { isProtectedBranch } = await import("../utils/protected");
   const cfg = loadMergeConfig();
-  const target = o.target ?? cfg?.target ?? "main";
-  const { branch, agentId, label } = await resolveRef(o.runId, o.ref);
-  let expectSha: string | undefined, checks: string | undefined;
+  const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
+  const { branch, agentId } = await resolveRef(o.runId, o.ref);
+  let expectSha: string | undefined;
   if (!o.require && !o.operator) throw new RelayError("usage", "merge needs --require <vfyId> (a passing `capcomd verify` of this ref)", "Run `capcomd verify <runId> --ref <ref>` first, or pass --operator to merge unverified.");
   if (o.require) {
     const v = await s.getOp({ opId: o.require });
@@ -613,24 +657,59 @@ export async function mergeRef(o: MergeOpts) {
     if (v.state !== "passed") throw new RelayError("conflict", `verification ${o.require} is ${v.state}`, "Only a passing verification can gate a merge.");
     if (v.data.branch !== branch || v.data.target !== target) throw new RelayError("conflict", `verification ${o.require} covers ${v.data.branch} → ${v.data.target}, not ${branch} → ${target}`, "Verify this ref against this target.");
     expectSha = (v.result?.commit as string | null) ?? undefined;
-    // Re-run the checks that verification passed with (the target may have moved), not the repo default.
-    if (typeof v.data.checks === "string" && v.data.checks) checks = v.data.checks;
   }
   // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
-  if (cfg && isProtectedBranch(target) && !o.operator) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
+  const needsApproval = !!cfg && isProtectedBranch(target) && !o.operator;
+  if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
   const mrgId = stableId("mrg", `${o.runId}\0${o.ref}\0${target}`, o.key);
-  const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null };
+  const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
   const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
-  const res: any = await c.verifier.getOrCreate([o.runId, mrgId]).verify({
-    verifierId: mrgId, taskId: label, branch, runId: o.runId, target, testOnly: false, ...(expectSha ? { expectSha } : {}), ...(checks ? { testCommand: checks } : {}),
+  if (needsApproval) return opView(await s.parkOp({ opId: mrgId, reason: `target ${target} is protected` }));
+  return executeMerge(o.runId, st.op);
+}
+
+/** Run a recorded merge op: land its ref (only the verified commit, re-running the checks verify passed with). */
+async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp) {
+  const c = client();
+  const s = c.scope.getOrCreate([runId]);
+  const d = op.data as { ref: string; branch: string; target: string; require: string | null; expectSha: string | null };
+  const { label } = await resolveRef(runId, d.ref);
+  // Re-run the checks that verification passed with (the target may have moved), not the repo default.
+  const v = d.require ? await s.getOp({ opId: d.require }) : null;
+  const checks = typeof v?.data.checks === "string" && v.data.checks ? (v.data.checks as string) : undefined;
+  const res: any = await c.verifier.getOrCreate([runId, op.id]).verify({
+    verifierId: op.id, taskId: label, branch: d.branch, runId, target: d.target, testOnly: false, ...(d.expectSha ? { expectSha: d.expectSha } : {}), ...(checks ? { testCommand: checks } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const merged = out.status === "merged";
   const result = merged
     ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}) }
     : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}) };
-  return opView(await s.finishOp({ opId: mrgId, state: merged ? "merged" : "failed", result }));
+  return opView(await s.finishOp({ opId: op.id, state: merged ? "merged" : "failed", result }));
+}
+
+/**
+ * The operator's decision on a merge an agent parked (protected target): approve runs it now, with the
+ * same gate (the verified commit only); deny fails it. Idempotent: a decided merge returns its record.
+ */
+export async function decideMerge(runId: string, mrgId: string, o: { approve: boolean; by?: string; reason?: string }) {
+  await assertEngine();
+  const s = client().scope.getOrCreate([runId]);
+  const op = await s.getOp({ opId: mrgId });
+  if (!op || op.kind !== "merge") throw new RelayError("not_found", `merge ${mrgId} not found in ${runId}`, `List pending merges with \`capcomd status ${runId} --json\` (pendingApprovals).`);
+  if (op.state !== "awaiting_approval" && op.state !== "running") return opView(op);
+  const { decided, op: now } = await s.decideOp({ opId: mrgId, approve: o.approve, by: o.by ?? "operator", ...(o.reason ? { reason: o.reason } : {}) });
+  // Approved (now, or by an earlier call that crashed before merging): run it.
+  if (o.approve && now.state === "running") return executeMerge(runId, now);
+  if (!decided && now.state === "running") throw new RelayError("conflict", `${mrgId} is already merging`, "Wait for it, then check its state.");
+  return opView(now);
+}
+
+/** Merges parked for approval in a run, oldest first. */
+export async function pendingMerges(runId: string) {
+  const ops = (await client().scope.getOrCreate([runId]).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as import("../actors/scope").ScopeOp[];
+  return ops.map((op) => ({ taskId: op.id, kind: "merge" as const, targetBranch: (op.data.target as string) ?? null, since: new Date(op.updatedAt).toISOString(), ref: op.data.ref as string }));
 }
 
 function opView(op: import("../actors/scope").ScopeOp) {

@@ -113,7 +113,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       const a = await O.spawnAgent({
         runId: run, parent: c.sub, task: String(args.task ?? ""), profile: args.profile, key: args.key ? `${c.sub}:${args.key}` : undefined,
         budget: args.budget !== undefined ? parseBudget(args.budget) : undefined, contract, grant: args.children, operator: false,
-        overrides: args.set ? { set: args.set } : undefined, ...(args.check !== undefined ? { check: String(args.check) } : {}),
+        overrides: args.set ? { set: args.set } : undefined, ...(args.check !== undefined ? { check: String(args.check) } : {}), ...(args.report === true || args.report === "true" ? { report: true } : {}),
       });
       return { agentId: a.agentId, status: a.status, depth: a.depth, budget: a.budget, limits: a.limits, created: a.created };
     }
@@ -244,7 +244,8 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       if (!ref.startsWith("agt-")) deny("in-VM merge takes a child agent id, not a branch");
       await assertWritable(c, ref, true);
       if (!args.require) throw new RelayError("usage", "merge needs --require <vfyId>", "Verify the child first: capcomd verify --ref <agt>.");
-      return O.mergeRef({ runId: run, ref, require: String(args.require), operator: false, key: args.key ? `${c.sub}:${args.key}` : undefined });
+      // A protected target parks the merge (awaiting_approval) for the operator; merge again with the same key to check.
+      return O.mergeRef({ runId: run, ref, require: String(args.require), operator: false, requestApproval: true, key: args.key ? `${c.sub}:${args.key}` : undefined });
     }
   }
   throw new RelayError("usage", `unknown op ${op}`, "See `capcomd help` inside the VM.");

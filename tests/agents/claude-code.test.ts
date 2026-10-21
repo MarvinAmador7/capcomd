@@ -81,6 +81,17 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(getFinishedSpans().some((x) => x.name === "agent.claude_code" && x.attributes["agent.review"] === true)).toBe(true);
   });
 
+  test("report mode: read-only prompt, final message returned, nothing committed or pushed", async () => {
+    const s = await setup("Find where sum is defined and report");
+    const res = await runClaudeCode(s.provider, s.id, { ...s.task, report: true }, s.cfg, { apiKey: KEY });
+    expect(res).toMatchObject({ sha: "", already: false, stopReason: "success", resultText: "fixed sum" });
+    expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBeNull(); // the fake edited a file; no branch was pushed
+    const prompt = readFileSync(join(s.W, "prompt.txt"), "utf8");
+    expect(prompt).toContain("read-only git checkout of the repository at main");
+    expect(prompt).toContain("Your final message is your report");
+    expect(getFinishedSpans().some((x) => x.name === "agent.claude_code" && x.attributes["agent.report"] === true)).toBe(true);
+  });
+
   test("redaction: a leaking agent never puts the key into trace, events, commit or errors", async () => {
     const s = await setup("[leak] do it");
     const events: any[] = [];

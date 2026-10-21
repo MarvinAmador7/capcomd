@@ -51,8 +51,9 @@ for callers of the old `--judge-profile` contract. A review with no verdict has 
 ## Status: `capcomd status <runId> --json` → `{run}`
 
 `runId, state` (run lifecycle), `goal`, `startedAt`/`startedAtMs` (first run event), `budget{spent,maxCost}`,
-`tasks[]`, `pendingApprovals[] {taskId, kind:"merge", targetBranch, since}`,
-`awaitingApproval[]` (**alias**: task ids only), `scope` (`null` unless the run has scope agents:
+`tasks[]`, `pendingApprovals[] {taskId, kind:"merge", targetBranch, since, ref?}` (recipe tasks, and agents'
+parked merges, whose `taskId` is the `mrg-…` id to pass to `approve`; events MERGE_AWAITING_APPROVAL, MERGE_APPROVED, MERGE_DENIED),
+`awaitingApproval[]` (**alias**: task ids only; recipe tasks), `scope` (`null` unless the run has scope agents:
 `{state: running|done|failed, agents, byStatus}`), `events` (count).
 
 ## Inspect: `capcomd inspect <runId> [--json] [--follow [--since-seq N] [--until TYPE] [--timeout-ms N]]`

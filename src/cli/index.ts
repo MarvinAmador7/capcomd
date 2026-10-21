@@ -39,14 +39,15 @@ Usage:
   capcomd events <runId> [--cursor N] [--limit N]
                                        List lifecycle events (alias: replay)
   capcomd trace <runId>                  Show the span waterfall
-  capcomd approve <runId> <taskId>       Approve a merge parked in awaiting_approval
+  capcomd approve <runId> <taskId|mrgId> [--deny] [--reason R]
+                                       Approve (or deny) a merge parked in awaiting_approval
   capcomd env build [--force]            Bake agent CLIs + repo deps into a boxd snapshot (no secrets)
   capcomd env status | env rm [name|all] List / delete env snapshots
   capcomd agents list|show|add|set|rm|schema|validate
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH; recipe = planner→worker→judge composed from primitives)
-  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE]  → runId (a scope; plans nothing)
-  capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--no-start] [--operator]
+  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
+  capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N]  ·  capcomd wait-any <runId> <agt…>
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--review-profile P] [--target T] [--key K]  → vfy-…
@@ -140,6 +141,9 @@ async function main(argv: string[]): Promise<number> {
         reason: { type: "string" },
         label: { type: "string" },
         "no-start": { type: "boolean" },
+        report: { type: "boolean" },
+        deny: { type: "boolean" },
+        "target-from": { type: "string" },
         ref: { type: "string" },
         checks: { type: "string" },
         check: { type: "string" },
@@ -234,7 +238,7 @@ async function main(argv: string[]): Promise<number> {
           try { if (values.budget !== undefined) budget = parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message} (e.g. 5 or usd=5,turns=200,wallSeconds=3600)`); }
           const P = await import("../primitives/ops");
           const checks = P.parseCheckSet((values["checks-set"] as string[] | undefined) ?? []);
-          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(values.reviewer ? { reviewer: values.reviewer as string } : {}) });
+          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(values.reviewer ? { reviewer: values.reviewer as string } : {}), ...(values.target ? { target: values.target as string } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) });
           if (json) out(r); else console.log(r.runId);
           return EXIT.ok;
         }
@@ -335,7 +339,7 @@ async function main(argv: string[]): Promise<number> {
         const r = await P.spawnAgent({
           runId, task, ...(profile ? { profile } : {}), ...(Object.keys(set).length || values.operator ? { overrides: { set, operator: !!values.operator } } : {}),
           parent: values.parent as string | undefined, key: values.key as string | undefined, contract, budget,
-          operator: !!values.operator, start: !values["no-start"], ...(values.check !== undefined ? { check: values.check as string } : {}),
+          operator: !!values.operator, start: !values["no-start"], ...(values.check !== undefined ? { check: values.check as string } : {}), ...(values.report ? { report: true } : {}),
           grant: Object.fromEntries(Object.entries(values).filter(([k, v]) => k.startsWith("children.") && v !== undefined).map(([k, v]) => [k.slice(9), v])),
         });
         if (json) out(r); else console.log(r.agentId);
@@ -618,8 +622,16 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case "approve": {
-        const runId = positionals[1] ?? usage("usage: capcomd approve <runId> <taskId>");
-        const taskId = positionals[2] ?? usage("usage: capcomd approve <runId> <taskId>");
+        const runId = positionals[1] ?? usage("usage: capcomd approve <runId> <taskId|mrgId> [--deny] [--reason R]");
+        const taskId = positionals[2] ?? usage("usage: capcomd approve <runId> <taskId|mrgId> [--deny] [--reason R]");
+        // An agent's merge into a protected target (mrg-…): approve runs it, --deny fails it.
+        if (taskId.startsWith("mrg-")) {
+          const P = await import("../primitives/ops");
+          const m: any = await P.decideMerge(runId, taskId, { approve: !values.deny, by: (values.by as string | undefined) ?? "cli", ...(values.reason ? { reason: String(values.reason) } : {}) });
+          if (json) out(m); else console.log(`${taskId}: ${m.state}${m.result?.sha ? ` (${String(m.result.sha).slice(0, 12)})` : ""}${m.result?.reason ? ` ${m.result.reason}` : ""}`);
+          return m.state === "merged" || (values.deny && m.state === "failed") ? EXIT.ok : EXIT.run_failed;
+        }
+        if (values.deny) usage("--deny applies to an agent's parked merge (mrg-…)");
         // Both run paths park protected merges on the task-board ledger (public contract).
         const r = await approveTask(runId, taskId, (values.by as string | undefined) ?? "cli");
         if (json) out(r);

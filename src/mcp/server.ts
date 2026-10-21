@@ -201,11 +201,15 @@ export function buildServer(): McpServer {
   server.registerTool(
     "capcomd_approve",
     {
-      description: "Approve a verified task whose merge into a protected branch is parked in awaiting_approval.",
-      inputSchema: { runId: z.string().min(1), taskId: z.string().min(1), approvedBy: z.string().optional() },
+      description: "Approve a verified task whose merge into a protected branch is parked in awaiting_approval. For an agent's parked merge (mrg-…), deny: true rejects it instead.",
+      inputSchema: { runId: z.string().min(1), taskId: z.string().min(1), approvedBy: z.string().optional(), deny: z.boolean().optional(), reason: z.string().optional() },
     },
-    async ({ runId, taskId, approvedBy }) => {
+    async ({ runId, taskId, approvedBy, deny, reason }) => {
       try {
+        if (taskId.startsWith("mrg-")) {
+          const { decideMerge } = await import("../primitives/ops");
+          return ok(await decideMerge(runId, taskId, { approve: !deny, by: approvedBy ?? "mcp", ...(reason ? { reason } : {}) }));
+        }
         return ok(await approveTask(runId, taskId, approvedBy ?? "mcp"));
       } catch (error) {
         return fail(error);

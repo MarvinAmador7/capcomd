@@ -425,7 +425,7 @@ export interface RunStatus {
   /** Legacy alias of pendingApprovals[].taskId. */
   awaitingApproval: string[];
   /** TUI contract: merges parked for a human (`capcomd approve <runId> <taskId>`). */
-  pendingApprovals: Array<{ taskId: string; kind: "merge"; targetBranch: string | null; since: string | null }>;
+  pendingApprovals: Array<{ taskId: string; kind: "merge"; targetBranch: string | null; since: string | null; ref?: string }>;
   /** ISO-8601 UTC of the run's first event (null if none yet); startedAtMs is the same in ms. */
   startedAt: string | null;
   startedAtMs: number | null;
@@ -466,6 +466,9 @@ export async function getStatus(runId: string): Promise<RunStatus> {
     const at = evs.filter((e) => /approval/i.test(String(e.event?.type ?? ""))).map((e) => Number(e.at)).pop();
     pending.push({ taskId: t.taskId, kind: "merge", targetBranch: t.targetBranch, since: at ? new Date(at).toISOString() : null });
   }
+  // Agents' merges into protected targets (mrg-…), parked for `capcomd approve`.
+  const { pendingMerges } = await import("../primitives/ops");
+  pending.push(...(await pendingMerges(runId).catch(() => [])));
   let scope: RunStatus["scope"] = null;
   const agents: any[] | null = await c.scope.getOrCreate([runId]).listAgents({}).catch(() => null);
   if (agents && agents.length) {

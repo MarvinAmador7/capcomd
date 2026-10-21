@@ -86,3 +86,24 @@ capcomd result --summary done >/dev/null`);
   expect(opReviewer.parent).toBeNull();
   expect(ov.j.result.judge).toMatchObject({ profile: "reviewer", passed: false }); // old --judge-profile contract
 }, 180_000);
+
+test("report mode: a read-only child returns its answer as its result; nothing is pushed", async () => {
+  const r = await w.cj(["run", "new", "--budget", "usd=10,turns=400,wallSeconds=3600", "--key", `rp-${Date.now()}`]);
+  const run = r.j.runId as string;
+  const reporter = w.script("reporter", `capcomd result --summary "sum is defined in src/sum.ts:1" >/dev/null`);
+  const p = w.script("rp-planner", `
+id=$(capcomd spawn --profile worker --task "where is sum defined?" --key q --report --children.maxChildren=0 --contract "$($S/json script=${JSON.stringify(reporter)})" | $S/jget agentId)
+capcomd await $id > $HOME/aw.json || exit 1
+capcomd result --summary "got: $($S/jget agents.0.result.summary.text < $HOME/aw.json)" >/dev/null`);
+  const root = await spawnRoot(w, run, "planner", p);
+  const done = (await waitAll(w, run, [root])).agents[0];
+  if (done.status !== "done") console.log((await w.cj(["logs", run, root])).j.lines.map((l: any) => l.line).join("\n"));
+  expect(done.status).toBe("done");
+  const child = (await agentsOf(run)).find((x: any) => x.parent === root);
+  expect(child.contract.report).toBe(true);
+  expect(child.result).toMatchObject({ summary: "sum is defined in src/sum.ts:1", branch: null, commit: null });
+  expect(done.result.summary).toContain("sum is defined in src/sum.ts:1"); // the parent read it (fenced)
+  const refs = Bun.spawnSync(["git", "-C", w.repo.bare, "for-each-ref", "--format=%(refname)", `refs/heads/capcomd/${run}`]).stdout.toString();
+  expect(refs).not.toContain(child.agentId); // the reporter pushed nothing (the scripted root's stand-in commit is not this)
+}, 120_000);
+

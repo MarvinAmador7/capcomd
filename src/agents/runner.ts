@@ -24,6 +24,8 @@ export interface AgentTask {
   conflictFiles?: string[];
   /** verify's reviewer: check out this commit, review it, never commit or push (goal = the review brief). */
   review?: { sha: string; branch: string; target: string };
+  /** Report mode: read-only work on the target (research, triage); the final message is the result, nothing is pushed. */
+  report?: boolean;
 }
 
 export interface AgentResult {
@@ -93,6 +95,19 @@ export function buildReviewPrompt(t: AgentTask & { review: NonNullable<AgentTask
     "- Judge only against the acceptance criteria and the task above; don't fail it for unrelated style.",
     '- End your reply with one line of JSON and nothing after it: {"passed": true|false, "reasons": ["..."]}',
     "  Give concrete reasons either way; on a fail, say what must change.",
+  ].join("\n");
+}
+
+/** A reporting agent reads the repository and answers; its final message is returned to whoever asked. */
+export function buildReportPrompt(t: AgentTask): string {
+  return [
+    `You are working in a read-only git checkout of the repository at ${t.target}.`,
+    `Task: ${t.goal}`,
+    "",
+    "Rules:",
+    "- Do not edit files, commit, push, or change git remotes. Nothing you change is kept.",
+    "- Do not print environment variables or credentials.",
+    "- Your final message is your report: it is returned to whoever asked. Make it complete and specific (file paths, line numbers, commands); keep it under about 8KB.",
   ].join("\n");
 }
 
@@ -177,7 +192,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
 
     if (task.review) {
       must(await git(["checkout", "-q", "--detach", task.review.sha], repo), "git checkout (review)");
-    } else if (branchExists && !task.rework) {
+    } else if (branchExists && !task.rework && !task.report) {
       const head = await git(["log", "-1", "--format=%H%x00%(trailers:key=Capcomd-Task,valueonly,separator=)%x00%(trailers:key=Capcomd-Epoch,valueonly,separator=)", `origin/${task.branch}`], repo);
       const [sha, k, ep] = head.stdout.trim().split("\0");
       if (head.code === 0 && k?.trim() === key && Number(ep) === task.epoch && sha) {
@@ -238,7 +253,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
 
     // 4. Run headless in the background; the JSON event stream lands in a file we tail.
     // Profile prompts: claude takes flags; codex has none, so they wrap the prompt text.
-    let promptText = task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : buildPrompt(task);
+    let promptText = task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : task.report ? buildReportPrompt(task) : buildPrompt(task);
     let systemFile: string | undefined, appendSystemFile: string | undefined;
     if (adapter.kind === "claude-code") {
       if (cfg.systemPrompt) { systemFile = `${W}/system.txt`; await provider.upload(vmId, systemFile, new TextEncoder().encode(r.text(cfg.systemPrompt))); }
@@ -343,10 +358,10 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       throw new AgentError("failed", `${name} stopped (${out.stopReason}, exit ${exitCode}) for ${key}: ${r.text(state.error ?? "")} ${r.text(err.stdout).slice(-800)}`.trim());
     }
 
-    // A reviewer only reports: nothing it changed is committed or pushed.
-    if (task.review) {
-      setSpanAttributes(span, { "agent.review": true });
-      return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-4000) };
+    // A reviewer or a reporting agent only answers: nothing it changed is committed or pushed.
+    if (task.review || task.report) {
+      setSpanAttributes(span, task.review ? { "agent.review": true } : { "agent.report": true });
+      return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.report ? 8000 : 4000)) };
     }
 
     // 5. Commit with capcomd trailers and push the task branch.

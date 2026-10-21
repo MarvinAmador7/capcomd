@@ -356,6 +356,8 @@ export const workerActor = actor({
         agent?: string;
         /** verify's reviewer: review this commit; nothing is committed or pushed. */
         review?: { sha: string; branch: string; target: string };
+        /** Report mode: read-only work; the final message is the result, nothing is pushed. */
+        report?: boolean;
       }
     ) {
       const { workerId, taskId, epoch, branch } = params;
@@ -457,7 +459,7 @@ export const workerActor = actor({
         const runId = params.runId;
         const res = await runAgent(adapter, provider, vmId, {
           runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
-          goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.review ? { review: params.review } : {}),
+          goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
           ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
         }, loadAgentConfig(process.env, params.agent), {
           apiKey,
@@ -477,8 +479,8 @@ export const workerActor = actor({
         billing = res.billing;
         notionalCostUsd = res.notionalCostUsd ?? 0;
         resultText = res.resultText;
-      } else if (params.review) {
-        // Fake sandbox reviewer: nothing to run or push (a scripted reviewer declares its verdict itself).
+      } else if (params.review || params.report) {
+        // Fake sandbox reviewer/reporter: nothing to run or push (a scripted one declares its result itself).
       } else {
         if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
         if (process.env.CAPCOMD_FAKE_PUSH_FAIL) throw new Error(process.env.CAPCOMD_FAKE_PUSH_FAIL); // test knob: a push that always fails
@@ -487,7 +489,7 @@ export const workerActor = actor({
 
       // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
       // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
-      if (!sha && !params.review && cfg && getDependencies().fakeWork && params.runId) {
+      if (!sha && !params.review && !params.report && cfg && getDependencies().fakeWork && params.runId) {
         sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework, ...(params.fakePath ? { path: params.fakePath, content: params.fakeContent ?? "" } : {}) });
       }
 

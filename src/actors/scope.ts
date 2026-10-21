@@ -498,6 +498,47 @@ export const scopeActor = actor({
       return r.length ? opRow(r[0]) : null;
     },
 
+    /** Merges into a protected target wait for the operator: running → awaiting_approval (idempotent). */
+    async parkOp(c, params: { opId: string; reason: string }) {
+      await c.db.transaction(async (tx: RawAccess) => {
+        const r = await tx.execute("SELECT * FROM ops WHERE op_id = ?", params.opId);
+        if (!r.length) fail("not_found", `${params.opId} not found`);
+        const op = opRow(r[0]);
+        if (op.state !== "running") return;
+        await tx.execute("UPDATE ops SET state = 'awaiting_approval', updated_at = ? WHERE op_id = ? AND state = 'running'", Date.now(), params.opId);
+        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, reason: params.reason }, `park-${params.opId}`);
+      }, { name: "scopeParkOp" });
+      return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
+    },
+
+    /** The operator's decision on a parked merge: approve → running again (the merge then runs), deny → failed. */
+    async decideOp(c, params: { opId: string; approve: boolean; by: string; reason?: string }) {
+      let decided = false;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const r = await tx.execute("SELECT * FROM ops WHERE op_id = ?", params.opId);
+        if (!r.length) fail("not_found", `${params.opId} not found`);
+        const op = opRow(r[0]);
+        if (op.state !== "awaiting_approval") return;
+        const now = Date.now();
+        if (params.approve) {
+          await tx.execute("UPDATE ops SET state = 'running', updated_at = ? WHERE op_id = ? AND state = 'awaiting_approval'", now, params.opId);
+          await addEvent(tx, "MERGE_APPROVED", (op.data.agentId as string) ?? null, { id: params.opId, by: params.by }, `approve-${params.opId}`);
+        } else {
+          const result = { merged: false, status: "denied", by: params.by, ...(params.reason ? { reason: params.reason } : {}) };
+          await tx.execute("UPDATE ops SET state = 'failed', result = ?, updated_at = ? WHERE op_id = ? AND state = 'awaiting_approval'", JSON.stringify(result), now, params.opId);
+          await addEvent(tx, "MERGE_DENIED", (op.data.agentId as string) ?? null, { id: params.opId, ...result }, `deny-${params.opId}`);
+        }
+        decided = true;
+      }, { name: "scopeDecideOp" });
+      return { decided, op: opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]) };
+    },
+
+    /** Ops in a state (e.g. merges awaiting approval), oldest first. */
+    async listOps(c, params: { state?: string; kind?: string } = {}) {
+      const rows = await c.db.execute("SELECT * FROM ops ORDER BY created_at");
+      return rows.map(opRow).filter((o: ScopeOp) => (!params.state || o.state === params.state) && (!params.kind || o.kind === params.kind));
+    },
+
     // ---- ADR-016 step 3: task board with leases ----
     async taskAdd(c, params: { taskId: string; title: string; data?: unknown; after?: string[]; key?: string; paramsHash: string }) {
       const get = async (db: any) => { const r = await db.execute("SELECT * FROM board_tasks WHERE task_id = ?", params.taskId); return r.length ? rowToTask(r[0]) : null; };

@@ -60,7 +60,11 @@ Authority comes only from the token and the scope's limits, never from request t
   to an easier check after a failure), and named checks reach a child only through a pin. The
   operator may still verify with any check. The vfy record keeps the check name and exact command.
 - `merge --require vfy` re-runs the checks that verification passed with, not the repo default.
-- `merge` needs a passing `verify` of that exact commit; protected targets still need an operator.
+- `merge` needs a passing `verify` of that exact commit. A merge into a protected target is parked
+  (`awaiting_approval`) for the operator (`capcomd approve <runId> <mrgId>`, or `--deny`), not refused.
+  A run's target can be a staging branch (`run new --target T`); agents can't choose another.
+- `spawn --report`: a read-only leaf whose final message is its result (nothing pushed), so research and
+  triage work doesn't need the in-VM CLI or a diff.
 - kv prefixes `_`, `approval/`, `recipe/`, `handoff/` are read-only from VMs.
 
 ### 3. Fan-out is set by the parent, at spawn time (narrow-only)
