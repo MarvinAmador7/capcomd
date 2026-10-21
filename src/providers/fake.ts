@@ -5,13 +5,13 @@ import type {
   ExecResult,
   VmInfo,
 } from "./sandbox";
-import { chmodSync, mkdtempSync, symlinkSync, writeFileSync } from "fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 
 /**
  * hostExec runs VM scripts on this host. They target Ubuntu VMs and use GNU `timeout` and `setsid`,
- * which macOS lacks: on non-Linux hosts, put minimal perl stand-ins (and the host's node) first on PATH.
+ * which macOS lacks: on non-Linux hosts, put minimal perl stand-ins (and the host's node directory) first on PATH.
  */
 let shimDir: string | null = null;
 function hostShimDir(): string | null {
@@ -31,14 +31,17 @@ exec perl -e '
   alarm $s; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$k" "$s" "$@"
 `);
   for (const f of ["setsid", "timeout"]) chmodSync(join(d, f), 0o755);
-  // VM scripts call node; the host's may live outside the minimal PATH (Homebrew, nvm).
-  const node = Bun.which("node");
-  if (node) symlinkSync(node, join(d, "node"));
   return (shimDir = d);
 }
 function withHostShims(env: Record<string, string>): Record<string, string> {
   const d = hostShimDir();
-  return d ? { ...env, PATH: `${d}:${env.PATH ?? process.env.PATH ?? "/usr/bin:/bin"}` } : env;
+  if (!d) return env;
+  // VM scripts call node (and npm next to it); the host's may live outside the minimal PATH (Homebrew, nvm):
+  // add its real directory, never a link to it (scripts derive npm from `dirname $(command -v node)`).
+  const node = Bun.which("node");
+  const nodeDir = node ? dirname(node) : null;
+  // Last, as a fallback only: a script's own node (e.g. a VM image's) must win.
+  return { ...env, PATH: [d, env.PATH ?? process.env.PATH ?? "/usr/bin:/bin", nodeDir].filter(Boolean).join(":") };
 }
 
 interface FakeVm {
