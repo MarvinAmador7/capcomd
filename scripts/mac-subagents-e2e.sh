@@ -83,7 +83,7 @@ GOAL="Three functions are broken, each with its own failing test: src/add.ts (te
 You are the planner. Do NOT edit files yourself. Use the capcomd command (see the orchestration skill in your instructions):
 1. Spawn exactly three leaf children in parallel, one per file, each with --children.maxChildren=0 and a budget of turns=20:
    add and mul with --profile claude-worker, shout with --profile codex-worker. Give each a self-contained task naming its file and test, and tell it to change only that file.
-2. capcomd await all three. For each child: capcomd verify --ref <agt>; if it passes, capcomd merge --ref <agt> --require <vfyId>.
+2. capcomd await all three. For each child: capcomd verify --ref <agt> --checks \"bun test test/<file>.test.ts\" (only that child's own test: the other files are still broken until their branches merge); if it passes, capcomd merge --ref <agt> --require <vfyId>.
    If a child failed or its verify failed, spawn one replacement with the failure in the task, then verify and merge it.
 3. Finish with: capcomd result --summary \"<per file: child id, profile, verified?, merged?>\""
 echo "== 3. planner (run $RUN)"
