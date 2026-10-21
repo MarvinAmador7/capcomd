@@ -56,7 +56,11 @@ export function fence(from: string, text: string): { untrusted: true; from: stri
 export interface TreeAgent {
   agentId: string; parent: string | null; status: string; spent: Budget; budget: Budget;
   heartbeatAt?: number; driverUntil?: number; createdAt?: number; result?: any; depth?: number; profile?: string | null;
+  key?: string | null; contract?: any;
 }
+
+/** A spawn key as its caller wrote it: in-VM keys are stored as "<caller>:<key>". */
+export const shortKey = (k?: string | null) => (k ? k.slice(k.lastIndexOf(":") + 1) : null);
 /** usd is billed spend; notionalUsd is the API-price estimate of subscription-billed work (never billed, never budgeted). */
 export interface Rollup { agents: number; byStatus: Record<string, number>; spent: Budget; turns: number; usd: number; notionalUsd: number; wallSeconds: number }
 
@@ -108,6 +112,8 @@ export function treeView(agents: TreeAgent[], root?: string, now = Date.now()) {
     return {
       agentId: a.agentId, profile: a.profile ?? null, depth: a.depth ?? 0, status: a.status, budget: a.budget, spent: a.spent,
       ...(notionalOf(a) ? { notionalUsd: notionalOf(a), billing: a.result?.billing ?? null } : {}),
+      // TUI: a label ("add"), and what a reviewer reviewed / a read-only reporter.
+      ...(shortKey(a.key) ? { key: shortKey(a.key) } : {}), ...(a.contract?.review?.of ? { reviewOf: String(a.contract.review.of) } : {}), ...(a.contract?.report ? { report: true } : {}),
       rollup: ru.get(a.agentId), ...(stuck ? { stuck } : {}), children: (kids.get(a.agentId) ?? []).map(node),
     };
   };

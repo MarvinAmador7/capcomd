@@ -20,7 +20,8 @@ function node(n: any, depth: number): AgentNode {
   return {
     agentId: String(n.agentId), profile: n.profile ?? null, status: String(n.status ?? "unknown"),
     depth: typeof n.depth === "number" ? n.depth : depth, spent: n.spent ?? {}, budget: n.budget ?? {},
-    ...(Number(n.notionalUsd) > 0 ? { notionalUsd: Number(n.notionalUsd) } : {}), rollup: n.rollup, stuck: n.stuck, parent: n.parent ?? null, taskId: n.taskId, spanId: n.spanId,
+    ...(Number(n.notionalUsd) > 0 ? { notionalUsd: Number(n.notionalUsd) } : {}), rollup: n.rollup,
+    ...(typeof n.key === "string" && n.key ? { key: n.key } : {}), ...(typeof n.reviewOf === "string" ? { reviewOf: n.reviewOf } : {}), ...(n.report ? { report: true } : {}), stuck: n.stuck, parent: n.parent ?? null, taskId: n.taskId, spanId: n.spanId,
     startedAt: ms(n.startedAt) ?? undefined, endedAt: n.endedAt === null ? null : ms(n.endedAt) ?? undefined,
     children: (n.children ?? []).map((c: any) => node(c, depth + 1)),
   };

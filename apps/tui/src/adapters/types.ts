@@ -58,6 +58,12 @@ export interface AgentNode {
   endedAt?: number | null;
   /** agent.error_kind from the agent's CLI span, when it failed. */
   errorKind?: string;
+  /** The spawn key as its caller wrote it (a short label, e.g. "add"). */
+  key?: string;
+  /** verify's reviewer: the agent (or branch) it reviewed. */
+  reviewOf?: string;
+  /** A read-only reporting agent (`spawn --report`). */
+  report?: boolean;
   children: AgentNode[];
 }
 

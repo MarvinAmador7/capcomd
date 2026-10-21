@@ -6,6 +6,7 @@ import { bar, clock, cost, dur, lpad, pad, usd } from "../format";
 import { c, statusColor, statusGlyph } from "../theme";
 import { Empty, Section, type ViewProps, compact } from "./common";
 import { eventColor } from "./Events";
+import { treeRows, type Pipeline, type TreeRow } from "./tree-rows";
 
 export function Live({ data, width, height, live }: ViewProps & { data: RunData; live?: boolean }) {
   const agents = flattenAgents(data.agents);
@@ -25,7 +26,7 @@ export function Live({ data, width, height, live }: ViewProps & { data: RunData;
       <Box gap={3}>
         <Box width={treeW} flexDirection="column">
           <Section title="Agents" hint={data.agentsFromTree ? "capcomd tree" : "inferred from trace"}>
-            {agents.length ? agents.map((a) => <AgentRow key={a.agentId} a={a} width={treeW} win={win} />) : <Empty>No agents yet.</Empty>}
+            {agents.length ? treeRows(data.agents, data.events).map((r, i) => <TreeRowView key={i} row={r} width={treeW} win={win} t0={win?.t0 ?? t0} />) : <Empty>No agents yet.</Empty>}
           </Section>
         </Box>
         <Box flexDirection="column" flexGrow={1}>
@@ -67,30 +68,57 @@ export function budgetUse(a: Pick<AgentNode, "spent" | "budget">): { frac: numbe
   return best;
 }
 
-function AgentRow({ a, width, win }: { a: AgentNode; width: number; win: { t0: number; t1: number } | null }) {
-  const indent = a.depth > 0 ? "  ".repeat(a.depth - 1) + "└ " : "";
-  const laneW = win ? 14 : 0;
-  const nameW = Math.max(16, width - 48 - (win ? laneW + 9 : 0));
+function TreeRowView({ row, width, win, t0 }: { row: TreeRow; width: number; win: { t0: number; t1: number } | null; t0: number }) {
+  if (row.kind !== "agent") {
+    const label = row.kind === "group" ? `parallel ×${row.count}` : row.text;
+    return (
+      <Text wrap="truncate">
+        <Text color={c.faint}>{row.prefix}</Text>
+        <Text color={row.kind === "group" ? c.accent : c.dim}>{label}</Text>
+        <Text color={c.faint}>{`   ${clock(row.window[0] - t0)} → ${clock(row.window[1] - t0)}`}</Text>
+      </Text>
+    );
+  }
+  return <AgentRow a={row.agent} prefix={row.prefix} label={row.label} pipeline={row.pipeline} verdict={row.verdict} width={width} win={win} />;
+}
+
+function AgentRow({ a, prefix, label, pipeline, verdict, width, win }: { a: AgentNode; prefix: string; label: string; pipeline: Pipeline | null; verdict: string | null; width: number; win: { t0: number; t1: number } | null }) {
+  const laneW = win ? (width >= 130 ? 14 : 10) : 0;
+  const nameW = Math.max(16, width - 60 - (win ? laneW + 9 : 0)); // leaves room for "checks✓ review✓ merged✓"
   const use = budgetUse(a);
   const frac = use?.frac ?? 0;
   const meterW = 8;
   const filled = frac > 0 ? Math.max(1, Math.round(frac * meterW)) : 0; // any use shows (3% would round to nothing)
+  const id = a.agentId.replace(/^agt-/, "").slice(0, 8);
+  const nameRoom = Math.max(4, nameW - prefix.length - 2);
+  const showId = label !== a.agentId.replace(/^agt-/, "").slice(0, 10) && label.length + 1 + id.length <= nameRoom;
   return (
     <Box flexDirection="column">
       <Text wrap="truncate">
+        <Text color={c.faint}>{prefix}</Text>
         <Text color={statusColor(a.status)}>{statusGlyph(a.status)} </Text>
-        <Text color={c.faint}>{indent}</Text>
-        <Text color={c.fg}>{pad(a.agentId, nameW - indent.length - 1)} </Text>
-        <Text color={c.dim}>{pad(a.profile ?? "", 10)}</Text>
+        <Text color={a.reviewOf ? c.dim : c.fg}>{showId ? label : pad(label, nameRoom)}</Text>
+        {showId ? <Text color={c.faint}>{" " + pad(id, nameRoom - label.length - 1)}</Text> : null}
+        <Text> </Text>
+        <Text color={c.dim}>{pad(a.profile ?? "", 13)}</Text>
         <Text color={a.spent.usd ? c.fg : c.dim}>{lpad(cost(a.spent.usd, a.notionalUsd), 7)}</Text>
         <Text color={c.dim}>{lpad(`${a.spent.turns ?? 0}t`, 5)}  </Text>
         {win && a.startedAt ? <AgentLane a={a} win={win} w={laneW} /> : win ? <Text>{" ".repeat(laneW + 9)}</Text> : null}
-        {use ? <Text><Text color={frac > 0.8 ? c.warn : c.accent}>{"▰".repeat(filled)}</Text><Text color={c.faint}>{"▱".repeat(meterW - filled)} {UNIT_MARK[use.unit]}</Text></Text> : null}
+        {pipeline ? <PipelineView p={pipeline} /> : verdict ? <Text color={verdict.startsWith("passed") ? c.ok : c.err}>{verdict}</Text>
+          : use ? <Text><Text color={frac > 0.8 ? c.warn : c.accent}>{"▰".repeat(filled)}</Text><Text color={c.faint}>{"▱".repeat(meterW - filled)} {UNIT_MARK[use.unit]}</Text></Text> : null}
       </Text>
       {a.stuck ? <Text color={c.warn}>{"    " + a.stuck}</Text> : null}
       {a.errorKind ? <Text color={c.err}>{"    ✗ " + a.errorKind}</Text> : null}
     </Box>
   );
+}
+
+/** checks → review → merge, each only once it happened. */
+function PipelineView({ p }: { p: Pipeline }) {
+  const step = (name: string, ok: boolean | null) => (ok === null ? null : <Text key={name}><Text color={c.dim}>{name}</Text><Text color={ok ? c.ok : c.err}>{ok ? "✓" : "✗"}</Text><Text> </Text></Text>);
+  const merge = p.merged === "merged" ? step("merged", true) : p.merged === "awaiting" ? <Text key="m" color={c.warn}>awaiting approval</Text>
+    : p.merged === "denied" ? <Text key="m" color={c.err}>denied</Text> : p.merged === "failed" ? step("merge", false) : null;
+  return <Text>{step("checks", p.checks)}{step("review", p.review)}{merge}</Text>;
 }
 
 /** Where in the run this agent was alive: start→end on a shared axis, so sub-agents read as nested. */

@@ -34,7 +34,9 @@ In-VM `capcomd events` (ADR-017) returns scope events with `seq`, `ts`, `epochMs
 `agentId, parent, profile, depth, status, budget, spent, rollup, stuck?, children[]`,
 plus `createdAt`, `startedAt` (first AGENT_STARTED), `endedAt` (terminal event, null while live),
 `taskId` (worker task label; the plan task id for recipe agents, else the agent id), and
-`spanId` (the agent's `agent.run` span id, deterministic: `agentSpanId(runId, agentId)`).
+`spanId` (the agent's `agent.run` span id, deterministic: `agentSpanId(runId, agentId)`), and when set:
+`key` (the spawn key as its caller wrote it, a short label), `reviewOf` (a reviewer: the agent it reviewed;
+its tree parent is the caller that paid for it), `report: true` (a read-only reporting agent).
 Cost: `spent.usd` is billed spend (0 under subscription billing). A subscription-billed agent whose CLI
 reported a cost also has `notionalUsd` (the API-price estimate) and `billing`; `rollup.notionalUsd` and
 `totals.notionalUsd` sum it over the subtree / run. It is never added to `usd` and never counts against a budget.
