@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **`capcomd setup`**: a guided setup, re-runnable and scriptable (`--yes`). An optional local demo with fake agents
+  (no accounts), then the boxd key (validated, kept in the OS keychain: macOS Keychain or Linux Secret Service),
+  the agent VM snapshot, Claude/Codex logins (plan or API key), `doctor`, your project (repository, target branch,
+  PR or direct merges, a default check from `package.json`, `worker`/`reviewer`/`planner` profiles), the Claude
+  Code skill, and the engine as a service. `capcomd setup check` reports what's configured and working.
+- **`capcomd service install|uninstall|status`**: the engine in the background (launchd agent on macOS, systemd
+  user unit on Linux), restarted on failure.
+- **Persisted settings**: `~/.capcomd/config.json` and a project's `.capcomd/config.json` are defaults for the
+  environment (a real env var wins); `run new` takes its checks, reviewer and target from the project when no
+  flags are given. `CAPCOMD_NO_CONFIG=1` ignores them.
+- **Runs carry their repository settings**: `run new` records the repository, merge mode, target, test command and
+  protected branches, and the engine uses the run's. An engine started without any of them (the service) works,
+  and one engine can serve runs on different repositories.
+- `kv list` leaves out reserved `_` keys (the run's settings), as it already did inside VMs; `--prefix _` lists
+  them and `kv get` reads them.
+- CI: the crash suite runs as four parallel jobs (one round per push, three nightly): ~8 minutes instead of ~45.
+
 ## 0.2.0 (2026-10-21), private preview
 
 First tagged release. Installs from git (`bun add -g git+ssh://git@github.com/MarvinAmador7/capcomd.git#v0.2.0`);

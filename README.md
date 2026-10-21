@@ -97,30 +97,40 @@ capcomd --version
 State lives in `~/.capcomd` (set `CAPCOMD_HOME` to move it); a project's own `.capcomd/agents.json` is used when
 you run capcomd from that project.
 
-**2. Connect your sandbox and agents**
+**2. Set up, guided** (run it inside the repository the agents should work on; on `main`, next release)
+
+```bash
+cd ~/code/app
+capcomd setup          # try it locally first (no accounts), then: boxd key, Claude/Codex logins, your repo, skill, engine
+capcomd setup check    # any time: what's configured and working
+```
+
+`capcomd setup` walks through each step and can be re-run safely. It validates your boxd key and keeps it in the OS
+keychain, builds the agent VM snapshot, logs your agents in with your plan (or API keys), detects your repository,
+target branch and test command, creates `worker`, `reviewer` and `planner` profiles, installs the orchestration skill
+for Claude Code, and can run the engine as a background service (launchd / systemd). Settings live in
+`~/.capcomd/config.json` and your project's `.capcomd/config.json`. `--yes` takes the defaults without prompting,
+so an agent can run it too; `capcomd setup project` (or `accounts`, `agent`, `service`, `demo`) runs one part.
+
+<details><summary>On 0.2.0, or by hand</summary>
 
 ```bash
 export BOXD_API_KEY=…  CAPCOMD_SANDBOX=boxd
 capcomd env build                 # bake the agent CLIs into a VM snapshot (once; no secrets)
 capcomd auth login claude         # log in with your plan inside a VM (or: codex)
 capcomd doctor --strict           # check every agent works
-```
-
-**3. Point capcomd at your repository and define your agents**
-
-```bash
 export CAPCOMD_REPO=https://github.com/you/app.git  CAPCOMD_MERGE_TARGET=main  CAPCOMD_MERGE_MODE=pr
 capcomd agents add worker --provider claude --auth subscription --max-turns 25
 capcomd agents add reviewer --provider claude --auth subscription --max-turns 15 \
   --allowed-tools 'Read,Glob,Grep,LS,Bash(git diff:*),Bash(bun test:*)'
+capcomd serve &                   # the engine (setup can install it as a service instead)
 ```
+</details>
 
-**4. Run agents**
+**3. Run agents**
 
 ```bash
-capcomd serve &                   # the local engine
-
-RUN=$(capcomd run new --budget usd=6,turns=200 --checks-set unit='bun test' --reviewer reviewer --json | jq -r .runId)
+RUN=$(capcomd run new --budget usd=6,turns=200 --json | jq -r .runId)   # checks + reviewer come from setup
 A=$(capcomd spawn $RUN --profile worker --task "Fix the off-by-one in src/pager.ts" --check unit --key pager --json | jq -r .agentId)
 capcomd await $RUN $A
 V=$(capcomd verify $RUN --ref $A --json | jq -r .id)     # checks in a VM, then the reviewer
@@ -130,11 +140,13 @@ capcomd merge $RUN --ref $A --require $V                 # only the verified com
 Watch it in the terminal debugger (from a checkout: `cd apps/tui && bun run start --run $RUN`), or see the tree
 with `capcomd tree $RUN`.
 
-**5. Let an agent orchestrate.** Give a profile the right to spawn, and it runs the same loop for you:
+**4. Let an agent orchestrate.** In Claude Code (with the skill setup installed), just ask:
+
+> Use capcomd to fix the failing tests in `src/`: one worker per file, each verified and reviewed, then merged.
+
+Or hand a goal to the `planner` profile, which spawns, verifies and merges its own workers:
 
 ```bash
-capcomd agents add planner --spec '{"provider":"claude","auth":"subscription","maxTurns":60,
-  "children":{"allowSpawn":true,"maxDepth":1,"maxChildren":3,"allowedChildProfiles":["worker"],"budgetShare":0.34}}'
 capcomd spawn $RUN --profile planner --task "Fix the three failing tests; one child per file; verify and merge each"
 ```
 

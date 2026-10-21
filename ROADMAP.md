@@ -44,7 +44,7 @@ each, every verify needing both its check and the verdict; the planner's verifie
 | Lead → team branch → main hierarchies | one target per run (operator-set); agents can't choose another | an operator allowlist of targets per run (`--targets team/*,main`), so a lead lands on its team branch and the planner verifies and lands the whole | M |
 | Comparing candidates (best-of-n) | verify judges one ref; there is no compare op | a `compare --refs …` op: a judge agent ranks the passing refs and returns the winner and reasons | M |
 | Several reviewers, or a reviewer per kind of change | one reviewer profile per run | per-run reviewer routing chosen by the operator (by path or label), and an optional quorum | M |
-| Changes across repositories | one repo per engine (`CAPCOMD_REPO`) | a repo per run (or per agent) in the run's settings | L |
+| Changes across repositories in one run | each run has one repository (recorded at `run new`; one engine serves runs on different repositories) | a repository per agent within a run | M |
 | An agent landing its own work | verify and merge exclude the caller | keep: a parent or the operator lands it (see constraints) | – |
 
 ### Stacked work
@@ -86,6 +86,8 @@ rework.
 
 - **Distribution** (M): `bun build --compile` fails on rivetkit's native module; capcomd runs from a checkout.
 - **Single local engine** (L): Rivet Cloud is deferred (ADR-009); no backup/restore of engine data.
+- **Engine data for test ports** (S): every engine started on a non-default port (tests, e2e runs) keeps a data dir in
+  `~/.capcomd/engine/<port>` that nothing removes.
 - **VM-ledger reconciliation** (S): no reaper reconciles `.relay/boxd.sqlite` rows whose VMs are gone (stale
   `created` rows were found on 2026-10-21; their VMs no longer existed).
 - **CI coverage** (M): CI runs the typecheck, `tests/machines`, the scenario suite, the killpoint tests (with

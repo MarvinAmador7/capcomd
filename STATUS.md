@@ -25,6 +25,9 @@ review by an agent (`run new --reviewer`) is built.
 | Report mode: `spawn --report` gives a leaf a read-only checkout; its final message is its result, nothing is pushed (research, triage) | Built | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
 | Protected targets from agents: an in-VM merge into a protected branch is parked (`awaiting_approval`, listed in `status` `pendingApprovals`); `approve <runId> <mrgId>` lands it, `--deny` fails it | Built | `tests/scenarios/approvals.test.ts` |
 | Per-run staging target: `run new --target T [--target-from BASE]`; children branch from it, verify and merge default to it | Built | `tests/scenarios/approvals.test.ts` |
+| Guided setup (`capcomd setup`, `setup check`): local demo, boxd key in the OS keychain, snapshot, logins, project config and profiles, Claude Code skill, engine service | Built (accounts step verified live, non-interactive) | `tests/config/` |
+| Engine as a service (`capcomd service install`): launchd (macOS), systemd user unit (Linux) | Built (launchd verified live) | `tests/config/service.test.ts` |
+| Runs carry their repository settings: an engine without repo env (a service) works; one engine serves several repos | Built | `tests/scenarios/run-repo.test.ts` |
 | Dependent work, interface first: a contract child lands, then provider and consumers run in parallel and land in dependency order (planner guidance, pattern 7) | Built | `tests/scenarios/interface-first.test.ts` |
 | Sub-agents in VMs (ADR-017): capability tokens, narrow-only fan-out, in-VM `capcomd` CLI and MCP tools, fencing of agent text | Built | `bun run test:scenarios` |
 | Real agents: Claude Code and Codex adapters, agent profiles, subscription logins (`auth login`), boxd host-bound secrets, env snapshots (`env build`), `doctor` | Built | `tests/agents`, `tests/env`, `tests/auth`, live `doctor --strict` |

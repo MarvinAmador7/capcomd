@@ -26,6 +26,11 @@ logs, driver pids), `.traces/` (spans) and `.capcomd/agents.json`. An installed 
 per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_TRACE_DIR`, `CAPCOMD_AGENTS_FILE`,
 `CAPCOMD_BOXD_DB`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
 
+Persisted settings (`capcomd setup` writes them): `~/.capcomd/config.json` and the nearest `.capcomd/config.json` from
+the current directory are environment defaults, applied by `src/cli/apply-config.ts` before anything else loads
+(a real env var wins; the boxd key comes from the OS keychain). `bun test` preloads `tests/helpers/isolate-config.ts`
+(`CAPCOMD_NO_CONFIG=1`), so a developer's own settings never reach the engines and CLIs tests start.
+
 ## Architecture
 
 Design documents live in `docs/`. Start with:
