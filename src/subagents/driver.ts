@@ -4,7 +4,7 @@
 //    on this host with a scrubbed env (no host secrets, no engine endpoint) and the same CLI on a
 //    LocalSpool, so scenarios exercise exactly the in-VM code path minus boxd.
 import { spawn as spawnProc } from "child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { client } from "../core/relay";
@@ -18,6 +18,7 @@ import type { SandboxProvider, VmId } from "../providers/sandbox";
 import { VM_RPC_DIR } from "./skill";
 
 export const VM_CLI_PATH = new URL("./vm-cli.mjs", import.meta.url).pathname;
+const NODE_BIN = Bun.which("node") ?? "node";
 
 function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number) {
   const s = client().scope.getOrCreate([runId]);
@@ -78,6 +79,8 @@ export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitC
   mkdirSync(bin, { recursive: true }); mkdirSync(home, { recursive: true });
   writeFileSync(join(bin, "capcomd"), `#!/bin/sh\nexec node ${JSON.stringify(VM_CLI_PATH)} "$@"\n`);
   chmodSync(join(bin, "capcomd"), 0o755);
+  // The PATH below is minimal; node may live elsewhere on the host (Homebrew, nvm): link it in.
+  if (NODE_BIN !== "node" && !existsSync(join(bin, "node"))) symlinkSync(NODE_BIN, join(bin, "node"));
   const s = client().scope.getOrCreate([runId]);
   const p = pumpFor(runId, a, new LocalSpool(dir, [{ file: out, stream: "stdout" }, { file: err, stream: "stderr" }]), Number(env("SCRIPT_RPC_POLL_MS") ?? 100));
   try {

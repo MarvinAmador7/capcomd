@@ -5,6 +5,38 @@ import type {
   ExecResult,
   VmInfo,
 } from "./sandbox";
+import { chmodSync, mkdtempSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+/**
+ * hostExec runs VM scripts on this host. They target Ubuntu VMs and use GNU `timeout` and `setsid`,
+ * which macOS lacks: on non-Linux hosts, put minimal perl stand-ins first on PATH.
+ */
+let shimDir: string | null = null;
+function hostShimDir(): string | null {
+  if (process.platform === "linux") return null;
+  if (shimDir) return shimDir;
+  const d = mkdtempSync(join(tmpdir(), "capcomd-hostshims-"));
+  // setsid CMD…: new session, then exec.
+  writeFileSync(join(d, "setsid"), `#!/bin/sh\nexec perl -MPOSIX -e 'POSIX::setsid(); exec { $ARGV[0] } @ARGV or exit 127' -- "$@"\n`);
+  // timeout [-k KILL] SECS CMD…: TERM the command's process group after SECS (KILL after KILL more), exit 124 like GNU.
+  writeFileSync(join(d, "timeout"), `#!/bin/sh
+k=0; if [ "$1" = "-k" ]; then k=$2; shift 2; fi
+s=$1; shift
+exec perl -e '
+  my ($k, $s) = (shift, shift);
+  my $p = fork; if (!$p) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV or exit 127 }
+  $SIG{ALRM} = sub { kill "TERM", -$p; if ($k) { sleep $k; kill "KILL", -$p } waitpid($p, 0); exit 124 };
+  alarm $s; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$k" "$s" "$@"
+`);
+  for (const f of ["setsid", "timeout"]) chmodSync(join(d, f), 0o755);
+  return (shimDir = d);
+}
+function withHostShims(env: Record<string, string>): Record<string, string> {
+  const d = hostShimDir();
+  return d ? { ...env, PATH: `${d}:${env.PATH ?? process.env.PATH ?? "/usr/bin:/bin"}` } : env;
+}
 
 interface FakeVm {
   id: VmId;
@@ -82,7 +114,7 @@ export class FakeProvider implements SandboxProvider {
     const env: Record<string, string> = {};
     for (const k of this.opts.inheritEnv ?? []) if (process.env[k] !== undefined) env[k] = process.env[k]!;
     Object.assign(env, this.machineEnv(), opts.env ?? {});
-    const proc = Bun.spawn(cmd, { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn(cmd, { env: withHostShims(env), stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     async function* merged() { for await (const c of proc.stdout as any) yield c as Uint8Array; }
     return {
       write: (d: string | Uint8Array) => { proc.stdin.write(d); proc.stdin.flush(); },
@@ -160,7 +192,7 @@ export class FakeProvider implements SandboxProvider {
       const env: Record<string, string> = {};
       for (const k of this.opts.inheritEnv ?? []) if (process.env[k] !== undefined) env[k] = process.env[k]!;
       Object.assign(env, this.machineEnv(), opts?.env ?? {});
-      const proc = Bun.spawn(cmd, { cwd: opts?.cwd, env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+      const proc = Bun.spawn(cmd, { cwd: opts?.cwd, env: withHostShims(env), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
       const timer = opts?.timeoutMs ? setTimeout(() => proc.kill("SIGKILL"), opts.timeoutMs) : null;
       const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
       if (timer) clearTimeout(timer);

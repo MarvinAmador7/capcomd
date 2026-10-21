@@ -1,6 +1,8 @@
 import { env as envVar } from "../../src/utils/env";
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { createRequire } from "module";
 import { homedir } from "os";
+import { join } from "path";
 import { openSync, readFileSync, readdirSync, readlinkSync } from "fs";
 
 const DEFAULT_PORT = 6420;
@@ -10,7 +12,15 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function descendantPids(root: number): number[] {
+// Linux reads /proc (fast, and what CI runs); other platforms (macOS) fall back to ps and lsof.
+const HAS_PROC = process.platform === "linux";
+const sh = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "utf8" }).stdout ?? "";
+
+function processTable(): Array<{ pid: number; ppid: number }> {
+  if (!HAS_PROC) {
+    return sh("ps", ["-A", "-o", "pid=,ppid="]).split("\n").map((l) => l.trim().split(/\s+/).map(Number))
+      .filter(([pid, ppid]) => pid! > 0 && Number.isFinite(ppid)).map(([pid, ppid]) => ({ pid: pid!, ppid: ppid! }));
+  }
   const entries: Array<{ pid: number; ppid: number }> = [];
   for (const name of readdirSync("/proc")) {
     if (!/^\d+$/.test(name)) continue;
@@ -23,7 +33,11 @@ function descendantPids(root: number): number[] {
       // process exited while scanning
     }
   }
+  return entries;
+}
 
+function descendantPids(root: number): number[] {
+  const entries = processTable();
   const out: number[] = [];
   const stack = [root];
   const seen = new Set<number>([root]);
@@ -41,7 +55,14 @@ function descendantPids(root: number): number[] {
   return out;
 }
 
+const DB_PATH = /sqlite|\.db|rivet/i;
+
 function openDbPaths(pid: number): string[] {
+  if (!HAS_PROC) {
+    // lsof -F n: one "n<path>" line per open file.
+    return sh("lsof", ["-nP", "-Fn", "-p", String(pid)]).split("\n")
+      .filter((l) => l.startsWith("n/")).map((l) => l.slice(1)).filter((t) => DB_PATH.test(t));
+  }
   const paths: string[] = [];
   let fds: string[] = [];
   try {
@@ -52,7 +73,7 @@ function openDbPaths(pid: number): string[] {
   for (const fd of fds) {
     try {
       const target = readlinkSync(`/proc/${pid}/fd/${fd}`);
-      if (/sqlite|\.db|rivet/i.test(target) && target.startsWith("/")) {
+      if (DB_PATH.test(target) && target.startsWith("/")) {
         paths.push(target);
       }
     } catch {
@@ -77,6 +98,7 @@ export async function pidsListening(port: number): Promise<number[]> {
 
 function pidsHolding(files: string[]): number[] {
   if (files.length === 0) return [];
+  if (!HAS_PROC) return sh("lsof", ["-nP", "-t", "--", ...files]).split(/\s+/).map(Number).filter((n) => n > 0);
   const wanted = new Set(files);
   const holders: number[] = [];
   for (const name of readdirSync("/proc")) {
@@ -136,7 +158,8 @@ export function repoEnv(opts: EngineOpts): NodeJS.ProcessEnv {
   };
 }
 
-const REAL_ENGINE = `${ROOT}/node_modules/@rivetkit/engine-cli-linux-x64-musl/rivet-engine`;
+// The platform's engine binary, resolved the same way `capcomd serve` does.
+const REAL_ENGINE = createRequire(import.meta.url)("@rivetkit/engine-cli").getEnginePath() as string;
 
 export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -154,6 +177,8 @@ export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
     env.RIVET_ENGINE_BINARY = `${ROOT}/tests/chaos/engine-wrapper.sh`;
     env.CAPCOMD_CHAOS_REAL_ENGINE = REAL_ENGINE;
     env.CAPCOMD_CHAOS_ENGINE_DATA = opts.dataDir;
+    // The wrapper records the engine pid here; stop() trusts it where /proc/<pid>/environ is unreadable.
+    env.CAPCOMD_ENGINE_PIDFILE = join(opts.dataDir, "engine.pid");
   }
   return env;
 }
@@ -202,6 +227,16 @@ export class Engine {
    */
   private owns(pid: number): boolean {
     if (this.opts.port === undefined) return true;
+    if (!HAS_PROC) {
+      // No readable environ: ours = our serve child or its descendants, our engine (pid file), or a
+      // serve runner for this exact port (stragglers from an earlier start of this instance).
+      const root = this.child?.pid;
+      if (root && (pid === root || descendantPids(root).includes(pid))) return true;
+      if (this.opts.dataDir) {
+        try { if (Number(readFileSync(join(this.opts.dataDir, "engine.pid"), "utf8").trim()) === pid) return true; } catch {}
+      }
+      return new RegExp(`src/cli/index\\.ts serve --port ${this.port}( |$)`).test(sh("ps", ["-o", "command=", "-p", String(pid)]).trim());
+    }
     try {
       return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(`RIVET_RUN_ENGINE_PORT=${this.port}`);
     } catch {
