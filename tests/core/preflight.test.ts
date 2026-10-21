@@ -5,7 +5,9 @@ import { mapBoxdError, isBoxdAuthError, SandboxAuthError, SandboxConfigError } f
 class AuthenticationError extends Error {}
 const BOXD = "bxd_live_SECRETKEY_0123456789abcdef";
 const ANTH = "sk-ant-api03-SECRET-0123456789abcdefghijklmnop";
-const env = { CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "claude-code", BOXD_API_KEY: BOXD, ANTHROPIC_API_KEY: ANTH };
+// Never the checkout's real .relay/ ledgers (a saved subscription login would skip the key checks).
+const ISO = { CAPCOMD_AUTH_LEDGER: "/nonexistent/capcomd/auths.json", CAPCOMD_ENV_LEDGER: "/nonexistent/capcomd/envs.json" };
+const env = { ...ISO, CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "claude-code", BOXD_API_KEY: BOXD, ANTHROPIC_API_KEY: ANTH };
 const okFetch = (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
 
 describe("preflight", () => {
@@ -36,7 +38,7 @@ describe("preflight", () => {
     const r = await runPreflight(env, { boxdList: async () => [], fetch: (async () => new Response("bad " + ANTH, { status: 401 })) as any });
     expect(r.find((c) => c.name === "anthropic")).toMatchObject({ ok: false });
     expect(r.find((c) => c.name === "anthropic")!.detail).toContain("ANTHROPIC_API_KEY was rejected (HTTP 401)");
-    const m = await runPreflight({ CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "claude-code" }, { boxdList: async () => [], fetch: okFetch });
+    const m = await runPreflight({ ...ISO, CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "claude-code" }, { boxdList: async () => [], fetch: okFetch });
     expect(m.map((c) => c.detail)).toEqual(["BOXD_API_KEY is not set", "claude-code: no credentials configured; set auth (agent profile or CAPCOMD_AUTH) and either ANTHROPIC_API_KEY or `capcomd auth login claude`"]);
     const forced = await runPreflight({ CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "claude-code", CAPCOMD_AUTH: "apikey" }, { boxdList: async () => [], fetch: okFetch });
     expect(forced[1]!.detail).toContain("ANTHROPIC_API_KEY is not set");
@@ -67,7 +69,7 @@ describe("preflight: codex + host-bound secrets", () => {
   test("codex checks OPENAI_API_KEY against /v1/models; secret mode allows no local key", async () => {
     const seen: string[] = [];
     const f = (async (url: string, init: any) => { seen.push(url); return new Response("{}", { status: init.headers.Authorization === "Bearer sk-proj-good-0123456789" ? 200 : 401 }); }) as any;
-    const base = { CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "codex", BOXD_API_KEY: "bxd_x" };
+    const base = { ...ISO, CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: "codex", BOXD_API_KEY: "bxd_x" };
     const ok = await runPreflight({ ...base, OPENAI_API_KEY: "sk-proj-good-0123456789" }, { boxdList: async () => [], fetch: f });
     expect(ok.find((c) => c.name === "openai")).toMatchObject({ ok: true });
     expect(seen).toEqual(["https://api.openai.com/v1/models"]);
