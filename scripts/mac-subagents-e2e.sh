@@ -119,10 +119,24 @@ TRACE="$CAPCOMD_TRACE_DIR/$RUN.ndjson" bun -e '
 $C logs "$RUN" "$ROOT" --tail 400 2>/dev/null | grep '\[capcomd\]' | sed 's/^/   /' | head -40 || true
 echo "== 7. merged PRs into integration"
 gh pr list -R "$REPO" --state all --json number,title,state,url -q '.[] | "   #\(.number) \(.state) \(.title) \(.url)"'
-echo "== 8. VM cleanup"
-bun scripts/vm-cleanup-check.ts "$RUN" || true
+MERGED=$(gh pr list -R "$REPO" --state merged --base integration --json number -q 'length' 2>/dev/null || echo 0)
+echo "== 8. integration suite (the whole goal: every test green once all branches landed)"
+FINAL="$WORK/final"
+if git clone -q --branch integration "https://github.com/$REPO.git" "$FINAL" 2>/dev/null && (cd "$FINAL" && bun test >"$WORK/final-test.log" 2>&1); then SUITE=pass; else SUITE=fail; fi
+sed 's/^/   /' "$WORK/final-test.log" 2>/dev/null | grep -E '(pass|fail)$|^ *\(fail\)' | head -10 || true
+echo "== 9. VM cleanup"
+bun scripts/vm-cleanup-check.ts "$RUN" && VMS=clean || { [ $? = 1 ] && VMS=leaked || VMS=unchecked; }
+PSTATUS=$(bun -e 'try { const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(j.agents?.[0]?.status ?? "unknown") } catch { console.log("unknown") }' "$WORK/await.json")
 echo
 echo "timings: total $(( $(date +%s) - T0 ))s, planner run ${T_RUN}s"
-echo "artifacts: $WORK   (engine log, traces, await.json, budget.json, agents.json)"
+echo "artifacts: $WORK   (engine log, traces, await.json, budget.json, agents.json, final-test.log)"
 echo "repo kept: https://github.com/$REPO   delete when done: gh repo delete $REPO --yes"
-exit "$RC"
+# Verdict: a planner that finishes "done" with nothing merged is a failure, not a pass.
+FAILS=""
+[ "$RC" = 0 ] || FAILS="$FAILS await-exit=$RC"
+[ "$PSTATUS" = done ] || FAILS="$FAILS planner=$PSTATUS"
+[ "$MERGED" = 3 ] || FAILS="$FAILS merged=$MERGED/3"
+[ "$SUITE" = pass ] || FAILS="$FAILS integration-suite=fail"
+[ "$VMS" = clean ] || FAILS="$FAILS vms=$VMS"
+if [ -n "$FAILS" ]; then echo "E2E FAIL:$FAILS"; exit 1; fi
+echo "E2E PASS: planner done, 3/3 merged, integration suite green, no VMs left"
