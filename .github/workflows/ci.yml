@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "0 8 * * *"   # nightly: the full chaos rounds
+  workflow_dispatch:
 
 jobs:
   test:
@@ -48,9 +51,17 @@ jobs:
           export RELAY_KILLPOINT=lease.expire.mid:1
           bun test tests/chaos/killpoints.test.ts || true
 
-  chaos-nightly:
-    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+  # Crash-safety gate (chaos:fast, strict), sharded so each suite gets its own runner: on one 2-vCPU runner the
+  # 258 cases took ~45 min, right at the timeout. On push: one round (a regression check, ~10-15 min per shard);
+  # nightly and on demand: the full three rounds.
+  chaos:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [killpoints, recipe, primitives, seeds]
     steps:
       - uses: actions/checkout@v4
 
@@ -62,9 +73,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: "chaos:fast (strict: any host stall fails the run; 8 workers)"
-        run: bun run chaos:fast
+      - name: "chaos:fast ${{ matrix.suite }} (strict; 1 round on push, 3 nightly)"
+        run: bun tests/chaos/fast.ts --only ${{ matrix.suite }} --rounds ${{ github.event_name == 'push' && 1 || 3 }}
         env:
           CHAOS_STRICT: "1"
-          CHAOS_WORKERS: "8"
+          CHAOS_WORKERS: "4"
         timeout-minutes: 45

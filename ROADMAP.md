@@ -89,8 +89,10 @@ rework.
 - **VM-ledger reconciliation** (S): no reaper reconciles `.relay/boxd.sqlite` rows whose VMs are gone (stale
   `created` rows were found on 2026-10-21; their VMs no longer existed).
 - **CI coverage** (M): CI runs the typecheck, `tests/machines`, the scenario suite, the killpoint tests (with
-  `|| true`, so they can't fail the build) and `chaos:fast` (strict, nightly job). It doesn't run the live e2e,
-  `tests/agents`, `tests/env`, `tests/merge` or `tests/cli`. Make the killpoint step strict and add those suites.
+  `|| true`, so they can't fail the build) and `chaos:fast` (strict), sharded into four parallel jobs (killpoints,
+  recipe, primitives, seeds): one round on every push to main, all three rounds nightly and on manual dispatch.
+  It doesn't run the live e2e, `tests/agents`, `tests/env`, `tests/merge` or `tests/cli`. Make the killpoint step
+  strict and add those suites.
 - **Host-mode checks see the host environment** (S): with fake sandboxes, checks run on the host with
   `process.env` (any `BOXD_API_KEY` or GitHub credentials included). Only the VM path is scrubbed; pass the
   same minimal env on the host.
