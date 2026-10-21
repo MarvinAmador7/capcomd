@@ -20,8 +20,8 @@ review by an agent (`run new --reviewer`) is built.
 | Primitives (ADR-016): `run new`, `spawn`, `await`, `wait-any`, `cancel`, `tree`, task board with fenced leases, versioned kv, `events --follow` | Built | `tests/primitives`, chaos `board.*` / `kv.*` killpoints |
 | `verify` (checks on the ref merged with the latest target) and `merge --require` (only the verified commit lands; merge re-runs the same checks) | Built | `tests/primitives/verify-merge.test.ts` |
 | Operator-named checks: `run new --checks-set name='cmd'`, pinned per child with `spawn --check NAME` | Built | `tests/scenarios/named-checks.test.ts` |
-| Reviewer: `run new --reviewer P` (operator-set); after the checks pass, verify spawns a reviewer agent on the commit (read-only, never pushes); both must pass, no verdict = fail | Built, not yet run live | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
-| Checks in a VM: with `CAPCOMD_SANDBOX=boxd`, verify and merge run the check command in a throwaway VM (env snapshot, no credentials, registry-only egress, the archived tree, destroyed after); fakes run it on the host | Built, not yet run live | `tests/merge/checks-vm.test.ts` |
+| Reviewer: `run new --reviewer P` (operator-set); after the checks pass, verify spawns a reviewer agent on the commit (read-only, never pushes); both must pass, no verdict = fail | Built, verified live | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
+| Checks in a VM: with `CAPCOMD_SANDBOX=boxd`, verify and merge run the check command in a throwaway VM (env snapshot, no credentials, registry-only egress, the archived tree, destroyed after); fakes run it on the host | Built, verified live | `tests/merge/checks-vm.test.ts` |
 | Report mode: `spawn --report` gives a leaf a read-only checkout; its final message is its result, nothing is pushed (research, triage) | Built | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
 | Protected targets from agents: an in-VM merge into a protected branch is parked (`awaiting_approval`, listed in `status` `pendingApprovals`); `approve <runId> <mrgId>` lands it, `--deny` fails it | Built | `tests/scenarios/approvals.test.ts` |
 | Per-run staging target: `run new --target T [--target-from BASE]`; children branch from it, verify and merge default to it | Built | `tests/scenarios/approvals.test.ts` |
@@ -34,9 +34,10 @@ review by an agent (`run new --reviewer`) is built.
 | Costs: billed USD, plus the API-price estimate for subscription work (`notionalUsd`, shown as `~$0.04`) | Built | `tests/subagents/unit.test.ts`, `apps/tui/test/cost.test.ts` |
 
 **Live end-to-end:** `scripts/mac-subagents-e2e.sh` runs a planner agent that splits a three-file fix across
-two Claude workers and one Codex worker, verifies each against its own named check, merges all three, runs
-the full suite on the result and confirms no VM is left behind. Last run, 2026-10-21: `E2E PASS`, 3/3 merged,
-165s, about $0.23 in API-equivalent cost on subscription billing. This script is manual; it is not in CI.
+two Claude workers and one Codex worker, verifies each against its own named check in a boxd checks VM, has a
+read-only reviewer agent review each, merges all three, runs the full suite on the result and confirms no VM is
+left behind. Last run, 2026-10-21: `E2E PASS`, 3/3 reviewed and merged, 228s (181s planner), 7 agents and 6
+checks VMs, about $0.37 in API-equivalent cost on subscription billing. This script is manual; it is not in CI.
 
 ## Open work
 
@@ -47,7 +48,7 @@ The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The bi
 2. Live spend: a real agent's cost is known only when it finishes.
 3. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
    verifying and landing several branches together, lead → team branch → main hierarchies, comparing candidates.
-4. The reviewer, checks in a VM, report mode, staging targets and approval requests pass their tests but
+4. Report mode, staging targets, approval requests and the interface-first pattern pass their tests but
    haven't had a live boxd run yet.
 
 ## How to check it yourself

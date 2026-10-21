@@ -6,13 +6,13 @@ orchestration patterns, risks and debt, with a proposed approach for each. Sizes
 
 ## 1. Built, waiting for a live run
 
-These pass their tests on fakes; the next `scripts/mac-subagents-e2e.sh` run exercises them on boxd with real agents.
+These pass their tests on fakes but aren't in `scripts/mac-subagents-e2e.sh` yet (S each): add a reporting
+child, a protected-target merge approved by the operator, a staging target, and an interface-first goal
+(contract, then provider and consumer in parallel).
 
-| Item | What the live run must show |
-|---|---|
-| Reviewer agent in `verify` (`run new --reviewer`) | 3 reviewers run on the children's commits with a read-only profile and return parseable verdicts; the planner's `verify` survives its Bash tool's 2-minute default (poll and `--key` guidance) |
-| Checks in a VM (boxd) | each verify and merge boots a checks VM from the env snapshot, `bun test` runs there, and every checks VM is destroyed |
-| Report mode (`spawn --report`), staging targets, approval requests | not in the e2e yet: add a reporting child and a protected-target merge to it (S) |
+Verified live on 2026-10-21 (`E2E PASS`, 228s): the **reviewer** (3 real reviewers on a read-only profile, ~16s
+each, every verify needing both its check and the verdict; the planner's verifies polled to completion) and
+**checks in a VM** (6 boxd checks VMs, one per verify and merge, `bun test` inside, all destroyed).
 
 ## 2. Next, in order
 
