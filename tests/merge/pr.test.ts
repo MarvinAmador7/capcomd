@@ -9,6 +9,10 @@ import { taskBranch, taskKey } from "../../src/merge/config";
 const ROOT = new URL("../..", import.meta.url).pathname;
 const req = (runId: string, taskId: string, extra: object = {}) => ({ runId, taskId, branch: taskBranch(runId, taskId), target: "main", ...extra });
 const servers: Array<{ stop(): void }> = [];
+/** Wait for a condition instead of a fixed sleep: opening a PR takes a clone, a fetch and the checks. */
+async function until(what: string, ok: () => boolean, timeoutMs = 15_000) {
+  for (const deadline = Date.now() + timeoutMs; !ok(); await Bun.sleep(50)) if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+}
 afterEach(() => { setGitHubApi(null); while (servers.length) servers.pop()!.stop(); });
 
 async function setup(opts: Parameters<typeof fakeGitHub>[1] = {}, strategy: "squash" | "rebase" | "merge" = "squash") {
@@ -39,7 +43,7 @@ describe("pr mode against a fake GitHub (backed by a real bare repo)", () => {
     const { r, gh } = await setup({ requireChecks: true });
     await produceFakeWork(r.cfg, { ...req("p2", "t"), epoch: 1 });
     const p = mergeTask(req("p2", "t"), r.cfg);
-    await Bun.sleep(300);
+    await until("auto-merge on the PR", () => gh.pulls[0]?.autoMerge != null);
     expect(gh.pulls[0]?.merged).toBe(false);
     expect(gh.pulls[0]?.autoMerge).toBe("squash");
     await gh.passChecks();
@@ -51,7 +55,7 @@ describe("pr mode against a fake GitHub (backed by a real bare repo)", () => {
     const { r, gh } = await setup({ mergeQueue: true });
     await produceFakeWork(r.cfg, { ...req("p3", "t"), epoch: 1 });
     const p = mergeTask(req("p3", "t"), r.cfg);
-    await Bun.sleep(300);
+    await until("the PR handed to auto-merge", () => gh.pulls[0]?.autoMerge != null);
     expect(gh.pulls[0]?.autoMerge).toBe("squash");
     await gh.passChecks(); // queue runs
     expect(await p).toMatchObject({ status: "merged" });

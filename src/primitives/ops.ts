@@ -54,7 +54,9 @@ export const TRACE_KV = "_trace";
 
 /** The run's recorded trace directory, if any. */
 export async function runTraceDir(runId: string): Promise<string | undefined> {
-  const v: any = (await client().scope.getOrCreate([runId]).kvGet({ k: TRACE_KV }).catch(() => null))?.value;
+  // A lookup, never a create (an unknown run must not get a scope actor), bounded: callers fall back to "no trace".
+  const look = (async () => (await (client().scope as any).get([runId]).kvGet({ k: TRACE_KV }))?.value)().catch(() => null);
+  const v: any = await Promise.race([look, new Promise((r) => setTimeout(() => r(null), 2000))]);
   return typeof v?.dir === "string" ? v.dir : undefined;
 }
 
@@ -542,6 +544,12 @@ export interface VerifyOpts {
 }
 
 export const verifyIdFor = (runId: string, ref: string, key?: string) => stableId("vfy", `${runId}\0${ref}`, key);
+
+/** A finished verification's record (null while it runs or before it starts): what a poll returns at once. */
+export async function finishedVerify(runId: string, vfyId: string) {
+  const op = await client().scope.getOrCreate([runId]).getOp({ opId: vfyId }).catch(() => null);
+  return op && op.kind === "verify" && op.state !== "running" ? opView(op) : null;
+}
 /** A verify with a review runs for minutes; calls for the same vfy while it runs share one run. */
 const inflightVerify = new Map<string, Promise<any>>();
 

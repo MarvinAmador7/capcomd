@@ -74,7 +74,8 @@ describe("capcomd CLI against a live engine", () => {
     const body = JSON.parse(r.stdout);
     expect(body.schema).toBe("relay.v1");
     expect(body.ok).toBe(true);
-    expect(Object.keys(body.run).sort()).toEqual(["awaitingApproval", "budget", "events", "goal", "runId", "state", "tasks"]);
+    // docs/output-contract.md, Status
+    expect(Object.keys(body.run).sort()).toEqual(["awaitingApproval", "budget", "events", "goal", "pendingApprovals", "runId", "scope", "startedAt", "startedAtMs", "state", "tasks"]);
     expect(body.run.state).toBe("completed");
     expect(body.run.tasks.length).toBeGreaterThan(0);
     expect(body.run.tasks.every((t: any) => t.state === "merged")).toBe(true);

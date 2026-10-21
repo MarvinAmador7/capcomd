@@ -232,6 +232,10 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
           pinned ? "Verify with just --ref: it uses the pinned check." : "Spawn the child with --check NAME, then verify with just --ref.");
       }
       const key = args.key ? `${c.sub}:${args.key}` : undefined;
+      // A poll of a verification that already finished gets its record at once (one lookup, not the
+      // whole verify path, which can outlast a short hold and would answer "running" forever).
+      const done = await O.finishedVerify(run, O.verifyIdFor(run, ref, key));
+      if (done) return done;
       // A review takes minutes, longer than one RPC: answer "running" after VERIFY_HOLD_MS; the CLI polls
       // with the same key, and the in-flight verify is shared (never re-run) until it finishes.
       const p = O.verifyRef({ runId: run, ref, ...(pinned ? { check: pinned } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key, reviewParent: c.sub });
