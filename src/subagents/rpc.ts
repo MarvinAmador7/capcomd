@@ -216,11 +216,14 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       throw new RelayError("usage", `task action ${action}?`, "add|list|show|claim|renew|release|done");
     }
     case "verify": {
+      if (args.checks !== undefined) deny("in-VM verify cannot set --checks: test commands come only from the operator", "Pick one of the run's operator-named checks with --check NAME (`capcomd kv get _checks` lists them), or pass only --ref for the default.");
       const ref = String(args.ref ?? "");
       if (!ref.startsWith("agt-")) deny("in-VM verify takes a child agent id, not a branch");
       await assertWritable(c, ref, true);
-      // Checks never come from the VM: the run's root contract (operator-set) or the repo's test command.
-      return O.verifyRef({ runId: run, ref, checks: await operatorChecks(c), acceptance: args.acceptance, key: args.key ? `${c.sub}:${args.key}` : undefined });
+      // Checks never come from the VM: an operator-named check picked by name, else the run's root
+      // contract (operator-set), else the repo's test command.
+      const check = args.check !== undefined ? String(args.check) : undefined;
+      return O.verifyRef({ runId: run, ref, ...(check !== undefined ? { check } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key: args.key ? `${c.sub}:${args.key}` : undefined });
     }
     case "merge": {
       const ref = String(args.ref ?? "");

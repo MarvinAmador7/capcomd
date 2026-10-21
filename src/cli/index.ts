@@ -45,11 +45,11 @@ Usage:
   capcomd agents list|show|add|set|rm|schema|validate
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH; recipe = planner→worker→judge composed from primitives)
-  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K]                     → runId (a scope; plans nothing)
+  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K] [--checks-set name='cmd']…  → runId (a scope; plans nothing)
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N]  ·  capcomd wait-any <runId> <agt…>
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
-  capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P] [--target T] [--key K]  → vfy-…
+  capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--judge-profile P] [--target T] [--key K]  → vfy-…
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
   ADR-017 sub-agents (agents allowed to spawn get the same verbs in their VM as \`capcomd\` + MCP tools):
   capcomd spawn … [--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N --children.allowedChildProfiles=a,b --children.budgetShare=F]
@@ -141,6 +141,8 @@ async function main(argv: string[]): Promise<number> {
         "no-start": { type: "boolean" },
         ref: { type: "string" },
         checks: { type: "string" },
+        check: { type: "string" },
+        "checks-set": { type: "string", multiple: true },
         acceptance: { type: "string" },
         "judge-profile": { type: "string" },
         require: { type: "string" },
@@ -228,7 +230,8 @@ async function main(argv: string[]): Promise<number> {
           let budget: Record<string, number> = { usd: 10 };
           try { if (values.budget !== undefined) budget = parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message} (e.g. 5 or usd=5,turns=200,wallSeconds=3600)`); }
           const P = await import("../primitives/ops");
-          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined });
+          const checks = P.parseCheckSet((values["checks-set"] as string[] | undefined) ?? []);
+          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks });
           if (json) out(r); else console.log(r.runId);
           return EXIT.ok;
         }
@@ -352,7 +355,7 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case "verify": {
-        const runId = positionals[1] ?? usage("runId required: capcomd verify <runId> --ref <agt|branch> [--checks CMD] [--acceptance JSON|file] [--judge-profile P]");
+        const runId = positionals[1] ?? usage("runId required: capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--judge-profile P]");
         const ref = (values.ref as string | undefined) ?? positionals[2] ?? usage("--ref required (an agent id or a branch)");
         let acceptance: unknown;
         if (values.acceptance) {
@@ -360,7 +363,7 @@ async function main(argv: string[]): Promise<number> {
           try { acceptance = raw.trim().startsWith("{") || raw.trim().startsWith("[") ? JSON.parse(raw) : existsSync(raw) ? JSON.parse(readFileSync(raw, "utf8")) : raw; } catch (e) { usage(`bad --acceptance: ${(e as Error).message}`); }
         }
         const r: any = await (await import("../primitives/ops")).verifyRef({
-          runId, ref, checks: values.checks as string | undefined, acceptance, judgeProfile: values["judge-profile"] as string | undefined,
+          runId, ref, checks: values.checks as string | undefined, check: values.check as string | undefined, acceptance, judgeProfile: values["judge-profile"] as string | undefined,
           target: values.target as string | undefined, key: values.key as string | undefined,
         });
         if (json) out(r);

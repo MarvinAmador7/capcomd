@@ -17,7 +17,8 @@ let r: Awaited<ReturnType<typeof bareRepo>>;
 const saved = { ...process.env };
 
 beforeAll(async () => {
-  r = await bareRepo({ mode: "direct", extraEnv: { CAPCOMD_MERGE_TARGET: "trunk" } });
+  // The repo's own test command fails: merge --require must re-run the checks verify passed with.
+  r = await bareRepo({ mode: "direct", test: "exit 7", extraEnv: { CAPCOMD_MERGE_TARGET: "trunk" } });
   await r.seed.ok(["push", "-q", "origin", "main:trunk"]);
   env = { ...r.env, CAPCOMD_AGENTS_FILE: primitivesAgentsFile(), CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_AWAIT_POLL_MS: "100", CAPCOMD_DRIVER_LEASE_MS: "3000", CAPCOMD_SKIP_PREFLIGHT: "1" };
   Object.assign(process.env, env);

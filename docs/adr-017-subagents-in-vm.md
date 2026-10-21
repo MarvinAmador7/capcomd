@@ -52,7 +52,12 @@ Authority comes only from the token and the scope's limits, never from request t
 - **Reads** (status, await, tree, inspect, logs, events) also see the caller's parent's subtree
   (siblings), so peers can coordinate and await cycles can be detected.
 - Contracts from a VM can't carry `checks`: verify runs the root contract's operator-set checks
-  or the repo's test command, never VM-supplied shell on the host.
+  or the repo's test command, never VM-supplied shell on the host. In-VM `verify --checks` is
+  refused (`forbidden`), not ignored. For per-task checks the operator names them at
+  `run new --checks-set add='bun test ./test/add.test.ts' …` (stored in kv `_checks`, read-only from
+  VMs); an agent picks one with `verify --check add` but can't write a command. The vfy record
+  keeps both the check name and the exact command it ran.
+- `merge --require vfy` re-runs the checks that verification passed with, not the repo default.
 - `merge` needs a passing `verify` of that exact commit; protected targets still need an operator.
 - kv prefixes `_`, `approval/`, `recipe/`, `handoff/` are read-only from VMs.
 

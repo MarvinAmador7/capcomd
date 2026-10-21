@@ -42,13 +42,45 @@ export function asRelay(e: unknown): never {
   throw e;
 }
 
-export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string }
+/** Operator-named checks (`run new --checks-set name=CMD`) live here; VMs can read `_` keys, never write them. */
+export const CHECKS_KV = "_checks";
+const CHECK_NAME = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** `name=command` pairs → { name: command }. Names: letters, digits, . _ - (max 64). */
+export function parseCheckSet(pairs: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of pairs) {
+    const i = p.indexOf("=");
+    const name = i > 0 ? p.slice(0, i) : "", cmd = i > 0 ? p.slice(i + 1).trim() : "";
+    if (!CHECK_NAME.test(name) || !cmd) throw new RelayError("usage", `bad --checks-set ${JSON.stringify(p)}`, "Use --checks-set name='command' (name: letters, digits, . _ -), once per check.");
+    if (name in out) throw new RelayError("usage", `check "${name}" is set twice`, "Give each check a distinct name.");
+    out[name] = cmd;
+  }
+  return out;
+}
+
+/** The command an operator-named check runs. Unknown names are refused with the list of known ones. */
+export async function namedCheck(runId: string, name: string): Promise<string> {
+  const S = await import("./state"); // state imports ops: keep the cycle out of module init
+  const set = (await S.kvGet(runId, CHECKS_KV)).value as Record<string, unknown> | null;
+  const cmd = CHECK_NAME.test(name) && set && Object.hasOwn(set, name) ? set[name] : undefined;
+  if (typeof cmd !== "string") {
+    const known = set ? Object.keys(set) : [];
+    throw new RelayError("usage", `no check named "${name}" in ${runId}`, known.length ? `Known checks: ${known.join(", ")}.` : "This run has no named checks (the operator sets them with `capcomd run new --checks-set name='cmd'`).");
+  }
+  return cmd;
+}
+
+export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string; checks?: Record<string, string> }
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
   const runId = o.runId ?? stableId("run", "run", o.key);
   const c = client();
-  const ph = paramsHash({ budget: o.budget, label: o.label ?? null });
+  const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
+  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, paramsHash: ph }).catch(asRelay);
+  // Written on every (idempotent) call, so a crash between init and this put heals on retry.
+  if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
   return { runId, created: res.created, budget: res.budget };
@@ -424,10 +456,10 @@ async function resolveRef(runId: string, ref: string): Promise<{ branch: string;
   return { branch: ref, agentId: null, label: ref };
 }
 
-export interface VerifyOpts { runId: string; ref: string; checks?: string; acceptance?: unknown; judgeProfile?: string; target?: string; key?: string }
+export interface VerifyOpts { runId: string; ref: string; checks?: string; check?: string; acceptance?: unknown; judgeProfile?: string; target?: string; key?: string }
 
 /**
- * Run checks (the repo's test command or --checks) on the ref merged with the latest target, in
+ * Run checks (the repo's test command, --checks, or the operator-named --check) on the ref merged with the latest target, in
  * the verifier actor (ADR-003: the result comes from running it, never from the agent's report).
  * With --judge-profile, a judge also scores the acceptance criteria; both must pass.
  * Records vfy-… with the exact branch commit tested, which `merge --require` checks.
@@ -440,12 +472,15 @@ export async function verifyRef(o: VerifyOpts) {
   const cfg = loadMergeConfig();
   const target = o.target ?? cfg?.target ?? "main";
   const { branch, agentId, label } = await resolveRef(o.runId, o.ref);
+  if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
+  const checks = o.check !== undefined ? await namedCheck(o.runId, o.check) : o.checks;
   const vfyId = stableId("vfy", `${o.runId}\0${o.ref}`, o.key);
-  const data = { ref: o.ref, agentId, branch, target, checks: o.checks ?? null, acceptance: o.acceptance ?? null, judgeProfile: o.judgeProfile ?? null };
+  // The record names the check and the exact command it ran; merge --require re-runs that command.
+  const data = { ref: o.ref, agentId, branch, target, ...(o.check !== undefined ? { check: o.check } : {}), checks: checks ?? null, acceptance: o.acceptance ?? null, judgeProfile: o.judgeProfile ?? null };
   const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   const res: any = await c.verifier.getOrCreate([o.runId, vfyId]).verify({
-    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(o.checks ? { testCommand: o.checks } : {}),
+    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(checks ? { testCommand: checks } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const checksPassed = out.status === "verified";
@@ -479,7 +514,7 @@ export async function mergeRef(o: MergeOpts) {
   const cfg = loadMergeConfig();
   const target = o.target ?? cfg?.target ?? "main";
   const { branch, agentId, label } = await resolveRef(o.runId, o.ref);
-  let expectSha: string | undefined;
+  let expectSha: string | undefined, checks: string | undefined;
   if (!o.require && !o.operator) throw new RelayError("usage", "merge needs --require <vfyId> (a passing `capcomd verify` of this ref)", "Run `capcomd verify <runId> --ref <ref>` first, or pass --operator to merge unverified.");
   if (o.require) {
     const v = await s.getOp({ opId: o.require });
@@ -487,6 +522,8 @@ export async function mergeRef(o: MergeOpts) {
     if (v.state !== "passed") throw new RelayError("conflict", `verification ${o.require} is ${v.state}`, "Only a passing verification can gate a merge.");
     if (v.data.branch !== branch || v.data.target !== target) throw new RelayError("conflict", `verification ${o.require} covers ${v.data.branch} → ${v.data.target}, not ${branch} → ${target}`, "Verify this ref against this target.");
     expectSha = (v.result?.commit as string | null) ?? undefined;
+    // Re-run the checks that verification passed with (the target may have moved), not the repo default.
+    if (typeof v.data.checks === "string" && v.data.checks) checks = v.data.checks;
   }
   // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
   if (cfg && isProtectedBranch(target) && !o.operator) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
@@ -495,7 +532,7 @@ export async function mergeRef(o: MergeOpts) {
   const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   const res: any = await c.verifier.getOrCreate([o.runId, mrgId]).verify({
-    verifierId: mrgId, taskId: label, branch, runId: o.runId, target, testOnly: false, ...(expectSha ? { expectSha } : {}),
+    verifierId: mrgId, taskId: label, branch, runId: o.runId, target, testOnly: false, ...(expectSha ? { expectSha } : {}), ...(checks ? { testCommand: checks } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const merged = out.status === "merged";
