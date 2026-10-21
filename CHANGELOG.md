@@ -2,7 +2,7 @@
 
 ## 0.2.0 (2026-10-21), private preview
 
-First tagged release. Installs from git (`bun add -g git+ssh://git@github.com/MarvinAmador7/relay.git#v0.2.0`);
+First tagged release. Installs from git (`bun add -g git+ssh://git@github.com/MarvinAmador7/capcomd.git#v0.2.0`);
 needs Bun ≥ 1.4. What works and what's open: [STATUS.md](STATUS.md), [ROADMAP.md](ROADMAP.md).
 
 ### Orchestration
