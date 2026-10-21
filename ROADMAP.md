@@ -111,8 +111,6 @@ rework.
 - `verify` on a branch that has already merged reports `status: "merged", pass: false`; it should report the
   merged commit as verified or say "already merged".
 - `docs/open-questions.md` is a low-confidence reconstruction and needs re-research.
-- Stray files at the repo root (`index.ts` "Hello via Bun", `test_harness_fix.js`, `test_kill_children.sh`,
-  `test_proper_harness.sh`, `test_restart.sh`) predate the current test harness; remove or move them.
 
 ## 7. Deliberate constraints
 

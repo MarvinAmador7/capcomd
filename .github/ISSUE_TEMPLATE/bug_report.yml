@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in capcomd doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Security problems go through [SECURITY.md](https://github.com/MarvinAmador7/capcomd/blob/main/SECURITY.md), not here.
+        Please remove keys, tokens and private repository names from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The commands you ran and what they printed (with `--json` if you can).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: capcomd version
+      description: "`capcomd --version`"
+      placeholder: capcomd 0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: sandbox
+    attributes:
+      label: Sandbox
+      options: [boxd, fake, not sure]
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS and Bun version
+      placeholder: macOS 15.5, Bun 1.4.3
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: "`capcomd setup check`, `capcomd doctor`, and for a run: `capcomd events <runId> --json` or `capcomd trace <runId>`."
+      render: text

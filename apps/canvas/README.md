@@ -177,20 +177,9 @@ bun run preview
 
 ## Screenshots
 
-### Full Canvas View
-Shows hierarchical graph with Run at top, Tasks in middle, Workers at bottom.
+The full canvas: the run at the top, tasks in the middle, workers at the bottom.
 
-![Canvas Full View](../../screenshots/canvas-full-view.png)
-
-### Node Details Panel
-Task node selected showing state, context, and event history.
-
-![Node Details Panel](../../screenshots/canvas-node-details.png)
-
-### Timeline Scrubber
-Replay mode with timeline controls at bottom.
-
-![Timeline Scrubber](../../screenshots/canvas-timeline.png)
+![Canvas Full View](screenshots/canvas-full-view.png)
 
 ## Future Enhancements
 

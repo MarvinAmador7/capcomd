@@ -1,0 +1,20 @@
+name: Feature request
+description: Something capcomd should do, or do differently
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to do and where capcomd gets in the way. A real example helps most.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: The commands, flags or behavior you have in mind, if you have an idea.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead

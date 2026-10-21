@@ -1,17 +1,38 @@
 {
   "name": "capcomd",
   "version": "0.3.0",
-  "description": "capcomd: agent orchestration CLI built on Rivet Actors",
+  "description": "Orchestrate Claude Code and Codex agents in isolated VMs; only verified, reviewed commits reach your repository",
+  "keywords": [
+    "agents",
+    "orchestration",
+    "claude-code",
+    "codex",
+    "ai-agents",
+    "sandbox",
+    "rivet",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "Marvin Amador Campos (https://github.com/MarvinAmador7)",
+  "homepage": "https://github.com/MarvinAmador7/capcomd#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MarvinAmador7/capcomd.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MarvinAmador7/capcomd/issues"
+  },
   "type": "module",
-  "private": true,
   "bin": {
     "capcomd": "./src/cli/index.ts"
   },
   "files": [
     "src",
     "skills",
-    "docs",
+    "docs/*.md",
+    "docs/upstream",
     "README.md",
+    "LICENSE",
     "STATUS.md",
     "ROADMAP.md",
     "CHANGELOG.md"
@@ -31,9 +52,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "playwright": "^1.64.1"
-  },
-  "peerDependencies": {
+    "playwright": "^1.64.1",
     "typescript": "^7"
   },
   "dependencies": {
@@ -47,5 +66,8 @@
     "rivetkit": "2.3.27",
     "xstate": "5.33.3",
     "zod": "^4.6.7"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

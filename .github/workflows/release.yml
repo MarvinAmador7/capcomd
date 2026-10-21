@@ -2,8 +2,10 @@ name: Release
 
 # Pushing a tag vX.Y.Z (X.Y.Z = package.json's version, with a dated CHANGELOG.md section) builds and publishes a
 # GitHub release: the tests on Linux and macOS, one strict chaos round, the package (`bun pm pack`) installed the
-# way a user installs it and driven with fake agents (scripts/release-smoke.sh), then the release with the package,
-# its SHA-256 and the changelog section as notes. Re-running for the same tag updates that release in place.
+# way a user installs it and driven with fake agents (scripts/release-smoke.sh), then that same package on npm (with
+# provenance; skipped while package.json is private) and the release with the package, its SHA-256 and the
+# changelog section as notes. Re-running for the same tag updates the release in place (npm versions are immutable:
+# an already-published version is skipped).
 # The live boxd/GitHub/agents e2e (scripts/mac-subagents-e2e.sh) stays a manual step before tagging (DEVELOPMENT.md).
 
 on:
@@ -37,6 +39,8 @@ jobs:
       version: ${{ steps.notes.outputs.version }}
       title: ${{ steps.notes.outputs.title }}
       prerelease: ${{ steps.notes.outputs.prerelease }}
+      npm: ${{ steps.notes.outputs.npm }}
+      npm_tag: ${{ steps.notes.outputs.npm_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -178,10 +182,40 @@ jobs:
       - name: Install the package with a fresh HOME and drive it (fake agents)
         run: scripts/release-smoke.sh "dist/capcomd-${{ needs.prepare.outputs.version }}.tgz" "${{ needs.prepare.outputs.version }}"
 
+  npm:
+    name: Publish to npm
+    needs: [prepare, test, chaos, smoke]
+    if: needs.prepare.outputs.npm == 'true' && (github.event_name == 'push' || inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # npm provenance (and trusted publishing, once configured on npmjs.com)
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: dist
+
+      - name: npm publish (the tested package, with provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          V: ${{ needs.prepare.outputs.version }}
+          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
+        run: |
+          if [ "$(npm view "capcomd@$V" version 2>/dev/null)" = "$V" ]; then echo "capcomd@$V is already on npm"; exit 0; fi
+          [ -n "$NODE_AUTH_TOKEN" ] || echo "::warning::no NPM_TOKEN secret: relying on npm trusted publishing for this repository"
+          npm publish "dist/capcomd-$V.tgz" --provenance --access public --tag "$NPM_TAG"
+
   publish:
     name: Publish the release
-    needs: [prepare, test, chaos, smoke]
-    if: github.event_name == 'push' || inputs.publish
+    needs: [prepare, test, chaos, smoke, npm]
+    # npm is skipped while package.json is private; any failure (npm included) publishes nothing here.
+    if: ${{ !cancelled() && !failure() && (github.event_name == 'push' || inputs.publish) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

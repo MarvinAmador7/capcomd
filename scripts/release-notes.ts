@@ -40,21 +40,25 @@ if (!body) fail(`CHANGELOG.md section ${pkg.version} is empty`);
 // Relative links (`[STATUS.md](STATUS.md)`, `docs/…`) would resolve against the releases page: point them at the tag.
 const notes = body.replace(/\]\((?!https?:|#|mailto:)([^)\s]+)\)/g, (_, p) => `](https://github.com/${repo}/blob/${tag}/${p})`);
 const tgz = `capcomd-${pkg.version}.tgz`;
+const bun = String(pkg.engines?.bun ?? ">=1.4").replace(/^>=\s*/, "");
+const npm = pkg.private !== true;
 const install = `### Install
 
-Needs [Bun](https://bun.sh) ≥ ${String(pkg.engines?.bun ?? ">=1.4").replace(/^>=\s*/, "")}.
+Needs [Bun](https://bun.sh) ≥ ${bun}.
 
 \`\`\`bash
-bun add -g git+ssh://git@github.com/${repo}.git#${tag}
+${npm ? `bun add -g capcomd@${pkg.version}
 # or from this release's package:
-gh release download ${tag} --repo ${repo} --pattern '${tgz}' && bun add -g ./${tgz}
+gh release download ${tag} --repo ${repo} --pattern '${tgz}' && bun add -g ./${tgz}` : `bun add -g git+ssh://git@github.com/${repo}.git#${tag}
+# or from this release's package:
+gh release download ${tag} --repo ${repo} --pattern '${tgz}' && bun add -g ./${tgz}`}
 capcomd setup
 \`\`\`
 
-\`${tgz}.sha256\` holds the package's SHA-256.`;
+\`${tgz}.sha256\` holds the package's SHA-256.${npm ? " The npm package is published from this workflow run with [provenance](https://docs.npmjs.com/generating-provenance-statements)." : ""}`;
 console.log(`${notes}\n\n${install}`);
 
 const preview = pkg.private === true || pkg.version.includes("-");
 if (process.env.GITHUB_OUTPUT) {
-  appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\ntitle=capcomd ${pkg.version}${preview ? " (private preview)" : ""}\nprerelease=${preview}\n`);
+  appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\ntitle=capcomd ${pkg.version}${pkg.private === true ? " (private preview)" : ""}\nprerelease=${preview}\nnpm=${npm}\nnpm_tag=${pkg.version.includes("-") ? "next" : "latest"}\n`);
 }

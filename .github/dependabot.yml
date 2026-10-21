@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # The workflows' actions (checkout, setup-bun, upload/download-artifact, setup-node).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

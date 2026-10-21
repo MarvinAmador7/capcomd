@@ -72,4 +72,4 @@ The engine-backed tests run on macOS and Linux; Linux uses `/proc` and macOS use
 run long suites under `caffeinate -i`: if the machine sleeps mid-run, tests time out and can leave an
 orphaned `rivet-engine` behind.
 
-Other reports: `CANVAS_REFACTOR.md` (the `apps/canvas` XState refactor), `docs/evidence/` (chaos logs).
+Other reports: `docs/evidence/` (chaos logs).

@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- **Open source, MIT licensed.** capcomd is published to npm (`bun add -g capcomd`); the release workflow publishes
+  the package it tested, with provenance. The package no longer pulls in TypeScript (it was a peer dependency) and
+  ships the design docs without the chaos logs.
+- Contributor guide (`CONTRIBUTING.md`), Code of Conduct, security policy (`SECURITY.md`, private reporting through
+  GitHub), issue templates, and Dependabot for the workflows' actions.
+- Removed leftovers from early development: the root `index.ts` and `test_*` scripts, an uploaded docs archive,
+  stray screenshots and internal import notes.
+
 ## 0.3.0 (2026-10-21), private preview
 
 Guided setup (`capcomd setup`), the engine as a background service, and releases built and tested by CI.

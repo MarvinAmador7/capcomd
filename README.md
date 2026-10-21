@@ -1,5 +1,9 @@
 # capcomd
 
+[![CI](https://github.com/MarvinAmador7/capcomd/actions/workflows/ci.yml/badge.svg)](https://github.com/MarvinAmador7/capcomd/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/capcomd)](https://www.npmjs.com/package/capcomd)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 **Run teams of coding agents in parallel, and land only the work that passes.**
 
 capcomd orchestrates Claude Code and Codex agents. Each agent works in its own isolated VM on its own branch;
@@ -7,8 +11,8 @@ nothing reaches your repository until it has passed checks you defined, been rev
 merged as the exact commit that was tested. Agents can break work down and delegate to other agents, within
 limits you set.
 
-> **Private preview (v0.3.0).** The orchestration primitives, sub-agents, verification and review are built and
-> verified live. `capcomd run "<goal>"` is experimental. See [STATUS.md](STATUS.md) and [ROADMAP.md](ROADMAP.md).
+> **Early release (0.x).** The orchestration primitives, sub-agents, verification and review are built and
+> verified live; expect changes between minor versions. `capcomd run "<goal>"` is experimental. See [STATUS.md](STATUS.md) and [ROADMAP.md](ROADMAP.md).
 
 ## Why
 
@@ -87,15 +91,15 @@ change, and merged all three.
 **Requirements:** [Bun](https://bun.sh) ≥ 1.4, a [boxd](https://boxd.sh) API key, a GitHub repository, and a
 Claude and/or ChatGPT plan (or Anthropic/OpenAI API keys).
 
-**1. Install** (private preview: needs read access to this repository)
+**1. Install**
 
 ```bash
-bun add -g git+ssh://git@github.com/MarvinAmador7/capcomd.git#v0.3.0
+bun add -g capcomd
 capcomd --version
 ```
 
-Or install the package attached to each [release](https://github.com/MarvinAmador7/capcomd/releases):
-`gh release download v0.3.0 --repo MarvinAmador7/capcomd --pattern 'capcomd-*.tgz' && bun add -g ./capcomd-0.3.0.tgz`.
+Each [release](https://github.com/MarvinAmador7/capcomd/releases) also has the package and its SHA-256 attached;
+the npm package is published by CI with [provenance](https://docs.npmjs.com/generating-provenance-statements).
 
 State lives in `~/.capcomd` (set `CAPCOMD_HOME` to move it); a project's own `.capcomd/agents.json` is used when
 you run capcomd from that project.
@@ -189,3 +193,12 @@ capcomd spawn $RUN --profile planner --task "Fix the three failing tests; one ch
 - [CHANGELOG.md](CHANGELOG.md): what's in each release.
 - [DEVELOPMENT.md](DEVELOPMENT.md): architecture, tests, chaos suite, cutting a release.
 - [docs/](docs/): design decisions (ADRs), and the operator's orchestration skill in [skills/](skills/).
+
+## Contributing
+
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md),
+and [SECURITY.md](SECURITY.md) for reporting vulnerabilities privately. Coding agents follow [AGENTS.md](AGENTS.md).
+
+## License
+
+[MIT](LICENSE) © Marvin Amador Campos

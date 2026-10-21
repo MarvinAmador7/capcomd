@@ -30,21 +30,24 @@ Procedure:
 1. Start from an up-to-date `main` with green CI. Read the `## Unreleased` entries and pick the version from them.
 2. In one PR (or commit, if asked to push to `main`) titled `release: vX.Y.Z`, change only:
    - `package.json` `version` to `X.Y.Z`;
-   - `CHANGELOG.md`: rename `## Unreleased` to `## X.Y.Z (YYYY-MM-DD)` (today's date, plus `, private preview`
-     while the package is private), add a one-line summary under it, and put a new empty `## Unreleased` above it;
-   - version mentions in README.md's install lines.
+   - `CHANGELOG.md`: rename `## Unreleased` to `## X.Y.Z (YYYY-MM-DD)` (today's date), add a one-line summary
+     under it, and put a new empty `## Unreleased` above it;
+   - version mentions in the docs, if any pin one.
 3. `bun scripts/release-notes.ts vX.Y.Z` must print the notes. Optionally run the install check locally:
    `bun pm pack && scripts/release-smoke.sh capcomd-X.Y.Z.tgz X.Y.Z`.
 4. The live end-to-end run (`scripts/mac-subagents-e2e.sh`) needs a maintainer's boxd, GitHub and agent logins:
    ask the maintainer to run it, or to waive it, and say which happened in the PR.
 5. After the release commit is on `main` and its CI passed, tag that exact commit and push only the tag:
    `git tag -a vX.Y.Z -m "capcomd X.Y.Z" <sha> && git push origin vX.Y.Z`.
-6. Watch the Release workflow (`gh run watch`) and report the release URL, or the failing job and its log.
+6. Watch the Release workflow (`gh run watch`) and report the release URL and the npm version
+   (`npm view capcomd@X.Y.Z version`), or the failing job and its log.
 
 Never:
 
 - create, edit or upload GitHub releases or their files by hand: the workflow is the only publisher, and re-running
   it (Actions → Release → Run workflow, with the tag) updates the release in place;
 - move, delete or re-push a published tag: fix forward with a patch release;
-- `npm publish`, or remove `"private": true` from `package.json`, without a maintainer's explicit decision;
+- `npm publish` by hand, `npm unpublish`/`npm deprecate`, or change npm dist-tags: the workflow publishes, and
+  anything else on npm is a maintainer's decision;
+- change `LICENSE`, the package name, or anything in `publishConfig` without a maintainer's explicit decision;
 - tag a commit that isn't on `main` or whose CI didn't pass (the workflow refuses the first, the second is on you).

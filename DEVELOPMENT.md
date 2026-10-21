@@ -143,13 +143,17 @@ the changelog, what never to do by hand). By hand, before tagging:
 The tag runs the release workflow: it checks the tag is on `main`, matches `package.json` and has a changelog
 section; runs typecheck, `test:fast`, the TUI tests and `test:scenarios` on Linux and macOS, and one strict chaos
 round; packs the package and installs it with a fresh `HOME` on both (`scripts/release-smoke.sh`: `setup demo`, a run
-with fake agents, `setup check`, the service definition, state only in `~/.capcomd`); then publishes the GitHub
-release with `capcomd-X.Y.Z.tgz`, its `.sha256` and the changelog section. Any failure publishes nothing; fix, then
+with fake agents, `setup check`, the service definition, state only in `~/.capcomd`); then publishes that package
+to npm and the GitHub release with `capcomd-X.Y.Z.tgz`, its `.sha256` and the changelog section. Any failure publishes nothing; fix, then
 re-run the workflow (Actions → Release → Run workflow, with the tag), which updates the release in place. Moving a
 tag that's already published needs `git push --force origin vX.Y.Z` and is best avoided: cut X.Y.Z+1 instead.
 
-`"private": true` stays while releases are private previews (it blocks an accidental `npm publish`; git installs
-work). A standalone binary (`bun build --compile`) builds, but `serve` doesn't work compiled yet (ROADMAP.md).
+npm: the workflow publishes the exact package it tested, with provenance, under the `latest` dist-tag (`next` for
+`X.Y.Z-rc.N`). It authenticates with the repository secret `NPM_TOKEN` (an npm automation token), or with npm
+trusted publishing once that's configured for this repository on npmjs.com (then the secret can go). A version
+that's already on npm is skipped, so re-runs are safe. Never `npm publish` by hand.
+
+A standalone binary (`bun build --compile`) builds, but `serve` doesn't work compiled yet (ROADMAP.md).
 
 ## Naming (renamed from relay)
 
