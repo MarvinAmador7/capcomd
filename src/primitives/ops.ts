@@ -18,6 +18,7 @@ import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
 import { parseVerdict, reviewBrief } from "./review";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
+import { stateDir } from "../utils/home";
 
 const LEASE_MS = Number(env("DRIVER_LEASE_MS") ?? 15_000);
 const POLL_MS = Number(env("AWAIT_POLL_MS") ?? 300);
@@ -292,7 +293,7 @@ export async function budgetShow(runId: string, agentId?: string) {
 /** Launch a detached driver process for one agent (logs in .relay/drivers/). */
 export function startDriver(runId: string, agentId: string) {
   if (env("NO_DRIVER") === "1") return;
-  const dir = join(process.cwd(), ".relay", "drivers");
+  const dir = join(stateDir(), "drivers");
   mkdirSync(dir, { recursive: true });
   const fd = openSync(join(dir, `${agentId}.log`), "a");
   const cli = new URL("../cli/index.ts", import.meta.url).pathname;
@@ -305,7 +306,7 @@ export function startDriver(runId: string, agentId: string) {
  * driver resumes where a crashed one stopped. Returns the agent's final record.
  */
 export async function driveAgent(runId: string, agentId: string): Promise<ScopeAgent> {
-  try { const d = join(process.cwd(), ".relay", "drivers"); mkdirSync(d, { recursive: true }); writeFileSync(join(d, `${agentId}.pid`), String(process.pid)); } catch {}
+  try { const d = join(stateDir(), "drivers"); mkdirSync(d, { recursive: true }); writeFileSync(join(d, `${agentId}.pid`), String(process.pid)); } catch {}
   // Retry the (idempotent) steps; only an error that persists while the engine answers marks the
   // agent failed. If the engine is down, the last finish() throws too, and the lease expires
   // so the next await/wait-any resumes the agent.

@@ -8,6 +8,7 @@ import { z } from "zod";
 import { SCHEMA, toRelayError } from "../core/errors";
 import { approveTask, assertEngine, cancelRun, generateRunId, getStatus, listEvents, paginate } from "../core/relay";
 import { loadTrace } from "../cli/commands/trace";
+import { stateDir } from "../utils/home";
 
 const REPO = resolve(new URL("../..", import.meta.url).pathname);
 const CLI = join(REPO, "src", "cli", "index.ts");
@@ -41,7 +42,7 @@ function fit<T>(items: T[], wrap: (items: T[], cut: boolean) => Record<string, u
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function startDetachedRun(goal: string, runId: string, targetBranch?: string) {
-  const dir = join(REPO, ".relay", "runs");
+  const dir = join(stateDir(), "runs");
   mkdirSync(dir, { recursive: true });
   const log = join(dir, `${runId}.ndjson`);
   const fd = openSync(log, "a");

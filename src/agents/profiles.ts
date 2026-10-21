@@ -4,6 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { env as envVar } from "../utils/env";
+import { defaultAgentsFile } from "../utils/home";
 
 export const AGENTS_SCHEMA = "capcomd.agents/v1";
 export type Provider = "claude" | "codex";
@@ -221,7 +222,7 @@ export function validateFile(raw: unknown): string[] {
 }
 
 export function agentsFilePath(source: Record<string, string | undefined> = process.env): string {
-  return envVar("AGENTS_FILE", source) ?? resolve(new URL("../..", import.meta.url).pathname, ".capcomd", "agents.json");
+  return envVar("AGENTS_FILE", source) ?? defaultAgentsFile(source);
 }
 export function readAgentsFile(path = agentsFilePath()): AgentsFile {
   if (!existsSync(path)) return { schema: AGENTS_SCHEMA, agents: {} };

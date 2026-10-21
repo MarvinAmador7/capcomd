@@ -3,7 +3,7 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { SandboxProvider, VmId, VmSpec, ExecResult, VmInfo } from "./sandbox";
 import {
   SandboxConfigError,
@@ -13,6 +13,7 @@ import {
   mapBoxdError,
 } from "./boxd-errors";
 import { env } from "../utils/env";
+import { stateDir } from "../utils/home";
 
 export * from "./boxd-errors";
 
@@ -126,7 +127,7 @@ export class BoxdProvider implements SandboxProvider {
     this.keepaliveMs = opts.keepaliveMs ?? 30 * 60_000;
     this.org = opts.org ?? process.env.BOXD_ORG;
     this.prefix = opts.namePrefix ?? "relay-";
-    const path = opts.dbPath ?? env("BOXD_DB") ?? resolve(new URL("../..", import.meta.url).pathname, ".relay", "boxd.sqlite");
+    const path = opts.dbPath ?? env("BOXD_DB") ?? join(stateDir(), "boxd.sqlite");
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true });
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;");

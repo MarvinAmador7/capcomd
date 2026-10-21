@@ -33,7 +33,8 @@ Usage:
                                        Pick an agent profile; overrides only narrow it
                                        (e.g. --set children.maxDepth=1 --set maxTurns=10)
                                        unless --operator
-                                       Start or resume a run
+                                       Start or resume a run (EXPERIMENTAL: the recipe's planner
+                                       and judge still use a fake model; see STATUS.md)
   capcomd status <runId>                 Show run status
   capcomd cancel <runId>                 Cancel a run
   capcomd events <runId> [--cursor N] [--limit N]
@@ -82,6 +83,7 @@ Options:
   --json        Machine-readable output (schema "${SCHEMA}"); run streams NDJSON
   --detach      With run: start in the background and print {runId}
   -h, --help    Show this help
+  --version     Print the version (also: capcomd version)
 
 Exit codes: 0 ok, 1 run failed, 2 usage, 3 not found, 4 engine unreachable
 `;
@@ -104,6 +106,7 @@ async function main(argv: string[]): Promise<number> {
       options: {
         help: { type: "boolean", short: "h" },
         json: { type: "boolean" },
+        version: { type: "boolean" },
         detach: { type: "boolean" },
         port: { type: "string", default: "6420" },
         "run-id": { type: "string" },
@@ -200,6 +203,11 @@ async function main(argv: string[]): Promise<number> {
   const out = (obj: Record<string, unknown>) => console.log(JSON.stringify({ schema: SCHEMA, ok: true, ...obj }));
 
   try {
+    if (values.version || command === "version") {
+      const { version } = JSON.parse(readFileSync(join((await import("../utils/home")).PACKAGE_ROOT, "package.json"), "utf8"));
+      if (json) out({ version }); else console.log(`capcomd ${version}`);
+      return EXIT.ok;
+    }
     if (values.help || !command) {
       console.log(HELP);
       return command || values.help ? EXIT.ok : EXIT.usage;
@@ -244,6 +252,8 @@ async function main(argv: string[]): Promise<number> {
         }
         const rawGoal = positionals[1];
         if (!rawGoal) usage("goal required: capcomd run <goal>");
+        // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
+        if (process.stderr.isTTY) console.error("capcomd run is experimental: its planner and judge still use a fake model. For real work use the primitives (run new, spawn, verify, merge); see STATUS.md.");
         // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
         // the planner/worker/preflight read. Overrides may only narrow the profile unless --operator.
         const agentFlag = (values.profile ?? values.agent) as string | undefined;
@@ -267,7 +277,7 @@ async function main(argv: string[]): Promise<number> {
         await assertEngine();
 
         if (values.detach) {
-          const dir = resolve(new URL("../..", import.meta.url).pathname, ".relay", "runs");
+          const dir = join((await import("../utils/home")).stateDir(), "runs");
           mkdirSync(dir, { recursive: true });
           const log = join(dir, `${runId}.ndjson`);
           const fd = openSync(log, "a");

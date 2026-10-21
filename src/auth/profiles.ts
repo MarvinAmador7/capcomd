@@ -1,8 +1,9 @@
 // Subscription auth profiles: local ledger + resolution (ADR-015 §5).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { env as envVar } from "../utils/env";
 import { ENV_PREFIX } from "../env/resolve";
+import { stateDir } from "../utils/home";
 
 export type ProfileAgent = "claude-code" | "codex";
 export interface AuthProfile {
@@ -25,7 +26,7 @@ export const CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN";
 export const authSnapshotName = (agent: ProfileAgent, envSnapshot: string) => `${AUTH_PREFIX}${agent === "claude-code" ? "claude" : "codex"}-${envSnapshot.replace(ENV_PREFIX, "")}`;
 
 export function authLedgerPath(source: Record<string, string | undefined> = process.env): string {
-  return envVar("AUTH_LEDGER", source) ?? resolve(new URL("../..", import.meta.url).pathname, ".relay", "auths.json");
+  return envVar("AUTH_LEDGER", source) ?? join(stateDir(source), "auths.json");
 }
 export function readAuthLedger(path = authLedgerPath()): AuthLedger {
   if (!existsSync(path)) return {};

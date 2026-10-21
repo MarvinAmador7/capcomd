@@ -10,6 +10,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { env } from "./env";
+import { tracesDir } from "./home";
 
 export interface SimpleSpan {
   traceId: string;
@@ -30,7 +31,7 @@ const als = new AsyncLocalStorage<SimpleSpan>();
 export function traceDir(): string {
   return env("TRACE_DIR")
     ? resolve(env("TRACE_DIR")!)
-    : resolve(new URL("../..", import.meta.url).pathname, ".traces");
+    : tracesDir();
 }
 
 export function tracePath(runId: string, dir = traceDir()): string {

@@ -1,8 +1,9 @@
 // Env snapshot naming, local ledger, and worker-side resolution.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { env as envVar } from "../utils/env";
+import { stateDir } from "../utils/home";
 
 export const ENV_PREFIX = "capcomd-env-";
 export const ENV_SCHEMA = 1;
@@ -36,7 +37,7 @@ export function envName(m: EnvManifest): string {
 }
 
 export function ledgerPath(source: Record<string, string | undefined> = process.env): string {
-  return envVar("ENV_LEDGER", source) ?? resolve(new URL("../..", import.meta.url).pathname, ".relay", "envs.json");
+  return envVar("ENV_LEDGER", source) ?? join(stateDir(source), "envs.json");
 }
 export function readLedger(path = ledgerPath()): EnvLedger {
   if (!existsSync(path)) return { history: [] };
