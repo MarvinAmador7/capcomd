@@ -56,17 +56,37 @@ describe("setup steps (non-interactive)", () => {
     expect(again.steps.find((s: any) => s.step === "profiles").detail).toContain("kept existing worker, reviewer, planner");
   });
 
-  test("agent: installs the orchestration skill for Claude Code", () => {
-    const r = json(run(["setup", "agent", "--yes", "--json"], { cwd: repo, env }).out);
+  test("agent: no Claude Code or Codex CLI: installs the orchestration skill and says how to add the MCP server", () => {
+    const r = json(run(["setup", "agent", "--yes", "--json"], { cwd: repo, env: { ...env, CAPCOMD_CLAUDE_CLI: "/nonexistent/claude", CAPCOMD_CODEX_CLI: "/nonexistent/codex" } }).out);
     expect(r.ok).toBe(true);
+    expect(r.steps[0].detail).toContain("claude mcp add capcomd -- capcomd mcp");
     expect(existsSync(join(home, ".claude", "skills", "capcomd-orchestration", "SKILL.md"))).toBe(true);
+  });
+
+  test("agent: with Claude Code and Codex, installs the plugin from the marketplace and replaces the old skill copy", () => {
+    const bin = mkdtempSync(join(tmpdir(), "capcomd-setup-bin-"));
+    const calls = join(bin, "calls.log");
+    // Fake CLIs: record calls; claude reports the plugin installed afterwards.
+    writeFileSync(join(bin, "claude"), `#!/bin/sh\necho "claude $@" >> ${JSON.stringify(calls)}\ncase "$1 $2" in\n  "plugin install") echo '{"outcome":"ok","plugin":"capcomd@capcomd"}' ;;\n  "plugin list") echo '[{"id":"capcomd@capcomd","enabled":true}]' ;;\nesac\nexit 0\n`);
+    writeFileSync(join(bin, "codex"), `#!/bin/sh\necho "codex $@" >> ${JSON.stringify(calls)}\nexit 0\n`);
+    Bun.spawnSync(["chmod", "+x", join(bin, "claude"), join(bin, "codex")]);
+    const e = { ...env, CAPCOMD_CLAUDE_CLI: join(bin, "claude"), CAPCOMD_CODEX_CLI: join(bin, "codex"), CAPCOMD_PLUGIN_MARKETPLACE: "acme/capcomd-fork" };
+    const r = json(run(["setup", "agent", "--yes", "--json"], { cwd: repo, env: e }).out);
+    expect(r.ok).toBe(true);
+    expect(r.steps.map((s: any) => s.step)).toEqual(["claude plugin", "codex plugin"]);
+    const log = readFileSync(calls, "utf8");
+    expect(log).toContain("claude plugin install capcomd --marketplace acme/capcomd-fork --json");
+    expect(log).toContain("codex plugin marketplace add acme/capcomd-fork");
+    expect(existsSync(join(home, ".claude", "skills", "capcomd-orchestration"))).toBe(false);
+    const c = json(run(["setup", "check", "--json"], { cwd: repo, env: { ...e, BOXD_API_KEY: "" } }).out);
+    expect(c.steps.find((s: any) => s.step === "agent plugin")).toMatchObject({ ok: true });
   });
 
   test("check: reports the project and the skill; no engine and no key show as not ok with a hint", () => {
     const r = run(["setup", "check", "--json"], { cwd: repo, env: { ...env, BOXD_API_KEY: "" } });
     const steps = json(r.out).steps as any[];
     expect(steps.find((s) => s.step === "project")).toMatchObject({ ok: true });
-    expect(steps.find((s) => s.step === "agent skill")).toMatchObject({ ok: true });
+    expect(steps.find((s) => s.step === "agent plugin")).toMatchObject({ ok: false });
     expect(steps.find((s) => s.step === "boxd key")).toMatchObject({ ok: false });
     expect(r.code).toBe(1);
   });

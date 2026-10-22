@@ -29,7 +29,8 @@ Procedure:
 
 1. Start from an up-to-date `main` with green CI. Read the `## Unreleased` entries and pick the version from them.
 2. In one PR (or commit, if asked to push to `main`) titled `release: vX.Y.Z`, change only:
-   - `package.json` `version` to `X.Y.Z`;
+   - `version` to `X.Y.Z` in `package.json` and both plugin manifests (`plugins/capcomd/.claude-plugin/plugin.json`,
+     `plugins/capcomd/.codex-plugin/plugin.json`; CI checks they agree);
    - `CHANGELOG.md`: rename `## Unreleased` to `## X.Y.Z (YYYY-MM-DD)` (today's date), add a one-line summary
      under it, and put a new empty `## Unreleased` above it;
    - version mentions in the docs, if any pin one.

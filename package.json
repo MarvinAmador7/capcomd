@@ -28,7 +28,7 @@
   },
   "files": [
     "src",
-    "skills",
+    "plugins",
     "docs/*.md",
     "docs/upstream",
     "README.md",

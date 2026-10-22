@@ -1,16 +1,17 @@
 // `capcomd setup`: from install to a working setup in one guided pass, and `capcomd setup --check` to verify it.
 //   0. demo      try it locally with fake agents (no accounts), optional
-//   1. accounts  boxd key (validated, kept in the OS keychain), env snapshot, Claude/Codex logins, doctor
+//   1. accounts  boxd key (made with the logged-in boxd CLI, or given; validated; kept in the OS keychain),
+//                env snapshot, Claude/Codex logins, doctor
 //   2. project   repository, target branch, PR or direct merges, a default check, worker/reviewer/planner profiles
-//   3. agent     the orchestration skill for Claude Code, and a prompt to try
+//   3. agent     the capcomd plugin (MCP tools and skills) for Claude Code and Codex, and a prompt to try
 //   4. service   the engine as a background service
 // Each step also runs alone (`capcomd setup project`). Without a terminal, or with --yes, prompts take their
 // defaults and flags, so agents and scripts can run setup too. Settings land in ~/.capcomd/config.json (user)
 // and <project>/.capcomd/config.json; the boxd key never sits in a file unless there is no keychain and you agree.
 import { spawnSync } from "child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { homedir, tmpdir } from "os";
-import { join } from "path";
+import { homedir, hostname, tmpdir } from "os";
+import { dirname, join } from "path";
 import { capcomdHome, PACKAGE_ROOT } from "../../utils/home";
 import { projectConfigPath, readConfig, userConfigPath, writeConfig } from "../../config/store";
 import { keychainGet, keychainKind, keychainSet } from "../../config/keychain";
@@ -94,23 +95,90 @@ async function validBoxdKey(key: string): Promise<boolean> {
   } catch { return false; }
 }
 
-/** 1a. The boxd key: from the environment, the keychain, or asked for; validated; kept in the keychain. */
-export async function boxdKeyStep(p: Prompter, v: Values): Promise<Step> {
+export interface BoxdOrg { id: string; name: string; active: boolean }
+export interface BoxdCli { installed: boolean; loggedIn: boolean; user?: string; orgs: BoxdOrg[] }
+/** The boxd CLI binary (CAPCOMD_BOXD_CLI overrides it, for tests). */
+const boxdBin = () => process.env.CAPCOMD_BOXD_CLI ?? "boxd";
+/** The JSON object in a boxd CLI's output (it may print an update notice first). */
+function boxdJson(out: string): any {
+  const i = out.indexOf("{");
+  try { return i >= 0 ? JSON.parse(out.slice(i)) : null; } catch { return null; }
+}
+
+/** Is the boxd CLI installed, and is someone logged in (`boxd auth --json`)? */
+export function boxdCli(): BoxdCli {
+  const r = spawnSync(boxdBin(), ["auth", "--json"], { encoding: "utf8", timeout: 20_000 });
+  if (r.error) return { installed: false, loggedIn: false, orgs: [] };
+  const j = r.status === 0 ? boxdJson(r.stdout ?? "") : null;
+  if (!j?.user_id) return { installed: true, loggedIn: false, orgs: [] };
+  return { installed: true, loggedIn: true, user: j.display_name ?? j.user_id, orgs: (j.orgs ?? []).map((o: any) => ({ id: String(o.id), name: String(o.name ?? o.id), active: !!o.active })) };
+}
+
+/** A key just for capcomd, made with the logged-in boxd CLI: named, fenced to one org, revocable on its own. */
+export function boxdKeyName(): string {
+  return `capcomd-${hostname().split(".")[0]!.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40) || "host"}`;
+}
+function mintBoxdKey(name: string, org: string): { key: string } | { error: string } {
+  const r = spawnSync(boxdBin(), ["auth", "keys", "create", name, "--org", org, "--json"], { encoding: "utf8", timeout: 30_000 });
+  const j = r.status === 0 ? boxdJson(r.stdout ?? "") : null;
+  if (typeof j?.api_key === "string" && j.api_key) return { key: j.api_key };
+  return { error: (r.stderr || r.stdout || "no output").trim().split("\n").pop()!.slice(0, 200) };
+}
+
+/** Make a key with the boxd CLI when it's logged in; otherwise say exactly what the person has to do. */
+async function keyFromBoxdCli(p: Prompter, v: Values): Promise<{ key: string; from: string } | Step> {
+  const cli = boxdCli();
+  const paste = "or paste an existing key when setup asks (interactive)";
+  if (!cli.installed) return { step: "boxd key", ok: false, detail: "no boxd key, and the boxd CLI isn't installed", hint: `Install it (\`curl -fsSL https://boxd.sh/downloads/install.sh | sh\`), run \`boxd auth login\`, then run setup again; ${paste}, or export BOXD_API_KEY.` };
+  if (!cli.loggedIn) return { step: "boxd key", ok: false, detail: "no boxd key, and the boxd CLI isn't logged in", hint: `Run \`boxd auth login\` (opens a browser), then run setup again; ${paste}, or export BOXD_API_KEY.` };
+  const wanted = typeof v.org === "string" ? v.org : undefined;
+  let org = wanted ? cli.orgs.find((o) => o.id === wanted || o.name === wanted) : cli.orgs.find((o) => o.active) ?? (cli.orgs.length === 1 ? cli.orgs[0] : undefined);
+  if (wanted && !org) return { step: "boxd key", ok: false, detail: `you're not in a boxd org named ${wanted}`, hint: `Your orgs: ${cli.orgs.map((o) => o.name).join(", ")}. Pass one with --org.` };
+  if (!org && p.interactive && cli.orgs.length) {
+    const id = await p.choose("Which boxd org should capcomd's VMs run in?", cli.orgs.map((o) => ({ value: o.id, label: o.name })), cli.orgs[0]!.id);
+    org = cli.orgs.find((o) => o.id === id);
+  }
+  if (!org) return { step: "boxd key", ok: false, detail: "you're in several boxd orgs and none is active", hint: `Pick one with --org (${cli.orgs.map((o) => o.name).join(", ")}), or \`boxd auth switch\`.` };
+  const name = boxdKeyName();
+  if (!(await p.confirm(`Create a boxd API key "${name}" for capcomd in org "${org.name}" (as ${cli.user})?`, true))) return { step: "boxd key", ok: false, detail: "no key created", hint: "Export BOXD_API_KEY, or run setup again and let it create one." };
+  const m = mintBoxdKey(name, org.id);
+  if ("error" in m) return { step: "boxd key", ok: false, detail: `boxd couldn't create a key: ${m.error}`, hint: "Try `boxd auth keys create capcomd` yourself and export BOXD_API_KEY." };
+  return { key: m.key, from: `created "${name}" in ${org.name}; revoke with \`boxd auth keys rm ${name}\`` };
+}
+
+/**
+ * 1a. The boxd key: from the environment or the keychain; else made with the logged-in boxd CLI (a key just for
+ * capcomd, never shown); else pasted. Validated, then kept in the OS keychain.
+ */
+export interface KeyDeps { validate: (key: string) => Promise<boolean>; kcGet: () => string | null; kcSet: (key: string) => void; kcKind: () => string | null }
+const realKeyDeps: KeyDeps = { validate: validBoxdKey, kcGet: () => keychainGet(), kcSet: (k) => keychainSet(k), kcKind: () => keychainKind() };
+
+export async function boxdKeyStep(p: Prompter, v: Values, deps: KeyDeps = realKeyDeps): Promise<Step> {
+  const validBoxdKey = deps.validate;
   let key = process.env.BOXD_API_KEY ?? "";
   let from = key ? "environment" : "";
-  if (!key) { const k = keychainGet(); if (k) { key = k; from = "keychain"; } }
-  if (!key) {
-    if (!p.interactive) return { step: "boxd key", ok: false, detail: "no BOXD_API_KEY", hint: "Export BOXD_API_KEY (create one with `boxd auth keys create capcomd`) and run setup again." };
-    key = await p.secret("boxd API key (bxd_…; create one with `boxd auth keys create capcomd`)");
-    from = "entered";
+  if (!key) { const k = deps.kcGet(); if (k) { key = k; from = "keychain"; } }
+  if (key && !(await validBoxdKey(key))) {
+    if (from === "environment") return { step: "boxd key", ok: false, detail: "BOXD_API_KEY was rejected by boxd", hint: "Check it with `boxd auth keys list`, or unset it and run setup again to create one." };
+    key = ""; from = ""; // a stale keychain key: replace it
   }
-  if (!(await validBoxdKey(key))) return { step: "boxd key", ok: false, detail: `the key (${from}) was rejected by boxd`, hint: "Check it with `boxd auth keys list`, or create a new one." };
+  if (!key) {
+    const made = await keyFromBoxdCli(p, v);
+    if ("key" in made) { key = made.key; from = made.from; }
+    else {
+      if (!p.interactive) return made;
+      key = await p.secret(`boxd API key (bxd_…). ${made.detail}; ${made.hint}`);
+      from = "entered";
+    }
+    if (!(await validBoxdKey(key))) return { step: "boxd key", ok: false, detail: `the key (${from}) was rejected by boxd`, hint: "Check it with `boxd auth keys list`, or create a new one." };
+  }
   process.env.BOXD_API_KEY = key;
   let stored = from === "keychain" ? "keychain" : "";
   if (!stored && v["no-store"] !== true) {
-    const kc = keychainKind();
-    if (kc && await p.confirm(`Keep the key in the ${kc === "macos" ? "macOS Keychain" : "Secret Service"}?`, true)) { keychainSet(key); stored = "keychain"; }
-    else if (!kc && p.interactive && await p.confirm(`No OS keychain found. Store the key in ${join(capcomdHome(), "credentials")} (readable only by you)?`, false)) {
+    const kc = deps.kcKind();
+    if (kc && await p.confirm(`Keep the key in the ${kc === "macos" ? "macOS Keychain" : "Secret Service"}?`, true)) { deps.kcSet(key); stored = "keychain"; }
+    // A key setup just created exists nowhere else: without a keychain it goes to the 0600 file rather than be lost.
+    else if (!kc && (from.startsWith("created") || (p.interactive && await p.confirm(`No OS keychain found. Store the key in ${join(capcomdHome(), "credentials")} (readable only by you)?`, false)))) {
       mkdirSync(capcomdHome(), { recursive: true });
       writeFileSync(join(capcomdHome(), "credentials"), JSON.stringify({ BOXD_API_KEY: key }) + "\n", { mode: 0o600 });
       stored = "file";
@@ -196,15 +264,55 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
   ];
 }
 
-/** 3. The orchestration skill for Claude Code (an agent then drives capcomd for you). */
-export async function agentIntegrationStep(p: Prompter, v: Values): Promise<Step> {
-  const dest = join(homedir(), ".claude", "skills", "capcomd-orchestration");
-  const src = join(PACKAGE_ROOT, "skills", "capcomd-orchestration");
-  if (v["no-skill"] === true || !(await p.confirm("Install the capcomd orchestration skill for Claude Code?", true))) return { step: "agent skill", ok: true, detail: "skipped" };
-  if (!existsSync(join(src, "SKILL.md"))) return { step: "agent skill", ok: false, detail: `skill not found in ${src}` };
-  mkdirSync(join(homedir(), ".claude", "skills"), { recursive: true });
-  cpSync(src, dest, { recursive: true });
-  return { step: "agent skill", ok: true, detail: `installed in ${dest}. Try, in Claude Code: "Use capcomd to fix the failing tests: one worker per file, each verified and reviewed, then merged."` };
+/** Where the capcomd plugin comes from: this repository's marketplace (CAPCOMD_PLUGIN_MARKETPLACE: a path, for tests). */
+export const pluginMarketplace = () => process.env.CAPCOMD_PLUGIN_MARKETPLACE ?? "MarvinAmador7/capcomd";
+const claudeBin = () => process.env.CAPCOMD_CLAUDE_CLI ?? "claude";
+const codexBin = () => process.env.CAPCOMD_CODEX_CLI ?? "codex";
+const runs = (cmd: string) => { const r = spawnSync(cmd, ["--version"], { encoding: "utf8", timeout: 15_000 }); return !r.error && r.status === 0; };
+const legacySkill = () => join(homedir(), ".claude", "skills", "capcomd-orchestration");
+
+/** Is the capcomd plugin installed and enabled in Claude Code? */
+export function claudePluginInstalled(): boolean {
+  const r = spawnSync(claudeBin(), ["plugin", "list", "--json"], { encoding: "utf8", timeout: 30_000 });
+  if (r.error || r.status !== 0) return false;
+  try { return (JSON.parse(r.stdout) as any[]).some((x) => String(x.id).startsWith("capcomd@") && x.enabled !== false); } catch { return false; }
+}
+
+/**
+ * 3. capcomd in your agents: the plugin (the MCP tools and the orchestration and setup skills) for Claude Code and
+ * Codex. Without either CLI, the orchestration skill for Claude Code and the line that registers the MCP server.
+ */
+export async function agentIntegrationStep(p: Prompter, v: Values): Promise<Step[]> {
+  if (v["no-skill"] === true || v["no-plugin"] === true) return [{ step: "agent plugin", ok: true, detail: "skipped" }];
+  const source = pluginMarketplace();
+  const steps: Step[] = [];
+  const hasClaude = runs(claudeBin()), hasCodex = runs(codexBin());
+  const tryIt = `Then ask your agent: "Use capcomd to fix the failing tests: one worker per file, each verified and reviewed, then merged."`;
+  if (hasClaude && await p.confirm("Install the capcomd plugin in Claude Code (MCP tools and skills)?", true)) {
+    const r = spawnSync(claudeBin(), ["plugin", "install", "capcomd", "--marketplace", source, "--json"], { encoding: "utf8", timeout: 300_000 });
+    const out: any = json(r.stdout ?? "");
+    const ok = r.status === 0 && (out?.outcome === "ok" || claudePluginInstalled());
+    // The plugin carries the skill now; an older copy setup made would load twice.
+    if (ok && existsSync(join(legacySkill(), "SKILL.md"))) rmSync(legacySkill(), { recursive: true, force: true });
+    steps.push(ok
+      ? { step: "claude plugin", ok, detail: `installed capcomd@capcomd (from ${source}). Restart Claude Code, or run /reload-plugins. ${tryIt}` }
+      : { step: "claude plugin", ok, detail: `install failed: ${(out?.message ?? r.stderr ?? r.stdout ?? "").toString().trim().slice(0, 200)}`, hint: `In Claude Code: \`/plugin install capcomd --marketplace ${source}\`.` });
+  }
+  if (hasCodex && await p.confirm("Add the capcomd plugin marketplace to Codex?", true)) {
+    const r = spawnSync(codexBin(), ["plugin", "marketplace", "add", source], { encoding: "utf8", timeout: 300_000 });
+    const ok = r.status === 0 || /already/i.test(`${r.stdout}${r.stderr}`);
+    steps.push(ok
+      ? { step: "codex plugin", ok, detail: `marketplace added (${source}): install capcomd from /plugins in Codex. ${tryIt}` }
+      : { step: "codex plugin", ok, detail: `marketplace add failed: ${(r.stderr || r.stdout || "").trim().slice(0, 200)}`, hint: `Run \`codex plugin marketplace add ${source}\`, then install capcomd from /plugins.` });
+  }
+  if (steps.length) return steps;
+  // No plugin host: the skill alone (agents with a shell use the CLI), and how to register the MCP server.
+  const src = join(PACKAGE_ROOT, "plugins", "capcomd", "skills", "capcomd-orchestration");
+  if (!existsSync(join(src, "SKILL.md"))) return [{ step: "agent skill", ok: false, detail: `skill not found in ${src}` }];
+  if (!(await p.confirm("No Claude Code or Codex CLI found. Install the capcomd skill for Claude Code anyway?", true))) return [{ step: "agent skill", ok: true, detail: "skipped" }];
+  mkdirSync(dirname(legacySkill()), { recursive: true });
+  cpSync(src, legacySkill(), { recursive: true });
+  return [{ step: "agent skill", ok: true, detail: `skill installed in ${legacySkill()}; for the MCP tools: \`claude mcp add capcomd -- capcomd mcp\`. ${tryIt}` }];
 }
 
 /** 4. The engine as a background service. */
@@ -227,7 +335,9 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
   const auth = json(self(["auth", "status", "--json"]).stdout)?.profiles ?? [];
   for (const a of auth) out.push({ step: `${a.agent} login`, ok: !!a.present && a.valid !== false, detail: a.detail ?? (a.present ? a.store : "not logged in") });
   out.push({ step: "project", ok: !!proj.env?.CAPCOMD_REPO, detail: projPath ? `${proj.env?.CAPCOMD_REPO ?? "no repo"} → ${proj.env?.CAPCOMD_MERGE_TARGET ?? "main"} (${projPath})` : "no .capcomd/config.json here or above", ...(proj.env?.CAPCOMD_REPO ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
-  out.push({ step: "agent skill", ok: existsSync(join(homedir(), ".claude", "skills", "capcomd-orchestration", "SKILL.md")), detail: "Claude Code skill" });
+  const plugin = runs(claudeBin()) && claudePluginInstalled();
+  const skill = existsSync(join(legacySkill(), "SKILL.md"));
+  out.push({ step: "agent plugin", ok: plugin || skill, detail: plugin ? "capcomd plugin in Claude Code (MCP tools and skills)" : skill ? "Claude Code skill only (no MCP tools)" : "not installed", ...(plugin ? {} : { hint: `Run \`capcomd setup agent\`, or in Claude Code: \`/plugin install capcomd --marketplace ${pluginMarketplace()}\`.` }) });
   const S = await import("./service");
   const st: any = await S.serviceStatus({});
   out.push({ step: "engine", ok: st.running, detail: st.running ? `running on :${st.port}${st.installed ? " (service)" : ""}` : `not running${st.installed ? " (service installed)" : ""}`, ...(st.running ? {} : { hint: "`capcomd service install`, or `capcomd serve`." }) });
@@ -258,7 +368,7 @@ export async function setup(part: string | undefined, v: Values, log: (s: string
     if (!k.ok && all) return steps;
   }
   if (all || part === "project") { section("Project"); steps.push(...(await projectStep(p, v))); }
-  if (all || part === "agent") { section("Agent integration"); steps.push(await agentIntegrationStep(p, v)); }
+  if (all || part === "agent") { section("Agent integration"); steps.push(...(await agentIntegrationStep(p, v))); }
   if (all || part === "service") { section("Engine"); steps.push(await serviceStep(p, v)); }
   return steps;
 }

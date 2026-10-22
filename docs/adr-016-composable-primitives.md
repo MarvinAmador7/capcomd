@@ -3,7 +3,7 @@
 Status: accepted in part. Built: step 1 (run new, spawn, await, wait-any, cancel, tree) and step 2 (verify, `merge --require`). The rest is proposed. Supersedes the *enforcement* in ADR-001: the planner → worker → judge hierarchy becomes one composition of these primitives, and capcomd no longer mandates it.
 
 ## Decision
-capcomd provides durable, sandboxed, observable building blocks: agents, tasks, verification, merge, state and budgets. An orchestrator (Hermes, a script, or a capcomd agent with `children.allowSpawn`) composes them into patterns, guided by `skills/capcomd-orchestration/SKILL.md`. capcomd enforces safety, not shape: sandbox/egress, the auth rules (ADR-015 §6), children limits (§7), budgets, leases, verification-before-merge and the event log.
+capcomd provides durable, sandboxed, observable building blocks: agents, tasks, verification, merge, state and budgets. An orchestrator (Hermes, a script, or a capcomd agent with `children.allowSpawn`) composes them into patterns, guided by `plugins/capcomd/skills/capcomd-orchestration/SKILL.md`. capcomd enforces safety, not shape: sandbox/egress, the auth rules (ADR-015 §6), children limits (§7), budgets, leases, verification-before-merge and the event log.
 
 ## Surface (every command: `--json` envelope `{schema:"capcomd.v1", ok, ...}`, stable IDs, idempotency via `--key`)
 IDs: `run-…` (scope/budget root), `agt-…` (agent instance), `tsk-…`, `vfy-…`, `mrg-…`. Every agent has `parent` (an agent ID or the operator) and `depth`.

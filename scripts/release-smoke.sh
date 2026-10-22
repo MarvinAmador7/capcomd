@@ -49,6 +49,10 @@ SV=$(capcomd service install --dry-run --json | jget 'j.dryRun && j.body.include
 [ -n "$SV" ] && pass "service install --dry-run: ${SV#$HOME/}" || fail "service install --dry-run gave no definition"
 capcomd service status --json | jget 'j.installed' | grep -q false && pass "service status: not installed" || fail "service status"
 
+echo "== the plugin ships with the package"
+PKG="$BUN_INSTALL/install/global/node_modules/capcomd"
+[ -f "$PKG/plugins/capcomd/.claude-plugin/plugin.json" ] && [ -f "$PKG/plugins/capcomd/skills/capcomd-orchestration/SKILL.md" ] && pass "plugins/capcomd (manifest and skills)" || fail "the package has no plugins/capcomd"
+
 echo "== where state went"
 [ -d "$HOME/.capcomd/state" ] && pass "state in ~/.capcomd ($(cd "$HOME/.capcomd" && ls | tr '\n' ' '))" || fail "no ~/.capcomd/state"
 LEAK=$(find "$BUN_INSTALL" \( -name .relay -o -name .traces \) -path '*capcomd*' 2>/dev/null | head -3)

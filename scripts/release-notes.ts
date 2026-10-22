@@ -4,7 +4,7 @@
 // "Unreleased"); prints that section with relative links pointed at the tag, plus install lines. Exits 1 with the
 // reason otherwise. With GITHUB_OUTPUT set (in Actions), also writes version, title and prerelease there.
 // `--check` (CI, every push): CHANGELOG.md starts with `## Unreleased`, every other section is `## X.Y.Z (YYYY-MM-DD)`,
-// and package.json's version is the newest released section (the version only changes in a release commit).
+// and package.json's version (and the plugin manifests') is the newest released section (it only changes in a release commit).
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -23,7 +23,12 @@ if (tag === "--check") {
   for (const h of released) if (!/^## \d+\.\d+\.\d+(-[0-9A-Za-z.]+)? \(\d{4}-\d{2}-\d{2}\)/.test(h)) fail(`CHANGELOG.md heading "${h}" isn't "## X.Y.Z (YYYY-MM-DD)"`);
   const newest = released[0]?.split(" ")[1];
   if (newest !== pkg.version) fail(`package.json version ${pkg.version} isn't the newest CHANGELOG.md release (${newest}): change it only in a release commit`);
-  console.log(`CHANGELOG.md and package.json agree (${pkg.version}; ${released.length} releases)`);
+  // The plugin's manifests carry the same version (its launcher needs a capcomd at least that new).
+  for (const m of ["plugins/capcomd/.claude-plugin/plugin.json", "plugins/capcomd/.codex-plugin/plugin.json"]) {
+    const v = JSON.parse(readFileSync(join(root, m), "utf8")).version;
+    if (v !== pkg.version) fail(`${m} has version ${v}, package.json ${pkg.version}: bump them together in the release commit`);
+  }
+  console.log(`CHANGELOG.md, package.json and the plugin manifests agree (${pkg.version}; ${released.length} releases)`);
   process.exit(0);
 }
 if (tag !== `v${pkg.version}`) fail(`tag ${tag} doesn't match package.json version ${pkg.version} (expected v${pkg.version})`);

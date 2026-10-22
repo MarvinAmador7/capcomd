@@ -13,8 +13,8 @@ another agent, as the exact commit that was tested. Runs are durable: agents kee
 ends, a crash or a restart resumes where it stopped, and every merge happens exactly once.
 
 > **Early release (0.x).** The primitives, sub-agents, verification, review and durability are built and verified
-> live; expect changes between minor versions. Your agent drives capcomd through the skill and the CLI, or the
-> MCP server; a one-step plugin for Claude Code and Codex is next. See [STATUS.md](STATUS.md) and
+> live; expect changes between minor versions. Your agent drives capcomd through the plugin (MCP tools and
+> skills) or the CLI. See [STATUS.md](STATUS.md) and
 > [ROADMAP.md](ROADMAP.md).
 
 ## How you use it
@@ -116,48 +116,52 @@ change, and merged all three.
 **Requirements:** [Bun](https://bun.sh) ≥ 1.4, a sandbox provider account ([boxd](https://boxd.sh) today), a
 GitHub repository, and a Claude and/or ChatGPT plan (or Anthropic/OpenAI API keys).
 
-**1. Install**
+**1. Add capcomd to your agent.** The capcomd plugin gives your agent the MCP tools and two skills
+(orchestration, and setup):
 
 ```bash
-bun add -g capcomd
+# Claude Code
+/plugin install capcomd --marketplace MarvinAmador7/capcomd
+# Codex
+codex plugin marketplace add MarvinAmador7/capcomd     # then install capcomd from /plugins
 ```
 
-Each [release](https://github.com/MarvinAmador7/capcomd/releases) also has the package and its SHA-256 attached;
-the npm package is published by CI with [provenance](https://docs.npmjs.com/generating-provenance-statements).
+**2. Ask your agent to set it up**, in the repository the agents should work on:
 
-**2. Set up** (inside the repository the agents should work on)
+> Set up capcomd for this repository.
 
-```bash
-cd ~/code/app
-capcomd setup          # a local demo first (no accounts), then your provider key, agent logins, repo, skill, engine
-```
+It installs the CLI (`bun add -g capcomd`), connects your sandbox provider (with the boxd CLI logged in, it creates
+a key just for capcomd and keeps it in your OS keychain), builds the agent VM snapshot, detects your repository,
+target branch and test command, and starts the engine. A few steps are yours: logging in to boxd
+(`boxd auth login`) and your agents (`capcomd auth login claude`) open a browser, and you confirm the gates (the
+checks, the reviewer, the target branch). Prefer a terminal? `bun add -g capcomd && capcomd setup` does the same,
+including the plugin, and can be re-run safely; `capcomd setup check` shows what's configured.
 
-`capcomd setup` walks through each step and can be re-run safely: it keeps your provider key in the OS keychain,
-builds the agent VM snapshot, logs your agents in with your plan (or API keys), detects your repository, target
-branch and test command, creates `worker`, `reviewer` and `planner` profiles, installs the orchestration skill for
-Claude Code, and runs the engine as a background service. `capcomd setup check` shows what's configured. Your agent
-can run it too: `capcomd setup --yes` takes the defaults without prompting.
-
-**3. Ask your agent.** Open your agent in the repository and describe the outcome:
+**3. Ask for the outcome:**
 
 > Use capcomd to fix the failing tests in `src/`: one worker per file, each verified and reviewed, then merged.
 
 > Use capcomd to add rate limiting to the API: plan it, put the shared types first, then the middleware and its
 > tests in parallel; land on a `staging` branch.
 
-Watch it with `capcomd tree <runId>` or the terminal debugger (from a checkout: `cd apps/tui && bun run start
---run <runId>`), and approve protected merges with `capcomd approve <runId> <mrgId>`.
+Your agent reports back as agents finish and merges land. Merges into protected branches wait for you:
+`capcomd approve <runId> <mrgId>`. Watch a run with `capcomd tree <runId>` or the terminal debugger (from a
+checkout: `cd apps/tui && bun run start --run <runId>`).
+
+Each [release](https://github.com/MarvinAmador7/capcomd/releases) has the package and its SHA-256 attached; the npm
+package is published by CI with [provenance](https://docs.npmjs.com/generating-provenance-statements).
 
 ### Connecting your agent
 
 | Agent | How it drives capcomd | Today |
 |---|---|---|
-| Claude Code | The orchestration skill (`capcomd setup` installs it) and the CLI with `--json` | Works, verified live |
-| Any agent with a shell (Codex, …) | The CLI with `--json`; point it at [the skill](skills/capcomd-orchestration/SKILL.md) | Works; the skill isn't installed for it automatically |
-| Any MCP client, with or without a shell | `capcomd mcp`: `claude mcp add capcomd -- capcomd mcp`, or Codex's `config.toml` ([how](docs/integration-agents.md#mcp)) | Works: all the primitives as tools; tested with a scripted client, not yet in the live run |
+| Claude Code | The capcomd plugin: MCP tools + orchestration and setup skills | Works; tested with a scripted MCP client, the live run uses the skill and CLI |
+| Codex | The same plugin from the marketplace (`/plugins`) | Built to OpenAI's plugin format; not yet tried in Codex |
+| Any other MCP client | `capcomd mcp` ([how](docs/integration-agents.md#mcp)) | Works |
+| Any agent with a shell | The CLI with `--json` and [the skill](plugins/capcomd/skills/capcomd-orchestration/SKILL.md) | Works, verified live |
 
-The skill teaches the agent the primitives and when to use which pattern (single loop, fan-out, supervisor,
-critic, best-of-n, planner, interface-first).
+The orchestration skill teaches the agent the primitives and when to use which pattern (single loop, fan-out,
+supervisor, critic, best-of-n, planner, interface-first).
 
 <details><summary>What your agent runs</summary>
 
@@ -222,8 +226,9 @@ agent profiles.
 
 ## Integrations
 
-- **Skill** for agents: [skills/capcomd-orchestration](skills/capcomd-orchestration/SKILL.md), the primitives
-  and orchestration patterns.
+- **Plugin** for Claude Code and Codex ([plugins/capcomd](plugins/capcomd)): the MCP server and the
+  [orchestration](plugins/capcomd/skills/capcomd-orchestration/SKILL.md) and
+  [setup](plugins/capcomd/skills/capcomd-setup/SKILL.md) skills.
 - **CLI with a JSON contract**: every command takes `--json` (schema `relay.v1`, stable exit codes), documented in
   [docs/output-contract.md](docs/output-contract.md).
 - **MCP server** (`capcomd mcp`): the primitives as tools for your agent, with bounded waits; it starts the engine

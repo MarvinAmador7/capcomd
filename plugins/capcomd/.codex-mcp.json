@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "capcomd": {
+      "command": "/bin/sh",
+      "args": ["./mcp/launch.sh"],
+      "cwd": ".",
+      "env_vars": ["PATH", "HOME", "PWD", "USER", "SHELL", "TMPDIR", "CAPCOMD_HOME", "CAPCOMD_ENDPOINT", "CAPCOMD_PROJECT_DIR", "BOXD_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"],
+      "tool_timeout_sec": 90
+    }
+  }
+}

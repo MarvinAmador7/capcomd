@@ -1,0 +1,13 @@
+{
+  "name": "capcomd",
+  "description": "capcomd: durable orchestration for swarms of coding agents, as a plugin for your agent",
+  "owner": { "name": "Marvin Amador Campos", "url": "https://github.com/MarvinAmador7" },
+  "plugins": [
+    {
+      "name": "capcomd",
+      "source": "./plugins/capcomd",
+      "description": "Spawn Claude Code and Codex agents in isolated VMs from your agent; verify, review and merge only tested commits.",
+      "category": "development"
+    }
+  ]
+}

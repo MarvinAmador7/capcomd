@@ -19,6 +19,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   model) and `capcomd_status` are gone: start a run with `capcomd_run_new` and spawn agents, and use
   `capcomd_tree` or `capcomd_runs` for status. `capcomd_approve` takes `merge` (an `mrg-…` id) instead of `taskId`.
 - The orchestration skill covers the MCP tools.
+- **The capcomd plugin** for Claude Code and Codex (`plugins/capcomd`; this repository is its marketplace): the MCP
+  tools and two skills, orchestration and setup. In Claude Code: `/plugin install capcomd --marketplace
+  MarvinAmador7/capcomd`; in Codex: `codex plugin marketplace add MarvinAmador7/capcomd`, then `/plugins`. Its server
+  runs the installed capcomd in your project, or, when capcomd is missing or older than the plugin, a single
+  `capcomd_setup` tool that says what to install. The setup skill walks your agent through onboarding.
+- `capcomd setup` installs the plugin in Claude Code and adds the marketplace to Codex (agent step; `--no-plugin`
+  skips it), and replaces the skill copy earlier versions put in `~/.claude/skills`. `setup check` reports it.
+- `capcomd setup` makes the boxd key itself when the boxd CLI is logged in: a key named `capcomd-<host>`, in your
+  active org (or `--org`), kept in the OS keychain and never shown; revoke it with `boxd auth keys rm`. A stale key
+  in the keychain is replaced. Without the CLI or a login, setup says exactly what to run.
+- The orchestration skill moved to `plugins/capcomd/skills/capcomd-orchestration/`; the npm package ships `plugins/`
+  instead of `skills/`.
 
 ## 0.4.0 (2026-10-21)
 

@@ -35,6 +35,8 @@ planner and judge still answer from a fake model (item 3).
 | Real agents: Claude Code and Codex adapters, agent profiles, subscription logins (`auth login`), boxd host-bound secrets, env snapshots (`env build`), `doctor` | Built | `tests/agents`, `tests/env`, `tests/auth`, live `doctor --strict` |
 | Git: direct and PR merge modes, protected branches parked for `approve` | Built | `tests/merge` |
 | CLI JSON contract (`--json`, schema `relay.v1`, exit codes) | Built | `tests/cli`, `docs/output-contract.md` |
+| The capcomd plugin (ADR-018 phase 2): Claude Code and Codex manifests, the repo as marketplace, the MCP server through a launcher that finds the installed CLI (or explains how to install it), orchestration and setup skills; `capcomd setup` installs it | Built (installed and validated in Claude Code; Codex not tried; no live run through it yet) | `tests/config/setup.test.ts`, `claude plugin validate` in CI |
+| `capcomd setup` makes the boxd key with your logged-in boxd CLI (a key just for capcomd, kept in the OS keychain, never shown) | Built (detection verified against the real CLI) | `tests/config/boxd-key.test.ts` |
 | MCP server for a driver agent (ADR-018 phase 1): the primitives as 18 tools, bounded waits, gates from the project config, human approvals by default, fenced agent text, engine auto-start, runs found again from a new session | Built (scripted client; not yet in the live e2e) | `tests/mcp`, `tests/core/engine-start.test.ts` |
 | Tracing, `inspect --follow`, TUI (`apps/tui`) | Built | `tests/tracing`, `apps/tui` tests |
 | Costs: billed USD, plus the API-price estimate for subscription work (`notionalUsd`, shown as `~$0.04`) | Built | `tests/subagents/unit.test.ts`, `apps/tui/test/cost.test.ts` |
@@ -49,8 +51,8 @@ checks VMs, about $0.37 in API-equivalent cost on subscription billing. This scr
 
 The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The biggest items:
 
-1. One-step install into your agent (ADR-018 phase 2): a capcomd plugin for Claude Code and Codex (MCP server +
-   skills); today the MCP server is registered by hand and the skill is installed for Claude Code only.
+1. A live run through the plugin: a real Claude Code session driving a swarm with only the capcomd MCP tools, and
+   trying the plugin in Codex.
 2. Sandbox providers as a documented contract: boxd is still wired in (provider list, checks VMs, snapshots,
    setup); a registry, capabilities, a conformance suite and a second provider are next.
 3. The `capcomd run` recipe's planner and run-level judge still answer from a fake model (per-branch review

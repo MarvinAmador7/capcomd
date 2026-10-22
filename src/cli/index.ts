@@ -77,10 +77,11 @@ Usage:
   capcomd auth status [agent] [--quick]  Verify saved logins   |   capcomd auth logout claude|codex
   capcomd secrets sync                   Store local ANTHROPIC/OPENAI keys as boxd host-bound secrets
   capcomd doctor                         Check agents + credentials inside a snapshot VM
-  capcomd mcp                            Serve the capcomd tools over MCP (stdio)
+  capcomd mcp                            Serve capcomd's primitives over MCP (stdio), for your agent
   capcomd setup [demo|accounts|project|agent|service]   Guided setup (interactive; --yes for defaults)
         [--yes] [--demo|--skip-demo] [--agents claude,codex] [--auth subscription|apikey] [--repo URL]
-        [--mode pr|direct] [--target B] [--check CMD] [--service|--no-service] [--no-skill] [--no-store]
+        [--mode pr|direct] [--target B] [--check CMD] [--service|--no-service] [--no-plugin] [--no-store]
+        [--org NAME]                   (the boxd org for the key setup creates with your boxd CLI login)
   capcomd setup check                    What's configured and working (changes nothing)
   capcomd service install|uninstall|status [--port N] [--dry-run]
                                        The engine as a background service (launchd / systemd user unit)
@@ -162,7 +163,9 @@ async function main(argv: string[]): Promise<number> {
         service: { type: "boolean" },
         "no-service": { type: "boolean" },
         "no-skill": { type: "boolean" },
+        "no-plugin": { type: "boolean" },
         "no-store": { type: "boolean" },
+        org: { type: "string" },
         relogin: { type: "boolean" },
         deny: { type: "boolean" },
         "target-from": { type: "string" },

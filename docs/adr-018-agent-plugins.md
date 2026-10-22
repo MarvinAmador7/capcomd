@@ -1,6 +1,6 @@
 # ADR-018: capcomd as a plugin for your agent (MCP + skills, Claude and OpenAI)
 
-Status: accepted (2026-10-22). Builds on ADR-016 (primitives) and ADR-017 (sub-agents in VMs).
+Status: accepted (2026-10-22); phase 1 built (`capcomd mcp`), phase 2 built except the live run. Builds on ADR-016 (primitives) and ADR-017 (sub-agents in VMs).
 
 ## Context
 
@@ -38,37 +38,38 @@ through a connection setup flow (OAuth or API key) and keep them out of the mani
 
 ```
 plugins/capcomd/
-  .claude-plugin/plugin.json      # Claude Code / Desktop / claude.ai
-  .codex-plugin/plugin.json       # Codex and ChatGPT (interface: displayName, defaultPrompt, logo, …)
-  .mcp.json                       # the capcomd MCP server (stdio), shared by both
-  skills/capcomd/SKILL.md         # orchestration: primitives and patterns (today's capcomd-orchestration)
-  skills/capcomd-setup/SKILL.md   # onboarding: install, accounts, project gates, engine (OpenAI: onboardingSkill)
-  assets/                         # logo, icons
+  .claude-plugin/plugin.json      # Claude Code / Desktop: metadata and the MCP server (inline)
+  .codex-plugin/plugin.json       # Codex (interface: displayName, defaultPrompt, …); skills and .codex-mcp.json
+  .codex-mcp.json                 # the MCP server in Codex's format (cwd = the plugin root)
+  mcp/launch.sh, mcp/launch.mjs   # the launcher (§2), dependency-free
+  skills/capcomd-orchestration/SKILL.md   # the primitives and patterns
+  skills/capcomd-setup/SKILL.md           # onboarding: install, provider, logins, gates, engine
 .claude-plugin/marketplace.json   # repo root: lists plugins/capcomd (Codex reads it as the legacy path)
 .agents/plugins/marketplace.json  # repo root: OpenAI's path
 ```
 
-Install: `claude plugin marketplace add MarvinAmador7/capcomd` then `/plugin install capcomd@capcomd`;
-`codex plugin marketplace add MarvinAmador7/capcomd` then `/plugins`. `capcomd setup`'s agent step installs the
-plugin (and registers the marketplace) for each agent it finds, instead of copying a skill file.
+The Codex server config isn't named `.mcp.json` because Claude Code also loads a plugin's `.mcp.json`, and the two
+formats differ (Claude: `${CLAUDE_PLUGIN_ROOT}` in `args`; Codex: paths relative to `cwd`, `env_vars`).
 
-The skill stays a plain `SKILL.md` so agents without plugins (Cursor, any agent with a shell) can still be pointed
-at it; `skills/capcomd-orchestration/` at the repo root becomes a pointer to `plugins/capcomd/skills/capcomd/`.
+Install: `/plugin install capcomd --marketplace MarvinAmador7/capcomd` in Claude Code (adds the marketplace and
+installs in one step); `codex plugin marketplace add MarvinAmador7/capcomd`, then `/plugins`, in Codex.
+`capcomd setup`'s agent step does this for each agent CLI it finds, and removes the skill copy older setups put in
+`~/.claude/skills`. With neither CLI, it installs the orchestration skill for Claude Code and prints the line that
+registers the MCP server.
+
+The skills stay plain `SKILL.md` files so agents without plugins (any agent with a shell) can be pointed at them.
 
 Versions: the plugin's `version` is the package version; `scripts/release-notes.ts --check` also checks both
 manifests agree with `package.json`, and CI runs `claude plugin validate --strict plugins/capcomd`.
 
 ### 2. The MCP server: launched from the plugin, backed by the installed CLI, engine kept alive
 
-`.mcp.json` runs a small launcher shipped in the plugin, with `bun` (which capcomd already requires):
-
-```json
-{ "mcpServers": { "capcomd": { "command": "bun", "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/launch.ts"] } } }
-```
-
-The launcher finds an installed `capcomd` whose major.minor matches the plugin and `exec`s `capcomd mcp`. If
-there is none, it serves a minimal MCP server with one tool, `capcomd_setup`, that returns the exact install
-command and what's missing, so the agent can fix it (the setup skill tells it how). We don't run `bunx capcomd`
+The server is a small launcher shipped in the plugin (`sh mcp/launch.sh`, which runs `mcp/launch.mjs` with Bun, or
+Node). Agent apps often start servers with a short `PATH`, so it also looks in `~/.bun/bin`, `/opt/homebrew/bin`
+and `/usr/local/bin`. It finds an installed `capcomd` at least as new as the plugin (same major.minor or newer) and
+runs `capcomd mcp` in the user's project (Claude Code passes `CAPCOMD_PROJECT_DIR=${CLAUDE_PROJECT_DIR}`; under
+Codex it's the session's `PWD`). Otherwise it serves a dependency-free MCP server with one tool, `capcomd_setup`,
+that says what's missing and the exact install commands, so the agent can fix it (the setup skill says how). We don't run `bunx capcomd`
 from the plugin: a cold install takes minutes, longer than any client's server startup timeout.
 
 `capcomd mcp` starts the engine when none answers on the endpoint (`capcomd serve` detached, state in

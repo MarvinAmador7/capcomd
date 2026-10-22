@@ -16,13 +16,11 @@ each, every verify needing both its check and the verdict; the planner's verifie
 
 ## 2. Next, in order
 
-1. **capcomd as a plugin for your agent** (M; ADR-018 phase 2). Phase 1 is built: `capcomd mcp` exposes the
-   primitives to a driver agent (bounded waits, gates from the project, human approvals by default, engine
-   auto-start). Left: one plugin for Claude Code and Codex (`plugins/capcomd/` with both manifests, the MCP server
-   through a launcher that finds the installed CLI, the orchestration and setup skills, the repo as marketplace),
-   installed by `capcomd setup` for each agent it finds; `claude plugin validate --strict` in CI; a live e2e where
-   the planner is a Claude Code session using only the MCP tools. Done when a clean machine goes from installing
-   the plugin to a merged, verified change without the user typing a capcomd command.
+1. **The plugin, live** (S; ADR-018). The MCP tools (phase 1) and the plugin (phase 2: manifests, launcher, setup
+   and orchestration skills, `capcomd setup` installing it, the boxd key from the boxd CLI) are built. Left: a
+   variant of `scripts/mac-subagents-e2e.sh` where the planner is a Claude Code session with only the plugin's MCP
+   tools; trying the plugin in Codex (built to OpenAI's format, not yet run there); and a release, so the plugin's
+   launcher finds a published capcomd with the new tools.
 2. **Sandbox providers as a documented contract** (M). VMs already come through `SandboxProvider`
    (`src/providers/sandbox.ts`), with boxd and a local fake behind it, but boxd is wired in: the provider list is
    hard-coded (`src/dependencies.ts`), checks run in a VM only when `CAPCOMD_SANDBOX === "boxd"`, `env build` and
@@ -71,7 +69,7 @@ only when real runs show work that can't be split by interface.
 1. **Interface first** (done 2026-10-21). The planner splits dependent work into a small contract change
    (interface, types, a stub behind a flag) that lands first, then the provider and consumers in parallel
    against the target, landed in dependency order with an integration check on the consumer. Guidance:
-   pattern 7 in `skills/capcomd-orchestration/SKILL.md` and the in-VM skill. Proof:
+   pattern 7 in `plugins/capcomd/skills/capcomd-orchestration/SKILL.md` and the in-VM skill. Proof:
    `tests/scenarios/interface-first.test.ts`. Left: a live e2e with real agents (S).
 2. **Speculative stacks** (L). `spawn --base <agt>` branches B from A's latest verified commit. Each change
    carries a stable `Capcomd-Change` trailer across rebases. B is verified against target + A + B, and the vfy

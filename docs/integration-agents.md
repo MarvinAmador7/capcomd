@@ -13,13 +13,13 @@ Two ways in, same schema (`relay.v1`):
 | Transport | stdio JSON-RPC | process + stdout |
 | Output | tool result JSON (`structuredContent` and text) | one JSON object per command |
 
-The skill (`skills/capcomd-orchestration/SKILL.md`) teaches either one the patterns: single loop, fan-out,
+The skill (`plugins/capcomd/skills/capcomd-orchestration/SKILL.md`) teaches either one the patterns: single loop, fan-out,
 supervisor, critic, best-of-n, planner, interface first.
 
 ## MCP
 
 Register capcomd as a stdio MCP server, run from the repository the agents work on (it reads that project's
-`.capcomd/config.json`). Claude Code: `claude mcp add capcomd -- capcomd mcp`. Codex, in `~/.codex/config.toml`:
+`.capcomd/config.json`). Claude Code: `claude mcp add capcomd -- capcomd mcp` (or install the capcomd plugin, which does it for you). Codex, in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.capcomd]

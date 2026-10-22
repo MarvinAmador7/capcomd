@@ -133,7 +133,8 @@ Named killpoints:
 CI builds releases (`.github/workflows/release.yml`); [AGENTS.md](AGENTS.md) has the rules (Semantic Versioning,
 the changelog, what never to do by hand). By hand, before tagging:
 
-1. In a `release: vX.Y.Z` commit, bump `version` in `package.json`; in `CHANGELOG.md`, rename `## Unreleased` to
+1. In a `release: vX.Y.Z` commit, bump `version` in `package.json` and in both plugin manifests under
+   `plugins/capcomd/`; in `CHANGELOG.md`, rename `## Unreleased` to
    `## X.Y.Z (YYYY-MM-DD)` and add a new empty `## Unreleased` above it (CI checks both stay in step:
    `bun scripts/release-notes.ts --check`). `bun scripts/release-notes.ts vX.Y.Z` prints the release notes, or why
    it can't.
