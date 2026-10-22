@@ -196,6 +196,9 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      - name: A recent npm (trusted publishing needs npm ≥ 11.5.1)
+        run: npm install -g npm@latest && npm --version
+
       - uses: actions/download-artifact@v4
         with:
           name: package
@@ -209,7 +212,8 @@ jobs:
         run: |
           if [ "$(npm view "capcomd@$V" version 2>/dev/null)" = "$V" ]; then echo "capcomd@$V is already on npm"; exit 0; fi
           [ -n "$NODE_AUTH_TOKEN" ] || echo "::warning::no NPM_TOKEN secret: relying on npm trusted publishing for this repository"
-          npm publish "dist/capcomd-$V.tgz" --provenance --access public --tag "$NPM_TAG"
+          # `./`: a bare `dist/x.tgz` is read as the GitHub repo dist/x.tgz.
+          npm publish "./dist/capcomd-$V.tgz" --provenance --access public --tag "$NPM_TAG"
 
   publish:
     name: Publish the release
