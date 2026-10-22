@@ -1,6 +1,6 @@
 # capcomd roadmap
 
-**Updated:** 2026-10-21. What works today is in [STATUS.md](STATUS.md); this file is what's left: gaps, limits on
+**Updated:** 2026-10-22. What works today is in [STATUS.md](STATUS.md); this file is what's left: gaps, limits on
 orchestration patterns, risks and debt, with a proposed approach for each. Sizes are rough: **S** (hours),
 **M** (a day or two), **L** (several days).
 
@@ -16,23 +16,40 @@ each, every verify needing both its check and the verdict; the planner's verifie
 
 ## 2. Next, in order
 
-1. **The `capcomd run` recipe still plans and judges with a fake model** (L). `src/models/` has only
+1. **Agents drive everything over MCP** (M). capcomd is meant to be driven by the user's agent, not typed by hand.
+   Today that works through the skill and the CLI (an agent with a shell); `capcomd mcp` has only run, status,
+   cancel, events, trace and approve, and its `capcomd_run` starts the recipe whose planner is still fake (item 3).
+   Approach: expose the operator primitives as MCP tools (`run_new`, `spawn`, `await` and `wait_any` bounded by a
+   timeout that returns progress instead of blocking past the client's limit, `tree`, `verify`, `merge`, `cancel`,
+   `approve`, `events`, `task_*`, `kv_*`, `budget`, `send`, results), reusing the in-VM tool definitions with the
+   operator's scope; `capcomd_run` stops starting the fake-planner recipe. `capcomd setup` registers the server
+   with the user's agent (Claude Code `claude mcp add`, Codex `config.toml`) and installs the skill for each agent
+   it supports, not only Claude Code. Done when an MCP-only client runs the README's fan-out example end to end.
+2. **Sandbox providers as a documented contract** (M). VMs already come through `SandboxProvider`
+   (`src/providers/sandbox.ts`), with boxd and a local fake behind it, but boxd is wired in: the provider list is
+   hard-coded (`src/dependencies.ts`), checks run in a VM only when `CAPCOMD_SANDBOX === "boxd"`, `env build` and
+   secrets assume boxd snapshots, and `capcomd setup` only offers boxd. Approach: a provider registry selected by
+   name, capabilities a provider declares (snapshots, host-bound secrets, checkpoints, egress control) in place of
+   the boxd checks, a conformance suite every provider must pass, a "Writing a provider" guide, and a provider
+   choice in setup. Then a second provider (a local one, e.g. containers or microVMs, so capcomd runs with no
+   cloud account) proves the contract.
+3. **The `capcomd run` recipe still plans and judges with a fake model** (L). `src/models/` has only
    `FakeModelClient`: the recipe's planner plans the same three generic tasks for any goal, and its run-level
    judge always passes (`src/actors/judge.ts` also treats a reply that isn't JSON as a pass). Approach: the
    recipe spawns a planner profile (as the sub-agent e2e already does) and judges the run with an agent; real
    runs refuse the fake model; keep it for offline tests.
-2. **Live spend** (M). A real agent's cost is known only when it finishes, so a budget can't stop a runaway
+4. **Live spend** (M). A real agent's cost is known only when it finishes, so a budget can't stop a runaway
    mid-run; spawn-time checks use the carve. Approach: stream token usage from the agent's event log (the
    runner already parses it) into the scope's `spent`, and cancel on a breach. Also carry the notional cost of
    failed or timed-out agents into the tree (only successful runs today).
-3. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
+5. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
    VmSpool can tail `agent.jsonl`; it is unwired to keep exec traffic low. Approach: tail on demand
    (`logs --follow`), not continuously.
-4. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
+6. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
    spends everything on children gets "no budget left", the review fails closed and nothing merges. Approach:
    reserve the reviewer's budget when the child is spawned (or warn at spawn time when the run has a
    reviewer and the remainder can't cover one).
-5. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
+7. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
    verify's VM for its merge when the target hasn't moved (same tree), else reuse the snapshot only.
 
 ## 3. Orchestration patterns that aren't possible yet

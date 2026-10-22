@@ -1,7 +1,7 @@
 {
   "name": "capcomd",
   "version": "0.4.0",
-  "description": "Orchestrate Claude Code and Codex agents in isolated VMs; only verified, reviewed commits reach your repository",
+  "description": "Durable orchestration for swarms of coding agents, driven by your agent: Claude Code and Codex in isolated VMs, landing only verified, reviewed commits",
   "keywords": [
     "agents",
     "orchestration",

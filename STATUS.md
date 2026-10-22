@@ -6,10 +6,11 @@
 ## Summary
 
 The orchestration primitives and in-VM sub-agents work end to end with real agents: Claude Code and
-Codex run in boxd VMs on API keys or subscription logins, and every merge is gated by operator-set checks.
-Most of the remaining work is in the `capcomd run "<goal>"` recipe: its planner and its judge still answer
-from a fake model, so that path doesn't plan or judge for real yet (see Open work, item 1). Per-branch
-review by an agent (`run new --reviewer`) is built.
+Codex run in VMs from the first sandbox provider, boxd, on API keys or subscription logins, every merge is gated
+by operator-set checks and a reviewer agent, and runs survive crashes. An agent drives a run today through the
+skill and the CLI (that's how the live end-to-end test runs); the MCP server doesn't expose the primitives yet,
+and boxd is still the only real provider (see Open work, items 1 and 2). The `capcomd run "<goal>"` recipe's
+planner and judge still answer from a fake model (item 3).
 
 ## What works
 
@@ -47,12 +48,16 @@ checks VMs, about $0.37 in API-equivalent cost on subscription billing. This scr
 
 The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The biggest items:
 
-1. The `capcomd run` recipe's planner and run-level judge still answer from a fake model (per-branch review
+1. Agents drive capcomd over MCP: `capcomd mcp` has run, status, cancel, events, trace and approve, not the
+   primitives (spawn, await, verify, merge, …); setup doesn't register it with your agent yet.
+2. Sandbox providers as a documented contract: boxd is still wired in (provider list, checks VMs, snapshots,
+   setup); a registry, capabilities, a conformance suite and a second provider are next.
+3. The `capcomd run` recipe's planner and run-level judge still answer from a fake model (per-branch review
    by an agent is built: `run new --reviewer`).
-2. Live spend: a real agent's cost is known only when it finishes.
-3. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
+4. Live spend: a real agent's cost is known only when it finishes.
+5. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
    verifying and landing several branches together, lead → team branch → main hierarchies, comparing candidates.
-4. Report mode, staging targets, approval requests and the interface-first pattern pass their tests but
+6. Report mode, staging targets, approval requests and the interface-first pattern pass their tests but
    haven't had a live boxd run yet.
 
 ## How to check it yourself
