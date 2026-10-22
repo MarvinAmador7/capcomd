@@ -14,6 +14,8 @@ First public release: capcomd is open source under the MIT license and installs 
   ships the design docs without the chaos logs.
 - Contributor guide (`CONTRIBUTING.md`), Code of Conduct, security policy (`SECURITY.md`, private reporting through
   GitHub), issue templates, and Dependabot for the workflows' actions.
+- `capcomd serve` waits for its engine to stop when it's stopped (up to 5 seconds, then kills it) instead of
+  exiting while the engine still runs.
 - Removed leftovers from early development: the root `index.ts` and `test_*` scripts, an uploaded docs archive,
   stray screenshots and internal import notes.
 

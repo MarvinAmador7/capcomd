@@ -53,10 +53,12 @@ export async function serve(opts: { port: number }) {
   // A previous serve on this port that died without reaping its engine: that engine is not
   // listening (ports were free above) but may still hold the data dir. It is ours; stop it.
   const enginePid = () => { try { const n = Number(readFileSync(pidFile, "utf8").trim()); return n > 1 ? n : null; } catch { return null; } };
-  // Alive AND still a rivet-engine (guards against a recycled pid; `ps` works on Linux and macOS).
+  // Alive AND still a rivet-engine (guards against a recycled pid; `ps` works on Linux and macOS). A zombie (exited,
+  // not yet reaped) counts as gone.
   const isAlive = (pid: number) => {
     try { process.kill(pid, 0); } catch { return false; }
-    return /rivet-engine/.test(spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }).stdout ?? "");
+    const ps = (spawnSync("ps", ["-o", "stat=,command=", "-p", String(pid)], { encoding: "utf8" }).stdout ?? "").trim();
+    return /rivet-engine/.test(ps) && !ps.startsWith("Z");
   };
   const stale = enginePid();
   if (stale && isAlive(stale)) {
@@ -65,10 +67,20 @@ export async function serve(opts: { port: number }) {
     for (let i = 0; i < 50 && isAlive(stale); i++) await new Promise((r) => setTimeout(r, 100));
   }
   rmSync(pidFile, { force: true });
-  // rivet-engine runs in its own process group: kill it whenever serve exits.
+  // rivet-engine runs in its own process group: kill it whenever serve exits. On a signal, wait for it to go (its
+  // graceful shutdown can take seconds on a slow host), then SIGKILL; `exit` can only ask, as a last resort.
   const reap = () => { const pid = enginePid(); if (pid && isAlive(pid)) { try { process.kill(pid, "SIGTERM"); } catch {} } rmSync(pidFile, { force: true }); };
+  const stopEngine = async () => {
+    const pid = enginePid();
+    if (pid && isAlive(pid)) {
+      try { process.kill(pid, "SIGTERM"); } catch {}
+      for (let i = 0; i < 50 && isAlive(pid); i++) await new Promise((r) => setTimeout(r, 100));
+      if (isAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch {}
+    }
+    rmSync(pidFile, { force: true });
+  };
   process.on("exit", reap);
-  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => { console.log("\nStopping engine..."); process.exit(0); });
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, async () => { console.log("\nStopping engine..."); await stopEngine(); process.exit(0); });
   // rivet-services (unused by capcomd) binds a fixed :8642; never let it collide off the default port.
   if (port !== 6420 && process.env.RIVET_RUN_SERVICES === undefined) process.env.RIVET_RUN_SERVICES = "0";
 
