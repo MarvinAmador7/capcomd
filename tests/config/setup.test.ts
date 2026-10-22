@@ -51,9 +51,23 @@ describe("setup steps (non-interactive)", () => {
     expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker"]);
     expect(agents.reviewer.allowedTools).toContain("Bash(bun run:*)");
     expect(agents.reviewer.allowedTools).not.toContain("Edit");
+    // No turn, time or money limits on the profiles setup makes (ADR-019).
+    for (const p of Object.values(agents) as any[]) expect([p.maxTurns, p.timeoutMs, p.maxBudgetUsd]).toEqual([undefined, undefined, undefined]);
     // Re-running keeps existing profiles (your edits survive).
     const again = json(run(["setup", "project", "--yes", "--json"], { cwd: repo, env }).out);
     expect(again.steps.find((s: any) => s.step === "profiles").detail).toContain("kept existing worker, reviewer, planner");
+  });
+
+  test("project: an API-key login gets the spend cap per run it asks for (--budget), saved as driver.maxRunBudget", () => {
+    const r2 = mkdtempSync(join(tmpdir(), "capcomd-setup-repo-"));
+    Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: r2 });
+    Bun.spawnSync(["git", "remote", "add", "origin", "git@github.com:acme/app.git"], { cwd: r2 });
+    const out = json(run(["setup", "project", "--yes", "--auth", "apikey", "--budget", "20", "--mode", "direct", "--json"], { cwd: r2, env }).out);
+    expect(out.ok).toBe(true);
+    expect(JSON.parse(readFileSync(join(r2, ".capcomd", "config.json"), "utf8")).driver).toEqual({ maxRunBudget: "usd=20" });
+    expect(JSON.parse(readFileSync(join(r2, ".capcomd", "agents.json"), "utf8")).agents.worker).toEqual({ provider: "claude", auth: "apikey" });
+    const bad = json(run(["setup", "project", "--yes", "--auth", "apikey", "--budget", "lots", "--json"], { cwd: r2, env }).out);
+    expect(bad.steps[0]).toMatchObject({ ok: false, detail: expect.stringContaining("isn't an amount") });
   });
 
   test("agent: no Claude Code or Codex CLI: installs the orchestration skill and says how to add the MCP server", () => {

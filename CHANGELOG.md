@@ -5,6 +5,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- **Breaking:** agents no longer have default turn, time or money limits. Before, every agent stopped at 30 turns,
+  20 minutes or $2 unless its profile said otherwise, and `capcomd setup` wrote 15–40 minute limits into the
+  profiles it created. Now an unset limit means none, so an agent can work for hours as long as it keeps going.
+  To keep a limit, set it on the profile (`capcomd agents set worker --max-turns 30 --timeout-ms 1200000 --budget 2`).
+  - **Idle stop:** an agent whose Claude Code or Codex CLI produces no output for 30 minutes has hung, and is
+    stopped with its work kept (`result.limit: "idle"`). Change the window with `--idle-after-ms`.
+  - **Long-running VMs:** a worker's VM is no longer deleted an hour after it was created. Its one-hour delete
+    deadline is renewed while its agent runs, so long work isn't cut off and a VM whose engine died is still
+    cleaned up.
+  - **Setup:** `capcomd setup` asks API-key users once for a spend cap per run (`--budget 20`, or empty for none).
+    Plan logins aren't asked, since a plan is already paid for.
+  - **Spawning:** a profile that may spawn and sets no `children.maxTotalDescendants` can start at most 10 agents
+    below it.
 - An agent that hits its time, turn or budget limit no longer loses its work or starts over. What it changed is
   pushed to its branch as a `WIP (stopped: <limit>)` commit with a `Capcomd-Stop` trailer, and it ends `failed`
   with `result.limit` (`timeout`, `max_turns` or `max_budget_usd`), `result.branch` and `result.commit`, after one

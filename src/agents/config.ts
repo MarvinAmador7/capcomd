@@ -86,9 +86,12 @@ export interface AgentConfig {
   version: string;
   codexVersion: string;
   nodeVersion: string;
-  maxTurns: number;
-  maxBudgetUsd: number;
-  timeoutMs: number;
+  /** Optional limits (ADR-019): undefined means none. */
+  maxTurns?: number;
+  maxBudgetUsd?: number;
+  timeoutMs?: number;
+  /** No events from the agent CLI for this long: it has hung, so it is stopped (its work kept). */
+  idleAfterMs: number;
   pollMs: number;
   allowedTools: string[];
   disallowedTools: string[];
@@ -122,13 +125,14 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   const { resolveAgent } = require("./profiles") as typeof import("./profiles");
   const ra = resolveAgent(profileName, source);
   const spec = ra.spec;
-  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs };
-  const num = (name: string, d: number) => {
+  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs };
+  const opt = (name: string) => {
     const v = envVar(name, source);
-    const n = v === undefined ? (specNum[name] ?? d) : Number(v);
-    if (!Number.isFinite(n) || n <= 0) throw new Error(`CAPCOMD_${name} must be a positive number`);
+    const n = v === undefined ? specNum[name] : Number(v);
+    if (n !== undefined && (!Number.isFinite(n) || n <= 0)) throw new Error(`CAPCOMD_${name} must be a positive number`);
     return n;
   };
+  const num = (name: string, d: number) => opt(name) ?? d;
   const kind = ra.kind;
   const sandbox = (envVar("CODEX_SANDBOX", source) ?? spec?.sandbox ?? "workspace-write") as AgentConfig["codexSandbox"];
   if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) throw new Error(`CAPCOMD_CODEX_SANDBOX=${sandbox} is invalid`);
@@ -137,9 +141,10 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     version: envVar("CLAUDE_CODE_VERSION", source) ?? CLAUDE_CODE_VERSION,
     codexVersion: envVar("CODEX_VERSION", source) ?? CODEX_VERSION,
     nodeVersion: envVar("AGENT_NODE_VERSION", source) ?? NODE_VERSION,
-    maxTurns: num("AGENT_MAX_TURNS", 30),
-    maxBudgetUsd: num("AGENT_MAX_BUDGET_USD", 2),
-    timeoutMs: num("AGENT_TIMEOUT_MS", 20 * 60_000),
+    maxTurns: opt("AGENT_MAX_TURNS"),
+    maxBudgetUsd: opt("AGENT_MAX_BUDGET_USD"),
+    timeoutMs: opt("AGENT_TIMEOUT_MS"),
+    idleAfterMs: num("AGENT_IDLE_MS", 30 * 60_000),
     pollMs: num("AGENT_POLL_MS", 2000),
     allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? DEFAULT_ALLOWED_TOOLS),
     disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), spec?.disallowedTools ?? DEFAULT_DISALLOWED_TOOLS),

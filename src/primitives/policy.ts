@@ -54,6 +54,9 @@ export interface AgentRow {
 
 const minDef = (a: number | undefined, b: number | undefined) => (a === undefined ? b : b === undefined ? a : Math.min(a, b));
 
+/** With budgets optional (ADR-019), the count of agents bounds a tree that spawns: a profile that sets none gets this. */
+export const DEFAULT_MAX_DESCENDANTS = 10;
+
 /** Limits for a root agent (spawned by the operator): its profile's children block as-is. */
 export function rootLimits(c: ChildrenSpec | undefined): Limits {
   const allow = !!c?.allowSpawn;
@@ -61,7 +64,7 @@ export function rootLimits(c: ChildrenSpec | undefined): Limits {
     allowSpawn: allow,
     maxDepth: allow ? (c?.maxDepth ?? 1) : 0,
     maxChildren: c?.maxChildren,
-    maxTotalDescendants: c?.maxTotalDescendants,
+    maxTotalDescendants: c?.maxTotalDescendants ?? (allow ? DEFAULT_MAX_DESCENDANTS : undefined),
     allowedChildProfiles: [...(c?.allowedChildProfiles ?? [])],
     budgetShare: c?.budgetShare ?? 1,
   };

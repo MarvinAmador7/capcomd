@@ -60,7 +60,9 @@ capcomd setup project --yes --target main --mode pr --check "bun test"
 ```
 
 `--mode pr` opens a pull request per merge; `direct` pushes to the target. Setup detects the repository and a
-default check from `package.json`, and creates `worker`, `reviewer` and `planner` agent profiles. Settings land in
+default check from `package.json`, and creates `worker`, `reviewer` and `planner` agent profiles, with no turn, time
+or money limits. When an agent bills an API key, setup asks once for a spend cap per run (`--budget USD`, empty for
+none) and saves it as `driver.maxRunBudget`. Settings land in
 `.capcomd/config.json` (commit it, so the team shares the gates) and `~/.capcomd/config.json`.
 
 Optional, in `.capcomd/config.json`: `"driver": {"maxRunBudget": "usd=20,turns=400"}` caps each run you start;

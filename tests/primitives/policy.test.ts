@@ -143,3 +143,11 @@ test("units a spawn doesn't name: the profile's caps, no usd for a subscription 
   // What the spawn names always wins.
   expect(checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "worker", childSpec: worker, requested: { turns: 20, usd: 1, wallSeconds: 300 } })).toMatchObject({ ok: true, budget: { usd: 1, turns: 20, wallSeconds: 300 } });
 });
+
+test("a profile that may spawn and sets no maxTotalDescendants gets the default (budgets are optional, the count isn't)", async () => {
+  const { DEFAULT_MAX_DESCENDANTS } = await import("../../src/primitives/policy");
+  expect(rootLimits({ allowSpawn: true, allowedChildProfiles: ["coder"] }).maxTotalDescendants).toBe(DEFAULT_MAX_DESCENDANTS);
+  expect(rootLimits({ allowSpawn: true, maxTotalDescendants: 3 }).maxTotalDescendants).toBe(3);
+  expect(rootLimits(undefined).maxTotalDescendants).toBeUndefined();
+  expect(childLimits(rootLimits({ allowSpawn: true, maxDepth: 2, allowedChildProfiles: ["sup"] }), { allowSpawn: true, allowedChildProfiles: ["sup"] }).maxTotalDescendants).toBe(DEFAULT_MAX_DESCENDANTS - 1);
+});
