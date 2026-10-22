@@ -88,8 +88,11 @@ clamped. Narrowing to zero is always allowed. Saturating `maxChildren` returns a
   look-alike markers neutralized.
 - `capcomd inspect <run> <agt>` (record, limits, children, awaits, VM, heartbeat, result, events,
   log tail), `capcomd logs` (scripted stdout/stderr and each in-VM call, stored in the scope).
-- **Heartbeats + stuck detection**: every in-VM call and log line is a heartbeat; `capcomd
-  heartbeat <note>` too. `tree`/`status` flag `stuck` after 5 min silence
+- **Heartbeats + stuck detection**: every in-VM call and scripted log line is a heartbeat;
+  `capcomd heartbeat <note>` too. For a real agent the engine also counts the agent CLI's own
+  events (Claude Code `stream-json`, Codex `--json`; at most one heartbeat per quarter of the
+  stuck window, 30s at most), so an agent without the in-VM CLI (one that can't spawn) still has
+  a heartbeat while its model works. `tree`/`status` flag `stuck` after 5 min silence
   (`CAPCOMD_STUCK_AFTER_MS`) or when the driver lease has expired.
 - **Cancellation propagation**: cancel walks the subtree (pre-order). Each driver sees the
   cancel, kills the agent (real: process group in the VM; scripted: process group) and drains
@@ -121,6 +124,8 @@ appended to the prompt. Agents without `children.allowSpawn` get no CLI, no MCP 
   and git repo. 24 scenarios assert outcome, trajectory (scope event order) and rollups.
 - `tests/subagents/unit.test.ts`: tokens, fencing/caps, rollups/stuck, CLI parsing, the MCP
   server, VmSpool over boxd-style exec (FakeProvider hostExec), skill gating via the claude adapter.
+- `tests/subagents/liveness.test.ts`: a real-adapter worker (fake claude) that can't spawn and
+  keeps working past the stuck window is not flagged stuck.
 - Chaos (`chaos:fast --only primitives`): `vm.rpc.spawn.before_reply` (driver killed after a VM's
   spawn was handled but before the reply), `vm.rpc.await.before`, and `vm.scope.spawn.mid`
   (engine killed inside a VM-initiated spawn). The audit checks exactly two children (no

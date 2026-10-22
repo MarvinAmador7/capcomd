@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agents that can't spawn children are no longer shown as stuck while they work. Only agents allowed to spawn get
+  the in-VM `capcomd`, so a worker had no way to heartbeat and `tree`, `inspect` and `capcomd_tree` flagged it
+  `stuck` five minutes in, even when healthy. capcomd now counts the agent's own Claude Code or Codex output as its
+  heartbeat, so `stuck` means the model has really gone quiet. `capcomd heartbeat "<note>"` still adds a note.
 - A unit of budget a spawn doesn't name now reserves the agent profile's own cap (`maxTurns`, `timeoutMs`,
   `maxBudgetUsd`, or what's left if that's less) instead of everything left, and a subscription agent that can't
   spawn reserves no usd (it bills $0; its spend still counts). Spawning several workers with only `turns` no longer

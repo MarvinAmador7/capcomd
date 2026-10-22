@@ -9,6 +9,8 @@ export const MAX_ARTIFACTS = 50;
 export const STUCK_AFTER_MS = Number(env("STUCK_AFTER_MS") ?? 5 * 60_000);
 /** Read at call time so an operator (or a scenario) can tune it without a restart of the importing module. */
 export const stuckAfterMs = () => Number(env("STUCK_AFTER_MS") ?? 5 * 60_000);
+/** How often the engine turns an agent's own output into a heartbeat: well inside the stuck window, at most every 30s. */
+export const heartbeatEveryMs = () => Math.min(30_000, Math.max(100, Math.floor(stuckAfterMs() / 4)));
 
 export interface Truncation { field: string; bytes: number; kept: number }
 
