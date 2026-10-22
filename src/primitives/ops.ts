@@ -345,7 +345,8 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
         const df = await s.driveFailed({ agentId, kind, message: String((e as Error)?.message ?? e), attempt, driver }).catch(() => null);
         if (df && df.consecutive >= maxSame) break;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
-        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing) break;
+        // A limit (timeout, turns, budget) is a decision, not a fault: running the same task again hits it again.
+        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit") break;
         await sleep(2000 * attempt);
       }
     }
@@ -449,8 +450,11 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     const verdictOf = review ? { verdict: parseVerdict(declared.data, rec.resultText) } : {};
     // Report mode: the agent's final message is its result (a scripted one declares its summary itself).
     const reportText = report && typeof rec.resultText === "string" ? rec.resultText.slice(0, 8000) : null;
+    // Stopped at a limit: the agent failed, but its work so far is on its branch for a continuation (not retried).
+    const limit = typeof rec.limit === "string" ? rec.limit : null;
+    const limitOf = limit ? { limit, error: `stopped at its ${limit} limit; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
     const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
-    const fin = await s.finish({ agentId, status: "done", spent, result: { ...declared, ...verdictOf, ...reportOf, verification: null, branch: review || report || (!pushed.sha && vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
+    const fin = await s.finish({ agentId, status: limit ? "failed" : "done", spent, result: { ...declared, ...verdictOf, ...reportOf, ...limitOf, verification: null, branch: review || report || (!pushed.sha && vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }

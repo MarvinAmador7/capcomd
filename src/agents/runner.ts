@@ -43,6 +43,8 @@ export interface AgentResult {
   agentVersion?: string;
   /** The agent's final message (a reviewer's verdict comes from it). */
   resultText?: string;
+  /** Stopped at a limit (timeout, max_turns, max_budget_usd): `sha` holds the work so far, with a Capcomd-Stop trailer. */
+  limit?: string;
 }
 
 export interface AgentRunOptions {
@@ -57,11 +59,14 @@ export interface AgentRunOptions {
 }
 
 export class AgentError extends Error {
-  constructor(readonly kind: "cancelled" | "timeout" | "failed" | "no_changes" | "install" | "git" | "credentials" | "guard", message: string) {
+  constructor(readonly kind: "cancelled" | "failed" | "no_changes" | "install" | "git" | "credentials" | "limit", message: string) {
     super(message);
     this.name = "AgentError";
   }
 }
+
+/** The CLI's own stop reasons that mean "out of budget", not "broken" (claude result subtypes; `timeout` exit 124). */
+const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turns: "max_turns", error_max_budget_usd: "max_budget_usd" };
 
 export const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 export const SECRET_PLACEHOLDER_PREFIX = "bxds_";
@@ -193,12 +198,13 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     if (task.review) {
       must(await git(["checkout", "-q", "--detach", task.review.sha], repo), "git checkout (review)");
     } else if (branchExists && !task.rework && !task.report) {
-      const head = await git(["log", "-1", "--format=%H%x00%(trailers:key=Capcomd-Task,valueonly,separator=)%x00%(trailers:key=Capcomd-Epoch,valueonly,separator=)", `origin/${task.branch}`], repo);
-      const [sha, k, ep] = head.stdout.trim().split("\0");
+      const head = await git(["log", "-1", "--format=%H%x00%(trailers:key=Capcomd-Task,valueonly,separator=)%x00%(trailers:key=Capcomd-Epoch,valueonly,separator=)%x00%(trailers:key=Capcomd-Stop,valueonly,separator=)", `origin/${task.branch}`], repo);
+      const [sha, k, ep, stop] = head.stdout.trim().split("\0");
       if (head.code === 0 && k?.trim() === key && Number(ep) === task.epoch && sha) {
         addSpanEvent(span, "agent.reused_push", { sha });
         setSpanAttributes(span, { "git.sha": sha, "agent.already": true });
-        return { sha, already: true, costUsd: 0, turns: 0, stopReason: "already_pushed", events: 0 };
+        // A push that stopped at a limit is still a stop when it is replayed, not a finished task.
+        return { sha, already: true, costUsd: 0, turns: 0, stopReason: "already_pushed", events: 0, ...(stop?.trim() ? { limit: stop.trim() } : {}) };
       }
     }
     if (!task.review) must(await git(["checkout", "-B", task.branch, branchExists && !task.rework ? `origin/${task.branch}` : `origin/${task.target}`], repo), "git checkout");
@@ -303,6 +309,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     live = state;
     let consumed = 0, exitCode: number | null = null;
+    // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
+    // caller stops the agent instead of retrying it, so hours of work aren't redone or lost at a cap.
+    let limit: string | null = null;
     const drain = async (final: boolean) => {
       const res = await sh(`tail -n +${consumed + 1} ${sq(jsonl)} 2>/dev/null; printf '\\n__CAPCOMD_EXIT__%s' "$(cat ${sq(exitFile)} 2>/dev/null)"`);
       const [body, exitPart] = res.stdout.split("\n__CAPCOMD_EXIT__");
@@ -330,8 +339,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       if (guard) {
         await kill(); await drain(true);
         addSpanEvent(span, "agent.guard", { reason: guard });
-        setSpanAttributes(span, { "agent.cost_usd": state.costUsd, "agent.turns": state.turns, "agent.stop_reason": guard });
-        throw new AgentError("guard", `${name} stopped by guard: ${guard} for ${key}`);
+        limit = guard.split(" ")[0]!;
+        break;
       }
       if (opts.isCancelled && (await opts.isCancelled().catch(() => false))) {
         await kill(); await drain(true);
@@ -340,26 +349,29 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       }
       if (now() > deadline) {
         await kill(); await drain(true);
-        throw new AgentError("timeout", `${name} timed out after ${cfg.timeoutMs}ms for ${key}`);
+        limit = "timeout";
+        break;
       }
     }
     await drain(true);
 
-    const out = adapter.outcome(state, exitCode!);
+    const out = adapter.outcome(state, exitCode ?? -1);
+    limit ??= LIMIT_STOPS[out.stopReason] ?? null;
     const billing = credentialMode === "subscription" ? "subscription" : "api";
     const notionalCostUsd = state.costUsd;
     const costUsd = billing === "subscription" ? 0 : state.costUsd;
     const { turns } = state;
     setSpanAttributes(span, { "agent.billing": billing, "agent.notional_cost_usd": notionalCostUsd });
-    setSpanAttributes(span, { "agent.exit_code": exitCode, "agent.cost_usd": costUsd, "agent.turns": turns, "agent.stop_reason": out.stopReason, "agent.events": state.events, "gen_ai.response.cost": costUsd, "gen_ai.usage.input_tokens": state.inputTokens, "gen_ai.usage.output_tokens": state.outputTokens });
-    if (out.stopReason === "timeout") throw new AgentError("timeout", `${name} hit the ${cfg.timeoutMs}ms timeout for ${key}`);
-    if (!out.ok) {
+    setSpanAttributes(span, { "agent.exit_code": exitCode, "agent.cost_usd": costUsd, "agent.turns": turns, "agent.stop_reason": limit ?? out.stopReason, "agent.events": state.events, "gen_ai.response.cost": costUsd, "gen_ai.usage.input_tokens": state.inputTokens, "gen_ai.usage.output_tokens": state.outputTokens });
+    if (limit) addSpanEvent(span, "agent.limit", { reason: limit });
+    if (!limit && !out.ok) {
       const err = await sh(`tail -c 2000 ${sq(errFile)} 2>/dev/null`);
       throw new AgentError("failed", `${name} stopped (${out.stopReason}, exit ${exitCode}) for ${key}: ${r.text(state.error ?? "")} ${r.text(err.stdout).slice(-800)}`.trim());
     }
 
     // A reviewer or a reporting agent only answers: nothing it changed is committed or pushed.
     if (task.review || task.report) {
+      if (limit) throw new AgentError("limit", `${name} stopped at its ${limit} limit for ${key} before answering`);
       setSpanAttributes(span, task.review ? { "agent.review": true } : { "agent.report": true });
       return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.report ? 8000 : 4000)) };
     }
@@ -370,20 +382,22 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const ahead = await git(["rev-list", "--count", `origin/${task.target}..HEAD`], repo);
     if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) {
       // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine.
-      if (opts.subagents) { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd }; }
+      if (opts.subagents) { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}) }; }
+      if (limit) throw new AgentError("limit", `${name} stopped at its ${limit} limit for ${key} before changing anything`);
       throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
     }
-    if (status.stdout.trim()) {
-      const subject = `${task.taskId}: ${task.goal.split("\n")[0]!.slice(0, 60)}`;
-      const msg = `${subject}\n\n${r.text(state.resultText ?? "").slice(0, 1500)}\n\nCapcomd-Task: ${key}\nCapcomd-Epoch: ${task.epoch}\nCapcomd-Agent: ${name}@${version}\n`;
+    // At a limit the stop is always recorded in a commit (empty if the agent committed everything itself), so a replay sees it.
+    if (status.stdout.trim() || limit) {
+      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${task.taskId}: ${task.goal.split("\n")[0]!.slice(0, 60)}`;
+      const msg = `${subject}\n\n${r.text(state.resultText ?? "").slice(0, 1500)}\n\nCapcomd-Task: ${key}\nCapcomd-Epoch: ${task.epoch}\nCapcomd-Agent: ${name}@${version}\n${limit ? `Capcomd-Stop: ${limit}\n` : ""}`;
       await provider.upload(vmId, `${W}/commit-msg.txt`, new TextEncoder().encode(msg));
-      must(await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", "-F", `${W}/commit-msg.txt`], repo), "git commit");
+      must(await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", ...(limit ? ["--allow-empty"] : []), "-F", `${W}/commit-msg.txt`], repo), "git commit");
     }
     const sha = must(await git(["rev-parse", "HEAD"], repo), "rev-parse").stdout.trim();
     const lease = branchExists ? `--force-with-lease=refs/heads/${task.branch}` : `--force-with-lease=refs/heads/${task.branch}:`;
     must(await git(["push", "--porcelain", lease, "origin", `HEAD:refs/heads/${task.branch}`], repo, 300_000), "git push");
     setSpanAttributes(span, { "git.sha": sha });
-    return { sha, already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd };
+    return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}) };
   } catch (e) {
     // Failed/timed-out spans still carry what was spent so far (subscription billing: cost 0, notional set).
     const st = live as AgentRunState | null;

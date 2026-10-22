@@ -75,6 +75,10 @@ Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token 
   (`maxTurns`, `timeoutMs`, `maxBudgetUsd`, at most what's left); a subscription child that can't spawn reserves no
   usd; only a unit the profile doesn't cap defaults to all that's left.
 - **Enforcement:** the carved budget narrows the agent's profile: `maxTurns ≤ turns`, `timeoutMs ≤ wallSeconds`, `maxBudgetUsd ≤ usd`. The profile's own limits stay the ceiling.
+  An agent that reaches one of them is stopped, not retried (running it again hits the same limit): what it changed is
+  committed and pushed to its branch (subject `WIP (stopped: <limit>) …`, trailer `Capcomd-Stop: <limit>`, so a
+  replay after a crash still sees the stop), and it finishes `failed` with `result.limit`, `result.branch` and
+  `result.commit`. A parent continues from that branch with a new child and more budget.
 - **Charging:** agents are charged `{usd: costUsd, turns, wallSeconds}` (agent wall time). Subscription agents spend usd 0 and are charged turns + time.
 
 ### Future (ADR item)

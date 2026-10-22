@@ -368,9 +368,9 @@ export const workerActor = actor({
       );
       if (already.length > 0) {
         // Replay: return what the first push recorded (a resumed driver needs the commit).
-        let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
+        let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string } = {};
         try { prev = JSON.parse(String(already[0]!.event)); } catch {}
-        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
+        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
       }
 
       const workerLife = await getLifecycle(c.db, workerId);
@@ -388,9 +388,9 @@ export const workerActor = actor({
       for (let waited = 0; ; waited += 500) {
         const done = await c.db.execute("SELECT event FROM lifecycle_events WHERE idem_key = ?", idemKey);
         if (done.length) {
-          let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean } = {};
+          let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string } = {};
           try { prev = JSON.parse(String(done[0]!.event)); } catch {}
-          return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
+          return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
         }
         const now = Date.now();
         const rows = await c.db.execute("SELECT * FROM push_locks WHERE idem_key = ?", idemKey);
@@ -437,6 +437,7 @@ export const workerActor = actor({
       let billing: string | undefined;
       let notionalCostUsd = 0; // subscription billing: what the CLI says the tokens would cost at API prices
       let resultText: string | undefined; // a reviewer's final message (its verdict)
+      let limit: string | undefined; // stopped at a limit: the branch holds the work so far
       let adopted = false;
       // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
       const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
@@ -490,6 +491,9 @@ export const workerActor = actor({
         billing = res.billing;
         notionalCostUsd = res.notionalCostUsd ?? 0;
         resultText = res.resultText;
+        limit = res.limit;
+        // The `capcomd run` recipe has no stopped state: its task fails, with the work kept on the branch.
+        if (limit && !workerId.startsWith("agt-")) throw new UserError(`agent stopped at its ${limit} limit; its work so far is on ${branch}`, { code: "limit", metadata: { kind: "limit" } });
       } else if (params.review || params.report) {
         // Fake sandbox reviewer/reporter: nothing to run or push (a scripted one declares its result itself).
       } else {
@@ -514,14 +518,14 @@ export const workerActor = actor({
           "worker",
           workerLife.state,
           { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(adopted ? { adopted: true } : {}), ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
+          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(adopted ? { adopted: true } : {}), ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
           idemKey,
           []
         );
         await tx.execute("UPDATE push_locks SET state = 'done', sha = ?, adopted = ?, until = 0, updated_at = ? WHERE idem_key = ?", sha || null, adopted ? 1 : 0, Date.now(), idemKey);
       }, { name: "pushBranch" });
 
-      return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(resultText ? { resultText } : {}) };
+      return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}) };
       } catch (error) {
         // Release so a retry can take over at once (the attempt count records the retry).
         await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});

@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- An agent that hits its time, turn or budget limit no longer loses its work or starts over. What it changed is
+  pushed to its branch as a `WIP (stopped: <limit>)` commit with a `Capcomd-Stop` trailer, and it ends `failed`
+  with `result.limit` (`timeout`, `max_turns` or `max_budget_usd`), `result.branch` and `result.commit`, after one
+  attempt. Before, it was retried from scratch up to three times, then failed with nothing pushed. To carry on,
+  spawn a new agent with more budget that starts from that branch.
 - Agents that can't spawn children are no longer shown as stuck while they work. Only agents allowed to spawn get
   the in-VM `capcomd`, so a worker had no way to heartbeat and `tree`, `inspect` and `capcomd_tree` flagged it
   `stuck` five minutes in, even when healthy. capcomd now counts the agent's own Claude Code or Codex output as its
