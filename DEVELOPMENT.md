@@ -159,6 +159,6 @@ A standalone binary (`bun build --compile`) builds, but `serve` doesn't work com
 ## Naming (renamed from relay)
 
 The CLI was renamed from `relay` to `capcomd` on 2026-10-18.
-- Binary / package: `capcomd`. MCP tools: `capcomd_run`, `capcomd_status`, `capcomd_cancel`, `capcomd_events`, `capcomd_trace`, `capcomd_approve`.
+- Binary / package: `capcomd`. MCP tools: `capcomd_*` (the list is in `docs/integration-agents.md`).
 - Env: `CAPCOMD_*` (`CAPCOMD_ENDPOINT`, `CAPCOMD_SANDBOX`, `CAPCOMD_PROTECTED_BRANCHES`, `CAPCOMD_TRACE`, `CAPCOMD_TRACE_DIR`, `CAPCOMD_KILLPOINT`, `CAPCOMD_BOXD_DB`). The old `RELAY_*` names still work as deprecated aliases and print one warning on stderr (silence with `CAPCOMD_NO_DEPRECATION_WARNINGS=1`).
 - Deliberately unchanged, for compatibility: actor names, the `relay.v1` JSON schema id, `relay.*` span attribute keys in traces, the `.relay/` state directory, and the `relay-` boxd VM name prefix (existing idempotency keys stay stable).

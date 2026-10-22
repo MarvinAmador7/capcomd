@@ -13,8 +13,8 @@ another agent, as the exact commit that was tested. Runs are durable: agents kee
 ends, a crash or a restart resumes where it stopped, and every merge happens exactly once.
 
 > **Early release (0.x).** The primitives, sub-agents, verification, review and durability are built and verified
-> live; expect changes between minor versions. Driving capcomd from an agent works today through the skill and
-> CLI; the MCP server doesn't expose the full set of primitives yet. See [STATUS.md](STATUS.md) and
+> live; expect changes between minor versions. Your agent drives capcomd through the skill and the CLI, or the
+> MCP server; a one-step plugin for Claude Code and Codex is next. See [STATUS.md](STATUS.md) and
 > [ROADMAP.md](ROADMAP.md).
 
 ## How you use it
@@ -154,7 +154,7 @@ Watch it with `capcomd tree <runId>` or the terminal debugger (from a checkout: 
 |---|---|---|
 | Claude Code | The orchestration skill (`capcomd setup` installs it) and the CLI with `--json` | Works, verified live |
 | Any agent with a shell (Codex, …) | The CLI with `--json`; point it at [the skill](skills/capcomd-orchestration/SKILL.md) | Works; the skill isn't installed for it automatically |
-| MCP clients | `capcomd mcp` | Start, watch, trace and approve runs; spawn, await, verify and merge over MCP are next |
+| Any MCP client, with or without a shell | `capcomd mcp`: `claude mcp add capcomd -- capcomd mcp`, or Codex's `config.toml` ([how](docs/integration-agents.md#mcp)) | Works: all the primitives as tools; tested with a scripted client, not yet in the live run |
 
 The skill teaches the agent the primitives and when to use which pattern (single loop, fan-out, supervisor,
 critic, best-of-n, planner, interface-first).
@@ -226,7 +226,8 @@ agent profiles.
   and orchestration patterns.
 - **CLI with a JSON contract**: every command takes `--json` (schema `relay.v1`, stable exit codes), documented in
   [docs/output-contract.md](docs/output-contract.md).
-- **MCP server** (`capcomd mcp`): start, watch, trace and approve runs today; the full primitives are next.
+- **MCP server** (`capcomd mcp`): the primitives as tools for your agent, with bounded waits; it starts the engine
+  when none is running. See [docs/integration-agents.md](docs/integration-agents.md#mcp).
 - **Other callers** (Hermes, scripts, services): see [docs/integration-agents.md](docs/integration-agents.md).
 
 ## Documentation

@@ -16,15 +16,13 @@ each, every verify needing both its check and the verdict; the planner's verifie
 
 ## 2. Next, in order
 
-1. **Agents drive everything over MCP** (M; designed in ADR-018, phases 1 and 2). capcomd is meant to be driven by the user's agent, not typed by hand.
-   Today that works through the skill and the CLI (an agent with a shell); `capcomd mcp` has only run, status,
-   cancel, events, trace and approve, and its `capcomd_run` starts the recipe whose planner is still fake (item 3).
-   Approach: expose the operator primitives as MCP tools (`run_new`, `spawn`, `await` and `wait_any` bounded by a
-   timeout that returns progress instead of blocking past the client's limit, `tree`, `verify`, `merge`, `cancel`,
-   `approve`, `events`, `task_*`, `kv_*`, `budget`, `send`, results), reusing the in-VM tool definitions with the
-   operator's scope; `capcomd_run` stops starting the fake-planner recipe. `capcomd setup` registers the server
-   with the user's agent (Claude Code `claude mcp add`, Codex `config.toml`) and installs the skill for each agent
-   it supports, not only Claude Code. Done when an MCP-only client runs the README's fan-out example end to end.
+1. **capcomd as a plugin for your agent** (M; ADR-018 phase 2). Phase 1 is built: `capcomd mcp` exposes the
+   primitives to a driver agent (bounded waits, gates from the project, human approvals by default, engine
+   auto-start). Left: one plugin for Claude Code and Codex (`plugins/capcomd/` with both manifests, the MCP server
+   through a launcher that finds the installed CLI, the orchestration and setup skills, the repo as marketplace),
+   installed by `capcomd setup` for each agent it finds; `claude plugin validate --strict` in CI; a live e2e where
+   the planner is a Claude Code session using only the MCP tools. Done when a clean machine goes from installing
+   the plugin to a merged, verified change without the user typing a capcomd command.
 2. **Sandbox providers as a documented contract** (M). VMs already come through `SandboxProvider`
    (`src/providers/sandbox.ts`), with boxd and a local fake behind it, but boxd is wired in: the provider list is
    hard-coded (`src/dependencies.ts`), checks run in a VM only when `CAPCOMD_SANDBOX === "boxd"`, `env build` and

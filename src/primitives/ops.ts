@@ -5,7 +5,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
 import { spawn as spawnProc } from "child_process";
-import { mkdirSync, openSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { client, assertEngine } from "../core/relay";
 import { RelayError } from "../core/errors";
@@ -132,9 +132,22 @@ export async function runNew(o: RunNewOpts) {
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
   if (res.created) await (await import("./state")).kvWrite(runId, { k: TRACE_KV, value: { dir: (await import("../utils/tracing-simple")).traceDir() }, writer: "operator" }).catch(() => {});
+  if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now() });
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
   return { runId, created: res.created, budget: res.budget };
+}
+
+/** Runs this machine created, newest last (one JSON line each), so a later session can find them: `capcomd_runs`. */
+export const runsIndexPath = () => join(stateDir(), "runs.jsonl");
+function recordRun(r: { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }) {
+  try { mkdirSync(stateDir(), { recursive: true }); appendFileSync(runsIndexPath(), JSON.stringify(r) + "\n"); } catch { /* an index, not state */ }
+}
+export function recentRuns(limit = 20): Array<{ runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }> {
+  if (!existsSync(runsIndexPath())) return [];
+  const rows = readFileSync(runsIndexPath(), "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
+  const seen = new Set<string>();
+  return rows.reverse().filter((r) => !seen.has(r.runId) && seen.add(r.runId)).slice(0, limit);
 }
 
 export interface SpawnOpts {

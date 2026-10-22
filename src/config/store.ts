@@ -13,6 +13,12 @@ export interface CapcomdConfig {
   boxdKey?: "keychain" | "file" | "env";
   /** Defaults for `run new` when its flags are absent (project config). */
   run?: { checks?: Record<string, string>; reviewer?: string; target?: string };
+  /**
+   * What an agent driving capcomd over MCP may do (ADR-018 §4). `approvals`: "human" (default) leaves merges into
+   * protected branches to a person; "client-confirmed" lets the tool approve after the client's own confirmation.
+   * `maxRunBudget`: a cap per run, e.g. "usd=20,turns=400" (units over it are refused, not clamped).
+   */
+  driver?: { approvals?: "human" | "client-confirmed"; maxRunBudget?: string };
 }
 
 type Source = Record<string, string | undefined>;
@@ -75,6 +81,12 @@ export function applyConfig(env: Source = process.env, cwd = process.cwd(), keyc
 /** `run new` defaults from the project config (flags win). */
 export function runDefaults(cwd = process.cwd()): NonNullable<CapcomdConfig["run"]> {
   return readConfig(projectConfigPath(cwd)).run ?? {};
+}
+
+/** The driver policy: the project's settings over the user's. */
+export function driverPolicy(cwd = process.cwd(), env: Source = process.env): NonNullable<CapcomdConfig["driver"]> {
+  if (env.CAPCOMD_NO_CONFIG) return {};
+  return { ...(readConfig(userConfigPath(env)).driver ?? {}), ...(readConfig(projectConfigPath(cwd)).driver ?? {}) };
 }
 
 function defaultKeychain(): string | null {

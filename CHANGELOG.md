@@ -5,6 +5,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- **Your agent drives capcomd over MCP** (ADR-018 phase 1). `capcomd mcp` now exposes the primitives as tools:
+  `capcomd_setup`, `capcomd_profiles`, `capcomd_run_new`, `capcomd_runs`, `capcomd_spawn`, `capcomd_await`,
+  `capcomd_send`, `capcomd_cancel`, `capcomd_verify`, `capcomd_merge`, `capcomd_approve`, `capcomd_task`,
+  `capcomd_kv`, `capcomd_budget`, `capcomd_tree`, `capcomd_inspect`, `capcomd_events` and `capcomd_trace`. Waits
+  return within 55 seconds with what's still pending (call again; the agents keep working). The agent is a
+  *driver*: the checks, reviewer and target come from the project's `.capcomd/config.json`, a protected target or
+  a budget over `driver.maxRunBudget` is refused, and merges into protected branches wait for a person unless the
+  project sets `driver.approvals: "client-confirmed"`. Agents' text arrives fenced. The server starts the engine
+  when none is running (`CAPCOMD_NO_ENGINE_AUTOSTART=1` turns that off) and leaves it running, and
+  `capcomd_runs` finds runs from earlier sessions. Register it with `claude mcp add capcomd -- capcomd mcp`.
+- **Breaking:** the MCP tools `capcomd_run` (it started the `capcomd run` recipe, whose planner is still a fake
+  model) and `capcomd_status` are gone: start a run with `capcomd_run_new` and spawn agents, and use
+  `capcomd_tree` or `capcomd_runs` for status. `capcomd_approve` takes `merge` (an `mrg-…` id) instead of `taskId`.
+- The orchestration skill covers the MCP tools.
+
 ## 0.4.0 (2026-10-21)
 
 First public release: capcomd is open source under the MIT license and installs from npm.

@@ -8,8 +8,8 @@
 The orchestration primitives and in-VM sub-agents work end to end with real agents: Claude Code and
 Codex run in VMs from the first sandbox provider, boxd, on API keys or subscription logins, every merge is gated
 by operator-set checks and a reviewer agent, and runs survive crashes. An agent drives a run today through the
-skill and the CLI (that's how the live end-to-end test runs); the MCP server doesn't expose the primitives yet,
-and boxd is still the only real provider (see Open work, items 1 and 2). The `capcomd run "<goal>"` recipe's
+skill and the CLI (that's how the live end-to-end test runs) or the MCP server (tested with a scripted client), and
+boxd is still the only real provider (see Open work, items 1 and 2). The `capcomd run "<goal>"` recipe's
 planner and judge still answer from a fake model (item 3).
 
 ## What works
@@ -34,7 +34,8 @@ planner and judge still answer from a fake model (item 3).
 | Sub-agents in VMs (ADR-017): capability tokens, narrow-only fan-out, in-VM `capcomd` CLI and MCP tools, fencing of agent text | Built | `bun run test:scenarios` |
 | Real agents: Claude Code and Codex adapters, agent profiles, subscription logins (`auth login`), boxd host-bound secrets, env snapshots (`env build`), `doctor` | Built | `tests/agents`, `tests/env`, `tests/auth`, live `doctor --strict` |
 | Git: direct and PR merge modes, protected branches parked for `approve` | Built | `tests/merge` |
-| CLI JSON contract (`--json`, schema `relay.v1`, exit codes), MCP server | Built | `tests/cli`, `tests/mcp`, `docs/output-contract.md` |
+| CLI JSON contract (`--json`, schema `relay.v1`, exit codes) | Built | `tests/cli`, `docs/output-contract.md` |
+| MCP server for a driver agent (ADR-018 phase 1): the primitives as 18 tools, bounded waits, gates from the project config, human approvals by default, fenced agent text, engine auto-start, runs found again from a new session | Built (scripted client; not yet in the live e2e) | `tests/mcp`, `tests/core/engine-start.test.ts` |
 | Tracing, `inspect --follow`, TUI (`apps/tui`) | Built | `tests/tracing`, `apps/tui` tests |
 | Costs: billed USD, plus the API-price estimate for subscription work (`notionalUsd`, shown as `~$0.04`) | Built | `tests/subagents/unit.test.ts`, `apps/tui/test/cost.test.ts` |
 
@@ -48,8 +49,8 @@ checks VMs, about $0.37 in API-equivalent cost on subscription billing. This scr
 
 The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The biggest items:
 
-1. Agents drive capcomd over MCP: `capcomd mcp` has run, status, cancel, events, trace and approve, not the
-   primitives (spawn, await, verify, merge, …); setup doesn't register it with your agent yet.
+1. One-step install into your agent (ADR-018 phase 2): a capcomd plugin for Claude Code and Codex (MCP server +
+   skills); today the MCP server is registered by hand and the skill is installed for Claude Code only.
 2. Sandbox providers as a documented contract: boxd is still wired in (provider list, checks VMs, snapshots,
    setup); a registry, capabilities, a conformance suite and a second provider are next.
 3. The `capcomd run` recipe's planner and run-level judge still answer from a fake model (per-branch review
