@@ -1,18 +1,34 @@
 {
   "name": "capcomd",
   "displayName": "capcomd",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Durable orchestration for swarms of coding agents: spawn Claude Code and Codex agents in isolated VMs, verify and review their work, merge only the tested commits.",
-  "author": { "name": "Marvin Amador Campos", "url": "https://github.com/MarvinAmador7" },
+  "author": {
+    "name": "Marvin Amador Campos",
+    "url": "https://github.com/MarvinAmador7"
+  },
   "homepage": "https://github.com/MarvinAmador7/capcomd#readme",
   "repository": "https://github.com/MarvinAmador7/capcomd",
   "license": "MIT",
-  "keywords": ["agents", "orchestration", "swarm", "mcp", "codex", "sandbox", "vm", "durable"],
+  "keywords": [
+    "agents",
+    "orchestration",
+    "swarm",
+    "mcp",
+    "codex",
+    "sandbox",
+    "vm",
+    "durable"
+  ],
   "mcpServers": {
     "capcomd": {
       "command": "sh",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/launch.sh"],
-      "env": { "CAPCOMD_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}" }
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp/launch.sh"
+      ],
+      "env": {
+        "CAPCOMD_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+      }
     }
   }
 }

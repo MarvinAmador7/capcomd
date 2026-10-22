@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.5.0 (2026-10-22)
+
+capcomd as a plugin for your agent: install it in Claude Code or Codex, ask your agent for the outcome, and it runs
+the swarm through capcomd's MCP tools. Setup makes the boxd key from your boxd CLI login.
+
 - **Your agent drives capcomd over MCP** (ADR-018 phase 1). `capcomd mcp` now exposes the primitives as tools:
   `capcomd_setup`, `capcomd_profiles`, `capcomd_run_new`, `capcomd_runs`, `capcomd_spawn`, `capcomd_await`,
   `capcomd_send`, `capcomd_cancel`, `capcomd_verify`, `capcomd_merge`, `capcomd_approve`, `capcomd_task`,

@@ -1,12 +1,23 @@
 {
   "name": "capcomd",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Durable orchestration for swarms of coding agents: spawn Claude Code and Codex agents in isolated VMs, verify and review their work, merge only the tested commits.",
-  "author": { "name": "Marvin Amador Campos", "url": "https://github.com/MarvinAmador7" },
+  "author": {
+    "name": "Marvin Amador Campos",
+    "url": "https://github.com/MarvinAmador7"
+  },
   "homepage": "https://github.com/MarvinAmador7/capcomd#readme",
   "repository": "https://github.com/MarvinAmador7/capcomd",
   "license": "MIT",
-  "keywords": ["agents", "orchestration", "swarm", "mcp", "sandbox", "vm", "durable"],
+  "keywords": [
+    "agents",
+    "orchestration",
+    "swarm",
+    "mcp",
+    "sandbox",
+    "vm",
+    "durable"
+  ],
   "skills": "./skills/",
   "mcpServers": "./.codex-mcp.json",
   "interface": {
@@ -15,7 +26,10 @@
     "longDescription": "Your agent orchestrates through capcomd: it spawns Claude Code and Codex agents in isolated VMs, each on its own branch, verifies their work with your checks and a reviewer agent, and merges only the exact commits that passed. Runs are durable: they survive crashes and outlive the session.",
     "developerName": "Marvin Amador Campos",
     "category": "Developer Tools",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "websiteURL": "https://github.com/MarvinAmador7/capcomd",
     "defaultPrompt": [
       "Use capcomd to fix the failing tests: one worker per file, each verified and reviewed, then merged",
