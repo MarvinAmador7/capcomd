@@ -16,11 +16,10 @@ each, every verify needing both its check and the verdict; the planner's verifie
 
 ## 2. Next, in order
 
-1. **The plugin, live** (S; ADR-018). The MCP tools (phase 1) and the plugin (phase 2: manifests, launcher, setup
-   and orchestration skills, `capcomd setup` installing it, the boxd key from the boxd CLI) are built. Left: a
-   variant of `scripts/mac-subagents-e2e.sh` where the planner is a Claude Code session with only the plugin's MCP
-   tools; trying the plugin in Codex (built to OpenAI's format, not yet run there); and a release, so the plugin's
-   launcher finds a published capcomd with the new tools.
+1. **The plugin in Codex** (S; ADR-018). The MCP tools, the plugin and `capcomd setup` installing it are built and
+   verified live from Claude Code (`scripts/mac-plugin-e2e.sh`). Left: run the plugin in Codex (built to OpenAI's
+   format: `.codex-plugin/plugin.json`, `.codex-mcp.json`, `.agents/plugins/marketplace.json`) and fix what differs,
+   for example whether Codex passes the session's `PWD` to the server.
 2. **Sandbox providers as a documented contract** (M). VMs already come through `SandboxProvider`
    (`src/providers/sandbox.ts`), with boxd and a local fake behind it, but boxd is wired in: the provider list is
    hard-coded (`src/dependencies.ts`), checks run in a VM only when `CAPCOMD_SANDBOX === "boxd"`, `env build` and
@@ -38,14 +37,18 @@ each, every verify needing both its check and the verdict; the planner's verifie
    mid-run; spawn-time checks use the carve. Approach: stream token usage from the agent's event log (the
    runner already parses it) into the scope's `spent`, and cancel on a breach. Also carry the notional cost of
    failed or timed-out agents into the tree (only successful runs today).
-5. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
+5. **Budget units a spawn leaves out** (S). A spawn takes all that's left of every unit it doesn't name, so a
+   driver that spawns three workers with only `turns=20` gets the second and third refused (seen in the plugin's
+   live run; the agent recovered by cancelling and respawning with every unit). Approach: an unnamed unit defaults
+   to the profile's own cap (`maxTurns`, `timeoutMs`, `maxBudgetUsd`) when it has one, and only then to what's left.
+6. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
    VmSpool can tail `agent.jsonl`; it is unwired to keep exec traffic low. Approach: tail on demand
    (`logs --follow`), not continuously.
-6. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
+7. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
    spends everything on children gets "no budget left", the review fails closed and nothing merges. Approach:
    reserve the reviewer's budget when the child is spawned (or warn at spawn time when the run has a
    reviewer and the remainder can't cover one).
-7. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
+8. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
    verify's VM for its merge when the target hasn't moved (same tree), else reuse the snapshot only.
 
 ## 3. Orchestration patterns that aren't possible yet

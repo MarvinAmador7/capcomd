@@ -106,6 +106,10 @@ in boxd VMs, verifies each (checks in a VM, then a reviewer agent), merges them,
 result and checks that no VM is left. It needs `BOXD_API_KEY`, `gh` and working Claude and Codex logins, creates
 a private GitHub repo (it prints the delete command) and ends with `E2E PASS` or `E2E FAIL: <reasons>`.
 
+`scripts/mac-plugin-e2e.sh` is the same goal driven the way users drive capcomd: a headless Claude Code session
+loads `plugins/capcomd` and may use only the plugin's MCP tools and skills (no shell, no edits). It needs `claude`
+logged in as well, and fails if the session used any other tool.
+
 ### Chaos tests
 
 ```bash

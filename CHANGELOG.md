@@ -29,6 +29,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - `capcomd setup` makes the boxd key itself when the boxd CLI is logged in: a key named `capcomd-<host>`, in your
   active org (or `--org`), kept in the OS keychain and never shown; revoke it with `boxd auth keys rm`. A stale key
   in the keychain is replaced. Without the CLI or a login, setup says exactly what to run.
+- Verified live: a headless Claude Code session with only the plugin's tools fixed three files with a swarm of
+  three workers (two Claude, one Codex), each checked and reviewed, merged as three PRs (`scripts/mac-plugin-e2e.sh`).
+- `capcomd setup check` (and `capcomd_setup`) counts settings from the environment, not only the config files, and
+  checks the engine at `CAPCOMD_ENDPOINT`, not only the default port.
+- `capcomd_spawn` and the orchestration skill say that budget units a spawn leaves out take everything that's left.
 - The orchestration skill moved to `plugins/capcomd/skills/capcomd-orchestration/`; the npm package ships `plugins/`
   instead of `skills/`.
 

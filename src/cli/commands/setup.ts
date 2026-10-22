@@ -329,17 +329,23 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
   const user = readConfig(userConfigPath());
   const projPath = projectConfigPath(cwd);
   const proj = readConfig(projPath);
-  out.push({ step: "user config", ok: !!user.env?.CAPCOMD_SANDBOX, detail: existsSync(userConfigPath()) ? `${userConfigPath()} (sandbox ${user.env?.CAPCOMD_SANDBOX ?? "unset"})` : "none", ...(user.env?.CAPCOMD_SANDBOX ? {} : { hint: "Run `capcomd setup`." }) });
+  // Settings count wherever they come from: the config files (applied to the environment at startup) or the environment.
+  const sandbox = process.env.CAPCOMD_SANDBOX ?? process.env.RELAY_SANDBOX;
+  out.push({ step: "user config", ok: !!sandbox, detail: `sandbox ${sandbox ?? "unset"}${user.env?.CAPCOMD_SANDBOX ? ` (${userConfigPath()})` : sandbox ? " (environment)" : ""}`, ...(sandbox ? {} : { hint: "Run `capcomd setup`." }) });
   const keyFrom = process.env.BOXD_API_KEY ? (user.boxdKey === "keychain" && keychainGet() === process.env.BOXD_API_KEY ? "keychain" : "environment") : null;
   out.push({ step: "boxd key", ok: !!keyFrom && (await validBoxdKey(process.env.BOXD_API_KEY!)), detail: keyFrom ? `from the ${keyFrom}` : "none", ...(keyFrom ? {} : { hint: "Run `capcomd setup accounts`." }) });
   const auth = json(self(["auth", "status", "--json"]).stdout)?.profiles ?? [];
   for (const a of auth) out.push({ step: `${a.agent} login`, ok: !!a.present && a.valid !== false, detail: a.detail ?? (a.present ? a.store : "not logged in") });
-  out.push({ step: "project", ok: !!proj.env?.CAPCOMD_REPO, detail: projPath ? `${proj.env?.CAPCOMD_REPO ?? "no repo"} → ${proj.env?.CAPCOMD_MERGE_TARGET ?? "main"} (${projPath})` : "no .capcomd/config.json here or above", ...(proj.env?.CAPCOMD_REPO ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
+  const repo = process.env.CAPCOMD_REPO ?? proj.env?.CAPCOMD_REPO;
+  const target = proj.run?.target ?? process.env.CAPCOMD_MERGE_TARGET ?? proj.env?.CAPCOMD_MERGE_TARGET ?? "main";
+  out.push({ step: "project", ok: !!repo, detail: repo ? `${repo} → ${target}${projPath ? ` (${projPath})` : " (environment)"}` : "no .capcomd/config.json here or above", ...(repo ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
   const plugin = runs(claudeBin()) && claudePluginInstalled();
   const skill = existsSync(join(legacySkill(), "SKILL.md"));
   out.push({ step: "agent plugin", ok: plugin || skill, detail: plugin ? "capcomd plugin in Claude Code (MCP tools and skills)" : skill ? "Claude Code skill only (no MCP tools)" : "not installed", ...(plugin ? {} : { hint: `Run \`capcomd setup agent\`, or in Claude Code: \`/plugin install capcomd --marketplace ${pluginMarketplace()}\`.` }) });
   const S = await import("./service");
-  const st: any = await S.serviceStatus({});
+  // The engine this CLI talks to (CAPCOMD_ENDPOINT), not only the service's default port.
+  const { localPort } = await import("../../core/engine-start");
+  const st: any = await S.serviceStatus({ port: localPort() ?? undefined });
   out.push({ step: "engine", ok: st.running, detail: st.running ? `running on :${st.port}${st.installed ? " (service)" : ""}` : `not running${st.installed ? " (service installed)" : ""}`, ...(st.running ? {} : { hint: "`capcomd service install`, or `capcomd serve`." }) });
   return out;
 }

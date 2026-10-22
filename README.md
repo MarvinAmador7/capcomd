@@ -155,7 +155,7 @@ package is published by CI with [provenance](https://docs.npmjs.com/generating-p
 
 | Agent | How it drives capcomd | Today |
 |---|---|---|
-| Claude Code | The capcomd plugin: MCP tools + orchestration and setup skills | Works; tested with a scripted MCP client, the live run uses the skill and CLI |
+| Claude Code | The capcomd plugin: MCP tools + orchestration and setup skills | Works, verified live: Claude Code ran a 3-worker swarm with only the plugin's tools |
 | Codex | The same plugin from the marketplace (`/plugins`) | Built to OpenAI's plugin format; not yet tried in Codex |
 | Any other MCP client | `capcomd mcp` ([how](docs/integration-agents.md#mcp)) | Works |
 | Any agent with a shell | The CLI with `--json` and [the skill](plugins/capcomd/skills/capcomd-orchestration/SKILL.md) | Works, verified live |
