@@ -52,6 +52,8 @@ interface FakeVm {
   files: Map<string, Uint8Array>;
   checkpoints: Map<string, any>;
   createTime: number;
+  /** Set by extendTtl; otherwise the deadline is createTime + ttlSeconds. */
+  deleteAt?: number;
 }
 
 export interface FakeProviderOptions {
@@ -277,6 +279,12 @@ export class FakeProvider implements SandboxProvider {
     }
   }
 
+  async extendTtl(id: VmId, seconds: number): Promise<void> {
+    const vm = this.vms.get(id);
+    if (!vm) throw new Error(`VM ${id} not found`);
+    vm.deleteAt = this.clock + seconds * 1000;
+  }
+
   async destroy(id: VmId): Promise<void> {
     const vm = this.vms.get(id);
     if (!vm) return;
@@ -289,7 +297,7 @@ export class FakeProvider implements SandboxProvider {
       if (vm.name.startsWith(prefix) && vm.state !== "destroyed") {
         const shouldReap =
           vm.spec.ttlSeconds > 0 &&
-          this.clock - vm.createTime > vm.spec.ttlSeconds * 1000;
+          this.clock > (vm.deleteAt ?? vm.createTime + vm.spec.ttlSeconds * 1000);
         if (!shouldReap) {
           result.push({
             id: vm.id,

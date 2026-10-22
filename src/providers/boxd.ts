@@ -34,6 +34,7 @@ export interface BoxdLike {
     exec(id: string, p: { command: string | string[]; env?: Record<string, string>; cwd?: string; timeout?: number }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
     streamExec?(id: string, p: { command: string | string[]; env?: Record<string, string>; tty?: boolean; cols?: number; rows?: number }): any;
     setEgressAllow(id: string, entries: string[]): Promise<string[]>;
+    setDeleteAfter?(id: string, seconds: number): Promise<unknown>;
     pause(id: string): Promise<unknown>;
     resume(id: string): Promise<unknown>;
     wake(id: string): Promise<void>;
@@ -360,6 +361,10 @@ export class BoxdProvider implements SandboxProvider {
   async resume(id: VmId): Promise<void> {
     await this.client.machines.resume(id).catch((e) => { throw mapBoxdError(e, id, "resume"); });
     this.startKeepalive(id);
+  }
+
+  async extendTtl(id: VmId, seconds: number): Promise<void> {
+    await this.client.machines.setDeleteAfter?.(id, seconds).catch((e: unknown) => { throw mapBoxdError(e, id, "setDeleteAfter"); });
   }
 
   /** Idempotent: a VM that is already gone counts as destroyed. */

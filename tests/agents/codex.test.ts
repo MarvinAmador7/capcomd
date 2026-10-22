@@ -80,6 +80,10 @@ describe("codex adapter (fake codex exec --json)", () => {
   test("parse: codex JSONL shapes; config and selection", () => {
     const st = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     const cfg = loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AUTH: "apikey" });
+    // No default limits (ADR-019); the idle stop is the one guard always on.
+    expect([cfg.maxTurns, cfg.maxBudgetUsd, cfg.timeoutMs]).toEqual([undefined, undefined, undefined]);
+    expect(cfg.idleAfterMs).toBe(30 * 60_000);
+    expect(codexAdapter.guard({ ...st, turns: 10_000, costUsd: 1_000 }, cfg)).toBeNull();
     const r = new Redactor([]);
     expect(codexAdapter.parse('{"type":"item.completed","item":{"type":"command_execution","command":"npm test"}}', r, st, cfg)!.tool).toBe("Bash(npm test)");
     expect(codexAdapter.parse('{"type":"error","message":"boom"}', r, st, cfg)!.text).toBe("boom");

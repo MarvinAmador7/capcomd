@@ -41,6 +41,7 @@ function mockSdk() {
         return { stdout: "ok\n", stderr: "", exitCode: 0 };
       },
       async setEgressAllow(id, entries) { calls.push(["setEgressAllow", id, entries]); find(id)!.egressAllow = entries; return entries; },
+      async setDeleteAfter(id, seconds) { calls.push(["setDeleteAfter", id, seconds]); if (!find(id)) throw new NotFoundError(`no ${id}`); return new Date(Date.now() + seconds * 1000); },
       async pause(id) { calls.push(["pause", id]); return {}; },
       async resume(id) { calls.push(["resume", id]); find(id)!.status = "running"; return {}; },
       async wake(id) { calls.push(["wake", id]); find(id)!.status = "running"; },
@@ -178,6 +179,12 @@ describe("BoxdProvider (mocked SDK)", () => {
     sdk.fail.exec = new NotFoundError("gone");
     await expect(p.exec(id, ["ls"])).rejects.toBeInstanceOf(SandboxNotFoundError);
     await expect(p.waitReady("m_nope", 10)).rejects.toBeInstanceOf(SandboxNotFoundError);
+  });
+
+  test("extendTtl moves the VM's delete deadline (a lease renewed while an agent runs)", async () => {
+    const { id } = await p.ensure(spec());
+    await p.extendTtl(id, 3600);
+    expect(sdk.calls.find((c) => c[0] === "setDeleteAfter")).toEqual(["setDeleteAfter", id, 3600]);
   });
 
   test("destroy is idempotent, marks the ledger, and list filters by prefix", async () => {

@@ -75,6 +75,9 @@ Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token 
   (`maxTurns`, `timeoutMs`, `maxBudgetUsd`, at most what's left); a subscription child that can't spawn reserves no
   usd; only a unit the profile doesn't cap defaults to all that's left.
 - **Enforcement:** the carved budget narrows the agent's profile: `maxTurns ≤ turns`, `timeoutMs ≤ wallSeconds`, `maxBudgetUsd ≤ usd`. The profile's own limits stay the ceiling.
+  Amended by ADR-019 (step 1): these limits are optional. Profiles have no default turns, time or money, and an
+  unset limit means none; the only guard always on is an idle stop (no output from the agent CLI for
+  `idleAfterMs`, default 30 min). A worker VM's delete deadline is a one-hour lease renewed while its agent runs.
   An agent that reaches one of them is stopped, not retried (running it again hits the same limit): what it changed is
   committed and pushed to its branch (subject `WIP (stopped: <limit>) …`, trailer `Capcomd-Stop: <limit>`, so a
   replay after a crash still sees the stop), and it finishes `failed` with `result.limit`, `result.branch` and

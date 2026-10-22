@@ -52,7 +52,8 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   Pass --acceptance '["criterion", …]' to say what the child had to achieve. A failed review returns
   \`result.review.reasons\`: send them to the child or retry with them.
 - A failed child: read \`capcomd inspect <agt>\` / \`capcomd logs <agt>\`, then retry with a clearer task or cancel.
-  A child stopped at a limit (\`result.limit\`: timeout, max_turns or max_budget_usd) kept its work on
+  A child stopped at a limit (\`result.limit\`: timeout, max_turns, max_budget_usd, or idle when its CLI
+  went silent) kept its work on
   \`result.branch\`: continue instead of starting over, with a child given more budget whose task begins with
   \`git fetch origin <branch> && git merge FETCH_HEAD\`.
 - Best-of-n: spawn n, verify each as it finishes, merge the best, \`capcomd cancel\` the rest.

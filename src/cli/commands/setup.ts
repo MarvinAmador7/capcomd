@@ -203,6 +203,7 @@ export async function agentAccountsStep(p: Prompter, v: Values, log: (s: string)
     const id = a === "claude" ? "claude-code" : "codex";
     const keyVar = a === "claude" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
     const auth = String(v.auth ?? await p.choose(`${a === "claude" ? "Claude Code" : "Codex"}: log in with`, [{ value: "subscription", label: a === "claude" ? "my Claude plan" : "my ChatGPT plan" }, { value: "apikey", label: `an API key (${keyVar})` }], "subscription"));
+    ((v as any)._auths ??= {})[a] = auth; // the profiles (project step) use the login chosen here
     if (auth === "apikey") {
       if (!process.env[keyVar]) { steps.push({ step: `${a} login`, ok: false, detail: `${keyVar} is not set`, hint: `Export ${keyVar}, then \`capcomd secrets sync\`.` }); continue; }
       const s = self(["secrets", "sync"], { env });
@@ -238,20 +239,33 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
   const target = String(v.target ?? await p.ask("Target branch (agent merges into protected branches like main wait for `capcomd approve`)", head || "main"));
   const check = String(v.check ?? await p.ask("The check every change must pass (a command; empty for none)", suggestCheck(dir) ?? ""));
   const cfgPath = join(dir, ".capcomd", "config.json");
+  const agents: string[] = (v as any)._agents ?? String(v.agents ?? "claude").split(",");
+  const provider = agents.includes("claude") ? "claude" : "codex";
+  const authOf = (a: string) => String((v as any)._auths?.[a] ?? v.auth ?? "subscription");
+  // No turn, time or money limits on the profiles (ADR-019): agents work as long as they make progress. A plan
+  // login is already paid for; with an API key, a cap per run is asked once (empty: no limit).
+  let cap: string | null = null;
+  if (agents.some((a) => authOf(a) === "apikey")) {
+    const raw = String(v.budget ?? await p.ask("Your agents bill an API key. Cap the spend per run, in USD (empty for no limit)", "")).trim();
+    if (raw && raw !== "none") {
+      const usd = Number(raw.replace(/^usd=/, ""));
+      if (!(usd > 0)) return [{ step: "project", ok: false, detail: `"${raw}" isn't an amount in USD`, hint: "Pass --budget 20 (USD per run), or leave it empty for no limit." }];
+      cap = `usd=${usd}`;
+    }
+  }
   writeConfig(cfgPath, {
     env: { CAPCOMD_REPO: repo, CAPCOMD_MERGE_MODE: mode, CAPCOMD_MERGE_TARGET: target, ...(gh ? { CAPCOMD_GITHUB_REPO: gh } : {}) },
     run: { ...(check ? { checks: { unit: check } } : {}), reviewer: "reviewer" },
+    ...(cap ? { driver: { ...readConfig(cfgPath).driver, maxRunBudget: cap } } : {}),
   });
   // Profiles: one worker per chosen agent, a read-only reviewer, a planner that may spawn workers.
-  const agents: string[] = (v as any)._agents ?? String(v.agents ?? "claude").split(",");
-  const provider = agents.includes("claude") ? "claude" : "codex";
-  const auth = String(v.auth ?? "subscription");
+  const auth = authOf(provider);
   const af = join(dir, ".capcomd", "agents.json");
   const workers = agents.map((a) => (a === provider ? "worker" : `${a}-worker`));
   const profiles: Array<[string, Record<string, unknown>]> = [
-    ...agents.map((a, i): [string, Record<string, unknown>] => [workers[i]!, { provider: a, auth, maxTurns: 25, timeoutMs: 900_000 }]),
-    ["reviewer", { provider, auth, maxTurns: 15, timeoutMs: 600_000, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...(check ? [`Bash(${check.split(" ").slice(0, 2).join(" ")}:*)`] : [])] }],
-    ["planner", { provider, auth, maxTurns: 60, timeoutMs: 2_400_000, children: { allowSpawn: true, maxDepth: 1, maxChildren: 3, maxTotalDescendants: 6, allowedChildProfiles: workers, budgetShare: 0.34 } }],
+    ...agents.map((a, i): [string, Record<string, unknown>] => [workers[i]!, { provider: a, auth: authOf(a) }]),
+    ["reviewer", { provider, auth, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...(check ? [`Bash(${check.split(" ").slice(0, 2).join(" ")}:*)`] : [])] }],
+    ["planner", { provider, auth, children: { allowSpawn: true, maxDepth: 1, maxChildren: 3, maxTotalDescendants: 6, allowedChildProfiles: workers, budgetShare: 0.34 } }],
   ];
   const made: string[] = [], kept: string[] = [];
   for (const [name, spec] of profiles) {
@@ -259,7 +273,7 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
     (r.code === 0 ? made : kept).push(name);
   }
   return [
-    { step: "project", ok: true, detail: `${repo} → ${target} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on; saved to ${cfgPath}` },
+    { step: "project", ok: true, detail: `${repo} → ${target} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${cfgPath}` },
     { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${af})` },
   ];
 }

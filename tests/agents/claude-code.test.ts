@@ -44,7 +44,11 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
 
     const argv = readFileSync(join(s.W, "argv.txt"), "utf8").split("\n");
-    for (const flag of ["--output-format", "stream-json", "--max-turns", "30", "--max-budget-usd", "2", "--allowedTools", "--disallowedTools"]) expect(argv).toContain(flag);
+    for (const flag of ["--output-format", "stream-json", "--allowedTools", "--disallowedTools"]) expect(argv).toContain(flag);
+    // No limits unless a profile sets them (ADR-019): no turn or budget flags, no `timeout` wrapper.
+    expect(argv).not.toContain("--max-turns");
+    expect(argv).not.toContain("--max-budget-usd");
+    expect(readFileSync(join(s.W, "run.sh"), "utf8")).not.toContain("timeout ");
     expect(argv[argv.indexOf("--allowedTools") + 1]).toContain("Bash(npm test:*)");
     expect(argv[argv.indexOf("--disallowedTools") + 1]).toContain("Bash(git push:*)");
     expect(argv).toContain("KEY_PRESENT");
@@ -125,6 +129,36 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(rework.sha).not.toBe(first.sha);
   });
 
+  test("limits a profile sets reach the CLI: --max-turns, --max-budget-usd and the timeout wrapper", async () => {
+    const s = await setup("make the failing test pass", { CAPCOMD_AGENT_MAX_TURNS: "30", CAPCOMD_AGENT_MAX_BUDGET_USD: "2", CAPCOMD_AGENT_TIMEOUT_MS: "60000" });
+    await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
+    const argv = readFileSync(join(s.W, "argv.txt"), "utf8").split("\n");
+    expect(argv[argv.indexOf("--max-turns") + 1]).toBe("30");
+    expect(argv[argv.indexOf("--max-budget-usd") + 1]).toBe("2");
+    expect(readFileSync(join(s.W, "run.sh"), "utf8")).toContain("timeout -k 10 60 ");
+  });
+
+  test("an agent whose CLI goes silent is stopped as idle, and keeps its work", async () => {
+    const s = await setup("[wip] long job", { CAPCOMD_AGENT_IDLE_MS: "1500" });
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
+    expect(res.limit).toBe("idle");
+    const msg = (await new Git(s.r.bare).run(["log", "-1", "--format=%B", s.task.branch])).stdout;
+    expect(msg).toContain("Capcomd-Stop: idle");
+    expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
+    expect(getFinishedSpans().find((x) => x.name === "agent.claude_code")!.events.map((e) => e.name)).toContain("agent.idle");
+  }, 60_000);
+
+  test("idle is silence, not total time: an agent that keeps producing events runs past the idle window", async () => {
+    const s = await setup("[slow] steady work", { CAPCOMD_AGENT_IDLE_MS: "1000" });
+    const renewals: number[] = [];
+    const extend = s.provider.extendTtl.bind(s.provider);
+    s.provider.extendTtl = async (id, seconds) => { renewals.push(seconds); return extend(id, seconds); };
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
+    expect(res.limit).toBeUndefined();
+    expect(res.stopReason).toBe("success");
+    expect(renewals[0]).toBe(3600); // the VM's delete deadline is renewed while the agent runs
+  }, 60_000);
+
   test("timeout kills the agent process group", async () => {
     const s = await setup("[sleep] hang", { CAPCOMD_AGENT_TIMEOUT_MS: "1500" });
     const t0 = Date.now();
@@ -181,8 +215,9 @@ describe("agent config, redaction, credentials, egress", () => {
     expect(() => agentFromEnv({ CAPCOMD_AGENT: "gpt" })).toThrow();
     const c = loadAgentConfig({});
     expect(c.version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(c.maxTurns).toBeGreaterThan(0);
-    expect(c.maxBudgetUsd).toBeGreaterThan(0);
+    expect(c.maxTurns).toBeUndefined(); // limits are optional: none unless set
+    expect(c.maxBudgetUsd).toBeUndefined();
+    expect(loadAgentConfig({ CAPCOMD_AGENT_MAX_TURNS: "12" }).maxTurns).toBe(12);
     expect(() => loadAgentConfig({ CAPCOMD_AGENT_MAX_BUDGET_USD: "-1" })).toThrow();
   });
 

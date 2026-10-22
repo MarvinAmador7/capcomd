@@ -19,7 +19,7 @@ beforeAll(async () => {
   repo = await bareRepo({ mode: "direct" });
   const dir = mkdtempSync(join(tmpdir(), "capcomd-limits-"));
   const agentsFile = join(dir, "agents.json");
-  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { short: { provider: "claude", auth: "apikey", maxTurns: 20, timeoutMs: 2000 } } }));
+  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { short: { provider: "claude", auth: "apikey", maxTurns: 20, timeoutMs: 2000 }, open: { provider: "claude", auth: "apikey", idleAfterMs: 2000 } } }));
   env = {
     ...repo.env,
     CAPCOMD_AGENTS_FILE: agentsFile,
@@ -54,10 +54,10 @@ const cj = async (args: string[]) => {
   return { ...x, j };
 };
 
-const runToEnd = async (task: string, key: string) => {
+const runToEnd = async (task: string, key: string, profile = "short") => {
   const run = (await cj(["run", "new"])).j?.runId;
   expect(run).toMatch(/^run-/);
-  const id = (await cj(["spawn", run, "--profile", "short", "--task", task, "--key", key])).j?.agentId;
+  const id = (await cj(["spawn", run, "--profile", profile, "--task", task, "--key", key])).j?.agentId;
   expect(id).toMatch(/^agt-/);
   const agent = (await cj(["await", run, id, "--timeout-ms", "90000"])).j?.agents?.[0];
   const events = (await capcomd(["events", run, "--json"], env)).stdout;
@@ -82,4 +82,14 @@ test("an agent that hits its timeout before changing anything fails after one at
   expect(agent.status).toBe("failed");
   expect(agent.result.error).toContain("timeout limit");
   expect(driveFailures).toBe(1);
+}, 120_000);
+
+test("an agent with no limits that goes silent is stopped as idle, keeps its work, and isn't retried", async () => {
+  const { agent, driveFailures } = await runToEnd("[wip] long job", "idle", "open");
+  expect(agent.status).toBe("failed");
+  expect(agent.result).toMatchObject({ limit: "idle" });
+  expect(agent.result.error).toContain("stopped after going idle");
+  expect(driveFailures).toBe(0);
+  const msg = (await new Git(repo.bare).run(["log", "-1", "--format=%B", agent.result.branch])).stdout;
+  expect(msg).toContain("Capcomd-Stop: idle");
 }, 120_000);

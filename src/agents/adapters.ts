@@ -23,7 +23,8 @@ export const claudeAdapter: AgentAdapter = {
   baseEnv: () => ({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1", CI: "1" }),
   command: (ctx, q) =>
     `${q(ctx.bin)} -p "$(cat ${q(ctx.promptFile)})" --output-format stream-json --verbose` +
-    ` --max-turns ${ctx.cfg.maxTurns} --max-budget-usd ${ctx.cfg.maxBudgetUsd}` +
+    (ctx.cfg.maxTurns ? ` --max-turns ${ctx.cfg.maxTurns}` : "") +
+    (ctx.cfg.maxBudgetUsd ? ` --max-budget-usd ${ctx.cfg.maxBudgetUsd}` : "") +
     ` --allowedTools ${q(ctx.cfg.allowedTools.join(","))} --disallowedTools ${q(ctx.cfg.disallowedTools.join(","))}` +
     (ctx.cfg.model ? ` --model ${q(ctx.cfg.model)}` : "") +
     (ctx.systemFile ? ` --system-prompt "$(cat ${q(ctx.systemFile)})"` : "") +
@@ -131,9 +132,9 @@ export const codexAdapter: AgentAdapter = {
   loginEgress: ["auth.openai.com", "chatgpt.com", "api.openai.com"],
   verifyCommand: (bin, q) => `${q(bin)} exec --json --color never --ephemeral --skip-git-repo-check --sandbox read-only 'Reply with exactly the word ok' < /dev/null | grep -q '"turn.completed"' && echo ok`,
   guard(state, cfg) {
-    if (state.turns > cfg.maxTurns) return `max_turns (${state.turns} > ${cfg.maxTurns} tool steps)`;
+    if (cfg.maxTurns && state.turns > cfg.maxTurns) return `max_turns (${state.turns} > ${cfg.maxTurns} tool steps)`;
     // On a plan login the token cost is notional; the turn guard and timeout still apply.
-    if (cfg.credentialMode !== "subscription" && state.costUsd > cfg.maxBudgetUsd) return `max_budget_usd (~$${state.costUsd.toFixed(3)} > $${cfg.maxBudgetUsd})`;
+    if (cfg.maxBudgetUsd && cfg.credentialMode !== "subscription" && state.costUsd > cfg.maxBudgetUsd) return `max_budget_usd (~$${state.costUsd.toFixed(3)} > $${cfg.maxBudgetUsd})`;
     return null;
   },
   outcome(state, exitCode) {

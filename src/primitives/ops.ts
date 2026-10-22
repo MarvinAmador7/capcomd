@@ -12,6 +12,7 @@ import { RelayError } from "../core/errors";
 import { decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
 import { available, budgetCaps, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { stuckReason, treeView, rollups, subtree } from "../subagents/results";
+import { stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
@@ -452,7 +453,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     const reportText = report && typeof rec.resultText === "string" ? rec.resultText.slice(0, 8000) : null;
     // Stopped at a limit: the agent failed, but its work so far is on its branch for a continuation (not retried).
     const limit = typeof rec.limit === "string" ? rec.limit : null;
-    const limitOf = limit ? { limit, error: `stopped at its ${limit} limit; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
+    const limitOf = limit ? { limit, error: `${stoppedAt(limit)}; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
     const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
     const fin = await s.finish({ agentId, status: limit ? "failed" : "done", spent, result: { ...declared, ...verdictOf, ...reportOf, ...limitOf, verification: null, branch: review || report || (!pushed.sha && vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
     return fin.agent;
@@ -623,7 +624,7 @@ async function reviewRef(o: { runId: string; vfyId: string; profile: string; bra
       ...(Object.keys(requested).length ? { budget: requested } : {}), review: true,
     });
     reviewer = r.agentId;
-    const [a] = (await awaitAgents(o.runId, [r.agentId], { timeoutMs: (spec?.timeoutMs ?? 30 * 60_000) + 10 * 60_000 })).agents as any[];
+    const [a] = (await awaitAgents(o.runId, [r.agentId], { timeoutMs: spec?.timeoutMs ? spec.timeoutMs + 10 * 60_000 : Infinity })).agents as any[];
     const v = a?.status === "done" ? (a.result?.verdict ?? null) : null;
     if (v) return { profile: o.profile, agentId: reviewer, passed: v.passed === true, reasons: v.reasons ?? [] };
     return { profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "reasons": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };

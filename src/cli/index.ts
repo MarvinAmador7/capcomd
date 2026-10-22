@@ -70,7 +70,7 @@ Usage:
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --max-turns --budget
-                                       --timeout-ms --sandbox --egress --system-prompt
+                                       --timeout-ms --idle-after-ms --sandbox --egress --system-prompt
                                        --append-system-prompt --allowed-tools --disallowed-tools
                                        --description --default --spec JSON --unset k1,k2
   capcomd auth login claude|codex        Log in with your Claude/ChatGPT plan in a VM; saves a private auth profile
@@ -80,7 +80,7 @@ Usage:
   capcomd mcp                            Serve capcomd's primitives over MCP (stdio), for your agent
   capcomd setup [demo|accounts|project|agent|service]   Guided setup (interactive; --yes for defaults)
         [--yes] [--demo|--skip-demo] [--agents claude,codex] [--auth subscription|apikey] [--repo URL]
-        [--mode pr|direct] [--target B] [--check CMD] [--service|--no-service] [--no-plugin] [--no-store]
+        [--mode pr|direct] [--target B] [--check CMD] [--budget USD] [--service|--no-service] [--no-plugin] [--no-store]
         [--org NAME]                   (the boxd org for the key setup creates with your boxd CLI login)
   capcomd setup check                    What's configured and working (changes nothing)
   capcomd service install|uninstall|status [--port N] [--dry-run]
@@ -135,6 +135,7 @@ async function main(argv: string[]): Promise<number> {
         "max-turns": { type: "string" },
         budget: { type: "string" },
         "timeout-ms": { type: "string" },
+        "idle-after-ms": { type: "string" },
         sandbox: { type: "string" },
         egress: { type: "string" },
         "system-prompt": { type: "string" },

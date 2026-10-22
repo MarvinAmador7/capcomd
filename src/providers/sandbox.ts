@@ -45,4 +45,6 @@ export interface SandboxProvider {
   resume(id: VmId): Promise<void>;
   destroy(id: VmId): Promise<void>;
   list(prefix: string): Promise<VmInfo[]>;
+  /** Move the VM's delete deadline to `seconds` from now (a lease the running work keeps renewing). */
+  extendTtl?(id: VmId, seconds: number): Promise<void>;
 }

@@ -18,7 +18,7 @@ import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
-import { runAgent } from "../agents/runner";
+import { AGENT_VM_TTL_SECONDS, runAgent } from "../agents/runner";
 import { heartbeatEveryMs } from "../subagents/results";
 import { adapterFor } from "../agents/adapters";
 import { resolveEnvSnapshot } from "../env/resolve";
@@ -207,7 +207,7 @@ export const workerActor = actor({
         const { id: vmId } = await provider.ensure({
           idemKey,
           isolated: true,
-          ttlSeconds: 3600,
+          ttlSeconds: AGENT_VM_TTL_SECONDS,
           egressAllow: egressAllow(params.agent),
         ...snapshotSpec(params.agent),
           labels: {
@@ -421,7 +421,7 @@ export const workerActor = actor({
       const { id: vmId } = await provider.ensure({
         idemKey: vmKey,
         isolated: true,
-        ttlSeconds: 3600,
+        ttlSeconds: AGENT_VM_TTL_SECONDS,
         egressAllow: egressAllow(params.agent),
         ...snapshotSpec(params.agent),
         labels: { workerId, taskId, epoch: String(epoch) },

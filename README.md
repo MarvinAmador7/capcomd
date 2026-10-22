@@ -190,8 +190,8 @@ capcomd env build                 # bake the agent CLIs into a VM snapshot (once
 capcomd auth login claude         # log in with your plan inside a VM (or: codex)
 capcomd doctor --strict           # check every agent works
 export CAPCOMD_REPO=https://github.com/you/app.git  CAPCOMD_MERGE_TARGET=main  CAPCOMD_MERGE_MODE=pr
-capcomd agents add worker --provider claude --auth subscription --max-turns 25
-capcomd agents add reviewer --provider claude --auth subscription --max-turns 15 \
+capcomd agents add worker --provider claude --auth subscription   # no limits; add --max-turns, --timeout-ms or --budget for one
+capcomd agents add reviewer --provider claude --auth subscription \
   --allowed-tools 'Read,Glob,Grep,LS,Bash(git diff:*),Bash(bun test:*)'
 capcomd serve &                   # the engine (setup can install it as a service instead)
 ```

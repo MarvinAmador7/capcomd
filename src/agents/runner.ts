@@ -43,7 +43,7 @@ export interface AgentResult {
   agentVersion?: string;
   /** The agent's final message (a reviewer's verdict comes from it). */
   resultText?: string;
-  /** Stopped at a limit (timeout, max_turns, max_budget_usd): `sha` holds the work so far, with a Capcomd-Stop trailer. */
+  /** Stopped at a limit (timeout, max_turns, max_budget_usd, idle): `sha` holds the work so far, with a Capcomd-Stop trailer. */
   limit?: string;
 }
 
@@ -65,6 +65,12 @@ export class AgentError extends Error {
   }
 }
 
+/** A worker VM is deleted this long after its last lease renewal, so a VM whose engine died is cleaned up. */
+export const AGENT_VM_TTL_SECONDS = 3600;
+const TTL_RENEW_MS = 10 * 60_000;
+
+/** How a stop reads in errors and results ("idle" isn't a limit anyone set: the agent CLI went silent). */
+export const stoppedAt = (limit: string) => (limit === "idle" ? "stopped after going idle (no output from the agent)" : `stopped at its ${limit} limit`);
 /** The CLI's own stop reasons that mean "out of budget", not "broken" (claude result subtypes; `timeout` exit 124). */
 const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turns: "max_turns", error_max_budget_usd: "max_budget_usd" };
 
@@ -180,7 +186,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
   const attrs = {
     "agent.kind": name, "agent.profile": cfg.profile ?? "", "relay.run_id": task.runId, "relay.task_id": task.taskId, "relay.epoch": task.epoch,
     ...(task.agentId ? { "relay.agent_id": task.agentId, "relay.parent_agent_id": task.parentAgentId ?? null } : {}),
-    "git.branch": task.branch, "agent.max_turns": cfg.maxTurns, "agent.max_budget_usd": cfg.maxBudgetUsd,
+    "git.branch": task.branch, ...(cfg.maxTurns ? { "agent.max_turns": cfg.maxTurns } : {}), ...(cfg.maxBudgetUsd ? { "agent.max_budget_usd": cfg.maxBudgetUsd } : {}),
   };
 
   let live: AgentRunState | null = null; // for cost/turns on failed or timed-out spans (TUI contract)
@@ -296,7 +302,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       `echo $$ > ${sq(pidFile)}`,
       ...(prelude ? [prelude] : []),
       ...(capcomdPrelude ? [capcomdPrelude] : []),
-      `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}) }, sq)}`,
+      `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}) }, sq)}`,
       `echo $? > ${sq(exitFile)}`,
     ].join("\n");
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));
@@ -305,10 +311,10 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       { ...adapter.baseEnv(), ...(credential ? adapter.credentialEnv(credential) : {}) }), `start ${name}`, "failed");
 
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
-    const deadline = now() + cfg.timeoutMs + 30_000;
+    const deadline = cfg.timeoutMs ? now() + cfg.timeoutMs + 30_000 : Infinity;
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     live = state;
-    let consumed = 0, exitCode: number | null = null;
+    let consumed = 0, exitCode: number | null = null, seen = 0, lastEventAt = now(), renewedAt = 0;
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
     // caller stops the agent instead of retrying it, so hours of work aren't redone or lost at a cap.
     let limit: string | null = null;
@@ -332,6 +338,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       if (code !== "") exitCode = Number(code);
     };
     while (exitCode === null) {
+      // The VM's delete deadline is a lease: renewed while the agent runs, so no fixed lifetime cuts long work short.
+      if (provider.extendTtl && now() - renewedAt > TTL_RENEW_MS) { renewedAt = now(); await provider.extendTtl(vmId, AGENT_VM_TTL_SECONDS).catch(() => {}); }
       await new Promise((res) => setTimeout(res, cfg.pollMs));
       await drain(false);
       if (exitCode !== null) break;
@@ -350,6 +358,14 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       if (now() > deadline) {
         await kill(); await drain(true);
         limit = "timeout";
+        break;
+      }
+      // Not a time limit: an agent may work for hours, but one whose CLI has said nothing for this long has hung.
+      if (state.events > seen) { seen = state.events; lastEventAt = now(); }
+      else if (now() - lastEventAt > cfg.idleAfterMs) {
+        await kill(); await drain(true);
+        addSpanEvent(span, "agent.idle", { "agent.idle_ms": now() - lastEventAt });
+        limit = "idle";
         break;
       }
     }
@@ -371,7 +387,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
 
     // A reviewer or a reporting agent only answers: nothing it changed is committed or pushed.
     if (task.review || task.report) {
-      if (limit) throw new AgentError("limit", `${name} stopped at its ${limit} limit for ${key} before answering`);
+      if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before answering`);
       setSpanAttributes(span, task.review ? { "agent.review": true } : { "agent.report": true });
       return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.report ? 8000 : 4000)) };
     }
@@ -383,7 +399,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) {
       // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine.
       if (opts.subagents) { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}) }; }
-      if (limit) throw new AgentError("limit", `${name} stopped at its ${limit} limit for ${key} before changing anything`);
+      if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before changing anything`);
       throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
     }
     // At a limit the stop is always recorded in a commit (empty if the agent committed everything itself), so a replay sees it.
