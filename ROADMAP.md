@@ -16,7 +16,7 @@ each, every verify needing both its check and the verdict; the planner's verifie
 
 ## 2. Next, in order
 
-1. **Agents drive everything over MCP** (M). capcomd is meant to be driven by the user's agent, not typed by hand.
+1. **Agents drive everything over MCP** (M; designed in ADR-018, phases 1 and 2). capcomd is meant to be driven by the user's agent, not typed by hand.
    Today that works through the skill and the CLI (an agent with a shell); `capcomd mcp` has only run, status,
    cancel, events, trace and approve, and its `capcomd_run` starts the recipe whose planner is still fake (item 3).
    Approach: expose the operator primitives as MCP tools (`run_new`, `spawn`, `await` and `wait_any` bounded by a
