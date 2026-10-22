@@ -1,6 +1,7 @@
 #!/bin/bash
 # Fake `claude` for adapter tests. Behaviour is selected by markers in the -p prompt:
 #   [leak] print the API key everywhere   [sleep] hang   [nochange] edit nothing   [fail] error result
+#   [slow] keep working for ~5s, one event every 0.25s (liveness)
 prompt=""; args=("$@")
 while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; *) shift;; esac; done
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
@@ -13,6 +14,9 @@ case "$prompt" in *"[leak]"*)
   echo "stderr leak $ANTHROPIC_API_KEY" >&2;;
 esac
 case "$prompt" in *"[sleep]"*) sleep 120;; esac
+case "$prompt" in *"[slow]"*)
+  for i in $(seq 1 20); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
+esac
 if [[ "$prompt" == *"[fail]"* ]]; then
   emit '{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":1,"total_cost_usd":0.01}'
   exit 1

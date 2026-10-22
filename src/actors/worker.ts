@@ -19,6 +19,7 @@ import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { runAgent } from "../agents/runner";
+import { heartbeatEveryMs } from "../subagents/results";
 import { adapterFor } from "../agents/adapters";
 import { resolveEnvSnapshot } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
@@ -457,12 +458,22 @@ export const workerActor = actor({
         // Optional: with a boxd host-bound secret the VM holds a bxds_ placeholder and this is unused.
         const apiKey = process.env[adapter.secretName];
         const runId = params.runId;
+        // Liveness from what the agent does, not what it says: its CLI's events (throttled) are its heartbeat, so an
+        // agent without the in-VM capcomd (one that can't spawn) isn't flagged stuck while it works.
+        const scope = workerId.startsWith("agt-") ? (c as any).client().scope.getOrCreate([runId]) : null;
+        const beatEvery = heartbeatEveryMs();
+        let beatAt = 0;
         const res = await runAgent(adapter, provider, vmId, {
           runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
           goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
           ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
         }, loadAgentConfig(process.env, params.agent), {
           apiKey,
+          onEvent: () => {
+            if (!scope || Date.now() - beatAt < beatEvery) return;
+            beatAt = Date.now();
+            scope.heartbeat({ agentId: workerId }).catch(() => {});
+          },
           ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: readFileSync(new URL("../subagents/vm-cli.mjs", import.meta.url).pathname, "utf8"), rpcDir: "/tmp/capcomd-rpc" } } : {}),
           isCancelled: async () => {
             const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
