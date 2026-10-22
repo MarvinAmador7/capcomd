@@ -4,6 +4,8 @@ import type { AgentSpec } from "../../src/agents/profiles";
 
 const sup: AgentSpec = { provider: "claude", auth: "subscription", maxTurns: 40, children: { allowSpawn: true, maxDepth: 2, maxChildren: 2, maxTotalDescendants: 3, allowedChildProfiles: ["coder", "sup"], budgetShare: 0.5 } } as AgentSpec;
 const coder: AgentSpec = { provider: "claude", auth: "subscription", maxTurns: 20 } as AgentSpec;
+/** Billed per token: reserves usd (a subscription leaf like coder reserves none). */
+const payg: AgentSpec = { provider: "claude", auth: "apikey", maxTurns: 20 } as AgentSpec;
 const row = (id: string, spec: AgentSpec, o: Partial<AgentRow> = {}): AgentRow => ({ agentId: id, parent: null, depth: 0, profile: id.split("-")[0]!, spec, limits: rootLimits(spec.children), status: "running", budget: { usd: 4 }, spent: {}, ...o });
 const base = { ancestors: [] as AgentRow[], descendantCounts: [] as number[], siblings: [] as AgentRow[], runBudget: { usd: 10 } };
 
@@ -12,7 +14,7 @@ test("operator spawn carves from the run budget; explicit budget above it is rej
   expect(d).toMatchObject({ ok: true, budget: { usd: 10 }, depth: 0 });
   const held = [row("sup-a", sup, { budget: { usd: 7 } })];
   expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: coder, requested: { usd: 4 } })).toMatchObject({ ok: false, code: "budget" });
-  expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { usd: 3 } });
+  expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: payg })).toMatchObject({ ok: true, budget: { usd: 3 } });
   // a finished sibling only holds what it spent
   expect(available({ usd: 10 }, {}, [{ status: "done", budget: { usd: 7 }, spent: { usd: 1 } }])).toEqual({ usd: 9 });
 });
@@ -23,7 +25,7 @@ test("children limits: allowSpawn, allowedChildProfiles, maxChildren, maxTotalDe
   const p = row("sup-a", sup);
   const at = (siblings: AgentRow[] = [], desc = 0, profile = "coder", spec = coder) => checkSpawn({ ...base, parent: p, ancestors: [p], descendantCounts: [desc], siblings, childProfile: profile, childSpec: spec });
   expect(at([], 0, "critic")).toMatchObject({ ok: false, code: "children_limit" });
-  const ok = at();
+  const ok = at([], 0, "coder", payg);
   expect(ok).toMatchObject({ ok: true, budget: { usd: 2 }, depth: 1 }); // 4 × budgetShare 0.5
   expect(at([row("coder-b", coder, { parent: "sup-a", budget: { usd: 1 } }), row("coder-c", coder, { parent: "sup-a", budget: { usd: 1 } })])).toMatchObject({ ok: false, error: expect.stringContaining("maxChildren=2") });
   expect(at([row("coder-b", coder, { status: "done", parent: "sup-a", budget: { usd: 1 }, spent: { usd: 1 } })], 3)).toMatchObject({ ok: false, error: expect.stringContaining("maxTotalDescendants=3") });
@@ -64,10 +66,12 @@ test("multi-unit budgets: per-unit carve/refund, unlimited units, caps narrow th
   const sib = [row("coder-a", coder, { budget: { usd: 5, turns: 60, wallSeconds: 600 } }), row("coder-b", coder, { status: "done", budget: { usd: 3, turns: 30, wallSeconds: 600 }, spent: { usd: 0, turns: 12, wallSeconds: 90 } })];
   expect(available(run, {}, sib)).toEqual({ usd: 5, turns: 28, wallSeconds: 2910 });
   const d = checkSpawn({ ...base, runBudget: run, parent: null, siblings: sib, childProfile: "coder", childSpec: coder, requested: { turns: 20 } });
-  expect(d).toMatchObject({ ok: true, budget: { usd: 5, turns: 20, wallSeconds: 2910 } });
+  // coder is a subscription leaf: it bills $0, so it reserves no usd; wallSeconds (uncapped by coder) takes what's left.
+  expect(d).toMatchObject({ ok: true, budget: { turns: 20, wallSeconds: 2910 } });
+  expect((d as any).budget.usd).toBeUndefined();
   expect(checkSpawn({ ...base, runBudget: run, parent: null, siblings: sib, childProfile: "coder", childSpec: coder, requested: { turns: 29 } })).toMatchObject({ ok: false, code: "budget", error: expect.stringContaining("29 turns exceeds 28 turns") });
-  // a unit the run doesn't limit stays unlimited unless requested
-  expect(checkSpawn({ ...base, runBudget: { turns: 50 }, parent: null, childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { turns: 50 } });
+  // a unit the run doesn't limit stays unlimited unless requested; an unnamed unit reserves the profile's cap (maxTurns 20)
+  expect(checkSpawn({ ...base, runBudget: { turns: 50 }, parent: null, childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { turns: 20 } });
   // subscription parent: turns × share, floored
   const p = row("sup-a", sup, { budget: { turns: 41 }, spent: { turns: 0 } });
   expect(checkSpawn({ ...base, parent: p, ancestors: [p], descendantCounts: [0], childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { turns: 20 } });
@@ -112,4 +116,30 @@ test("verify's reviewer: exempt from the caller's fan-out, paid from its budget 
   // Operator verify: top level, paid by the run; a finished caller can't pay.
   expect(checkSpawn({ ...base, parent: null, childProfile: "reviewer", childSpec: reviewer, review: true, requested: { usd: 1 } })).toMatchObject({ ok: true, depth: 0, budget: { usd: 1 } });
   expect(checkSpawn({ ...base, parent: { ...leaf, status: "done" }, ancestors: [leaf], descendantCounts: [0], childProfile: "reviewer", childSpec: reviewer, review: true })).toMatchObject({ ok: false, code: "parent_terminal" });
+});
+
+// Seen live (scripts/mac-plugin-e2e.sh): a driver spawned three workers with only `turns=20`; the first took every
+// remaining usd and second, and the other two were refused. Unnamed units now reserve the profile's caps.
+import { profileDefaults } from "../../src/primitives/policy";
+test("units a spawn doesn't name: the profile's caps, no usd for a subscription leaf, else what's left", () => {
+  const run = { usd: 6, turns: 200, wallSeconds: 3600 };
+  const worker = { provider: "claude", auth: "subscription", maxTurns: 25, timeoutMs: 900_000 } as AgentSpec;
+  const rows: any[] = [];
+  for (const n of ["add", "mul", "shout"]) {
+    const d: any = checkSpawn({ ...base, runBudget: run, parent: null, siblings: rows, childProfile: "worker", childSpec: worker, requested: { turns: 20 } });
+    expect(d).toMatchObject({ ok: true, budget: { turns: 20, wallSeconds: 900 } });
+    expect(d.budget.usd).toBeUndefined();
+    rows.push(row(n, worker, { budget: d.budget }));
+  }
+  expect(available(run, {}, rows)).toEqual({ usd: 6, turns: 140, wallSeconds: 900 });
+
+  // An API-key profile with a dollar cap reserves that cap; without one it still takes what's left (usd is real money).
+  const capped = { provider: "claude", auth: "apikey", maxTurns: 25, maxBudgetUsd: 1.5 } as AgentSpec;
+  expect(checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "c", childSpec: capped, requested: { turns: 20 } })).toMatchObject({ ok: true, budget: { usd: 1.5 } });
+  const open = { provider: "claude", auth: "apikey", maxTurns: 25 } as AgentSpec;
+  expect(checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "o", childSpec: open, requested: { turns: 20 } })).toMatchObject({ ok: true, budget: { usd: 6 } });
+  // A subscription agent that may spawn keeps a usd reservation: it hands usd to its children.
+  expect(profileDefaults(sup).none).toEqual([]);
+  // What the spawn names always wins.
+  expect(checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "worker", childSpec: worker, requested: { turns: 20, usd: 1, wallSeconds: 300 } })).toMatchObject({ ok: true, budget: { usd: 1, turns: 20, wallSeconds: 300 } });
 });

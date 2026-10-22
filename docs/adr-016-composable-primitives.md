@@ -71,6 +71,9 @@ Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token 
 - **Unlimited units:** a unit the parent doesn't set is unlimited for its children.
 - **Carve and refund**, per unit: a live child holds its allocation and a finished one holds what it spent. A child gets `remaining × budgetShare`, with turns floored. Requesting more than that is rejected.
 - The default with no request is all of the remaining budget (× budgetShare), so fan-out callers should request explicitly.
+  Amended 2026-10-22: per unit, a spawn that doesn't name a unit reserves the child profile's own cap for it
+  (`maxTurns`, `timeoutMs`, `maxBudgetUsd`, at most what's left); a subscription child that can't spawn reserves no
+  usd; only a unit the profile doesn't cap defaults to all that's left.
 - **Enforcement:** the carved budget narrows the agent's profile: `maxTurns ≤ turns`, `timeoutMs ≤ wallSeconds`, `maxBudgetUsd ≤ usd`. The profile's own limits stay the ceiling.
 - **Charging:** agents are charged `{usd: costUsd, turns, wallSeconds}` (agent wall time). Subscription agents spend usd 0 and are charged turns + time.
 

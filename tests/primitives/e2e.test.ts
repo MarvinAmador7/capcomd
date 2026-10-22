@@ -50,16 +50,19 @@ test("primitives: ids, keys, limits, budget, cancel propagation, await/wait-any,
   // root supervisor (held: --no-start), idempotent by key
   const sup = await cj(["spawn", runId, "--profile", "sup", "--task", "supervise", "--key", "sup", "--budget", "4", "--no-start"]);
   expect(sup.code).toBe(0);
-  expect(sup.j).toMatchObject({ created: true, depth: 0, profile: "sup", status: "pending", budget: { usd: 4, turns: 100 } });
+  // turns unnamed: sup reserves its profile's maxTurns (40), not all 100 of the run's
+  expect(sup.j).toMatchObject({ created: true, depth: 0, profile: "sup", status: "pending", budget: { usd: 4, turns: 40 } });
   const supId = sup.j.agentId as string;
   expect((await cj(["spawn", runId, "--profile", "sup", "--task", "supervise", "--key", "sup", "--budget", "4", "--no-start"])).j).toMatchObject({ agentId: supId, created: false });
   expect((await cj(["spawn", runId, "--profile", "sup", "--task", "other", "--key", "sup", "--budget", "4", "--no-start"])).j.error.code).toBe("conflict");
 
-  // children: carve 4 × 0.5 = 2, then 2 × 0.5 = 1; maxChildren=2; only "coder"; coders can't spawn
+  // children: turns carve 40 × 0.5 = 20 (coder's own cap too), then 20 × 0.5 = 10; coder is a subscription leaf, so it
+  // reserves no usd; maxChildren=2; only "coder"; coders can't spawn
   const c1 = await cj(["spawn", runId, "--parent", supId, "--profile", "coder", "--task", "part 1", "--key", "c1", "--no-start"]);
-  expect(c1.j).toMatchObject({ depth: 1, parent: supId, budget: { usd: 2, turns: 50 } });
+  expect(c1.j).toMatchObject({ depth: 1, parent: supId, budget: { turns: 20 } });
+  expect(c1.j.budget.usd).toBeUndefined();
   const c2 = await cj(["spawn", runId, "--parent", supId, "--profile", "coder", "--task", "part 2", "--key", "c2", "--no-start"]);
-  expect(c2.j.budget).toEqual({ usd: 1, turns: 25 });
+  expect(c2.j.budget).toEqual({ turns: 10 });
   const c3 = await cj(["spawn", runId, "--parent", supId, "--profile", "coder", "--task", "part 3", "--key", "c3", "--no-start"]);
   // ADR-017: saturating maxChildren is retryable backpressure (await or cancel a child), not a hard refusal.
   expect(c3.code).not.toBe(0);
@@ -69,8 +72,8 @@ test("primitives: ids, keys, limits, budget, cancel propagation, await/wait-any,
   expect((await cj(["spawn", runId, "--parent", c1.j.agentId, "--profile", "coder", "--task", "x", "--no-start"])).j.error.message).toContain("allowSpawn=false");
   expect((await cj(["spawn", runId, "--parent", supId, "--profile", "coder", "--set", "maxTurns=99", "--task", "x", "--no-start"])).code).toBe(2);
   expect((await cj(["spawn", runId, "--profile", "coder", "--task", "x", "--budget", "5", "--no-start"])).j.error.message).toContain("exceeds $4");
-  // turns: the run has 100, sup holds all of them while live
-  expect((await cj(["spawn", runId, "--profile", "coder", "--task", "x", "--budget", "turns=1", "--no-start"])).j.error.message).toContain("exceeds 0 turns");
+  // turns: the run has 100, sup holds 40 while live
+  expect((await cj(["spawn", runId, "--profile", "coder", "--task", "x", "--budget", "turns=61", "--no-start"])).j.error.message).toContain("exceeds 60 turns");
 
   // propagating cancel
   const cancel = await cj(["cancel", runId, supId, "--reason", "test"]);
@@ -102,7 +105,7 @@ test("primitives: ids, keys, limits, budget, cancel propagation, await/wait-any,
   const types = ev.j.events.map((e: any) => e.type);
   for (const t of ["RUN_NEW", "AGENT_SPAWNED", "AGENT_CANCELLED", "AGENT_STARTED", "AGENT_DONE"]) expect(types).toContain(t);
   const spawned = ev.j.events.find((e: any) => e.type === "AGENT_SPAWNED" && e.entity === `scope:${supId}`);
-  expect(spawned.event).toMatchObject({ profile: "sup", budget: { usd: 4, turns: 100 }, limits: { allowSpawn: true, maxDepth: 2 }, agent: { maxTurns: 40 } });
+  expect(spawned.event).toMatchObject({ profile: "sup", budget: { usd: 4, turns: 40 }, limits: { allowSpawn: true, maxDepth: 2 }, agent: { maxTurns: 40 } });
   expect(types.filter((t: string) => t === "AGENT_SPAWNED").length).toBe(7);
 
   // run-wide cancel cancels the rest (w-agent still running or done) and the run

@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- A unit of budget a spawn doesn't name now reserves the agent profile's own cap (`maxTurns`, `timeoutMs`,
+  `maxBudgetUsd`, or what's left if that's less) instead of everything left, and a subscription agent that can't
+  spawn reserves no usd (it bills $0; its spend still counts). Spawning several workers with only `turns` no longer
+  hands the first one every remaining dollar and second (seen in the plugin's live run). A unit the profile
+  doesn't cap still takes what's left.
+
 ## 0.5.0 (2026-10-22)
 
 capcomd as a plugin for your agent: install it in Claude Code or Codex, ask your agent for the outcome, and it runs

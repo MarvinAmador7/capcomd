@@ -178,7 +178,7 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
     const avail = available(x.runBudget, {}, x.siblings);
     const g = applyGrant(rootLimits(own), x.grant);
     if (!g.ok) return { ok: false, code: "children_limit", error: g.error };
-    return carve(avail, 1, x.requested, () => ({ limits: g.limits, depth: 0 }), "run");
+    return carve(avail, 1, x.requested, () => ({ limits: g.limits, depth: 0 }), "run", profileDefaults(x.childSpec));
   }
   const p = x.parent;
   if (TERMINAL_AGENT.has(p.status)) return { ok: false, code: "parent_terminal", error: `parent ${p.agentId} is ${p.status}` };
@@ -203,7 +203,23 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
   const avail = available(p.budget, p.spent, x.siblings);
   const g = applyGrant(childLimits(L, own), x.grant);
   if (!g.ok) return { ok: false, code: "children_limit", error: `${g.error} (set by ${p.agentId}'s limits and the child profile)` };
-  return carve(avail, L.budgetShare, x.requested, () => ({ limits: g.limits, depth: p.depth + 1 }), p.agentId);
+  return carve(avail, L.budgetShare, x.requested, () => ({ limits: g.limits, depth: p.depth + 1 }), p.agentId, profileDefaults(x.childSpec));
+}
+
+/**
+ * What a spawn reserves for a unit it doesn't name. An agent can't use more than its profile's maxTurns, timeoutMs or
+ * maxBudgetUsd, so a capped unit reserves that cap (or what's left, if less), not everything left: spawning several
+ * agents with only `turns` no longer hands the first one every remaining second. A subscription agent that can't
+ * spawn bills $0, so it reserves no usd at all (its spend still counts against the run). Any other unit the profile
+ * doesn't cap takes what's left, as before.
+ */
+export function profileDefaults(spec: { auth?: string; maxTurns?: number; timeoutMs?: number; maxBudgetUsd?: number; children?: { allowSpawn?: boolean } } | null | undefined): { caps: Budget; none: Unit[] } {
+  const caps: Budget = {};
+  if (spec?.maxTurns !== undefined) caps.turns = spec.maxTurns;
+  if (spec?.timeoutMs !== undefined) caps.wallSeconds = Math.ceil(spec.timeoutMs / 1000);
+  if (spec?.maxBudgetUsd !== undefined) caps.usd = spec.maxBudgetUsd;
+  const none: Unit[] = spec?.auth === "subscription" && !spec.children?.allowSpawn && caps.usd === undefined ? ["usd"] : [];
+  return { caps, none };
 }
 
 /** A reviewer can never spawn. */
@@ -228,15 +244,16 @@ function reviewSpawn(x: SpawnCheck): SpawnDecision {
 }
 
 const fmt = (u: Unit, n: number) => (u === "usd" ? `$${n}` : `${n} ${u}`);
-function carve(avail: Budget, share: number, requested: Budget | undefined, rest: () => { limits: Limits; depth: number }, from: string): SpawnDecision {
+function carve(avail: Budget, share: number, requested: Budget | undefined, rest: () => { limits: Limits; depth: number }, from: string, defaults: { caps: Budget; none: Unit[] } = { caps: {}, none: [] }): SpawnDecision {
   const budget: Budget = {};
   for (const u of UNITS) {
     const req = requested?.[u];
     if (avail[u] === undefined) { if (req !== undefined) budget[u] = req; continue; }
+    if (req === undefined && defaults.none.includes(u)) continue; // reserved by nobody; spend still counts
     const cap = u === "turns" ? Math.floor(avail[u]! * share) : round(avail[u]! * share);
     if (req !== undefined && req > cap)
       return { ok: false, code: "budget", error: `requested ${fmt(u, req)} exceeds ${fmt(u, cap)} available from ${from} (remaining ${fmt(u, avail[u]!)} × budgetShare ${share})` };
-    budget[u] = req ?? cap;
+    budget[u] = req ?? (defaults.caps[u] !== undefined ? Math.min(defaults.caps[u]!, cap) : cap);
     if (budget[u]! <= 0) return { ok: false, code: "budget", error: `no ${u} budget left in ${from}` };
   }
   return { ok: true, budget, ...rest() };

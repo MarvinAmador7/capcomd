@@ -37,18 +37,14 @@ each, every verify needing both its check and the verdict; the planner's verifie
    mid-run; spawn-time checks use the carve. Approach: stream token usage from the agent's event log (the
    runner already parses it) into the scope's `spent`, and cancel on a breach. Also carry the notional cost of
    failed or timed-out agents into the tree (only successful runs today).
-5. **Budget units a spawn leaves out** (S). A spawn takes all that's left of every unit it doesn't name, so a
-   driver that spawns three workers with only `turns=20` gets the second and third refused (seen in the plugin's
-   live run; the agent recovered by cancelling and respawning with every unit). Approach: an unnamed unit defaults
-   to the profile's own cap (`maxTurns`, `timeoutMs`, `maxBudgetUsd`) when it has one, and only then to what's left.
-6. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
+5. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
    VmSpool can tail `agent.jsonl`; it is unwired to keep exec traffic low. Approach: tail on demand
    (`logs --follow`), not continuously.
-7. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
+6. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
    spends everything on children gets "no budget left", the review fails closed and nothing merges. Approach:
    reserve the reviewer's budget when the child is spawned (or warn at spawn time when the run has a
    reviewer and the remainder can't cover one).
-8. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
+7. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
    verify's VM for its merge when the target hasn't moved (same tree), else reuse the snapshot only.
 
 ## 3. Orchestration patterns that aren't possible yet
