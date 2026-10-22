@@ -52,6 +52,9 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   Pass --acceptance '["criterion", …]' to say what the child had to achieve. A failed review returns
   \`result.review.reasons\`: send them to the child or retry with them.
 - A failed child: read \`capcomd inspect <agt>\` / \`capcomd logs <agt>\`, then retry with a clearer task or cancel.
+  A child stopped at a limit (\`result.limit\`: timeout, max_turns or max_budget_usd) kept its work on
+  \`result.branch\`: continue instead of starting over, with a child given more budget whose task begins with
+  \`git fetch origin <branch> && git merge FETCH_HEAD\`.
 - Best-of-n: spawn n, verify each as it finishes, merge the best, \`capcomd cancel\` the rest.
 - Dependent work (B needs what A builds): don't wait for A to finish before starting B, and don't build B on A's
   branch. First land a tiny contract child (the shared interface, a stub, or a flag that is off), then spawn A and

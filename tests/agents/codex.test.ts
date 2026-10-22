@@ -54,7 +54,7 @@ describe("codex adapter (fake codex exec --json)", () => {
     const s = await setup("[loop] spin", { CAPCOMD_AGENT_MAX_TURNS: "5" });
     const err = await runAgent(codexAdapter, s.provider, s.id, s.task, s.cfg, { apiKey: KEY }).catch((e) => e);
     expect(err).toBeInstanceOf(AgentError);
-    expect(err.kind).toBe("guard");
+    expect(err.kind).toBe("limit"); // nothing changed, so nothing to keep
     expect(err.message).toContain("max_turns");
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBeNull();
   }, 30_000);

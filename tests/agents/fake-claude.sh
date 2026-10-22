@@ -25,6 +25,8 @@ emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","na
 if [[ "$prompt" != *"[nochange]"* ]]; then
   mkdir -p src && printf 'export const sum = (a: number, b: number) => a + b;\n' > src/sum.ts
 fi
+# [wip]: edit, then hang (a limit with work to keep)
+case "$prompt" in *"[wip]"*) sleep 120;; esac
 emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'
 result="fixed sum"
 [[ "$prompt" == *"[leak]"* ]] && result="done with $ANTHROPIC_API_KEY"

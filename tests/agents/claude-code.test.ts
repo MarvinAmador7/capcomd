@@ -130,12 +130,28 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     const t0 = Date.now();
     const err = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY }).catch((e) => e);
     expect(err).toBeInstanceOf(AgentError);
-    expect(err.kind).toBe("timeout");
+    expect(err.kind).toBe("limit"); // a limit with nothing changed: nothing to keep, not retried
+    expect(err.message).toContain("timeout");
     expect(Date.now() - t0).toBeLessThan(40_000);
     const pid = Number(readFileSync(join(s.W, "agent.pid"), "utf8"));
     await Bun.sleep(1500);
     expect(existsSync(`/proc/${pid}`)).toBe(false);
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBeNull();
+  }, 60_000);
+
+  test("a limit keeps the work: what the agent changed is pushed with a Capcomd-Stop trailer, and a replay reports the stop", async () => {
+    const s = await setup("[wip] long job", { CAPCOMD_AGENT_TIMEOUT_MS: "1500" });
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
+    expect(res.limit).toBe("timeout");
+    expect(res.sha).toBeTruthy();
+    expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBe(res.sha);
+    const msg = (await new Git(s.r.bare).run(["log", "-1", "--format=%B", s.task.branch])).stdout;
+    expect(msg).toStartWith("WIP (stopped: timeout) task-1:");
+    expect(msg).toContain("Capcomd-Stop: timeout");
+    expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
+    // A driver that crashed after this push runs the task again: it reuses the commit and still reports the stop.
+    const again = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
+    expect(again).toMatchObject({ already: true, sha: res.sha, limit: "timeout" });
   }, 60_000);
 
   test("cancel path: isCancelled stops the agent, nothing is pushed", async () => {
