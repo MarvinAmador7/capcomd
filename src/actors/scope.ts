@@ -46,6 +46,9 @@ async function remember(tx: any, key: string | undefined, kind: string, hash: st
 
 const fail = (code: string, message: string): never => { throw new UserError(message, { code }); };
 
+/** ADR-019 §2: why a running agent looks stuck ("idle", "spinning", "failing"; "dead" is derived, never stored). */
+export interface AgentNotice { kind: string; detail: string; at: number }
+
 function rowToAgent(r: any) {
   return {
     agentId: r.agent_id as string,
@@ -75,6 +78,8 @@ function rowToAgent(r: any) {
     pausedUntil: Number(r.paused_until ?? 0),
     /** ADR-019 §3: the latest checkpoint of its workspace (a commit at `ref` on the remote), if any. */
     checkpoint: r.checkpoint ? (JSON.parse(r.checkpoint as string) as { ref: string; sha: string; at: number; reason: string; files: number }) : null,
+    /** ADR-019 §2: the agent looks stuck (idle, spinning, failing) while it runs; cleared when it doesn't. */
+    notice: r.notice ? (JSON.parse(r.notice as string) as AgentNotice) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -179,6 +184,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "epoch", "INTEGER NOT NULL DEFAULT 1");
       await addColumn(database, "agents_v2", "paused_until", "INTEGER");
       await addColumn(database, "agents_v2", "checkpoint", "TEXT");
+      await addColumn(database, "agents_v2", "notice", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -312,7 +318,7 @@ export const scopeActor = actor({
       const a = rowToAgent(r[0]);
       if (TERMINAL_AGENT.has(a.status)) return { changed: false, agent: a };
       await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("UPDATE agents_v2 SET status = ?, result = ?, spent = ?, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
+        await tx.execute("UPDATE agents_v2 SET status = ?, result = ?, spent = ?, notice = NULL, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
           params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? a.spent, budget: a.budget }, `finish-${params.agentId}`);
         await tx.execute("DELETE FROM awaits WHERE waiter = ?", params.agentId);
@@ -331,6 +337,20 @@ export const scopeActor = actor({
       return { ok: true };
     },
 
+    /** ADR-019 §2: the runner's stuck notice for a running agent (null: it no longer looks stuck). */
+    async notice(c, params: { agentId: string; notice: { kind: string; detail: string } | null }) {
+      const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
+      const a = rowToAgent(r[0]);
+      if (a.status !== "running" || (a.notice?.kind ?? null) === (params.notice?.kind ?? null)) return { changed: false };
+      const n: AgentNotice | null = params.notice ? { kind: params.notice.kind, detail: params.notice.detail.slice(0, 300), at: Date.now() } : null;
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("UPDATE agents_v2 SET notice = ?, updated_at = ? WHERE agent_id = ?", n ? JSON.stringify(n) : null, Date.now(), params.agentId);
+        await addEvent(tx, n ? "AGENT_NOTICE" : "AGENT_NOTICE_CLEARED", params.agentId, n ? { ...n } : { kind: a.notice?.kind ?? null }, `notice-${params.agentId}-${n?.at ?? `clear-${Date.now()}`}`);
+      }, { name: "scopeNotice" });
+      return { changed: true };
+    },
+
     /**
      * ADR-019 §6: the agent's provider said its usage limit is reached. Its work is on its branch; it waits, neither
      * failed nor retried, until `until` (0: no reset time given) or `resume`. Releases the driver lease.
@@ -341,7 +361,7 @@ export const scopeActor = actor({
       const a = rowToAgent(r[0]);
       if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { changed: false, agent: a };
       await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("UPDATE agents_v2 SET status = 'paused', paused_until = ?, result = ?, spent = ?, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
+        await tx.execute("UPDATE agents_v2 SET status = 'paused', paused_until = ?, result = ?, spent = ?, notice = NULL, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
           params.until, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, "AGENT_PAUSED", params.agentId, { result: params.result, until: params.until || null }, `pause-${params.agentId}-e${a.epoch}`);
       }, { name: "scopePause" });

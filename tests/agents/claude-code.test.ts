@@ -5,6 +5,7 @@ import { join } from "path";
 import { bareRepo } from "../merge/gitfixture";
 import { FakeProvider } from "../../src/providers/fake";
 import { runClaudeCode, AgentError, parseStreamLine, buildPrompt, installScript } from "../../src/agents/claude-code";
+import type { SupervisorReport } from "../../src/agents/runner";
 import { loadAgentConfig, agentFromEnv, AGENT_EGRESS, CLAUDE_CODE_VERSION } from "../../src/agents/config";
 import { Redactor, REDACTED } from "../../src/agents/redact";
 import { githubGitCredentials } from "../../src/agents/credentials";
@@ -140,10 +141,14 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(readFileSync(join(s.W, "agent.sh"), "utf8")).toContain("timeout -k 10 60 ");
   });
 
-  test("an agent whose CLI goes silent is stopped as idle, and keeps its work", async () => {
+  test("an agent whose CLI goes silent is noticed as idle, then stopped after a second window, and keeps its work", async () => {
     const s = await setup("[wip] long job", { CAPCOMD_AGENT_IDLE_MS: "1500" });
-    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
+    const notices: Array<{ kind: string; detail: string } | null> = [];
+    const t0 = Date.now();
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY, onNotice: (n) => notices.push(n) });
     expect(res.limit).toBe("idle");
+    expect(notices).toEqual([{ kind: "idle", detail: expect.stringMatching(/^no output from the agent for \d+s$/) }]);
+    expect(Date.now() - t0).toBeGreaterThan(3000); // stopped after twice the window, not at the first
     const msg = (await new Git(s.r.bare).run(["log", "-1", "--format=%B", s.task.branch])).stdout;
     expect(msg).toContain("Capcomd-Stop: idle");
     expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
@@ -159,6 +164,31 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(res.limit).toBeUndefined();
     expect(res.stopReason).toBe("success");
     expect(renewals[0]).toBe(3600); // the VM's delete deadline is renewed while the agent runs
+  }, 60_000);
+
+  test("spinning (ADR-019 §2): the same call again and again is a notice, the work is checkpointed, then a stop that keeps it", async () => {
+    const s = await setup("[spin] go round", { CAPCOMD_AGENT_STUCK_REPEATS: "3" });
+    const notices: Array<{ kind: string; detail: string } | null> = [];
+    const reports: SupervisorReport[] = [];
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY, heartbeatMs: 100, onNotice: (n) => notices.push(n), onReport: (x) => reports.push(x) });
+    expect(res.limit).toBe("spinning");
+    expect(notices).toEqual([{ kind: "spinning", detail: "the same Read call 3 times in a row" }]);
+    const msg = (await new Git(s.r.bare).run(["log", "-1", "--format=%B", s.task.branch])).stdout;
+    expect(msg).toContain("Capcomd-Stop: spinning");
+    expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
+    expect(reports.filter((x) => x.type === "checkpoint").map((x) => (x as any).reason)).toContain("notice");
+    const names = getFinishedSpans().find((x) => x.name === "agent.claude_code")!.events.map((e) => e.name);
+    expect(names).toContain("agent.notice");
+    expect(names).toContain("agent.spinning");
+  }, 60_000);
+
+  test("failing: the same error repeated is a notice; an agent that moves on before the second window finishes normally", async () => {
+    const s = await setup("[failing:4] fix it", { CAPCOMD_AGENT_STUCK_REPEATS: "3" });
+    const notices: Array<{ kind: string; detail: string } | null> = [];
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY, onNotice: (n) => notices.push(n) });
+    expect(res.limit).toBeUndefined();
+    expect(res.stopReason).toBe("success");
+    expect(notices[0]).toEqual({ kind: "failing", detail: "the same Bash error 3 times: sum.test.ts:# expected #, received # (#ms)" });
   }, 60_000);
 
   test("live spend: the runner reports it while the agent works, and stops it when the engine says a budget is over", async () => {

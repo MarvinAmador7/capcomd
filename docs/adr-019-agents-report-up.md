@@ -73,6 +73,33 @@ Each is a notice to the parent first. A parent that sends a message or a grant r
 profile fields with defaults; they measure behavior, so a long task that keeps changing things never trips them.
 The heuristics will have false positives, which is why the first window only notifies.
 
+**Step 4 (built).** Where it differs from the above:
+
+- **Who detects it.** The runner on the engine detects idle, spinning and failing (`src/agents/stuck.ts`), not the
+  supervisor: it already parses each CLI's events through the adapters, and the supervisor stays provider-agnostic.
+  The adapters now report each event's tool calls (`name input`) and results (with the error text when a call
+  failed); codex reports a tool step once, as both.
+- **The signals.**
+  - idle: no events for `idleAfterMs`; the stop is at twice that (it used to be at `idleAfterMs`).
+  - spinning: the same call `stuckRepeats` times in a row (profile field, default 8); text between calls doesn't
+    break the run, a different call does. The "no change in the workspace for a window" variant isn't built.
+  - failing: the same call failing with the same error `stuckRepeats` times, numbers in the error ignored, and not
+    necessarily in a row; that call succeeding clears it.
+  - Stop at twice the repeats; the limit is the kind (`result.limit` idle, spinning, failing), and the work is
+    kept as with any limit.
+- **The notice.** The runner tells the engine (`notice` on the agent, `AGENT_NOTICE` / `AGENT_NOTICE_CLEARED`)
+  and asks the supervisor for a checkpoint (`checkpoint.request` in the VM; reason "notice"). It clears when the
+  agent does something else, and when the agent finishes or pauses.
+- **dead** isn't stored: it is derived where agents are shown (no heartbeat for `CAPCOMD_STUCK_AFTER_MS`, or no
+  live driver), and its action stays the driver takeover in `await`. `notice` shows all four; `stuck` keeps the
+  text for callers that only show a flag. The "confirm before acting on silence" check isn't built.
+- **Waking.** `capcomd_await`, the in-VM `await`/`wait-any` and `capcomd await --notices` return early with
+  `notices` when one is raised while they wait (not one already showing when the wait began). On the host CLI it
+  is opt-in, so scripts that wait for the end keep working. Internal waits (`verify`'s reviewer, handoffs, the
+  `run` recipe) don't return on notices.
+- **Not built:** a parent's message or grant resetting the window (the runner doesn't see them), and profile
+  presets for the windows.
+
 ### 3. Checkpoints instead of caps
 
 The supervisor snapshots the workspace without touching it: a temporary index (`GIT_INDEX_FILE`), `git add -A`,
@@ -102,8 +129,7 @@ Step 3 (built: the supervisor, its outbox and checkpoints):
     agent (`checkpoint`, `AGENT_CHECKPOINT`).
   - Reviewers and reporting agents don't checkpoint.
 - **Not built yet:**
-  - spend and stuck states in the supervisor's reports (the runner still computes spend and idle from the log;
-    §2 is step 4);
+  - spend and stuck states in the supervisor's reports (the runner computes both from the log; see §2, step 4);
   - checkpoints at each spend step;
   - `send`/`inbox` for workers (a headless CLI can't read a message mid-run, so this needs its own design);
   - deleting checkpoint refs once their agent's work has landed.

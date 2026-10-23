@@ -123,7 +123,7 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_await", {
     title: "Wait for agents",
-    description: "Wait until the agents finish (mode all) or one does (mode any), up to timeoutMs; returns done (with results, fenced) and pending. Call again for what is pending: agents keep working between calls.",
+    description: "Wait until the agents finish (mode all) or one does (mode any), up to timeoutMs; returns done (with results, fenced) and pending. It also returns early with `notices` when an agent looks stuck (idle, spinning on the same call, failing with the same error); it keeps running, and is stopped with its work kept if it stays stuck. Call again for what is pending: agents keep working between calls.",
     inputSchema: { runId: run, agents: z.array(z.string().min(1)).min(1), mode: z.enum(["all", "any"]).optional(), timeoutMs: wait },
     annotations: READ,
   }, (a) => handle(() => D.awaitAgents(a)));

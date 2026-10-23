@@ -50,7 +50,7 @@ Usage:
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH; recipe = planner→worker→judge composed from primitives)
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--no-start] [--operator]
-  capcomd await <runId> <agt…> [--timeout-ms N]  ·  capcomd wait-any <runId> <agt…>
+  capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd resume <runId> [agt]                  run paused agents again now (paused by a provider usage limit)
   capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--review-profile P] [--target T] [--key K]  → vfy-…
@@ -71,7 +71,7 @@ Usage:
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --max-turns --budget
-                                       --timeout-ms --idle-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
+                                       --timeout-ms --idle-after-ms --stuck-repeats --checkpoint-every-ms --sandbox --egress --system-prompt
                                        --append-system-prompt --allowed-tools --disallowed-tools
                                        --description --default --spec JSON --unset k1,k2
   capcomd auth login claude|codex        Log in with your Claude/ChatGPT plan in a VM; saves a private auth profile
@@ -138,6 +138,8 @@ async function main(argv: string[]): Promise<number> {
         "timeout-ms": { type: "string" },
         "idle-after-ms": { type: "string" },
         "checkpoint-every-ms": { type: "string" },
+        "stuck-repeats": { type: "string" },
+        notices: { type: "boolean" },
         sandbox: { type: "string" },
         egress: { type: "string" },
         "system-prompt": { type: "string" },
@@ -392,10 +394,11 @@ async function main(argv: string[]): Promise<number> {
         if (!ids.length) usage(`agent ids required: capcomd ${command} <runId> <agentId…>`);
         const timeoutMs = values["timeout-ms"] ? Number(values["timeout-ms"]) : undefined;
         const P = await import("../primitives/ops");
-        const r: any = await P.awaitAgents(runId, ids, { timeoutMs, any: command === "wait-any" });
+        const r: any = await P.awaitAgents(runId, ids, { timeoutMs, any: command === "wait-any", notices: !!values.notices });
         if (json) out(r);
-        else for (const a of r.agents) console.log(`${a.agentId}: ${a.status}${a.result?.commit ? ` ${String(a.result.commit).slice(0, 12)}` : ""}${a.result?.error ? ` (${a.result.error})` : ""}`);
-        if (r.timeout) return EXIT.run_failed;
+        else for (const a of r.agents) console.log(`${a.agentId}: ${a.status}${a.notice ? ` ${String(a.notice.kind).toUpperCase()}: ${a.notice.detail}` : ""}${a.result?.commit ? ` ${String(a.result.commit).slice(0, 12)}` : ""}${a.result?.error ? ` (${a.result.error})` : ""}`);
+        // A notice (ADR-019 §2) ends the wait while the agent still runs: not done, like a timeout.
+        if (r.timeout || r.notices) return EXIT.run_failed;
         const relevant = command === "wait-any" ? [r.first] : r.agents;
         return relevant.every((a: any) => a.status === "done") ? EXIT.ok : EXIT.run_failed;
       }
@@ -489,7 +492,7 @@ async function main(argv: string[]): Promise<number> {
         const r: any = await (await import("../primitives/ops")).inspectAgent(runId, id, { logTail: values.tail ? Number(values.tail) : 50 });
         if (json) out(r);
         else {
-          console.log(`${r.agentId} [${r.profile ?? "-"}] ${r.status}${r.stuck ? ` STUCK: ${r.stuck}` : ""}  parent ${r.parent ?? "(operator)"}  depth ${r.depth}`);
+          console.log(`${r.agentId} [${r.profile ?? "-"}] ${r.status}${r.notice ? ` ${String(r.notice.kind).toUpperCase()}: ${r.notice.detail}` : ""}  parent ${r.parent ?? "(operator)"}  depth ${r.depth}`);
           console.log(`  budget ${JSON.stringify(r.budget)} spent ${JSON.stringify(r.spent)}  subtree ${JSON.stringify(r.rollup)}`);
           console.log(`  limits ${JSON.stringify(r.limits)}`);
           console.log(`  vm ${JSON.stringify(r.vm)}  driver ${r.driver ?? "-"}  heartbeat ${r.heartbeatAt ? new Date(r.heartbeatAt).toISOString() : "-"} ${r.heartbeatNote ?? ""}`);

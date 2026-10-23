@@ -11,7 +11,7 @@ import { client, assertEngine } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
 import { available, budgetCaps, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
-import { stuckReason, treeView, rollups, subtree } from "../subagents/results";
+import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
 import { stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
@@ -228,10 +228,16 @@ export function view(a: ScopeAgent) {
   return {
     agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status,
     budget: a.budget, spent: a.spent, task: a.task, key: a.key, limits: a.limits, result: a.result,
-    ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...(stuckReason(a) ? { stuck: stuckReason(a) } : {}),
+    ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...noticeView(a),
     ...(a.status === "paused" && a.pausedUntil ? { pausedUntil: new Date(a.pausedUntil).toISOString() } : {}), ...(a.epoch > 1 ? { epoch: a.epoch } : {}),
     ...(a.checkpoint ? { checkpoint: a.checkpoint } : {}),
   };
+}
+
+/** ADR-019 §2: `notice` (dead, idle, spinning, failing) and its text as `stuck`, while the agent looks stuck. */
+function noticeView(a: ScopeAgent) {
+  const n = noticeOf(a);
+  return n ? { stuck: n.detail, notice: n } : {};
 }
 
 /** A paused agent whose reset time has passed runs again (its next epoch). True when it was woken. */
@@ -521,24 +527,36 @@ export async function getAgentOrThrow(runId: string, agentId: string): Promise<S
   return a;
 }
 
-/** Wait until the agents are terminal; take over stale drivers. Timeout returns status "timeout". */
-export async function awaitAgents(runId: string, ids: string[], opts: { timeoutMs?: number; any?: boolean } = {}) {
+/**
+ * Wait until the agents are terminal; take over stale drivers. Timeout returns status "timeout". With `notices`
+ * (ADR-019 §2), a stuck notice raised on an awaited agent while waiting ends the wait too, as `notices`, so the
+ * waiter hears about trouble when it happens; one already showing when the wait began doesn't.
+ */
+export async function awaitAgents(runId: string, ids: string[], opts: { timeoutMs?: number; any?: boolean; notices?: boolean } = {}) {
   await assertEngine();
   const deadline = Date.now() + (opts.timeoutMs ?? 30 * 60_000);
   const kicked = new Map<string, number>();
   const done = new Map<string, ScopeAgent>();
-  for (;;) {
+  const latest = new Map<string, ScopeAgent>();
+  const noticeAt = new Map<string, number>();
+  for (let poll = 0; ; poll++) {
+    const noticed: ScopeAgent[] = [];
     for (const id of ids) {
       if (done.has(id)) continue;
       const a = await getAgentOrThrow(runId, id);
+      latest.set(id, a);
       if (TERMINAL_AGENT.has(a.status)) { done.set(id, a); continue; }
       // A paused agent wakes at its reset time; until then nothing drives it.
       if (a.status === "paused") { if (await wakeIfDue(runId, a)) kicked.set(id, Date.now()); continue; }
       const stale = !a.driver || a.driverUntil < Date.now();
       if (stale && (kicked.get(id) ?? 0) < Date.now() - LEASE_MS) { startDriver(runId, id); kicked.set(id, Date.now()); }
+      const at = a.notice?.at ?? 0;
+      if (opts.notices && poll > 0 && at && at !== noticeAt.get(id)) noticed.push(a);
+      noticeAt.set(id, at);
     }
     if (opts.any && done.size) { const [first] = [...done.values()].sort((x, y) => x.updatedAt - y.updatedAt); return { first: view(first!), agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "running" })) }; }
     if (done.size === ids.length) return { agents: ids.map((i) => view(done.get(i)!)) };
+    if (noticed.length) return { notices: noticed.map((a) => ({ agentId: a.agentId, ...a.notice! })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)) };
     if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })) };
     await sleep(POLL_MS);
   }

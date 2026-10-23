@@ -6,6 +6,10 @@ export interface AgentEvent {
   subtype?: string;
   tool?: string;
   text?: string;
+  /** ADR-019 §2: the tool calls this event makes, each as "name input" (the same string means the same call). */
+  calls?: string[];
+  /** The tool results it carries: the call they answer, and the error text when the call failed. */
+  results?: Array<{ call: string; error?: string }>;
   raw: Record<string, unknown>;
 }
 
@@ -29,6 +33,8 @@ export interface AgentRunState {
   quota?: { message: string; resetAt?: number };
   /** claude: the latest rejected rate_limit_event's reset (ms epoch), used if a usage-limit stop follows. */
   quotaResetHint?: number;
+  /** claude: each tool_use id's call ("name input"), so its tool_result can be matched to it. */
+  toolCalls?: Record<string, string>;
 }
 
 export interface AgentCommandCtx {

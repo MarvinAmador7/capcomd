@@ -109,6 +109,13 @@ describe("codex adapter (fake codex exec --json)", () => {
     expect(codexAdapter.parse('{"type":"item.completed","item":{"type":"command_execution","command":"npm test"}}', r, st, cfg)!.tool).toBe("Bash(npm test)");
     expect(codexAdapter.parse('{"type":"error","message":"boom"}', r, st, cfg)!.text).toBe("boom");
     expect(codexAdapter.parse("{partial", r, st, cfg)).toBeNull();
+    // A tool step is its own call and result, for the stuck watch (ADR-019 §2): a non-zero exit is an error.
+    const ok = codexAdapter.parse('{"type":"item.completed","item":{"type":"command_execution","command":"npm test","exit_code":0,"status":"completed"}}', r, st, cfg)!;
+    expect(ok.calls).toEqual(['command "npm test"']);
+    expect(ok.results).toEqual([{ call: 'command "npm test"' }]);
+    const bad = codexAdapter.parse('{"type":"item.completed","item":{"type":"command_execution","command":"npm test","exit_code":1,"status":"failed","aggregated_output":"1 failing: expected 3"}}', r, st, cfg)!;
+    expect(bad.results).toEqual([{ call: 'command "npm test"', error: "1 failing: expected 3" }]);
+    expect(codexAdapter.parse('{"type":"item.started","item":{"type":"command_execution","command":"npm test"}}', r, st, cfg)!.calls).toBeUndefined();
     expect(agentFromEnv({ CAPCOMD_AGENT: "codex" })).toBe("codex");
     expect(cfg.egress).toEqual(["github.com", "api.openai.com", "registry.npmjs.org", "nodejs.org"]);
     expect(adapterFor("codex").secretName).toBe("OPENAI_API_KEY");

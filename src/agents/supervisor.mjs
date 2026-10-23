@@ -5,7 +5,7 @@
 //   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs }
 // It never pushes: the agent must not hold push credentials, so the engine pushes the checkpoint ref it reports.
 import { spawn, execFileSync } from "node:child_process";
-import { appendFileSync, closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync } from "node:fs";
 
 const cfg = JSON.parse(readFileSync(process.argv[2], "utf8"));
 let seq = 0;
@@ -64,6 +64,9 @@ const beat = setInterval(() => {
   report("heartbeat", { events, lastEventAt });
   // The agent committed (claude and codex may): checkpoint the new HEAD now rather than at the next interval.
   try { const h = git(["rev-parse", "HEAD"]); if (lastHead && h !== lastHead) checkpoint("commit"); } catch {}
+  // The engine asks for one when the agent looks stuck (ADR-019 §2), so the work is safe before anything else.
+  const req = `${cfg.dir}/checkpoint.request`;
+  if (existsSync(req)) { try { unlinkSync(req); } catch {} checkpoint("notice"); }
 }, cfg.heartbeatMs);
 const every = cfg.checkpointEveryMs > 0 ? setInterval(() => checkpoint("interval"), cfg.checkpointEveryMs) : null;
 

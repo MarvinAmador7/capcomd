@@ -47,12 +47,20 @@ async function callOnce(id, op, args, timeoutMs) {
   return { id, ok: false, error: { code: "unavailable", message: `no answer from the orchestrator in ${timeoutMs}ms`, hint: "Retry with the same --key; the orchestrator may be restarting." } };
 }
 
-/** Block until the agents finish (or any, for wait-any). Polls; the orchestrator refuses deadlocks. */
+/**
+ * Block until the agents finish (or any, for wait-any), or one of them looks stuck: a notice raised while waiting
+ * (ADR-019 §2) returns early, as `notices`. Polls; the orchestrator refuses deadlocks.
+ */
 async function awaitLoop(op, args) {
   const deadline = Date.now() + Number(args.timeoutMs ?? 30 * 60000);
+  let seen = null;
   for (;;) {
     const r = await call(op, args);
     if (!r.ok || r.result.done) return r;
+    const now = new Map((r.result.notices ?? []).map((n) => [n.agentId, n.at]));
+    const fresh = seen ? (r.result.notices ?? []).filter((n) => seen.get(n.agentId) !== n.at) : [];
+    seen = now;
+    if (fresh.length) { await call(op, { ...args, end: true }); return { ok: true, result: { ...r.result, notices: fresh } }; }
     if (Date.now() > deadline) { await call(op, { ...args, end: true }); return { ok: true, result: { ...r.result, timeout: true } }; }
     await sleep(AWAIT_POLL);
   }

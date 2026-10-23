@@ -58,7 +58,7 @@ export function fence(from: string, text: string): { untrusted: true; from: stri
 export interface TreeAgent {
   agentId: string; parent: string | null; status: string; spent: Budget; budget: Budget;
   heartbeatAt?: number; driverUntil?: number; createdAt?: number; result?: any; depth?: number; profile?: string | null;
-  key?: string | null; contract?: any;
+  key?: string | null; contract?: any; notice?: { kind: string; detail: string; at: number } | null;
 }
 
 /** A spawn key as its caller wrote it: in-VM keys are stored as "<caller>:<key>". */
@@ -104,19 +104,29 @@ export function stuckReason(a: TreeAgent, now = Date.now(), after = stuckAfterMs
   return null;
 }
 
+/**
+ * ADR-019 §2: why a running agent looks stuck. "dead" (no heartbeat, or no live driver) is derived here; idle, spinning
+ * and failing are the runner's notices. `stuck` (the text) is kept for callers that only show a flag.
+ */
+export function noticeOf(a: TreeAgent, now = Date.now()): { kind: string; detail: string; at?: number } | null {
+  const dead = stuckReason(a, now);
+  if (dead) return { kind: "dead", detail: dead };
+  return a.status === "running" && a.notice ? a.notice : null;
+}
+
 /** Nested tree view with rollups and stuck flags, rooted at `root` (or all top-level agents). */
 export function treeView(agents: TreeAgent[], root?: string, now = Date.now()) {
   const ru = rollups(agents);
   const kids = new Map<string | null, TreeAgent[]>();
   for (const a of agents) kids.set(a.parent, [...(kids.get(a.parent) ?? []), a]);
   const node = (a: TreeAgent): any => {
-    const stuck = stuckReason(a, now);
+    const notice = noticeOf(a, now);
     return {
       agentId: a.agentId, profile: a.profile ?? null, depth: a.depth ?? 0, status: a.status, budget: a.budget, spent: a.spent,
       ...(notionalOf(a) ? { notionalUsd: notionalOf(a), billing: a.result?.billing ?? null } : {}),
       // TUI: a label ("add"), and what a reviewer reviewed / a read-only reporter.
       ...(shortKey(a.key) ? { key: shortKey(a.key) } : {}), ...(a.contract?.review?.of ? { reviewOf: String(a.contract.review.of) } : {}), ...(a.contract?.report ? { report: true } : {}),
-      rollup: ru.get(a.agentId), ...(stuck ? { stuck } : {}), children: (kids.get(a.agentId) ?? []).map(node),
+      rollup: ru.get(a.agentId), ...(notice ? { stuck: notice.detail, notice } : {}), children: (kids.get(a.agentId) ?? []).map(node),
     };
   };
   const roots = root ? agents.filter((a) => a.agentId === root) : agents.filter((a) => !a.parent);
@@ -137,7 +147,7 @@ export const notional = (n?: number) => (n && n > 0 ? ` (~$${Math.round(n * 1e4)
 export function textTree(nodes: any[], indent = ""): string {
   return nodes.map((n) => {
     const r = n.rollup;
-    const line = `${indent}${n.agentId} [${n.profile ?? "-"}] ${n.status}${n.stuck ? ` STUCK(${n.stuck})` : ""}  self: $${n.spent.usd ?? 0}${notional(n.notionalUsd)} ${n.spent.turns ?? 0}t  subtree(${r.agents}): $${r.usd}${notional(r.notionalUsd)} ${r.turns}t ${r.wallSeconds}s`;
+    const line = `${indent}${n.agentId} [${n.profile ?? "-"}] ${n.status}${n.notice ? ` ${String(n.notice.kind).toUpperCase()}(${n.notice.detail})` : ""}  self: $${n.spent.usd ?? 0}${notional(n.notionalUsd)} ${n.spent.turns ?? 0}t  subtree(${r.agents}): $${r.usd}${notional(r.notionalUsd)} ${r.turns}t ${r.wallSeconds}s`;
     return [line, textTree(n.children, indent + "  ")].filter(Boolean).join("\n");
   }).join("\n");
 }
