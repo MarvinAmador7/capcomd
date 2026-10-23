@@ -18,7 +18,7 @@ beforeAll(async () => {
   const r = (repo = await bareRepo({ mode: "direct" }));
   const dir = mkdtempSync(join(tmpdir(), "capcomd-liveness-"));
   const agentsFile = join(dir, "agents.json");
-  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 }, spender: { provider: "claude", auth: "apikey" } } }));
+  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 }, spender: { provider: "claude", auth: "apikey" }, listener: { provider: "claude", auth: "apikey" } } }));
   env = {
     ...r.env,
     CAPCOMD_AGENTS_FILE: agentsFile,
@@ -102,4 +102,16 @@ test("the supervisor's checkpoints reach the remote and the agent's record while
   const m = await cj(["merge", run, "--ref", id, "--operator"]);
   expect(m.j).toMatchObject({ state: "merged" });
   expect(await repo.sha(`refs/capcomd/checkpoints/${id}`)).toBeFalsy();
+}, 120_000);
+
+test("capcomd send reaches a running claude worker: the supervisor hands it to the CLI on stdin", async () => {
+  const run = (await cj(["run", "new"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen] wait for word", "--key", "listen"])).j?.agentId;
+  for (let i = 0; i < 100 && (await cj(["inspect", run, id])).j?.status !== "running"; i++) await Bun.sleep(100);
+  expect((await cj(["send", run, id, "use", "tabs", "please"])).code).toBe(0);
+  const agent = (await cj(["await", run, id, "--timeout-ms", "60000"])).j?.agents?.[0];
+  expect(agent?.status).toBe("done");
+  const heard = await repo.show(agent.result.branch, "messages.txt");
+  expect(heard).toContain("Message from the operator");
+  expect(heard).toContain("use tabs please");
 }, 120_000);

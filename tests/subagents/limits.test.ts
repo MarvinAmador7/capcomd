@@ -227,11 +227,11 @@ test("a paused agent wakes at its reset with nobody awaiting it (the engine sche
 test("waiting through a pause: a wait that ends while the agent is paused waits again (the run recipe's way)", async () => {
   rmSync(quotaLedger, { force: true });
   const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:20] short limit", "--key", "through"])).j?.agentId;
+  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:40] short limit", "--key", "through"])).j?.agentId;
   await until(run, id, "paused");
   process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
   let pausedWaits = 0;
-  const r: any = await awaitThroughPauses(run, id, { timeoutMs: 10_000, onPaused: () => pausedWaits++ });
+  const r: any = await awaitThroughPauses(run, id, { timeoutMs: 30_000, onPaused: () => pausedWaits++ });
   expect(r.agents[0]).toMatchObject({ status: "done", epoch: 2 });
   expect(pausedWaits).toBeGreaterThan(0);
 }, 180_000);

@@ -131,7 +131,7 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_send", {
     title: "Message an agent",
-    description: "Send a message to a running agent (for example a failed check's output to fix).",
+    description: "Send a message to a running agent (for example a failed check's output to fix). A Claude agent reads it within seconds, at its next step; a Codex agent can't read messages while it runs.",
     inputSchema: { runId: run, to: z.string().min(1), body: z.string().min(1), key }, annotations: WRITE,
   }, (a) => handle(() => D.send(a)));
 

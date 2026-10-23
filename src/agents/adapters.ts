@@ -53,8 +53,10 @@ export const claudeAdapter: AgentAdapter = {
   credentialEnv: (v) => ({ ANTHROPIC_API_KEY: v }),
   // IS_SANDBOX: the VM is the sandbox, so permissions may be bypassed even as root (claude refuses that otherwise).
   baseEnv: () => ({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1", CI: "1", IS_SANDBOX: "1" }),
+  // Messages written to stdin while it works are read at its next model call; it exits when stdin closes.
+  streamInput: true,
   command: (ctx, q) =>
-    `${q(ctx.bin)} -p "$(cat ${q(ctx.promptFile)})" --output-format stream-json --verbose` +
+    `${q(ctx.bin)} -p ${ctx.stdinPrompt ? "--input-format stream-json" : `"$(cat ${q(ctx.promptFile)})"`} --output-format stream-json --verbose` +
     (ctx.cfg.maxTurns ? ` --max-turns ${ctx.cfg.maxTurns}` : "") +
     (ctx.cfg.maxBudgetUsd ? ` --max-budget-usd ${ctx.cfg.maxBudgetUsd}` : "") +
     // No allowlist: every tool, with no permission prompts (nobody is there to answer them headless).
@@ -64,7 +66,7 @@ export const claudeAdapter: AgentAdapter = {
     (ctx.systemFile ? ` --system-prompt "$(cat ${q(ctx.systemFile)})"` : "") +
     (ctx.appendSystemFile ? ` --append-system-prompt "$(cat ${q(ctx.appendSystemFile)})"` : "") +
     (ctx.capcomd ? ` --mcp-config ${q(ctx.capcomd.mcpConfig)}` : "") +
-    ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)} < /dev/null`,
+    ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)}${ctx.stdinPrompt ? "" : " < /dev/null"}`,
   parse(line, r, state) {
     const raw = parseJson(line, r);
     if (!raw) return null;

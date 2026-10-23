@@ -98,8 +98,9 @@ The heuristics will have false positives, which is why the first window only not
   `notices` when one is raised while they wait (not one already showing when the wait began). On the host CLI it
   is opt-in, so scripts that wait for the end keep working. Internal waits (`verify`'s reviewer, handoffs, the
   `run` recipe) don't return on notices.
-- **Not built:** a parent's message resetting the window (the runner doesn't see messages; a grant does reset it,
-  step 5), and profile presets for the windows.
+- **Messages reset it too.** A message delivered to a running agent (§3, `send` to a worker) restarts the
+  runner's stuck watch, as a grant does (step 5).
+- **Not built:** profile presets for the windows.
 
 ### 3. Checkpoints instead of caps
 
@@ -131,19 +132,21 @@ Step 3 (built: the supervisor, its outbox and checkpoints):
   - Reviewers and reporting agents don't checkpoint.
   - A merge of the agent's work deletes its checkpoint ref; an agent whose work didn't land keeps it, to continue
     from.
-- **Not built yet:**
-  - spend and stuck states in the supervisor's reports (the runner computes both from the log; see §2, step 4);
-  - checkpoints at each spend step;
-  - `send`/`inbox` for workers (a headless CLI can't read a message mid-run, so this needs its own design).
   - When a budget covers the agent (its own, an ancestor's or the run's), it also checkpoints each time its spend
     passes another quarter of the tightest one: the engine's answer to each spend report carries how much is used,
     and the runner asks the supervisor (`checkpoint.request`, reason "spend"). A grant lowers the step; passing it
     again checkpoints again.
   - Spend and stuck states aren't in the supervisor's reports: the runner already computes both from the agent's
     log (§2, step 4), and the supervisor stays provider-agnostic.
-- **Not built yet:**
-  - `send`/`inbox` for workers (a headless CLI can't read a message mid-run, so this needs its own design);
-  - deleting checkpoint refs once their agent's work has landed.
+- **Messages to a running worker** (`capcomd send`, `capcomd_send`, an in-VM `send` to a child). Claude Code reads
+  user messages on stdin while it works (`--input-format stream-json`), at its next model call, and exits when its
+  input ends. So under the supervisor it starts that way: the supervisor sends the prompt as the first message,
+  hands it each message the runner appends to `inbox.jsonl` in the VM, and closes its input once it has finished
+  (a `result`) with nothing sent since. The runner gets the messages sent since its cursor with each spend report
+  (every 5 s, no extra call), labelled with who sent them (the operator, or the parent or an ancestor: the only
+  ones who can write to it). Reviewers don't take messages.
+- **Not built yet:** `send` to a Codex worker while it runs: `codex exec` reads no input after its prompt, so the
+  message waits in its inbox (agents that may spawn read theirs with `capcomd inbox`).
 
 ### 4. Limits are optional
 

@@ -16,6 +16,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   inside a VM for your own children) starts a new agent from a finished agent's work: its branch (for example one
   stopped at a limit), or its last checkpoint if it never pushed one. Before, the new agent's task had to fetch and
   merge that work itself. It is refused for an agent that is still running or paused.
+- `capcomd send <runId> <agent> "…"` (and `capcomd_send`, or `capcomd send` from a parent inside its VM) now reaches
+  a running Claude Code agent within seconds: it reads the message at its next step and carries on with it. Before,
+  only agents allowed to spawn could read messages, by checking their inbox. A message also restarts the agent's
+  stuck window, as a grant does. Codex agents still can't read messages while they run.
 - **Breaking:** nothing restricts an agent by default any more; set limits on a profile or a run when you want
   them.
   - **Tools and network:** an agent whose profile sets no `allowedTools` can use every tool without permission

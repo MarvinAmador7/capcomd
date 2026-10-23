@@ -74,7 +74,7 @@ export interface AgentRunOptions {
    * records it and answers with a limit to stop at (e.g. "max_budget_usd") when a budget is over, else null, and
    * when the agent was last given more budget (a new grant resets the stuck window).
    */
-  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }) => Promise<{ stop: string | null; grantedAt?: number; used?: number | null }>;
+  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => Promise<{ stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string }[] }>;
   /**
    * ADR-019 §1: reports from the in-VM supervisor: heartbeats while it is alive, and checkpoints (already pushed to
    * `ref`). A VM without node has no supervisor; heartbeats then come from the agent CLI's own events.
@@ -122,6 +122,12 @@ const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turn
 
 export const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 export const SECRET_PLACEHOLDER_PREFIX = "bxds_";
+
+/** A message sent to a running agent (`capcomd send`), as the agent reads it: from its parent or the operator. */
+export function messageText(m: { from: string; body: string }): string {
+  const who = m.from === "operator" || m.from === "driver" ? "the operator" : `agent ${m.from} (your parent or an ancestor)`;
+  return `Message from ${who}, sent while you work (capcomd send):\n\n${m.body}`;
+}
 
 export function buildPrompt(t: AgentTask): string {
   const lines = [
@@ -347,21 +353,25 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     }
     await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(promptText)));
     const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`, outbox = `${W}/outbox.jsonl`;
-    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}) }, sq)}`;
     // ADR-019 §1: the supervisor runs the agent and reports up through the outbox. It needs node, which the npm CLIs
     // bring; a VM without it (a native CLI) runs the agent directly, as before.
     const ckptRef = checkpointRef(task.agentId ?? `${task.runId}/${task.taskId}`);
     // A node that really runs code (≥16 for the supervisor's ESM): a stub or an old one would silently run nothing.
     const supervised = (await sh(`node -e 'process.stdout.write(+process.versions.node.split(".")[0] >= 16 ? "yes" : "no")' 2>/dev/null; true`)).stdout.trim() === "yes";
+    // Messages sent to it while it runs reach it through the supervisor, when its CLI reads input as it goes.
+    const streaming = supervised && !!adapter.streamInput && !task.review;
+    const inboxFile = `${W}/inbox.jsonl`;
+    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}) }, sq)}`;
     if (supervised) {
       await provider.upload(vmId, `${W}/agent.sh`, new TextEncoder().encode(`${agentLine}\n`));
       await provider.upload(vmId, `${W}/supervisor.mjs`, new TextEncoder().encode(SUPERVISOR_SOURCE));
       await provider.upload(vmId, `${W}/supervisor.json`, new TextEncoder().encode(JSON.stringify({
         script: `${W}/agent.sh`, dir: W, repo, jsonl, outbox, ref: ckptRef, agentId: task.agentId ?? task.taskId,
         heartbeatMs: opts.heartbeatMs ?? 30_000, checkpointEveryMs: task.review || task.report ? 0 : cfg.checkpointEveryMs,
+        ...(streaming ? { input: { prompt: `${W}/prompt.txt`, inbox: inboxFile } } : {}),
       })));
     }
-    setSpanAttributes(span, { "agent.supervised": supervised });
+    setSpanAttributes(span, { "agent.supervised": supervised, "agent.reads_messages": streaming });
     const script = [
       "#!/bin/sh",
       `cd ${sq(repo)} || exit 97`,
@@ -373,7 +383,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     ].join("\n");
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));
     // The credential exists only in this exec's env (inherited by the agent). Never logged.
-    must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)} ${sq(outbox)} ${sq(`${W}/checkpoint.request`)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
+    must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)} ${sq(outbox)} ${sq(inboxFile)} ${sq(`${W}/checkpoint.request`)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
       { ...adapter.baseEnv(), ...(credential ? adapter.credentialEnv(credential) : {}) }), `start ${name}`, "failed");
 
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
@@ -383,7 +393,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck }, now());
-    let noticed: string | null = null, grantSeen = 0, spendStep = 0;
+    let noticed: string | null = null, grantSeen = 0, spendStep = 0, inboxSeq = 0;
     // The supervisor takes it at its next heartbeat; reviewers and reporting agents don't checkpoint.
     const requestCheckpoint = async (reason: string) => {
       if (supervised && !task.review && !task.report) await sh(`printf %s ${sq(reason)} > ${sq(`${W}/checkpoint.request`)}`).catch(() => {});
@@ -412,6 +422,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         // Its start is a heartbeat too: the first interval hasn't passed yet.
         if (rep.type === "heartbeat" || rep.type === "start") opts.onReport?.({ type: "heartbeat", events: Number(rep.events ?? 0), lastEventAt: Number(rep.lastEventAt ?? now()), source: "supervisor" });
         if (rep.type === "checkpoint" && typeof rep.sha === "string") ckpt = { sha: rep.sha, reason: String(rep.reason ?? ""), files: Number(rep.files ?? 0) };
+        else if (rep.type === "delivered") addSpanEvent(span, "agent.message_delivered", { "agent.message_seq": Number(rep.seq ?? 0) });
         else if (rep.type === "error" || rep.type === "start" || rep.type === "exit") addSpanEvent(span, `agent.supervisor.${rep.type}`, { ...(rep.message ? { "agent.text": r.text(String(rep.message)) } : {}), ...(rep.code !== undefined ? { "agent.exit_code": rep.code } : {}) });
       }
       if (ckpt) await pushCheckpoint(ckpt);
@@ -458,7 +469,19 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       if (opts.onSpend && now() - spendAt >= (opts.spendEveryMs ?? SPEND_REPORT_MS)) {
         spendAt = now();
         const usd = credentialMode === "subscription" ? 0 : Math.round(state.costUsd * 1e6) / 1e6;
-        const rep = await opts.onSpend({ usd, turns: state.turns, wallSeconds: Math.round((now() - startedAt) / 1000) }).catch(() => null);
+        const rep = await opts.onSpend({ usd, turns: state.turns, wallSeconds: Math.round((now() - startedAt) / 1000) }, streaming ? inboxSeq : undefined).catch(() => null);
+        // Messages sent to it since the last report: into the VM, where the supervisor hands them to the CLI. A
+        // message means someone looked at the agent: its stuck window starts again (ADR-019 §2).
+        const msgs = (rep?.messages ?? []).filter((m) => m.seq > inboxSeq);
+        if (msgs.length) {
+          const lines = msgs.map((m) => JSON.stringify({ seq: m.seq, text: messageText(m) })).join("\n") + "\n";
+          const put = await sh(`printf %s ${sq(lines)} >> ${sq(inboxFile)}`).catch(() => null);
+          if (put && !put.code) {
+            inboxSeq = Math.max(...msgs.map((m) => m.seq));
+            watch.reset(now());
+            addSpanEvent(span, "agent.message", { "agent.messages": msgs.length, "agent.message_seq": inboxSeq });
+          }
+        }
         // A parent that gives more budget has looked at the agent: its stuck window starts again (ADR-019 §2).
         if (rep?.grantedAt && rep.grantedAt > grantSeen) {
           grantSeen = rep.grantedAt;
