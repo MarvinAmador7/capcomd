@@ -11,8 +11,13 @@ child, a protected-target merge approved by the operator, a staging target, and 
 (contract, then provider and consumer in parallel).
 
 Also built and tested on fakes, not yet run live with real agents: quota pauses and the wake at the reset (the
-CLIs' usage-limit output was read from their code, not captured), stuck notices, `grant`, messages to a running
-Claude worker, and `spawn --continue` (ADR-019).
+CLIs' usage-limit output was read from their code, not captured), spinning and failing notices, and `grant`
+(ADR-019).
+
+Verified live on 2026-10-23 (`scripts/mac-agent-ops-e2e.sh`, `E2E PASS`, 159s, three Claude agents): an `idle`
+notice that `await --notices` returned while the agent ran a long command; a message sent to it then, delivered
+mid-run and acted on (its branch has what the message asked for); an agent stopped at its timeout, continued with
+`spawn --continue` to a branch holding both its work and the rest.
 
 Verified live on 2026-10-23 (`E2E PASS`, 185s): the no-restrictions defaults (ADR-019 §7: `capcomd setup`'s
 planner profile with no limits, no run budget, workers with every tool and open egress), and checkpoints pushed to

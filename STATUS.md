@@ -42,10 +42,10 @@ planner and judge still answer from a fake model (item 3).
 | No restrictions by default (ADR-019 §7): no run budget, no turn, time, money or fan-out limits, every tool without permission prompts and open egress in the VM, unless a profile or run sets them | Built, verified live 2026-10-23 (the e2e runs `capcomd setup`'s planner profile with no run budget) | `tests/agents`, `tests/auth`, `scripts/mac-subagents-e2e.sh` |
 | In-VM supervisor (ADR-019 §1, §3): heartbeats, checkpoints of the workspace (every 10 min, after a commit, at each quarter of a budget, on a notice) pushed by the engine to `refs/capcomd/checkpoints/<agent>` and deleted when the work merges | Built; checkpoint push and deletion on GitHub verified live 2026-10-23 | `tests/agents/supervisor.test.ts`, `tests/subagents/liveness.test.ts` |
 | Live spend: budgets enforced by the engine from spend reported every 5 s, for both CLIs; `grant` raises a running agent's budget | Built | `tests/subagents/limits.test.ts`, `tests/primitives/policy.test.ts` |
-| Stuck notices (idle, spinning, failing) to the parent and the waiting `await`; a stop only when the profile sets the window | Built | `tests/subagents/limits.test.ts`, `tests/agents/stuck.test.ts` |
+| Stuck notices (idle, spinning, failing) to the parent and the waiting `await`; a stop only when the profile sets the window | Built; idle verified live 2026-10-23 | `tests/subagents/limits.test.ts`, `tests/agents/stuck.test.ts` |
 | Quota pause: an agent at its provider's usage limit is `paused` with its work kept, other agents on that login wait, and it wakes at the reset (scheduled by the engine) or on `resume` | Built; the CLIs' limit output was read from their code, not captured live | `tests/subagents/limits.test.ts` |
-| Messages to a running Claude worker (`send`): delivered on its stdin through the supervisor, read at its next step | Built (the CLI's stdin behavior checked against Claude Code 2.1.304) | `tests/subagents/liveness.test.ts`, `tests/agents/supervisor.test.ts` |
-| `spawn --continue <agt>`: a new agent starts from a finished agent's branch or last checkpoint | Built | `tests/subagents/limits.test.ts` |
+| Messages to a running Claude worker (`send`): delivered on its stdin through the supervisor, read at its next step | Built, verified live 2026-10-23 (`scripts/mac-agent-ops-e2e.sh`) | `tests/subagents/liveness.test.ts`, `tests/agents/supervisor.test.ts` |
+| `spawn --continue <agt>`: a new agent starts from a finished agent's branch or last checkpoint | Built, verified live 2026-10-23 | `tests/subagents/limits.test.ts` |
 | Single executable (`install.sh`, Homebrew tap `MarvinAmador7/tap`, `capcomd upgrade`), built for macOS and Linux, x64 and arm64 | Built; linux-x64 and darwin-arm64 driven in CI and locally; the other two first run in the next release | `tests/cli/binary.test.ts`, `scripts/release-smoke.sh`, CI `binary` job |
 
 **Live end-to-end:** `scripts/mac-subagents-e2e.sh` runs a planner agent that splits a three-file fix across
@@ -68,7 +68,7 @@ The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The bi
 4. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
    verifying and landing several branches together, lead → team branch → main hierarchies, comparing candidates.
 5. Report mode, staging targets, approval requests and the interface-first pattern pass their tests but
-   haven't had a live boxd run yet; neither have quota pauses, stuck notices, grants or messages to a worker.
+   haven't had a live boxd run yet; neither have quota pauses, spinning and failing notices, or grants.
 
 ## How to check it yourself
 
@@ -81,6 +81,7 @@ bun test tests/agents tests/primitives tests/merge
 (cd apps/tui && bun test)
 bun run test:chaos             # long: the killpoint and seed suites
 scripts/mac-subagents-e2e.sh   # live: needs BOXD_API_KEY, gh, and working claude + codex logins
+scripts/mac-agent-ops-e2e.sh   # live: notices, send to a running agent, spawn --continue (claude login)
 ```
 
 The engine-backed tests run on macOS and Linux; Linux uses `/proc` and macOS uses `ps`/`lsof`. On a Mac,
