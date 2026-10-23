@@ -1,6 +1,6 @@
 # capcomd roadmap
 
-**Updated:** 2026-10-22. What works today is in [STATUS.md](STATUS.md); this file is what's left: gaps, limits on
+**Updated:** 2026-10-23. What works today is in [STATUS.md](STATUS.md); this file is what's left: gaps, limits on
 orchestration patterns, risks and debt, with a proposed approach for each. Sizes are rough: **S** (hours),
 **M** (a day or two), **L** (several days).
 
@@ -9,6 +9,14 @@ orchestration patterns, risks and debt, with a proposed approach for each. Sizes
 These pass their tests on fakes but aren't in `scripts/mac-subagents-e2e.sh` yet (S each): add a reporting
 child, a protected-target merge approved by the operator, a staging target, and an interface-first goal
 (contract, then provider and consumer in parallel).
+
+Also built and tested on fakes, not yet run live with real agents: quota pauses and the wake at the reset (the
+CLIs' usage-limit output was read from their code, not captured), stuck notices, `grant`, messages to a running
+Claude worker, and `spawn --continue` (ADR-019).
+
+Verified live on 2026-10-23 (`E2E PASS`, 185s): the no-restrictions defaults (ADR-019 §7: `capcomd setup`'s
+planner profile with no limits, no run budget, workers with every tool and open egress), and checkpoints pushed to
+`refs/capcomd/checkpoints/*` on GitHub and deleted when the work merged.
 
 Verified live on 2026-10-21 (`E2E PASS`, 228s): the **reviewer** (3 real reviewers on a read-only profile, ~16s
 each, every verify needing both its check and the verdict; the planner's verifies polled to completion) and
@@ -33,19 +41,22 @@ each, every verify needing both its check and the verdict; the planner's verifie
    judge always passes (`src/actors/judge.ts` also treats a reply that isn't JSON as a pass). Approach: the
    recipe spawns a planner profile (as the sub-agent e2e already does) and judges the run with an agent; real
    runs refuse the fake model; keep it for offline tests.
-4. **Live spend** (M). A real agent's cost is known only when it finishes, so a budget can't stop a runaway
-   mid-run; spawn-time checks use the carve. Approach: stream token usage from the agent's event log (the
-   runner already parses it) into the scope's `spent`, and cancel on a breach. Also carry the notional cost of
-   failed or timed-out agents into the tree (only successful runs today).
-5. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
+4. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
    VmSpool can tail `agent.jsonl`; it is unwired to keep exec traffic low. Approach: tail on demand
    (`logs --follow`), not continuously.
-6. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
+5. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
    spends everything on children gets "no budget left", the review fails closed and nothing merges. Approach:
    reserve the reviewer's budget when the child is spawned (or warn at spawn time when the run has a
    reviewer and the remainder can't cover one).
-7. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
+6. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
    verify's VM for its merge when the target hasn't moved (same tree), else reuse the snapshot only.
+7. **Messages to a Codex worker** (S). `send` reaches a running Claude agent (on its stdin), but `codex exec`
+   reads no input after its prompt, so a message to a Codex worker waits in its inbox. Approach: when it finishes
+   with messages it hasn't read, continue its session with them (`codex exec resume`), or say at send time that
+   it can't read them.
+8. **ADR-019 leftovers** (S each): spinning detected as "events but no change in the workspace for a window"
+   (opt-in, since reading code for a long time is normal); a check of the VM before acting on silence ("dead");
+   profile presets for the stuck windows.
 
 ## 3. Orchestration patterns that aren't possible yet
 
@@ -88,11 +99,11 @@ rework.
 | Limit | Impact | Approach | Size |
 |---|---|---|---|
 | Gates are fixed at `run new` | a planner that discovers sub-tasks mid-run can only pin existing named checks (or fall back to the default suite, which fails on a red repo). The operator can rewrite kv `_checks` mid-run, but that's undocumented and unvalidated | `capcomd checks add <runId> name='cmd'` (operator), validated like `--checks-set` | S |
-| Leaf agents can't coordinate | real agents get the in-VM CLI (task board, kv, inbox, heartbeat, result) only when they may spawn; siblings can read each other but messages go through the parent | a `--tools coordinate` grant that gives a leaf the CLI without spawn rights; sibling messaging within one parent | M |
-| Rework rounds start from scratch | a finished agent can't continue, so each critic round is a new agent with a fresh VM, clone, install and context | resume the agent's session (`claude --resume`) in a kept VM for k rounds | M |
+| Leaf agents can't coordinate | real agents get the in-VM CLI (task board, kv, inbox, heartbeat, result) only when they may spawn; a leaf only hears from its parent (`send`, Claude only); siblings can read each other but messages go through the parent | a `--tools coordinate` grant that gives a leaf the CLI without spawn rights; sibling messaging within one parent | M |
+| Rework rounds start fresh | `spawn --continue` starts the next round from the last one's branch, but in a new VM, clone, install and session | resume the agent's session (`claude --resume`) in a kept VM for k rounds | M |
 | Repeated verify without `--key` | a planner whose verify is cut off by its tool's timeout and re-runs it without `--key` starts a second review | the skill text says to pass `--key`; add a per-ref "in progress" lookup so a keyless re-run joins the running one | S |
 | Budgets on subscription billing | USD budgets do nothing (cost is $0); only turns and wall time bind | budget on notional cost as an opt-in unit | S |
-| Carve shrinkage | each later child gets `budgetShare` × what's left, so the n-th child gets much less unless budgets are explicit | an "equal split" spawn option for fan-out | S |
+| Carve shrinkage | with a `budgetShare` set, each later child gets that share of what's left, so the n-th child gets much less unless budgets are explicit (no share is set by default) | an "equal split" spawn option for fan-out | S |
 
 ## 5. Operations, deployment, CI
 
@@ -116,13 +127,13 @@ rework.
 
 ## 6. Known issues and test debt
 
-- `tests/merge/pr.test.ts` (4 cases) and `tests/cli/json.test.ts` (`status --json has the stable shape`) fail on
-  `main` as of `db0aadb`, independently of recent work. They're outside CI, so nothing caught it.
 - Test files interfere when run in one `bun test` process (for example `serve --port N binds N…`); run them per
   file until they're isolated.
 - Tests that read the checkout's real `.relay/` ledgers: three were found and fixed (2026-10-21); audit the rest
   so a saved login can't change test outcomes.
 - `tests/env` probes the host as if it were a fresh image, so it fails where `codex` is installed (boxd VMs).
+- Every file in `tests/merge`, `tests/cli` and `tests/env` passes on its own (checked 2026-10-23 on macOS without
+  `codex`), but CI doesn't run them yet (§5, CI coverage).
 - `verify` on a branch that has already merged reports `status: "merged", pass: false`; it should report the
   merged commit as verified or say "already merged".
 - `docs/open-questions.md` is a low-confidence reconstruction and needs re-research.

@@ -1,6 +1,6 @@
 # capcomd status
 
-**Updated:** 2026-10-21. What's left, with proposed approaches, is in [ROADMAP.md](ROADMAP.md). This file replaces the October 17–18 session logs (`BLOCKING.md`, `PROGRESS.md`,
+**Updated:** 2026-10-23. What's left, with proposed approaches, is in [ROADMAP.md](ROADMAP.md). This file replaces the October 17–18 session logs (`BLOCKING.md`, `PROGRESS.md`,
 `FINAL-STATUS.md`, and the old `STATUS.md`); they are in git history. Design decisions live in `docs/adr-*.md`.
 
 ## Summary
@@ -39,12 +39,22 @@ planner and judge still answer from a fake model (item 3).
 | MCP server for a driver agent (ADR-018 phase 1): the primitives as 18 tools, bounded waits, gates from the project config, human approvals by default, fenced agent text, engine auto-start, runs found again from a new session | Built; verified live through the plugin | `tests/mcp`, `tests/core/engine-start.test.ts` |
 | Tracing, `inspect --follow`, TUI (`apps/tui`) | Built | `tests/tracing`, `apps/tui` tests |
 | Costs: billed USD, plus the API-price estimate for subscription work (`notionalUsd`, shown as `~$0.04`) | Built | `tests/subagents/unit.test.ts`, `apps/tui/test/cost.test.ts` |
+| No restrictions by default (ADR-019 §7): no run budget, no turn, time, money or fan-out limits, every tool without permission prompts and open egress in the VM, unless a profile or run sets them | Built, verified live 2026-10-23 (the e2e runs `capcomd setup`'s planner profile with no run budget) | `tests/agents`, `tests/auth`, `scripts/mac-subagents-e2e.sh` |
+| In-VM supervisor (ADR-019 §1, §3): heartbeats, checkpoints of the workspace (every 10 min, after a commit, at each quarter of a budget, on a notice) pushed by the engine to `refs/capcomd/checkpoints/<agent>` and deleted when the work merges | Built; checkpoint push and deletion on GitHub verified live 2026-10-23 | `tests/agents/supervisor.test.ts`, `tests/subagents/liveness.test.ts` |
+| Live spend: budgets enforced by the engine from spend reported every 5 s, for both CLIs; `grant` raises a running agent's budget | Built | `tests/subagents/limits.test.ts`, `tests/primitives/policy.test.ts` |
+| Stuck notices (idle, spinning, failing) to the parent and the waiting `await`; a stop only when the profile sets the window | Built | `tests/subagents/limits.test.ts`, `tests/agents/stuck.test.ts` |
+| Quota pause: an agent at its provider's usage limit is `paused` with its work kept, other agents on that login wait, and it wakes at the reset (scheduled by the engine) or on `resume` | Built; the CLIs' limit output was read from their code, not captured live | `tests/subagents/limits.test.ts` |
+| Messages to a running Claude worker (`send`): delivered on its stdin through the supervisor, read at its next step | Built (the CLI's stdin behavior checked against Claude Code 2.1.304) | `tests/subagents/liveness.test.ts`, `tests/agents/supervisor.test.ts` |
+| `spawn --continue <agt>`: a new agent starts from a finished agent's branch or last checkpoint | Built | `tests/subagents/limits.test.ts` |
+| Single executable (`install.sh`, Homebrew tap `MarvinAmador7/tap`, `capcomd upgrade`), built for macOS and Linux, x64 and arm64 | Built; linux-x64 and darwin-arm64 driven in CI and locally; the other two first run in the next release | `tests/cli/binary.test.ts`, `scripts/release-smoke.sh`, CI `binary` job |
 
 **Live end-to-end:** `scripts/mac-subagents-e2e.sh` runs a planner agent that splits a three-file fix across
 two Claude workers and one Codex worker, verifies each against its own named check in a boxd checks VM, has a
 read-only reviewer agent review each, merges all three, runs the full suite on the result and confirms no VM is
-left behind. Last run, 2026-10-21: `E2E PASS`, 3/3 reviewed and merged, 228s (181s planner), 7 agents and 6
-checks VMs, about $0.37 in API-equivalent cost on subscription billing. This script is manual; it is not in CI.
+left behind. It uses the planner profile `capcomd setup` writes and no run budget, and checks that the workers'
+checkpoints reach GitHub and are deleted once their work merges. Last run, 2026-10-23: `E2E PASS`, 3/3 reviewed
+and merged, checkpoints pushed and cleaned up, 185s (143s planner), 7 agents. This script is manual; it is not in
+CI.
 
 ## Open work
 
@@ -55,11 +65,10 @@ The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The bi
    setup); a registry, capabilities, a conformance suite and a second provider are next.
 3. The `capcomd run` recipe's planner and run-level judge still answer from a fake model (per-branch review
    by an agent is built: `run new --reviewer`).
-4. Live spend: a real agent's cost is known only when it finishes.
-5. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
+4. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
    verifying and landing several branches together, lead → team branch → main hierarchies, comparing candidates.
-6. Report mode, staging targets, approval requests and the interface-first pattern pass their tests but
-   haven't had a live boxd run yet.
+5. Report mode, staging targets, approval requests and the interface-first pattern pass their tests but
+   haven't had a live boxd run yet; neither have quota pauses, stuck notices, grants or messages to a worker.
 
 ## How to check it yourself
 
