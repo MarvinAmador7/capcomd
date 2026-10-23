@@ -96,7 +96,10 @@ rework.
 
 ## 5. Operations, deployment, CI
 
-- **Distribution** (M): `bun build --compile` fails on rivetkit's native module; capcomd runs from a checkout.
+- **Binary signing** (S): the single executables (scripts/build-binary.ts) are ad-hoc signed only; macOS doesn't
+  quarantine a `curl` download, but a browser download needs `xattr -d com.apple.quarantine`. Sign and notarize them.
+- **Binary size** (S): each binary is 210–240 MB, most of it rivet-engine; the engine could be fetched on first
+  `serve` instead, for a smaller download.
 - **Single local engine** (L): Rivet Cloud is deferred (ADR-009); no backup/restore of engine data.
 - **Engine data for test ports** (S): every engine started on a non-default port (tests, e2e runs) keeps a data dir in
   `~/.capcomd/engine/<port>` that nothing removes.

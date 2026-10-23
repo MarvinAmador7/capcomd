@@ -87,6 +87,9 @@ Usage:
   capcomd setup check                    What's configured and working (changes nothing)
   capcomd service install|uninstall|status [--port N] [--dry-run]
                                        The engine as a background service (launchd / systemd user unit)
+  capcomd upgrade [--to X.Y.Z] [--dry-run]
+                                       Replace this capcomd with the latest release (the installed binary;
+                                       npm and Homebrew installs say how to upgrade them)
   capcomd ui                             Launch the web UI
 
 Options:
@@ -160,6 +163,7 @@ async function main(argv: string[]): Promise<number> {
         "no-start": { type: "boolean" },
         report: { type: "boolean" },
         "dry-run": { type: "boolean" },
+        to: { type: "string" },
         yes: { type: "boolean", short: "y" },
         demo: { type: "boolean" },
         "skip-demo": { type: "boolean" },
@@ -232,7 +236,7 @@ async function main(argv: string[]): Promise<number> {
 
   try {
     if (values.version || command === "version") {
-      const { version } = JSON.parse(readFileSync(join((await import("../utils/home")).PACKAGE_ROOT, "package.json"), "utf8"));
+      const version = (await import("../utils/self")).VERSION;
       if (json) out({ version }); else console.log(`capcomd ${version}`);
       return EXIT.ok;
     }
@@ -313,10 +317,8 @@ async function main(argv: string[]): Promise<number> {
           mkdirSync(dir, { recursive: true });
           const log = join(dir, `${runId}.ndjson`);
           const fd = openSync(log, "a");
-          const args = [new URL(import.meta.url).pathname, "run", "--json", "--run-id", runId];
-          if (targetBranch) args.push("--target-branch", targetBranch);
-          args.push(goal);
-          const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
+          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), goal);
+          const child = spawn(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
           child.unref();
           if (json) out({ runId, detached: true, log, pid: child.pid });
           else console.log(`Started run ${runId} in the background (log: ${log})`);
@@ -715,6 +717,16 @@ async function main(argv: string[]): Promise<number> {
         if (json) out({ steps, ok });
         else console.log(`\n${S.formatSteps(steps)}\n${ok ? "\nReady. Next: `capcomd setup check` any time; README Quickstart step 4 to run agents." : "\nSome steps need attention (see → above). Re-run `capcomd setup` (finished steps are skipped or kept)."}`);
         return ok ? EXIT.ok : EXIT.run_failed;
+      }
+
+      case "upgrade": {
+        const r: any = await (await import("./commands/upgrade")).upgrade({ to: values.to as string | undefined, dryRun: !!values["dry-run"] });
+        if (json) out(r);
+        else if (r.how) console.log(`capcomd ${r.current} was installed with ${r.how.split(" ")[0]}; upgrade it with: ${r.how}`);
+        else if (r.upgraded) console.log(`✓ capcomd ${r.current} → ${r.latest} (${r.path})\n  ${r.next}`);
+        else if (r.dryRun) console.log(`capcomd ${r.latest} is available (this is ${r.current}); run \`capcomd upgrade\` to install it`);
+        else console.log(`capcomd ${r.current} is the latest`);
+        return EXIT.ok;
       }
 
       case "service": {

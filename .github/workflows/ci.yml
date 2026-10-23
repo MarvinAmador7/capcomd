@@ -44,6 +44,28 @@ jobs:
         run: bun run test:scenarios
         timeout-minutes: 20
 
+  # The single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
+  # no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that
+  # loads something by a computed name) fails here, not at release.
+  binary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - run: bun install
+
+      - name: Build capcomd-linux-x64
+        run: bun scripts/build-binary.ts --target linux-x64 --outdir dist
+
+      - name: Install it and drive it (scripts/release-smoke.sh)
+        run: scripts/release-smoke.sh dist/capcomd-linux-x64 "$(bun -e 'console.log(require("./package.json").version)')"
+
   # Crash-safety gate (chaos:fast, strict), sharded so each suite gets its own runner: on one 2-vCPU runner the
   # 258 cases took ~45 min, right at the timeout. On push: one round (a regression check, ~10-15 min per shard);
   # nightly and on demand: the full three rounds.

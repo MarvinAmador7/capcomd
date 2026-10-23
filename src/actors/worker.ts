@@ -1,4 +1,5 @@
 import { readFileSync } from "fs";
+import { VM_CLI_SOURCE } from "../utils/assets";
 import { redactShapes } from "../agents/redact";
 import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
@@ -481,7 +482,7 @@ export const workerActor = actor({
           },
           onNotice: (n) => { scope?.notice({ agentId: workerId, notice: n }).catch(() => {}); },
           ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }) => (await scope.reportSpend({ agentId: workerId, spent })) as { stop: string | null; grantedAt?: number } } : {}),
-          ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: readFileSync(new URL("../subagents/vm-cli.mjs", import.meta.url).pathname, "utf8"), rpcDir: "/tmp/capcomd-rpc" } } : {}),
+          ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: "/tmp/capcomd-rpc" } } : {}),
           isCancelled: async () => {
             const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
             if (run?.state === "cancelled") return true;

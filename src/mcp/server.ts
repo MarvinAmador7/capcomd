@@ -8,7 +8,7 @@ import { SCHEMA, toRelayError } from "../core/errors";
 import { listEvents, paginate } from "../core/relay";
 import { ensureEngine } from "../core/engine-start";
 import { loadTrace } from "../cli/commands/trace";
-import { PACKAGE_ROOT } from "../utils/home";
+import { VERSION } from "../utils/self";
 import * as D from "./driver";
 
 /** Hard cap on the JSON text of one tool result. */
@@ -56,7 +56,7 @@ const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: tru
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true } as const;
 
 export function buildServer(): McpServer {
-  const { version } = require(`${PACKAGE_ROOT}/package.json`);
+  const version = VERSION;
   const server = new McpServer({ name: "capcomd", version });
 
   // ── discover ──

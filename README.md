@@ -114,8 +114,18 @@ change, and merged all three.
 
 ## Quickstart
 
-**Requirements:** [Bun](https://bun.sh) ≥ 1.4, a sandbox provider account ([boxd](https://boxd.sh) today), a
-GitHub repository, and a Claude and/or ChatGPT plan (or Anthropic/OpenAI API keys).
+**Requirements:** macOS or Linux, a sandbox provider account ([boxd](https://boxd.sh) today), a GitHub repository,
+and a Claude and/or ChatGPT plan (or Anthropic/OpenAI API keys).
+
+**Install** (one self-contained executable, no runtime to install first):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.sh | sh
+# or: brew install MarvinAmador7/tap/capcomd
+# or, with Bun: bun add -g capcomd
+```
+
+`capcomd upgrade` updates it later.
 
 **1. Add capcomd to your agent.** The capcomd plugin gives your agent the MCP tools and two skills
 (orchestration, and setup):
@@ -131,11 +141,11 @@ codex plugin marketplace add MarvinAmador7/capcomd     # then install capcomd fr
 
 > Set up capcomd for this repository.
 
-It installs the CLI (`bun add -g capcomd`), connects your sandbox provider (with the boxd CLI logged in, it creates
+It installs the CLI if it's missing (the installer above), connects your sandbox provider (with the boxd CLI logged in, it creates
 a key just for capcomd and keeps it in your OS keychain), builds the agent VM snapshot, detects your repository,
 target branch and test command, and starts the engine. A few steps are yours: logging in to boxd
 (`boxd auth login`) and your agents (`capcomd auth login claude`) open a browser, and you confirm the gates (the
-checks, the reviewer, the target branch). Prefer a terminal? `bun add -g capcomd && capcomd setup` does the same,
+checks, the reviewer, the target branch). Prefer a terminal? `capcomd setup` after installing does the same,
 including the plugin, and can be re-run safely; `capcomd setup check` shows what's configured.
 
 **3. Ask for the outcome:**
@@ -149,8 +159,9 @@ Your agent reports back as agents finish and merges land. Merges into protected 
 `capcomd approve <runId> <mrgId>`. Watch a run with `capcomd tree <runId>` or the terminal debugger (from a
 checkout: `cd apps/tui && bun run start --run <runId>`).
 
-Each [release](https://github.com/MarvinAmador7/capcomd/releases) has the package and its SHA-256 attached; the npm
-package is published by CI with [provenance](https://docs.npmjs.com/generating-provenance-statements).
+Each [release](https://github.com/MarvinAmador7/capcomd/releases) has the binaries for macOS and Linux (arm64 and
+x64) and the npm package, each with its SHA-256 (the installer and `capcomd upgrade` check it); the npm package is
+published by CI with [provenance](https://docs.npmjs.com/generating-provenance-statements).
 
 ### Connecting your agent
 

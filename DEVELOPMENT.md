@@ -144,14 +144,16 @@ the changelog, what never to do by hand). By hand, before tagging:
    `bun scripts/release-notes.ts --check`). `bun scripts/release-notes.ts vX.Y.Z` prints the release notes, or why
    it can't.
 2. Run the live e2e (`scripts/mac-subagents-e2e.sh`, `E2E PASS`); CI can't (it needs boxd, GitHub and agent logins).
-   Optionally `bun pm pack && scripts/release-smoke.sh capcomd-X.Y.Z.tgz X.Y.Z` (the install check CI runs).
+   Optionally `bun pm pack && scripts/release-smoke.sh capcomd-X.Y.Z.tgz X.Y.Z`, and
+   `bun scripts/build-binary.ts && scripts/release-smoke.sh dist/capcomd-<os>-<arch> X.Y.Z` (the install checks CI runs).
 3. Merge to `main`, let CI pass, then tag that commit: `git tag -a vX.Y.Z -m "capcomd X.Y.Z" <sha> && git push origin vX.Y.Z`.
 
 The tag runs the release workflow: it checks the tag is on `main`, matches `package.json` and has a changelog
 section; runs typecheck, `test:fast`, the TUI tests and `test:scenarios` on Linux and macOS, and one strict chaos
 round; packs the package and installs it with a fresh `HOME` on both (`scripts/release-smoke.sh`: `setup demo`, a run
 with fake agents, `setup check`, the service definition, state only in `~/.capcomd`); then publishes that package
-to npm and the GitHub release with `capcomd-X.Y.Z.tgz`, its `.sha256` and the changelog section. Any failure publishes nothing; fix, then
+to npm and the GitHub release with `capcomd-X.Y.Z.tgz`, the four binaries, their `.sha256` files and the changelog
+section. Any failure publishes nothing; fix, then
 re-run the workflow (Actions → Release → Run workflow, with the tag), which updates the release in place. Moving a
 tag that's already published needs `git push --force origin vX.Y.Z` and is best avoided: cut X.Y.Z+1 instead.
 
@@ -160,7 +162,32 @@ npm: the workflow publishes the exact package it tested, with provenance, under 
 trusted publishing once that's configured for this repository on npmjs.com (then the secret can go). A version
 that's already on npm is skipped, so re-runs are safe. Never `npm publish` by hand.
 
-A standalone binary (`bun build --compile`) builds, but `serve` doesn't work compiled yet (ROADMAP.md).
+Binaries: the workflow builds the single executable for darwin-arm64, darwin-x64, linux-x64 and linux-arm64 on one
+Linux runner (`scripts/build-binary.ts --target T`), then installs each with `install.sh` and drives it without Bun
+on a runner of its own platform (`scripts/release-smoke.sh dist/capcomd-T X.Y.Z`; on macOS arm64 it also installs
+the Homebrew formula from a throwaway tap). They go on the release with their `.sha256` files, which is where
+`install.sh` and `capcomd upgrade` download from. Last, for a non-prerelease, it commits `Formula/capcomd.rb`
+(`scripts/homebrew-formula.ts`) to MarvinAmador7/homebrew-tap with the `HOMEBREW_TAP_TOKEN` secret (a fine-grained
+token with contents write on that repository); without the secret it warns and skips that step.
+
+### The single executable
+
+`bun scripts/build-binary.ts [--target darwin-arm64|darwin-x64|linux-x64|linux-arm64]` writes
+`dist/capcomd-<target>` (210–240 MB) and its `.sha256`. Any target builds on any host: its native parts (rivetkit's
+addon and rivet-engine) are the installed packages for the host's platform, or are fetched from npm at the same
+versions and checked against the registry's integrity hash. What makes it work, if you change something nearby:
+
+- Everything capcomd reads from its own package at run time is bundled: `src/utils/assets.ts` (the in-VM supervisor
+  and CLI, the engine launcher, the orchestration skill) and the version (`src/utils/self.ts`). Don't add
+  `readFileSync(new URL(…, import.meta.url))` for a package file; import it there.
+- capcomd starting itself (the engine, drivers, `run --detach`, the service) goes through `selfArgv()`: the binary
+  runs itself, a checkout runs `bun src/cli/index.ts`.
+- rivetkit loads its native runtime and engine resolver by computed names; the build's plugin spells them out so
+  they're bundled, and fails the build if it can't find them. The engine is extracted to
+  `~/.capcomd/bin/<version>/` on first `serve` (`onDisk`), since the OS can't run a file inside the binary.
+- The binary never reads a `.env` or `bunfig.toml` from the directory it's run in.
+
+CI builds the Linux binary and drives it on every pull request (the `binary` job).
 
 ## Naming (renamed from relay)
 

@@ -1,23 +1,36 @@
 #!/usr/bin/env bash
-# Install a packed capcomd (`bun pm pack`) the way a user would, into a throwaway Bun prefix with a fresh HOME, and
-# drive the installed CLI: version, the setup demo, a run on its own engine with fake agents, setup check, the
-# service definition, and where state lands (only ~/.capcomd, never inside the installed package).
+# Install capcomd the way a user would, with a fresh HOME, and drive the installed CLI: version, the setup demo, a run
+# on its own engine with fake agents, setup check, the service definition, and where state lands (only ~/.capcomd,
+# never inside what was installed). Either the npm package (`bun pm pack`), installed into a throwaway Bun prefix, or
+# the single executable (scripts/build-binary.ts), installed by install.sh from its directory and run without Bun.
 #   scripts/release-smoke.sh capcomd-0.3.0.tgz [expected-version]
+#   scripts/release-smoke.sh dist/capcomd-linux-x64 [expected-version]
 # Ends with `SMOKE PASS` (exit 0) or `SMOKE FAIL: <reasons>` (exit 1). Needs no accounts.
 set -u
-TGZ=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); WANT=${2:-}
+SRC=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); WANT=${2:-}
+case "$SRC" in *.tgz) MODE=npm ;; *) MODE=binary ;; esac
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+BUN=$(command -v bun) # only for reading JSON here: the binary itself runs without Bun
 W=$(mktemp -d); export HOME=$W/home BUN_INSTALL=$W/bun; mkdir -p "$HOME"; cd "$W"
-export PATH=$BUN_INSTALL/bin:$PATH
+if [ $MODE = npm ]; then export PATH=$BUN_INSTALL/bin:$PATH; else export PATH=$HOME/.capcomd/bin:/usr/bin:/bin:/usr/sbin:/sbin; fi
 FAILS=(); fail() { FAILS+=("$1"); echo "  ✗ $1"; }; pass() { echo "  ✓ $1"; }
-jget() { bun -e "const t=await Bun.stdin.text(); let j; try { j=JSON.parse(t) } catch { process.exit(0) } const v=($1); console.log(typeof v==='object'?JSON.stringify(v):(v ?? ''))"; }
+jget() { "$BUN" -e "const t=await Bun.stdin.text(); let j; try { j=JSON.parse(t) } catch { process.exit(0) } const v=($1); console.log(typeof v==='object'?JSON.stringify(v):(v ?? ''))"; }
 ENGINE=""; cleanup() { [ -n "$ENGINE" ] && { pkill -P "$ENGINE" 2>/dev/null; kill "$ENGINE" 2>/dev/null; }; true; }
 # Anything still running from the throwaway install (an engine, a driver) goes too.
 reap_all() { cleanup; for _ in 1 2 3 4 5; do pgrep -f "$W/" >/dev/null || return 0; pkill -f "$W/"; sleep 1; done; pkill -9 -f "$W/"; true; }; trap reap_all EXIT
 
-echo "== install $(basename "$TGZ") (HOME and BUN_INSTALL under $W)"
-if bun add -g "$TGZ" > "$W/install.log" 2>&1; then pass "bun add -g"; else fail "install failed: $(tail -3 "$W/install.log" | tr '\n' ' ')"; fi
-C=$(command -v capcomd || true)
-case "$C" in "$BUN_INSTALL"/*) pass "capcomd on PATH from the fresh prefix" ;; *) fail "capcomd not installed in the fresh prefix (found: ${C:-nothing})" ;; esac
+echo "== install $(basename "$SRC") (HOME under $W)"
+if [ $MODE = npm ]; then
+  if "$BUN" add -g "$SRC" > "$W/install.log" 2>&1; then pass "bun add -g"; else fail "install failed: $(tail -3 "$W/install.log" | tr '\n' ' ')"; fi
+  C=$(command -v capcomd || true)
+  case "$C" in "$BUN_INSTALL"/*) pass "capcomd on PATH from the fresh prefix" ;; *) fail "capcomd not installed in the fresh prefix (found: ${C:-nothing})" ;; esac
+else
+  # install.sh picks this machine's build by name: give it the file under that name, next to its .sha256.
+  if CAPCOMD_INSTALL_FROM=$(dirname "$SRC") sh "$REPO_ROOT/install.sh" > "$W/install.log" 2>&1; then pass "install.sh"; else fail "install.sh failed: $(tail -3 "$W/install.log" | tr '\n' ' ')"; fi
+  C=$(command -v capcomd || true)
+  [ "$C" = "$HOME/.capcomd/bin/capcomd" ] && pass "capcomd in ~/.capcomd/bin" || fail "capcomd not installed in ~/.capcomd/bin (found: ${C:-nothing})"
+  command -v bun > /dev/null && fail "bun is on the PATH: the binary must run without it" || pass "no bun on the PATH"
+fi
 [ ${#FAILS[@]} -eq 0 ] || { echo "SMOKE FAIL: ${FAILS[*]}"; exit 1; }
 
 V=$(capcomd --version --json | jget 'j.version')
@@ -49,13 +62,22 @@ SV=$(capcomd service install --dry-run --json | jget 'j.dryRun && j.body.include
 [ -n "$SV" ] && pass "service install --dry-run: ${SV#$HOME/}" || fail "service install --dry-run gave no definition"
 capcomd service status --json | jget 'j.installed' | grep -q false && pass "service status: not installed" || fail "service status"
 
-echo "== the plugin ships with the package"
-PKG="$BUN_INSTALL/install/global/node_modules/capcomd"
-[ -f "$PKG/plugins/capcomd/.claude-plugin/plugin.json" ] && [ -f "$PKG/plugins/capcomd/skills/capcomd-orchestration/SKILL.md" ] && pass "plugins/capcomd (manifest and skills)" || fail "the package has no plugins/capcomd"
+if [ $MODE = npm ]; then
+  echo "== the plugin ships with the package"
+  PKG="$BUN_INSTALL/install/global/node_modules/capcomd"
+  [ -f "$PKG/plugins/capcomd/.claude-plugin/plugin.json" ] && [ -f "$PKG/plugins/capcomd/skills/capcomd-orchestration/SKILL.md" ] && pass "plugins/capcomd (manifest and skills)" || fail "the package has no plugins/capcomd"
+else
+  echo "== the binary runs itself and its engine"
+  SB=$(capcomd service install --dry-run --json | jget 'j.body')
+  echo "$SB" | grep -q "$HOME/.capcomd/bin/capcomd" && ! echo "$SB" | grep -q "index.ts" && pass "the service runs the binary" || fail "the service definition doesn't run the binary"
+  [ -x "$HOME/.capcomd/bin/$(capcomd --version --json | jget 'j.version')/rivet-engine" ] && pass "engine extracted to ~/.capcomd/bin/<version>" || fail "no extracted engine in ~/.capcomd/bin"
+  UP=$(capcomd upgrade --to "$V" --dry-run --json | jget 'j.dryRun')
+  [ "$UP" = "true" ] && pass "upgrade --dry-run knows it's a binary install" || fail "upgrade --dry-run: '$UP'"
+fi
 
 echo "== where state went"
 [ -d "$HOME/.capcomd/state" ] && pass "state in ~/.capcomd ($(cd "$HOME/.capcomd" && ls | tr '\n' ' '))" || fail "no ~/.capcomd/state"
-LEAK=$(find "$BUN_INSTALL" \( -name .relay -o -name .traces \) -path '*capcomd*' 2>/dev/null | head -3)
+LEAK=$(find "$BUN_INSTALL" "$HOME/.capcomd/bin" \( -name .relay -o -name .traces \) 2>/dev/null | head -3)
 [ -z "$LEAK" ] && pass "nothing written inside the installed package" || fail "state inside the package: $LEAK"
 
 if [ ${#FAILS[@]} -eq 0 ]; then echo "SMOKE PASS"; reap_all; rm -rf "$W"; else echo "SMOKE FAIL: ${FAILS[*]} (logs in $W)"; exit 1; fi

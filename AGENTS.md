@@ -40,8 +40,9 @@ Procedure:
    ask the maintainer to run it, or to waive it, and say which happened in the PR.
 5. After the release commit is on `main` and its CI passed, tag that exact commit and push only the tag:
    `git tag -a vX.Y.Z -m "capcomd X.Y.Z" <sha> && git push origin vX.Y.Z`.
-6. Watch the Release workflow (`gh run watch`) and report the release URL and the npm version
-   (`npm view capcomd@X.Y.Z version`), or the failing job and its log.
+6. Watch the Release workflow (`gh run watch`) and report the release URL, the npm version
+   (`npm view capcomd@X.Y.Z version`) and whether the Homebrew tap was updated (the `homebrew` job), or the failing
+   job and its log.
 
 Never:
 

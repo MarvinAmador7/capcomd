@@ -12,8 +12,8 @@ can run. Always start with what's already there: call `capcomd_setup` and fix on
 
 Call `capcomd_setup`. Two shapes:
 
-- **`problem` + `install`** (only the setup tool exists): capcomd or Bun isn't installed, or is older than this
-  plugin. Go to step 2.
+- **`problem` + `install`** (only the setup tool exists): capcomd isn't installed, or is older than this plugin.
+  Go to step 2.
 - **`ready`, `steps[]`, `gates`, `driver`**: capcomd is installed. Each step that isn't `ok` has a `hint`; go to the
   matching step below. When `ready` is true, you're done: use capcomd-orchestration.
 
@@ -22,11 +22,14 @@ Without the MCP tools (no plugin), run `capcomd setup check --json` in a shell i
 ## 2. Install (you can run these, with the user's go-ahead)
 
 ```bash
-curl -fsSL https://bun.sh/install | bash   # only if Bun is missing
-bun add -g capcomd                          # or the version capcomd_setup names: capcomd@X.Y.Z
+curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.sh | sh
+# a specific version (the one capcomd_setup names): … | CAPCOMD_VERSION=X.Y.Z sh
+# an older capcomd already installed: capcomd upgrade
 ```
 
-A first install downloads a few hundred MB of dependencies and can take several minutes. After installing, the
+That installs one self-contained executable (about 220 MB: the CLI and its engine; no Bun or Node needed) in
+`~/.capcomd/bin`; if that isn't on the user's PATH, the installer prints the line to add. Homebrew users can
+`brew install MarvinAmador7/tap/capcomd` instead. After installing, the
 plugin's tools load in a new session: ask the user to restart it (or reload plugins), then call `capcomd_setup`.
 
 ## 3. The sandbox provider (boxd today)

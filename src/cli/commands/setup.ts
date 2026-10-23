@@ -12,14 +12,15 @@ import { spawnSync } from "child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { homedir, hostname, tmpdir } from "os";
 import { dirname, join } from "path";
-import { capcomdHome, PACKAGE_ROOT } from "../../utils/home";
+import { capcomdHome } from "../../utils/home";
+import { selfArgv } from "../../utils/self";
+import { ORCHESTRATION_SKILL } from "../../utils/assets";
 import { projectConfigPath, readConfig, userConfigPath, writeConfig } from "../../config/store";
 import { keychainGet, keychainKind, keychainSet } from "../../config/keychain";
 import { prompter, type Prompter } from "../prompt";
 
 export interface Step { step: string; ok: boolean; detail: string; hint?: string }
 type Values = Record<string, unknown>;
-const CLI = join(PACKAGE_ROOT, "src", "cli", "index.ts");
 
 /** Run this CLI as a subprocess (inheriting the terminal for interactive steps like a login). */
 /** process.env with `extra` on top; an `undefined` value removes the variable. */
@@ -29,7 +30,8 @@ function envWith(extra: Record<string, string | undefined> = {}): Record<string,
   return e as Record<string, string>;
 }
 function self(args: string[], o: { env?: Record<string, string | undefined>; inherit?: boolean; cwd?: string } = {}) {
-  const r = spawnSync(process.execPath, [CLI, ...args], { env: envWith(o.env), cwd: o.cwd, stdio: o.inherit ? "inherit" : "pipe", encoding: "utf8" });
+  const [cmd, ...argv] = selfArgv(...args);
+  const r = spawnSync(cmd!, argv, { env: envWith(o.env), cwd: o.cwd, stdio: o.inherit ? "inherit" : "pipe", encoding: "utf8" });
   return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 const json = (s: string): any => { try { return JSON.parse(s.trim().split("\n").pop() ?? ""); } catch { return null; } };
@@ -67,7 +69,7 @@ export async function demoStep(log: (s: string) => void): Promise<Step> {
   const port = 20000 + Math.floor(Math.random() * 20000);
   const env = { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_SANDBOX: "fake", CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_SKIP_PREFLIGHT: "1",
     CAPCOMD_ENDPOINT: `http://127.0.0.1:${port}`, CAPCOMD_ENGINE_DATA: join(home, "engine"), CAPCOMD_REPO: undefined, CAPCOMD_AGENTS_FILE: join(home, "agents.json") };
-  const engine = Bun.spawn([process.execPath, CLI, "serve", "--port", String(port)], { env: envWith(env), stdout: "ignore", stderr: "ignore" });
+  const engine = Bun.spawn(selfArgv("serve", "--port", String(port)), { env: envWith(env), stdout: "ignore", stderr: "ignore" });
   try {
     log("  starting a private engine with fake agents…");
     let run = "";
@@ -322,11 +324,9 @@ export async function agentIntegrationStep(p: Prompter, v: Values): Promise<Step
   }
   if (steps.length) return steps;
   // No plugin host: the skill alone (agents with a shell use the CLI), and how to register the MCP server.
-  const src = join(PACKAGE_ROOT, "plugins", "capcomd", "skills", "capcomd-orchestration");
-  if (!existsSync(join(src, "SKILL.md"))) return [{ step: "agent skill", ok: false, detail: `skill not found in ${src}` }];
   if (!(await p.confirm("No Claude Code or Codex CLI found. Install the capcomd skill for Claude Code anyway?", true))) return [{ step: "agent skill", ok: true, detail: "skipped" }];
-  mkdirSync(dirname(legacySkill()), { recursive: true });
-  cpSync(src, legacySkill(), { recursive: true });
+  mkdirSync(legacySkill(), { recursive: true });
+  writeFileSync(join(legacySkill(), "SKILL.md"), ORCHESTRATION_SKILL);
   return [{ step: "agent skill", ok: true, detail: `skill installed in ${legacySkill()}; for the MCP tools: \`claude mcp add capcomd -- capcomd mcp\`. ${tryIt}` }];
 }
 

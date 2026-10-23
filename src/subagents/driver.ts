@@ -3,6 +3,7 @@
 //  - Scripted fake agents (CAPCOMD_SPAWN_EXEC=script, tests/scenarios): the contract's `script` runs
 //    on this host with a scrubbed env (no host secrets, no engine endpoint) and the same CLI on a
 //    LocalSpool, so scenarios exercise exactly the in-VM code path minus boxd.
+import { VM_CLI_SOURCE } from "../utils/assets";
 import { spawn as spawnProc } from "child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -17,7 +18,7 @@ import { env } from "../utils/env";
 import type { SandboxProvider, VmId } from "../providers/sandbox";
 import { VM_RPC_DIR } from "./skill";
 
-export const VM_CLI_PATH = new URL("./vm-cli.mjs", import.meta.url).pathname;
+
 const NODE_BIN = Bun.which("node") ?? "node";
 
 function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number) {
@@ -79,7 +80,8 @@ export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitC
   const dir = join(root, "rpc"), bin = join(root, "bin"), home = join(root, "home");
   const pidFile = join(root, "pid"), exitFile = join(root, "exit"), out = join(root, "stdout"), err = join(root, "stderr");
   mkdirSync(bin, { recursive: true }); mkdirSync(home, { recursive: true });
-  writeFileSync(join(bin, "capcomd"), `#!/bin/sh\nexec node ${JSON.stringify(VM_CLI_PATH)} "$@"\n`);
+  writeFileSync(join(bin, "vm-cli.mjs"), VM_CLI_SOURCE);
+  writeFileSync(join(bin, "capcomd"), `#!/bin/sh\nexec node ${JSON.stringify(join(bin, "vm-cli.mjs"))} "$@"\n`);
   chmodSync(join(bin, "capcomd"), 0o755);
   // The PATH below is minimal; node may live elsewhere on the host (Homebrew, nvm): link it in.
   if (NODE_BIN !== "node" && !existsSync(join(bin, "node"))) symlinkSync(NODE_BIN, join(bin, "node"));

@@ -1,6 +1,7 @@
 // Generic headless-agent runner: clone → detect/install CLI → resolve credential (boxd host-bound
 // secret placeholder preferred, env injection fallback) → run in background → stream + guard →
 // commit with capcomd trailers → push. Agent specifics live in adapters.ts. ADR-014, ADR-015.
+import { SUPERVISOR_SOURCE } from "../utils/assets";
 import type { SandboxProvider, VmId, ExecResult } from "../providers/sandbox";
 import type { AgentConfig } from "./config";
 import type { AgentAdapter, AgentEvent, AgentRunState } from "./types";
@@ -113,7 +114,6 @@ export const stoppedAt = (limit: string) => STUCK_STOPS[limit] ?? `stopped at it
 const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turns: "max_turns", error_max_budget_usd: "max_budget_usd" };
 
 /** The supervisor program, uploaded into each VM next to the agent. */
-const SUPERVISOR_SOURCE = readFileSync(new URL("./supervisor.mjs", import.meta.url).pathname, "utf8");
 
 export const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 export const SECRET_PLACEHOLDER_PREFIX = "bxds_";

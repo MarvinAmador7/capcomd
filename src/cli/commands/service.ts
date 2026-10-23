@@ -6,20 +6,23 @@ import { spawnSync } from "child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
-import { PACKAGE_ROOT, capcomdHome } from "../../utils/home";
+import { capcomdHome } from "../../utils/home";
+import { selfArgv } from "../../utils/self";
 import { RelayError } from "../../core/errors";
 
 export const LABEL = "dev.capcomd.engine";
 export const UNIT = "capcomd-engine.service";
 
-export interface ServiceSpec { platform: NodeJS.Platform; bun: string; cli: string; port: number; home: string; logFile: string; path: string }
+/** `argv`: the command that runs the engine (the single executable, or bun with the CLI's entry). */
+export interface ServiceSpec { platform: NodeJS.Platform; argv: string[]; port: number; home: string; logFile: string; path: string }
 
 export function serviceSpec(o: { port?: number; platform?: NodeJS.Platform } = {}): ServiceSpec {
   const home = homedir();
   const bunDir = dirname(process.execPath);
-  // launchd/systemd start with a bare PATH: keep the dirs where bun, git, gh and node live.
+  // launchd/systemd start with a bare PATH: keep the dirs where capcomd (or bun), git, gh and node live.
   const path = [...new Set([bunDir, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(":");
-  return { platform: o.platform ?? process.platform, bun: process.execPath, cli: join(PACKAGE_ROOT, "src", "cli", "index.ts"), port: o.port ?? 6420, home, logFile: join(capcomdHome(), "engine.log"), path };
+  const port = o.port ?? 6420;
+  return { platform: o.platform ?? process.platform, argv: selfArgv("serve", "--port", String(port)), port, home, logFile: join(capcomdHome(), "engine.log"), path };
 }
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -35,7 +38,7 @@ export function serviceFile(s: ServiceSpec): { path: string; body: string } {
 <dict>
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
-  <array><string>${xml(s.bun)}</string><string>${xml(s.cli)}</string><string>serve</string><string>--port</string><string>${s.port}</string></array>
+  <array>${s.argv.map((a) => `<string>${xml(a)}</string>`).join("")}</array>
   <key>WorkingDirectory</key><string>${xml(s.home)}</string>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>${xml(s.path)}</string><key>HOME</key><string>${xml(s.home)}</string></dict>
@@ -56,7 +59,7 @@ Description=capcomd engine (agent orchestration)
 After=network-online.target
 
 [Service]
-ExecStart=${s.bun} ${s.cli} serve --port ${s.port}
+ExecStart=${s.argv.join(" ")}
 WorkingDirectory=${s.home}
 Environment=PATH=${s.path}
 Restart=on-failure
