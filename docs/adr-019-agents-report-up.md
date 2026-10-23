@@ -1,6 +1,7 @@
 # ADR-019: Agents report up; limits are optional
 
-Status: proposed (2026-10-22), not built. Changes how ADR-016 enforces budgets and how ADR-017 detects stuck agents.
+Status: proposed (2026-10-22); steps 1 to 5 built, with differences noted under each. Changes how ADR-016 enforces
+budgets and how ADR-017 detects stuck agents.
 Builds on PR #3 (heartbeats from agent events) and PR #4 (an agent stopped at a limit keeps its work).
 
 ## Context
@@ -97,8 +98,8 @@ The heuristics will have false positives, which is why the first window only not
   `notices` when one is raised while they wait (not one already showing when the wait began). On the host CLI it
   is opt-in, so scripts that wait for the end keep working. Internal waits (`verify`'s reviewer, handoffs, the
   `run` recipe) don't return on notices.
-- **Not built:** a parent's message or grant resetting the window (the runner doesn't see them), and profile
-  presets for the windows.
+- **Not built:** a parent's message resetting the window (the runner doesn't see messages; a grant does reset it,
+  step 5), and profile presets for the windows.
 
 ### 3. Checkpoints instead of caps
 
@@ -154,6 +155,25 @@ Step 3 (built: the supervisor, its outbox and checkpoints):
 - **grant:** `capcomd grant <run> <agt> --budget …` (and an MCP tool) raises a running child's budget, within what
   the parent has left.
 
+Step 5 (built: `grant`):
+
+- **The verbs.** `capcomd grant <run> <agt> --budget usd=…,turns=…,wallSeconds=…`, `capcomd_grant`, and in the VM
+  `capcomd grant <agt> --budget …` (an op in the token of agents that can spawn, for their direct children only).
+  The amount is added (`AGENT_GRANTED`), carved from what the agent's parent has left, or the run's for a
+  top-level agent. A `key` makes a retry count once.
+- **What it may raise.** Only a unit the agent already has a budget in: without one its spend already counts
+  against its parent's, so the grant goes there. Never above the profile's own cap (`maxTurns`, `timeoutMs`,
+  `maxBudgetUsd`), which the CLI is launched with. Without an agent, the operator raises the run's budget
+  (`RUN_GRANTED`); a driver only within `driver.maxRunBudget`. Pending, running and paused agents can be granted;
+  finished ones can't.
+- **Taking effect while it runs.** A spawn's budget is no longer turned into launch flags (`--max-budget-usd`,
+  `--max-turns`, the `timeout` wrapper): the engine enforces it from live spend (step 1b), so a raise applies at the
+  next spend report (every 5 s). Claude's turns are now counted live (one per model response, replaced by its
+  `num_turns` at the end), so a turns budget is enforced for both providers. The cost: a budget stop lands up to
+  one report late, rather than exactly at the CLI's own count.
+- **The stuck window.** The engine's answer to each spend report carries when the agent was last granted; on a
+  new grant the runner restarts its stuck watch (§2), clearing a notice.
+
 ### 5. Tree size is bounded by count, not by budget
 
 With budgets optional, `maxTotalDescendants` (children, grandchildren and so on over an agent's lifetime) is the guard
@@ -191,7 +211,9 @@ Step 2 (built), until the supervisor exists:
 
 ## What changes elsewhere
 
-- **ADR-016 (multi-unit budgets):** enforcement applies only to limits that are set; there are no default caps.
+- **ADR-016 (multi-unit budgets):** enforcement applies only to limits that are set; there are no default caps. The
+  carved budget no longer narrows the profile's launch limits (its "Enforcement" bullet): the engine enforces it
+  from live spend, so a grant can raise it (step 5).
 - **ADR-017 (heartbeats):** heartbeats come from the supervisor for every agent; the single `stuck` flag becomes
   the dead/idle/spinning/failing notices, with the default actions above.
 - **PR #3:** an interim step; its engine-side heartbeat is replaced by supervisor reports.

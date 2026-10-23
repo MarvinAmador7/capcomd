@@ -8,7 +8,7 @@ import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
-import { available, checkSpawn, type Grant, overBudget, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
+import { available, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
@@ -80,6 +80,8 @@ function rowToAgent(r: any) {
     checkpoint: r.checkpoint ? (JSON.parse(r.checkpoint as string) as { ref: string; sha: string; at: number; reason: string; files: number }) : null,
     /** ADR-019 §2: the agent looks stuck (idle, spinning, failing) while it runs; cleared when it doesn't. */
     notice: r.notice ? (JSON.parse(r.notice as string) as AgentNotice) : null,
+    /** ADR-019 §4: when it was last given more budget (0: never). */
+    grantedAt: Number(r.granted_at ?? 0),
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -185,6 +187,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "paused_until", "INTEGER");
       await addColumn(database, "agents_v2", "checkpoint", "TEXT");
       await addColumn(database, "agents_v2", "notice", "TEXT");
+      await addColumn(database, "agents_v2", "granted_at", "INTEGER");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -410,7 +413,54 @@ export const scopeActor = actor({
       const runBudget = meta.length ? (JSON.parse(meta[0]!.v as string).budget as Budget) : {};
       const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
       const over = overBudget(params.agentId, all, runBudget);
-      return over ? { stop: UNIT_LIMIT[over.unit], over } : { stop: null };
+      // The runner resets its stuck window when it sees a new grant (ADR-019 §2).
+      const grantedAt = Number(all.find((a) => a.agentId === params.agentId)?.grantedAt ?? 0);
+      return over ? { stop: UNIT_LIMIT[over.unit], over, grantedAt } : { stop: null, grantedAt };
+    },
+
+    /**
+     * ADR-019 §4: more budget for a live agent, carved from what its parent (or the run) has left; without an agent,
+     * a higher run budget (the operator's call). Additive, so a retry needs the same `key` to count once.
+     */
+    async grant(c, params: { agentId?: string; add: Budget; by: string; key?: string; paramsHash: string }) {
+      let out: Record<string, unknown> = {};
+      await c.db.transaction(async (tx: RawAccess) => {
+        const again = await replay(tx, params.key, params.paramsHash);
+        if (again) { out = again; return; }
+        const meta = await tx.execute("SELECT v FROM scope_meta WHERE k = 'init'");
+        if (!meta.length) fail("not_found", "run not found (create it with capcomd run new)");
+        const init = JSON.parse(meta[0]!.v as string);
+        const runBudget = init.budget as Budget;
+        const all: ScopeAgent[] = (await tx.execute("SELECT * FROM agents_v2")).map(rowToAgent);
+        const tree = treeSpend(all);
+        const withTree = (xs: ScopeAgent[]) => xs.map((x) => ({ ...x, tree: tree.get(x.agentId) }));
+        if (!params.agentId) {
+          const g = growRun(runBudget, params.add);
+          if (!g.ok) fail("grant", g.error);
+          if (!g.ok) return;
+          await tx.execute("UPDATE scope_meta SET v = ? WHERE k = 'init'", JSON.stringify({ ...init, budget: g.budget }));
+          await addEvent(tx, "RUN_GRANTED", null, { add: params.add, budget: g.budget, by: params.by }, `grant-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+          out = { agentId: null, add: params.add, budget: g.budget, left: available(g.budget, {}, withTree(all.filter((x) => !x.parent))) };
+        } else {
+          const a = all.find((x) => x.agentId === params.agentId);
+          if (!a) fail("not_found", `agent ${params.agentId} not found`);
+          if (!a) return;
+          if (TERMINAL_AGENT.has(a.status)) fail("finished", `agent ${a.agentId} is ${a.status}`);
+          const parent = a.parent ? all.find((x) => x.agentId === a.parent) ?? null : null;
+          const siblings = withTree(all.filter((x) => x.parent === a.parent));
+          const avail = parent ? available(parent.budget, parent.spent, siblings) : available(runBudget, {}, siblings);
+          const g = checkGrant({ agentId: a.agentId, budget: a.budget, used: tree.get(a.agentId) ?? {}, add: params.add, avail, from: parent?.agentId ?? "run", caps: profileDefaults(a.spec as AgentSpec | null).caps });
+          if (!g.ok) fail("grant", g.error);
+          if (!g.ok) return;
+          const now = Date.now();
+          await tx.execute("UPDATE agents_v2 SET budget = ?, granted_at = ?, updated_at = ? WHERE agent_id = ?", JSON.stringify(g.budget), now, now, a.agentId);
+          await addEvent(tx, "AGENT_GRANTED", a.agentId, { add: params.add, budget: g.budget, by: params.by }, `grant-${a.agentId}-${now}-${Math.random().toString(36).slice(2, 8)}`);
+          const after = siblings.map((x) => (x.agentId === a.agentId ? { ...x, budget: g.budget } : x));
+          out = { agentId: a.agentId, add: params.add, budget: g.budget, from: parent?.agentId ?? "run", left: parent ? available(parent.budget, parent.spent, after) : available(runBudget, {}, after) };
+        }
+        await remember(tx, params.key, "grant", params.paramsHash, out);
+      }, { name: "scopeGrant" });
+      return out;
     },
 
     /**

@@ -125,6 +125,22 @@ export async function resume(a: { runId: string; agent?: string }) {
   return O.resumeAgents(a.runId, a.agent);
 }
 
+export async function grant(a: { runId: string; agent?: string; budget: string; key?: string }) {
+  let add: Budget;
+  try { add = parseBudget(a.budget); } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Units: usd, turns, wallSeconds, e.g. \"usd=1,turns=20\"."); }
+  if (!a.agent) {
+    // A driver raises the run's budget only within the project's cap per run, like run_new.
+    const p = await policy();
+    if (p.maxRunBudget) {
+      const cap = parseBudget(p.maxRunBudget) as Record<string, number>;
+      const cur = ((await O.budgetShow(a.runId)).budget ?? {}) as Record<string, number>;
+      const over = Object.entries(add).filter(([u, n]) => cap[u] !== undefined && (cur[u] ?? 0) + n > cap[u]!);
+      if (over.length) deny(`raising the run's budget by ${a.budget} goes over this project's cap per run (${p.maxRunBudget})`, "Ask the user to raise driver.maxRunBudget in .capcomd/config.json, or to run `capcomd grant <runId> --budget …` themselves.");
+    }
+  }
+  return O.grantBudget(a.runId, { ...(a.agent ? { agentId: a.agent } : {}), add, by: DRIVER, ...(a.key ? { key: `${DRIVER}:${a.key}` } : {}) });
+}
+
 // ── gates ─────────────────────────────────────────────────────────────────────────────────────────
 
 /** Race a long operation against the wait; on timeout it keeps running here, and the same call picks it up. */

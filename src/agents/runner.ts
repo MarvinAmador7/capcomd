@@ -65,9 +65,10 @@ export interface AgentRunOptions {
   onEvent?: (e: AgentEvent) => void;
   /**
    * ADR-019: spend so far (usd is 0 on a subscription), reported every few seconds while the agent runs. The engine
-   * records it and answers with a limit to stop at (e.g. "max_budget_usd") when a budget is over, else null.
+   * records it and answers with a limit to stop at (e.g. "max_budget_usd") when a budget is over, else null, and
+   * when the agent was last given more budget (a new grant resets the stuck window).
    */
-  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }) => Promise<string | null>;
+  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }) => Promise<{ stop: string | null; grantedAt?: number }>;
   /**
    * ADR-019 §1: reports from the in-VM supervisor: heartbeats while it is alive, and checkpoints (already pushed to
    * `ref`). A VM without node has no supervisor; heartbeats then come from the agent CLI's own events.
@@ -75,6 +76,8 @@ export interface AgentRunOptions {
   onReport?: (r: SupervisorReport) => void;
   /** Supervisor heartbeat interval (default 30s). */
   heartbeatMs?: number;
+  /** How often spend is reported to onSpend (default 5s). */
+  spendEveryMs?: number;
   /**
    * ADR-019 §2: the agent looks stuck (idle, spinning, failing), or no longer does (null). The first window is only
    * this notice; after the second the runner stops the agent itself (limit = the kind, work kept).
@@ -371,7 +374,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats }, now());
-    let noticed: string | null = null;
+    let noticed: string | null = null, grantSeen = 0;
     const startedAt = now();
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
     // caller stops the agent instead of retrying it, so hours of work aren't redone or lost at a cap.
@@ -439,10 +442,17 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         break;
       }
       // A budget is enforced by the engine from live spend (its own, an ancestor's or the run's), for every provider.
-      if (opts.onSpend && now() - spendAt >= SPEND_REPORT_MS) {
+      if (opts.onSpend && now() - spendAt >= (opts.spendEveryMs ?? SPEND_REPORT_MS)) {
         spendAt = now();
         const usd = credentialMode === "subscription" ? 0 : Math.round(state.costUsd * 1e6) / 1e6;
-        const stop = await opts.onSpend({ usd, turns: state.turns, wallSeconds: Math.round((now() - startedAt) / 1000) }).catch(() => null);
+        const rep = await opts.onSpend({ usd, turns: state.turns, wallSeconds: Math.round((now() - startedAt) / 1000) }).catch(() => null);
+        // A parent that gives more budget has looked at the agent: its stuck window starts again (ADR-019 §2).
+        if (rep?.grantedAt && rep.grantedAt > grantSeen) {
+          grantSeen = rep.grantedAt;
+          watch.reset(now());
+          addSpanEvent(span, "agent.granted");
+        }
+        const stop = rep?.stop;
         if (stop) {
           await kill(); await drain(true);
           addSpanEvent(span, "agent.budget", { reason: stop, "agent.cost_usd": usd });

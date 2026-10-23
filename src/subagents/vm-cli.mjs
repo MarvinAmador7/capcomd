@@ -115,7 +115,7 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
   cancel <agt> [--reason R]   send <agt|parent> <text> [--key K]   inbox [--after N]
   handoff --task T [--profile P] [--context JSON]
   events [--follow] [--after N | --since-seq N] [--until TYPE] [--timeout-ms N]
-  budget [show]   heartbeat [note]
+  budget [show]   grant <agt> --budget usd=1,turns=20 [--key K]  (more for a child, from what you have left)   heartbeat [note]
   result --summary S [--artifact name=ref]… [--data JSON]
   task add --title T [--data JSON] [--after tsk,…] [--key K] | list [--status S] | show <tsk>
        | claim [tsk] [--lease-ms N] | renew|release|done <tsk> --epoch E [--result JSON]
@@ -147,6 +147,7 @@ export function toCall(argv) {
     case "handoff": if (!fl.task) usage("handoff needs --task"); return { op: "handoff", args: { task: fl.task, profile: fl.profile, context: json(fl.context, "--context") } };
     case "events": return { op: "events", args: { follow: fl.follow === "true", after: fl.after ?? fl["since-seq"], until: fl.until, timeoutMs }, events: true };
     case "budget": return { op: "budget", args: {} };
+    case "grant": if (!pos[0] || !fl.budget) usage("grant <agt> --budget usd=…,turns=…,wallSeconds=…"); return { op: "grant", args: { agent: pos[0], budget: fl.budget, key } };
     case "heartbeat": return { op: "heartbeat", args: { note: pos.join(" ") || undefined } };
     case "result": return { op: "result", args: { summary: fl.summary ?? pos.join(" "), artifacts: arr(fl.artifact).map((a) => { const [name, ref] = String(a).split(/=(.*)/s); return { name, ref: ref ?? name }; }), data: json(fl.data, "--data") } };
     case "task": {
@@ -195,6 +196,7 @@ export const TOOLS = [
   ["handoff", "Hand the rest of your task to a successor child; then stop.", S({ task: str, profile: str, context: { type: "object" } }, ["task"])],
   ["events", "Events in your visible tree after a cursor.", S({ after: num, until: str })],
   ["budget", "Your budget, spend, what is left to give children, and subtree rollup.", S({})],
+  ["grant", "Give one of your children more budget while it runs, from what you have left (only units it has a budget in); it also restarts its stuck window.", S({ agent: str, budget: str, key: str }, ["agent", "budget"])],
   ["task", "Shared task board: action add|list|show|claim|renew|release|done.", S({ action: str, title: str, task: str, epoch: num, leaseMs: num, after: ids, data: {}, result: {}, status: str, key: str }, ["action"])],
   ["kv", "Shared blackboard: action get|put|cas|del|list (cas needs expect=version).", S({ action: str, k: str, value: {}, expect: num, prefix: str, key: str }, ["action"])],
   ["verify", "Run the run's checks on a child's branch (never self-reported); a child pinned with spawn check uses that check.", S({ ref: str, check: str, acceptance: {}, key: str }, ["ref"])],

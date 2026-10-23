@@ -53,6 +53,7 @@ Usage:
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd resume <runId> [agt]                  run paused agents again now (paused by a provider usage limit)
+  capcomd grant <runId> [agt] --budget usd=…,turns=…,wallSeconds=… [--key K]   give a live agent more budget (from its parent's), or raise the run's
   capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--review-profile P] [--target T] [--key K]  → vfy-…
                                        (checks, then the reviewer agent: the run's --reviewer or --review-profile; both must pass)
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
@@ -594,6 +595,19 @@ async function main(argv: string[]): Promise<number> {
         const r = await cancelRun(runId);
         if (json) out(r);
         else console.log(r.changed ? `✓ Run ${runId} cancelled` : `Run ${runId} is ${r.state}; nothing to cancel`);
+        return EXIT.ok;
+      }
+
+      case "grant": {
+        // ADR-019 §4: more budget for a live agent (from its parent's, or the run's), or with no agent, the run's.
+        const runId = positionals[1] ?? usage("capcomd grant <runId> [agt] --budget usd=…,turns=…,wallSeconds=… [--key K]");
+        let add: Record<string, number> = {};
+        try { add = (await import("../primitives/policy")).parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message}`); }
+        if (!Object.keys(add).length) usage("capcomd grant <runId> [agt] --budget usd=…,turns=…,wallSeconds=…");
+        const r: any = await (await import("../primitives/ops")).grantBudget(runId, { ...(positionals[2] ? { agentId: positionals[2] } : {}), add, by: "operator", ...(values.key ? { key: String(values.key) } : {}) });
+        const b = (x: Record<string, number> = {}) => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(",") || "-";
+        if (json) out(r);
+        else console.log(`✓ ${r.agentId ?? runId} budget ${b(r.budget)}${r.replayed ? " (already granted)" : ""}; ${r.agentId ? r.from : "the run"} has ${b(r.left)} left${r.agentId ? "" : " to give"}`);
         return EXIT.ok;
       }
 

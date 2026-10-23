@@ -196,15 +196,31 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     const reports: Array<{ usd: number; turns: number; wallSeconds: number }> = [];
     const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, {
       apiKey: KEY,
-      onSpend: async (spent) => { reports.push(spent); return spent.usd > 1 ? "max_budget_usd" : null; },
+      onSpend: async (spent) => { reports.push(spent); return { stop: spent.usd > 1 ? "max_budget_usd" : null }; },
     });
     expect(reports.length).toBeGreaterThan(0);
     expect(reports.at(-1)!.usd).toBeGreaterThan(1); // 100k output tokens per message at $20/Mtok: $2 each
+    expect(reports.at(-1)!.turns).toBeGreaterThan(0); // one per message, before claude's own count at the end
     expect(res.limit).toBe("max_budget_usd");
     const msg = (await new Git(s.r.bare).run(["log", "-1", "--format=%B", s.task.branch])).stdout;
     expect(msg).toContain("Capcomd-Stop: max_budget_usd");
     expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
     expect(getFinishedSpans().find((x) => x.name === "agent.claude_code")!.events.map((e) => e.name)).toContain("agent.budget");
+  }, 60_000);
+
+  test("a grant (ADR-019 §4) restarts the stuck window: the notice clears, and the stop comes a full window later", async () => {
+    const s = await setup("[spin:40] go round", { CAPCOMD_AGENT_STUCK_REPEATS: "4" });
+    const notices: Array<{ kind: string; detail: string } | null> = [];
+    let grantedAt = 0;
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, {
+      apiKey: KEY, spendEveryMs: 100,
+      // The parent grants once, when it first hears the agent is spinning.
+      onNotice: (n) => { notices.push(n); if (n && !grantedAt) grantedAt = Date.now(); },
+      onSpend: async () => ({ stop: null, grantedAt }),
+    });
+    expect(res.limit).toBe("spinning");
+    expect(notices.map((n) => n?.kind ?? null)).toEqual(["spinning", null, "spinning"]);
+    expect(getFinishedSpans().find((x) => x.name === "agent.claude_code")!.events.map((e) => e.name)).toContain("agent.granted");
   }, 60_000);
 
   test("usage limit (quota): recognized from claude's events, the reset taken from rate_limit_info, the work kept", async () => {

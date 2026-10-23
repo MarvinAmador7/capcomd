@@ -128,6 +128,25 @@ test("an agent repeating the same tool call is stopped as spinning after its sec
   expect(await repo.show(agent.result.branch, "src/sum.ts")).toContain("a + b");
 }, 120_000);
 
+test("grant (ADR-019 §4): the operator gives an agent more from the run, and the engine stops it at the new budget", async () => {
+  const run = (await cj(["run", "new", "--budget", "usd=50"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[spend] costly work", "--key", "grant", "--budget", "usd=3", "--no-start"])).j?.agentId;
+  const g = await cj(["grant", run, id, "--budget", "usd=4", "--key", "g1"]);
+  expect(g.code).toBe(0);
+  expect(g.j).toMatchObject({ agentId: id, budget: { usd: 7 }, from: "run", left: { usd: 43 } });
+  expect((await cj(["grant", run, id, "--budget", "usd=4", "--key", "g1"])).j).toMatchObject({ budget: { usd: 7 }, replayed: true });
+  const over = await cj(["grant", run, id, "--budget", "usd=60"]);
+  expect(over.code).not.toBe(0);
+  expect(over.stdout + over.stderr).toContain("granting $60 needs $60, but run has $43 left");
+  expect((await cj(["grant", run, "--budget", "usd=10"])).j).toMatchObject({ agentId: null, budget: { usd: 60 }, left: { usd: 53 } });
+  const agent = (await cj(["await", run, id, "--timeout-ms", "90000"])).j?.agents?.[0];
+  expect(agent).toMatchObject({ status: "failed", budget: { usd: 7 }, result: { limit: "max_budget_usd" } });
+  expect(agent.spent.usd).toBeGreaterThan(7);
+  expect((await capcomd(["events", run, "--json"], env)).stdout).toContain("AGENT_GRANTED");
+  const late = await cj(["grant", run, id, "--budget", "usd=1"]);
+  expect(late.stdout + late.stderr).toContain(`agent ${id} is failed`);
+}, 120_000);
+
 // ADR-019 §6. These run last: a usage limit is remembered for the login (claude:apikey here) that every profile shares.
 const statusOf = async (run: string, id: string) => (await cj(["inspect", run, id])).j;
 const until = async (run: string, id: string, status: string) => {

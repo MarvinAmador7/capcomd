@@ -309,14 +309,40 @@ function carve(avail: Budget, share: number, requested: Budget | undefined, rest
   return { ok: true, budget, ...rest() };
 }
 
-/** Effective agent limits from a carved budget: the profile's own limits, narrowed. */
-export function budgetCaps(spec: { maxTurns?: number; timeoutMs?: number; maxBudgetUsd?: number } | null, b: Budget): Record<string, number> {
-  const out: Record<string, number> = {};
-  const min = (a: number | undefined, c: number | undefined) => (a === undefined ? c : c === undefined ? a : Math.min(a, c));
-  const t = min(spec?.maxTurns, b.turns); if (t !== undefined && t !== spec?.maxTurns) out.maxTurns = Math.max(1, Math.floor(t));
-  const w = min(spec?.timeoutMs, b.wallSeconds === undefined ? undefined : b.wallSeconds * 1000); if (w !== undefined && w !== spec?.timeoutMs) out.timeoutMs = Math.max(1000, Math.floor(w));
-  const d = min(spec?.maxBudgetUsd, b.usd); if (d !== undefined && d !== spec?.maxBudgetUsd) out.maxBudgetUsd = d;
-  return out;
+const CAP_FIELD: Record<Unit, string> = { usd: "maxBudgetUsd", turns: "maxTurns", wallSeconds: "timeoutMs" };
+
+/**
+ * ADR-019 §4: more budget for a live agent, from what its parent (or the run) has left. Per unit, what the agent holds
+ * grows from max(budget, used) to max(budget + add, used) (`used`: its subtree's spend), and that must fit in `avail`,
+ * the parent's available with the agent among its children. Only units the agent has a budget in (otherwise its spend
+ * already counts against the parent's), and never above its profile's own cap: the CLI was launched with that.
+ */
+export function checkGrant(x: { agentId: string; budget: Budget; used: Budget; add: Budget; avail: Budget; from: string; caps: Budget }): { ok: true; budget: Budget } | { ok: false; error: string } {
+  const budget: Budget = { ...x.budget };
+  for (const u of UNITS) {
+    const add = x.add[u];
+    if (add === undefined) continue;
+    const old = x.budget[u];
+    if (old === undefined) return { ok: false, error: `${x.agentId} has no ${u} budget of its own: its spend counts against ${x.from === "run" ? "the run's" : `${x.from}'s`}, so grant ${x.from === "run" ? "the run" : x.from} instead` };
+    const next = round(old + add);
+    if (x.caps[u] !== undefined && next > x.caps[u]!) return { ok: false, error: `${x.agentId}'s profile caps it at ${fmt(u, x.caps[u]!)} (${CAP_FIELD[u]}); a grant can't lift a profile's own cap` };
+    const used = x.used[u] ?? 0;
+    const more = round(Math.max(next, used) - Math.max(old, used));
+    if (x.avail[u] !== undefined && more > x.avail[u]!) return { ok: false, error: `granting ${fmt(u, add)} needs ${fmt(u, more)}, but ${x.from} has ${fmt(u, x.avail[u]!)} left` };
+    budget[u] = next;
+  }
+  return { ok: true, budget };
+}
+
+/** A higher run budget (operator only): each unit it names must already be limited. */
+export function growRun(run: Budget, add: Budget): { ok: true; budget: Budget } | { ok: false; error: string } {
+  const budget: Budget = { ...run };
+  for (const u of UNITS) {
+    if (add[u] === undefined) continue;
+    if (run[u] === undefined) return { ok: false, error: `the run has no ${u} limit to raise` };
+    budget[u] = round(run[u]! + add[u]!);
+  }
+  return { ok: true, budget };
 }
 
 /** Stable IDs: a caller key always maps to the same ID; without a key the ID is random. */

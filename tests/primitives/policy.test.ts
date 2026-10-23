@@ -62,7 +62,7 @@ test("stable ids and params hash", () => {
   expect(paramsHash({ a: 1, b: [1, { c: 2 }] })).toBe(paramsHash({ b: [1, { c: 2 }], a: 1, z: undefined }));
 });
 
-import { budgetCaps, parseBudget } from "../../src/primitives/policy";
+import { checkGrant, growRun, parseBudget } from "../../src/primitives/policy";
 test("multi-unit budgets: per-unit carve/refund, unlimited units, caps narrow the profile", () => {
   expect(parseBudget("5")).toEqual({ usd: 5 });
   expect(parseBudget("usd=2,turns=100,wallSeconds=600")).toEqual({ usd: 2, turns: 100, wallSeconds: 600 });
@@ -81,8 +81,22 @@ test("multi-unit budgets: per-unit carve/refund, unlimited units, caps narrow th
   // subscription parent: turns × share, floored
   const p = row("sup-a", sup, { budget: { turns: 41 }, spent: { turns: 0 } });
   expect(checkSpawn({ ...base, parent: p, ancestors: [p], descendantCounts: [0], childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { turns: 20 } });
-  expect(budgetCaps({ maxTurns: 20, timeoutMs: 600_000 }, { turns: 12, wallSeconds: 900, usd: 1 })).toEqual({ maxTurns: 12, maxBudgetUsd: 1 });
-  expect(budgetCaps({ maxTurns: 5 }, { turns: 12 })).toEqual({});
+});
+
+// ADR-019 §4: a grant gives a live agent more of a unit it has a budget in, from what its parent has left.
+test("grant: more budget from the parent's remainder, only units it has, never above the profile's cap", () => {
+  const g = (o: Partial<Parameters<typeof checkGrant>[0]>) => checkGrant({ agentId: "agt-c", budget: { usd: 1, turns: 10 }, used: {}, add: {}, avail: { usd: 2 }, from: "agt-p", caps: {}, ...o });
+  expect(g({ add: { usd: 1.5 } })).toEqual({ ok: true, budget: { usd: 2.5, turns: 10 } });
+  expect(g({ add: { usd: 3 } })).toMatchObject({ ok: false, error: "granting $3 needs $3, but agt-p has $2 left" });
+  // already over its budget: it holds what it spent, so only the part above that is new
+  expect(g({ used: { usd: 1.8 }, add: { usd: 2.5 } })).toMatchObject({ ok: true, budget: { usd: 3.5 } });
+  // a unit the parent doesn't limit: nothing to carve from
+  expect(g({ add: { turns: 100 } })).toMatchObject({ ok: true, budget: { turns: 110 } });
+  expect(g({ add: { wallSeconds: 60 } })).toMatchObject({ ok: false, error: expect.stringContaining("has no wallSeconds budget of its own: its spend counts against agt-p's, so grant agt-p instead") });
+  expect(g({ from: "run", add: { wallSeconds: 60 } })).toMatchObject({ ok: false, error: expect.stringContaining("against the run's, so grant the run instead") });
+  expect(g({ caps: { usd: 1.5 }, add: { usd: 1 } })).toMatchObject({ ok: false, error: expect.stringContaining("profile caps it at $1.5 (maxBudgetUsd)") });
+  expect(growRun({ usd: 5 }, { usd: 2.5 })).toEqual({ ok: true, budget: { usd: 7.5 } });
+  expect(growRun({ usd: 5 }, { turns: 10 })).toMatchObject({ ok: false, error: "the run has no turns limit to raise" });
 });
 
 // ADR-017: the parent sets the child's fan-out at spawn time; it may only narrow the ceiling.

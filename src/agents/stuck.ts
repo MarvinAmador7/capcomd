@@ -35,6 +35,14 @@ export class StuckWatch {
     }
   }
 
+  /** Start every window again (a grant: the parent has seen the agent and lets it go on). */
+  reset(now: number) {
+    this.lastEventAt = now;
+    this.call = "";
+    this.calls = 0;
+    this.fails.clear();
+  }
+
   /** The current signal, if any; `stop` once its second window has passed. */
   check(now: number): Stuck | null {
     const { idleAfterMs, repeats } = this.o;
