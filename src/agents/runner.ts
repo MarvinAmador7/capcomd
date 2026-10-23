@@ -8,6 +8,7 @@ import { Redactor } from "./redact";
 import { taskKey } from "../merge/config";
 import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils/tracing-simple";
 import { readFileSync } from "fs";
+import { StuckWatch, type Stuck } from "./stuck";
 
 /** ADR-019 §1: what the in-VM supervisor reports up (its outbox), or the runner on its behalf without one. */
 export type SupervisorReport =
@@ -74,6 +75,11 @@ export interface AgentRunOptions {
   onReport?: (r: SupervisorReport) => void;
   /** Supervisor heartbeat interval (default 30s). */
   heartbeatMs?: number;
+  /**
+   * ADR-019 §2: the agent looks stuck (idle, spinning, failing), or no longer does (null). The first window is only
+   * this notice; after the second the runner stops the agent itself (limit = the kind, work kept).
+   */
+  onNotice?: (n: { kind: Stuck["kind"]; detail: string } | null) => void;
   secrets?: string[];
   now?: () => number;
   /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
@@ -92,9 +98,14 @@ export const AGENT_VM_TTL_SECONDS = 3600;
 const TTL_RENEW_MS = 10 * 60_000;
 const SPEND_REPORT_MS = 5_000;
 
-/** How a stop reads in errors and results ("idle" isn't a limit anyone set: the agent CLI went silent). */
-export const stoppedAt = (limit: string) =>
-  limit === "idle" ? "stopped after going idle (no output from the agent)" : limit === "quota" ? "stopped by its provider's usage limit" : `stopped at its ${limit} limit`;
+/** How a stop reads in errors and results (idle, spinning and failing aren't limits anyone set: ADR-019 §2). */
+const STUCK_STOPS: Record<string, string> = {
+  idle: "stopped after going idle (no output from the agent)",
+  spinning: "stopped after repeating the same tool call (spinning)",
+  failing: "stopped after hitting the same error again and again (failing)",
+  quota: "stopped by its provider's usage limit",
+};
+export const stoppedAt = (limit: string) => STUCK_STOPS[limit] ?? `stopped at its ${limit} limit`;
 /** The CLI's own stop reasons that mean "out of budget", not "broken" (claude result subtypes; `timeout` exit 124). */
 const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turns: "max_turns", error_max_budget_usd: "max_budget_usd" };
 
@@ -350,14 +361,17 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     ].join("\n");
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));
     // The credential exists only in this exec's env (inherited by the agent). Never logged.
-    must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)} ${sq(outbox)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
+    must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)} ${sq(outbox)} ${sq(`${W}/checkpoint.request`)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
       { ...adapter.baseEnv(), ...(credential ? adapter.credentialEnv(credential) : {}) }), `start ${name}`, "failed");
 
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
     const deadline = cfg.timeoutMs ? now() + cfg.timeoutMs + 30_000 : Infinity;
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     live = state;
-    let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, seen = 0, lastEventAt = now(), renewedAt = 0, spendAt = now();
+    let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
+    // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
+    const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats }, now());
+    let noticed: string | null = null;
     const startedAt = now();
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
     // caller stops the agent instead of retrying it, so hours of work aren't redone or lost at a cap.
@@ -393,6 +407,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         const ev = adapter.parse(line, r, state, cfg);
         if (!ev) { if (i === lines.length - 1 && !final) break; consumed++; continue; }
         consumed++; state.events++;
+        watch.observe(ev, now());
         addSpanEvent(span, `agent.${ev.type}${ev.subtype ? `.${ev.subtype}` : ""}`, {
           ...(ev.tool ? { "agent.tool": ev.tool } : {}), ...(ev.text ? { "agent.text": ev.text } : {}),
         });
@@ -445,12 +460,18 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         limit = "timeout";
         break;
       }
-      // Not a time limit: an agent may work for hours, but one whose CLI has said nothing for this long has hung.
-      if (state.events > seen) { seen = state.events; lastEventAt = now(); }
-      else if (now() - lastEventAt > cfg.idleAfterMs) {
+      // A notice first (the parent hears it; the supervisor checkpoints the work), then a stop after the second window.
+      const stuck = watch.check(now());
+      if ((stuck?.kind ?? null) !== noticed) {
+        noticed = stuck?.kind ?? null;
+        addSpanEvent(span, stuck ? "agent.notice" : "agent.notice_cleared", stuck ? { "agent.notice": stuck.kind, "agent.text": stuck.detail } : {});
+        opts.onNotice?.(stuck ? { kind: stuck.kind, detail: stuck.detail } : null);
+        if (stuck && supervised) await sh(`touch ${sq(`${W}/checkpoint.request`)}`).catch(() => {});
+      }
+      if (stuck?.stop) {
         await kill(); await drain(true);
-        addSpanEvent(span, "agent.idle", { "agent.idle_ms": now() - lastEventAt });
-        limit = "idle";
+        addSpanEvent(span, `agent.${stuck.kind}`, { "agent.text": stuck.detail });
+        limit = stuck.kind;
         break;
       }
     }

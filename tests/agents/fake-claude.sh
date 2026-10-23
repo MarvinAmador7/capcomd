@@ -6,6 +6,9 @@
 #           claude 2.1.303 does; a resumed run (its prompt says it was stopped earlier) works normally
 #   [steady] edit, then keep working for ~3s (checkpoints, supervisor heartbeats)
 #   [spend] edit, then keep working for ~10s, each message reporting 100k output tokens (live spend)
+#   [spin] or [spin:N] edit, then make the same Read call N times (default 30, 0.15s apart), then finish normally (stuck: spinning)
+#   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
+#           error differing only in numbers, then finish normally (stuck: failing)
 prompt=""; args=("$@")
 while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; *) shift;; esac; done
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
@@ -29,6 +32,21 @@ emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","na
 if [[ "$prompt" != *"[nochange]"* ]]; then
   mkdir -p src && printf 'export const sum = (a: number, b: number) => a + b;\n' > src/sum.ts
 fi
+case "$prompt" in *"[spin"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[spin:\([0-9]*\)\].*/\1/p')
+  for i in $(seq 1 "${n:-30}"); do sleep 0.15
+    emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"s$i\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/sum.ts\"}}]}}"
+    emit "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"s$i\",\"content\":\"export const sum = 1\"}]}}"
+  done;;
+esac
+case "$prompt" in *"[failing"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[failing:\([0-9]*\)\].*/\1/p')
+  for i in $(seq 1 "${n:-30}"); do sleep 0.15
+    emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"f$i\",\"name\":\"Bash\",\"input\":{\"command\":\"bun test\"}}]}}"
+    emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"e$i\",\"name\":\"Edit\",\"input\":{\"file_path\":\"src/sum.ts\",\"attempt\":$i}}]}}"
+    emit "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"f$i\",\"is_error\":true,\"content\":\"sum.test.ts:$i expected 3, received $((i * 7)) (${i}ms)\"}]}}"
+  done;;
+esac
 case "$prompt" in *"[spend]"*)
   for i in $(seq 1 40); do sleep 0.25
     emit "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$i\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":10,\"output_tokens\":100000},\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"

@@ -37,6 +37,11 @@ export function codexResetAt(message: string, now = Date.now()): number | undefi
   return at < now - 60_000 ? at + 86_400_000 : at;
 }
 
+/** A tool call's identity for the stuck watch (ADR-019 §2): the same name and input is the same call. */
+const toolCall = (name: unknown, input: unknown) => `${String(name)} ${JSON.stringify(input ?? {})}`.slice(0, 1000);
+const contentText = (c: unknown) =>
+  (typeof c === "string" ? c : Array.isArray(c) ? c.map((x: any) => (typeof x?.text === "string" ? x.text : "")).join("\n") : "").slice(0, 1000);
+
 /** Claude Code `--output-format stream-json`: system/assistant/user/result events. */
 export const claudeAdapter: AgentAdapter = {
   kind: "claude-code",
@@ -68,6 +73,11 @@ export const claudeAdapter: AgentAdapter = {
       if (tool) ev.tool = String(tool.name);
       const text = content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("\n");
       if (text) ev.text = text.slice(0, 500);
+      // Tool calls and their results (matched by tool_use id), for the stuck watch.
+      const uses = content.filter((c: any) => c?.type === "tool_use");
+      if (uses.length) ev.calls = uses.map((u: any) => { const call = toolCall(u.name, u.input); if (u.id) (state.toolCalls ??= {})[String(u.id)] = call; return call; });
+      const results = content.filter((c: any) => c?.type === "tool_result" && state.toolCalls?.[String(c.tool_use_id)]);
+      if (results.length) ev.results = results.map((x: any) => ({ call: state.toolCalls![String(x.tool_use_id)]!, ...(x.is_error ? { error: contentText(x.content) } : {}) }));
     }
     // Live spend (ADR-019): claude reports a cost only in its final result, so meanwhile it is estimated from each
     // message's usage. A message streams as several events with the same id and usage: counted once.
@@ -156,7 +166,16 @@ export const codexAdapter: AgentAdapter = {
     const item = raw.item;
     if (item && typeof item === "object") {
       ev.subtype = String(item.type ?? "");
-      if (type === "item.completed" && CODEX_TOOL_ITEMS.has(item.type)) { state.turns++; ev.tool = item.type === "command_execution" ? `Bash(${String(item.command ?? "").slice(0, 80)})` : String(item.type); }
+      if (type === "item.completed" && CODEX_TOOL_ITEMS.has(item.type)) {
+        state.turns++;
+        ev.tool = item.type === "command_execution" ? `Bash(${String(item.command ?? "").slice(0, 80)})` : String(item.type);
+        // codex reports a tool step once, done: it is both the call and its result (for the stuck watch).
+        const call = item.type === "command_execution" ? toolCall("command", item.command) : item.type === "mcp_tool_call" ? toolCall(`${item.server}.${item.tool}`, item.arguments) : toolCall(item.type, item.changes ?? item.query);
+        const failed = item.status === "failed" || (item.type === "command_execution" && Number(item.exit_code ?? 0) !== 0);
+        const error = failed ? String(item.error?.message ?? item.aggregated_output ?? item.status ?? "failed").slice(-1000) : undefined;
+        ev.calls = [call];
+        ev.results = [{ call, ...(failed ? { error } : {}) }];
+      }
       if (item.type === "agent_message" && typeof item.text === "string") { ev.text = item.text.slice(0, 500); if (type === "item.completed") state.resultText = item.text; }
     }
     if (type === "turn.completed") {

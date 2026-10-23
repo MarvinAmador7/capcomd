@@ -6,7 +6,7 @@ import { RelayError } from "../core/errors";
 import { client } from "../core/relay";
 import * as O from "../primitives/ops";
 import * as S from "../primitives/state";
-import { parseBudget, type Budget } from "../primitives/policy";
+import { parseBudget, TERMINAL_AGENT, type Budget } from "../primitives/policy";
 import { fence } from "../subagents/results";
 
 /** The driver's name in records it writes (kv writer, task holder, message sender, approver). */
@@ -29,6 +29,8 @@ export function agentView(a: any) {
     for (const k of ["summary", "error", "claim"]) if (typeof r[k] === "string") r[k] = fence(v.agentId, r[k]);
     v.result = r;
   }
+  // A failing notice quotes the agent's own error output.
+  if (v.notice) { v.notice = { ...v.notice, detail: fence(v.agentId, String(v.notice.detail)) }; v.stuck = v.notice.detail; }
   return v;
 }
 
@@ -91,16 +93,22 @@ export async function spawn(a: { runId: string; task: string; profile?: string; 
   return { ...agentView(r), next: `Wait with capcomd_await {runId: "${a.runId}", agents: ["${r.agentId}"]}.` };
 }
 
-/** Bounded wait: returns when all (or any) are done, or after timeoutMs with what's still pending. */
+/**
+ * Bounded wait: returns when all (or any) are done, when one of them looks stuck (ADR-019 §2: a notice raised while
+ * waiting), or after timeoutMs with what's still pending.
+ */
 export async function awaitAgents(a: { runId: string; agents: string[]; mode?: "all" | "any"; timeoutMs?: number }) {
   if (!a.agents?.length) throw new RelayError("usage", "agents required", "Pass the agent ids capcomd_spawn returned.");
-  const r: any = await O.awaitAgents(a.runId, a.agents, { timeoutMs: waitMs(a.timeoutMs), any: a.mode === "any" });
+  const r: any = await O.awaitAgents(a.runId, a.agents, { timeoutMs: waitMs(a.timeoutMs), any: a.mode === "any", notices: true });
   const rows: any[] = r.agents ?? [];
-  const pending = rows.filter((x) => x.status === "timeout" || x.status === "running").map((x) => x.agentId);
+  const pending = rows.filter((x) => !TERMINAL_AGENT.has(x.status)).map((x) => x.agentId);
   const done = rows.filter((x) => !pending.includes(x.agentId)).map(agentView);
+  const notices = ((r.notices ?? []) as Array<{ agentId: string; kind: string; detail: string }>).map((n) => ({ ...n, detail: fence(n.agentId, n.detail) }));
   return {
-    done, pending, ...(r.first ? { first: agentView(r.first) } : {}),
-    next: pending.length && !(a.mode === "any" && done.length) ? `Still running; call capcomd_await again for ${pending.join(", ")} (the agents keep working between calls).` : "Verify finished work with capcomd_verify.",
+    done, pending, ...(r.first ? { first: agentView(r.first) } : {}), ...(notices.length ? { notices } : {}),
+    next: notices.length
+      ? `${notices.map((n) => `${n.agentId} looks ${n.kind}: ${n.detail}`).join("; ")}. It keeps running, and is stopped with its work kept if it stays that way. Look with capcomd_inspect, cancel it with capcomd_cancel, or call capcomd_await again.`
+      : pending.length && !(a.mode === "any" && done.length) ? `Still running; call capcomd_await again for ${pending.join(", ")} (the agents keep working between calls).` : "Verify finished work with capcomd_verify.",
   };
 }
 

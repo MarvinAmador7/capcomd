@@ -20,7 +20,7 @@ beforeAll(async () => {
   repo = await bareRepo({ mode: "direct" });
   const dir = mkdtempSync(join(tmpdir(), "capcomd-limits-"));
   const agentsFile = join(dir, "agents.json");
-  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { short: { provider: "claude", auth: "apikey", maxTurns: 20, timeoutMs: 2000 }, open: { provider: "claude", auth: "apikey", idleAfterMs: 2000 } } }));
+  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { short: { provider: "claude", auth: "apikey", maxTurns: 20, timeoutMs: 2000 }, open: { provider: "claude", auth: "apikey", idleAfterMs: 2000 }, spin: { provider: "claude", auth: "apikey", stuckRepeats: 3 } } }));
   env = {
     ...repo.env,
     CAPCOMD_AGENTS_FILE: agentsFile,
@@ -86,8 +86,19 @@ test("an agent that hits its timeout before changing anything fails after one at
   expect(driveFailures).toBe(1);
 }, 120_000);
 
-test("an agent with no limits that goes silent is stopped as idle, keeps its work, and isn't retried", async () => {
-  const { agent, driveFailures } = await runToEnd("[wip] long job", "idle", "open");
+test("an agent with no limits that goes silent is noticed as idle (await --notices returns), then stopped, keeps its work, and isn't retried", async () => {
+  const run = (await cj(["run", "new"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "idle"])).j?.agentId;
+  // ADR-019 §2: the first window is a notice, and a waiting parent hears it while the agent still runs.
+  const early = await cj(["await", run, id, "--notices", "--timeout-ms", "60000"]);
+  expect(early.code).toBe(1);
+  expect(early.j?.notices).toEqual([expect.objectContaining({ agentId: id, kind: "idle" })]);
+  expect(early.j?.agents?.[0]).toMatchObject({ status: "running", notice: { kind: "idle" }, stuck: expect.stringContaining("no output from the agent") });
+  const agent = (await cj(["await", run, id, "--timeout-ms", "60000"])).j?.agents?.[0];
+  const events = (await capcomd(["events", run, "--json"], env)).stdout;
+  const driveFailures = events.split("\n").filter((l) => l.includes('"DRIVE_FAILED"')).length;
+  expect(events).toContain("AGENT_NOTICE");
+  expect(agent.notice).toBeUndefined();
   expect(agent.status).toBe("failed");
   expect(agent.result).toMatchObject({ limit: "idle" });
   expect(agent.result.error).toContain("stopped after going idle");
@@ -105,6 +116,16 @@ test("a spawn without a budget reserves nothing, and the engine stops it from li
   expect(driveFailures).toBe(0);
   const msg = (await new Git(repo.bare).run(["log", "-1", "--format=%B", agent.result.branch])).stdout;
   expect(msg).toContain("Capcomd-Stop: max_budget_usd");
+}, 120_000);
+
+test("an agent repeating the same tool call is stopped as spinning after its second window, with its work kept", async () => {
+  const { agent, driveFailures } = await runToEnd("[spin] go round", "spin", "spin");
+  expect(agent.status).toBe("failed");
+  expect(agent.result).toMatchObject({ limit: "spinning" });
+  expect(agent.result.error).toContain("stopped after repeating the same tool call");
+  expect(driveFailures).toBe(0);
+  expect((await new Git(repo.bare).run(["log", "-1", "--format=%B", agent.result.branch])).stdout).toContain("Capcomd-Stop: spinning");
+  expect(await repo.show(agent.result.branch, "src/sum.ts")).toContain("a + b");
 }, 120_000);
 
 // ADR-019 §6. These run last: a usage limit is remembered for the login (claude:apikey here) that every profile shares.

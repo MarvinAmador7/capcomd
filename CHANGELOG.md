@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- capcomd now notices an agent that looks stuck while it works, and tells its parent before stopping it. An agent
+  is **idle** when it has produced no output for `idleAfterMs` (default 30 minutes), **spinning** when it makes the
+  same tool call over and over, and **failing** when it hits the same error over and over (both after
+  `stuckRepeats` times, default 8; set per profile with `capcomd agents set <profile> --stuck-repeats N`). The
+  agent keeps running: `inspect` and `tree` show the `notice`, its work is checkpointed, and `capcomd_await`, an
+  agent's own `await` inside its VM, and `capcomd await --notices` return early with `notices` so you or the
+  parent can step in. If it is still stuck after a second window (twice as long, or twice as many repeats), it is
+  stopped with its work kept and `result.limit` set to `idle`, `spinning` or `failing`.
+- **Breaking:** an idle agent is now stopped after twice `idleAfterMs` (an hour by default), not at `idleAfterMs`;
+  the first window is a notice. Halve `--idle-after-ms` to keep the old stop time.
 - Agents now save checkpoints of their work while they run, so a crash, a cancel or a lost VM no longer loses
   everything since the last commit. Every 10 minutes, and right after the agent commits, a snapshot of its
   workspace is pushed to `refs/capcomd/checkpoints/<agent>` on your repository, without touching the agent's own

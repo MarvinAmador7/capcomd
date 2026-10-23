@@ -89,6 +89,8 @@ function agentFor(c: Claims, a: ScopeAgent) {
     for (const k of ["summary", "error", "claim"]) if (typeof r[k] === "string") r[k] = fence(a.agentId, r[k]);
     v.result = r;
   }
+  // A failing notice quotes the agent's own error output.
+  if (a.agentId !== c.sub && v.notice) { v.notice = { ...v.notice, detail: fence(a.agentId, String(v.notice.detail)) }; v.stuck = v.notice.detail; }
   delete v.limits?.allowedChildProfiles?.__proto__;
   return v;
 }
@@ -134,7 +136,9 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       const doneNow = op === "wait-any" ? live.length < targets.length : live.length === 0;
       if (doneNow) await s.awaitEnd({ waiter: c.sub });
       else await s.awaitBegin({ waiter: c.sub, targets: live }).catch(O.asRelay);
-      return { done: doneNow, agents: agents.map((a) => agentFor(c, a)) };
+      // ADR-019 §2: stuck notices on what's still running; the in-VM client returns on one raised while it waits.
+      const notices = agents.filter((a) => a.status === "running" && a.notice).map((a) => ({ agentId: a.agentId, ...a.notice!, detail: fence(a.agentId, a.notice!.detail) }));
+      return { done: doneNow, agents: agents.map((a) => agentFor(c, a)), ...(notices.length ? { notices } : {}) };
     }
     case "tree": {
       const root = args.root ? String(args.root) : c.sub;

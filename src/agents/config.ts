@@ -90,8 +90,10 @@ export interface AgentConfig {
   maxTurns?: number;
   maxBudgetUsd?: number;
   timeoutMs?: number;
-  /** No events from the agent CLI for this long: it has hung, so it is stopped (its work kept). */
+  /** ADR-019 §2: no events from the agent CLI for this long is a notice ("idle"); twice as long stops it (work kept). */
   idleAfterMs: number;
+  /** The same tool call, or the same error, this many times is a notice ("spinning", "failing"); twice stops it. */
+  stuckRepeats: number;
   /** ADR-019 §3: the in-VM supervisor checkpoints the workspace this often (0: never). */
   checkpointEveryMs: number;
   pollMs: number;
@@ -149,7 +151,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   const { resolveAgent } = require("./profiles") as typeof import("./profiles");
   const ra = resolveAgent(profileName, source);
   const spec = ra.spec;
-  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs, AGENT_CHECKPOINT_MS: spec?.checkpointEveryMs };
+  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs, AGENT_STUCK_REPEATS: spec?.stuckRepeats, AGENT_CHECKPOINT_MS: spec?.checkpointEveryMs };
   const opt = (name: string) => {
     const v = envVar(name, source);
     const n = v === undefined ? specNum[name] : Number(v);
@@ -169,6 +171,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     maxBudgetUsd: opt("AGENT_MAX_BUDGET_USD"),
     timeoutMs: opt("AGENT_TIMEOUT_MS"),
     idleAfterMs: num("AGENT_IDLE_MS", 30 * 60_000),
+    stuckRepeats: num("AGENT_STUCK_REPEATS", 8),
     checkpointEveryMs: num("AGENT_CHECKPOINT_MS", 10 * 60_000),
     pollMs: num("AGENT_POLL_MS", 2000),
     allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? DEFAULT_ALLOWED_TOOLS),
