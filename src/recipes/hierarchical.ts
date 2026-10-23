@@ -54,7 +54,7 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
   emit("run.started", { goal: opts.goal, targetBranch: opts.targetBranch ?? null, recipe: "hierarchical" }, `Starting run: ${runId} (recipe)\nGoal: ${opts.goal}\n`);
 
   // 1. scope + run ledger (run new also creates the run actor in "planning").
-  const scope = await runNew({ runId, budget: { usd: opts.budgetUsd ?? 10 }, label: opts.goal });
+  const scope = await runNew({ runId, budget: opts.budgetUsd ? { usd: opts.budgetUsd } : {}, label: opts.goal });
   emit(scope.created ? "run.created" : "run.resumed", { runId }, scope.created ? "✓ Run created (scope)" : "✓ Run resumed (scope)");
   const runH = c.run.getOrCreate([runId]);
   let run = await runH.getRun({ runId });
@@ -142,7 +142,7 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
         if (lt.state === "cancelled") emit("task.cancelled", { taskId: t.id, state: lt.state }, `  ✗ ${t.id} cancelled`);
         continue;
       }
-      const a = await spawnAgent({ runId, task: feedback ? `${t.goal}\n\nPrevious attempt failed: ${feedback}` : t.goal, key: k, contract: { planTask: t.id, epoch }, ...(profile ? { profile: profile.name, overrides: profile.overrides } : {}), budget: { usd: 1 } });
+      const a = await spawnAgent({ runId, task: feedback ? `${t.goal}\n\nPrevious attempt failed: ${feedback}` : t.goal, key: k, contract: { planTask: t.id, epoch }, ...(profile ? { profile: profile.name, overrides: profile.overrides } : {}) });
       if (lt.state === "leased") { await ledger.workerStarted({ taskId: t.id, epoch }); lt = await ledger.getTask({ taskId: t.id }); }
       const done: any = await awaitAgents(runId, [a.agentId], { timeoutMs: 6 * 3600_000 });
       const ag = done.agents[0];

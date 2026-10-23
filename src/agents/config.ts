@@ -1,4 +1,5 @@
 import { env as envVar } from "../utils/env";
+import { OPEN_EGRESS } from "../providers/sandbox";
 
 export type AgentKind = "fake" | "claude-code" | "codex";
 export type RealAgent = Exclude<AgentKind, "fake">;
@@ -15,15 +16,6 @@ export const isRealAgent = (k: AgentKind): k is RealAgent => k !== "fake";
 export const CLAUDE_CODE_VERSION = "2.1.303";
 export const CODEX_VERSION = "0.163.0";
 export const NODE_VERSION = "22.23.3";
-
-export const DEFAULT_ALLOWED_TOOLS = [
-  "Read", "Edit", "Write", "Glob", "Grep", "LS", "TodoWrite",
-  "Bash(npm test:*)", "Bash(npm run test:*)", "Bash(npm install:*)", "Bash(npm ci:*)",
-  "Bash(npx tsc:*)", "Bash(npx vitest:*)", "Bash(npx jest:*)", "Bash(node:*)",
-  "Bash(bun test:*)", "Bash(bun install:*)", "Bash(bun run:*)",
-  "Bash(ls:*)", "Bash(cat:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
-];
-export const DEFAULT_DISALLOWED_TOOLS = ["Bash(git push:*)", "Bash(git remote:*)", "Bash(curl:*)", "Bash(wget:*)", "WebFetch", "WebSearch"];
 
 /** Hosts every agent VM needs (clone/push, bootstrap registries). */
 export const BASE_EGRESS = ["github.com", "registry.npmjs.org", "nodejs.org"];
@@ -90,14 +82,21 @@ export interface AgentConfig {
   maxTurns?: number;
   maxBudgetUsd?: number;
   timeoutMs?: number;
-  /** ADR-019 §2: no events from the agent CLI for this long is a notice ("idle"); twice as long stops it (work kept). */
+  /** ADR-019 §2: no events from the agent CLI for this long is a notice ("idle"); twice as long stops it (work kept)
+   *  when `stopIdle`. */
   idleAfterMs: number;
-  /** The same tool call, or the same error, this many times is a notice ("spinning", "failing"); twice stops it. */
+  /** The same tool call, or the same error, this many times is a notice ("spinning", "failing"); twice stops it
+   *  when `stopStuck`. */
   stuckRepeats: number;
+  /** No limits by default: a stuck agent is only noticed, and stopped only when its profile (or the env) sets the
+   *  window: idleAfterMs for idle, stuckRepeats for spinning and failing. */
+  stopIdle: boolean;
+  stopStuck: boolean;
   /** ADR-019 §3: the in-VM supervisor checkpoints the workspace this often (0: never). */
   checkpointEveryMs: number;
   pollMs: number;
-  allowedTools: string[];
+  /** Unset: every tool, without permission prompts (the VM is the boundary; agents never hold push credentials). */
+  allowedTools?: string[];
   disallowedTools: string[];
   model?: string;
   /** Working dir inside the VM (persistent disk, so a snapshot keeps installs and the dep template). */
@@ -105,6 +104,7 @@ export interface AgentConfig {
   /** Override the agent binary (tests: fake claude/codex). When set, detect/install is skipped. */
   claudeBin?: string;
   agentBin?: string;
+  /** The VM's egress allowlist; [OPEN_EGRESS] (the default) is unrestricted. */
   egress: string[];
   /** codex exec --sandbox mode. The VM is the isolation boundary; workspace-write is the least privilege that edits. */
   codexSandbox: "read-only" | "workspace-write" | "danger-full-access";
@@ -160,7 +160,8 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   };
   const num = (name: string, d: number) => opt(name) ?? d;
   const kind = ra.kind;
-  const sandbox = (envVar("CODEX_SANDBOX", source) ?? spec?.sandbox ?? "workspace-write") as AgentConfig["codexSandbox"];
+  // No restrictions by default: the VM is the isolation boundary.
+  const sandbox = (envVar("CODEX_SANDBOX", source) ?? spec?.sandbox ?? "danger-full-access") as AgentConfig["codexSandbox"];
   if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) throw new Error(`CAPCOMD_CODEX_SANDBOX=${sandbox} is invalid`);
   const cred = credentialModeFor(kind, source, spec?.auth);
   return {
@@ -172,10 +173,12 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     timeoutMs: opt("AGENT_TIMEOUT_MS"),
     idleAfterMs: num("AGENT_IDLE_MS", 30 * 60_000),
     stuckRepeats: num("AGENT_STUCK_REPEATS", 8),
+    stopIdle: opt("AGENT_IDLE_MS") !== undefined,
+    stopStuck: opt("AGENT_STUCK_REPEATS") !== undefined,
     checkpointEveryMs: num("AGENT_CHECKPOINT_MS", 10 * 60_000),
     pollMs: num("AGENT_POLL_MS", 2000),
-    allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? DEFAULT_ALLOWED_TOOLS),
-    disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), spec?.disallowedTools ?? DEFAULT_DISALLOWED_TOOLS),
+    ...(envVar("AGENT_ALLOWED_TOOLS", source) !== undefined || spec?.allowedTools ? { allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? []) } : {}),
+    disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), spec?.disallowedTools ?? []),
     model: envVar("AGENT_MODEL", source) ?? spec?.model,
     profile: ra.name,
     systemPrompt: spec?.systemPrompt,
@@ -183,7 +186,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     workdir: envVar("AGENT_WORKDIR", source) ?? "/var/tmp/capcomd",
     claudeBin: envVar("AGENT_CLAUDE_BIN", source),
     agentBin: envVar("AGENT_BIN", source),
-    egress: list(envVar("AGENT_EGRESS", source), spec?.egress ?? (isRealAgent(kind) ? egressFor(kind, cred === "subscription" ? "subscription" : "apikey") : AGENT_EGRESS)),
+    egress: list(envVar("AGENT_EGRESS", source), spec?.egress ?? (isRealAgent(kind) ? [OPEN_EGRESS] : AGENT_EGRESS)),
     codexSandbox: sandbox,
     codexUsdPerMtokIn: num("CODEX_USD_PER_MTOK_IN", 1.25),
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),

@@ -5,7 +5,7 @@ import { PassThrough } from "stream";
 import { tmpdir } from "os";
 import { join } from "path";
 import { FakeProvider } from "../../src/providers/fake";
-import { loadAgentConfig, credentialModeFor } from "../../src/agents/config";
+import { loadAgentConfig, credentialModeFor, egressFor } from "../../src/agents/config";
 import { TokenFilter, AUTH_SHAPES } from "../../src/auth/interactive";
 import { authLogin, authStatus, authLogout } from "../../src/auth/login";
 import { readAuthLedger, writeAuthLedger, authSnapshotName } from "../../src/auth/profiles";
@@ -139,7 +139,8 @@ describe("subscription mode in workers, preflight, doctor", () => {
     expect(credentialModeFor("codex", { CAPCOMD_AUTH_LEDGER: join(dir, "none.json"), OPENAI_API_KEY: "sk-proj-x" })).toBe("auto");
     expect(credentialModeFor("codex", { CAPCOMD_AUTH_LEDGER: led, OPENAI_API_KEY: "sk-proj-x", CAPCOMD_AUTH: "subscription" })).toBe("subscription");
     expect(credentialModeFor("codex", { CAPCOMD_AUTH_LEDGER: led, CAPCOMD_CREDENTIALS: "env" })).toBe("env");
-    expect(loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AUTH_LEDGER: led }).egress).toEqual(expect.arrayContaining(["chatgpt.com", "auth.openai.com"]));
+    expect(loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AUTH_LEDGER: led }).egress).toEqual(["*"]); // open by default
+    expect(egressFor("codex", "subscription")).toEqual(expect.arrayContaining(["chatgpt.com", "auth.openai.com"])); // a profile that narrows it
     for (const agent of ["claude-code", "codex"]) {
       const r = await runPreflight({ CAPCOMD_SANDBOX: "boxd", CAPCOMD_AGENT: agent, BOXD_API_KEY: "bxd_x", CAPCOMD_AUTH_LEDGER: led }, { boxdList: async () => [], fetch: (async () => { throw new Error("must not call the API"); }) as any });
       expect(r.every((c) => c.ok)).toBe(true);

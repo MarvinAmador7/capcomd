@@ -5,6 +5,22 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- **Breaking:** nothing restricts an agent by default any more; set limits on a profile or a run when you want
+  them.
+  - **Tools and network:** an agent whose profile sets no `allowedTools` can use every tool without permission
+    prompts (Claude Code runs with `--permission-mode bypassPermissions`), nothing is disallowed (before:
+    `git push`, `git remote`, `curl`, `wget`, web fetch and search), Codex runs with `--sandbox danger-full-access`
+    (before: `workspace-write`), and the VM can reach any host (before: GitHub, the npm registry, nodejs.org and
+    the provider's API). The VM is the boundary, and agents still never hold push credentials. To restrict a
+    profile again: `capcomd agents set <profile> --egress github.com,api.anthropic.com,registry.npmjs.org` and
+    `allowedTools` / `disallowedTools` / `sandbox` in its spec.
+  - **Run budget:** `capcomd run new` without `--budget` creates a run with no budget (before: $10), and the `run`
+    recipe no longer gives each task $1. `capcomd_run_new` takes `budget` as optional.
+  - **Fan-out:** a profile that may spawn has no depth or descendant limit unless its `children` block sets one
+    (before: one level, at most 10 agents below it), and `capcomd setup` writes the planner profile with only the
+    worker profiles it may spawn (before: 3 at once, 6 in all, a third of the budget each).
+  - **Stuck agents:** an agent that looks idle, spinning or failing gets a notice and keeps running; it is stopped
+    only if its profile sets that window (`--idle-after-ms`, `--stuck-repeats`).
 - You can now give a running agent more budget instead of letting it stop and starting over:
   `capcomd grant <runId> <agent> --budget usd=2,turns=20,wallSeconds=600` (or the new `capcomd_grant` MCP tool,
   or `capcomd grant <agent> --budget …` from a parent agent inside its VM, for its own children). The amount is
@@ -15,16 +31,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - An agent's budget now applies while it runs as well: the engine stops it once its spend goes over (within a few
   seconds), instead of the agent's CLI being launched with the budget as a fixed cap. Claude agents' turns are
   now counted while they work too, not only when they finish.
-- capcomd now notices an agent that looks stuck while it works, and tells its parent before stopping it. An agent
-  is **idle** when it has produced no output for `idleAfterMs` (default 30 minutes), **spinning** when it makes the
-  same tool call over and over, and **failing** when it hits the same error over and over (both after
-  `stuckRepeats` times, default 8; set per profile with `capcomd agents set <profile> --stuck-repeats N`). The
-  agent keeps running: `inspect` and `tree` show the `notice`, its work is checkpointed, and `capcomd_await`, an
-  agent's own `await` inside its VM, and `capcomd await --notices` return early with `notices` so you or the
-  parent can step in. If it is still stuck after a second window (twice as long, or twice as many repeats), it is
-  stopped with its work kept and `result.limit` set to `idle`, `spinning` or `failing`.
-- **Breaking:** an idle agent is now stopped after twice `idleAfterMs` (an hour by default), not at `idleAfterMs`;
-  the first window is a notice. Halve `--idle-after-ms` to keep the old stop time.
+- capcomd now notices an agent that looks stuck while it works, and tells its parent. An agent is **idle** when
+  it has produced no output for `idleAfterMs` (default 30 minutes), **spinning** when it makes the same tool call
+  over and over, and **failing** when it hits the same error over and over (both after `stuckRepeats` times,
+  default 8). The agent keeps running: `inspect` and `tree` show the `notice`, its work is checkpointed, and
+  `capcomd_await`, an agent's own `await` inside its VM, and `capcomd await --notices` return early with `notices`
+  so you or the parent can step in. A profile that sets the window (`capcomd agents set <profile>
+  --idle-after-ms N` or `--stuck-repeats N`) also stops the agent if it is still stuck after a second window
+  (twice as long, or twice as many repeats), with its work kept and `result.limit` set to `idle`, `spinning` or
+  `failing`.
 - Agents now save checkpoints of their work while they run, so a crash, a cancel or a lost VM no longer loses
   everything since the last commit. Every 10 minutes, and right after the agent commits, a snapshot of its
   workspace is pushed to `refs/capcomd/checkpoints/<agent>` on your repository, without touching the agent's own
@@ -45,15 +60,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   20 minutes or $2 unless its profile said otherwise, and `capcomd setup` wrote 15–40 minute limits into the
   profiles it created. Now an unset limit means none, so an agent can work for hours as long as it keeps going.
   To keep a limit, set it on the profile (`capcomd agents set worker --max-turns 30 --timeout-ms 1200000 --budget 2`).
-  - **Idle stop:** an agent whose Claude Code or Codex CLI produces no output for 30 minutes has hung, and is
-    stopped with its work kept (`result.limit: "idle"`). Change the window with `--idle-after-ms`.
   - **Long-running VMs:** a worker's VM is no longer deleted an hour after it was created. Its one-hour delete
     deadline is renewed while its agent runs, so long work isn't cut off and a VM whose engine died is still
     cleaned up.
   - **Setup:** `capcomd setup` asks API-key users once for a spend cap per run (`--budget 20`, or empty for none).
     Plan logins aren't asked, since a plan is already paid for.
-  - **Spawning:** a profile that may spawn and sets no `children.maxTotalDescendants` can start at most 10 agents
-    below it.
 - An agent that hits its time, turn or budget limit no longer loses its work or starts over. What it changed is
   pushed to its branch as a `WIP (stopped: <limit>)` commit with a `Capcomd-Stop` trailer, and it ends `failed`
   with `result.limit` (`timeout`, `max_turns` or `max_budget_usd`), `result.branch` and `result.commit`, after one

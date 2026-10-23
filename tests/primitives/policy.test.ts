@@ -168,12 +168,16 @@ test("units a spawn doesn't name: the profile's caps, else nothing", () => {
   expect(checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "worker", childSpec: worker, requested: { turns: 20, usd: 1, wallSeconds: 300 } })).toMatchObject({ ok: true, budget: { usd: 1, turns: 20, wallSeconds: 300 } });
 });
 
-test("a profile that may spawn and sets no maxTotalDescendants gets the default (budgets are optional, the count isn't)", async () => {
-  const { DEFAULT_MAX_DESCENDANTS } = await import("../../src/primitives/policy");
-  expect(rootLimits({ allowSpawn: true, allowedChildProfiles: ["coder"] }).maxTotalDescendants).toBe(DEFAULT_MAX_DESCENDANTS);
+test("a profile that may spawn and sets no fan-out limits has none: no depth or descendant limit by default", async () => {
+  const open = rootLimits({ allowSpawn: true, allowedChildProfiles: ["sup"] });
+  expect(open).toMatchObject({ allowSpawn: true, maxDepth: undefined, maxChildren: undefined, maxTotalDescendants: undefined });
   expect(rootLimits({ allowSpawn: true, maxTotalDescendants: 3 }).maxTotalDescendants).toBe(3);
-  expect(rootLimits(undefined).maxTotalDescendants).toBeUndefined();
-  expect(childLimits(rootLimits({ allowSpawn: true, maxDepth: 2, allowedChildProfiles: ["sup"] }), { allowSpawn: true, allowedChildProfiles: ["sup"] }).maxTotalDescendants).toBe(DEFAULT_MAX_DESCENDANTS - 1);
+  expect(rootLimits(undefined)).toMatchObject({ allowSpawn: false, maxDepth: 0 });
+  // Unlimited all the way down, unless a level sets a limit; the parent's limits still narrow its children.
+  const kid = childLimits(open, { allowSpawn: true, allowedChildProfiles: ["sup"] });
+  expect(kid).toMatchObject({ allowSpawn: true, maxDepth: undefined, maxTotalDescendants: undefined });
+  expect(childLimits(rootLimits({ allowSpawn: true, maxDepth: 2, allowedChildProfiles: ["sup"] }), { allowSpawn: true, allowedChildProfiles: ["sup"] })).toMatchObject({ allowSpawn: true, maxDepth: 1 });
+  expect(applyGrant(open, { maxDepth: 2 })).toMatchObject({ ok: true, limits: { maxDepth: 2 } });
 });
 
 // ADR-019 step 1b: budgets are enforced from live spend, whatever a spawn reserved.

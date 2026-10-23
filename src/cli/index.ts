@@ -270,7 +270,7 @@ async function main(argv: string[]): Promise<number> {
       case "run": {
         if (positionals[1] === "new" && positionals.length === 2) {
           const { parseBudget } = await import("../primitives/policy");
-          let budget: Record<string, number> = { usd: 10 };
+          let budget: Record<string, number> = {}; // no budget: the run is unlimited
           try { if (values.budget !== undefined) budget = parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message} (e.g. 5 or usd=5,turns=200,wallSeconds=3600)`); }
           const P = await import("../primitives/ops");
           // Flags win; else the project's `capcomd setup` defaults (.capcomd/config.json "run").

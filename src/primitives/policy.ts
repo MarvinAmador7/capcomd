@@ -11,7 +11,7 @@ export type AgentStatus = "pending" | "running" | "paused" | "done" | "failed" |
 /** Effective children limits held by one agent instance (already narrowed by its ancestors). */
 export interface Limits {
   allowSpawn: boolean;
-  maxDepth: number;            // further levels allowed below this agent (0 = none)
+  maxDepth?: number;           // further levels allowed below this agent (0 = none; unset = no limit)
   maxChildren?: number;        // concurrent, direct
   maxTotalDescendants?: number;
   allowedChildProfiles: string[];
@@ -55,17 +55,14 @@ export interface AgentRow {
 
 const minDef = (a: number | undefined, b: number | undefined) => (a === undefined ? b : b === undefined ? a : Math.min(a, b));
 
-/** With budgets optional (ADR-019), the count of agents bounds a tree that spawns: a profile that sets none gets this. */
-export const DEFAULT_MAX_DESCENDANTS = 10;
-
-/** Limits for a root agent (spawned by the operator): its profile's children block as-is. */
+/** Limits for a root agent (spawned by the operator): its profile's children block as-is. A limit it doesn't set is none. */
 export function rootLimits(c: ChildrenSpec | undefined): Limits {
   const allow = !!c?.allowSpawn;
   return {
     allowSpawn: allow,
-    maxDepth: allow ? (c?.maxDepth ?? 1) : 0,
+    maxDepth: allow ? c?.maxDepth : 0,
     maxChildren: c?.maxChildren,
-    maxTotalDescendants: c?.maxTotalDescendants ?? (allow ? DEFAULT_MAX_DESCENDANTS : undefined),
+    maxTotalDescendants: c?.maxTotalDescendants,
     allowedChildProfiles: [...(c?.allowedChildProfiles ?? [])],
     budgetShare: c?.budgetShare ?? 1,
   };
@@ -74,10 +71,10 @@ export function rootLimits(c: ChildrenSpec | undefined): Limits {
 /** Child limits: the child's own policy, narrowed by every limit the parent passes down. */
 export function childLimits(parent: Limits, own: ChildrenSpec | undefined): Limits {
   const o = rootLimits(own);
-  const depth = Math.min(o.maxDepth, Math.max(0, parent.maxDepth - 1));
+  const depth = minDef(o.maxDepth, parent.maxDepth === undefined ? undefined : Math.max(0, parent.maxDepth - 1));
   const allowed = o.allowedChildProfiles.filter((p) => parent.allowedChildProfiles.includes(p));
   return {
-    allowSpawn: o.allowSpawn && depth > 0 && allowed.length > 0,
+    allowSpawn: o.allowSpawn && (depth === undefined || depth > 0) && allowed.length > 0,
     maxDepth: depth,
     maxChildren: minDef(o.maxChildren, parent.maxChildren),
     maxTotalDescendants: minDef(o.maxTotalDescendants, parent.maxTotalDescendants === undefined ? undefined : parent.maxTotalDescendants - 1),
@@ -197,7 +194,7 @@ export function applyGrant(ceiling: Limits, g: Grant | undefined): { ok: true; l
   const over = (k: string, want: number | string, max: number | string | undefined) => `grant children.${k}=${want} exceeds the ceiling ${max ?? "(none: spawning not allowed)"}`;
   if (g.allowSpawn === true && !ceiling.allowSpawn) return { ok: false, error: over("allowSpawn", "true", "false") };
   if (g.allowSpawn === false) L.allowSpawn = false;
-  if (g.maxDepth !== undefined) { if (g.maxDepth > ceiling.maxDepth) return { ok: false, error: over("maxDepth", g.maxDepth, ceiling.maxDepth) }; L.maxDepth = g.maxDepth; }
+  if (g.maxDepth !== undefined) { if (ceiling.maxDepth !== undefined && g.maxDepth > ceiling.maxDepth) return { ok: false, error: over("maxDepth", g.maxDepth, ceiling.maxDepth) }; L.maxDepth = g.maxDepth; }
   for (const k of ["maxChildren", "maxTotalDescendants"] as const) {
     const want = g[k]; if (want === undefined) continue;
     if (!ceiling.allowSpawn && want === 0) { L[k] = 0; continue; } // narrowing to none is always fine
@@ -211,7 +208,7 @@ export function applyGrant(ceiling: Limits, g: Grant | undefined): { ok: true; l
     L.allowedChildProfiles = [...g.allowedChildProfiles];
   }
   if (g.budgetShare !== undefined) { if (g.budgetShare > ceiling.budgetShare) return { ok: false, error: over("budgetShare", g.budgetShare, ceiling.budgetShare) }; L.budgetShare = g.budgetShare; }
-  if (L.maxDepth < 1 || !L.allowedChildProfiles.length || L.maxChildren === 0 || L.maxTotalDescendants === 0) L.allowSpawn = false;
+  if ((L.maxDepth !== undefined && L.maxDepth < 1) || !L.allowedChildProfiles.length || L.maxChildren === 0 || L.maxTotalDescendants === 0) L.allowSpawn = false;
   if (!L.allowSpawn) L.maxDepth = 0;
   return { ok: true, limits: L };
 }
@@ -233,7 +230,7 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
   if (TERMINAL_AGENT.has(p.status)) return { ok: false, code: "parent_terminal", error: `parent ${p.agentId} is ${p.status}` };
   const L = p.limits;
   if (!L.allowSpawn) return { ok: false, code: "children_limit", error: `${p.agentId} (profile ${p.profile ?? "-"}) has children.allowSpawn=false` };
-  if (L.maxDepth < 1) return { ok: false, code: "children_limit", error: `children.maxDepth reached at ${p.agentId} (depth ${p.depth})` };
+  if (L.maxDepth !== undefined && L.maxDepth < 1) return { ok: false, code: "children_limit", error: `children.maxDepth reached at ${p.agentId} (depth ${p.depth})` };
   if (!x.childProfile || !L.allowedChildProfiles.includes(x.childProfile))
     return { ok: false, code: "children_limit", error: `profile ${x.childProfile ?? "(none)"} is not in ${p.agentId}'s children.allowedChildProfiles [${L.allowedChildProfiles.join(", ")}]` };
   const active = x.siblings.filter((s) => !TERMINAL_AGENT.has(s.status)).length;

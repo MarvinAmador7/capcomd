@@ -45,13 +45,15 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
 
     const argv = readFileSync(join(s.W, "argv.txt"), "utf8").split("\n");
-    for (const flag of ["--output-format", "stream-json", "--allowedTools", "--disallowedTools"]) expect(argv).toContain(flag);
+    for (const flag of ["--output-format", "stream-json"]) expect(argv).toContain(flag);
+    // No restrictions by default: every tool, no permission prompts, nothing disallowed (the VM is the boundary).
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
+    expect(argv).not.toContain("--allowedTools");
+    expect(argv).not.toContain("--disallowedTools");
     // No limits unless a profile sets them (ADR-019): no turn or budget flags, no `timeout` wrapper.
     expect(argv).not.toContain("--max-turns");
     expect(argv).not.toContain("--max-budget-usd");
     expect(readFileSync(join(s.W, "agent.sh"), "utf8")).not.toContain("timeout "); // run under the supervisor
-    expect(argv[argv.indexOf("--allowedTools") + 1]).toContain("Bash(npm test:*)");
-    expect(argv[argv.indexOf("--disallowedTools") + 1]).toContain("Bash(git push:*)");
     expect(argv).toContain("KEY_PRESENT");
 
     const span = getFinishedSpans().find((x) => x.name === "agent.claude_code")!;
@@ -132,12 +134,15 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(rework.sha).not.toBe(first.sha);
   });
 
-  test("limits a profile sets reach the CLI: --max-turns, --max-budget-usd and the timeout wrapper", async () => {
-    const s = await setup("make the failing test pass", { CAPCOMD_AGENT_MAX_TURNS: "30", CAPCOMD_AGENT_MAX_BUDGET_USD: "2", CAPCOMD_AGENT_TIMEOUT_MS: "60000" });
+  test("limits a profile sets reach the CLI: --max-turns, --max-budget-usd, the timeout wrapper and its tool lists", async () => {
+    const s = await setup("make the failing test pass", { CAPCOMD_AGENT_MAX_TURNS: "30", CAPCOMD_AGENT_MAX_BUDGET_USD: "2", CAPCOMD_AGENT_TIMEOUT_MS: "60000", CAPCOMD_AGENT_ALLOWED_TOOLS: "Read,Edit,Bash(npm test:*)", CAPCOMD_AGENT_DISALLOWED_TOOLS: "WebFetch" });
     await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
     const argv = readFileSync(join(s.W, "argv.txt"), "utf8").split("\n");
     expect(argv[argv.indexOf("--max-turns") + 1]).toBe("30");
     expect(argv[argv.indexOf("--max-budget-usd") + 1]).toBe("2");
+    expect(argv[argv.indexOf("--allowedTools") + 1]).toBe("Read,Edit,Bash(npm test:*)");
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("WebFetch");
+    expect(argv).not.toContain("--permission-mode");
     expect(readFileSync(join(s.W, "agent.sh"), "utf8")).toContain("timeout -k 10 60 ");
   });
 
@@ -350,6 +355,7 @@ describe("agent config, redaction, credentials, egress", () => {
     expect(c.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(c.maxTurns).toBeUndefined(); // limits are optional: none unless set
     expect(c.maxBudgetUsd).toBeUndefined();
+    expect([c.allowedTools, c.disallowedTools, c.stopIdle, c.stopStuck]).toEqual([undefined, [], false, false]);
     expect(loadAgentConfig({ CAPCOMD_AGENT_MAX_TURNS: "12" }).maxTurns).toBe(12);
     expect(() => loadAgentConfig({ CAPCOMD_AGENT_MAX_BUDGET_USD: "-1" })).toThrow();
   });

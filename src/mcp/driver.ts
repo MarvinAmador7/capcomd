@@ -40,14 +40,14 @@ async function policy() {
 
 // ── runs ──────────────────────────────────────────────────────────────────────────────────────────
 
-export async function runNew(a: { budget: string; label?: string; key?: string; target?: string; targetFrom?: string }) {
+export async function runNew(a: { budget?: string; label?: string; key?: string; target?: string; targetFrom?: string }) {
   let budget: Budget;
-  try { budget = parseBudget(a.budget); } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Pass units, e.g. budget: \"usd=5,turns=200,wallSeconds=3600\"."); }
+  try { budget = parseBudget(a.budget ?? ""); } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Pass units, e.g. budget: \"usd=5,turns=200,wallSeconds=3600\"."); }
   const p = await policy();
   if (p.maxRunBudget) {
     const cap = parseBudget(p.maxRunBudget) as Record<string, number>;
     const over = Object.entries(cap).filter(([u, max]) => (budget as Record<string, number>)[u] === undefined || (budget as Record<string, number>)[u]! > max);
-    if (over.length) deny(`budget ${a.budget} is over this project's cap per run (${p.maxRunBudget})`, `Ask for at most ${p.maxRunBudget} (every capped unit must be given); the cap is driver.maxRunBudget in .capcomd/config.json.`);
+    if (over.length) deny(`budget ${a.budget ?? "(none)"} is over this project's cap per run (${p.maxRunBudget})`, `Ask for at most ${p.maxRunBudget} (every capped unit must be given); the cap is driver.maxRunBudget in .capcomd/config.json.`);
   }
   // Gates come from the project (`capcomd setup`), never from the driver.
   const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
@@ -107,7 +107,7 @@ export async function awaitAgents(a: { runId: string; agents: string[]; mode?: "
   return {
     done, pending, ...(r.first ? { first: agentView(r.first) } : {}), ...(notices.length ? { notices } : {}),
     next: notices.length
-      ? `${notices.map((n) => `${n.agentId} looks ${n.kind}: ${n.detail}`).join("; ")}. It keeps running, and is stopped with its work kept if it stays that way. Look with capcomd_inspect, cancel it with capcomd_cancel, or call capcomd_await again.`
+      ? `${notices.map((n) => `${n.agentId} looks ${n.kind}: ${n.detail}`).join("; ")}. It keeps running (it is stopped, work kept, only if its profile sets a stuck window). Look with capcomd_inspect, cancel it with capcomd_cancel, or call capcomd_await again.`
       : pending.length && !(a.mode === "any" && done.length) ? `Still running; call capcomd_await again for ${pending.join(", ")} (the agents keep working between calls).` : "Verify finished work with capcomd_verify.",
   };
 }

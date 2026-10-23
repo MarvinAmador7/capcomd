@@ -128,6 +128,9 @@ describe("BoxdProvider (mocked SDK)", () => {
     await expect(p.ensure(spec({ idemKey: "k3", egressAllow: ["  "] }))).rejects.toBeInstanceOf(SandboxConfigError);
     await expect(p.setEgress(id, [])).rejects.toBeInstanceOf(SandboxConfigError);
     expect(sdk.calls.filter((c) => c[0] === "create").length).toBe(1);
+    // Unrestricted only when asked for by name ("*", the agents' default): boxd's [].
+    const open = await p.ensure(spec({ idemKey: "k4", egressAllow: ["*"] }));
+    expect(sdk.calls.find((c) => c[0] === "setEgressAllow" && c[1] === open.id)).toEqual(["setEgressAllow", open.id, []]);
   });
 
   test("hibernated VM on reuse is woken; keepalive execs run on the interval", async () => {

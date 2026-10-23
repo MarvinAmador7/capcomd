@@ -150,14 +150,14 @@ test("skill injection: spawners get capcomd + MCP + skill; others get nothing", 
   const { loadAgentConfig } = await import("../../src/agents/config");
   const { taskBranch } = await import("../../src/merge/config");
   const FAKE = new URL("../agents/fake-claude.sh", import.meta.url).pathname;
-  const run = async (withSkill: boolean) => {
+  const run = async (withSkill: boolean, env: Record<string, string> = {}) => {
     const r = await bareRepo();
     const workdir = mkdtempSync(join(tmpdir(), "capcomd-agent-"));
     const rpcDir = mkdtempSync(join(tmpdir(), "capcomd-rpcdir-"));
     const provider = new FakeProvider({ hostExec: true });
     const { id } = await provider.ensure({ idemKey: `t-${Math.random()}`, isolated: true, ttlSeconds: 60, egressAllow: [], labels: {} });
     await provider.waitReady(id, 1000);
-    const cfg = loadAgentConfig({ CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_CLAUDE_BIN: FAKE, CAPCOMD_AGENT_POLL_MS: "50" });
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_CLAUDE_BIN: FAKE, CAPCOMD_AGENT_POLL_MS: "50", ...env });
     const task = { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: r.bare, goal: "make the failing test pass" };
     const skill = orchestrationSkill({ agentId: "agt-p", limits: { allowSpawn: true, maxDepth: 1, maxChildren: 3, allowedChildProfiles: ["worker"], budgetShare: 0.5 }, budget: { turns: 40 }, mcp: true });
     await runClaudeCode(provider, id, task, cfg, { apiKey: "sk-ant-x", ...(withSkill ? { subagents: { skill, cliSource: readFileSync(CLI, "utf8"), rpcDir } } : {}) } as any);
@@ -166,14 +166,17 @@ test("skill injection: spawners get capcomd + MCP + skill; others get nothing", 
   };
   const yes = await run(true);
   expect(yes.argv).toContain("--mcp-config");
-  expect(yes.argv[yes.argv.indexOf("--allowedTools") + 1]).toContain("Bash(capcomd:*)");
+  expect(yes.argv[yes.argv.indexOf("--permission-mode") + 1]).toBe("bypassPermissions"); // every tool, capcomd's included
+  // A profile with an allowlist gets capcomd's CLI and MCP tools added to it.
+  const listed = await run(true, { CAPCOMD_AGENT_ALLOWED_TOOLS: "Read,Edit" });
+  expect(listed.argv[listed.argv.indexOf("--allowedTools") + 1]).toBe("Read,Edit,Bash(capcomd:*),mcp__capcomd");
   expect(readFileSync(join(yes.W, "append-system.txt"), "utf8")).toContain("# Orchestrating child agents (capcomd)");
   expect(readFileSync(join(yes.W, "append-system.txt"), "utf8")).toContain("--children.maxChildren=0");
   expect(existsSync(join(yes.rpcDir, "bin", "capcomd"))).toBe(true);
   expect(JSON.parse(readFileSync(join(yes.W, "capcomd-mcp.json"), "utf8")).mcpServers.capcomd.args[1]).toBe("mcp");
   const no = await run(false);
   expect(no.argv).not.toContain("--mcp-config");
-  expect(no.argv[no.argv.indexOf("--allowedTools") + 1]).not.toContain("capcomd");
+  expect(no.argv.join(" ")).not.toContain("capcomd:");
   expect(existsSync(join(no.W, "append-system.txt"))).toBe(false);
   expect(existsSync(join(no.rpcDir, "bin", "capcomd"))).toBe(false);
 }, 60_000);

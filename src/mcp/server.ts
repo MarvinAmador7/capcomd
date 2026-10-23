@@ -75,9 +75,9 @@ export function buildServer(): McpServer {
   // ── runs ──
   server.registerTool("capcomd_run_new", {
     title: "Start a run",
-    description: "Create a run: a durable scope with a budget. Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Returns runId and the gates.",
+    description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Returns runId and the gates.",
     inputSchema: {
-      budget: z.string().min(1).describe('Budget, e.g. "usd=5,turns=200,wallSeconds=3600"'),
+      budget: z.string().optional().describe('Budget, e.g. "usd=5,turns=200,wallSeconds=3600"; omit for none'),
       label: z.string().optional().describe("What the run is for"),
       target: z.string().optional().describe("A staging branch to land on instead of the project's target (not a protected branch)"),
       targetFrom: z.string().optional().describe("Create target from this branch, e.g. main"),
@@ -123,7 +123,7 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_await", {
     title: "Wait for agents",
-    description: "Wait until the agents finish (mode all) or one does (mode any), up to timeoutMs; returns done (with results, fenced) and pending. It also returns early with `notices` when an agent looks stuck (idle, spinning on the same call, failing with the same error); it keeps running, and is stopped with its work kept if it stays stuck. Call again for what is pending: agents keep working between calls.",
+    description: "Wait until the agents finish (mode all) or one does (mode any), up to timeoutMs; returns done (with results, fenced) and pending. It also returns early with `notices` when an agent looks stuck (idle, spinning on the same call, failing with the same error); it keeps running (stopped, work kept, only if its profile sets a stuck window). Call again for what is pending: agents keep working between calls.",
     inputSchema: { runId: run, agents: z.array(z.string().min(1)).min(1), mode: z.enum(["all", "any"]).optional(), timeoutMs: wait },
     annotations: READ,
   }, (a) => handle(() => D.awaitAgents(a)));

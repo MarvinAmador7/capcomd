@@ -265,7 +265,8 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
   const profiles: Array<[string, Record<string, unknown>]> = [
     ...agents.map((a, i): [string, Record<string, unknown>] => [workers[i]!, { provider: a, auth: authOf(a) }]),
     ["reviewer", { provider, auth, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...(check ? [`Bash(${check.split(" ").slice(0, 2).join(" ")}:*)`] : [])] }],
-    ["planner", { provider, auth, children: { allowSpawn: true, maxDepth: 1, maxChildren: 3, maxTotalDescendants: 6, allowedChildProfiles: workers, budgetShare: 0.34 } }],
+    // No fan-out limits either: the planner may spawn workers as it sees fit (set children.* to bound it).
+    ["planner", { provider, auth, children: { allowSpawn: true, allowedChildProfiles: workers } }],
   ];
   const made: string[] = [], kept: string[] = [];
   for (const [name, spec] of profiles) {
