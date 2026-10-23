@@ -379,8 +379,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         let rep: any;
         try { rep = JSON.parse(line); } catch { break; }
         outConsumed++;
-        if (rep.type === "heartbeat") opts.onReport?.({ type: "heartbeat", events: Number(rep.events ?? 0), lastEventAt: Number(rep.lastEventAt ?? 0), source: "supervisor" });
-        else if (rep.type === "checkpoint" && typeof rep.sha === "string") ckpt = { sha: rep.sha, reason: String(rep.reason ?? ""), files: Number(rep.files ?? 0) };
+        // Its start is a heartbeat too: the first interval hasn't passed yet.
+        if (rep.type === "heartbeat" || rep.type === "start") opts.onReport?.({ type: "heartbeat", events: Number(rep.events ?? 0), lastEventAt: Number(rep.lastEventAt ?? now()), source: "supervisor" });
+        if (rep.type === "checkpoint" && typeof rep.sha === "string") ckpt = { sha: rep.sha, reason: String(rep.reason ?? ""), files: Number(rep.files ?? 0) };
         else if (rep.type === "error" || rep.type === "start" || rep.type === "exit") addSpanEvent(span, `agent.supervisor.${rep.type}`, { ...(rep.message ? { "agent.text": r.text(String(rep.message)) } : {}), ...(rep.code !== undefined ? { "agent.exit_code": rep.code } : {}) });
       }
       if (ckpt) await pushCheckpoint(ckpt);
@@ -397,8 +398,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         });
         opts.onEvent?.(ev);
       }
-      // No supervisor: the agent CLI's own events are its heartbeat (PR #3's path).
-      if (!supervised && state.events > beatEvents) { beatEvents = state.events; opts.onReport?.({ type: "heartbeat", events: state.events, lastEventAt: now(), source: "events" }); }
+      // The agent CLI's own events are a heartbeat too (PR #3's path, the only one without a supervisor): any sign of
+      // life counts, so the supervisor's start-up and first interval don't open a gap.
+      if (state.events > beatEvents) { beatEvents = state.events; opts.onReport?.({ type: "heartbeat", events: state.events, lastEventAt: now(), source: "events" }); }
       const code = (exitPart ?? "").trim();
       if (code !== "") exitCode = Number(code);
     };
