@@ -9,8 +9,17 @@
 #   [spin] or [spin:N] edit, then make the same Read call N times (default 30, 0.15s apart), then finish normally (stuck: spinning)
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
 #           error differing only in numbers, then finish normally (stuck: failing)
-prompt=""; args=("$@")
-while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; *) shift;; esac; done
+#   [listen] edit, then work for ~8s, writing each message it reads on stdin to messages.txt (send mid-run)
+# With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
+# result it answers further messages until stdin closes, as claude does.
+prompt=""; stream=0; args=("$@")
+while [ $# -gt 0 ]; do case "$1" in
+  -p) case "${2:-}" in -*|"") shift;; *) prompt="$2"; shift 2;; esac;;
+  --input-format) [ "${2:-}" = stream-json ] && stream=1; shift 2;;
+  *) shift;; esac; done
+text_of() { node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).message.content))}catch{}})'; }
+if [ "$stream" = 1 ]; then IFS= read -r first; prompt=$(printf '%s' "$first" | text_of); fi
+printf '%s' "$prompt" > ../prompt-seen.txt
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
 printf '%s' "$ANTHROPIC_API_KEY" > ../keyseen.txt
 echo "oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} apikey=${ANTHROPIC_API_KEY:+set}" > ../authseen.txt
@@ -64,9 +73,24 @@ esac
 case "$prompt" in *"[steady]"*)
   for i in $(seq 1 12); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
 esac
+case "$prompt" in *"[listen]"*)
+  for i in $(seq 1 8); do
+    if [ "$stream" = 1 ] && IFS= read -r -t 1 line; then
+      printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
+      emit '{"type":"assistant","message":{"content":[{"type":"text","text":"heard a message"}]}}'
+    else [ "$stream" = 1 ] || sleep 1; emit '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'; fi
+  done;;
+esac
 # [wip]: edit, then hang (a limit with work to keep)
 case "$prompt" in *"[wip]"*) sleep 120;; esac
 emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'
 result="fixed sum"
 [[ "$prompt" == *"[leak]"* ]] && result="done with $ANTHROPIC_API_KEY"
 emit "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":3,\"total_cost_usd\":0.123,\"result\":\"$result\"}"
+# Fed on stdin: answer what comes after the result, until the input ends.
+if [ "$stream" = 1 ]; then
+  while IFS= read -r line; do
+    printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
+    emit '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0,"result":"answered"}'
+  done
+fi

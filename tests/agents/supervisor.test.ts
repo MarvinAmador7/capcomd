@@ -8,7 +8,7 @@ import { Git } from "../../src/merge/git";
 
 const SUPERVISOR = new URL("../../src/agents/supervisor.mjs", import.meta.url).pathname;
 
-async function setup(agent: string, o: { checkpointEveryMs?: number } = {}) {
+async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capcomd-sup-"));
   const repo = join(dir, "repo");
   const g = new Git(dir);
@@ -22,7 +22,9 @@ async function setup(agent: string, o: { checkpointEveryMs?: number } = {}) {
   writeFileSync(join(dir, "sup.json"), JSON.stringify({
     script: join(dir, "agent.sh"), dir, repo, jsonl, outbox, ref: "refs/capcomd/checkpoints/agt-1", agentId: "agt-1",
     heartbeatMs: 150, checkpointEveryMs: o.checkpointEveryMs ?? 400,
+    ...(o.input ? { input: { prompt: join(dir, "prompt.txt"), inbox: join(dir, "inbox.jsonl") } } : {}),
   }));
+  if (o.input) writeFileSync(join(dir, "prompt.txt"), "do the thing");
   const run = async () => {
     const p = Bun.spawn(["node", SUPERVISOR, join(dir, "sup.json")], { cwd: repo, stdout: "pipe", stderr: "pipe" });
     const code = await p.exited;
@@ -67,4 +69,20 @@ test("an untouched workspace makes no checkpoint", async () => {
   const s = await setup(`sleep 1`);
   const { reports } = await s.run();
   expect(reports.filter((x) => x.type === "checkpoint")).toEqual([]);
+}, 30_000);
+
+test("input: the prompt and each inbox message go to the CLI's stdin; after a result with nothing new, stdin closes", async () => {
+  // A CLI that logs what it reads, answers the first message after a second (letting a message arrive meanwhile),
+  // then answers each later one, and exits when its input ends.
+  const s = await setup(`IFS= read -r p; echo "$p" > seen.txt; sleep 1; echo '{"type":"result"}' >> $JSONL
+while IFS= read -r m; do echo "$m" >> seen.txt; echo '{"type":"result"}' >> $JSONL; done; exit 0`, { input: true, checkpointEveryMs: 0 });
+  setTimeout(() => writeFileSync(join(s.dir, "inbox.jsonl"), JSON.stringify({ seq: 7, text: "also this" }) + "\n"), 300);
+  const { code, reports } = await s.run();
+  expect(code).toBe(0); // it ended: the supervisor closed its input after the last result
+  const seen = readFileSync(join(s.repo, "seen.txt"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  expect(seen).toEqual([
+    { type: "user", message: { role: "user", content: "do the thing" } },
+    { type: "user", message: { role: "user", content: "also this" } },
+  ]);
+  expect(reports.filter((x) => x.type === "delivered")).toEqual([expect.objectContaining({ seq: 7 })]);
 }, 30_000);

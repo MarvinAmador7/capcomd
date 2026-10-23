@@ -62,10 +62,11 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   without a branch may still have a \`checkpoint\` (in \`capcomd inspect\`); \`--continue\` starts from it then.
 - \`await\` and \`wait-any\` also return early with \`notices\` when a child looks stuck while you wait: idle (no
   output), spinning (the same tool call again and again) or failing (the same error again and again). It is still
-  running (it is stopped, work kept, only if its profile sets a stuck window). Decide: \`capcomd send\` it a hint (if it can
-  read its inbox), cancel it and continue its work in a new child with a better task, or await again.
+  running (it is stopped, work kept, only if its profile sets a stuck window). Decide: \`capcomd send <agt> "<hint>"\` (a Claude
+  child reads it within seconds, at its next step; a Codex child can't read messages while it runs), cancel it and
+  continue its work in a new child with a better task, or await again.
 - A child paused by its provider's usage limit (status paused, \`result.limit\` quota) isn't failed: don't
-  respawn it. Keep awaiting; it continues from its branch after the reset.
+  respawn it. It continues from its branch by itself after the reset.
 - Best-of-n: spawn n, verify each as it finishes, merge the best, \`capcomd cancel\` the rest.
 - Dependent work (B needs what A builds): don't wait for A to finish before starting B, and don't build B on A's
   branch. First land a tiny contract child (the shared interface, a stub, or a flag that is off), then spawn A and

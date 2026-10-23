@@ -52,6 +52,8 @@ export interface AgentCommandCtx {
   cfg: AgentConfig;
   /** ADR-017: in-VM capcomd for agents allowed to spawn (MCP server script + its config). */
   capcomd?: { cli: string; mcpConfig: string };
+  /** The supervisor feeds the prompt, and messages sent while it runs, on stdin (adapters with streamInput). */
+  stdinPrompt?: boolean;
 }
 
 /**
@@ -73,6 +75,8 @@ export interface AgentAdapter {
   credentialEnv(value: string): Record<string, string>;
   /** Extra env for the agent process. */
   baseEnv(): Record<string, string>;
+  /** The CLI reads user messages on stdin while it runs (`send` reaches it mid-run; see ctx.stdinPrompt). */
+  streamInput?: boolean;
   /** Shell command (one line) that runs the agent headless; stdout must go to ctx.jsonl. */
   command(ctx: AgentCommandCtx, q: (s: string) => string): string;
   /** Parse one JSON line, update state; null for partial/invalid lines. */

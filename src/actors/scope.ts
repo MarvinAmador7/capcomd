@@ -426,7 +426,7 @@ export const scopeActor = actor({
      * (so budget, tree and spawns see it), then checked against its own budget, every ancestor's (their subtree's
      * spend) and the run's. `stop` names the limit to stop at (result.limit) when one is over.
      */
-    async reportSpend(c, params: { agentId: string; spent: Budget }) {
+    async reportSpend(c, params: { agentId: string; spent: Budget; inboxAfter?: number }) {
       const r = await c.db.execute("SELECT status FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length || TERMINAL_AGENT.has(r[0]!.status as string)) return { stop: null };
       await c.db.execute("UPDATE agents_v2 SET spent = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')", JSON.stringify(params.spent), params.agentId);
@@ -437,7 +437,10 @@ export const scopeActor = actor({
       // The runner resets its stuck window when it sees a new grant (ADR-019 §2), and checkpoints at budget steps (§3).
       const grantedAt = Number(all.find((a) => a.agentId === params.agentId)?.grantedAt ?? 0);
       const used = budgetUsed(params.agentId, all, runBudget);
-      return over ? { stop: UNIT_LIMIT[over.unit], over, grantedAt, used } : { stop: null, grantedAt, used };
+      // An agent that reads messages while it runs gets the ones sent since its cursor with each report.
+      const messages = params.inboxAfter === undefined ? undefined : ((await c.db.execute("SELECT seq, from_agent, body FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, params.inboxAfter)) as any[])
+        .map((r) => ({ seq: Number(r.seq), from: r.from_agent as string, body: r.body as string }));
+      return { ...(over ? { stop: UNIT_LIMIT[over.unit], over } : { stop: null }), grantedAt, used, ...(messages ? { messages } : {}) };
     },
 
     /**

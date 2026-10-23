@@ -483,7 +483,7 @@ export const workerActor = actor({
             scope.heartbeat({ agentId: workerId }).catch(() => {});
           },
           onNotice: (n) => { scope?.notice({ agentId: workerId, notice: n }).catch(() => {}); },
-          ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }) => (await scope.reportSpend({ agentId: workerId, spent })) as { stop: string | null; grantedAt?: number; used?: number | null } } : {}),
+          ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string }[] } } : {}),
           ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: "/tmp/capcomd-rpc" } } : {}),
           isCancelled: async () => {
             const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
