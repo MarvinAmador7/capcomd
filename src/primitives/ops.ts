@@ -11,7 +11,7 @@ import { RelayError } from "../core/errors";
 import { encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
-import { stoppedAt } from "../agents/runner";
+import { checkpointRef, stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
@@ -794,11 +794,16 @@ export async function mergeRef(o: MergeOpts) {
   return executeMerge(o.runId, st.op);
 }
 
+async function dropCheckpoints(runId: string, agentId: string) {
+  const cfg = (await import("../merge/config")).loadMergeConfig(await (await import("../merge/run-config")).runEnv(runId));
+  if (cfg) await (await import("../merge/repo")).deleteRemoteRef(cfg, checkpointRef(agentId));
+}
+
 /** Run a recorded merge op: land its ref (only the verified commit, re-running the checks verify passed with). */
 async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp) {
   const c = client();
   const s = c.scope.getOrCreate([runId]);
-  const d = op.data as { ref: string; branch: string; target: string; require: string | null; expectSha: string | null };
+  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null };
   const { label } = await resolveRef(runId, d.ref);
   // Re-run the checks that verification passed with (the target may have moved), not the repo default.
   const v = d.require ? await s.getOp({ opId: d.require }) : null;
@@ -808,6 +813,8 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const merged = out.status === "merged";
+  // Its checkpoints were only for continuing the work, which has landed now (best effort).
+  if (merged && d.agentId) await dropCheckpoints(runId, d.agentId).catch(() => {});
   const result = merged
     ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}) }
     : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}) };
