@@ -122,6 +122,8 @@ test("a worker on the snapshot reuses the baked node_modules when the lockfile m
   const cfg = loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AGENT_WORKDIR: f.workdir, CAPCOMD_AGENT_BIN: new URL("../agents/fake-codex.sh", import.meta.url).pathname, CAPCOMD_AGENT_POLL_MS: "50", CAPCOMD_CREDENTIALS: "env" });
   const res = await runAgent(codexAdapter, f.provider, id, { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: f.r.bare, goal: "fix" }, cfg, { apiKey: "sk-proj-x-0123456789abcdef" });
   expect(getFinishedSpans().find((s) => s.name === "agent.codex")!.events.map((e) => e.name)).toContain("agent.deps_reused");
+  // This image's node is a stub that runs no code: the agent runs without the supervisor (ADR-019), as before.
+  expect(getFinishedSpans().find((s) => s.name === "agent.codex")!.attributes["agent.supervised"]).toBe(false);
   expect(existsSync(join(f.workdir, "task-1-e1/repo/node_modules/leftpad/index.js"))).toBe(true);
   // node_modules is excluded, never committed.
   const { Git } = await import("../../src/merge/git");

@@ -23,6 +23,8 @@ export interface AgentSpec {
   timeoutMs?: number;
   /** Stop an agent whose CLI has produced no events for this long (default 30 min): a hung agent, not a long one. */
   idleAfterMs?: number;
+  /** How often the in-VM supervisor checkpoints the workspace (default 10 min; a cadence, not a limit). */
+  checkpointEveryMs?: number;
   /** codex --sandbox (claude ignores it; the VM is the boundary). */
   sandbox?: SandboxMode;
   /** Replaces the default egress allowlist (non-empty). */
@@ -85,6 +87,7 @@ export const AGENTS_JSON_SCHEMA = {
         maxBudgetUsd: { type: "number", exclusiveMinimum: 0 },
         timeoutMs: { type: "integer", minimum: 1000 },
         idleAfterMs: { type: "integer", minimum: 1000 },
+        checkpointEveryMs: { type: "integer", minimum: 1000 },
         sandbox: { enum: ["read-only", "workspace-write", "danger-full-access"] },
         egress: { type: "array", minItems: 1, items: { type: "string", pattern: "^[A-Za-z0-9.*-]+$" } },
         systemPrompt: { type: "string" },
@@ -130,7 +133,7 @@ export function validateSpec(name: string, raw: unknown): string[] {
   if (s.auth === undefined) at(legacyKey || legacySub ? `use auth: "${legacyKey ? "apikey" : "subscription"}" instead of a credential field` : "auth is required (\"apikey\" or \"subscription\"): neither is configured");
   else if (!["apikey", "subscription"].includes(s.auth as string)) at(`auth must be "apikey" or "subscription"`);
   const posInt = (k: string, min = 1) => { if (s[k] !== undefined && (!Number.isInteger(s[k]) || (s[k] as number) < min)) at(`${k} must be an integer >= ${min}`); };
-  posInt("maxTurns"); posInt("timeoutMs", 1000); posInt("idleAfterMs", 1000);
+  posInt("maxTurns"); posInt("timeoutMs", 1000); posInt("idleAfterMs", 1000); posInt("checkpointEveryMs", 1000);
   if (s.maxBudgetUsd !== undefined && !(typeof s.maxBudgetUsd === "number" && s.maxBudgetUsd > 0)) at("maxBudgetUsd must be > 0");
   if (s.sandbox !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(s.sandbox as string)) at("sandbox is invalid");
   if (s.model !== undefined && (typeof s.model !== "string" || !s.model)) at("model must be a non-empty string");
@@ -350,7 +353,7 @@ export function effectiveAgentRecord(ref?: string | null, source: Record<string,
     return {
       name: ra.name, kind: ra.kind, overridden: !!ra.overridden, operator: ref ? !!decodeAgentRef(ref).overrides?.operator : false,
       auth: c.credentialMode === "subscription" ? "subscription" : "apikey", credentialMode: c.credentialMode,
-      model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs,
+      model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, checkpointEveryMs: c.checkpointEveryMs,
       sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools, disallowedTools: c.disallowedTools,
       systemPrompt: !!c.systemPrompt, appendSystemPrompt: !!c.appendSystemPrompt,
       children: { allowSpawn: false, ...(ra.spec?.children ?? {}) },

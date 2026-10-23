@@ -71,7 +71,7 @@ Usage:
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --max-turns --budget
-                                       --timeout-ms --idle-after-ms --sandbox --egress --system-prompt
+                                       --timeout-ms --idle-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
                                        --append-system-prompt --allowed-tools --disallowed-tools
                                        --description --default --spec JSON --unset k1,k2
   capcomd auth login claude|codex        Log in with your Claude/ChatGPT plan in a VM; saves a private auth profile
@@ -137,6 +137,7 @@ async function main(argv: string[]): Promise<number> {
         budget: { type: "string" },
         "timeout-ms": { type: "string" },
         "idle-after-ms": { type: "string" },
+        "checkpoint-every-ms": { type: "string" },
         sandbox: { type: "string" },
         egress: { type: "string" },
         "system-prompt": { type: "string" },

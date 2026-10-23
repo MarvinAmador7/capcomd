@@ -56,7 +56,9 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   A child stopped at a limit (\`result.limit\`: timeout, max_turns, max_budget_usd, or idle when its CLI
   went silent) kept its work on
   \`result.branch\`: continue instead of starting over, with a child given more budget whose task begins with
-  \`git fetch origin <branch> && git merge FETCH_HEAD\`.
+  \`git fetch origin <branch> && git merge FETCH_HEAD\`. A child that failed or was cancelled without a branch
+  may still have a \`checkpoint\` (in \`capcomd inspect\`): continue from it the same way, with
+  \`git fetch origin <checkpoint.ref> && git merge FETCH_HEAD\`.
 - A child paused by its provider's usage limit (status paused, \`result.limit\` quota) isn't failed: don't
   respawn it. Keep awaiting; it continues from its branch after the reset.
 - Best-of-n: spawn n, verify each as it finishes, merge the best, \`capcomd cancel\` the rest.

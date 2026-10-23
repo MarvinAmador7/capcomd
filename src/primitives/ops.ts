@@ -230,6 +230,7 @@ export function view(a: ScopeAgent) {
     budget: a.budget, spent: a.spent, task: a.task, key: a.key, limits: a.limits, result: a.result,
     ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...(stuckReason(a) ? { stuck: stuckReason(a) } : {}),
     ...(a.status === "paused" && a.pausedUntil ? { pausedUntil: new Date(a.pausedUntil).toISOString() } : {}), ...(a.epoch > 1 ? { epoch: a.epoch } : {}),
+    ...(a.checkpoint ? { checkpoint: a.checkpoint } : {}),
   };
 }
 

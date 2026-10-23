@@ -73,6 +73,8 @@ function rowToAgent(r: any) {
     epoch: Number(r.epoch ?? 1),
     /** Paused until (ms epoch) when its provider gave a reset time; 0 = until `resume`. */
     pausedUntil: Number(r.paused_until ?? 0),
+    /** ADR-019 §3: the latest checkpoint of its workspace (a commit at `ref` on the remote), if any. */
+    checkpoint: r.checkpoint ? (JSON.parse(r.checkpoint as string) as { ref: string; sha: string; at: number; reason: string; files: number }) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -176,6 +178,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "heartbeat_note", "TEXT");
       await addColumn(database, "agents_v2", "epoch", "INTEGER NOT NULL DEFAULT 1");
       await addColumn(database, "agents_v2", "paused_until", "INTEGER");
+      await addColumn(database, "agents_v2", "checkpoint", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -316,6 +319,16 @@ export const scopeActor = actor({
       }, { name: "scopeFinish" });
       const orphans = await reapOrphans(c, { ...a, status: params.status });
       return { changed: true, orphans, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+    },
+
+    /** ADR-019 §3: the supervisor checkpointed the agent's workspace and the engine pushed it to `ref`. */
+    async checkpoint(c, params: { agentId: string; ref: string; sha: string; reason: string; files: number }) {
+      const cp = { ref: params.ref, sha: params.sha, at: Date.now(), reason: params.reason, files: params.files };
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("UPDATE agents_v2 SET checkpoint = ?, heartbeat_at = ? WHERE agent_id = ?", JSON.stringify(cp), Date.now(), params.agentId);
+        await addEvent(tx, "AGENT_CHECKPOINT", params.agentId, cp, `ckpt-${params.agentId}-${params.sha}`);
+      }, { name: "scopeCheckpoint" });
+      return { ok: true };
     },
 
     /**

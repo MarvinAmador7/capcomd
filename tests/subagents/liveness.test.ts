@@ -1,6 +1,6 @@
-// A real agent that can't spawn has no in-VM capcomd, so it never calls `capcomd heartbeat`. Its liveness comes
-// from the engine reading the agent CLI's own events: a worker that keeps working past the stuck window is not
-// flagged stuck. (fake claude in a host-exec FakeProvider, spawned through the engine like any agent.)
+// A real agent that can't spawn has no in-VM capcomd, so it never calls `capcomd heartbeat`. Its liveness is reported
+// up by the in-VM supervisor (ADR-019), which also checkpoints its workspace: a worker that keeps working past the
+// stuck window is not flagged stuck. (fake claude in a host-exec FakeProvider, spawned through the engine.)
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -10,14 +10,15 @@ import { capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 
 let engine: Engine;
+let repo: Awaited<ReturnType<typeof bareRepo>>;
 let env: Record<string, string>;
 const saved = { ...process.env };
 
 beforeAll(async () => {
-  const r = await bareRepo({ mode: "direct" });
+  const r = (repo = await bareRepo({ mode: "direct" }));
   const dir = mkdtempSync(join(tmpdir(), "capcomd-liveness-"));
   const agentsFile = join(dir, "agents.json");
-  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 } } }));
+  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 } } }));
   env = {
     ...r.env,
     CAPCOMD_AGENTS_FILE: agentsFile,
@@ -74,4 +75,16 @@ test("a worker without the in-VM CLI that keeps working is not flagged stuck", a
   expect(seen).toBeGreaterThan(0);
   const aw = await cj(["await", run, id, "--timeout-ms", "60000"]);
   expect(aw.j?.agents?.[0]?.status).toBe("done");
+}, 120_000);
+
+test("the supervisor's checkpoints reach the remote and the agent's record while it works", async () => {
+  const run = (await cj(["run", "new"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "ckpt", "--task", "[steady] add sum", "--key", "ckpt"])).j?.agentId;
+  const aw = await cj(["await", run, id, "--timeout-ms", "60000"]);
+  const agent = aw.j?.agents?.[0];
+  expect(agent?.status).toBe("done");
+  expect(agent.checkpoint).toMatchObject({ ref: `refs/capcomd/checkpoints/${id}`, reason: "interval", files: 1 });
+  expect(await repo.sha(`refs/capcomd/checkpoints/${id}`)).toBe(agent.checkpoint.sha);
+  expect(await repo.show(agent.checkpoint.sha, "src/sum.ts")).toContain("a + b");
+  expect((await capcomd(["events", run, "--json"], env)).stdout).toContain("AGENT_CHECKPOINT");
 }, 120_000);
