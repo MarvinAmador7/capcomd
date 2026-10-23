@@ -9,7 +9,7 @@ import { db } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
 import { startDriver } from "../primitives/drivers";
-import { available, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
+import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
@@ -434,9 +434,10 @@ export const scopeActor = actor({
       const runBudget = meta.length ? (JSON.parse(meta[0]!.v as string).budget as Budget) : {};
       const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
       const over = overBudget(params.agentId, all, runBudget);
-      // The runner resets its stuck window when it sees a new grant (ADR-019 §2).
+      // The runner resets its stuck window when it sees a new grant (ADR-019 §2), and checkpoints at budget steps (§3).
       const grantedAt = Number(all.find((a) => a.agentId === params.agentId)?.grantedAt ?? 0);
-      return over ? { stop: UNIT_LIMIT[over.unit], over, grantedAt } : { stop: null, grantedAt };
+      const used = budgetUsed(params.agentId, all, runBudget);
+      return over ? { stop: UNIT_LIMIT[over.unit], over, grantedAt, used } : { stop: null, grantedAt, used };
     },
 
     /**

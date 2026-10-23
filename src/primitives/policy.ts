@@ -125,20 +125,30 @@ export const UNIT_LIMIT: Record<Unit, string> = { usd: "max_budget_usd", turns: 
  * spend has pushed over: its own, an ancestor's (that ancestor's whole subtree counts), or the run's (everyone).
  */
 export function overBudget(agentId: string, agents: Array<Pick<AgentRow, "agentId" | "parent" | "budget" | "spent">>, runBudget: Budget): { unit: Unit; at: string; spent: number; budget: number } | null {
+  return budgetsOf(agentId, agents, runBudget).find((x) => x.spent > x.budget) ?? null;
+}
+
+/** How much of its tightest budget an agent's spend has used (1 = all of it), or null when no budget covers it. */
+export function budgetUsed(agentId: string, agents: Array<Pick<AgentRow, "agentId" | "parent" | "budget" | "spent">>, runBudget: Budget): number | null {
+  const xs = budgetsOf(agentId, agents, runBudget).filter((x) => x.budget > 0);
+  return xs.length ? Math.max(...xs.map((x) => x.spent / x.budget)) : null;
+}
+
+/** Every budget the agent's spend counts against (its own, its ancestors', the run's), nearest first. */
+function budgetsOf(agentId: string, agents: Array<Pick<AgentRow, "agentId" | "parent" | "budget" | "spent">>, runBudget: Budget) {
+  const out: { unit: Unit; at: string; spent: number; budget: number }[] = [];
   const tree = treeSpend(agents);
   const byId = new Map(agents.map((a) => [a.agentId, a]));
   for (let a = byId.get(agentId); a; a = a.parent ? byId.get(a.parent) : undefined)
     for (const u of UNITS) {
-      const b = a.budget[u], sp = tree.get(a.agentId)?.[u] ?? 0;
-      if (b !== undefined && sp > b) return { unit: u, at: a.agentId, spent: sp, budget: b };
+      const b = a.budget[u];
+      if (b !== undefined) out.push({ unit: u, at: a.agentId, spent: tree.get(a.agentId)?.[u] ?? 0, budget: b });
     }
   for (const u of UNITS) {
     const b = runBudget[u];
-    if (b === undefined) continue;
-    const sp = round(agents.reduce((x, a) => x + (a.spent[u] ?? 0), 0));
-    if (sp > b) return { unit: u, at: "run", spent: sp, budget: b };
+    if (b !== undefined) out.push({ unit: u, at: "run", spent: round(agents.reduce((x, a) => x + (a.spent[u] ?? 0), 0)), budget: b });
   }
-  return null;
+  return out;
 }
 const round = (x: number) => Math.round(x * 1e6) / 1e6;
 

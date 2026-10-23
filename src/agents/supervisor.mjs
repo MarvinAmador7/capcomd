@@ -64,9 +64,14 @@ const beat = setInterval(() => {
   report("heartbeat", { events, lastEventAt });
   // The agent committed (claude and codex may): checkpoint the new HEAD now rather than at the next interval.
   try { const h = git(["rev-parse", "HEAD"]); if (lastHead && h !== lastHead) checkpoint("commit"); } catch {}
-  // The engine asks for one when the agent looks stuck (ADR-019 §2), so the work is safe before anything else.
+  // The engine asks for one (the file says why): the agent looks stuck (ADR-019 §2), so the work is safe before
+  // anything else, or its spend passed another step of its budget (§3).
   const req = `${cfg.dir}/checkpoint.request`;
-  if (existsSync(req)) { try { unlinkSync(req); } catch {} checkpoint("notice"); }
+  if (existsSync(req)) {
+    let why = "";
+    try { why = readFileSync(req, "utf8").trim(); unlinkSync(req); } catch {}
+    checkpoint(/^[a-z]{1,20}$/.test(why) ? why : "notice");
+  }
 }, cfg.heartbeatMs);
 const every = cfg.checkpointEveryMs > 0 ? setInterval(() => checkpoint("interval"), cfg.checkpointEveryMs) : null;
 

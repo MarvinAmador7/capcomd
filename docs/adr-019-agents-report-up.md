@@ -135,6 +135,15 @@ Step 3 (built: the supervisor, its outbox and checkpoints):
   - spend and stuck states in the supervisor's reports (the runner computes both from the log; see §2, step 4);
   - checkpoints at each spend step;
   - `send`/`inbox` for workers (a headless CLI can't read a message mid-run, so this needs its own design).
+  - When a budget covers the agent (its own, an ancestor's or the run's), it also checkpoints each time its spend
+    passes another quarter of the tightest one: the engine's answer to each spend report carries how much is used,
+    and the runner asks the supervisor (`checkpoint.request`, reason "spend"). A grant lowers the step; passing it
+    again checkpoints again.
+  - Spend and stuck states aren't in the supervisor's reports: the runner already computes both from the agent's
+    log (§2, step 4), and the supervisor stays provider-agnostic.
+- **Not built yet:**
+  - `send`/`inbox` for workers (a headless CLI can't read a message mid-run, so this needs its own design);
+  - deleting checkpoint refs once their agent's work has landed.
 
 ### 4. Limits are optional
 
