@@ -48,7 +48,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     // No limits unless a profile sets them (ADR-019): no turn or budget flags, no `timeout` wrapper.
     expect(argv).not.toContain("--max-turns");
     expect(argv).not.toContain("--max-budget-usd");
-    expect(readFileSync(join(s.W, "run.sh"), "utf8")).not.toContain("timeout ");
+    expect(readFileSync(join(s.W, "agent.sh"), "utf8")).not.toContain("timeout "); // run under the supervisor
     expect(argv[argv.indexOf("--allowedTools") + 1]).toContain("Bash(npm test:*)");
     expect(argv[argv.indexOf("--disallowedTools") + 1]).toContain("Bash(git push:*)");
     expect(argv).toContain("KEY_PRESENT");
@@ -56,8 +56,10 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     const span = getFinishedSpans().find((x) => x.name === "agent.claude_code")!;
     expect(span.attributes["agent.cost_usd"]).toBeCloseTo(0.123);
     const names = span.events.map((e) => e.name);
-    expect(names).toEqual(["agent.system.init", "agent.assistant", "agent.user", "agent.result.success"]);
-    expect(span.events[1]!.attributes!["agent.tool"]).toBe("Edit");
+    expect(names.filter((n) => !n.startsWith("agent.supervisor."))).toEqual(["agent.system.init", "agent.assistant", "agent.user", "agent.result.success"]);
+    expect(names).toContain("agent.supervisor.start");
+    expect(names).toContain("agent.supervisor.exit");
+    expect(span.events.find((e) => e.name === "agent.assistant")!.attributes!["agent.tool"]).toBe("Edit");
 
     // The key went into exactly one exec env (the claude start), never into git execs.
     const withKey = s.log.filter((l) => l.envKeys.includes("ANTHROPIC_API_KEY"));
@@ -135,7 +137,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     const argv = readFileSync(join(s.W, "argv.txt"), "utf8").split("\n");
     expect(argv[argv.indexOf("--max-turns") + 1]).toBe("30");
     expect(argv[argv.indexOf("--max-budget-usd") + 1]).toBe("2");
-    expect(readFileSync(join(s.W, "run.sh"), "utf8")).toContain("timeout -k 10 60 ");
+    expect(readFileSync(join(s.W, "agent.sh"), "utf8")).toContain("timeout -k 10 60 ");
   });
 
   test("an agent whose CLI goes silent is stopped as idle, and keeps its work", async () => {
@@ -206,6 +208,24 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     claudeAdapter.parse('{"type":"result","subtype":"success","is_error":true,"result":"API Error: Request rejected (429) · rate limited"}', r, b, {} as any);
     expect(b.quota).toBeUndefined();
   });
+
+  test("supervisor (ADR-019): heartbeats from inside the VM, and a checkpoint of the work pushed while the agent runs", async () => {
+    const s = await setup("[steady] steady work", { CAPCOMD_AGENT_CHECKPOINT_MS: "500" });
+    const reports: any[] = [];
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY, heartbeatMs: 200, onReport: (x) => reports.push(x) });
+    expect(res.stopReason).toBe("success");
+    expect(reports.filter((x) => x.type === "heartbeat" && x.source === "supervisor").length).toBeGreaterThanOrEqual(3);
+    const cps = reports.filter((x) => x.type === "checkpoint");
+    expect(cps.length).toBeGreaterThanOrEqual(1);
+    expect(cps[0]).toMatchObject({ ref: "refs/capcomd/checkpoints/r1/task-1", reason: "interval", files: 1 });
+    // pushed to the remote, holding the work before the final commit existed
+    expect(await s.r.sha("refs/capcomd/checkpoints/r1/task-1")).toBe(cps.at(-1).sha);
+    expect(await s.r.show(cps[0].sha, "src/sum.ts")).toContain("a + b");
+    expect(readFileSync(join(s.W, "run.sh"), "utf8")).toContain("supervisor.mjs");
+    const span = getFinishedSpans().find((x) => x.name === "agent.claude_code")!;
+    expect(span.attributes["agent.supervised"]).toBe(true);
+    expect(span.events.map((e) => e.name)).toContain("agent.checkpoint");
+  }, 60_000);
 
   test("timeout kills the agent process group", async () => {
     const s = await setup("[sleep] hang", { CAPCOMD_AGENT_TIMEOUT_MS: "1500" });

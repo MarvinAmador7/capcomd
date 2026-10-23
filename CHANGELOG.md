@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agents now save checkpoints of their work while they run, so a crash, a cancel or a lost VM no longer loses
+  everything since the last commit. Every 10 minutes, and right after the agent commits, a snapshot of its
+  workspace is pushed to `refs/capcomd/checkpoints/<agent>` on your repository, without touching the agent's own
+  files or git state. `inspect`, `tree` and `await` show the latest one as `checkpoint` (ref, commit, time, files
+  changed). To continue from one, start the new agent with
+  `git fetch origin refs/capcomd/checkpoints/<agent> && git merge FETCH_HEAD`. Change the interval per profile
+  with `capcomd agents set <profile> --checkpoint-every-ms N`.
+- Agents that can't spawn now report that they're alive from inside their VM, every 30 seconds, instead of the
+  engine inferring it from their output. An agent that is thinking quietly is no longer reported as silent.
 - An agent that hits its provider's usage limit (a Claude or ChatGPT plan's limit, or the API's) is now paused
   instead of failed. It keeps what it has done so far on its branch, shows as `paused` in `tree` and `inspect`
   with the time it resumes, and runs again by itself after the provider's reset time, continuing from that

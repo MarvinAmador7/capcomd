@@ -92,6 +92,8 @@ export interface AgentConfig {
   timeoutMs?: number;
   /** No events from the agent CLI for this long: it has hung, so it is stopped (its work kept). */
   idleAfterMs: number;
+  /** ADR-019 §3: the in-VM supervisor checkpoints the workspace this often (0: never). */
+  checkpointEveryMs: number;
   pollMs: number;
   allowedTools: string[];
   disallowedTools: string[];
@@ -147,7 +149,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   const { resolveAgent } = require("./profiles") as typeof import("./profiles");
   const ra = resolveAgent(profileName, source);
   const spec = ra.spec;
-  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs };
+  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs, AGENT_CHECKPOINT_MS: spec?.checkpointEveryMs };
   const opt = (name: string) => {
     const v = envVar(name, source);
     const n = v === undefined ? specNum[name] : Number(v);
@@ -167,6 +169,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     maxBudgetUsd: opt("AGENT_MAX_BUDGET_USD"),
     timeoutMs: opt("AGENT_TIMEOUT_MS"),
     idleAfterMs: num("AGENT_IDLE_MS", 30 * 60_000),
+    checkpointEveryMs: num("AGENT_CHECKPOINT_MS", 10 * 60_000),
     pollMs: num("AGENT_POLL_MS", 2000),
     allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? DEFAULT_ALLOWED_TOOLS),
     disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), spec?.disallowedTools ?? DEFAULT_DISALLOWED_TOOLS),

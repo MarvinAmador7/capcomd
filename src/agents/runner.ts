@@ -7,6 +7,12 @@ import type { AgentAdapter, AgentEvent, AgentRunState } from "./types";
 import { Redactor } from "./redact";
 import { taskKey } from "../merge/config";
 import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils/tracing-simple";
+import { readFileSync } from "fs";
+
+/** ADR-019 §1: what the in-VM supervisor reports up (its outbox), or the runner on its behalf without one. */
+export type SupervisorReport =
+  | { type: "heartbeat"; events: number; lastEventAt: number; source: "supervisor" | "events" }
+  | { type: "checkpoint"; sha: string; ref: string; reason: string; files: number };
 
 export interface AgentTask {
   /** ADR-017 / TUI contract: scope agent id and its parent (null at root), stamped on agent.* spans. */
@@ -61,6 +67,13 @@ export interface AgentRunOptions {
    * records it and answers with a limit to stop at (e.g. "max_budget_usd") when a budget is over, else null.
    */
   onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }) => Promise<string | null>;
+  /**
+   * ADR-019 §1: reports from the in-VM supervisor: heartbeats while it is alive, and checkpoints (already pushed to
+   * `ref`). A VM without node has no supervisor; heartbeats then come from the agent CLI's own events.
+   */
+  onReport?: (r: SupervisorReport) => void;
+  /** Supervisor heartbeat interval (default 30s). */
+  heartbeatMs?: number;
   secrets?: string[];
   now?: () => number;
   /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
@@ -84,6 +97,9 @@ export const stoppedAt = (limit: string) =>
   limit === "idle" ? "stopped after going idle (no output from the agent)" : limit === "quota" ? "stopped by its provider's usage limit" : `stopped at its ${limit} limit`;
 /** The CLI's own stop reasons that mean "out of budget", not "broken" (claude result subtypes; `timeout` exit 124). */
 const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turns: "max_turns", error_max_budget_usd: "max_budget_usd" };
+
+/** The supervisor program, uploaded into each VM next to the agent. */
+const SUPERVISOR_SOURCE = readFileSync(new URL("./supervisor.mjs", import.meta.url).pathname, "utf8");
 
 export const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 export const SECRET_PLACEHOLDER_PREFIX = "bxds_";
@@ -307,33 +323,67 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       } else promptText = [promptText, sa.skill].join("\n\n");
     }
     await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(promptText)));
-    const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`;
+    const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`, outbox = `${W}/outbox.jsonl`;
+    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}) }, sq)}`;
+    // ADR-019 §1: the supervisor runs the agent and reports up through the outbox. It needs node, which the npm CLIs
+    // bring; a VM without it (a native CLI) runs the agent directly, as before.
+    const ckptRef = `refs/capcomd/checkpoints/${task.agentId ?? `${task.runId}/${task.taskId}`}`;
+    // A node that really runs code (≥16 for the supervisor's ESM): a stub or an old one would silently run nothing.
+    const supervised = (await sh(`node -e 'process.stdout.write(+process.versions.node.split(".")[0] >= 16 ? "yes" : "no")' 2>/dev/null; true`)).stdout.trim() === "yes";
+    if (supervised) {
+      await provider.upload(vmId, `${W}/agent.sh`, new TextEncoder().encode(`${agentLine}\n`));
+      await provider.upload(vmId, `${W}/supervisor.mjs`, new TextEncoder().encode(SUPERVISOR_SOURCE));
+      await provider.upload(vmId, `${W}/supervisor.json`, new TextEncoder().encode(JSON.stringify({
+        script: `${W}/agent.sh`, dir: W, repo, jsonl, outbox, ref: ckptRef, agentId: task.agentId ?? task.taskId,
+        heartbeatMs: opts.heartbeatMs ?? 30_000, checkpointEveryMs: task.review || task.report ? 0 : cfg.checkpointEveryMs,
+      })));
+    }
+    setSpanAttributes(span, { "agent.supervised": supervised });
     const script = [
       "#!/bin/sh",
       `cd ${sq(repo)} || exit 97`,
       `echo $$ > ${sq(pidFile)}`,
       ...(prelude ? [prelude] : []),
       ...(capcomdPrelude ? [capcomdPrelude] : []),
-      `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}) }, sq)}`,
+      supervised ? `node ${sq(`${W}/supervisor.mjs`)} ${sq(`${W}/supervisor.json`)}` : agentLine,
       `echo $? > ${sq(exitFile)}`,
     ].join("\n");
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));
     // The credential exists only in this exec's env (inherited by the agent). Never logged.
-    must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
+    must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)} ${sq(outbox)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
       { ...adapter.baseEnv(), ...(credential ? adapter.credentialEnv(credential) : {}) }), `start ${name}`, "failed");
 
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
     const deadline = cfg.timeoutMs ? now() + cfg.timeoutMs + 30_000 : Infinity;
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     live = state;
-    let consumed = 0, exitCode: number | null = null, seen = 0, lastEventAt = now(), renewedAt = 0, spendAt = now();
+    let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, seen = 0, lastEventAt = now(), renewedAt = 0, spendAt = now();
     const startedAt = now();
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
     // caller stops the agent instead of retrying it, so hours of work aren't redone or lost at a cap.
     let limit: string | null = null;
+    // A checkpoint the supervisor made in the VM is pushed from here: the agent holds no push credentials.
+    const pushCheckpoint = async (c: { sha: string; reason: string; files: number }) => {
+      const res = await git(["push", "--force", "--porcelain", "origin", `${c.sha}:${ckptRef}`], repo, 300_000).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+      addSpanEvent(span, "agent.checkpoint", { "git.sha": c.sha, "agent.checkpoint_reason": c.reason, "agent.checkpoint_files": c.files, ...(res.code ? { "agent.checkpoint_error": r.text(res.stderr).slice(-300) } : {}) });
+      if (!res.code) opts.onReport?.({ type: "checkpoint", sha: c.sha, ref: ckptRef, reason: c.reason, files: c.files });
+    };
     const drain = async (final: boolean) => {
-      const res = await sh(`tail -n +${consumed + 1} ${sq(jsonl)} 2>/dev/null; printf '\\n__CAPCOMD_EXIT__%s' "$(cat ${sq(exitFile)} 2>/dev/null)"`);
-      const [body, exitPart] = res.stdout.split("\n__CAPCOMD_EXIT__");
+      const res = await sh(`tail -n +${consumed + 1} ${sq(jsonl)} 2>/dev/null; printf '\\n__CAPCOMD_OUTBOX__\\n'; tail -n +${outConsumed + 1} ${sq(outbox)} 2>/dev/null; printf '\\n__CAPCOMD_EXIT__%s' "$(cat ${sq(exitFile)} 2>/dev/null)"`);
+      const [rest, exitPart] = res.stdout.split("\n__CAPCOMD_EXIT__");
+      const [body, outPart] = (rest ?? "").split("\n__CAPCOMD_OUTBOX__\n");
+      // The supervisor's reports: complete lines only (a line still being written is read next time).
+      let ckpt: { sha: string; reason: string; files: number } | null = null;
+      for (const line of (outPart ?? "").split("\n")) {
+        if (!line.trim()) continue;
+        let rep: any;
+        try { rep = JSON.parse(line); } catch { break; }
+        outConsumed++;
+        if (rep.type === "heartbeat") opts.onReport?.({ type: "heartbeat", events: Number(rep.events ?? 0), lastEventAt: Number(rep.lastEventAt ?? 0), source: "supervisor" });
+        else if (rep.type === "checkpoint" && typeof rep.sha === "string") ckpt = { sha: rep.sha, reason: String(rep.reason ?? ""), files: Number(rep.files ?? 0) };
+        else if (rep.type === "error" || rep.type === "start" || rep.type === "exit") addSpanEvent(span, `agent.supervisor.${rep.type}`, { ...(rep.message ? { "agent.text": r.text(String(rep.message)) } : {}), ...(rep.code !== undefined ? { "agent.exit_code": rep.code } : {}) });
+      }
+      if (ckpt) await pushCheckpoint(ckpt);
       const lines = (body ?? "").split("\n");
       if (lines[lines.length - 1] === "") lines.pop();
       for (let i = 0; i < lines.length; i++) {
@@ -347,6 +397,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         });
         opts.onEvent?.(ev);
       }
+      // No supervisor: the agent CLI's own events are its heartbeat (PR #3's path).
+      if (!supervised && state.events > beatEvents) { beatEvents = state.events; opts.onReport?.({ type: "heartbeat", events: state.events, lastEventAt: now(), source: "events" }); }
       const code = (exitPart ?? "").trim();
       if (code !== "") exitCode = Number(code);
     };

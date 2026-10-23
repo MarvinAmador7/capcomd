@@ -460,8 +460,8 @@ export const workerActor = actor({
         // Optional: with a boxd host-bound secret the VM holds a bxds_ placeholder and this is unused.
         const apiKey = process.env[adapter.secretName];
         const runId = params.runId;
-        // Liveness from what the agent does, not what it says: its CLI's events (throttled) are its heartbeat, so an
-        // agent without the in-VM capcomd (one that can't spawn) isn't flagged stuck while it works.
+        // ADR-019 §1: liveness is reported up by the in-VM supervisor (or, without one, the agent CLI's own events), for
+        // every agent, so one that can't spawn isn't flagged stuck while it works. Checkpoints are recorded too.
         const scope = workerId.startsWith("agt-") ? (c as any).client().scope.getOrCreate([runId]) : null;
         const beatEvery = heartbeatEveryMs();
         let beatAt = 0;
@@ -471,8 +471,11 @@ export const workerActor = actor({
           ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
         }, loadAgentConfig(process.env, params.agent), {
           apiKey,
-          onEvent: () => {
-            if (!scope || Date.now() - beatAt < beatEvery) return;
+          heartbeatMs: beatEvery,
+          onReport: (rep) => {
+            if (!scope) return;
+            if (rep.type === "checkpoint") { scope.checkpoint({ agentId: workerId, ref: rep.ref, sha: rep.sha, reason: rep.reason, files: rep.files }).catch(() => {}); return; }
+            if (Date.now() - beatAt < beatEvery) return;
             beatAt = Date.now();
             scope.heartbeat({ agentId: workerId }).catch(() => {});
           },

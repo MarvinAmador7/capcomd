@@ -4,6 +4,7 @@
 #   [slow] keep working for ~5s, one event every 0.25s (liveness)
 #   [quota] or [quota:N] edit, then stop at a plan usage limit resetting in N seconds (default 3600), as
 #           claude 2.1.303 does; a resumed run (its prompt says it was stopped earlier) works normally
+#   [steady] edit, then keep working for ~3s (checkpoints, supervisor heartbeats)
 #   [spend] edit, then keep working for ~10s, each message reporting 100k output tokens (live spend)
 prompt=""; args=("$@")
 while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; *) shift;; esac; done
@@ -41,6 +42,9 @@ case "$prompt" in *"stopped earlier by your provider's usage limit"*) ;; *"[quot
   emit "{\"type\":\"assistant\",\"message\":{\"model\":\"<synthetic>\",\"content\":[{\"type\":\"text\",\"text\":\"You've hit your session limit · resets 3pm (UTC)\"}]},\"error\":\"rate_limit\",\"is_api_error_message\":true,\"api_error_status\":429,\"api_error\":\"usage_limit_reached\",\"api_error_params\":{\"rate_limit_info\":$info}}"
   emit '{"type":"result","subtype":"success","is_error":true,"num_turns":2,"total_cost_usd":0,"result":"You'"'"'ve hit your session limit · resets 3pm (UTC)","api_error_status":429,"api_error":"usage_limit_reached"}'
   exit 1;;
+esac
+case "$prompt" in *"[steady]"*)
+  for i in $(seq 1 12); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
 esac
 # [wip]: edit, then hang (a limit with work to keep)
 case "$prompt" in *"[wip]"*) sleep 120;; esac

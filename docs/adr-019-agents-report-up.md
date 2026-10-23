@@ -84,6 +84,29 @@ Each checkpoint sends a progress report up: spend since the last one, the diff a
 result, and the agent's last message. Any stop (a limit, stuck, a crash, cancel) loses at most one interval of work,
 and a parent continues from the checkpoint the way it continues from a stopped branch today (PR #4).
 
+Step 3 (built: the supervisor, its outbox and checkpoints):
+
+- **The supervisor** is `src/agents/supervisor.mjs`, a dependency-free Node program.
+  - `run.sh` starts it when the VM has `node`, and it runs the agent line from `agent.sh`. A VM without node (a
+    native CLI) runs the agent directly, as before.
+  - It appends reports to `outbox.jsonl`: `start`, a `heartbeat` every 30 s (with the count of agent events and
+    when the last one came), `checkpoint`, `error` and `exit`.
+  - The runner drains the outbox in the same exec that tails the agent's log, so the transport adds no calls.
+- **Heartbeats** now come from the supervisor's reports, replacing PR #3's engine-side path. Without a supervisor,
+  the agent CLI's events still serve, as before.
+- **Checkpoints** are taken at start (the baseline, not reported), every `checkpointEveryMs` (profile field,
+  default 10 min) and when HEAD moves.
+  - The supervisor only writes the commit and the local ref. It never pushes, because the agent must not hold push
+    credentials. The engine pushes each reported checkpoint with its own git credentials and records it on the
+    agent (`checkpoint`, `AGENT_CHECKPOINT`).
+  - Reviewers and reporting agents don't checkpoint.
+- **Not built yet:**
+  - spend and stuck states in the supervisor's reports (the runner still computes spend and idle from the log;
+    §2 is step 4);
+  - checkpoints at each spend step;
+  - `send`/`inbox` for workers (a headless CLI can't read a message mid-run, so this needs its own design);
+  - deleting checkpoint refs once their agent's work has landed.
+
 ### 4. Limits are optional
 
 - `maxTurns`, `timeoutMs` and `maxBudgetUsd` have **no defaults**. Unset means none. A profile that sets one gets

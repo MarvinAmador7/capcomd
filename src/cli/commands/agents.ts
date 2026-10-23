@@ -29,6 +29,7 @@ export function specFromFlags(v: Record<string, any>): Partial<AgentSpec> {
   set("maxBudgetUsd", num(v.budget, "budget"));
   set("timeoutMs", num(v["timeout-ms"], "timeout-ms"));
   set("idleAfterMs", num(v["idle-after-ms"], "idle-after-ms"));
+  set("checkpointEveryMs", num(v["checkpoint-every-ms"], "checkpoint-every-ms"));
   set("sandbox", v.sandbox);
   set("egress", list(v.egress));
   set("systemPrompt", v["system-prompt"]);
@@ -79,7 +80,7 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
       let effective: unknown = null, error: string | null = null;
       try {
         const c = loadAgentConfig(process.env, n);
-        effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
+        effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
       } catch (e) { error = (e as Error).message; }
       out({ name: n, default: f.default === n, spec, effective, error, ...readiness(n, spec) }, JSON.stringify({ name: n, spec, effective, error }, null, 2));
       return error ? 1 : 0;
