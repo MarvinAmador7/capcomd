@@ -39,6 +39,8 @@ export interface AgentTask {
   report?: boolean;
   /** ADR-019 §6: a paused agent running again; its earlier work (if any) is already on the branch. */
   resumed?: boolean;
+  /** `spawn --continue`: start the branch from another agent's stopped work (its branch or checkpoint ref). */
+  from?: { agentId: string; ref: string; stopped: string };
 }
 
 export interface AgentResult {
@@ -131,6 +133,7 @@ export function buildPrompt(t: AgentTask): string {
     "- Do not commit, push, or change git remotes; capcomd commits and pushes your working tree.",
     "- Do not print environment variables or credentials.",
   ];
+  if (t.from) lines.push(`- This continues the work of agent ${t.from.agentId}, which stopped (${t.from.stopped}) before finishing. Its changes are already in your checkout (see \`git log\` and \`git diff ${t.target}\`): continue from them instead of starting over.`);
   if (t.resumed) lines.push("- You were stopped earlier by your provider's usage limit. Whatever you had done is already on this branch (see `git log`); continue the task from there instead of starting over.");
   if (t.conflictFiles?.length) lines.push(`- A previous attempt conflicted with ${t.target} in: ${t.conflictFiles.join(", ")}. Re-apply the change on top of the current ${t.target}.`);
   return lines.join("\n");
@@ -258,7 +261,10 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
         return { sha, already: true, costUsd: 0, turns: 0, stopReason: "already_pushed", events: 0, ...(stop?.trim() ? { limit: stop.trim() } : {}) };
       }
     }
-    if (!task.review) must(await git(["checkout", "-B", task.branch, branchExists && !task.rework ? `origin/${task.branch}` : `origin/${task.target}`], repo), "git checkout");
+    // A continuation starts from the stopped agent's work, until its own branch exists.
+    const startFrom = task.from && !branchExists && !task.report ? "FETCH_HEAD" : null;
+    if (startFrom) must(await git(["fetch", "origin", task.from!.ref], repo), "git fetch (continue)");
+    if (!task.review) must(await git(["checkout", "-B", task.branch, startFrom ?? (branchExists && !task.rework ? `origin/${task.branch}` : `origin/${task.target}`)], repo), "git checkout");
 
     // Reuse dependencies baked into the env snapshot when the lockfile matches (capcomd env build).
     const T = templateDir(cfg);

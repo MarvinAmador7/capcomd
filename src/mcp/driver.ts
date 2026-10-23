@@ -85,11 +85,11 @@ export async function inspect(a: { runId: string; agent: string; tail?: number }
 
 // ── agents ────────────────────────────────────────────────────────────────────────────────────────
 
-export async function spawn(a: { runId: string; task: string; profile?: string; key?: string; budget?: string; check?: string; report?: boolean; children?: Record<string, unknown> }) {
+export async function spawn(a: { runId: string; task: string; profile?: string; key?: string; budget?: string; check?: string; report?: boolean; continue?: string; children?: Record<string, unknown> }) {
   let budget: Budget | undefined;
   try { budget = a.budget ? parseBudget(a.budget) : undefined; } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Units: usd, turns, wallSeconds, e.g. \"usd=1,turns=40\"."); }
   // No `operator`: a driver's spawn may only narrow the profile, like any parent.
-  const r = await O.spawnAgent({ runId: a.runId, task: a.task, profile: a.profile, key: a.key, ...(budget ? { budget } : {}), ...(a.check ? { check: a.check } : {}), ...(a.report ? { report: true } : {}), ...(a.children ? { grant: a.children as any } : {}) });
+  const r = await O.spawnAgent({ runId: a.runId, task: a.task, profile: a.profile, key: a.key, ...(budget ? { budget } : {}), ...(a.check ? { check: a.check } : {}), ...(a.report ? { report: true } : {}), ...(a.continue ? { continueFrom: a.continue } : {}), ...(a.children ? { grant: a.children as any } : {}) });
   return { ...agentView(r), next: `Wait with capcomd_await {runId: "${a.runId}", agents: ["${r.agentId}"]}.` };
 }
 

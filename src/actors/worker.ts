@@ -346,6 +346,8 @@ export const workerActor = actor({
       c,
       params: {
         workerId: string; taskId: string; epoch: number; branch: string; runId?: string; parentAgentId?: string | null; target?: string; rework?: boolean; resumed?: boolean;
+        /** `spawn --continue`: the stopped agent whose work this branch starts from. */
+        from?: { agentId: string; ref: string; stopped: string };
         /** Task goal for a real agent (claude-code). */
         goal?: string;
         /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
@@ -468,7 +470,7 @@ export const workerActor = actor({
         let beatAt = 0;
         const res = await runAgent(adapter, provider, vmId, {
           runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
-          goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
+          goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
           ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
         }, loadAgentConfig(process.env, params.agent), {
           apiKey,
