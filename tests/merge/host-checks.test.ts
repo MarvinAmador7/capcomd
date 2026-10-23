@@ -30,3 +30,23 @@ test("a host check doesn't see BOXD_API_KEY, and gets the run's ids", async () =
     expect(r.output).toContain("PATH=");
   } finally { if (saved === undefined) delete process.env.BOXD_API_KEY; else process.env.BOXD_API_KEY = saved; }
 });
+
+test("a tree that passed a command isn't checked again with it (verify, then merge onto an unmoved target)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "capcomd-reuse-"));
+  const dir = join(root, "clone");
+  const g = new Git(root);
+  await g.ok(["init", "-q", dir]);
+  const git = new Git(dir);
+  await git.ok(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"]);
+  const runs = join(root, "runs.txt");
+  const cmd = `echo ran >> ${runs}`;
+  expect(await runTests(git, cmd, {})).toMatchObject({ passed: true, where: "host" });
+  const again = await runTests(git, cmd, {});
+  expect(again).toMatchObject({ passed: true, where: "reused" });
+  expect(again.output).toContain("not run again");
+  expect((await Bun.file(runs).text()).trim().split("\n")).toHaveLength(1);
+  // another command, or a failure, always runs
+  expect(await runTests(git, `${cmd}; true`, {})).toMatchObject({ where: "host" });
+  expect(await runTests(git, "exit 1", {})).toMatchObject({ passed: false });
+  expect(await runTests(git, "exit 1", {})).toMatchObject({ passed: false, where: "host" });
+});
