@@ -100,7 +100,8 @@ echo "   https://github.com/$REPO"
 
 echo "== 2. engine on :$PORT"
 curl -s -m 1 "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && die "port $PORT became busy before the engine started"
-bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
+# Engine data in the run's work dir, not ~/.capcomd/engine/<port> (one per test port, never removed).
+CAPCOMD_ENGINE_DATA="$WORK/engine" bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
 ENGINE_PID=$!
 cleanup() { [ -n "${RUN_PID:-}" ] && kill "$RUN_PID" 2>/dev/null; pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
