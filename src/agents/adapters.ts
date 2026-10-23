@@ -11,6 +11,32 @@ function parseJson(line: string, r: Redactor): any | null {
   return r.value(raw);
 }
 
+/**
+ * Provider usage limits (ADR-019 §6), from the CLIs' own code at the pinned versions (claude 2.1.303 `lt()`/`zWo()`,
+ * codex-rs 0.163.0 `UsageLimitReachedError`). A plain 429 is retried by the CLI itself and isn't one of these.
+ */
+const CLAUDE_USAGE_LIMIT = /^(You['’]ve hit your|You['’]ve reached your|You['’]re out of usage credits)/;
+const CODEX_USAGE_LIMIT = /^(You['’]ve hit your usage limit|Quota exceeded\. Check your plan|Your workspace is out of credits|You hit your spend cap)/;
+
+/**
+ * codex prints a usage limit's reset only as VM-local clock text ("Try again at 3:05 PM." today, else
+ * "Try again at Oct 25th, 2026 3:05 PM."); the VM runs it with TZ=UTC. Best effort: undefined if absent or unparsable.
+ */
+export function codexResetAt(message: string, now = Date.now()): number | undefined {
+  const m = /try again at (.+?)\.?$/i.exec(message.trim());
+  if (!m) return undefined;
+  const t = /^(?:([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) )?(\d{1,2}):(\d{2}) ?([AP]M)$/i.exec(m[1]!.trim());
+  if (!t) return undefined;
+  const h = (Number(t[4]) % 12) + (t[6]!.toUpperCase() === "PM" ? 12 : 0), min = Number(t[5]);
+  const d = new Date(now);
+  if (t[1]) {
+    const mon = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(t[1].toLowerCase());
+    return mon < 0 ? undefined : Date.UTC(Number(t[3]), mon, Number(t[2]), h, min);
+  }
+  const at = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), h, min);
+  return at < now - 60_000 ? at + 86_400_000 : at;
+}
+
 /** Claude Code `--output-format stream-json`: system/assistant/user/result events. */
 export const claudeAdapter: AgentAdapter = {
   kind: "claude-code",
@@ -56,6 +82,15 @@ export const claudeAdapter: AgentAdapter = {
       state.costUsd = all.reduce((x, v) => x + claudeCostUsd(v), 0);
       state.inputTokens = all.reduce((x, v) => x + v.input + v.cacheWrite + v.cacheRead, 0);
       state.outputTokens = all.reduce((x, v) => x + v.output, 0);
+    }
+    // Usage limit: a rejected rate_limit_event carries the reset (epoch s); the stop itself is a synthetic assistant
+    // message and an is_error result with api_error "usage_limit_reached" (internal, so the text prefix too).
+    if (ev.type === "rate_limit_event" && raw.rate_limit_info?.status === "rejected" && Number(raw.rate_limit_info.resetsAt) > 0)
+      state.quotaResetHint = Number(raw.rate_limit_info.resetsAt) * 1000;
+    const errText = ev.type === "result" ? (typeof raw.result === "string" ? raw.result : "") : ev.text ?? "";
+    if ((ev.type === "assistant" || (ev.type === "result" && raw.is_error)) && (raw.api_error === "usage_limit_reached" || (raw.error === "rate_limit" || ev.type === "result") && CLAUDE_USAGE_LIMIT.test(errText))) {
+      const reset = Number(raw.api_error_params?.rate_limit_info?.resetsAt) * 1000 || state.quotaResetHint;
+      state.quota = { message: errText.slice(0, 300), ...(reset ? { resetAt: reset } : {}) };
     }
     if (ev.type === "result") {
       if (typeof raw.result === "string") { ev.text = raw.result.slice(0, 500); state.resultText = raw.result; }
@@ -105,7 +140,8 @@ export const codexAdapter: AgentAdapter = {
   apiHost: AGENT_API_HOST.codex,
   // codex exec reads CODEX_API_KEY for API-key auth in automation.
   credentialEnv: (v) => ({ CODEX_API_KEY: v, OPENAI_API_KEY: v }),
-  baseEnv: () => ({ CI: "1", NO_COLOR: "1" }),
+  // TZ=UTC: codex prints a usage limit's reset as local clock time (codexResetAt).
+  baseEnv: () => ({ CI: "1", NO_COLOR: "1", TZ: "UTC" }),
   command: (ctx, q) =>
     `${q(ctx.bin)} exec --json --color never --ephemeral --sandbox ${ctx.cfg.codexSandbox} -C ${q(ctx.repo)}` +
     (ctx.cfg.model ? ` -m ${q(ctx.cfg.model)}` : "") +
@@ -133,6 +169,11 @@ export const codexAdapter: AgentAdapter = {
     }
     if (type === "turn.failed" || type === "error") {
       state.error = String(raw.error?.message ?? raw.message ?? type).slice(0, 300);
+      // A usage limit isn't retried by codex (retryable errors read "Reconnecting…", "exceeded retry limit…").
+      if (CODEX_USAGE_LIMIT.test(state.error.trim())) {
+        const reset = codexResetAt(state.error);
+        state.quota = { message: state.error, ...(reset ? { resetAt: reset } : {}) };
+      }
       state.stopReason = type === "error" ? "error" : "turn_failed";
       ev.text = state.error;
     }

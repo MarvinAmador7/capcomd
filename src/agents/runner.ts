@@ -26,6 +26,8 @@ export interface AgentTask {
   review?: { sha: string; branch: string; target: string };
   /** Report mode: read-only work on the target (research, triage); the final message is the result, nothing is pushed. */
   report?: boolean;
+  /** ADR-019 §6: a paused agent running again; its earlier work (if any) is already on the branch. */
+  resumed?: boolean;
 }
 
 export interface AgentResult {
@@ -43,8 +45,10 @@ export interface AgentResult {
   agentVersion?: string;
   /** The agent's final message (a reviewer's verdict comes from it). */
   resultText?: string;
-  /** Stopped at a limit (timeout, max_turns, max_budget_usd, idle): `sha` holds the work so far, with a Capcomd-Stop trailer. */
+  /** Stopped at a limit (timeout, max_turns, max_budget_usd, idle, quota): `sha` holds the work so far, with a Capcomd-Stop trailer. */
   limit?: string;
+  /** limit "quota": when the provider's usage limit resets (ms epoch), if it said. */
+  resetAt?: number;
 }
 
 export interface AgentRunOptions {
@@ -76,7 +80,8 @@ const TTL_RENEW_MS = 10 * 60_000;
 const SPEND_REPORT_MS = 5_000;
 
 /** How a stop reads in errors and results ("idle" isn't a limit anyone set: the agent CLI went silent). */
-export const stoppedAt = (limit: string) => (limit === "idle" ? "stopped after going idle (no output from the agent)" : `stopped at its ${limit} limit`);
+export const stoppedAt = (limit: string) =>
+  limit === "idle" ? "stopped after going idle (no output from the agent)" : limit === "quota" ? "stopped by its provider's usage limit" : `stopped at its ${limit} limit`;
 /** The CLI's own stop reasons that mean "out of budget", not "broken" (claude result subtypes; `timeout` exit 124). */
 const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turns: "max_turns", error_max_budget_usd: "max_budget_usd" };
 
@@ -93,6 +98,7 @@ export function buildPrompt(t: AgentTask): string {
     "- Do not commit, push, or change git remotes; capcomd commits and pushes your working tree.",
     "- Do not print environment variables or credentials.",
   ];
+  if (t.resumed) lines.push("- You were stopped earlier by your provider's usage limit. Whatever you had done is already on this branch (see `git log`); continue the task from there instead of starting over.");
   if (t.conflictFiles?.length) lines.push(`- A previous attempt conflicted with ${t.target} in: ${t.conflictFiles.join(", ")}. Re-apply the change on top of the current ${t.target}.`);
   return lines.join("\n");
 }
@@ -350,6 +356,12 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       await new Promise((res) => setTimeout(res, cfg.pollMs));
       await drain(false);
       if (exitCode !== null) break;
+      // The provider's usage limit: retrying now only hits it again, so stop and keep the work (the agent is paused).
+      if (state.quota) {
+        await kill(); await drain(true);
+        limit = "quota";
+        break;
+      }
       const guard = adapter.guard(state, cfg);
       if (guard) {
         await kill(); await drain(true);
@@ -391,7 +403,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     await drain(true);
 
     const out = adapter.outcome(state, exitCode ?? -1);
-    limit ??= LIMIT_STOPS[out.stopReason] ?? null;
+    limit ??= state.quota ? "quota" : LIMIT_STOPS[out.stopReason] ?? null;
+    const resetAt = limit === "quota" && state.quota?.resetAt ? { resetAt: state.quota.resetAt } : {};
+    if (limit === "quota") addSpanEvent(span, "agent.quota", { "agent.quota_message": r.text(state.quota?.message ?? ""), ...(state.quota?.resetAt ? { "agent.quota_reset_at": state.quota.resetAt } : {}) });
     const billing = credentialMode === "subscription" ? "subscription" : "api";
     const notionalCostUsd = state.costUsd;
     const costUsd = billing === "subscription" ? 0 : state.costUsd;
@@ -406,6 +420,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
 
     // A reviewer or a reporting agent only answers: nothing it changed is committed or pushed.
     if (task.review || task.report) {
+      if (limit === "quota") return { sha: "", already: false, costUsd, turns, stopReason: limit, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, limit, ...resetAt };
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before answering`);
       setSpanAttributes(span, task.review ? { "agent.review": true } : { "agent.report": true });
       return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.report ? 8000 : 4000)) };
@@ -416,8 +431,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const status = await git(["status", "--porcelain"], repo);
     const ahead = await git(["rev-list", "--count", `origin/${task.target}..HEAD`], repo);
     if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) {
-      // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine.
-      if (opts.subagents) { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}) }; }
+      // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine. A paused agent
+      // (quota) has nothing to keep yet either: it starts over when it resumes.
+      if (opts.subagents || limit === "quota") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt }; }
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before changing anything`);
       throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
     }
@@ -432,7 +448,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const lease = branchExists ? `--force-with-lease=refs/heads/${task.branch}` : `--force-with-lease=refs/heads/${task.branch}:`;
     must(await git(["push", "--porcelain", lease, "origin", `HEAD:refs/heads/${task.branch}`], repo, 300_000), "git push");
     setSpanAttributes(span, { "git.sha": sha });
-    return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}) };
+    return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt };
   } catch (e) {
     // Failed/timed-out spans still carry what was spent so far (subscription billing: cost 0, notional set).
     const st = live as AgentRunState | null;

@@ -97,7 +97,7 @@ const round = (x: number) => Math.round(x * 1e6) / 1e6;
 
 /** Running agent with no heartbeat (in-VM call / log line) for STUCK_AFTER_MS, or no live driver. */
 export function stuckReason(a: TreeAgent, now = Date.now(), after = stuckAfterMs()): string | null {
-  if (TERMINAL_AGENT.has(a.status) || a.status === "pending") return null;
+  if (TERMINAL_AGENT.has(a.status) || a.status === "pending" || a.status === "paused") return null;
   if ((a.driverUntil ?? 0) < now) return "no live driver (lease expired); the next await takes it over";
   const last = a.heartbeatAt || a.createdAt || 0;
   if (last && now - last > after) return `no heartbeat for ${Math.round((now - last) / 1000)}s`;

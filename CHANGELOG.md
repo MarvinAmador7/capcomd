@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- An agent that hits its provider's usage limit (a Claude or ChatGPT plan's limit, or the API's) is now paused
+  instead of failed. It keeps what it has done so far on its branch, shows as `paused` in `tree` and `inspect`
+  with the time it resumes, and runs again by itself after the provider's reset time, continuing from that
+  branch. Other agents on the same login wait for the reset too, instead of starting and failing. To resume
+  sooner (for example after upgrading your plan), run `capcomd resume <runId> [agent]`, or call the new
+  `capcomd_resume` MCP tool. Resuming happens while the run is being awaited (`capcomd await`, `capcomd_await`, a
+  parent agent's `await`).
 - **Breaking:** agents no longer have default turn, time or money limits. Before, every agent stopped at 30 turns,
   20 minutes or $2 unless its profile said otherwise, and `capcomd setup` wrote 15–40 minute limits into the
   profiles it created. Now an unset limit means none, so an agent can work for hours as long as it keeps going.

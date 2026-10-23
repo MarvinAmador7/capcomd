@@ -69,6 +69,10 @@ function rowToAgent(r: any) {
     driverUntil: Number(r.driver_until ?? 0),
     heartbeatAt: Number(r.heartbeat_at ?? 0),
     heartbeatNote: (r.heartbeat_note as string | null) ?? null,
+    /** Attempt number: 1, then one more per resume (each attempt gets its own worker and VM). */
+    epoch: Number(r.epoch ?? 1),
+    /** Paused until (ms epoch) when its provider gave a reset time; 0 = until `resume`. */
+    pausedUntil: Number(r.paused_until ?? 0),
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -170,6 +174,8 @@ export const scopeActor = actor({
       // ADR-017: agent heartbeats, await edges (deadlock detection), token revocation, mailbox, logs.
       await addColumn(database, "agents_v2", "heartbeat_at", "INTEGER");
       await addColumn(database, "agents_v2", "heartbeat_note", "TEXT");
+      await addColumn(database, "agents_v2", "epoch", "INTEGER NOT NULL DEFAULT 1");
+      await addColumn(database, "agents_v2", "paused_until", "INTEGER");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -286,7 +292,7 @@ export const scopeActor = actor({
       const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
       const a = rowToAgent(r[0]);
-      if (TERMINAL_AGENT.has(a.status)) return { ok: false, agent: a };
+      if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { ok: false, agent: a };
       const now = Date.now();
       if (a.driver && a.driver !== params.driver && a.driverUntil > now) return { ok: false, agent: a };
       await c.db.transaction(async (tx: RawAccess) => {
@@ -310,6 +316,37 @@ export const scopeActor = actor({
       }, { name: "scopeFinish" });
       const orphans = await reapOrphans(c, { ...a, status: params.status });
       return { changed: true, orphans, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+    },
+
+    /**
+     * ADR-019 §6: the agent's provider said its usage limit is reached. Its work is on its branch; it waits, neither
+     * failed nor retried, until `until` (0: no reset time given) or `resume`. Releases the driver lease.
+     */
+    async pause(c, params: { agentId: string; until: number; result: Record<string, unknown>; spent?: Budget }) {
+      const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
+      const a = rowToAgent(r[0]);
+      if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { changed: false, agent: a };
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("UPDATE agents_v2 SET status = 'paused', paused_until = ?, result = ?, spent = ?, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
+          params.until, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
+        await addEvent(tx, "AGENT_PAUSED", params.agentId, { result: params.result, until: params.until || null }, `pause-${params.agentId}-e${a.epoch}`);
+      }, { name: "scopePause" });
+      return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+    },
+
+    /** A paused agent runs again as its next epoch (a new worker and VM, continuing on its branch). */
+    async resume(c, params: { agentId: string; by?: string }) {
+      const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
+      const a = rowToAgent(r[0]);
+      if (a.status !== "paused") return { changed: false, agent: a };
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("UPDATE agents_v2 SET status = 'running', epoch = ?, paused_until = NULL, result = NULL, heartbeat_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'paused'",
+          a.epoch + 1, Date.now(), Date.now(), params.agentId);
+        await addEvent(tx, "AGENT_RESUMED", params.agentId, { epoch: a.epoch + 1, by: params.by ?? null }, `resume-${params.agentId}-e${a.epoch + 1}`);
+      }, { name: "scopeResume" });
+      return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
 
     /** Merge fields into a finished agent's result (ADR-017: the latest verification of its branch). */

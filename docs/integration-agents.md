@@ -42,6 +42,7 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 | `capcomd_await` | `runId`, `agents[]`, `mode?` (`all`\|`any`), `timeoutMs?` (≤ 55000) | `{done[], pending[], first?, next}` |
 | `capcomd_send` | `runId`, `to`, `body`, `key?` | `{seq, …}` |
 | `capcomd_cancel` | `runId`, `agent?`, `reason?` | `{cancelled, affected[]}` |
+| `capcomd_resume` | `runId`, `agent?` | `{resumed[]}`: paused agents (provider usage limit) run again now |
 | `capcomd_verify` | `runId`, `ref`, `check?`, `acceptance?`, `key?`, `timeoutMs?` | `{id: "vfy-…", state: passed\|failed\|running, result, next}` |
 | `capcomd_merge` | `runId`, `ref`, `require`, `key?`, `timeoutMs?` | `{id: "mrg-…", state: merged\|failed\|awaiting_approval\|running, result, next}` |
 | `capcomd_approve` | `runId`, `merge`, `deny?`, `reason?` | the merge record, or a `forbidden` error (below) |

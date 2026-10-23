@@ -113,6 +113,10 @@ export async function cancel(a: { runId: string; agent?: string; reason?: string
   return O.cancelAgents(a.runId, a.agent, a.reason);
 }
 
+export async function resume(a: { runId: string; agent?: string }) {
+  return O.resumeAgents(a.runId, a.agent);
+}
+
 // ── gates ─────────────────────────────────────────────────────────────────────────────────────────
 
 /** Race a long operation against the wait; on timeout it keeps running here, and the same call picks it up. */

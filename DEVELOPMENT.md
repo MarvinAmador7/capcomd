@@ -23,8 +23,8 @@ Run the CLI from the checkout with `bun capcomd â€¦` (or `bun src/cli/index.ts â
 A git checkout keeps state next to the code: `.relay/` (auth profiles, env snapshot ledger, boxd VM ledger, run
 logs, driver pids), `.traces/` (spans) and `.capcomd/agents.json`. An installed CLI, or any CLI with
 `CAPCOMD_HOME` set, uses `~/.capcomd` (`state/`, `traces/`, `agents.json`). `src/utils/home.ts` decides; the
-per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_TRACE_DIR`, `CAPCOMD_AGENTS_FILE`,
-`CAPCOMD_BOXD_DB`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
+per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_QUOTA_LEDGER`, `CAPCOMD_TRACE_DIR`,
+`CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
 
 Persisted settings (`capcomd setup` writes them): `~/.capcomd/config.json` and the nearest `.capcomd/config.json` from
 the current directory are environment defaults, applied by `src/cli/apply-config.ts` before anything else loads

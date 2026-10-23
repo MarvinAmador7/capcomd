@@ -20,6 +20,10 @@ import { env } from "../utils/env";
 import { parseVerdict, reviewBrief } from "./review";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
+import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
+
+/** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
+const workerOf = (runId: string, agentId: string, epoch = 1) => client().worker.getOrCreate(epoch > 1 ? [runId, agentId, `e${epoch}`] : [runId, agentId]);
 
 const LEASE_MS = Number(env("DRIVER_LEASE_MS") ?? 15_000);
 const POLL_MS = Number(env("AWAIT_POLL_MS") ?? 300);
@@ -225,7 +229,16 @@ export function view(a: ScopeAgent) {
     agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status,
     budget: a.budget, spent: a.spent, task: a.task, key: a.key, limits: a.limits, result: a.result,
     ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...(stuckReason(a) ? { stuck: stuckReason(a) } : {}),
+    ...(a.status === "paused" && a.pausedUntil ? { pausedUntil: new Date(a.pausedUntil).toISOString() } : {}), ...(a.epoch > 1 ? { epoch: a.epoch } : {}),
   };
+}
+
+/** A paused agent whose reset time has passed runs again (its next epoch). True when it was woken. */
+async function wakeIfDue(runId: string, a: ScopeAgent): Promise<boolean> {
+  if (a.status !== "paused" || !a.pausedUntil || a.pausedUntil > Date.now()) return false;
+  const r = await client().scope.getOrCreate([runId]).resume({ agentId: a.agentId, by: "reset" });
+  if (r.changed) startDriver(runId, a.agentId);
+  return r.changed;
 }
 
 /** One non-blocking look at agents (ADR-017 in-VM await polls this): kicks stale drivers. */
@@ -234,6 +247,7 @@ export async function peekAgents(runId: string, ids: string[]) {
   const out: ScopeAgent[] = [];
   for (const id of ids) {
     const a = await getAgentOrThrow(runId, id);
+    if (a.status === "paused") { if (await wakeIfDue(runId, a)) kickedAt.set(id, Date.now()); out.push(a); continue; }
     if (!TERMINAL_AGENT.has(a.status) && (!a.driver || a.driverUntil < Date.now()) && (kickedAt.get(id) ?? 0) < Date.now() - LEASE_MS) { startDriver(runId, id); kickedAt.set(id, Date.now()); }
     out.push(a);
   }
@@ -281,7 +295,7 @@ export async function inspectAgent(runId: string, agentId: string, o: { logTail?
   const awaits = (await s.listAwaits({})).filter((w: any) => w.waiter === agentId || w.target === agentId);
   const events = (await s.getEvents({})).filter((e: any) => e.agentId === agentId || e.data?.parent === agentId).slice(-50);
   const logs = await s.getLogs({ agentId, tail: o.logTail ?? 50 });
-  const w = client().worker.getOrCreate([runId, agentId]);
+  const w = workerOf(runId, agentId, a.epoch);
   const wk: any = await w.getWorker({ workerId: agentId }).catch(() => null);
   return {
     ...view(a), contract: a.contract, spec: a.spec, driver: a.driver, driverUntil: a.driverUntil, heartbeatNote: a.heartbeatNote,
@@ -379,7 +393,8 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   if (!claim.ok) return claim.agent;
   const a = claim.agent;
   const hb = setInterval(() => { s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(() => {}); }, Math.max(500, LEASE_MS / 3));
-  const w = c.worker.getOrCreate([runId, agentId]);
+  const w = workerOf(runId, agentId, a.epoch);
+  const epoch = a.epoch;
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   // Test/eval knob: run the fake agent while profiles still govern policy (no real CLI/repo).
   // The carved budget narrows the profile: maxTurns ≤ turns, timeoutMs ≤ wallSeconds, maxBudgetUsd ≤ usd.
@@ -395,6 +410,13 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   // Fail fast (no retries, no driverless "running"): a real agent on boxd needs the env snapshot.
   const envProblem = exec ? envSnapshotProblem((a.spec as any)?.provider) : null;
   if (envProblem) { clearInterval(hb); throw new EnvSnapshotMissing(envProblem); }
+  // ADR-019 §6: the login this agent spends from is out of quota (another agent hit it): wait for the reset, don't run.
+  const login = exec ? loginOf(a.spec) : null;
+  const waitUntil = login ? quotaUntil(login) : 0;
+  if (waitUntil) {
+    clearInterval(hb);
+    return (await s.pause({ agentId, until: waitUntil, result: { limit: "quota", login, resetAt: waitUntil, error: `waiting for ${login}'s usage limit to reset (${new Date(waitUntil).toISOString()})` } })).agent;
+  }
   const branch = `capcomd/${runId}/${agentId}`;
   // The commit's Capcomd-Task trailer names the task: the contract's planTask when set (the
   // hierarchical recipe, so landings match the legacy `<run>/<task>` key), else the agent id.
@@ -402,11 +424,11 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   try {
     let wk = await w.getWorker({ workerId: agentId });
     if (!wk || wk.state === "provisioning" || wk.state === "failed") {
-      await w.provisionWorker({ workerId: agentId, runId, epoch: 1, ...(exec ? { agent: exec } : {}) });
+      await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec } : {}) });
       wk = await w.getWorker({ workerId: agentId });
     }
     if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
-    if (wk?.state === "idle") await w.assignTask({ workerId: agentId, taskId: taskLabel, epoch: 1 });
+    if (wk?.state === "idle") await w.assignTask({ workerId: agentId, taskId: taskLabel, epoch });
     // ADR-017: scripted fake agents run now (with in-VM capcomd on a local spool).
     let fakeFile: { path?: string; content?: string } = {};
     if (mode === "script") {
@@ -437,7 +459,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     const report = (a.contract as any)?.report === true;
     // Children branch from the run's target (a staging branch) when the operator set one.
     const target = await runTarget(runId);
-    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch: 1, branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(target ? { target } : {}) });
+    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(target ? { target } : {}) });
     const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);
@@ -448,6 +470,13 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     await w.taskDone({ workerId: agentId });
     await w.drainWorker({ workerId: agentId });
     if (await cancelled()) return (await s.getAgent({ agentId }))!;
+    // ADR-019 §6: the provider's usage limit is a pause, not a failure. Its login waits for the reset too.
+    if (rec.limit === "quota") {
+      const until = Number(rec.resetAt) || Date.now() + quotaRetryMs();
+      if (login) recordQuota(login, { until, at: Date.now(), runId, agentId });
+      const p = await s.pause({ agentId, until, spent, result: { limit: "quota", login, resetAt: Number(rec.resetAt) || null, error: `${stoppedAt("quota")}; it resumes at ${new Date(until).toISOString()} (or on \`capcomd resume\`)${pushed.sha ? `, from its work on ${branch}` : ""}`, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds } });
+      return p.agent;
+    }
     const declared = await resultOf(runId, agentId);
     const verdictOf = review ? { verdict: parseVerdict(declared.data, rec.resultText) } : {};
     // Report mode: the agent's final message is its result (a scripted one declares its summary itself).
@@ -502,6 +531,8 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       if (done.has(id)) continue;
       const a = await getAgentOrThrow(runId, id);
       if (TERMINAL_AGENT.has(a.status)) { done.set(id, a); continue; }
+      // A paused agent wakes at its reset time; until then nothing drives it.
+      if (a.status === "paused") { if (await wakeIfDue(runId, a)) kicked.set(id, Date.now()); continue; }
       const stale = !a.driver || a.driverUntil < Date.now();
       if (stale && (kicked.get(id) ?? 0) < Date.now() - LEASE_MS) { startDriver(runId, id); kicked.set(id, Date.now()); }
     }
@@ -510,6 +541,26 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })) };
     await sleep(POLL_MS);
   }
+}
+
+/**
+ * ADR-019 §6: run paused agents again now (one, or every paused agent in the run), each from its work so far. It is
+ * the operator saying the login can work: its recorded quota is cleared, so other waiting agents may go too.
+ */
+export async function resumeAgents(runId: string, agentId?: string) {
+  await assertEngine();
+  const s = client().scope.getOrCreate([runId]);
+  const all: ScopeAgent[] = agentId ? [await getAgentOrThrow(runId, agentId)] : await s.listAgents({});
+  const paused = all.filter((a) => a.status === "paused");
+  if (agentId && !paused.length) throw new RelayError("conflict", `agent ${agentId} is ${all[0]!.status}, not paused`, "Only a paused agent can be resumed; see `capcomd tree`.");
+  const resumed: string[] = [];
+  for (const a of paused) {
+    const login = loginOf(a.spec);
+    if (login) clearQuota(login);
+    const r = await s.resume({ agentId: a.agentId, by: "operator" });
+    if (r.changed) { resumed.push(a.agentId); startDriver(runId, a.agentId); }
+  }
+  return { runId, resumed };
 }
 
 /** Cancel an agent (or the whole run) and every descendant; destroy their VMs. Idempotent. */
@@ -522,7 +573,7 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
   const affected = all.filter((a: { agentId: string; status: string }) => res.affected.includes(a.agentId));
   for (const a of affected) {
     if (a.status !== "cancelled") continue;
-    const w = c.worker.getOrCreate([runId, a.agentId]);
+    const w = workerOf(runId, a.agentId, (a as ScopeAgent).epoch);
     const wk = await w.getWorker({ workerId: a.agentId });
     if (wk && wk.state !== "destroyed") await w.drainWorker({ workerId: a.agentId });
   }

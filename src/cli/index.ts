@@ -52,6 +52,7 @@ Usage:
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N]  ·  capcomd wait-any <runId> <agt…>
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
+  capcomd resume <runId> [agt]                  run paused agents again now (paused by a provider usage limit)
   capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--review-profile P] [--target T] [--key K]  → vfy-…
                                        (checks, then the reviewer agent: the run's --reviewer or --review-profile; both must pass)
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
@@ -589,6 +590,14 @@ async function main(argv: string[]): Promise<number> {
         const r = await cancelRun(runId);
         if (json) out(r);
         else console.log(r.changed ? `✓ Run ${runId} cancelled` : `Run ${runId} is ${r.state}; nothing to cancel`);
+        return EXIT.ok;
+      }
+
+      case "resume": {
+        const runId = positionals[1] ?? usage("runId required: capcomd resume <runId> [agentId]");
+        const r = await (await import("../primitives/ops")).resumeAgents(runId, positionals[2]);
+        if (json) out(r);
+        else console.log(r.resumed.length ? `✓ resumed ${r.resumed.join(", ")}` : "no paused agents to resume");
         return EXIT.ok;
       }
 
