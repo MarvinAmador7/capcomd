@@ -92,8 +92,9 @@ Step 3 (built: the supervisor, its outbox and checkpoints):
   - It appends reports to `outbox.jsonl`: `start`, a `heartbeat` every 30 s (with the count of agent events and
     when the last one came), `checkpoint`, `error` and `exit`.
   - The runner drains the outbox in the same exec that tails the agent's log, so the transport adds no calls.
-- **Heartbeats** now come from the supervisor's reports, replacing PR #3's engine-side path. Without a supervisor,
-  the agent CLI's events still serve, as before.
+- **Heartbeats** now come from the supervisor's reports (its `start` and each `heartbeat`), so an agent that is
+  quietly thinking still shows as alive. The agent CLI's events still count too, as in PR #3: any sign of life is a
+  heartbeat, which also covers the supervisor's start-up before its first interval, and a VM without a supervisor.
 - **Checkpoints** are taken at start (the baseline, not reported), every `checkpointEveryMs` (profile field,
   default 10 min) and when HEAD moves.
   - The supervisor only writes the commit and the local ref. It never pushes, because the agent must not hold push
