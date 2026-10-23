@@ -111,11 +111,12 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     case "spawn": {
       // Parent is always the caller; never operator; contracts can't carry host-side checks.
       const contract = { ...(args.contract ?? {}) };
-      delete contract.checks; delete contract.orphansPolicyOverride; delete contract.review; // review mode is verify's alone
+      delete contract.checks; delete contract.orphansPolicyOverride; delete contract.review; delete contract.from; // review mode is verify's alone; from is --continue's
       const a = await O.spawnAgent({
         runId: run, parent: c.sub, task: String(args.task ?? ""), profile: args.profile, key: args.key ? `${c.sub}:${args.key}` : undefined,
         budget: args.budget !== undefined ? parseBudget(args.budget) : undefined, contract, grant: args.children, operator: false,
         overrides: args.set ? { set: args.set } : undefined, ...(args.check !== undefined ? { check: String(args.check) } : {}), ...(args.report === true || args.report === "true" ? { report: true } : {}),
+        ...(typeof args.continue === "string" && args.continue ? { continueFrom: args.continue } : {}),
       });
       return { agentId: a.agentId, status: a.status, depth: a.depth, budget: a.budget, limits: a.limits, created: a.created };
     }

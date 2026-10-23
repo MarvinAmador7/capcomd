@@ -12,6 +12,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   repository; checkpoints of agents whose work didn't land are kept, so you can continue from them.
 - An agent with a budget (its own, a parent's or the run's) now also saves a checkpoint each time its spend passes
   another quarter of that budget, so stopping at the budget loses little work.
+- `capcomd spawn <runId> --continue <agent> --task …` (`continue` on `capcomd_spawn`, and `capcomd spawn --continue`
+  inside a VM for your own children) starts a new agent from a finished agent's work: its branch (for example one
+  stopped at a limit), or its last checkpoint if it never pushed one. Before, the new agent's task had to fetch and
+  merge that work itself. It is refused for an agent that is still running or paused.
 - **Breaking:** nothing restricts an agent by default any more; set limits on a profile or a run when you want
   them.
   - **Tools and network:** an agent whose profile sets no `allowedTools` can use every tool without permission

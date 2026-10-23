@@ -49,7 +49,7 @@ Usage:
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH; recipe = planner→worker→judge composed from primitives)
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
-  capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--no-start] [--operator]
+  capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd resume <runId> [agt]                  run paused agents again now (paused by a provider usage limit)
@@ -162,6 +162,7 @@ async function main(argv: string[]): Promise<number> {
         label: { type: "string" },
         "no-start": { type: "boolean" },
         report: { type: "boolean" },
+        continue: { type: "string" },
         "dry-run": { type: "boolean" },
         to: { type: "string" },
         yes: { type: "boolean", short: "y" },
@@ -384,6 +385,7 @@ async function main(argv: string[]): Promise<number> {
           runId, task, ...(profile ? { profile } : {}), ...(Object.keys(set).length || values.operator ? { overrides: { set, operator: !!values.operator } } : {}),
           parent: values.parent as string | undefined, key: values.key as string | undefined, contract, budget,
           operator: !!values.operator, start: !values["no-start"], ...(values.check !== undefined ? { check: values.check as string } : {}), ...(values.report ? { report: true } : {}),
+          ...(values.continue ? { continueFrom: values.continue as string } : {}),
           grant: Object.fromEntries(Object.entries(values).filter(([k, v]) => k.startsWith("children.") && v !== undefined).map(([k, v]) => [k.slice(9), v])),
         });
         if (json) out(r); else console.log(r.agentId);

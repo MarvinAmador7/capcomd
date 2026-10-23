@@ -80,6 +80,27 @@ test("at its timeout an agent's work is pushed with a Capcomd-Stop trailer, and 
   expect(await repo.show(agent.result.branch, "src/sum.ts")).toContain("a + b");
 }, 120_000);
 
+test("spawn --continue starts a new agent from a stopped agent's branch, and is refused for one still running", async () => {
+  const run = (await cj(["run", "new"])).j?.runId;
+  const first = (await cj(["spawn", run, "--profile", "short", "--task", "[wip] long job", "--key", "c1"])).j?.agentId;
+  const stopped = (await cj(["await", run, first, "--timeout-ms", "90000"])).j?.agents?.[0];
+  expect(stopped.result).toMatchObject({ limit: "timeout" });
+  const next = await cj(["spawn", run, "--profile", "open", "--task", "finish the job", "--continue", first, "--key", "c2"]);
+  expect(next.code).toBe(0);
+  const done = (await cj(["await", run, next.j.agentId, "--timeout-ms", "90000"])).j?.agents?.[0];
+  expect(done.status).toBe("done");
+  // its branch builds on the stopped agent's commit
+  expect((await new Git(repo.bare).run(["merge-base", "--is-ancestor", stopped.result.commit, done.result.commit])).code).toBe(0);
+
+  const busy = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "c3"])).j?.agentId;
+  const refused = await cj(["spawn", run, "--profile", "open", "--task", "x", "--continue", busy, "--key", "c4"]);
+  expect(refused.code).not.toBe(0);
+  expect(refused.stdout + refused.stderr).toMatch(new RegExp(`agent ${busy} is (pending|running)`));
+  const forged = await cj(["spawn", run, "--profile", "open", "--task", "x", "--contract", JSON.stringify({ from: { ref: "refs/heads/main" } }), "--key", "c5"]);
+  expect(forged.stdout + forged.stderr).toContain("contract.from is set by --continue");
+  await cj(["cancel", run, busy]);
+}, 180_000);
+
 test("an agent that hits its timeout before changing anything fails after one attempt", async () => {
   const { agent, driveFailures } = await runToEnd("[sleep] hang", "sleep");
   expect(agent.status).toBe("failed");

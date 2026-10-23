@@ -169,10 +169,14 @@ export interface SpawnOpts {
   report?: boolean;
   /** ADR-017: children limits the parent grants this child (narrow-only; contract.children also accepted). */
   grant?: Grant;
+  /** Start from this finished agent's work (contract.from): its branch, else its last checkpoint. */
+  continueFrom?: string;
 }
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
   if (o.report) o = { ...o, contract: { ...(o.contract ?? {}), report: true } };
+  if (o.contract?.from !== undefined) throw new RelayError("usage", "contract.from is set by --continue", "Continue an agent's work with --continue <agentId>.");
+  if (o.continueFrom) o = { ...o, contract: { ...(o.contract ?? {}), from: await continuation(o.runId, o.continueFrom, o.parent) } };
   if (o.contract?.report !== undefined && o.contract.report !== true) throw new RelayError("usage", "contract.report must be true", "Spawn a read-only reporting agent with --report.");
   const pin = o.check ?? o.contract?.check;
   if (pin !== undefined) {
@@ -206,6 +210,20 @@ export async function spawnAgent(o: SpawnOpts) {
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
+}
+
+/**
+ * Where `spawn --continue <agt>` starts: the agent's branch (work it pushed, finished or stopped at a limit), else
+ * its last checkpoint (it failed or was cancelled before pushing). A parent may continue only its own children.
+ */
+async function continuation(runId: string, id: string, parent?: string) {
+  const src = await getAgentOrThrow(runId, id);
+  if (parent !== undefined && src.parent !== parent) throw new RelayError("conflict", `agent ${id} is not your child`, "Continue only your own children's work.");
+  if (!TERMINAL_AGENT.has(src.status)) throw new RelayError("conflict", `agent ${id} is ${src.status}`, src.status === "paused" ? "A paused agent continues by itself after its provider's reset (or `capcomd resume`)." : "Wait for it to finish, or cancel it first.");
+  const r = (src.result ?? {}) as Record<string, unknown>;
+  const ref = typeof r.branch === "string" && r.branch ? `refs/heads/${r.branch}` : src.checkpoint?.ref;
+  if (!ref) throw new RelayError("conflict", `agent ${id} left no work to continue from (no branch, no checkpoint)`, "Spawn a new agent for the task instead.");
+  return { agentId: id, ref, stopped: typeof r.limit === "string" ? r.limit : src.status };
 }
 
 /** TUI contract: every agent.run span ends with status, cost and turns, failed or not. */
@@ -463,9 +481,10 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
     const review = reviewOf(a);
     const report = (a.contract as any)?.report === true;
+    const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
     // Children branch from the run's target (a staging branch) when the operator set one.
     const target = await runTarget(runId);
-    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(target ? { target } : {}) });
+    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
     const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);

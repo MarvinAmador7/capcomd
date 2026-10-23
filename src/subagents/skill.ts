@@ -57,10 +57,9 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
 - A failed child: read \`capcomd inspect <agt>\` / \`capcomd logs <agt>\`, then retry with a clearer task or cancel.
   A child stopped at a limit (\`result.limit\`: timeout, max_turns, max_budget_usd; or idle, spinning or
   failing when it was stuck) kept its work on
-  \`result.branch\`: continue instead of starting over, with a child given more budget whose task begins with
-  \`git fetch origin <branch> && git merge FETCH_HEAD\`. A child that failed or was cancelled without a branch
-  may still have a \`checkpoint\` (in \`capcomd inspect\`): continue from it the same way, with
-  \`git fetch origin <checkpoint.ref> && git merge FETCH_HEAD\`.
+  \`result.branch\`: continue instead of starting over, with \`capcomd spawn --continue <agt> --task …\` (give it
+  more budget if a budget stopped it): the new child starts from that branch. A child that failed or was cancelled
+  without a branch may still have a \`checkpoint\` (in \`capcomd inspect\`); \`--continue\` starts from it then.
 - \`await\` and \`wait-any\` also return early with \`notices\` when a child looks stuck while you wait: idle (no
   output), spinning (the same tool call again and again) or failing (the same error again and again). It is still
   running (it is stopped, work kept, only if its profile sets a stuck window). Decide: \`capcomd send\` it a hint (if it can
