@@ -25,6 +25,10 @@ export interface AgentRunState {
   /** Adapter saw an error/failed event. */
   error?: string;
   stopReason?: string;
+  /** ADR-019 §6: the provider's usage limit was reached (a pause, not a failure); resetAt in ms epoch when given. */
+  quota?: { message: string; resetAt?: number };
+  /** claude: the latest rejected rate_limit_event's reset (ms epoch), used if a usage-limit stop follows. */
+  quotaResetHint?: number;
 }
 
 export interface AgentCommandCtx {

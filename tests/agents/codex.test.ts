@@ -77,6 +77,27 @@ describe("codex adapter (fake codex exec --json)", () => {
     expect(JSON.stringify(getFinishedSpans()) + err.message + e2.message).not.toContain(KEY);
   }, 30_000);
 
+  test("usage limit: recognized from turn.failed (not a retry), reset parsed from the VM's UTC clock text", async () => {
+    const { codexResetAt } = await import("../../src/agents/adapters");
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "codex" });
+    const r = new Redactor([]);
+    const now = Date.UTC(2026, 9, 22, 13, 0);
+    expect(codexResetAt("You’ve hit your usage limit. Try again at 3:05 PM.", now)).toBe(Date.UTC(2026, 9, 22, 15, 5));
+    expect(codexResetAt("You’ve hit your usage limit. Try again at 9:00 AM.", now)).toBe(Date.UTC(2026, 9, 23, 9, 0)); // past today: tomorrow
+    expect(codexResetAt("You’ve hit your usage limit. Upgrade to Pro or try again at Oct 25th, 2026 3:05 PM.", now)).toBe(Date.UTC(2026, 9, 25, 15, 5));
+    expect(codexResetAt("You’ve hit your usage limit. Try again later.", now)).toBeUndefined();
+    const st = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false } as any;
+    codexAdapter.parse('{"type":"error","message":"Reconnecting... 2/5 (stream disconnected)"}', r, st, cfg);
+    expect(st.quota).toBeUndefined();
+    codexAdapter.parse('{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Try again at 3:05 PM."}}', r, st, cfg);
+    expect(st.quota).toMatchObject({ message: expect.stringContaining("usage limit") });
+    expect(typeof st.quota.resetAt).toBe("number");
+    const st2 = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false } as any;
+    codexAdapter.parse('{"type":"turn.failed","error":{"message":"exceeded retry limit, last status: 429 Too Many Requests"}}', r, st2, cfg);
+    expect(st2.quota).toBeUndefined();
+    expect(codexAdapter.baseEnv().TZ).toBe("UTC");
+  });
+
   test("parse: codex JSONL shapes; config and selection", () => {
     const st = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     const cfg = loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AUTH: "apikey" });

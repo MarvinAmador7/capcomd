@@ -57,6 +57,8 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   went silent) kept its work on
   \`result.branch\`: continue instead of starting over, with a child given more budget whose task begins with
   \`git fetch origin <branch> && git merge FETCH_HEAD\`.
+- A child paused by its provider's usage limit (status paused, \`result.limit\` quota) isn't failed: don't
+  respawn it. Keep awaiting; it continues from its branch after the reset.
 - Best-of-n: spawn n, verify each as it finishes, merge the best, \`capcomd cancel\` the rest.
 - Dependent work (B needs what A builds): don't wait for A to finish before starting B, and don't build B on A's
   branch. First land a tiny contract child (the shared interface, a stub, or a flag that is off), then spawn A and

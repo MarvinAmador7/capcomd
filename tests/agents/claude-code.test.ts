@@ -175,6 +175,38 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(getFinishedSpans().find((x) => x.name === "agent.claude_code")!.events.map((e) => e.name)).toContain("agent.budget");
   }, 60_000);
 
+  test("usage limit (quota): recognized from claude's events, the reset taken from rate_limit_info, the work kept", async () => {
+    const s = await setup("[quota] big job");
+    const t0 = Date.now();
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY });
+    expect(res.limit).toBe("quota");
+    // the fake resets an hour out, in epoch seconds
+    expect(res.resetAt).toBeGreaterThanOrEqual(Math.floor(t0 / 1000) * 1000 + 3600_000);
+    expect(res.resetAt).toBeLessThanOrEqual(Date.now() + 3600_000);
+    const msg = (await new Git(s.r.bare).run(["log", "-1", "--format=%B", s.task.branch])).stdout;
+    expect(msg).toContain("Capcomd-Stop: quota");
+    expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
+    expect(getFinishedSpans().find((x) => x.name === "agent.claude_code")!.events.map((e) => e.name)).toContain("agent.quota");
+  }, 60_000);
+
+  test("usage limit vs other 429s: only the plan's limit is quota; an API-key 429 that ran out of retries is an error", async () => {
+    const { claudeAdapter } = await import("../../src/agents/adapters");
+    const r = new Redactor([]);
+    const st = () => ({ events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false }) as any;
+    const a = st();
+    claudeAdapter.parse('{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1761159600,"utilization":0.9}}', r, a, {} as any);
+    expect(a.quotaResetHint).toBeUndefined();
+    claudeAdapter.parse('{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1761159600}}', r, a, {} as any);
+    // the result alone (no api_error: it is internal) still counts, with the reset from the event
+    claudeAdapter.parse(`{"type":"result","subtype":"success","is_error":true,"result":"You’ve hit your weekly limit · resets Oct 25, 3pm (UTC)"}`, r, a, {} as any);
+    expect(a.quota).toEqual({ message: expect.stringContaining("weekly limit"), resetAt: 1761159600_000 });
+    const b = st();
+    claudeAdapter.parse('{"type":"system","subtype":"api_retry","error_status":429,"error":"rate_limit","retry_delay_ms":2000}', r, b, {} as any);
+    claudeAdapter.parse('{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: Request rejected (429) · rate limited"}]},"error":"rate_limit"}', r, b, {} as any);
+    claudeAdapter.parse('{"type":"result","subtype":"success","is_error":true,"result":"API Error: Request rejected (429) · rate limited"}', r, b, {} as any);
+    expect(b.quota).toBeUndefined();
+  });
+
   test("timeout kills the agent process group", async () => {
     const s = await setup("[sleep] hang", { CAPCOMD_AGENT_TIMEOUT_MS: "1500" });
     const t0 = Date.now();

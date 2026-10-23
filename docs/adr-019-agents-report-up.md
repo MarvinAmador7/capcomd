@@ -119,6 +119,26 @@ checkpoints and goes to a new `paused` status. That isn't a failure, so it isn't
 (a scheduled wake) or on `capcomd resume`, from its checkpoint. Other agents on the same login will hit the same
 quota, so the report names the login and new spawns on it wait.
 
+Step 2 (built), until the supervisor exists:
+
+- **Recognizing it.** The output was read from the CLIs' own code at the pinned versions, not captured live.
+  - **Claude Code 2.1.303:** sends a `rate_limit_event` with `rate_limit_info.status: "rejected"` and `resetsAt`
+    in epoch seconds. Then come a synthetic assistant message (`error: "rate_limit"`, `api_error:
+    "usage_limit_reached"`, text "You've hit your … limit · resets 3pm (Zone)") and an `is_error` result; exit 1.
+    `api_error` is internal, so the text prefix counts too. A plain 429 is retried by the CLI and isn't quota.
+  - **Codex 0.163.0:** `turn.failed` with "You’ve hit your usage limit. … Try again at 3:05 PM." The reset is only
+    given as VM-local clock text, so codex runs with `TZ=UTC` and the text is parsed best-effort. Prepaid quota,
+    out-of-credits and spend-cap messages count too (no reset time).
+- **The stop.** The runner stops the agent at `quota` and keeps its work like any limit (`Capcomd-Stop: quota`).
+  The engine pauses it (`AGENT_PAUSED`) until the reset. With no reset time, it pauses for `CAPCOMD_QUOTA_RETRY_MS`
+  (default an hour).
+- **The login.** It is recorded on the engine host (`quotas.json`), so a new or resumed agent on that login pauses
+  at once until the reset instead of starting.
+- **Waking.** A paused agent wakes while it is awaited (`await`, `wait-any`, an in-VM `await`) once its reset has
+  passed, or on `capcomd resume` / `capcomd_resume`, which also clears the login's wait. A wake is a new epoch:
+  a fresh worker and VM, on its branch, told that it was stopped and should continue. That answers the
+  open question for now: a new session from the branch, not the CLI's own session resume.
+
 ## What changes elsewhere
 
 - **ADR-016 (multi-unit budgets):** enforcement applies only to limits that are set; there are no default caps.
@@ -151,7 +171,7 @@ Each step is its own PR, with fake-claude markers for its cases (long work with 
 
 ## Open questions
 
-- The usage-limit output and reset times of each CLI.
+- The usage-limit output and reset times of each CLI: read from their code (§6); still to confirm on a live run.
 - Resume from a checkpoint with a new session, or the CLI's own session resume (`claude --resume`, `codex exec
   resume`): the second keeps the model's context, but the session lives in the VM.
 - Default windows: `idleAfterMs`, the spinning window and K, `checkpointEveryMs`.

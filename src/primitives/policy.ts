@@ -5,7 +5,8 @@ import { createHash } from "crypto";
 import { widenings, type AgentSpec, type ChildrenSpec } from "../agents/profiles";
 
 export const TERMINAL_AGENT = new Set(["done", "failed", "cancelled"]);
-export type AgentStatus = "pending" | "running" | "done" | "failed" | "cancelled";
+/** "paused" (ADR-019 §6): stopped by its provider's usage limit, work kept; it resumes after the reset or on `resume`. */
+export type AgentStatus = "pending" | "running" | "paused" | "done" | "failed" | "cancelled";
 
 /** Effective children limits held by one agent instance (already narrowed by its ancestors). */
 export interface Limits {

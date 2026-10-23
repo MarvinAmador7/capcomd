@@ -140,6 +140,12 @@ export function buildServer(): McpServer {
     inputSchema: { runId: run, agent: z.string().optional(), reason: z.string().optional() }, annotations: DESTRUCTIVE,
   }, (a) => handle(() => D.cancel(a)));
 
+  server.registerTool("capcomd_resume", {
+    title: "Resume",
+    description: "Run a paused agent (or every paused agent in the run, when agent is omitted) again now. An agent is paused, not failed, when its provider's usage limit is reached, and resumes by itself at the reset time; resume it sooner when the limit was lifted (e.g. a plan upgrade). It continues from its work on its branch.",
+    inputSchema: { runId: run, agent: z.string().optional() }, annotations: WRITE,
+  }, (a) => handle(() => D.resume(a)));
+
   // ── gates ──
   server.registerTool("capcomd_verify", {
     title: "Verify",
