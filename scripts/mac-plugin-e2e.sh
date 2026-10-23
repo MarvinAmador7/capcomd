@@ -67,7 +67,8 @@ git -C "$SRC" push -q origin main:integration
 echo "   https://github.com/$REPO  (target branch: integration)"
 
 echo "== 2. engine on :$PORT"
-bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
+# Engine data in the run's work dir, not ~/.capcomd/engine/<port> (one per test port, never removed).
+CAPCOMD_ENGINE_DATA="$WORK/engine" bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
 ENGINE_PID=$!
 cleanup() { pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
