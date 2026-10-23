@@ -4,17 +4,20 @@ import type { AgentSpec } from "../../src/agents/profiles";
 
 const sup: AgentSpec = { provider: "claude", auth: "subscription", maxTurns: 40, children: { allowSpawn: true, maxDepth: 2, maxChildren: 2, maxTotalDescendants: 3, allowedChildProfiles: ["coder", "sup"], budgetShare: 0.5 } } as AgentSpec;
 const coder: AgentSpec = { provider: "claude", auth: "subscription", maxTurns: 20 } as AgentSpec;
-/** Billed per token: reserves usd (a subscription leaf like coder reserves none). */
+/** Billed per token, no dollar cap of its own: a spawn that names no usd reserves none (ADR-019). */
 const payg: AgentSpec = { provider: "claude", auth: "apikey", maxTurns: 20 } as AgentSpec;
 const row = (id: string, spec: AgentSpec, o: Partial<AgentRow> = {}): AgentRow => ({ agentId: id, parent: null, depth: 0, profile: id.split("-")[0]!, spec, limits: rootLimits(spec.children), status: "running", budget: { usd: 4 }, spent: {}, ...o });
 const base = { ancestors: [] as AgentRow[], descendantCounts: [] as number[], siblings: [] as AgentRow[], runBudget: { usd: 10 } };
 
 test("operator spawn carves from the run budget; explicit budget above it is rejected", () => {
+  // Nothing named, no profile cap: nothing reserved (its spend is metered live against the run's).
   const d = checkSpawn({ ...base, parent: null, childProfile: "sup", childSpec: sup });
-  expect(d).toMatchObject({ ok: true, budget: { usd: 10 }, depth: 0 });
+  expect(d).toMatchObject({ ok: true, budget: {}, depth: 0 });
+  expect((d as any).budget.usd).toBeUndefined();
+  expect(checkSpawn({ ...base, parent: null, childProfile: "sup", childSpec: sup, requested: { usd: 10 } })).toMatchObject({ ok: true, budget: { usd: 10 } });
   const held = [row("sup-a", sup, { budget: { usd: 7 } })];
   expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: coder, requested: { usd: 4 } })).toMatchObject({ ok: false, code: "budget" });
-  expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: payg })).toMatchObject({ ok: true, budget: { usd: 3 } });
+  expect(checkSpawn({ ...base, parent: null, siblings: held, childProfile: "coder", childSpec: payg, requested: { usd: 3 } })).toMatchObject({ ok: true, budget: { usd: 3 } });
   // a finished sibling only holds what it spent
   expect(available({ usd: 10 }, {}, [{ status: "done", budget: { usd: 7 }, spent: { usd: 1 } }])).toEqual({ usd: 9 });
 });
@@ -26,7 +29,9 @@ test("children limits: allowSpawn, allowedChildProfiles, maxChildren, maxTotalDe
   const at = (siblings: AgentRow[] = [], desc = 0, profile = "coder", spec = coder) => checkSpawn({ ...base, parent: p, ancestors: [p], descendantCounts: [desc], siblings, childProfile: profile, childSpec: spec });
   expect(at([], 0, "critic")).toMatchObject({ ok: false, code: "children_limit" });
   const ok = at([], 0, "coder", payg);
-  expect(ok).toMatchObject({ ok: true, budget: { usd: 2 }, depth: 1 }); // 4 × budgetShare 0.5
+  expect(ok).toMatchObject({ ok: true, budget: {}, depth: 1 }); // no usd named and payg has no dollar cap: none reserved
+  expect((ok as any).budget.usd).toBeUndefined();
+  expect(checkSpawn({ ...base, parent: p, ancestors: [p], descendantCounts: [0], childProfile: "coder", childSpec: payg, requested: { usd: 2.5 } })).toMatchObject({ ok: false, code: "budget" }); // 4 × budgetShare 0.5
   expect(at([row("coder-b", coder, { parent: "sup-a", budget: { usd: 1 } }), row("coder-c", coder, { parent: "sup-a", budget: { usd: 1 } })])).toMatchObject({ ok: false, error: expect.stringContaining("maxChildren=2") });
   expect(at([row("coder-b", coder, { status: "done", parent: "sup-a", budget: { usd: 1 }, spent: { usd: 1 } })], 3)).toMatchObject({ ok: false, error: expect.stringContaining("maxTotalDescendants=3") });
   // nested supervisor gets narrowed limits: depth 2→1, descendants 3→2, allowed ∩
@@ -66,9 +71,10 @@ test("multi-unit budgets: per-unit carve/refund, unlimited units, caps narrow th
   const sib = [row("coder-a", coder, { budget: { usd: 5, turns: 60, wallSeconds: 600 } }), row("coder-b", coder, { status: "done", budget: { usd: 3, turns: 30, wallSeconds: 600 }, spent: { usd: 0, turns: 12, wallSeconds: 90 } })];
   expect(available(run, {}, sib)).toEqual({ usd: 5, turns: 28, wallSeconds: 2910 });
   const d = checkSpawn({ ...base, runBudget: run, parent: null, siblings: sib, childProfile: "coder", childSpec: coder, requested: { turns: 20 } });
-  // coder is a subscription leaf: it bills $0, so it reserves no usd; wallSeconds (uncapped by coder) takes what's left.
-  expect(d).toMatchObject({ ok: true, budget: { turns: 20, wallSeconds: 2910 } });
+  // usd and wallSeconds aren't named and coder caps neither: nothing reserved.
+  expect(d).toMatchObject({ ok: true, budget: { turns: 20 } });
   expect((d as any).budget.usd).toBeUndefined();
+  expect((d as any).budget.wallSeconds).toBeUndefined();
   expect(checkSpawn({ ...base, runBudget: run, parent: null, siblings: sib, childProfile: "coder", childSpec: coder, requested: { turns: 29 } })).toMatchObject({ ok: false, code: "budget", error: expect.stringContaining("29 turns exceeds 28 turns") });
   // a unit the run doesn't limit stays unlimited unless requested; an unnamed unit reserves the profile's cap (maxTurns 20)
   expect(checkSpawn({ ...base, runBudget: { turns: 50 }, parent: null, childProfile: "coder", childSpec: coder })).toMatchObject({ ok: true, budget: { turns: 20 } });
@@ -119,9 +125,9 @@ test("verify's reviewer: exempt from the caller's fan-out, paid from its budget 
 });
 
 // Seen live (scripts/mac-plugin-e2e.sh): a driver spawned three workers with only `turns=20`; the first took every
-// remaining usd and second, and the other two were refused. Unnamed units now reserve the profile's caps.
+// remaining usd and second, and the other two were refused. Unnamed units now reserve the profile's caps, else nothing.
 import { profileDefaults } from "../../src/primitives/policy";
-test("units a spawn doesn't name: the profile's caps, no usd for a subscription leaf, else what's left", () => {
+test("units a spawn doesn't name: the profile's caps, else nothing", () => {
   const run = { usd: 6, turns: 200, wallSeconds: 3600 };
   const worker = { provider: "claude", auth: "subscription", maxTurns: 25, timeoutMs: 900_000 } as AgentSpec;
   const rows: any[] = [];
@@ -133,12 +139,16 @@ test("units a spawn doesn't name: the profile's caps, no usd for a subscription 
   }
   expect(available(run, {}, rows)).toEqual({ usd: 6, turns: 140, wallSeconds: 900 });
 
-  // An API-key profile with a dollar cap reserves that cap; without one it still takes what's left (usd is real money).
+  // An API-key profile with a dollar cap reserves that cap; without one it reserves nothing (spend is metered live).
   const capped = { provider: "claude", auth: "apikey", maxTurns: 25, maxBudgetUsd: 1.5 } as AgentSpec;
   expect(checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "c", childSpec: capped, requested: { turns: 20 } })).toMatchObject({ ok: true, budget: { usd: 1.5 } });
   const open = { provider: "claude", auth: "apikey", maxTurns: 25 } as AgentSpec;
-  expect(checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "o", childSpec: open, requested: { turns: 20 } })).toMatchObject({ ok: true, budget: { usd: 6 } });
-  // A subscription agent that may spawn keeps a usd reservation: it hands usd to its children.
+  expect((checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "o", childSpec: open, requested: { turns: 20 } }) as any).budget).toEqual({ turns: 20 });
+  // Nothing left of a unit: an agent that bills it is refused; a subscription worker (bills $0) isn't.
+  const spentRun = [row("x", open, { status: "done", budget: {}, spent: { usd: 6 } })];
+  expect(checkSpawn({ ...base, runBudget: run, parent: null, siblings: spentRun, childProfile: "o", childSpec: open, requested: { turns: 20 } })).toMatchObject({ ok: false, code: "budget", error: expect.stringContaining("no usd budget left") });
+  expect(checkSpawn({ ...base, runBudget: run, parent: null, siblings: spentRun, childProfile: "worker", childSpec: worker, requested: { turns: 20 } })).toMatchObject({ ok: true });
+  // A subscription agent that may spawn bills usd through its children.
   expect(profileDefaults(sup).none).toEqual([]);
   // What the spawn names always wins.
   expect(checkSpawn({ ...base, runBudget: run, parent: null, childProfile: "worker", childSpec: worker, requested: { turns: 20, usd: 1, wallSeconds: 300 } })).toMatchObject({ ok: true, budget: { usd: 1, turns: 20, wallSeconds: 300 } });
@@ -150,4 +160,30 @@ test("a profile that may spawn and sets no maxTotalDescendants gets the default 
   expect(rootLimits({ allowSpawn: true, maxTotalDescendants: 3 }).maxTotalDescendants).toBe(3);
   expect(rootLimits(undefined).maxTotalDescendants).toBeUndefined();
   expect(childLimits(rootLimits({ allowSpawn: true, maxDepth: 2, allowedChildProfiles: ["sup"] }), { allowSpawn: true, allowedChildProfiles: ["sup"] }).maxTotalDescendants).toBe(DEFAULT_MAX_DESCENDANTS - 1);
+});
+
+// ADR-019 step 1b: budgets are enforced from live spend, whatever a spawn reserved.
+import { overBudget, treeSpend } from "../../src/primitives/policy";
+test("live spend: subtree spend counts against every ancestor's budget and the run's", () => {
+  const agents = [
+    { agentId: "sup", parent: null, budget: { usd: 3 }, spent: { usd: 0.5 } },
+    { agentId: "a", parent: "sup", budget: {}, spent: { usd: 1 } },
+    { agentId: "b", parent: "sup", budget: { usd: 1 }, spent: { usd: 0.75 } },
+    { agentId: "b1", parent: "b", budget: {}, spent: { usd: 0.2 } },
+  ];
+  expect(treeSpend(agents).get("sup")).toEqual({ usd: 2.45 });
+  expect(treeSpend(agents).get("b")).toEqual({ usd: 0.95 });
+  expect(overBudget("b1", agents, {})).toBeNull();
+  // b1 pushes b's subtree over b's $1: stop, at b
+  const more = agents.map((a) => (a.agentId === "b1" ? { ...a, spent: { usd: 0.3 } } : a));
+  expect(overBudget("b1", more, {})).toMatchObject({ unit: "usd", at: "b", budget: 1 });
+  // a reserved nothing; its spend counts against sup's $3
+  const big = agents.map((a) => (a.agentId === "a" ? { ...a, spent: { usd: 1.6 } } : a));
+  expect(overBudget("a", big, {})).toMatchObject({ unit: "usd", at: "sup" });
+  // the run's cap counts everyone
+  expect(overBudget("a", agents, { usd: 2 })).toMatchObject({ unit: "usd", at: "run", spent: 2.45 });
+  // a live child that reserved nothing holds what its subtree spent; one that reserved holds the larger of the two
+  const tree = treeSpend(agents);
+  const kids = agents.filter((x) => x.parent === "sup").map((x) => ({ ...x, status: "running" as const, tree: tree.get(x.agentId) }));
+  expect(available({ usd: 3 }, { usd: 0.5 }, kids)).toEqual({ usd: 0.5 }); // 3 − 0.5 − 1 (a) − 1 (b's reservation)
 });

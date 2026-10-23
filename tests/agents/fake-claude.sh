@@ -2,6 +2,7 @@
 # Fake `claude` for adapter tests. Behaviour is selected by markers in the -p prompt:
 #   [leak] print the API key everywhere   [sleep] hang   [nochange] edit nothing   [fail] error result
 #   [slow] keep working for ~5s, one event every 0.25s (liveness)
+#   [spend] edit, then keep working for ~10s, each message reporting 100k output tokens (live spend)
 prompt=""; args=("$@")
 while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; *) shift;; esac; done
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
@@ -25,6 +26,11 @@ emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","na
 if [[ "$prompt" != *"[nochange]"* ]]; then
   mkdir -p src && printf 'export const sum = (a: number, b: number) => a + b;\n' > src/sum.ts
 fi
+case "$prompt" in *"[spend]"*)
+  for i in $(seq 1 40); do sleep 0.25
+    emit "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$i\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":10,\"output_tokens\":100000},\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"
+  done;;
+esac
 # [wip]: edit, then hang (a limit with work to keep)
 case "$prompt" in *"[wip]"*) sleep 120;; esac
 emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'

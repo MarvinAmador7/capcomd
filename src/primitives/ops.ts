@@ -10,7 +10,7 @@ import { join } from "path";
 import { client, assertEngine } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
-import { available, budgetCaps, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
+import { available, budgetCaps, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { stuckReason, treeView, rollups, subtree } from "../subagents/results";
 import { stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
@@ -304,7 +304,8 @@ export async function budgetShow(runId: string, agentId?: string) {
   const all: ScopeAgent[] = await s.listAgents({});
   if (!agentId) { const sc = await s.getScope({}); return { runId, agentId: null, budget: sc?.budget ?? {}, spent: sc?.spent ?? {}, available: sc?.unallocated ?? {}, totals: rollupTotals(all) }; }
   const a = await getAgentOrThrow(runId, agentId);
-  const kids = all.filter((x) => x.parent === agentId);
+  const tree = treeSpend(all);
+  const kids = all.filter((x) => x.parent === agentId).map((x) => ({ ...x, tree: tree.get(x.agentId) }));
   return { runId, agentId, budget: a.budget, spent: a.spent, available: available(a.budget, a.spent, kids), limits: a.limits, children: kids.length, rollup: rollups(all).get(agentId) };
 }
 

@@ -112,7 +112,7 @@ export function buildServer(): McpServer {
       runId: run,
       task: z.string().min(1).describe("What the agent should do, with acceptance criteria"),
       profile: z.string().optional().describe("Agent profile (capcomd_profiles); default: the default profile"),
-      budget: z.string().optional().describe(`This agent's share, e.g. "usd=1,turns=40,wallSeconds=900". A unit you leave out reserves the profile's own cap (maxTurns, timeoutMs, maxBudgetUsd); a subscription worker reserves no usd; an uncapped unit takes all that is left. Omit it in a run without a budget: the agent works until done (or stopped if it goes idle)`),
+      budget: z.string().optional().describe(`This agent's share, e.g. "usd=1,turns=40,wallSeconds=900". A unit you leave out reserves the profile's own cap (maxTurns, timeoutMs, maxBudgetUsd) if it sets one, else nothing: the agent's spend is metered as it works and counts against your budget and the run's, and it is stopped when one runs out. Name a unit to give a child its own cap. Omit it in a run without a budget: the agent works until done (or stopped if it goes idle)`),
       check: z.string().optional().describe("One of the run's check names (capcomd_setup gates.checks)"),
       report: z.boolean().optional().describe("Read-only work whose answer is its result; nothing is pushed"),
       children: z.record(z.string(), z.unknown()).optional().describe("Fan-out it may use: maxChildren, maxDepth, maxTotalDescendants, allowedChildProfiles, budgetShare"),

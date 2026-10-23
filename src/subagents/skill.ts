@@ -30,8 +30,9 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   is itself several independent parts, and only as much as it needs:
   --children.maxChildren=N --children.maxDepth=1 [--children.maxTotalDescendants=M --children.allowedChildProfiles=a,b --children.budgetShare=0.5]
 - A grant above your own limits is refused (not clamped). Split by independent files/modules so siblings
-  don't conflict; give each child a budget proportional to its share of the work and keep a reserve
-  for retries and verification.
+  don't conflict. A child spawned without --budget reserves nothing: its spend counts against yours as it
+  works, and it is stopped when your budget runs out. To give a child its own cap, name it
+  (--budget usd=…); keep a reserve for retries and verification.
 - Spawning while maxChildren children run returns error reason "backpressure" (exit 75): wait-any, then spawn again.
 
 ## Rules

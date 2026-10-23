@@ -54,8 +54,8 @@ const cj = async (args: string[]) => {
   return { ...x, j };
 };
 
-const runToEnd = async (task: string, key: string, profile = "short") => {
-  const run = (await cj(["run", "new"])).j?.runId;
+const runToEnd = async (task: string, key: string, profile = "short", runArgs: string[] = []) => {
+  const run = (await cj(["run", "new", ...runArgs])).j?.runId;
   expect(run).toMatch(/^run-/);
   const id = (await cj(["spawn", run, "--profile", profile, "--task", task, "--key", key])).j?.agentId;
   expect(id).toMatch(/^agt-/);
@@ -92,4 +92,15 @@ test("an agent with no limits that goes silent is stopped as idle, keeps its wor
   expect(driveFailures).toBe(0);
   const msg = (await new Git(repo.bare).run(["log", "-1", "--format=%B", agent.result.branch])).stdout;
   expect(msg).toContain("Capcomd-Stop: idle");
+}, 120_000);
+
+test("a spawn without a budget reserves nothing, and the engine stops it from live spend when the run's cap is reached", async () => {
+  const { agent, driveFailures } = await runToEnd("[spend] costly work", "spend", "open", ["--budget", "usd=1"]);
+  expect(agent.budget).toEqual({});
+  expect(agent.status).toBe("failed");
+  expect(agent.result).toMatchObject({ limit: "max_budget_usd" });
+  expect(agent.spent.usd).toBeGreaterThan(1);
+  expect(driveFailures).toBe(0);
+  const msg = (await new Git(repo.bare).run(["log", "-1", "--format=%B", agent.result.branch])).stdout;
+  expect(msg).toContain("Capcomd-Stop: max_budget_usd");
 }, 120_000);

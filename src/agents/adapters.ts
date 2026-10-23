@@ -1,7 +1,7 @@
 // Claude Code and Codex adapters for the generic runner.
 import type { AgentAdapter, AgentEvent, AgentRunState } from "./types";
 import type { AgentConfig, RealAgent } from "./config";
-import { AGENT_API_HOST } from "./config";
+import { AGENT_API_HOST, claudeCostUsd } from "./config";
 import type { Redactor } from "./redact";
 
 function parseJson(line: string, r: Redactor): any | null {
@@ -42,6 +42,20 @@ export const claudeAdapter: AgentAdapter = {
       if (tool) ev.tool = String(tool.name);
       const text = content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("\n");
       if (text) ev.text = text.slice(0, 500);
+    }
+    // Live spend (ADR-019): claude reports a cost only in its final result, so meanwhile it is estimated from each
+    // message's usage. A message streams as several events with the same id and usage: counted once.
+    const m = raw.message;
+    if (ev.type === "assistant" && m?.id && m.usage && !state.done) {
+      const u = m.usage;
+      (state.usage ??= {})[String(m.id)] = {
+        model: typeof m.model === "string" ? m.model : undefined, input: Number(u.input_tokens ?? 0),
+        cacheWrite: Number(u.cache_creation_input_tokens ?? 0), cacheRead: Number(u.cache_read_input_tokens ?? 0), output: Number(u.output_tokens ?? 0),
+      };
+      const all = Object.values(state.usage);
+      state.costUsd = all.reduce((x, v) => x + claudeCostUsd(v), 0);
+      state.inputTokens = all.reduce((x, v) => x + v.input + v.cacheWrite + v.cacheRead, 0);
+      state.outputTokens = all.reduce((x, v) => x + v.output, 0);
     }
     if (ev.type === "result") {
       if (typeof raw.result === "string") { ev.text = raw.result.slice(0, 500); state.resultText = raw.result; }

@@ -27,11 +27,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   the in-VM `capcomd`, so a worker had no way to heartbeat and `tree`, `inspect` and `capcomd_tree` flagged it
   `stuck` five minutes in, even when healthy. capcomd now counts the agent's own Claude Code or Codex output as its
   heartbeat, so `stuck` means the model has really gone quiet. `capcomd heartbeat "<note>"` still adds a note.
-- A unit of budget a spawn doesn't name now reserves the agent profile's own cap (`maxTurns`, `timeoutMs`,
-  `maxBudgetUsd`, or what's left if that's less) instead of everything left, and a subscription agent that can't
-  spawn reserves no usd (it bills $0; its spend still counts). Spawning several workers with only `turns` no longer
-  hands the first one every remaining dollar and second (seen in the plugin's live run). A unit the profile
-  doesn't cap still takes what's left.
+- **Breaking:** a spawn no longer hands the child everything left of a budget it doesn't name. It reserves only
+  the units it names, or the profile's own cap (`maxTurns`, `timeoutMs`, `maxBudgetUsd`), and otherwise nothing.
+  Spend is now tracked while agents work instead of only when they finish, so `tree`, `inspect` and `budget show`
+  are current, and an agent is stopped with its work kept (`result.limit: "max_budget_usd"`) as soon as its own
+  budget, a parent's or the run's is spent. Before, the first worker spawned with only `turns` took every
+  remaining dollar and second and the next ones were refused (seen in the plugin's live run). To give a child a
+  cap of its own, name it: `spawn --budget usd=2`.
 
 ## 0.5.0 (2026-10-22)
 
