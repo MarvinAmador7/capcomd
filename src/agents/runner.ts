@@ -72,7 +72,7 @@ export interface AgentRunOptions {
    * records it and answers with a limit to stop at (e.g. "max_budget_usd") when a budget is over, else null, and
    * when the agent was last given more budget (a new grant resets the stuck window).
    */
-  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }) => Promise<{ stop: string | null; grantedAt?: number }>;
+  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }) => Promise<{ stop: string | null; grantedAt?: number; used?: number | null }>;
   /**
    * ADR-019 §1: reports from the in-VM supervisor: heartbeats while it is alive, and checkpoints (already pushed to
    * `ref`). A VM without node has no supervisor; heartbeats then come from the agent CLI's own events.
@@ -377,7 +377,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck }, now());
-    let noticed: string | null = null, grantSeen = 0;
+    let noticed: string | null = null, grantSeen = 0, spendStep = 0;
+    // The supervisor takes it at its next heartbeat; reviewers and reporting agents don't checkpoint.
+    const requestCheckpoint = async (reason: string) => {
+      if (supervised && !task.review && !task.report) await sh(`printf %s ${sq(reason)} > ${sq(`${W}/checkpoint.request`)}`).catch(() => {});
+    };
     const startedAt = now();
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
     // caller stops the agent instead of retrying it, so hours of work aren't redone or lost at a cap.
@@ -455,6 +459,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
           watch.reset(now());
           addSpanEvent(span, "agent.granted");
         }
+        // A checkpoint each time spend passes another quarter of its tightest budget (ADR-019 §3), so a budget stop
+        // loses little work. A grant lowers the step, and passing it again checkpoints again.
+        const step = rep?.used != null ? Math.min(3, Math.floor(rep.used * 4)) : 0;
+        if (step > spendStep) await requestCheckpoint("spend");
+        spendStep = step;
         const stop = rep?.stop;
         if (stop) {
           await kill(); await drain(true);
@@ -480,7 +489,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         noticed = stuck?.kind ?? null;
         addSpanEvent(span, stuck ? "agent.notice" : "agent.notice_cleared", stuck ? { "agent.notice": stuck.kind, "agent.text": stuck.detail } : {});
         opts.onNotice?.(stuck ? { kind: stuck.kind, detail: stuck.detail } : null);
-        if (stuck && supervised) await sh(`touch ${sq(`${W}/checkpoint.request`)}`).catch(() => {});
+        if (stuck) await requestCheckpoint("notice");
       }
       if (stuck?.stop) {
         await kill(); await drain(true);

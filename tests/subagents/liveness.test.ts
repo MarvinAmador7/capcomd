@@ -18,7 +18,7 @@ beforeAll(async () => {
   const r = (repo = await bareRepo({ mode: "direct" }));
   const dir = mkdtempSync(join(tmpdir(), "capcomd-liveness-"));
   const agentsFile = join(dir, "agents.json");
-  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 } } }));
+  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 }, spender: { provider: "claude", auth: "apikey" } } }));
   env = {
     ...r.env,
     CAPCOMD_AGENTS_FILE: agentsFile,
@@ -75,6 +75,17 @@ test("a worker without the in-VM CLI that keeps working is not flagged stuck", a
   expect(seen).toBeGreaterThan(0);
   const aw = await cj(["await", run, id, "--timeout-ms", "60000"]);
   expect(aw.j?.agents?.[0]?.status).toBe("done");
+}, 120_000);
+
+// Keep this before the next test: that one merges src/sum.ts (which every fake agent here writes) into the shared
+// repo, after which this agent would change nothing.
+test("spend passing a quarter of its budget checkpoints the work (no interval checkpoint due)", async () => {
+  // $2 a message, 4 a second for ~10 s, against $100: the 5 s spend reports pass 25% and 75%.
+  const run = (await cj(["run", "new", "--budget", "usd=100"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "spender", "--task", "[spend] costly work", "--key", "spender"])).j?.agentId;
+  const agent = (await cj(["await", run, id, "--timeout-ms", "60000"])).j?.agents?.[0];
+  expect(agent?.status).toBe("done");
+  expect(agent.checkpoint).toMatchObject({ ref: `refs/capcomd/checkpoints/${id}`, reason: "spend" });
 }, 120_000);
 
 test("the supervisor's checkpoints reach the remote and the agent's record while it works", async () => {

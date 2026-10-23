@@ -10,6 +10,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   pause, however long, instead of failing the task after 6 hours (a weekly limit can reset days later).
 - Merging an agent's work now deletes its checkpoint ref (`refs/capcomd/checkpoints/<agent>`) from your
   repository; checkpoints of agents whose work didn't land are kept, so you can continue from them.
+- An agent with a budget (its own, a parent's or the run's) now also saves a checkpoint each time its spend passes
+  another quarter of that budget, so stopping at the budget loses little work.
 - **Breaking:** nothing restricts an agent by default any more; set limits on a profile or a run when you want
   them.
   - **Tools and network:** an agent whose profile sets no `allowedTools` can use every tool without permission

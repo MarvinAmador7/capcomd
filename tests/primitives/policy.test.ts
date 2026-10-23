@@ -181,7 +181,7 @@ test("a profile that may spawn and sets no fan-out limits has none: no depth or 
 });
 
 // ADR-019 step 1b: budgets are enforced from live spend, whatever a spawn reserved.
-import { overBudget, treeSpend } from "../../src/primitives/policy";
+import { budgetUsed, overBudget, treeSpend } from "../../src/primitives/policy";
 test("live spend: subtree spend counts against every ancestor's budget and the run's", () => {
   const agents = [
     { agentId: "sup", parent: null, budget: { usd: 3 }, spent: { usd: 0.5 } },
@@ -200,6 +200,11 @@ test("live spend: subtree spend counts against every ancestor's budget and the r
   expect(overBudget("a", big, {})).toMatchObject({ unit: "usd", at: "sup" });
   // the run's cap counts everyone
   expect(overBudget("a", agents, { usd: 2 })).toMatchObject({ unit: "usd", at: "run", spent: 2.45 });
+  // how much of its tightest budget each has used: b1 is under b's $1 (0.95), a only under sup's $3
+  expect(budgetUsed("b1", agents, {})).toBeCloseTo(0.95);
+  expect(budgetUsed("a", agents, {})).toBeCloseTo(2.45 / 3);
+  expect(budgetUsed("a", agents, { usd: 2.5 })).toBeCloseTo(2.45 / 2.5);
+  expect(budgetUsed("x", [{ agentId: "x", parent: null, budget: {}, spent: { usd: 9 } }], {})).toBeNull();
   // a live child that reserved nothing holds what its subtree spent; one that reserved holds the larger of the two
   const tree = treeSpend(agents);
   const kids = agents.filter((x) => x.parent === "sup").map((x) => ({ ...x, status: "running" as const, tree: tree.get(x.agentId) }));
