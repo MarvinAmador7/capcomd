@@ -1,10 +1,12 @@
 name: Release
 
 # Pushing a tag vX.Y.Z (X.Y.Z = package.json's version, with a dated CHANGELOG.md section) builds and publishes a
-# GitHub release: the tests on Linux and macOS, one strict chaos round, the package (`bun pm pack`) installed the
-# way a user installs it and driven with fake agents (scripts/release-smoke.sh), then that same package on npm (with
-# provenance; skipped while package.json is private) and the release with the package, its SHA-256 and the
-# changelog section as notes. Re-running for the same tag updates the release in place (npm versions are immutable:
+# GitHub release: the tests on Linux and macOS, one strict chaos round, the package (`bun pm pack`) and the single
+# executables (scripts/build-binary.ts: macOS and Linux, arm64 and x64) each installed the way a user installs them
+# (bun add -g; install.sh) and driven with fake agents on their own platform (scripts/release-smoke.sh), then that
+# same package on npm (with provenance; skipped while package.json is private), the release with the package, the
+# binaries, their SHA-256 and the changelog section as notes, and the Homebrew formula in MarvinAmador7/homebrew-tap
+# (needs the HOMEBREW_TAP_TOKEN secret; skipped with a warning without it, and for prereleases). Re-running for the same tag updates the release in place (npm versions are immutable:
 # an already-published version is skipped).
 # The live boxd/GitHub/agents e2e (scripts/mac-subagents-e2e.sh) stays a manual step before tagging (DEVELOPMENT.md).
 
@@ -182,9 +184,86 @@ jobs:
       - name: Install the package with a fresh HOME and drive it (fake agents)
         run: scripts/release-smoke.sh "dist/capcomd-${{ needs.prepare.outputs.version }}.tgz" "${{ needs.prepare.outputs.version }}"
 
+  binaries:
+    name: Single executables
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - run: bun install
+
+      # Every target builds here: each one's native parts come from npm, checked against the registry's hash.
+      - name: Build darwin-arm64, darwin-x64, linux-x64, linux-arm64
+        run: for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do bun scripts/build-binary.ts --target "$t" --outdir dist; done
+
+      - name: Each one reports this version
+        run: ./dist/capcomd-linux-x64 --version | grep -qx "capcomd ${{ needs.prepare.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            dist/capcomd-*
+            !dist/.platform
+
+  binary-smoke:
+    name: Install and run the binary (${{ matrix.target }})
+    needs: [prepare, binaries]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, os: macos-latest }
+          - { target: darwin-x64, os: macos-15-intel }
+          - { target: linux-x64, os: ubuntu-latest }
+          - { target: linux-arm64, os: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: |
+            scripts
+            install.sh
+            .bun-version
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - name: install.sh with a fresh HOME, then drive it without Bun (fake agents)
+        run: scripts/release-smoke.sh "dist/capcomd-${{ matrix.target }}" "${{ needs.prepare.outputs.version }}"
+
+      - name: The Homebrew formula installs it (from a throwaway local tap)
+        if: matrix.target == 'darwin-arm64'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_FROM_API: "1"
+          V: ${{ needs.prepare.outputs.version }}
+        run: |
+          brew tap-new --no-git capcomd-ci/test
+          bun scripts/homebrew-formula.ts "$V" dist "file://$PWD/dist" > "$(brew --repository)/Library/Taps/capcomd-ci/homebrew-test/Formula/capcomd.rb"
+          brew install capcomd-ci/test/capcomd
+          "$(brew --prefix)/bin/capcomd" --version | grep -qx "capcomd $V"
+          brew test capcomd-ci/test/capcomd
+          brew uninstall capcomd && brew untap capcomd-ci/test
+
   npm:
     name: Publish to npm
-    needs: [prepare, test, chaos, smoke]
+    needs: [prepare, test, chaos, smoke, binary-smoke]
     if: needs.prepare.outputs.npm == 'true' && (github.event_name == 'push' || inputs.publish)
     runs-on: ubuntu-latest
     permissions:
@@ -217,7 +296,7 @@ jobs:
 
   publish:
     name: Publish the release
-    needs: [prepare, test, chaos, smoke, npm]
+    needs: [prepare, test, chaos, smoke, binary-smoke, npm]
     # npm is skipped while package.json is private; any failure (npm included) publishes nothing here.
     if: ${{ !cancelled() && !failure() && (github.event_name == 'push' || inputs.publish) }}
     runs-on: ubuntu-latest
@@ -234,12 +313,51 @@ jobs:
       - name: Create or update the GitHub release
         run: |
           F=artifacts/package/capcomd-${{ needs.prepare.outputs.version }}.tgz
+          FILES=("$F" "$F.sha256" artifacts/binaries/capcomd-*)
           FLAGS=(); [ "${{ needs.prepare.outputs.prerelease }}" = "true" ] && FLAGS+=(--prerelease) || FLAGS+=(--latest)
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release edit "$TAG" --title "${{ needs.prepare.outputs.title }}" --notes-file artifacts/release-notes/release-notes.md "${FLAGS[@]}"
-            gh release upload "$TAG" "$F" "$F.sha256" --clobber
+            gh release upload "$TAG" "${FILES[@]}" --clobber
           else
             gh release create "$TAG" --verify-tag --title "${{ needs.prepare.outputs.title }}" \
-              --notes-file artifacts/release-notes/release-notes.md "${FLAGS[@]}" "$F" "$F.sha256"
+              --notes-file artifacts/release-notes/release-notes.md "${FLAGS[@]}" "${FILES[@]}"
           fi
           gh release view "$TAG" --json url,isPrerelease,assets --jq '{url, isPrerelease, assets: [.assets[].name]}'
+
+  homebrew:
+    name: Update the Homebrew tap
+    needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.prepare.outputs.prerelease != 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      V: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: |
+            scripts
+            package.json
+            .bun-version
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - name: Commit Formula/capcomd.rb to MarvinAmador7/homebrew-tap
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then echo "::warning::no HOMEBREW_TAP_TOKEN secret: the tap was not updated (brew install MarvinAmador7/tap/capcomd stays on the previous version)"; exit 0; fi
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/MarvinAmador7/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          bun scripts/homebrew-formula.ts "$V" dist > tap/Formula/capcomd.rb
+          cd tap
+          git config user.name "capcomd release" && git config user.email "capcomd@users.noreply.github.com"
+          git add Formula/capcomd.rb
+          git diff --cached --quiet && { echo "Formula already at $V"; exit 0; }
+          git commit -m "capcomd $V" && git push origin HEAD

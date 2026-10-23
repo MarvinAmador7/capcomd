@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeF
 import { dirname, join } from "path";
 import { RelayError } from "./errors";
 import { endpoint } from "./relay";
-import { PACKAGE_ROOT, capcomdHome } from "../utils/home";
+import { capcomdHome } from "../utils/home";
+import { selfArgv } from "../utils/self";
 
 const up = async (url: string) => fetch(url + "/", { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -43,7 +44,8 @@ export async function ensureEngine(o: { timeoutMs?: number } = {}): Promise<{ st
     mkdirSync(dirname(marker), { recursive: true });
     writeFileSync(marker, String(Date.now()));
     const fd = openSync(engineLog(), "a");
-    const child = spawn(process.execPath, [join(PACKAGE_ROOT, "src", "cli", "index.ts"), "serve", "--port", String(port)], { detached: true, stdio: ["ignore", fd, fd], env: process.env });
+    const [cmd, ...args] = selfArgv("serve", "--port", String(port));
+    const child = spawn(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
     child.unref();
     pid = child.pid;
   }

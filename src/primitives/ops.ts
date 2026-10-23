@@ -20,6 +20,7 @@ import { env } from "../utils/env";
 import { parseVerdict, reviewBrief } from "./review";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
+import { selfArgv } from "../utils/self";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
@@ -351,8 +352,8 @@ export function startDriver(runId: string, agentId: string) {
   const dir = join(stateDir(), "drivers");
   mkdirSync(dir, { recursive: true });
   const fd = openSync(join(dir, `${agentId}.log`), "a");
-  const cli = new URL("../cli/index.ts", import.meta.url).pathname;
-  const p = spawnProc(process.execPath, [cli, "agent-drive", runId, agentId], { detached: true, stdio: ["ignore", fd, fd], env: process.env });
+  const [cmd, ...args] = selfArgv("agent-drive", runId, agentId);
+  const p = spawnProc(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
   p.unref();
 }
 

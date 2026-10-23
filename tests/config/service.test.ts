@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { LABEL, UNIT, serviceFile, type ServiceSpec } from "../../src/cli/commands/service";
 
-const spec = (platform: NodeJS.Platform): ServiceSpec => ({ platform, bun: "/opt/bun/bin/bun", cli: "/opt/capcomd/src/cli/index.ts", port: 6420, home: "/home/me", logFile: "/home/me/.capcomd/engine.log", path: "/opt/bun/bin:/usr/bin:/bin" });
+const spec = (platform: NodeJS.Platform, argv = ["/opt/bun/bin/bun", "/opt/capcomd/src/cli/index.ts", "serve", "--port", "6420"]): ServiceSpec => ({ platform, argv, port: 6420, home: "/home/me", logFile: "/home/me/.capcomd/engine.log", path: "/opt/bun/bin:/usr/bin:/bin" });
 
 describe("engine as a service", () => {
   test("macOS: a launchd agent running `capcomd serve`, restarted on crash, logging to ~/.capcomd", () => {
@@ -20,6 +20,11 @@ describe("engine as a service", () => {
     expect(f.body).toContain("Restart=on-failure");
     expect(f.body).toContain("WantedBy=default.target");
     expect(f.body).not.toContain("BOXD_API_KEY");
+  });
+  test("the single executable runs itself, without bun", () => {
+    const argv = ["/home/me/.capcomd/bin/capcomd", "serve", "--port", "6420"];
+    expect(serviceFile(spec("linux", argv)).body).toContain("ExecStart=/home/me/.capcomd/bin/capcomd serve --port 6420");
+    expect(serviceFile(spec("darwin", argv)).body).toContain("<array><string>/home/me/.capcomd/bin/capcomd</string><string>serve</string>");
   });
   test("other platforms are refused with a hint", () => {
     expect(() => serviceFile(spec("win32"))).toThrow(/no background service support/);

@@ -9,8 +9,11 @@ import { join, resolve } from "path";
 export const PACKAGE_ROOT = resolve(new URL("../..", import.meta.url).pathname);
 type Source = Record<string, string | undefined>;
 
-/** A git checkout of capcomd itself (development), as opposed to an installed package. */
-export const isDevCheckout = () => existsSync(join(PACKAGE_ROOT, ".git"));
+/** The single executable (`bun build --compile`, scripts/build-binary.ts): its modules live in Bun's virtual $bunfs. */
+export const COMPILED = import.meta.url.includes("$bunfs") || import.meta.url.includes("~BUN");
+
+/** A git checkout of capcomd itself (development), as opposed to an installed package or binary. */
+export const isDevCheckout = () => !COMPILED && existsSync(join(PACKAGE_ROOT, ".git"));
 const useHome = (source: Source) => !!source.CAPCOMD_HOME || !isDevCheckout();
 
 /** ~/.capcomd, or $CAPCOMD_HOME. */

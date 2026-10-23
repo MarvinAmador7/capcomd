@@ -21,6 +21,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
     worker profiles it may spawn (before: 3 at once, 6 in all, a third of the budget each).
   - **Stuck agents:** an agent that looks idle, spinning or failing gets a notice and keeps running; it is stopped
     only if its profile sets that window (`--idle-after-ms`, `--stuck-repeats`).
+- capcomd now installs as a single executable, like any other CLI, with nothing to install first (no Bun or Node):
+  `curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.sh | sh`. It picks your machine's build (macOS or Linux, arm64 or x64) from the release, checks its
+  SHA-256 and puts it in `~/.capcomd/bin` (`CAPCOMD_INSTALL_DIR` to change that, `CAPCOMD_VERSION` for a specific
+  version). Or `brew install MarvinAmador7/tap/capcomd`. `capcomd upgrade` replaces it with the latest release
+  (`--to X.Y.Z` for a specific one, `--dry-run` to only check). The binary carries the engine, which it unpacks to
+  `~/.capcomd/bin/<version>/` the first time it starts. The npm package (`bun add -g capcomd`) is still published,
+  and the plugin works with either.
 - You can now give a running agent more budget instead of letting it stop and starting over:
   `capcomd grant <runId> <agent> --budget usd=2,turns=20,wallSeconds=600` (or the new `capcomd_grant` MCP tool,
   or `capcomd grant <agent> --budget …` from a parent agent inside its VM, for its own children). The amount is

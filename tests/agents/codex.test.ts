@@ -80,7 +80,8 @@ describe("codex adapter (fake codex exec --json)", () => {
 
   test("usage limit: recognized from turn.failed (not a retry), reset parsed from the VM's UTC clock text", async () => {
     const { codexResetAt } = await import("../../src/agents/adapters");
-    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "codex" });
+    // The auth mode is set here, never inferred from the checkout's real .relay/ logins.
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AUTH: "subscription" });
     const r = new Redactor([]);
     const now = Date.UTC(2026, 9, 22, 13, 0);
     expect(codexResetAt("You’ve hit your usage limit. Try again at 3:05 PM.", now)).toBe(Date.UTC(2026, 9, 22, 15, 5));

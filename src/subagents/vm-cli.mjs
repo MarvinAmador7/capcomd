@@ -3,7 +3,8 @@
 // to the network: each call is a request file in $CAPCOMD_RPC_DIR/req that the orchestrator
 // answers over boxd's authenticated exec channel. Authority = the token in $CAPCOMD_TOKEN_FILE.
 // Output is always JSON. Exit: 0 ok, 1 error, 2 usage, 75 retry later (backpressure).
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
@@ -245,6 +246,9 @@ async function main() {
   return exitFor(r);
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("/capcomd")) {
+// Run directly (not imported): compared as real paths, since a temp dir behind a symlink (macOS's /var) resolves
+// differently in import.meta.url than in argv.
+const isMain = () => { try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]); } catch { return false; } };
+if (isMain() || process.argv[1]?.endsWith("/capcomd")) {
   main().then((code) => { if (code !== null) process.exit(code); }, (e) => { console.log(JSON.stringify({ ok: false, error: { code: "internal", message: String(e?.message ?? e) } })); process.exit(1); });
 }

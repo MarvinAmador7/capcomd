@@ -46,9 +46,11 @@ export async function serve(opts: { port: number }) {
   if (dataDir) process.env.CAPCOMD_ENGINE_DATA = dataDir;
   if (!process.env.RIVET_ENGINE_BINARY) {
     // Launch through the wrapper (data dir + pid file); it execs the real platform binary.
-    const real = createRequire(import.meta.url)("@rivetkit/engine-cli").getEnginePath() as string;
+    // The single executable carries the engine and extracts it once per version; from source it's the npm package's.
+    const { embedded, engineWrapperPath, onDisk } = await import("../../utils/assets");
+    const real = embedded.engine ? onDisk("rivet-engine", embedded.engine) : (createRequire(import.meta.url)("@rivetkit/engine-cli").getEnginePath() as string);
     process.env.CAPCOMD_REAL_ENGINE = real;
-    process.env.RIVET_ENGINE_BINARY = new URL("../../engine/engine-wrapper.sh", import.meta.url).pathname;
+    process.env.RIVET_ENGINE_BINARY = engineWrapperPath();
   }
   // A previous serve on this port that died without reaping its engine: that engine is not
   // listening (ports were free above) but may still hold the data dir. It is ours; stop it.
@@ -88,7 +90,8 @@ export async function serve(opts: { port: number }) {
   // before serve runs; so start the engine in a child that has the env from the first instruction.
   if (process.env.CAPCOMD_SERVE_EXEC !== "1") {
     const { spawn } = await import("child_process");
-    const child = spawn(process.execPath, process.argv.slice(1), { stdio: "inherit", env: { ...process.env, CAPCOMD_SERVE_EXEC: "1" } });
+    const [cmd, ...args] = (await import("../../utils/self")).selfArgv(...process.argv.slice(2));
+    const child = spawn(cmd!, args, { stdio: "inherit", env: { ...process.env, CAPCOMD_SERVE_EXEC: "1" } });
     for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => child.kill(sig));
     const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((r) => child.on("exit", (c, sg) => r([c, sg])));
     if (signal) { process.removeAllListeners(signal); process.kill(process.pid, signal); } // same death (137 for a SIGKILL killpoint)
