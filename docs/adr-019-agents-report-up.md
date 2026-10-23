@@ -129,11 +129,12 @@ Step 3 (built: the supervisor, its outbox and checkpoints):
     credentials. The engine pushes each reported checkpoint with its own git credentials and records it on the
     agent (`checkpoint`, `AGENT_CHECKPOINT`).
   - Reviewers and reporting agents don't checkpoint.
+  - A merge of the agent's work deletes its checkpoint ref; an agent whose work didn't land keeps it, to continue
+    from.
 - **Not built yet:**
   - spend and stuck states in the supervisor's reports (the runner computes both from the log; see §2, step 4);
   - checkpoints at each spend step;
-  - `send`/`inbox` for workers (a headless CLI can't read a message mid-run, so this needs its own design);
-  - deleting checkpoint refs once their agent's work has landed.
+  - `send`/`inbox` for workers (a headless CLI can't read a message mid-run, so this needs its own design).
 
 ### 4. Limits are optional
 

@@ -87,4 +87,8 @@ test("the supervisor's checkpoints reach the remote and the agent's record while
   expect(await repo.sha(`refs/capcomd/checkpoints/${id}`)).toBe(agent.checkpoint.sha);
   expect(await repo.show(agent.checkpoint.sha, "src/sum.ts")).toContain("a + b");
   expect((await capcomd(["events", run, "--json"], env)).stdout).toContain("AGENT_CHECKPOINT");
+  // Once its work lands, its checkpoints go (they were only for continuing it).
+  const m = await cj(["merge", run, "--ref", id, "--operator"]);
+  expect(m.j).toMatchObject({ state: "merged" });
+  expect(await repo.sha(`refs/capcomd/checkpoints/${id}`)).toBeFalsy();
 }, 120_000);

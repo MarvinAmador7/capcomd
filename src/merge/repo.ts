@@ -75,3 +75,11 @@ export async function countTaskLandings(git: Git, targetRef: string, key: string
   const r = await git.run(["log", "--no-merges", "--format=%H", "--fixed-strings", "--grep", `Capcomd-Task: ${key}`, targetRef]);
   return r.stdout.split("\n").filter(Boolean).length;
 }
+
+/** Delete a ref on the remote (no clone needed). True when it is gone, including when it never existed. */
+export async function deleteRemoteRef(cfg: MergeConfig, ref: string): Promise<boolean> {
+  const dir = join(cfg.workdir, createHash("sha1").update(cfg.remote).digest("hex").slice(0, 12), "_refs");
+  if (!existsSync(join(dir, ".git"))) { mkdirSync(dir, { recursive: true }); await new Git(dir).ok(["init", "-q"]); }
+  const res = await new Git(dir).run(["push", "--porcelain", cfg.remote, `:${ref}`]);
+  return res.code === 0 || /remote ref does not exist|unable to delete .*: remote ref does not exist/.test(res.stdout + res.stderr);
+}

@@ -8,6 +8,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - A paused agent (stopped by its provider's usage limit) now starts again by itself at the reset time, even when
   nothing is waiting on it; before, it only woke while something awaited it. `capcomd run` now waits through such a
   pause, however long, instead of failing the task after 6 hours (a weekly limit can reset days later).
+- Merging an agent's work now deletes its checkpoint ref (`refs/capcomd/checkpoints/<agent>`) from your
+  repository; checkpoints of agents whose work didn't land are kept, so you can continue from them.
 - **Breaking:** nothing restricts an agent by default any more; set limits on a profile or a run when you want
   them.
   - **Tools and network:** an agent whose profile sets no `allowedTools` can use every tool without permission

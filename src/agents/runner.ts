@@ -11,6 +11,9 @@ import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils
 import { readFileSync } from "fs";
 import { StuckWatch, type Stuck } from "./stuck";
 
+/** Where an agent's checkpoints are pushed (ADR-019 §3); deleted once its work merges. */
+export const checkpointRef = (agentId: string) => `refs/capcomd/checkpoints/${agentId}`;
+
 /** ADR-019 §1: what the in-VM supervisor reports up (its outbox), or the runner on its behalf without one. */
 export type SupervisorReport =
   | { type: "heartbeat"; events: number; lastEventAt: number; source: "supervisor" | "events" }
@@ -341,7 +344,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}) }, sq)}`;
     // ADR-019 §1: the supervisor runs the agent and reports up through the outbox. It needs node, which the npm CLIs
     // bring; a VM without it (a native CLI) runs the agent directly, as before.
-    const ckptRef = `refs/capcomd/checkpoints/${task.agentId ?? `${task.runId}/${task.taskId}`}`;
+    const ckptRef = checkpointRef(task.agentId ?? `${task.runId}/${task.taskId}`);
     // A node that really runs code (≥16 for the supervisor's ESM): a stub or an old one would silently run nothing.
     const supervised = (await sh(`node -e 'process.stdout.write(+process.versions.node.split(".")[0] >= 16 ? "yes" : "no")' 2>/dev/null; true`)).stdout.trim() === "yes";
     if (supervised) {
