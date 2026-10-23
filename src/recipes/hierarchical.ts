@@ -9,7 +9,7 @@ import { isBoxdAuthError, BOXD_AUTH_HINT } from "../providers/boxd-errors";
 import { preflightNeeded, runPreflight } from "../core/preflight";
 import { RelayError } from "../core/errors";
 import { decodeAgentRef, parseAgentDirective } from "../agents/profiles";
-import { awaitAgents, mergeRef, runNew, spawnAgent, verifyRef } from "../primitives/ops";
+import { awaitThroughPauses, mergeRef, runNew, spawnAgent, verifyRef } from "../primitives/ops";
 import * as S from "../primitives/state";
 import { isProtectedBranch } from "../utils/protected";
 import { loadMergeConfig } from "../merge/config";
@@ -144,7 +144,10 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
       }
       const a = await spawnAgent({ runId, task: feedback ? `${t.goal}\n\nPrevious attempt failed: ${feedback}` : t.goal, key: k, contract: { planTask: t.id, epoch }, ...(profile ? { profile: profile.name, overrides: profile.overrides } : {}) });
       if (lt.state === "leased") { await ledger.workerStarted({ taskId: t.id, epoch }); lt = await ledger.getTask({ taskId: t.id }); }
-      const done: any = await awaitAgents(runId, [a.agentId], { timeoutMs: 6 * 3600_000 });
+      const done: any = await awaitThroughPauses(runId, a.agentId, { timeoutMs: opts.agentWaitMs ?? 6 * 3600_000, onPaused: (p) => {
+        const until = p.pausedUntil ? new Date(p.pausedUntil).toISOString() : null;
+        emit("task.paused", { taskId: t.id, agentId: p.agentId, until }, `  ⏸ ${t.id}: ${p.agentId} is paused by its provider's usage limit${until ? ` until ${until}` : ""}; waiting (capcomd resume ${runId} to run it now)`);
+      } });
       const ag = done.agents[0];
       if (ag.status === "failed" && isBoxdAuthError(String(ag.result?.error ?? ""))) throw new Error(String(ag.result.error)); // non-retryable: fail the run as config
       if (lt.state === "running") { await ledger.handoffTask({ taskId: t.id, epoch, branch: ag.result?.branch ?? "", commitSha: ag.result?.commit ?? "" }); lt = await ledger.getTask({ taskId: t.id }); }

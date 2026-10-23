@@ -4,8 +4,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 // actor. The CLI is a thin client; durable state lives in the scope actor (agent tree, keys,
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
-import { spawn as spawnProc } from "child_process";
-import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { client, assertEngine } from "../core/relay";
 import { RelayError } from "../core/errors";
@@ -20,8 +19,9 @@ import { env } from "../utils/env";
 import { parseVerdict, reviewBrief } from "./review";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
-import { selfArgv } from "../utils/self";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
+import { startDriver } from "./drivers";
+export { startDriver };
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
 const workerOf = (runId: string, agentId: string, epoch = 1) => client().worker.getOrCreate(epoch > 1 ? [runId, agentId, `e${epoch}`] : [runId, agentId]);
@@ -346,17 +346,6 @@ export async function grantBudget(runId: string, o: { agentId?: string; add: Bud
   return { runId, ...r };
 }
 
-/** Launch a detached driver process for one agent (logs in .relay/drivers/). */
-export function startDriver(runId: string, agentId: string) {
-  if (env("NO_DRIVER") === "1") return;
-  const dir = join(stateDir(), "drivers");
-  mkdirSync(dir, { recursive: true });
-  const fd = openSync(join(dir, `${agentId}.log`), "a");
-  const [cmd, ...args] = selfArgv("agent-drive", runId, agentId);
-  const p = spawnProc(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
-  p.unref();
-}
-
 /**
  * Advance one agent to a terminal state. Every step is idempotent (worker actor), so a new
  * driver resumes where a crashed one stopped. Returns the agent's final record.
@@ -569,6 +558,21 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     if (noticed.length) return { notices: noticed.map((a) => ({ agentId: a.agentId, ...a.notice! })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)) };
     if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })) };
     await sleep(POLL_MS);
+  }
+}
+
+/**
+ * Wait for one agent that may pause on its provider's usage limit (ADR-019 §6). A pause isn't a failure and can
+ * outlast any wait (a weekly limit, by days), so a timeout while it is paused waits again, for its reset or
+ * `capcomd resume`; `onPaused` hears about each such wait.
+ */
+export async function awaitThroughPauses(runId: string, agentId: string, o: { timeoutMs: number; onPaused?: (a: ScopeAgent) => void }) {
+  for (;;) {
+    const r = await awaitAgents(runId, [agentId], { timeoutMs: o.timeoutMs });
+    if (!("timeout" in r)) return r;
+    const a = await getAgentOrThrow(runId, agentId);
+    if (a.status !== "paused") return r;
+    o.onPaused?.(a);
   }
 }
 

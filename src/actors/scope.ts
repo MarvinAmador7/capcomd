@@ -8,6 +8,7 @@ import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
+import { startDriver } from "../primitives/drivers";
 import { available, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
@@ -152,6 +153,19 @@ async function reapOrphans(c: any, parent: ScopeAgent): Promise<{ reaped: string
     }
   }
   return out;
+}
+
+async function resumeAgent(c: { db: RawAccess }, agentId: string, by?: string) {
+  const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", agentId);
+  if (!r.length) fail("not_found", `agent ${agentId} not found`);
+  const a = rowToAgent(r[0]);
+  if (a.status !== "paused") return { changed: false, agent: a };
+  await c.db.transaction(async (tx: RawAccess) => {
+    await tx.execute("UPDATE agents_v2 SET status = 'running', epoch = ?, paused_until = NULL, result = NULL, heartbeat_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'paused'",
+      a.epoch + 1, Date.now(), Date.now(), agentId);
+    await addEvent(tx, "AGENT_RESUMED", agentId, { epoch: a.epoch + 1, by: by ?? null }, `resume-${agentId}-e${a.epoch + 1}`);
+  }, { name: "scopeResume" });
+  return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", agentId))[0]) };
 }
 
 export const scopeActor = actor({
@@ -368,21 +382,28 @@ export const scopeActor = actor({
           params.until, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, "AGENT_PAUSED", params.agentId, { result: params.result, until: params.until || null }, `pause-${params.agentId}-e${a.epoch}`);
       }, { name: "scopePause" });
+      // Wake at the reset even when nobody awaits it (the engine host starts its driver).
+      if (params.until > 0) await c.schedule.at(params.until, "wakeDue", { agentId: params.agentId, epoch: a.epoch });
       return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
 
     /** A paused agent runs again as its next epoch (a new worker and VM, continuing on its branch). */
     async resume(c, params: { agentId: string; by?: string }) {
+      return resumeAgent(c, params.agentId, params.by);
+    },
+
+    /**
+     * Scheduled by `pause` for its reset time: the agent runs again if it is still that pause (not resumed, cancelled
+     * or paused again since), and the engine host starts its driver. A waiter that got there first already did both.
+     */
+    async wakeDue(c, params: { agentId: string; epoch: number }) {
       const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
-      if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
+      if (!r.length) return { woken: false };
       const a = rowToAgent(r[0]);
-      if (a.status !== "paused") return { changed: false, agent: a };
-      await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("UPDATE agents_v2 SET status = 'running', epoch = ?, paused_until = NULL, result = NULL, heartbeat_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'paused'",
-          a.epoch + 1, Date.now(), Date.now(), params.agentId);
-        await addEvent(tx, "AGENT_RESUMED", params.agentId, { epoch: a.epoch + 1, by: params.by ?? null }, `resume-${params.agentId}-e${a.epoch + 1}`);
-      }, { name: "scopeResume" });
-      return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+      if (a.status !== "paused" || a.epoch !== params.epoch || !a.pausedUntil || a.pausedUntil > Date.now() + 1000) return { woken: false };
+      const res = await resumeAgent(c, params.agentId, "reset");
+      if (res.changed) startDriver(a.runId, a.agentId);
+      return { woken: res.changed };
     },
 
     /** Merge fields into a finished agent's result (ADR-017: the latest verification of its branch). */

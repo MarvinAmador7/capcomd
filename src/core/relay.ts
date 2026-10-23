@@ -93,6 +93,8 @@ export interface RunOptions {
   targetBranch?: string;
   approvalPollMs?: number;
   approvalTimeoutMs?: number;
+  /** How long to wait for a task's agent before failing the attempt (default 6 h); a wait that ends while it is paused on a quota waits again. */
+  agentWaitMs?: number;
   emit: Emit;
 }
 
