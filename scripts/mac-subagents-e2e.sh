@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# ADR-017 live e2e: a planner agent (claude, children.allowSpawn, depth 1, 3 children) splits a
-# 3-file goal into child agents (mix of claude + codex) from inside its VM with in-VM capcomd,
-# verifies and merges each child's branch, and reports. Prints the tree, rollups and timings.
+# ADR-017 live e2e: a planner agent (claude, with the profile `capcomd setup` writes: may spawn the two worker
+# profiles, no other limits, no run budget) splits a 3-file goal into child agents (mix of claude + codex) from
+# inside its VM with in-VM capcomd, verifies and merges each child's branch, and reports. Workers checkpoint every
+# 5 s: their checkpoint refs must reach GitHub and be deleted when their work merges. Prints the tree, rollups and
+# timings.
 # The GitHub repo is NOT deleted (inspect it; the delete command is printed at the end).
 # Needs: bun, gh (logged in), BOXD_API_KEY, working claude + codex logins (capcomd auth status).
 # Override profiles with CAPCOMD_PLANNER_SPEC / CAPCOMD_CLAUDE_WORKER_SPEC / CAPCOMD_CODEX_WORKER_SPEC /
@@ -22,11 +24,12 @@ gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
 [ -d node_modules ] || bun install
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="credential.https://github.com.helper" GIT_CONFIG_VALUE_0='!gh auth git-credential'
 
-# Profiles: the planner may spawn exactly these two worker profiles, 3 at a time, one level deep.
+# Profiles: the planner as `capcomd setup` writes it (may spawn these two worker profiles, nothing else limited).
+# Workers keep a 15-minute timeout only as this script's safety net, and checkpoint every 5 s.
 AGENTS="$WORK/agents.json"
-DEF_P='{"provider":"claude","auth":"subscription","maxTurns":60,"timeoutMs":2400000,"children":{"allowSpawn":true,"maxDepth":1,"maxChildren":3,"maxTotalDescendants":6,"allowedChildProfiles":["claude-worker","codex-worker"],"budgetShare":0.34}}'
-DEF_C='{"provider":"claude","auth":"subscription","maxTurns":25,"timeoutMs":900000}'
-DEF_X='{"provider":"codex","auth":"subscription","maxTurns":25,"timeoutMs":900000}'
+DEF_P='{"provider":"claude","auth":"subscription","children":{"allowSpawn":true,"allowedChildProfiles":["claude-worker","codex-worker"]}}'
+DEF_C='{"provider":"claude","auth":"subscription","timeoutMs":900000,"checkpointEveryMs":5000}'
+DEF_X='{"provider":"codex","auth":"subscription","timeoutMs":900000,"checkpointEveryMs":5000}'
 # Read-only reviewer: may read and run the tests, never edit (verify never pushes its tree anyway).
 DEF_R='{"provider":"claude","auth":"subscription","maxTurns":15,"timeoutMs":600000,"allowedTools":["Read","Glob","Grep","LS","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(bun test:*)","Bash(cat:*)","Bash(ls:*)"]}'
 P="${CAPCOMD_PLANNER_SPEC:-$DEF_P}"; C="${CAPCOMD_CLAUDE_WORKER_SPEC:-$DEF_C}"; X="${CAPCOMD_CODEX_WORKER_SPEC:-$DEF_X}"; R="${CAPCOMD_REVIEWER_SPEC:-$DEF_R}"
@@ -83,12 +86,12 @@ kill -0 "$ENGINE_PID" 2>/dev/null || die "engine exited: $(tail -3 "$WORK/engine
 C="bun src/cli/index.ts"
 # Operator-named checks (a VM can't pass --checks): one per file, since the other files stay broken
 # until their branches merge. The planner pins one per child at spawn; merge re-runs the same command.
-RUN=$($C run new --budget usd=6,turns=200,wallSeconds=3600 --label "subagents e2e $TS" \
+RUN=$($C run new --label "subagents e2e $TS" \
   --checks-set add='bun test ./test/add.test.ts' --checks-set mul='bun test ./test/mul.test.ts' --checks-set shout='bun test ./test/shout.test.ts' \
   --reviewer reviewer --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).runId)')
 GOAL="Three functions are broken, each with its own failing test: src/add.ts (test/add.test.ts), src/mul.ts (test/mul.test.ts), src/shout.ts (test/shout.test.ts).
 You are the planner. Do NOT edit files yourself. Use the capcomd command (see the orchestration skill in your instructions):
-1. Spawn exactly three leaf children in parallel, one per file, each with --children.maxChildren=0 and a budget of turns=20:
+1. Spawn exactly three leaf children in parallel, one per file, each with --children.maxChildren=0:
    add and mul with --profile claude-worker, shout with --profile codex-worker. Give each a self-contained task naming its file and test, and tell it to change only that file.
    Pin each child's check with --check <file> (add, mul or shout: the operator's check that runs only that file's test).
 2. capcomd await all three. For each child: capcomd verify --ref <agt> --key v-<file> --acceptance '[\"src/<file>.ts is fixed so test/<file>.test.ts passes\", \"no other file changed\"]' (it runs the pinned check, then the run's reviewer agent reads the change: give the command a 10-minute timeout, and if it is cut off, run the same command again); if it passes, capcomd merge --ref <agt> --require <vfyId>. If the review fails, its reasons are in result.review.reasons.
@@ -125,6 +128,14 @@ $C logs "$RUN" "$ROOT" --tail 400 2>/dev/null | grep '\[capcomd\]' | sed 's/^/  
 echo "== 7. merged PRs into integration"
 gh pr list -R "$REPO" --state all --json number,title,state,url -q '.[] | "   #\(.number) \(.state) \(.title) \(.url)"'
 MERGED=$(gh pr list -R "$REPO" --state merged --base integration --json number -q 'length' 2>/dev/null || echo 0)
+echo "== 7b. checkpoints (pushed while the workers ran; deleted once their work merged)"
+CKPTS=$($C events "$RUN" --json 2>/dev/null | grep -c '"AGENT_CHECKPOINT"' || true)
+MERGED_IDS=$(gh pr list -R "$REPO" --state merged --base integration --json title -q '.[].title' | grep -o 'agt-[a-z0-9]*' | sort -u)
+LEFT=0
+for ref in $(git ls-remote "https://github.com/$REPO.git" 'refs/capcomd/checkpoints/*' | awk '{print $2}'); do
+  echo "   left: $ref"; echo "$MERGED_IDS" | grep -qx "${ref##*/}" && LEFT=$((LEFT + 1))
+done
+echo "   checkpoints recorded: $CKPTS; refs left for merged agents: $LEFT"
 echo "== 8. integration suite (the whole goal: every test green once all branches landed)"
 FINAL="$WORK/final"
 if git clone -q --branch integration "https://github.com/$REPO.git" "$FINAL" 2>/dev/null && (cd "$FINAL" && bun test >"$WORK/final-test.log" 2>&1); then SUITE=pass; else SUITE=fail; fi
@@ -146,5 +157,7 @@ FAILS=""
 [ "$REVIEWERS" -ge 3 ] || FAILS="$FAILS reviewers=$REVIEWERS/3"
 [ "$SUITE" = pass ] || FAILS="$FAILS integration-suite=fail"
 [ "$VMS" = clean ] || FAILS="$FAILS vms=$VMS"
+[ "${CKPTS:-0}" -ge 1 ] || FAILS="$FAILS checkpoints=0"
+[ "$LEFT" = 0 ] || FAILS="$FAILS checkpoint-refs-left=$LEFT"
 if [ -n "$FAILS" ]; then echo "E2E FAIL:$FAILS"; exit 1; fi
-echo "E2E PASS: planner done, 3/3 reviewed and merged, integration suite green, no VMs left"
+echo "E2E PASS: planner done, 3/3 reviewed and merged, integration suite green, checkpoints pushed and cleaned up, no VMs left"
