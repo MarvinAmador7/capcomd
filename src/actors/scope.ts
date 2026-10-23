@@ -8,7 +8,7 @@ import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
-import { checkSpawn, type Grant, TERMINAL_AGENT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
+import { available, checkSpawn, type Grant, overBudget, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
@@ -203,15 +203,13 @@ export const scopeActor = actor({
       if (!have.length) return null;
       const meta = JSON.parse(have[0]!.v as string);
       const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
-      const roots = all.filter((a) => !a.parent);
-      const spent: Budget = {}, unallocated: Budget = {};
+      const tree = treeSpend(all);
+      const spent: Budget = {};
       for (const u of UNITS) {
         const sp = all.reduce((x, a) => x + (a.spent[u] ?? 0), 0);
         if (sp) spent[u] = Math.round(sp * 1e6) / 1e6;
-        if (meta.budget[u] === undefined) continue;
-        const held = roots.reduce((x, r) => x + ((TERMINAL_AGENT.has(r.status) ? r.spent[u] : r.budget[u] ?? r.spent[u]) ?? 0), 0);
-        unallocated[u] = Math.max(0, Math.round((meta.budget[u] - held) * 1e6) / 1e6);
       }
+      const unallocated = available(meta.budget, {}, all.filter((a) => !a.parent).map((a) => ({ ...a, tree: tree.get(a.agentId) })));
       return { budget: meta.budget as Budget, label: meta.label as string | null, createdAt: meta.createdAt as number, spent, unallocated };
     },
 
@@ -249,13 +247,13 @@ export const scopeActor = actor({
         }
         const ancestors: ScopeAgent[] = [];
         for (let a = parent; a; a = a.parent ? await get(a.parent) : null) ancestors.push(a);
-        const all = (await tx.execute("SELECT agent_id, parent FROM agents_v2")) as any[];
+        const all = (await tx.execute("SELECT * FROM agents_v2")).map(rowToAgent);
         const kids = new Map<string, string[]>();
-        for (const r of all) if (r.parent) kids.set(r.parent, [...(kids.get(r.parent) ?? []), r.agent_id]);
+        for (const r of all) if (r.parent) kids.set(r.parent, [...(kids.get(r.parent) ?? []), r.agentId]);
         const countDesc = (id: string): number => (kids.get(id) ?? []).reduce((n, k) => n + 1 + countDesc(k), 0);
-        const siblings = (params.parent
-          ? await tx.execute("SELECT * FROM agents_v2 WHERE parent = ?", params.parent)
-          : await tx.execute("SELECT * FROM agents_v2 WHERE parent IS NULL")).map(rowToAgent);
+        // A sibling that reserved nothing holds what its subtree has spent so far (ADR-019).
+        const tree = treeSpend(all);
+        const siblings = all.filter((a) => a.parent === (params.parent ?? null)).map((a) => ({ ...a, tree: tree.get(a.agentId) }));
         const d = checkSpawn({
           parent: parent as AgentRow | null, ancestors: ancestors as AgentRow[], descendantCounts: ancestors.map((a) => countDesc(a.agentId)),
           siblings: siblings as AgentRow[], childProfile: params.profile, childSpec: (params.spec as unknown as AgentSpec) ?? null,
@@ -306,8 +304,8 @@ export const scopeActor = actor({
       if (TERMINAL_AGENT.has(a.status)) return { changed: false, agent: a };
       await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("UPDATE agents_v2 SET status = ?, result = ?, spent = ?, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
-          params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? {}), Date.now(), params.agentId);
-        await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? {}, budget: a.budget }, `finish-${params.agentId}`);
+          params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
+        await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? a.spent, budget: a.budget }, `finish-${params.agentId}`);
         await tx.execute("DELETE FROM awaits WHERE waiter = ?", params.agentId);
       }, { name: "scopeFinish" });
       const orphans = await reapOrphans(c, { ...a, status: params.status });
@@ -327,6 +325,22 @@ export const scopeActor = actor({
     async heartbeat(c, params: { agentId: string; note?: string }) {
       await c.db.execute("UPDATE agents_v2 SET heartbeat_at = ?, heartbeat_note = COALESCE(?, heartbeat_note) WHERE agent_id = ?", Date.now(), params.note?.slice(0, 200) ?? null, params.agentId);
       return { ok: true };
+    },
+
+    /**
+     * ADR-019: a running agent's spend, reported live by its runner (not only when it finishes). Recorded on the agent
+     * (so budget, tree and spawns see it), then checked against its own budget, every ancestor's (their subtree's
+     * spend) and the run's. `stop` names the limit to stop at (result.limit) when one is over.
+     */
+    async reportSpend(c, params: { agentId: string; spent: Budget }) {
+      const r = await c.db.execute("SELECT status FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      if (!r.length || TERMINAL_AGENT.has(r[0]!.status as string)) return { stop: null };
+      await c.db.execute("UPDATE agents_v2 SET spent = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')", JSON.stringify(params.spent), params.agentId);
+      const meta = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
+      const runBudget = meta.length ? (JSON.parse(meta[0]!.v as string).budget as Budget) : {};
+      const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
+      const over = overBudget(params.agentId, all, runBudget);
+      return over ? { stop: UNIT_LIMIT[over.unit], over } : { stop: null };
     },
 
     /**

@@ -86,16 +86,61 @@ export function childLimits(parent: Limits, own: ChildrenSpec | undefined): Limi
 }
 
 /** Per unit, what a parent still controls: its allocation − its own spend − what children hold
- *  (a live child holds its allocation; a finished one only what it spent). Units the parent
- *  doesn't limit are absent (unlimited). */
-export function available(budget: Budget, spent: Budget, children: Array<Pick<AgentRow, "status" | "budget" | "spent">>): Budget {
+ *  (a live child holds its allocation; a finished child, or one that reserved nothing, what its subtree spent:
+ *  `tree`, from treeSpend, else its own spend). Units the parent doesn't limit are absent (unlimited). */
+export function available(budget: Budget, spent: Budget, children: Array<Pick<AgentRow, "status" | "budget" | "spent"> & { tree?: Budget }>): Budget {
   const out: Budget = {};
   for (const u of UNITS) {
     if (budget[u] === undefined) continue;
-    const held = children.reduce((a, c) => a + ((TERMINAL_AGENT.has(c.status) ? c.spent[u] : c.budget[u] ?? c.spent[u]) ?? 0), 0);
+    const held = children.reduce((a, c) => {
+      const used = (c.tree ?? c.spent)[u] ?? 0;
+      return a + (!TERMINAL_AGENT.has(c.status) && c.budget[u] !== undefined ? Math.max(c.budget[u]!, used) : used);
+    }, 0);
     out[u] = Math.max(0, round(budget[u]! - (spent[u] ?? 0) - held));
   }
   return out;
+}
+
+/** What each agent's subtree (the agent and every descendant) has spent, by agent id. */
+export function treeSpend(agents: Array<Pick<AgentRow, "agentId" | "parent" | "spent">>): Map<string, Budget> {
+  const kids = new Map<string, string[]>();
+  for (const a of agents) if (a.parent) kids.set(a.parent, [...(kids.get(a.parent) ?? []), a.agentId]);
+  const byId = new Map(agents.map((a) => [a.agentId, a]));
+  const out = new Map<string, Budget>();
+  const walk = (id: string): Budget => {
+    const have = out.get(id);
+    if (have) return have;
+    const b: Budget = { ...(byId.get(id)?.spent ?? {}) };
+    for (const k of kids.get(id) ?? []) { const kb = walk(k); for (const u of UNITS) if (kb[u]) b[u] = round((b[u] ?? 0) + kb[u]!); }
+    out.set(id, b);
+    return b;
+  };
+  for (const a of agents) walk(a.agentId);
+  return out;
+}
+
+/** The limit a stop over each unit reads as (result.limit). */
+export const UNIT_LIMIT: Record<Unit, string> = { usd: "max_budget_usd", turns: "max_turns", wallSeconds: "timeout" };
+
+/**
+ * ADR-019: budgets are enforced from live spend, not only by what a spawn reserved. The first budget an agent's
+ * spend has pushed over: its own, an ancestor's (that ancestor's whole subtree counts), or the run's (everyone).
+ */
+export function overBudget(agentId: string, agents: Array<Pick<AgentRow, "agentId" | "parent" | "budget" | "spent">>, runBudget: Budget): { unit: Unit; at: string; spent: number; budget: number } | null {
+  const tree = treeSpend(agents);
+  const byId = new Map(agents.map((a) => [a.agentId, a]));
+  for (let a = byId.get(agentId); a; a = a.parent ? byId.get(a.parent) : undefined)
+    for (const u of UNITS) {
+      const b = a.budget[u], sp = tree.get(a.agentId)?.[u] ?? 0;
+      if (b !== undefined && sp > b) return { unit: u, at: a.agentId, spent: sp, budget: b };
+    }
+  for (const u of UNITS) {
+    const b = runBudget[u];
+    if (b === undefined) continue;
+    const sp = round(agents.reduce((x, a) => x + (a.spent[u] ?? 0), 0));
+    if (sp > b) return { unit: u, at: "run", spent: sp, budget: b };
+  }
+  return null;
 }
 const round = (x: number) => Math.round(x * 1e6) / 1e6;
 
@@ -210,11 +255,11 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
 }
 
 /**
- * What a spawn reserves for a unit it doesn't name. An agent can't use more than its profile's maxTurns, timeoutMs or
- * maxBudgetUsd, so a capped unit reserves that cap (or what's left, if less), not everything left: spawning several
- * agents with only `turns` no longer hands the first one every remaining second. A subscription agent that can't
- * spawn bills $0, so it reserves no usd at all (its spend still counts against the run). Any other unit the profile
- * doesn't cap takes what's left, as before.
+ * What a spawn reserves for a unit it doesn't name (ADR-019): the profile's own cap (maxTurns, timeoutMs, maxBudgetUsd;
+ * at most what's left) when it sets one, else nothing. An agent that reserves nothing still spends from the same pool:
+ * the engine meters its spend live and stops it when it, or any ancestor, or the run, goes over budget. `none` lists
+ * units the agent doesn't bill at all (usd for a subscription agent that can't spawn): a spawn isn't refused for
+ * having none of them left.
  */
 export function profileDefaults(spec: { auth?: string; maxTurns?: number; timeoutMs?: number; maxBudgetUsd?: number; children?: { allowSpawn?: boolean } } | null | undefined): { caps: Budget; none: Unit[] } {
   const caps: Budget = {};
@@ -252,12 +297,13 @@ function carve(avail: Budget, share: number, requested: Budget | undefined, rest
   for (const u of UNITS) {
     const req = requested?.[u];
     if (avail[u] === undefined) { if (req !== undefined) budget[u] = req; continue; }
-    if (req === undefined && defaults.none.includes(u)) continue; // reserved by nobody; spend still counts
     const cap = u === "turns" ? Math.floor(avail[u]! * share) : round(avail[u]! * share);
     if (req !== undefined && req > cap)
       return { ok: false, code: "budget", error: `requested ${fmt(u, req)} exceeds ${fmt(u, cap)} available from ${from} (remaining ${fmt(u, avail[u]!)} × budgetShare ${share})` };
-    budget[u] = req ?? (defaults.caps[u] !== undefined ? Math.min(defaults.caps[u]!, cap) : cap);
-    if (budget[u]! <= 0) return { ok: false, code: "budget", error: `no ${u} budget left in ${from}` };
+    const r = req ?? (defaults.caps[u] !== undefined ? Math.min(defaults.caps[u]!, cap) : undefined);
+    if (r !== undefined) budget[u] = r;
+    else if (defaults.none.includes(u)) continue; // doesn't bill this unit
+    if ((r ?? avail[u]!) <= 0) return { ok: false, code: "budget", error: `no ${u} budget left in ${from}` };
   }
   return { ok: true, budget, ...rest() };
 }

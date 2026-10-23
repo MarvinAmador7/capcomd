@@ -1,4 +1,4 @@
-import type { AgentConfig, RealAgent } from "./config";
+import type { AgentConfig, ClaudeUsage, RealAgent } from "./config";
 import type { Redactor } from "./redact";
 
 export interface AgentEvent {
@@ -16,6 +16,8 @@ export interface AgentRunState {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  /** Per message id, the usage claude reported so far (each content block repeats its message's usage). */
+  usage?: Record<string, ClaudeUsage>;
   /** Final summary text (claude `result`, codex last agent_message). */
   resultText?: string;
   /** Adapter saw a terminal result event. */

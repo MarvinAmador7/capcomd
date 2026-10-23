@@ -74,6 +74,9 @@ Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token 
   Amended 2026-10-22: per unit, a spawn that doesn't name a unit reserves the child profile's own cap for it
   (`maxTurns`, `timeoutMs`, `maxBudgetUsd`, at most what's left); a subscription child that can't spawn reserves no
   usd; only a unit the profile doesn't cap defaults to all that's left.
+  Amended by ADR-019 (step 1b): a unit the profile doesn't cap reserves nothing. Spend is metered live and the
+  engine stops an agent when its own budget, an ancestor's (that ancestor's whole subtree counts) or the run's is
+  over; a child that reserved nothing holds what its subtree has spent.
 - **Enforcement:** the carved budget narrows the agent's profile: `maxTurns ≤ turns`, `timeoutMs ≤ wallSeconds`, `maxBudgetUsd ≤ usd`. The profile's own limits stay the ceiling.
   Amended by ADR-019 (step 1): these limits are optional. Profiles have no default turns, time or money, and an
   unset limit means none; the only guard always on is an idle stop (no output from the agent CLI for

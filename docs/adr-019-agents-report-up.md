@@ -97,8 +97,9 @@ and a parent continues from the checkpoint the way it continues from a stopped b
 - **Run ceiling:** `run new --budget` stays the place for a hard money cap. Setup asks API-key users once ("cap
   spend per run? $___ / no limit"); subscription users aren't asked.
 - **The budget tree is unchanged:** a unit a parent doesn't set is already unlimited for its children
-  (`src/primitives/policy.ts`). A spawn without a budget reserves nothing.
-- **Turns** stay accepted as a budget unit for compatibility, but they're never defaulted or reserved, and the docs
+  (`src/primitives/policy.ts`). A spawn without a budget reserves nothing, except a cap its profile sets.
+- **Turns** stay accepted as a budget unit for compatibility, but they're never defaulted (reserved only when a spawn
+  names them or the profile caps them), and the docs
   say they're counted differently per provider.
 - **grant:** `capcomd grant <run> <agt> --budget …` (and an MCP tool) raises a running child's budget, within what
   the parent has left.

@@ -159,6 +159,22 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(renewals[0]).toBe(3600); // the VM's delete deadline is renewed while the agent runs
   }, 60_000);
 
+  test("live spend: the runner reports it while the agent works, and stops it when the engine says a budget is over", async () => {
+    const s = await setup("[spend] costly work");
+    const reports: Array<{ usd: number; turns: number; wallSeconds: number }> = [];
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, {
+      apiKey: KEY,
+      onSpend: async (spent) => { reports.push(spent); return spent.usd > 1 ? "max_budget_usd" : null; },
+    });
+    expect(reports.length).toBeGreaterThan(0);
+    expect(reports.at(-1)!.usd).toBeGreaterThan(1); // 100k output tokens per message at $20/Mtok: $2 each
+    expect(res.limit).toBe("max_budget_usd");
+    const msg = (await new Git(s.r.bare).run(["log", "-1", "--format=%B", s.task.branch])).stdout;
+    expect(msg).toContain("Capcomd-Stop: max_budget_usd");
+    expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
+    expect(getFinishedSpans().find((x) => x.name === "agent.claude_code")!.events.map((e) => e.name)).toContain("agent.budget");
+  }, 60_000);
+
   test("timeout kills the agent process group", async () => {
     const s = await setup("[sleep] hang", { CAPCOMD_AGENT_TIMEOUT_MS: "1500" });
     const t0 = Date.now();
@@ -209,6 +225,25 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
 });
 
 describe("agent config, redaction, credentials, egress", () => {
+  test("spend estimate: each message's usage counted once, priced by its model; the final total replaces it", async () => {
+    const { claudeAdapter } = await import("../../src/agents/adapters");
+    const { claudeCostUsd } = await import("../../src/agents/config");
+    const r = new Redactor([]);
+    const st = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
+    const msg = (id: string, model: string, u: Record<string, number>) => JSON.stringify({ type: "assistant", message: { id, model, usage: u, content: [{ type: "text", text: "x" }] } });
+    const u1 = { input_tokens: 1000, cache_creation_input_tokens: 2000, cache_read_input_tokens: 10_000, output_tokens: 500 };
+    claudeAdapter.parse(msg("m1", "claude-opus-5-5", u1), r, st, {} as any);
+    claudeAdapter.parse(msg("m1", "claude-opus-5-5", u1), r, st, {} as any); // the same message's next content block
+    // opus 5.5: 1000×$4 + 2000×$5 (write 1.25×) + 10000×$0.20 + 500×$20, per Mtok
+    expect(st.costUsd).toBeCloseTo((4000 + 10_000 + 2000 + 10_000) / 1e6, 9);
+    expect(st.inputTokens).toBe(13_000);
+    claudeAdapter.parse(msg("m2", "claude-haiku-5-5", { input_tokens: 1_000_000, output_tokens: 0 }), r, st, {} as any);
+    expect(st.costUsd).toBeCloseTo(0.026 + 0.1, 9);
+    expect(claudeCostUsd({ model: "claude-something-new", input: 1e6, cacheWrite: 0, cacheRead: 0, output: 0 })).toBe(5); // unknown: priced high
+    claudeAdapter.parse('{"type":"result","subtype":"success","total_cost_usd":0.2,"num_turns":2,"usage":{}}', r, st, {} as any);
+    expect(st.costUsd).toBe(0.2);
+  });
+
   test("CAPCOMD_AGENT selects claude-code; default stays fake", () => {
     expect(agentFromEnv({})).toBe("fake");
     expect(agentFromEnv({ CAPCOMD_AGENT: "claude-code" })).toBe("claude-code");

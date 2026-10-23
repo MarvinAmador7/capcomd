@@ -52,6 +52,11 @@ export interface AgentRunOptions {
   apiKey?: string;
   isCancelled?: () => Promise<boolean>;
   onEvent?: (e: AgentEvent) => void;
+  /**
+   * ADR-019: spend so far (usd is 0 on a subscription), reported every few seconds while the agent runs. The engine
+   * records it and answers with a limit to stop at (e.g. "max_budget_usd") when a budget is over, else null.
+   */
+  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }) => Promise<string | null>;
   secrets?: string[];
   now?: () => number;
   /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
@@ -68,6 +73,7 @@ export class AgentError extends Error {
 /** A worker VM is deleted this long after its last lease renewal, so a VM whose engine died is cleaned up. */
 export const AGENT_VM_TTL_SECONDS = 3600;
 const TTL_RENEW_MS = 10 * 60_000;
+const SPEND_REPORT_MS = 5_000;
 
 /** How a stop reads in errors and results ("idle" isn't a limit anyone set: the agent CLI went silent). */
 export const stoppedAt = (limit: string) => (limit === "idle" ? "stopped after going idle (no output from the agent)" : `stopped at its ${limit} limit`);
@@ -314,7 +320,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const deadline = cfg.timeoutMs ? now() + cfg.timeoutMs + 30_000 : Infinity;
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     live = state;
-    let consumed = 0, exitCode: number | null = null, seen = 0, lastEventAt = now(), renewedAt = 0;
+    let consumed = 0, exitCode: number | null = null, seen = 0, lastEventAt = now(), renewedAt = 0, spendAt = now();
+    const startedAt = now();
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
     // caller stops the agent instead of retrying it, so hours of work aren't redone or lost at a cap.
     let limit: string | null = null;
@@ -349,6 +356,18 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         addSpanEvent(span, "agent.guard", { reason: guard });
         limit = guard.split(" ")[0]!;
         break;
+      }
+      // A budget is enforced by the engine from live spend (its own, an ancestor's or the run's), for every provider.
+      if (opts.onSpend && now() - spendAt >= SPEND_REPORT_MS) {
+        spendAt = now();
+        const usd = credentialMode === "subscription" ? 0 : Math.round(state.costUsd * 1e6) / 1e6;
+        const stop = await opts.onSpend({ usd, turns: state.turns, wallSeconds: Math.round((now() - startedAt) / 1000) }).catch(() => null);
+        if (stop) {
+          await kill(); await drain(true);
+          addSpanEvent(span, "agent.budget", { reason: stop, "agent.cost_usd": usd });
+          limit = stop;
+          break;
+        }
       }
       if (opts.isCancelled && (await opts.isCancelled().catch(() => false))) {
         await kill(); await drain(true);

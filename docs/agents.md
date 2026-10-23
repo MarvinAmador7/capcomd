@@ -16,6 +16,8 @@ For Hermes or another orchestrator: define profiles with `agents add NAME --spec
 
 Limits are optional: `maxTurns`, `timeoutMs` and `maxBudgetUsd` (`--max-turns`, `--timeout-ms`, `--budget`) are unset unless you set them, and an unset limit means none (ADR-019). Turns count differently per provider: Claude Code counts model turns, Codex counts tool steps. One guard is always on: an agent whose CLI produces no output for `idleAfterMs` (`--idle-after-ms`, default 30 minutes) has hung and is stopped. Any stop keeps the work: it's pushed to the agent's branch and the agent ends `failed` with `result.limit`. A profile that may spawn and sets no `children.maxTotalDescendants` can start at most 10 agents below it.
 
+Budgets (`run new --budget`, `spawn --budget`) are enforced from live spend: while an agent works, its runner reports what it has spent every few seconds (Claude's from each message's token usage at list prices, until its final cost arrives; Codex's from tokens × `CAPCOMD_CODEX_USD_PER_MTOK_IN/OUT`), and the engine stops the agent (`result.limit: max_budget_usd`, work kept) when its own budget, an ancestor's or the run's is spent. A spawn reserves only the units it names (or its profile caps), so agents spawned without a budget share what's left.
+
 Auth is exactly one of `apikey` (the provider's API key, from local env or a boxd secret) or `subscription` (from `capcomd auth login claude|codex`). Giving both or neither is an error. `CAPCOMD_AGENT` still works as an override, set to a kind or a profile name.
 
 `children` (policy only for now): `{allowSpawn, maxDepth, maxChildren, maxTotalDescendants, allowedChildProfiles, budgetShare}`. Children may only narrow their parent.

@@ -119,6 +119,28 @@ export interface AgentConfig {
   credentialMode: "auto" | "secret" | "env" | "subscription";
 }
 
+/**
+ * USD per million tokens, for Claude's spend while it runs (claude reports a cost only when it finishes; that total
+ * replaces the estimate). Matched against the model in each message, first match wins; cache writes cost 1.25×
+ * input, cache reads `cacheRead` (else 0.1× input). Anthropic list prices, 2026-10. An unknown model is priced as
+ * the dearer older Opus, so a budget errs towards stopping early.
+ */
+export const CLAUDE_USD_PER_MTOK: Array<[RegExp, { in: number; out: number; cacheRead?: number }]> = [
+  [/fable-5-1|mythos-5-1/, { in: 10, out: 50, cacheRead: 0.25 }],
+  [/fable|mythos/, { in: 10, out: 50 }],
+  [/opus-5-5/, { in: 4, out: 20, cacheRead: 0.2 }],
+  [/sonnet-5/, { in: 2, out: 10, cacheRead: 0.2 }],
+  [/haiku-5-5/, { in: 0.1, out: 0.5 }],
+  [/sonnet/, { in: 3, out: 15 }],
+  [/haiku/, { in: 1, out: 5 }],
+  [/.*/, { in: 5, out: 25 }],
+];
+export interface ClaudeUsage { model?: string; input: number; cacheWrite: number; cacheRead: number; output: number }
+export function claudeCostUsd(u: ClaudeUsage): number {
+  const p = CLAUDE_USD_PER_MTOK.find(([re]) => re.test(u.model ?? ""))![1];
+  return (u.input * p.in + u.cacheWrite * p.in * 1.25 + u.cacheRead * (p.cacheRead ?? p.in * 0.1) + u.output * p.out) / 1e6;
+}
+
 const list = (v: string | undefined, d: string[]) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : d);
 
 export function loadAgentConfig(source: Record<string, string | undefined> = process.env, profileName?: string | null): AgentConfig {
