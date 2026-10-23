@@ -6,7 +6,7 @@ name: Release
 # (bun add -g; install.sh) and driven with fake agents on their own platform (scripts/release-smoke.sh), then that
 # same package on npm (with provenance; skipped while package.json is private), the release with the package, the
 # binaries, their SHA-256 and the changelog section as notes, and the Homebrew formula in MarvinAmador7/homebrew-tap
-# (needs the HOMEBREW_TAP_TOKEN secret; skipped with a warning without it, and for prereleases). Re-running for the same tag updates the release in place (npm versions are immutable:
+# (needs the HOMEBREW_TAP_DEPLOY_KEY secret; skipped with a warning without it, and for prereleases). Re-running for the same tag updates the release in place (npm versions are immutable:
 # an already-published version is skipped).
 # The live boxd/GitHub/agents e2e (scripts/mac-subagents-e2e.sh) stays a manual step before tagging (DEVELOPMENT.md).
 
@@ -330,7 +330,7 @@ jobs:
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.prepare.outputs.prerelease != 'true' }}
     runs-on: ubuntu-latest
     env:
-      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
       V: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
@@ -352,8 +352,14 @@ jobs:
 
       - name: Commit Formula/capcomd.rb to MarvinAmador7/homebrew-tap
         run: |
-          if [ -z "$TAP_TOKEN" ]; then echo "::warning::no HOMEBREW_TAP_TOKEN secret: the tap was not updated (brew install MarvinAmador7/tap/capcomd stays on the previous version)"; exit 0; fi
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/MarvinAmador7/homebrew-tap.git" tap
+          if [ -z "$TAP_KEY" ]; then echo "::warning::no HOMEBREW_TAP_DEPLOY_KEY secret: the tap was not updated (brew install MarvinAmador7/tap/capcomd stays on the previous version)"; exit 0; fi
+          # A deploy key with write access to the tap only.
+          key="$RUNNER_TEMP/tap-key"
+          (umask 077 && printf '%s\n' "$TAP_KEY" > "$key")
+          # github.com's host key, from https://api.github.com/meta (ssh_keys).
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$RUNNER_TEMP/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes"
+          git clone --depth 1 git@github.com:MarvinAmador7/homebrew-tap.git tap
           mkdir -p tap/Formula
           bun scripts/homebrew-formula.ts "$V" dist > tap/Formula/capcomd.rb
           cd tap

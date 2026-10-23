@@ -167,8 +167,9 @@ Linux runner (`scripts/build-binary.ts --target T`), then installs each with `in
 on a runner of its own platform (`scripts/release-smoke.sh dist/capcomd-T X.Y.Z`; on macOS arm64 it also installs
 the Homebrew formula from a throwaway tap). They go on the release with their `.sha256` files, which is where
 `install.sh` and `capcomd upgrade` download from. Last, for a non-prerelease, it commits `Formula/capcomd.rb`
-(`scripts/homebrew-formula.ts`) to MarvinAmador7/homebrew-tap with the `HOMEBREW_TAP_TOKEN` secret (a fine-grained
-token with contents write on that repository); without the secret it warns and skips that step.
+(`scripts/homebrew-formula.ts`) to MarvinAmador7/homebrew-tap with the `HOMEBREW_TAP_DEPLOY_KEY` secret (the private
+half of an SSH deploy key with write access to that repository only); without the secret it warns and skips that
+step.
 
 ### The single executable
 
