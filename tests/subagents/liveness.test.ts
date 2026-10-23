@@ -115,3 +115,16 @@ test("capcomd send reaches a running claude worker: the supervisor hands it to t
   expect(heard).toContain("Message from the operator");
   expect(heard).toContain("use tabs please");
 }, 120_000);
+
+test("capcomd logs shows what a real (CLI) agent does, and --follow streams it until the agent finishes", async () => {
+  const run = (await cj(["run", "new"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "worker", "--task", "[slow] make the failing test pass", "--key", "logs"])).j?.agentId;
+  const follow = await capcomd(["logs", run, id, "--follow"], env); // returns once the agent is finished
+  expect(follow.code).toBe(0);
+  expect(follow.stdout).toMatch(/agent +tool Edit/);
+  expect(follow.stdout).toMatch(/agent +say step 1\n/);
+  const r = (await cj(["logs", run, id])).j;
+  // Finished either way: "failed" with no changes when an earlier test here already merged the same edit.
+  expect(["done", "failed"]).toContain(r.status);
+  expect(r.lines.map((l: any) => l.line)).toEqual(expect.arrayContaining([expect.stringMatching(/^tool Edit/), expect.stringMatching(/^result/)]));
+}, 120_000);

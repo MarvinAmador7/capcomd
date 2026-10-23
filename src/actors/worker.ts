@@ -484,6 +484,8 @@ export const workerActor = actor({
           },
           onNotice: (n) => { scope?.notice({ agentId: workerId, notice: n }).catch(() => {}); },
           ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string }[] } } : {}),
+          // Agents that may spawn already have their raw stream tailed into the log by the spool pump (driver.ts).
+          ...(scope && !params.subagents ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
           ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: "/tmp/capcomd-rpc" } } : {}),
           isCancelled: async () => {
             const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });

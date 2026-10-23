@@ -333,10 +333,10 @@ export async function inspectAgent(runId: string, agentId: string, o: { logTail?
   };
 }
 
-export async function agentLogs(runId: string, agentId: string, tail = 200) {
+export async function agentLogs(runId: string, agentId: string, tail = 200, after?: number) {
   await assertEngine();
-  await getAgentOrThrow(runId, agentId);
-  return { runId, agentId, lines: await client().scope.getOrCreate([runId]).getLogs({ agentId, tail }) };
+  const a = await getAgentOrThrow(runId, agentId);
+  return { runId, agentId, status: a.status, lines: await client().scope.getOrCreate([runId]).getLogs({ agentId, tail, ...(after !== undefined ? { after } : {}) }) };
 }
 
 /** Budget of an agent (or the run): allocation, own spend, what children hold, what's left to carve, subtree rollup. */

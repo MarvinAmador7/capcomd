@@ -82,6 +82,8 @@ export interface AgentRunOptions {
   onReport?: (r: SupervisorReport) => void;
   /** Supervisor heartbeat interval (default 30s). */
   heartbeatMs?: number;
+  /** What the agent does, a line per tool call, failed result, message and result (`capcomd logs`). */
+  onLog?: (lines: string[]) => void;
   /** How often spend is reported to onSpend (default 5s). */
   spendEveryMs?: number;
   /**
@@ -127,6 +129,18 @@ export const SECRET_PLACEHOLDER_PREFIX = "bxds_";
 export function messageText(m: { from: string; body: string }): string {
   const who = m.from === "operator" || m.from === "driver" ? "the operator" : `agent ${m.from} (your parent or an ancestor)`;
   return `Message from ${who}, sent while you work (capcomd send):\n\n${m.body}`;
+}
+
+/** An event as `capcomd logs` lines: its tool calls, failed results, text and final result. */
+export function logLinesOf(ev: AgentEvent): string[] {
+  const out: string[] = [];
+  const cut = (x: string, n: number) => (x.length > n ? `${x.slice(0, n)}…` : x).replace(/\s+/g, " ");
+  const failed = (ev.results ?? []).filter((x) => x.error !== undefined);
+  for (const c of ev.calls ?? []) if (!failed.some((f) => f.call === c)) out.push(`tool ${cut(c, 300)}`);
+  for (const f of failed) out.push(`error ${cut(f.call, 200)}: ${cut(f.error ?? "", 300)}`);
+  if (ev.text) out.push(`${ev.type === "result" ? "result" : "say"} ${cut(ev.text, 500)}`);
+  else if (ev.type === "result") out.push(`result ${ev.subtype ?? ""}`.trim());
+  return out;
 }
 
 export function buildPrompt(t: AgentTask): string {
@@ -390,6 +404,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const deadline = cfg.timeoutMs ? now() + cfg.timeoutMs + 30_000 : Infinity;
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     live = state;
+    const logLines: string[] = [];
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck }, now());
@@ -439,7 +454,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
           ...(ev.tool ? { "agent.tool": ev.tool } : {}), ...(ev.text ? { "agent.text": ev.text } : {}),
         });
         opts.onEvent?.(ev);
+        logLines.push(...logLinesOf(ev));
       }
+      if (logLines.length) { opts.onLog?.(logLines.splice(0)); }
       // The agent CLI's own events are a heartbeat too (PR #3's path, the only one without a supervisor): any sign of
       // life counts, so the supervisor's start-up and first interval don't open a gap.
       if (state.events > beatEvents) { beatEvents = state.events; opts.onReport?.({ type: "heartbeat", events: state.events, lastEventAt: now(), source: "events" }); }
