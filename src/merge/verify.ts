@@ -16,9 +16,22 @@ export function checksMode(source: Record<string, string | undefined> = process.
 export async function runTests(git: Git, command: string, env: Record<string, string>): Promise<{ passed: boolean; output: string; where?: ChecksMode }> {
   if (!command.trim()) return { passed: true, output: "(no test command configured)" };
   if (checksMode() === "vm") return { ...(await runInVm(git, command, env)), where: "vm" };
-  const proc = Bun.spawn(["sh", "-c", command], { cwd: git.cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["sh", "-c", command], { cwd: git.cwd, env: { ...hostCheckEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   return { passed: code === 0, output: (out + err).slice(-4000), where: "host" };
+}
+
+/**
+ * The environment a check gets on the host (fake sandboxes, or CAPCOMD_CHECKS=host): the operator's, minus what could
+ * act as them: capcomd's own settings, provider and GitHub keys, anything named like a key, token, secret, password or
+ * credential, git credential config and the SSH agent. Toolchain variables (PATH, HOME, BUN_INSTALL, …) stay, so
+ * checks run as they would in the operator's shell. (The VM path passes only the run, task and target ids.)
+ */
+export function hostCheckEnv(source: Record<string, string | undefined> = process.env): Record<string, string> {
+  const drop = /^(CAPCOMD_|RELAY_|BOXD_|ANTHROPIC_|OPENAI_|CLAUDE_|CODEX_|GH_|GITHUB_|GIT_CONFIG_|GIT_ASKPASS$|SSH_AUTH_SOCK$|AWS_|GOOGLE_|AZURE_|NPM_TOKEN$)|(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(source)) if (v !== undefined && !drop.test(k)) out[k] = v;
+  return out;
 }
 
 const CHECKS_TIMEOUT_MS = () => Number(process.env.CAPCOMD_CHECKS_TIMEOUT_MS ?? 20 * 60_000);
