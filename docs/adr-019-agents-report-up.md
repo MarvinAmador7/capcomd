@@ -206,8 +206,10 @@ Step 2 (built), until the supervisor exists:
   (default an hour).
 - **The login.** It is recorded on the engine host (`quotas.json`), so a new or resumed agent on that login pauses
   at once until the reset instead of starting.
-- **Waking.** A paused agent wakes while it is awaited (`await`, `wait-any`, an in-VM `await`) once its reset has
-  passed, or on `capcomd resume` / `capcomd_resume`, which also clears the login's wait. A wake is a new epoch:
+- **Waking.** A paused agent wakes at its reset time: the pause schedules a wake on the run's scope actor, and the
+  engine host starts its driver, so nobody has to be waiting (a waiter that gets there first wakes it the same
+  way). `capcomd resume` / `capcomd_resume` wakes it sooner and also clears the login's wait. The `run` recipe
+  waits through a pause however long it lasts, instead of failing the task after its 6-hour wait. A wake is a new epoch:
   a fresh worker and VM, on its branch, told that it was stopped and should continue. That answers the
   open question for now: a new session from the branch, not the CLI's own session resume.
 

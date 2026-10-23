@@ -36,6 +36,8 @@ export async function serve(opts: { port: number }) {
     process.exit(1);
   }
   process.env.RIVET_RUN_ENGINE_PORT = String(port);
+  // What the engine host starts itself (a paused agent's driver, at its reset) talks to this engine.
+  process.env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${port}`;
   // Own data dir per port (the default :6420 keeps rivetkit's default dir): a second engine on the
   // shared ~/.rivetkit/var/engine/db never becomes healthy while another engine holds its LOCK.
   const dataDir = process.env.CAPCOMD_ENGINE_DATA ?? process.env.CAPCOMD_CHAOS_ENGINE_DATA ?? (port === 6420 ? undefined : join(homedir(), ".capcomd", "engine", String(port)));

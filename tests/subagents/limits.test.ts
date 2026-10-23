@@ -9,6 +9,7 @@ import { Engine } from "../chaos/engine";
 import { capcomd, sleep, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 import { Git } from "../../src/merge/git";
+import { awaitThroughPauses } from "../../src/primitives/ops";
 
 let engine: Engine;
 let env: Record<string, string>;
@@ -189,4 +190,27 @@ test("a paused agent wakes by itself at the provider's reset time while it is aw
   const [agent] = (await cj(["await", run, id, "--timeout-ms", "90000"])).j?.agents;
   expect(agent).toMatchObject({ status: "done", epoch: 2 });
   expect((await capcomd(["events", run, "--json"], env)).stdout).toContain('"by":"reset"');
+}, 180_000);
+
+test("a paused agent wakes at its reset with nobody awaiting it (the engine schedules it)", async () => {
+  rmSync(quotaLedger, { force: true });
+  const run = (await cj(["run", "new"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:3] short limit", "--key", "alone"])).j?.agentId;
+  await until(run, id, "paused");
+  // Only `inspect` from here on: it never wakes or drives anything.
+  const a = await until(run, id, "done");
+  expect(a.epoch).toBe(2);
+  expect((await capcomd(["events", run, "--json"], env)).stdout).toContain('"by":"reset"');
+}, 180_000);
+
+test("waiting through a pause: a wait that ends while the agent is paused waits again (the run recipe's way)", async () => {
+  rmSync(quotaLedger, { force: true });
+  const run = (await cj(["run", "new"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:20] short limit", "--key", "through"])).j?.agentId;
+  await until(run, id, "paused");
+  process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
+  let pausedWaits = 0;
+  const r: any = await awaitThroughPauses(run, id, { timeoutMs: 10_000, onPaused: () => pausedWaits++ });
+  expect(r.agents[0]).toMatchObject({ status: "done", epoch: 2 });
+  expect(pausedWaits).toBeGreaterThan(0);
 }, 180_000);
