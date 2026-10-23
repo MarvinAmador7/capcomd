@@ -8,6 +8,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - `capcomd logs <runId> <agent>` (and `capcomd_inspect`'s recent logs) now show what a working Claude Code or
   Codex agent does, a line per tool call, failed call, message and result; before, they were empty for agents that
   can't spawn. `capcomd logs … --follow` streams new lines until the agent finishes (`--json`: one object per line).
+- A merge no longer re-runs the checks when nothing changed since `verify` (the same tree, the same check
+  command), so it doesn't boot a second checks VM; the result says so (`not run again`). When the target moved, the
+  checks run again as before. `CAPCOMD_CHECKS_REUSE=0` always re-runs them.
 - Checks that run on your machine (local fake sandboxes, or `CAPCOMD_CHECKS=host`) no longer see your credentials:
   capcomd's settings, provider and GitHub keys, anything named like a key, token, secret or password, git
   credential settings and the SSH agent are removed from their environment. Your toolchain variables stay.

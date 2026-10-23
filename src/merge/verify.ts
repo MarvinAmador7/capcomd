@@ -1,3 +1,6 @@
+import { createHash } from "crypto";
+import { readFileSync, renameSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 import type { Git } from "./git";
 
 /**
@@ -13,12 +16,38 @@ export function checksMode(source: Record<string, string | undefined> = process.
 }
 
 /** Run the repo's test command in the merged worktree. No command configured = pass (reported). */
-export async function runTests(git: Git, command: string, env: Record<string, string>): Promise<{ passed: boolean; output: string; where?: ChecksMode }> {
+export async function runTests(git: Git, command: string, env: Record<string, string>): Promise<{ passed: boolean; output: string; where?: ChecksMode | "reused" }> {
   if (!command.trim()) return { passed: true, output: "(no test command configured)" };
-  if (checksMode() === "vm") return { ...(await runInVm(git, command, env)), where: "vm" };
-  const proc = Bun.spawn(["sh", "-c", command], { cwd: git.cwd, env: { ...hostCheckEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  return { passed: code === 0, output: (out + err).slice(-4000), where: "host" };
+  // The same tree already passed the same command (verify, then a merge onto a target that hasn't moved): its result
+  // is known, so no second run, and no second checks VM. Only passes are kept; CAPCOMD_CHECKS_REUSE=0 turns it off.
+  const key = process.env.CAPCOMD_CHECKS_REUSE === "0" ? null : await passKey(git, command);
+  const prior = key ? passes(git).get(key) : undefined;
+  if (prior) return { passed: true, output: `(this tree passed \`${command}\` at ${new Date(prior.at).toISOString()}; not run again)\n${prior.output}`.slice(-4000), where: "reused" };
+  let r: { passed: boolean; output: string; where: ChecksMode };
+  if (checksMode() === "vm") r = { ...(await runInVm(git, command, env)), where: "vm" };
+  else {
+    const proc = Bun.spawn(["sh", "-c", command], { cwd: git.cwd, env: { ...hostCheckEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    r = { passed: code === 0, output: (out + err).slice(-4000), where: "host" };
+  }
+  if (r.passed && key) recordPass(git, key, r.output);
+  return r;
+}
+
+/** Passing checks by (tree, command), next to capcomd's clones of the repository (a cache: losing it only costs a re-run). */
+const passFile = (git: Git) => join(dirname(git.cwd), ".checks-passed.json");
+async function passKey(git: Git, command: string): Promise<string | null> {
+  const tree = (await git.run(["rev-parse", "HEAD^{tree}"])).stdout.trim();
+  return tree ? createHash("sha256").update(`${tree}\0${command}`).digest("hex") : null;
+}
+function passes(git: Git): Map<string, { at: number; output: string }> {
+  try { return new Map(Object.entries(JSON.parse(readFileSync(passFile(git), "utf8")))); } catch { return new Map(); }
+}
+function recordPass(git: Git, key: string, output: string) {
+  const m = passes(git);
+  m.set(key, { at: Date.now(), output: output.slice(-1000) });
+  const kept = [...m.entries()].slice(-500);
+  try { const f = passFile(git), tmp = `${f}.${process.pid}`; writeFileSync(tmp, JSON.stringify(Object.fromEntries(kept))); renameSync(tmp, f); } catch {}
 }
 
 /**
