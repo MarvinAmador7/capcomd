@@ -2,7 +2,7 @@
 // authority comes only from the token and the scope's limits, never from request text, so a
 // prompt-injected agent can at most use what its own token already grants.
 //
-// Scopes: WRITE ops (spawn, cancel, send, verify, merge, handoff) touch only the caller's own
+// Scopes: WRITE ops (spawn, cancel, send, verify, merge, handoff, grant) touch only the caller's own
 // subtree. READ ops (status, await, tree, inspect, logs, events) may also see the caller's
 // parent's subtree (its siblings), so peers can coordinate and await-cycles can be detected.
 // Agent-authored text in responses (results, messages, logs) is fenced.
@@ -105,7 +105,7 @@ function ids(args: Record<string, any>, key = "agents"): string[] {
 async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: string): Promise<unknown> {
   const run = c.run;
   // Writes are idempotent per request: the CLI retries a transient failure with the same id.
-  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task"].includes(op)) args = { ...args, key: `r:${reqId}` };
+  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant"].includes(op)) args = { ...args, key: `r:${reqId}` };
   const s = client().scope.getOrCreate([run]);
   switch (op) {
     case "spawn": {
@@ -179,6 +179,14 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       return { events: evs.slice(0, limit).map((e: any) => ({ seq: e.seq, ts: new Date(e.at).toISOString(), epochMs: e.at, at: e.at, type: e.type, agentId: e.agentId ?? null, data: e.agentId === c.sub ? e.data : redactEvent(e) })), more: evs.length > limit };
     }
     case "budget": return O.budgetShow(run, c.sub);
+    case "grant": {
+      // More budget for one of the caller's own children, from what the caller has left (ADR-019 §4).
+      const t = ids(args)[0]!;
+      if ((await O.getAgentOrThrow(run, t)).parent !== c.sub) deny(`${t} is not your child: you can give budget only to agents you spawned`);
+      let add;
+      try { add = parseBudget(args.budget); } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Units: usd, turns, wallSeconds, e.g. --budget usd=1,turns=20."); }
+      return O.grantBudget(run, { agentId: t, add, by: c.sub, key: `${c.sub}:${args.key}` });
+    }
     case "inspect": {
       const t = ids(args)[0]!;
       await assertReadable(c, [t]);

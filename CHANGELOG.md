@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- You can now give a running agent more budget instead of letting it stop and starting over:
+  `capcomd grant <runId> <agent> --budget usd=2,turns=20,wallSeconds=600` (or the new `capcomd_grant` MCP tool,
+  or `capcomd grant <agent> --budget …` from a parent agent inside its VM, for its own children). The amount is
+  added to what the agent already has and taken from what its parent (or the run) has left; it is refused if
+  there isn't enough, if the agent has no budget of its own in that unit (grant its parent instead), or if it
+  would go over a cap set in the agent's profile. A grant also restarts the agent's stuck window. Without an agent,
+  `capcomd grant <runId> --budget …` raises the run's own budget. Pass `--key` so that a retried grant counts once.
+- An agent's budget now applies while it runs as well: the engine stops it once its spend goes over (within a few
+  seconds), instead of the agent's CLI being launched with the budget as a fixed cap. Claude agents' turns are
+  now counted while they work too, not only when they finish.
 - capcomd now notices an agent that looks stuck while it works, and tells its parent before stopping it. An agent
   is **idle** when it has produced no output for `idleAfterMs` (default 30 minutes), **spinning** when it makes the
   same tool call over and over, and **failing** when it hits the same error over and over (both after

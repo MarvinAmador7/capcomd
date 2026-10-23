@@ -9,8 +9,8 @@ import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, writeFil
 import { join } from "path";
 import { client, assertEngine } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
-import { available, budgetCaps, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
+import { encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
+import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
 import { stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
@@ -46,6 +46,8 @@ export function asRelay(e: unknown): never {
   if (code === "backpressure") throw new RelayError("conflict", msg, "Fan-out is at the limit your parent granted: `capcomd wait-any` for a child to finish (or cancel one), then spawn again.", { retryable: true, code: "backpressure" });
   if (code === "deadlock") throw new RelayError("conflict", msg, "Await only your own children; never an ancestor or an agent that is waiting on you.", { code: "deadlock" });
   if (code === "budget" || code === "parent_terminal") throw new RelayError("conflict", msg, "Request a smaller --budget or free budget by cancelling agents.");
+  if (code === "grant") throw new RelayError("conflict", msg, "Grant less, give the parent more first (or raise the run's budget: capcomd grant <runId> --budget …), or free budget by cancelling agents.");
+  if (code === "finished") throw new RelayError("conflict", msg, "A finished agent can't be given more: spawn one that continues from its branch (result.branch).");
   throw e;
 }
 
@@ -330,6 +332,19 @@ export async function budgetShow(runId: string, agentId?: string) {
   return { runId, agentId, budget: a.budget, spent: a.spent, available: available(a.budget, a.spent, kids), limits: a.limits, children: kids.length, rollup: rollups(all).get(agentId) };
 }
 
+/**
+ * ADR-019 §4: give a live agent more budget, carved from what its parent (or the run) has left; it applies while the
+ * agent runs (the engine enforces budgets from live spend) and resets its stuck window. Without an agent, raise the
+ * run's budget (operator only). Additive: pass the same `key` when retrying so it counts once.
+ */
+export async function grantBudget(runId: string, o: { agentId?: string; add: Budget; by: string; key?: string }) {
+  await assertEngine();
+  if (!Object.keys(o.add).length) throw new RelayError("usage", "grant needs a budget to add", "Pass the units to add, e.g. --budget usd=2,turns=20.");
+  if (o.agentId) await getAgentOrThrow(runId, o.agentId);
+  const r = await client().scope.getOrCreate([runId]).grant({ ...o, paramsHash: paramsHash({ agentId: o.agentId ?? null, add: o.add, by: o.by }) }).catch(asRelay);
+  return { runId, ...r };
+}
+
 /** Launch a detached driver process for one agent (logs in .relay/drivers/). */
 export function startDriver(runId: string, agentId: string) {
   if (env("NO_DRIVER") === "1") return;
@@ -404,16 +419,10 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   const epoch = a.epoch;
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   // Test/eval knob: run the fake agent while profiles still govern policy (no real CLI/repo).
-  // The carved budget narrows the profile: maxTurns ≤ turns, timeoutMs ≤ wallSeconds, maxBudgetUsd ≤ usd.
+  // The CLI is launched with the profile's own caps only: the engine enforces the agent's budget from its live spend,
+  // so a grant (ADR-019 §4) raises it while it runs.
   const mode = env("SPAWN_EXEC");
-  let exec = mode === "fake" || mode === "script" ? undefined : (a.ref ?? undefined);
-  if (exec) {
-    const caps = budgetCaps(a.spec as any, a.budget);
-    if (Object.keys(caps).length) {
-      const d = decodeAgentRef(exec);
-      exec = encodeAgentRef(d.name, { set: { ...(d.overrides?.set ?? {}), ...caps }, operator: d.overrides?.operator });
-    }
-  }
+  const exec = mode === "fake" || mode === "script" ? undefined : (a.ref ?? undefined);
   // Fail fast (no retries, no driverless "running"): a real agent on boxd needs the env snapshot.
   const envProblem = exec ? envSnapshotProblem((a.spec as any)?.provider) : null;
   if (envProblem) { clearInterval(hb); throw new EnvSnapshotMissing(envProblem); }

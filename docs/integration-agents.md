@@ -43,6 +43,7 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 | `capcomd_send` | `runId`, `to`, `body`, `key?` | `{seq, …}` |
 | `capcomd_cancel` | `runId`, `agent?`, `reason?` | `{cancelled, affected[]}` |
 | `capcomd_resume` | `runId`, `agent?` | `{resumed[]}`: paused agents (provider usage limit) run again now |
+| `capcomd_grant` | `runId`, `agent?`, `budget`, `key?` | `{agentId, budget, from, left}`: more budget for a live agent, from its parent's (or, without `agent`, a higher run budget, within `driver.maxRunBudget`) |
 | `capcomd_verify` | `runId`, `ref`, `check?`, `acceptance?`, `key?`, `timeoutMs?` | `{id: "vfy-…", state: passed\|failed\|running, result, next}` |
 | `capcomd_merge` | `runId`, `ref`, `require`, `key?`, `timeoutMs?` | `{id: "mrg-…", state: merged\|failed\|awaiting_approval\|running, result, next}` |
 | `capcomd_approve` | `runId`, `merge`, `deny?`, `reason?` | the merge record, or a `forbidden` error (below) |

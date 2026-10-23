@@ -42,6 +42,39 @@ capcomd result --summary "lead=$(capcomd status $l | $S/jget agents.0.result.sum
   expect(inOrder(await types(w, run), ["AGENT_SPAWNED", "AGENT_SPAWNED", "AGENT_SPAWNED", "AGENT_DONE", "AGENT_DONE", "AGENT_DONE"])).toBe(true);
 }, 120_000);
 
+test("grant (ADR-019 §4): a lead gives its running child more from what it has left, never more than that, only to its own children", async () => {
+  const run = await newRun(w, "turns=30");
+  const lead = w.script("lead-grant", PRE() + `
+a=$(capcomd spawn --profile worker --task one --key one --budget turns=2 --contract "${child("SLEEP=4 SPENT=4")}" | $S/jget agentId)
+g=$(capcomd grant $a --budget turns=3 --key g1 | $S/jget budget.turns)
+again=$(capcomd grant $a --budget turns=3 --key g1 | $S/jget budget.turns)
+over=$(capcomd grant $a --budget turns=12); orc=$?
+cap=$(capcomd grant $a --budget turns=16); crc=$?
+none=$(capcomd grant $a --budget usd=1); nrc=$?
+self=$(capcomd grant $CAPCOMD_AGENT_ID --budget turns=1); src=$?
+capcomd await $a >/dev/null
+capcomd result --summary "g=$g again=$again orc=$orc crc=$crc nrc=$nrc src=$src" >/dev/null`);
+  const p = w.script("planner-grant", `
+l=$(capcomd spawn --profile lead --task lead --key lead --children.maxChildren=2 --contract "$($S/json script=${JSON.stringify(lead)})" | $S/jget agentId)
+capcomd await $l >/dev/null
+capcomd result --summary "lead=$(capcomd status $l | $S/jget agents.0.result.summary.text)" >/dev/null`);
+  const root = await spawnRoot(w, run, "planner", p);
+  expect((await finished(run, root)).status).toBe("done");
+  const all = await agentsOf(run);
+  const leadRow = all.find((x: any) => x.depth === 1);
+  const kid = all.find((x: any) => x.depth === 2);
+  // 2 + 3 once (the retried key counts once); 12 is more than the lead's 15 − 5 left; 5 + 16 is over the worker
+  // profile's maxTurns 20; no usd budget; the lead itself isn't its own child
+  expect(leadRow.result.summary).toBe("g=5 again=5 orc=1 crc=1 nrc=1 src=1");
+  expect(kid.budget).toEqual({ turns: 5 });
+  const logs = await logText(run, leadRow.agentId);
+  expect(logs).toMatch(/grant → error .*granting 12 turns needs 12 turns, but agt-\S+ has 10 turns left/);
+  expect(logs).toMatch(/grant → error .*profile caps it at 20 turns \(maxTurns\)/);
+  expect(logs).toMatch(/grant → error .*has no usd budget of its own/);
+  expect(logs).toMatch(/grant → error forbidden: agt-\S+ is not your child/);
+  expect((await types(w, run)).filter((t) => t === "AGENT_GRANTED").length).toBe(1);
+}, 120_000);
+
 test("parent grants child maxChildren=2; the child's 3rd concurrent spawn is refused (backpressure), then succeeds after wait-any", async () => {
   const run = await newRun(w);
   const lead = w.script("lead-3", PRE() + `

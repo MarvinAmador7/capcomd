@@ -81,7 +81,7 @@ describe("capcomd mcp: the driver's tools", () => {
   test("lists the primitives, with read-only and destructive annotations", async () => {
     const { tools } = await mcp.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      "capcomd_approve", "capcomd_await", "capcomd_budget", "capcomd_cancel", "capcomd_events", "capcomd_inspect", "capcomd_kv",
+      "capcomd_approve", "capcomd_await", "capcomd_budget", "capcomd_cancel", "capcomd_events", "capcomd_grant", "capcomd_inspect", "capcomd_kv",
       "capcomd_merge", "capcomd_profiles", "capcomd_resume", "capcomd_run_new", "capcomd_runs", "capcomd_send", "capcomd_setup", "capcomd_spawn",
       "capcomd_task", "capcomd_trace", "capcomd_tree", "capcomd_verify",
     ]);
@@ -143,8 +143,14 @@ describe("capcomd mcp: the driver's tools", () => {
     await ok("capcomd_kv", { runId: run, action: "put", k: "plan", value: { files: 1 } });
     expect((await ok("capcomd_kv", { runId: run, action: "get", k: "plan" })).writer).toBe("driver");
 
+    // More budget for the run stays within the project's cap per run (usd=20) too.
+    const raise = await call("capcomd_grant", { runId: run, budget: "usd=16" });
+    expect(raise.body.error.reason).toBe("forbidden");
+    expect(await ok("capcomd_grant", { runId: run, budget: "usd=1", key: "r1" })).toMatchObject({ agentId: null, budget: { usd: 6, turns: 100 } });
+
     const a = (await ok("capcomd_spawn", { runId: run, task: "work p", profile: "coder", check: "unit", key: "p" })).agentId;
     for (;;) { const w = await ok("capcomd_await", { runId: run, agents: [a], timeoutMs: 10_000 }); if (!w.pending.length) break; }
+    expect((await call("capcomd_grant", { runId: run, agent: a, budget: "usd=1" })).isError).toBe(true); // finished
     const v = await settle("capcomd_verify", { runId: run, ref: a });
     const m = await settle("capcomd_merge", { runId: run, ref: a, require: v.id });
     expect(m.state).toBe("awaiting_approval");

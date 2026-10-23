@@ -146,6 +146,17 @@ export function buildServer(): McpServer {
     inputSchema: { runId: run, agent: z.string().optional() }, annotations: WRITE,
   }, (a) => handle(() => D.resume(a)));
 
+  server.registerTool("capcomd_grant", {
+    title: "Give more budget",
+    description: "Give a running (or paused) agent more budget while it works, taken from what its parent has left (the run's, for an agent you spawned); it also restarts its stuck window. Only units it already has a budget in, never above its profile's own cap. With agent omitted, raise the run's budget (within the project's cap per run). Additive: pass a key so a retry counts once.",
+    inputSchema: {
+      runId: run, agent: z.string().optional(),
+      budget: z.string().min(1).describe(`What to add, e.g. "usd=1" or "turns=20,wallSeconds=600"`),
+      key,
+    },
+    annotations: WRITE,
+  }, (a) => handle(() => D.grant(a)));
+
   // ── gates ──
   server.registerTool("capcomd_verify", {
     title: "Verify",

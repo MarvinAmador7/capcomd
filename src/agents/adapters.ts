@@ -90,6 +90,8 @@ export const claudeAdapter: AgentAdapter = {
       };
       const all = Object.values(state.usage);
       state.costUsd = all.reduce((x, v) => x + claudeCostUsd(v), 0);
+      // Turns, likewise: one per model response until the result's num_turns replaces the count.
+      state.turns = all.length;
       state.inputTokens = all.reduce((x, v) => x + v.input + v.cacheWrite + v.cacheRead, 0);
       state.outputTokens = all.reduce((x, v) => x + v.output, 0);
     }

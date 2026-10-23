@@ -33,6 +33,8 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   don't conflict. A child spawned without --budget reserves nothing: its spend counts against yours as it
   works, and it is stopped when your budget runs out. To give a child its own cap, name it
   (--budget usd=…); keep a reserve for retries and verification.
+- A child close to its cap that is making progress: \`capcomd grant <agt> --budget usd=…\` adds to it while it
+  runs, from what you have left (only units you gave it a budget in). It also restarts the child's stuck window.
 - Spawning while maxChildren children run returns error reason "backpressure" (exit 75): wait-any, then spawn again.
 
 ## Rules
