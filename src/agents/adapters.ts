@@ -51,12 +51,15 @@ export const claudeAdapter: AgentAdapter = {
   secretName: "ANTHROPIC_API_KEY",
   apiHost: AGENT_API_HOST["claude-code"],
   credentialEnv: (v) => ({ ANTHROPIC_API_KEY: v }),
-  baseEnv: () => ({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1", CI: "1" }),
+  // IS_SANDBOX: the VM is the sandbox, so permissions may be bypassed even as root (claude refuses that otherwise).
+  baseEnv: () => ({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1", CI: "1", IS_SANDBOX: "1" }),
   command: (ctx, q) =>
     `${q(ctx.bin)} -p "$(cat ${q(ctx.promptFile)})" --output-format stream-json --verbose` +
     (ctx.cfg.maxTurns ? ` --max-turns ${ctx.cfg.maxTurns}` : "") +
     (ctx.cfg.maxBudgetUsd ? ` --max-budget-usd ${ctx.cfg.maxBudgetUsd}` : "") +
-    ` --allowedTools ${q(ctx.cfg.allowedTools.join(","))} --disallowedTools ${q(ctx.cfg.disallowedTools.join(","))}` +
+    // No allowlist: every tool, with no permission prompts (nobody is there to answer them headless).
+    (ctx.cfg.allowedTools ? ` --allowedTools ${q(ctx.cfg.allowedTools.join(","))}` : " --permission-mode bypassPermissions") +
+    (ctx.cfg.disallowedTools.length ? ` --disallowedTools ${q(ctx.cfg.disallowedTools.join(","))}` : "") +
     (ctx.cfg.model ? ` --model ${q(ctx.cfg.model)}` : "") +
     (ctx.systemFile ? ` --system-prompt "$(cat ${q(ctx.systemFile)})"` : "") +
     (ctx.appendSystemFile ? ` --append-system-prompt "$(cat ${q(ctx.appendSystemFile)})"` : "") +

@@ -13,7 +13,7 @@ You are agent ${o.agentId}. You may delegate parts of your task to child agents,
 with its own git branch. Use the \`capcomd\` command${o.mcp ? " (or the equivalent capcomd_* MCP tools)" : ""}. All output is JSON.
 
 Your hard limits (set by your parent/operator; you can only hand children LESS):
-- maxDepth=${L.maxDepth} levels below you, maxChildren=${L.maxChildren ?? "∞"} running at once, maxTotalDescendants=${L.maxTotalDescendants ?? "∞"}
+- maxDepth=${L.maxDepth ?? "∞"} levels below you, maxChildren=${L.maxChildren ?? "∞"} running at once, maxTotalDescendants=${L.maxTotalDescendants ?? "∞"}
 - child profiles: ${L.allowedChildProfiles.join(", ")}; each child gets at most budgetShare=${L.budgetShare} of what you have left
 - your budget: ${b}  (check with \`capcomd budget\`)
 
@@ -63,7 +63,7 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   \`git fetch origin <checkpoint.ref> && git merge FETCH_HEAD\`.
 - \`await\` and \`wait-any\` also return early with \`notices\` when a child looks stuck while you wait: idle (no
   output), spinning (the same tool call again and again) or failing (the same error again and again). It is still
-  running, and is stopped with its work kept if it stays that way. Decide: \`capcomd send\` it a hint (if it can
+  running (it is stopped, work kept, only if its profile sets a stuck window). Decide: \`capcomd send\` it a hint (if it can
   read its inbox), cancel it and continue its work in a new child with a better task, or await again.
 - A child paused by its provider's usage limit (status paused, \`result.limit\` quota) isn't failed: don't
   respawn it. Keep awaiting; it continues from its branch after the reset.

@@ -1,5 +1,8 @@
 export type VmId = string;
 
+/** An egress allowlist of just this means "unrestricted", said on purpose (an empty list is refused as a mistake). */
+export const OPEN_EGRESS = "*";
+
 export interface VmSpec {
   idemKey: string;
   fromSnapshot?: string;

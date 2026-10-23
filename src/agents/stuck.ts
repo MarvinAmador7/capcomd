@@ -1,6 +1,7 @@
 // ADR-019 §2: stuck signals, read from what the agent does rather than from caps. Each has two windows: the first
 // is a notice to the parent (the heuristics can be wrong, so it costs nothing), the second stops the agent with its
-// work kept. A long task that keeps doing different things never trips them.
+// work kept, when that stop is asked for (`stopIdle`, `stopRepeats`; by default only the notices). A long task that
+// keeps doing different things never trips them.
 import type { AgentEvent } from "./types";
 
 export type StuckKind = "idle" | "spinning" | "failing";
@@ -17,7 +18,7 @@ export class StuckWatch {
   /** Per call+error: how many times it failed so far; that call succeeding clears it. */
   private fails = new Map<string, number>();
 
-  constructor(private o: { idleAfterMs: number; repeats: number }, now: number) {
+  constructor(private o: { idleAfterMs: number; repeats: number; stopIdle: boolean; stopRepeats: boolean }, now: number) {
     this.lastEventAt = now;
   }
 
@@ -43,17 +44,17 @@ export class StuckWatch {
     this.fails.clear();
   }
 
-  /** The current signal, if any; `stop` once its second window has passed. */
+  /** The current signal, if any; `stop` once its second window has passed (and that stop is on). */
   check(now: number): Stuck | null {
-    const { idleAfterMs, repeats } = this.o;
+    const { idleAfterMs, repeats, stopIdle, stopRepeats } = this.o;
     const quiet = now - this.lastEventAt;
-    if (quiet > idleAfterMs) return { kind: "idle", detail: `no output from the agent for ${Math.round(quiet / 1000)}s`, stop: quiet > 2 * idleAfterMs };
-    if (this.calls >= repeats) return { kind: "spinning", detail: `the same ${toolName(this.call)} call ${this.calls} times in a row`, stop: this.calls >= 2 * repeats };
+    if (quiet > idleAfterMs) return { kind: "idle", detail: `no output from the agent for ${Math.round(quiet / 1000)}s`, stop: stopIdle && quiet > 2 * idleAfterMs };
+    if (this.calls >= repeats) return { kind: "spinning", detail: `the same ${toolName(this.call)} call ${this.calls} times in a row`, stop: stopRepeats && this.calls >= 2 * repeats };
     let worst: [string, number] | null = null;
     for (const e of this.fails) if (!worst || e[1] > worst[1]) worst = e;
     if (worst && worst[1] >= repeats) {
       const [call, error] = worst[0].split("\n", 2) as [string, string];
-      return { kind: "failing", detail: `the same ${toolName(call)} error ${worst[1]} times: ${error.slice(0, 120)}`, stop: worst[1] >= 2 * repeats };
+      return { kind: "failing", detail: `the same ${toolName(call)} error ${worst[1]} times: ${error.slice(0, 120)}`, stop: stopRepeats && worst[1] >= 2 * repeats };
     }
     return null;
   }

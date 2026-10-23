@@ -356,7 +356,7 @@ export function effectiveAgentRecord(ref?: string | null, source: Record<string,
       name: ra.name, kind: ra.kind, overridden: !!ra.overridden, operator: ref ? !!decodeAgentRef(ref).overrides?.operator : false,
       auth: c.credentialMode === "subscription" ? "subscription" : "apikey", credentialMode: c.credentialMode,
       model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs,
-      sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools, disallowedTools: c.disallowedTools,
+      sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools,
       systemPrompt: !!c.systemPrompt, appendSystemPrompt: !!c.appendSystemPrompt,
       children: { allowSpawn: false, ...(ra.spec?.children ?? {}) },
     };

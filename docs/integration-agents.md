@@ -36,7 +36,7 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 |---|---|---|
 | `capcomd_setup` | | `{ready, steps[], gates: {checks, reviewer, target}, driver: {approvals, maxRunBudget}}` |
 | `capcomd_profiles` | | `{default, profiles: [{name, provider, auth, model, canSpawn, ready, detail}]}` |
-| `capcomd_run_new` | `budget`, `label?`, `target?`, `targetFrom?`, `key?` | `{runId, created, budget, gates}` |
+| `capcomd_run_new` | `budget?` (none: unlimited), `label?`, `target?`, `targetFrom?`, `key?` | `{runId, created, budget, gates}` |
 | `capcomd_runs` | `limit?` | `{runs: [{runId, label, repo, cwd, createdAt, agents: {status: n}, pendingApprovals}]}` |
 | `capcomd_spawn` | `runId`, `task`, `profile?`, `budget?`, `check?`, `report?`, `children?`, `key?` | the agent: `{agentId, status, …}` |
 | `capcomd_await` | `runId`, `agents[]`, `mode?` (`all`\|`any`), `timeoutMs?` (≤ 55000) | `{done[], pending[], first?, next}` |

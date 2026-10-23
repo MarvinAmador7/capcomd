@@ -176,6 +176,8 @@ Step 5 (built: `grant`):
 
 ### 5. Tree size is bounded by count, not by budget
 
+Superseded by §7: there is no default count either; a profile's `children` block sets one when it wants it.
+
 With budgets optional, `maxTotalDescendants` (children, grandchildren and so on over an agent's lifetime) is the guard
 against runaway fan-out; `maxChildren` only counts concurrent children. It already exists, and setup's planner sets
 6. A profile that allows spawning and doesn't set it gets a default (10). It bounds how many agents a tree starts,
@@ -208,6 +210,28 @@ Step 2 (built), until the supervisor exists:
   passed, or on `capcomd resume` / `capcomd_resume`, which also clears the login's wait. A wake is a new epoch:
   a fresh worker and VM, on its branch, told that it was stopped and should continue. That answers the
   open question for now: a new session from the branch, not the CLI's own session resume.
+
+### 7. No restrictions by default (2026-10-23)
+
+The focus is plan logins (subscriptions), where money is already paid and the provider enforces its own quota
+(§6). So by default nothing restricts an agent, and every limit is something a profile or a run opts into:
+
+- **No run budget** unless `run new --budget` gives one (it used to default to $10; the `run` recipe gave each task
+  $1). `capcomd_run_new` takes `budget` as optional; a project's `driver.maxRunBudget` still applies.
+- **No fan-out limits** (supersedes §5): `maxDepth` and `maxTotalDescendants` are unset (unlimited) unless the
+  profile's `children` block sets them, and setup's planner gets only `allowSpawn` and its child profiles. Whether
+  a profile may spawn at all stays opt-in: that is a capability, not a limit.
+- **Stuck notices, not stops** (changes §2's default action): idle, spinning and failing are noticed at the
+  default windows; the stop after a second window happens only for a signal whose window the profile (or the
+  env) sets: `idleAfterMs` for idle, `stuckRepeats` for spinning and failing. An idle VM keeps costing money; the
+  notice is how the parent hears about it.
+- **Every tool, open network:** without `allowedTools`, Claude Code runs with `--permission-mode
+  bypassPermissions` (and `IS_SANDBOX=1`, since it refuses that as root otherwise) and nothing is disallowed;
+  Codex runs `danger-full-access`; the VM's egress is unrestricted (`*`, sent to boxd as its `[]`, which capcomd
+  otherwise refuses as a mistake). The VM is the boundary. Agents still never hold push credentials (the engine
+  pushes), and a plan login kept as a boxd host-bound secret stays a placeholder in the VM. A login kept as a file
+  in the VM (`.capcomd-auth`) is readable by the agent, and with open egress it could be sent anywhere: a profile
+  that needs that closed sets `egress`.
 
 ## What changes elsewhere
 

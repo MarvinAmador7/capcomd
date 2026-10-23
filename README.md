@@ -62,8 +62,9 @@ crashes and restarts. Every step is an idempotent, recorded transition, so a cra
 driver resumes where it stopped, a retried call never acts twice, and a merge happens exactly once. A chaos suite
 kills the process at named points, and at random, to prove it.
 
-**Isolation.** Every agent runs in a fresh VM with its own clone and branch and an egress allowlist; VM snapshots
-are scrubbed of secrets. Agents can't touch each other's work or your machine.
+**Isolation.** Every agent runs in a fresh VM with its own clone and branch; VM snapshots are scrubbed of secrets.
+Agents can't touch each other's work or your machine, and never hold push credentials. Inside its VM an agent is
+unrestricted by default (every tool, open network); a profile can narrow its tools, sandbox and egress allowlist.
 
 **Verification you control.** You name the checks (`run new --checks-set unit='bun test'`); agents pick one by
 name and can never write their own. Checks run on the branch merged with the latest target, in a throwaway VM, so

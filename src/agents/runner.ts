@@ -331,7 +331,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       capcomdCtx = { cli, mcpConfig };
       capcomdPrelude = `export PATH=${sq(`${sa.rpcDir}/bin`)}:"$PATH" CAPCOMD_RPC_DIR=${sq(sa.rpcDir)}`;
       if (adapter.kind === "claude-code") {
-        cfg = { ...cfg, allowedTools: [...cfg.allowedTools, "Bash(capcomd:*)", "mcp__capcomd"] };
+        if (cfg.allowedTools) cfg = { ...cfg, allowedTools: [...cfg.allowedTools, "Bash(capcomd:*)", "mcp__capcomd"] };
         appendSystemFile = `${W}/append-system.txt`;
         await provider.upload(vmId, appendSystemFile, new TextEncoder().encode([cfg.appendSystemPrompt ? r.text(cfg.appendSystemPrompt) : "", sa.skill].filter(Boolean).join("\n\n")));
       } else promptText = [promptText, sa.skill].join("\n\n");
@@ -373,7 +373,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     live = state;
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
-    const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats }, now());
+    const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck }, now());
     let noticed: string | null = null, grantSeen = 0;
     const startedAt = now();
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
@@ -470,7 +470,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         limit = "timeout";
         break;
       }
-      // A notice first (the parent hears it; the supervisor checkpoints the work), then a stop after the second window.
+      // A notice first (the parent hears it; the supervisor checkpoints the work); a stop after the second window only
+      // when the profile set that window (no limits by default).
       const stuck = watch.check(now());
       if ((stuck?.kind ?? null) !== noticed) {
         noticed = stuck?.kind ?? null;

@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { SandboxProvider, VmId, VmSpec, ExecResult, VmInfo } from "./sandbox";
+import { OPEN_EGRESS, type SandboxProvider, type VmId, type VmSpec, type ExecResult, type VmInfo } from "./sandbox";
 import {
   SandboxConfigError,
   SandboxHibernatedError,
@@ -99,8 +99,10 @@ export function vmNameFor(idemKey: string, prefix = "relay-"): string {
 export function assertEgress(allow: string[] | undefined): string[] {
   const list = (allow ?? []).map((s) => s.trim()).filter(Boolean);
   if (list.length === 0) {
-    throw new SandboxConfigError("egress allowlist is empty; boxd treats [] as unrestricted, so capcomd refuses to send it");
+    throw new SandboxConfigError(`egress allowlist is empty; boxd treats [] as unrestricted, so capcomd refuses to send it (pass ["${OPEN_EGRESS}"] to mean that)`);
   }
+  // Unrestricted, asked for explicitly: boxd's [].
+  if (list.includes(OPEN_EGRESS)) return [];
   return list;
 }
 
@@ -202,11 +204,11 @@ export class BoxdProvider implements SandboxProvider {
 
     if (ASLEEP.has(machine.status)) await this.wakeUp(machine.id, machine.status);
 
-    // Always apply an explicit, non-empty allowlist (restored-from-snapshot VMs start unrestricted).
+    // Always apply the allowlist (restored-from-snapshot VMs start unrestricted); empty only when asked for (OPEN_EGRESS).
     const applied = await this.client.machines.setEgressAllow(machine.id, egress).catch((err) => {
       throw mapBoxdError(err, machine!.id, "setEgressAllow");
     });
-    if (!applied || applied.length === 0) {
+    if (egress.length && (!applied || applied.length === 0)) {
       throw new SandboxConfigError("boxd returned an empty egress allowlist after set; refusing to use an unrestricted VM", machine.id);
     }
     this.startKeepalive(machine.id);
