@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- `capcomd logs <runId> <agent>` (and `capcomd_inspect`'s recent logs) now show what a working Claude Code or
+  Codex agent does, a line per tool call, failed call, message and result; before, they were empty for agents that
+  can't spawn. `capcomd logs … --follow` streams new lines until the agent finishes (`--json`: one object per line).
 - A paused agent (stopped by its provider's usage limit) now starts again by itself at the reset time, even when
   nothing is waiting on it; before, it only woke while something awaited it. `capcomd run` now waits through such a
   pause, however long, instead of failing the task after 6 hours (a weekly limit can reset days later).

@@ -581,8 +581,10 @@ export const scopeActor = actor({
       }, { name: "scopeLog" });
       return { ok: true };
     },
-    async getLogs(c, params: { agentId: string; tail?: number }) {
-      const rows = (await c.db.execute("SELECT * FROM (SELECT * FROM agent_logs WHERE agent_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq", params.agentId, params.tail ?? 200)) as any[];
+    async getLogs(c, params: { agentId: string; tail?: number; after?: number }) {
+      const rows = (params.after !== undefined
+        ? await c.db.execute("SELECT * FROM agent_logs WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?", params.agentId, params.after, params.tail ?? 200)
+        : await c.db.execute("SELECT * FROM (SELECT * FROM agent_logs WHERE agent_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq", params.agentId, params.tail ?? 200)) as any[];
       return rows.map((r) => ({ seq: Number(r.seq), at: Number(r.at), stream: r.stream as string, line: r.line as string }));
     },
 

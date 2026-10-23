@@ -61,7 +61,7 @@ Usage:
   capcomd spawn … [--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N --children.allowedChildProfiles=a,b --children.budgetShare=F]
                                        (the parent sets the child's fan-out; narrow-only, refused above the ceiling)
   capcomd tree <runId> [--root agt]      subtree with cost/turn rollups and stuck flags
-  capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N]  ·  capcomd budget show <runId> [agt]
+  capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N] [--follow]  ·  capcomd budget show <runId> [agt]
   capcomd send <runId> <agt> <text> [--from agt]  ·  capcomd token revoke <runId> <jti> [--reason R]
   capcomd task add <runId> --title T [--data JSON] [--after tsk,…] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
@@ -510,11 +510,24 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case "logs": {
-        const runId = positionals[1] ?? usage("capcomd logs <runId> <agt> [--tail N]");
-        const id = positionals[2] ?? usage("capcomd logs <runId> <agt> [--tail N]");
-        const r = await (await import("../primitives/ops")).agentLogs(runId, id, values.tail ? Number(values.tail) : 200);
-        if (json) out(r); else for (const l of r.lines) console.log(`${new Date(l.at).toISOString()} ${l.stream.padEnd(6)} ${l.line}`);
-        return EXIT.ok;
+        const runId = positionals[1] ?? usage("capcomd logs <runId> <agt> [--tail N] [--follow]");
+        const id = positionals[2] ?? usage("capcomd logs <runId> <agt> [--tail N] [--follow]");
+        const O = await import("../primitives/ops");
+        const show = (l: { at: number; stream: string; line: string }) => (json ? console.log(JSON.stringify(l)) : console.log(`${new Date(l.at).toISOString()} ${l.stream.padEnd(6)} ${l.line}`));
+        const r = await O.agentLogs(runId, id, values.tail ? Number(values.tail) : 200);
+        if (!values.follow) { if (json) out(r); else r.lines.forEach(show); return EXIT.ok; }
+        // --follow: new lines as they come (one JSON object per line with --json), until the agent is finished.
+        r.lines.forEach(show);
+        let after = r.lines.at(-1)?.seq ?? 0;
+        for (let status = r.status; ; ) {
+          const finished = (await import("../primitives/policy")).TERMINAL_AGENT.has(status as any);
+          const more = await O.agentLogs(runId, id, 500, after);
+          more.lines.forEach(show);
+          after = more.lines.at(-1)?.seq ?? after;
+          if (finished && !more.lines.length) return EXIT.ok;
+          status = more.status;
+          if (!more.lines.length) await new Promise((res) => setTimeout(res, 1000));
+        }
       }
 
       case "budget": {
