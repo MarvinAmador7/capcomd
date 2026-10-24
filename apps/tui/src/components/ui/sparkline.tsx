@@ -1,8 +1,8 @@
 import { Box, Text } from "ink";
 
-import { useTheme } from "@/hooks/use-theme";
-import { useUnicode } from "@/hooks/use-unicode";
-import { summarizeSeries } from "@/lib/accessibility";
+import { useTheme } from "../../hooks/use-theme";
+import { useUnicode } from "../../hooks/use-unicode";
+import { summarizeSeries } from "../../lib/accessibility";
 
 export interface SparklineProps {
   data: number[];

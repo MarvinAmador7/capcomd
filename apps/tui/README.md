@@ -1,7 +1,8 @@
 # capcomd-tui
 
 A terminal debugger for capcomd runs, built with Ink and [termcn](https://www.termcn.dev) components.
-It lives in its own package and reads only what the `capcomd` CLI prints, so it never imports `src/`.
+It reads only what the `capcomd` CLI prints, so it never imports `src/`. Installed, it's `capcomd tui [runId]`: the CLI
+(and the single executable) bundles this package's `src/run.tsx` and runs itself for the live data. From a checkout:
 
 ```bash
 cd apps/tui && bun install

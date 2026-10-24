@@ -1,5 +1,5 @@
-import type { Theme } from "@/components/ui/types";
-import { defaultTheme } from "@/lib/terminal-themes/default";
+import type { Theme } from "./components/ui/types";
+import { defaultTheme } from "./lib/terminal-themes/default";
 
 /**
  * One accent, used only for the thing you're looking at (active tab, selection, agent work).

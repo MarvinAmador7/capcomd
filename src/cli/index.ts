@@ -63,6 +63,7 @@ Usage:
   capcomd spawn … [--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N --children.allowedChildProfiles=a,b --children.budgetShare=F]
                                        (the parent sets the child's fan-out; narrow-only, refused above the ceiling)
   capcomd tree <runId> [--root agt]      subtree with cost/turn rollups and stuck flags
+  capcomd tui [runId] [--view live|waterfall|timeline|rollups|events]   the terminal debugger (no runId: the latest run)
   capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N] [--follow]  ·  capcomd budget show <runId> [agt]
   capcomd send <runId> <agt> <text> [--from agt]  ·  capcomd token revoke <runId> <jti> [--reason R]
   capcomd task add <runId> --title T [--data JSON] [--after tsk,…] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
@@ -114,6 +115,12 @@ function usage(message: string): never {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // `capcomd tui …`: the terminal debugger takes its own flags (apps/tui/src/run.tsx).
+  if (argv[0] === "tui") {
+    const { runTui } = await import("../../apps/tui/src/run");
+    const O = await import("../primitives/ops");
+    return runTui(argv.slice(1), { cli: (await import("../utils/self")).selfArgv(), latestRun: () => O.recentRuns(1)[0]?.runId ?? null });
+  }
   let parsed;
   try {
     parsed = parseArgs({

@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
-import { BarChart } from "@/components/ui/bar-chart";
-import { Sparkline } from "@/components/ui/sparkline";
+import { BarChart } from "../components/ui/bar-chart";
+import { Sparkline } from "../components/ui/sparkline";
 import { familyOf } from "../adapters/trace";
 import { flattenAgents } from "../adapters/tree";
 import type { AgentNode, RunData } from "../adapters/types";

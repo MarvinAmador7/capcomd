@@ -1,9 +1,9 @@
 import { Box, Text } from "ink";
 
-import { useTheme } from "@/hooks/use-theme";
-import { useUnicode } from "@/hooks/use-unicode";
-import { resolveBorderStyle } from "@/lib/terminal-style";
-import type { BorderStyle } from "@/components/ui/types";
+import { useTheme } from "../../hooks/use-theme";
+import { useUnicode } from "../../hooks/use-unicode";
+import { resolveBorderStyle } from "../../lib/terminal-style";
+import type { BorderStyle } from "./types";
 
 export type BadgeVariant =
   | "default"

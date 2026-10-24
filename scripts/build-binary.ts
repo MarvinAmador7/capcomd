@@ -78,11 +78,19 @@ await import("./cli/index.ts");
         a.path === pk.napi ? { path: napiMain } : { path: a.path, external: true });
     },
   };
+  // Ink (capcomd tui) imports React's devtools at load but only connects when DEV=true: a stub stands in.
+  const noDevtools: import("bun").BunPlugin = {
+    name: "no-react-devtools",
+    setup(b) {
+      b.onResolve({ filter: /^react-devtools-core$/ }, () => ({ path: "react-devtools-core", namespace: "capcomd-stub" }));
+      b.onLoad({ filter: /.*/, namespace: "capcomd-stub" }, () => ({ contents: "export default { initialize() {}, connectToDevTools() {} };", loader: "js" }));
+    },
+  };
   const out = join(outdir, name);
   try {
     const r = await Bun.build({
       entrypoints: [entry],
-      plugins: [rivetkit],
+      plugins: [rivetkit, noDevtools],
       // Never pick up a .env or bunfig.toml from wherever capcomd is run (a user's repository).
       compile: { target: bunTarget(target), outfile: out, autoloadDotenv: false, autoloadBunfig: false },
     });

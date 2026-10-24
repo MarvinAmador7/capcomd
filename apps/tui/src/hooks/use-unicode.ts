@@ -1,12 +1,12 @@
 import * as React from "react";
 
-import type { UnicodeContextValue } from "@/components/ui/types";
+import type { UnicodeContextValue } from "../components/ui/types";
 
 const getEnv = (name: string): string | undefined =>
   typeof process !== "undefined" && process.env ? process.env[name] : undefined;
 
 const detectUnicodeSupport = (): boolean => {
-  if (typeof window !== "undefined") {
+  if (typeof (globalThis as { window?: unknown }).window !== "undefined") {
     return true;
   }
 

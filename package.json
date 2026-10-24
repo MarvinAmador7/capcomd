@@ -28,6 +28,7 @@
   },
   "files": [
     "src",
+    "apps/tui/src",
     "plugins",
     "docs/*.md",
     "docs/upstream",
@@ -61,9 +62,11 @@
     "@xyflow/react": "^12.12.0",
     "commander": "^15.0.0",
     "elkjs": "^0.12.0",
+    "ink": "6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "rivetkit": "2.3.27",
+    "string-width": "8.2.0",
     "xstate": "5.33.3",
     "zod": "^4.6.7"
   },
