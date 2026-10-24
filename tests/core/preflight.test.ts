@@ -20,10 +20,22 @@ describe("preflight", () => {
   test("both keys valid", async () => {
     let usedKey = "";
     let headers: any;
-    const r = await runPreflight(env, { boxdList: async (k) => { usedKey = k; return []; }, fetch: (async (_u: any, i: any) => { headers = i.headers; return new Response("{}"); }) as any });
+    const r = await runPreflight(env, { boxdList: async (k) => { usedKey = k ?? ""; return []; }, fetch: (async (_u: any, i: any) => { headers = i.headers; return new Response("{}"); }) as any });
     expect(r.every((c) => c.ok)).toBe(true);
     expect(usedKey).toBe(BOXD);
     expect(headers["x-api-key"]).toBe(ANTH);
+  });
+
+  test("no BOXD_API_KEY inside a boxd machine with credentials of its own: they're used and checked; elsewhere it's missing", async () => {
+    const { BOXD_API_KEY: _k, ...noKey } = env;
+    let usedKey: string | undefined = "unset";
+    const inside = await runPreflight(noKey, { boxdMachine: async () => ({ inside: true, credentials: true, detail: "inside boxd machine hermes: using its credentials" }), boxdList: async (k) => { usedKey = k; return []; }, fetch: okFetch });
+    expect(inside.find((c) => c.name === "boxd")).toMatchObject({ ok: true, detail: "inside boxd machine hermes: using its credentials (machines.list)" });
+    expect(usedKey).toBeUndefined(); // the SDK's own in-machine credentials, no key
+    const isolated = await runPreflight(noKey, { boxdMachine: async () => ({ inside: true, credentials: false, detail: "in a boxd machine whose metadata service gives no credentials (403: VM is isolated)" }), fetch: okFetch });
+    expect(isolated.find((c) => c.name === "boxd")).toMatchObject({ ok: false, detail: "BOXD_API_KEY is not set (in a boxd machine whose metadata service gives no credentials (403: VM is isolated))" });
+    const laptop = await runPreflight(noKey, { boxdMachine: async () => ({ inside: false, credentials: false, detail: "not in a boxd machine" }), fetch: okFetch });
+    expect(laptop.find((c) => c.name === "boxd")).toMatchObject({ ok: false, detail: "BOXD_API_KEY is not set" });
   });
 
   test("boxd auth rejection → clear message, no key material", async () => {

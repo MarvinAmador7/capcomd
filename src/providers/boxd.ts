@@ -23,6 +23,8 @@ export interface BoxdMachine {
   name: string;
   status: string;
   egressAllow?: string[];
+  /** Isolated machines get no org credentials from their metadata service (see boxd-machine.ts). */
+  isolated?: boolean;
 }
 export interface BoxdLike {
   machines: {
@@ -121,10 +123,12 @@ export class BoxdProvider implements SandboxProvider {
       this.client = opts.client;
     } else {
       const apiKey = opts.apiKey ?? process.env.BOXD_API_KEY;
-      if (!apiKey) throw new SandboxConfigError("BoxdProvider requires BOXD_API_KEY");
+      // Inside a boxd machine the SDK mints the machine's own credentials when it has no key (boxd-machine.ts).
+      const inMachine = ["BOXD_VM_ID", "BOXD_VM_NAME", "BOXD_PROXY_ENDPOINT"].some((h) => process.env[h]);
+      if (!apiKey && !inMachine) throw new SandboxConfigError("BoxdProvider requires BOXD_API_KEY");
       // Lazy require keeps grpc-js out of processes that never select boxd.
       const { Boxd } = require("@boxd-sh/sdk") as typeof import("@boxd-sh/sdk");
-      this.client = new Boxd({ apiKey }) as unknown as BoxdLike;
+      this.client = new Boxd(apiKey ? { apiKey } : {}) as unknown as BoxdLike;
     }
     this.gitCredentials = opts.gitCredentials ?? noGitCredentials;
     this.keepaliveMs = opts.keepaliveMs ?? 30 * 60_000;
@@ -161,6 +165,10 @@ export class BoxdProvider implements SandboxProvider {
   }
 
   async ensure(spec: VmSpec): Promise<{ id: VmId; created: boolean }> {
+    // Agents run in isolated VMs only: a machine that isn't isolated can mint org credentials from its metadata
+    // service (create, delete or exec in the org's machines), checked live on 2026-10-24. The type says so; this
+    // makes sure at run time too.
+    if (spec.isolated !== true) throw new SandboxConfigError("refusing to create a boxd VM that isn't isolated: its processes could mint org credentials");
     const egress = assertEgress(spec.egressAllow);
     const name = vmNameFor(spec.idemKey, this.prefix);
     const row = this.record(spec.idemKey);
@@ -198,6 +206,11 @@ export class BoxdProvider implements SandboxProvider {
       }
     }
 
+    // A snapshot's isolation is inherited, so this should hold; if boxd ever says otherwise, don't hand it to an agent.
+    if (machine.isolated === false) {
+      await this.client.machines.delete(machine.id).catch(() => {});
+      throw new SandboxConfigError(`boxd VM ${machine.id} isn't isolated (its processes could mint org credentials); deleted it`, machine.id);
+    }
     // VM id is durable in SQLite before anything uses the VM.
     this.upsert(spec.idemKey, name, machine.id, "created");
     this.labels.set(machine.id, spec.labels ?? {});

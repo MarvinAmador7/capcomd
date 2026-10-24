@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Running capcomd from inside a boxd machine (an agent like Hermes on boxd) no longer needs a `BOXD_API_KEY`: when
+  the machine has credentials of its own, `capcomd setup` and preflight say so and use them. An explicit key still
+  wins. Agent VMs never get such credentials: capcomd only ever runs agents in isolated VMs, which boxd refuses them
+  to, and now refuses to use a VM that isn't isolated.
 - capcomd can now run agents in Docker containers on your machine instead of boxd VMs: `CAPCOMD_SANDBOX=docker`
   (Docker Desktop, OrbStack, Colima or Podman's docker). `capcomd env build` bakes the agent CLIs into a local image
   and the engine removes expired containers. Differences from boxd: a container instead of a VM, an API key reaches

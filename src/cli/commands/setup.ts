@@ -152,14 +152,26 @@ async function keyFromBoxdCli(p: Prompter, v: Values): Promise<{ key: string; fr
  * 1a. The boxd key: from the environment or the keychain; else made with the logged-in boxd CLI (a key just for
  * capcomd, never shown); else pasted. Validated, then kept in the OS keychain.
  */
-export interface KeyDeps { validate: (key: string) => Promise<boolean>; kcGet: () => string | null; kcSet: (key: string) => void; kcKind: () => string | null }
-const realKeyDeps: KeyDeps = { validate: validBoxdKey, kcGet: () => keychainGet(), kcSet: (k) => keychainSet(k), kcKind: () => keychainKind() };
+export interface KeyDeps {
+  validate: (key: string) => Promise<boolean>; kcGet: () => string | null; kcSet: (key: string) => void; kcKind: () => string | null;
+  /** Inside a boxd machine with credentials of its own (an agent like Hermes on boxd): no key needed. */
+  machine?: () => Promise<{ inside: boolean; credentials: boolean; detail: string }>;
+}
+const realKeyDeps: KeyDeps = { validate: validBoxdKey, kcGet: () => keychainGet(), kcSet: (k) => keychainSet(k), kcKind: () => keychainKind(), machine: async () => (await import("../../providers/boxd-machine")).boxdMachine() };
 
 export async function boxdKeyStep(p: Prompter, v: Values, deps: KeyDeps = realKeyDeps): Promise<Step> {
   const validBoxdKey = deps.validate;
   let key = process.env.BOXD_API_KEY ?? "";
   let from = key ? "environment" : "";
   if (!key) { const k = deps.kcGet(); if (k) { key = k; from = "keychain"; } }
+  // No key, inside a boxd machine that has credentials of its own: use them (said, and asked when someone is there).
+  if (!key && deps.machine) {
+    const m = await deps.machine();
+    if (m.credentials && (!p.interactive || await p.confirm(`${m.detail.replace(": using its credentials", "")}. Use its credentials instead of a boxd API key?`, true))) {
+      writeConfig(userConfigPath(), { env: { CAPCOMD_SANDBOX: "boxd" } });
+      return { step: "boxd key", ok: true, detail: `none needed: ${m.detail}` };
+    }
+  }
   if (key && !(await validBoxdKey(key))) {
     if (from === "environment") return { step: "boxd key", ok: false, detail: "BOXD_API_KEY was rejected by boxd", hint: "Check it with `boxd auth keys list`, or unset it and run setup again to create one." };
     key = ""; from = ""; // a stale keychain key: replace it
@@ -348,7 +360,9 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
   const sandbox = process.env.CAPCOMD_SANDBOX ?? process.env.RELAY_SANDBOX;
   out.push({ step: "user config", ok: !!sandbox, detail: `sandbox ${sandbox ?? "unset"}${user.env?.CAPCOMD_SANDBOX ? ` (${userConfigPath()})` : sandbox ? " (environment)" : ""}`, ...(sandbox ? {} : { hint: "Run `capcomd setup`." }) });
   const keyFrom = process.env.BOXD_API_KEY ? (user.boxdKey === "keychain" && keychainGet() === process.env.BOXD_API_KEY ? "keychain" : "environment") : null;
-  out.push({ step: "boxd key", ok: !!keyFrom && (await validBoxdKey(process.env.BOXD_API_KEY!)), detail: keyFrom ? `from the ${keyFrom}` : "none", ...(keyFrom ? {} : { hint: "Run `capcomd setup accounts`." }) });
+  const machine = keyFrom ? null : await (await import("../../providers/boxd-machine")).boxdMachine();
+  if (machine?.credentials) out.push({ step: "boxd key", ok: true, detail: `none needed: ${machine.detail}` });
+  else out.push({ step: "boxd key", ok: !!keyFrom && (await validBoxdKey(process.env.BOXD_API_KEY!)), detail: keyFrom ? `from the ${keyFrom}` : machine?.inside ? `none (${machine.detail})` : "none", ...(keyFrom ? {} : { hint: "Run `capcomd setup accounts`." }) });
   const auth = json(self(["auth", "status", "--json"]).stdout)?.profiles ?? [];
   for (const a of auth) out.push({ step: `${a.agent} login`, ok: !!a.present && a.valid !== false, detail: a.detail ?? (a.present ? a.store : "not logged in") });
   const repo = process.env.CAPCOMD_REPO ?? proj.env?.CAPCOMD_REPO;

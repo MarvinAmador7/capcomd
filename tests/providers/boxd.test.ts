@@ -72,6 +72,15 @@ describe("BoxdProvider (mocked SDK)", () => {
     expect(create.deleteAfter).toBe(3600);
   });
 
+  test("agents run in isolated VMs only: a spec that isn't isolated is refused, and a VM boxd reports as not isolated is deleted", async () => {
+    await expect(p.ensure({ ...spec(), isolated: false as unknown as true })).rejects.toThrow("refusing to create a boxd VM that isn't isolated");
+    expect(sdk.calls.filter((c) => c[0] === "create")).toEqual([]);
+    const create = sdk.machines.create;
+    sdk.machines.create = async (q: Record<string, unknown>) => ({ ...(await create(q)), isolated: false });
+    await expect(p.ensure(spec())).rejects.toThrow("isn't isolated (its processes could mint org credentials); deleted it");
+    expect(sdk.calls.some((c) => c[0] === "delete")).toBe(true);
+  });
+
   test("VM id is recorded in SQLite before the VM is used (before setEgressAllow)", async () => {
     let recordedAtEgress: any = "unset";
     const orig = sdk.machines.setEgressAllow;
