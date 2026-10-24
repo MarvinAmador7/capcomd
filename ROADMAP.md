@@ -45,16 +45,12 @@ each, every verify needing both its check and the verdict; the planner's verifie
    the boxd checks, a conformance suite every provider must pass, a "Writing a provider" guide, and a provider
    choice in setup. Then a second provider (a local one, e.g. containers or microVMs, so capcomd runs with no
    cloud account) proves the contract.
-3. **Messages to a Codex worker** (S). `send` reaches a running Claude agent (on its stdin), but `codex exec`
-   reads no input after its prompt, so a message to a Codex worker waits in its inbox. Approach: when it finishes
-   with messages it hasn't read, continue its session with them (`codex exec resume`), or say at send time that
-   it can't read them.
-4. **ADR-019 leftovers** (S each): spinning detected as "events but no change in the workspace for a window"
-   (opt-in, since reading code for a long time is normal); a check of the VM before acting on silence ("dead");
-   profile presets for the stuck windows.
 
 Done on 2026-10-23/24: `capcomd run` with a planner agent, agent logs (`logs --follow`), one checks run for verify and
-merge (a pass is reused for the same tree), host checks without credentials. Dropped: a reviewer budget reserve
+merge (a pass is reused for the same tree), host checks without credentials, the ADR-019 leftovers (spinning without
+workspace changes, opt-in; `send` saying when a Codex or finished agent won't read a message, since `codex exec`
+reads no input once started and runs `--ephemeral`; "confirm before acting on silence" and stuck-window presets
+decided against, see ADR-019 §2). Dropped: a reviewer budget reserve
 (a reviewer is paid from its caller's budget, which only binds when a budget is set; `grant` the caller more).
 
 ## 3. Orchestration patterns that aren't possible yet
@@ -131,8 +127,6 @@ rework.
 - `tests/env` probes the host as if it were a fresh image, so it fails where `codex` is installed (boxd VMs).
 - Every file in `tests/merge`, `tests/cli` and `tests/env` passes on its own (checked 2026-10-23 on macOS without
   `codex`), but CI doesn't run them yet (§5, CI coverage).
-- `verify` on a branch that has already merged reports `status: "merged", pass: false`; it should report the
-  merged commit as verified or say "already merged".
 - `docs/open-questions.md` is a low-confidence reconstruction and needs re-research.
 
 ## 7. Deliberate constraints
