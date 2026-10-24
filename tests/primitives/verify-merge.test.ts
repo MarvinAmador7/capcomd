@@ -93,6 +93,9 @@ test("verify + merge --require: gate, exact-commit check, idempotency, events", 
   const ls = Bun.spawnSync(["git", "-C", r.bare, "ls-tree", "-r", "--name-only", "trunk"]).stdout.toString();
   expect(ls).toContain(`tasks/${a}.md`);
   expect(ls).not.toContain(`tasks/${b}.md`);
+  // verifying it again once it's on the target: passes, as already merged (nothing new to check)
+  const after = await cj(["verify", runId, "--ref", a, "--checks", CHECK, "--key", "va-after"]);
+  expect(after.j).toMatchObject({ state: "passed", result: { pass: true, alreadyMerged: true, checks: { passed: true, status: "merged" } } });
 
   const types = (await cj(["events", runId, "--limit", "1000"])).j.events.map((e: any) => e.type);
   for (const t of ["VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED"]) expect(types).toContain(t);
