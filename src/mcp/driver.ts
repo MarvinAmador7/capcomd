@@ -114,7 +114,8 @@ export async function awaitAgents(a: { runId: string; agents: string[]; mode?: "
 
 export async function send(a: { runId: string; to: string; body: string; key?: string }) {
   const r = await client().scope.getOrCreate([a.runId]).sendMessage({ to: a.to, from: DRIVER, body: a.body, ...(a.key ? { key: `${DRIVER}:${a.key}` } : {}) });
-  return { runId: a.runId, to: a.to, ...r };
+  const note = await O.messageNote(a.runId, a.to);
+  return { runId: a.runId, to: a.to, ...r, ...(note ? { note } : {}) };
 }
 
 export async function cancel(a: { runId: string; agent?: string; reason?: string }) {
