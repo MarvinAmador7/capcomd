@@ -120,8 +120,10 @@ export function boxdCli(): BoxdCli {
 export function boxdKeyName(): string {
   return `capcomd-${hostname().split(".")[0]!.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40) || "host"}`;
 }
-function mintBoxdKey(name: string, org: string): { key: string } | { error: string } {
-  const r = spawnSync(boxdBin(), ["auth", "keys", "create", name, "--org", org, "--json"], { encoding: "utf8", timeout: 30_000 });
+/** A key in the active org is made without `--org`: the boxd CLI rejects `keys create --org` for it ("org not found"
+ *  with the id, a membership error with the name; checked 2026-10-24), and a key is fenced to the active org anyway. */
+function mintBoxdKey(name: string, org: BoxdOrg): { key: string } | { error: string } {
+  const r = spawnSync(boxdBin(), ["auth", "keys", "create", name, ...(org.active ? [] : ["--org", org.id]), "--json"], { encoding: "utf8", timeout: 30_000 });
   const j = r.status === 0 ? boxdJson(r.stdout ?? "") : null;
   if (typeof j?.api_key === "string" && j.api_key) return { key: j.api_key };
   return { error: (r.stderr || r.stdout || "no output").trim().split("\n").pop()!.slice(0, 200) };
@@ -143,8 +145,10 @@ async function keyFromBoxdCli(p: Prompter, v: Values): Promise<{ key: string; fr
   if (!org) return { step: "boxd key", ok: false, detail: "you're in several boxd orgs and none is active", hint: `Pick one with --org (${cli.orgs.map((o) => o.name).join(", ")}), or \`boxd auth switch\`.` };
   const name = boxdKeyName();
   if (!(await p.confirm(`Create a boxd API key "${name}" for capcomd in org "${org.name}" (as ${cli.user})?`, true))) return { step: "boxd key", ok: false, detail: "no key created", hint: "Export BOXD_API_KEY, or run setup again and let it create one." };
-  const m = mintBoxdKey(name, org.id);
-  if ("error" in m) return { step: "boxd key", ok: false, detail: `boxd couldn't create a key: ${m.error}`, hint: "Try `boxd auth keys create capcomd` yourself and export BOXD_API_KEY." };
+  const m = mintBoxdKey(name, org);
+  if ("error" in m) return { step: "boxd key", ok: false, detail: `boxd couldn't create a key: ${m.error}`, hint: org.active
+    ? `Make one yourself (\`boxd auth keys create ${name}\`) and paste it, or export BOXD_API_KEY.`
+    : `Switch to that org first (\`boxd auth switch\`, then run setup again), or make a key there yourself and export BOXD_API_KEY.` };
   return { key: m.key, from: `created "${name}" in ${org.name}; revoke with \`boxd auth keys rm ${name}\`` };
 }
 

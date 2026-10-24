@@ -22,7 +22,10 @@ if [ "$1 $2" = "auth --json" ]; then
   esac
   exit 0
 fi
-if [ "$1 $2 $3" = "auth keys create" ]; then echo "{\\"id\\":\\"key_1\\",\\"api_key\\":\\"bxd_made_$6\\",\\"expires_at\\":0}"; exit 0; fi
+if [ "$1 $2 $3" = "auth keys create" ]; then
+  org=active; [ "$5" = "--org" ] && org=$6
+  echo "{\\"id\\":\\"key_1\\",\\"api_key\\":\\"bxd_made_$org\\",\\"expires_at\\":0}"; exit 0
+fi
 exit 2
 `);
 chmodSync(fake, 0o755);
@@ -50,8 +53,9 @@ afterAll(() => {
 test("logged-in CLI: creates a named key in the active org, keeps it in the keychain, never shows it", async () => {
   const s = await boxdKeyStep(yes, {}, deps());
   expect(s.ok).toBe(true);
-  expect(log()).toContain(`auth keys create ${boxdKeyName()} --org org-a --json`);
-  expect(kc.value).toBe("bxd_made_org-a");
+  // the active org: no --org (the boxd CLI rejects it there)
+  expect(log()).toContain(`auth keys create ${boxdKeyName()} --json`);
+  expect(kc.value).toBe("bxd_made_active");
   expect(s.detail).toContain(`revoke with \`boxd auth keys rm ${boxdKeyName()}\``);
   expect(s.detail).not.toContain("bxd_made");
   expect(JSON.parse(readFileSync(join(process.env.CAPCOMD_HOME!, "config.json"), "utf8"))).toMatchObject({ env: { CAPCOMD_SANDBOX: "boxd" }, boxdKey: "keychain" });
@@ -72,7 +76,7 @@ test("a stale keychain key is replaced by a new one", async () => {
   kc.value = "bxd_revoked";
   const s = await boxdKeyStep(yes, {}, deps());
   expect(s.ok).toBe(true);
-  expect(kc.value).toBe("bxd_made_org-a");
+  expect(kc.value).toBe("bxd_made_active");
 });
 
 test("a rejected BOXD_API_KEY is reported, not silently replaced", async () => {
@@ -110,7 +114,7 @@ test("no OS keychain: a key setup created goes to the 0600 credentials file, not
   const s = await boxdKeyStep(yes, {}, deps());
   expect(s.detail).toContain("kept in the file");
   const f = join(process.env.CAPCOMD_HOME!, "credentials");
-  expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ BOXD_API_KEY: "bxd_made_org-a" });
+  expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ BOXD_API_KEY: "bxd_made_active" });
   expect(statSync(f).mode & 0o777).toBe(0o600);
 });
 

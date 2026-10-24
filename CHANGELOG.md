@@ -8,6 +8,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - `capcomd tui [runId]` opens the terminal debugger: the run's agents live, a waterfall of what each did, a timeline,
   cost rollups and events (`--view` picks the first tab). With no runId it opens the latest run. Before, it ran only
   from a git checkout (`apps/tui`); it now ships with the CLI and the single executable.
+- `capcomd setup` can create its boxd key again: it failed with "org not found" because the boxd CLI rejects
+  `keys create --org` for your active org. Setup now leaves `--org` out there (the key is fenced to that org anyway);
+  for another org it says to `boxd auth switch` first.
 - Running capcomd from inside a boxd machine (an agent like Hermes on boxd) no longer needs a `BOXD_API_KEY`: when
   the machine has credentials of its own, `capcomd setup` and preflight say so and use them. An explicit key still
   wins. Agent VMs never get such credentials: capcomd only ever runs agents in isolated VMs, which boxd refuses them
