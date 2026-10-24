@@ -41,6 +41,15 @@ export function sandboxCaps(source: Record<string, string | undefined> = process
   return PROVIDERS[sandboxName(source)];
 }
 
+/**
+ * A state file of this provider's (env snapshots, plan logins): boxd and the fakes keep the original name, others get
+ * their own (`envs-docker.json`), so switching providers never points one at the other's images.
+ */
+export function providerStateFile(base: string, source: Record<string, string | undefined> = process.env): string {
+  const name = sandboxName(source);
+  return name === "boxd" || name === "fake" || name === "fake-host" ? base : base.replace(/(\.[a-z]+)$/, `-${name}$1`);
+}
+
 /** Real agent CLIs run isolated from this host (a VM or a container), not in a test fake. */
 export function realSandbox(source: Record<string, string | undefined> = process.env): boolean {
   return sandboxCaps(source).isolation !== "host";
