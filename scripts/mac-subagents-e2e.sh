@@ -85,12 +85,34 @@ bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "en
 kill -0 "$ENGINE_PID" 2>/dev/null || die "engine exited: $(tail -3 "$WORK/engine.log")"
 
 C="bun src/cli/index.ts"
+# CAPCOMD_E2E_VIA=run: the same goal through `capcomd run --planner planner`, which creates the run from the project's
+# gates (a .capcomd/config.json in a scratch dir here) and spawns the planner itself; otherwise the script does both.
+VIA="${CAPCOMD_E2E_VIA:-spawn}"
+CHECKS='{"add":"bun test ./test/add.test.ts","mul":"bun test ./test/mul.test.ts","shout":"bun test ./test/shout.test.ts"}'
+PROBLEM="Three functions are broken, each with its own failing test: src/add.ts (test/add.test.ts), src/mul.ts (test/mul.test.ts), src/shout.ts (test/shout.test.ts)."
+if [ "$VIA" = run ]; then
+  PROJ="$WORK/proj"; mkdir -p "$PROJ/.capcomd"
+  printf '{"run":{"checks":%s,"reviewer":"reviewer","target":"integration"}}\n' "$CHECKS" > "$PROJ/.capcomd/config.json"
+  GOAL_RUN="$PROBLEM Fix each in its own child, changing only that file: add and mul with --profile claude-worker, shout with --profile codex-worker, each with --children.maxChildren=0 and its file's check pinned (--check add, mul or shout)."
+  echo "== 3. capcomd run --planner planner"
+  T_RUN0=$(date +%s)
+  ROOTDIR=$(pwd)
+  set +e
+  (cd "$PROJ" && bun "$ROOTDIR/src/cli/index.ts" run "$GOAL_RUN" --planner planner --json) > "$WORK/run.jsonl" 2> "$WORK/run.err"
+  RC=$?
+  set -e
+  grep '"agent.status"' "$WORK/run.jsonl" | bun -e 'for (const l of (await Bun.stdin.text()).trim().split("\n")) { const j = JSON.parse(l); console.log(`   | ${j.agentId} ${j.profile} ${j.status}`); }' || true
+  RUN=$(head -1 "$WORK/run.jsonl" | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).runId)')
+  ROOT=$(grep '"planner.spawned"' "$WORK/run.jsonl" | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).agentId)')
+  echo "   run $RUN, planner $ROOT, exit $RC"
+  $C await "$RUN" "$ROOT" --timeout-ms 60000 --json > "$WORK/await.json" || true
+else
 # Operator-named checks (a VM can't pass --checks): one per file, since the other files stay broken
 # until their branches merge. The planner pins one per child at spawn; merge re-runs the same command.
 RUN=$($C run new --label "subagents e2e $TS" \
   --checks-set add='bun test ./test/add.test.ts' --checks-set mul='bun test ./test/mul.test.ts' --checks-set shout='bun test ./test/shout.test.ts' \
   --reviewer reviewer --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).runId)')
-GOAL="Three functions are broken, each with its own failing test: src/add.ts (test/add.test.ts), src/mul.ts (test/mul.test.ts), src/shout.ts (test/shout.test.ts).
+GOAL="$PROBLEM
 You are the planner. Do NOT edit files yourself. Use the capcomd command (see the orchestration skill in your instructions):
 1. Spawn exactly three leaf children in parallel, one per file, each with --children.maxChildren=0:
    add and mul with --profile claude-worker, shout with --profile codex-worker. Give each a self-contained task naming its file and test, and tell it to change only that file.
@@ -109,6 +131,7 @@ $C await "$RUN" "$ROOT" --timeout-ms 3000000 --json > "$WORK/await.json"
 RC=$?
 set -e
 { kill "$WATCH" && wait "$WATCH"; } 2>/dev/null || true   # reap it quietly (no "Terminated: 15")
+fi
 T_RUN=$(( $(date +%s) - T_RUN0 ))
 
 echo "== 4. tree + rollups"
