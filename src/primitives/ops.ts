@@ -21,6 +21,7 @@ import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/t
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
 import { startDriver } from "./drivers";
+import { realSandbox, sandboxCaps } from "../providers/registry";
 export { startDriver };
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
@@ -235,10 +236,13 @@ function stampSpent(span: { attributes: Record<string, any> }, a: ScopeAgent) {
 }
 
 export class EnvSnapshotMissing extends Error { readonly code = "env_snapshot_missing"; }
-/** Real CLI agents on boxd boot from the capcomd env snapshot; without one the CLI isn't installed. */
+/**
+ * Real CLI agents on a provider with snapshots boot from the capcomd env snapshot (the CLIs baked in); without one
+ * every agent would install its CLI first (minutes, and network the profile may not allow), so spawn asks for one.
+ */
 export function envSnapshotProblem(provider: unknown, source: Record<string, string | undefined> = process.env): string | null {
   if (provider !== "claude" && provider !== "codex") return null;
-  if ((source.CAPCOMD_SANDBOX ?? "") !== "boxd") return null;
+  if (!realSandbox(source) || !sandboxCaps(source).snapshots) return null;
   if ((source.CAPCOMD_SPAWN_EXEC ?? "") === "fake" || (source.CAPCOMD_SPAWN_EXEC ?? "") === "script") return null;
   if ((source.CAPCOMD_ENV ?? "").toLowerCase() === "image") return null;
   if (resolveEnvSnapshot(source)) return null;

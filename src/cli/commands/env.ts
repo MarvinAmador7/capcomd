@@ -9,13 +9,14 @@ import { doctor, formatDoctor } from "../../env/doctor";
 import { resolveEnvSnapshot } from "../../env/resolve";
 import { RelayError, SCHEMA } from "../../core/errors";
 import { ALL_ADAPTERS } from "../../agents/adapters";
+import { sandboxName } from "../../providers/registry";
 
 /** env/auth/doctor work on the CLIs, not one agent's credentials: don't apply the strict auth check. */
 const toolCfg = () => loadAgentConfig({ ...process.env, CAPCOMD_CREDENTIALS: "auto", CAPCOMD_AGENT: "fake" });
 
 function platform() {
   const p = providerFromEnv();
-  if (!isEnvPlatform(p)) throw new RelayError("config", "this sandbox has no snapshots/secrets; set CAPCOMD_SANDBOX=boxd", "export CAPCOMD_SANDBOX=boxd BOXD_API_KEY=…");
+  if (!isEnvPlatform(p)) throw new RelayError("config", `the ${sandboxName()} sandbox has no snapshots or secrets`, "Use a provider that has them: export CAPCOMD_SANDBOX=boxd BOXD_API_KEY=… (see `capcomd setup`).");
   return p as any;
 }
 const emit = (json: boolean, obj: Record<string, unknown>, text: string) => console.log(json ? JSON.stringify({ schema: SCHEMA, ok: obj.ok ?? true, ...obj }) : text);

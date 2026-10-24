@@ -296,7 +296,7 @@ async function main(argv: string[]): Promise<number> {
         // A planner agent plans real work: --planner P, or on real VMs the profile named "planner" (capcomd setup writes
         // it). The built-in recipe's planner is a placeholder model, so real VMs need --recipe/--legacy to use it.
         const PA = await import("../recipes/planner-agent");
-        const realVms = (process.env.CAPCOMD_SANDBOX ?? process.env.RELAY_SANDBOX ?? "fake") === "boxd";
+        const realVms = (await import("../providers/registry")).realSandbox();
         let planner: string | null = null;
         if (values.planner !== undefined) {
           if (values.recipe || values.legacy) usage("--planner runs a planner agent; don't combine it with --recipe/--legacy");
