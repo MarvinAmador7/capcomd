@@ -9,9 +9,9 @@
 // defaults and flags, so agents and scripts can run setup too. Settings land in ~/.capcomd/config.json (user)
 // and <project>/.capcomd/config.json; the boxd key never sits in a file unless there is no keychain and you agree.
 import { spawnSync } from "child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { homedir, hostname, tmpdir } from "os";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
 import { capcomdHome } from "../../utils/home";
 import { selfArgv } from "../../utils/self";
 import { ORCHESTRATION_SKILL } from "../../utils/assets";
@@ -245,8 +245,24 @@ export async function agentAccountsStep(p: Prompter, v: Values, log: (s: string)
 
 /** 2. The project: repository, target, merge mode, a default check and reviewer, and the agent profiles. */
 export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): Promise<Step[]> {
-  const root = sh("git", ["rev-parse", "--show-toplevel"], cwd);
-  const dir = root.code === 0 ? root.out : cwd;
+  // The project's settings live in its checkout (.capcomd/): the one setup runs in, else the one the person names.
+  // Never the home directory: its .capcomd/config.json is capcomd's user config, so the project would apply everywhere.
+  const gitRoot = (d: string) => { const r = sh("git", ["rev-parse", "--show-toplevel"], d); return r.code === 0 && r.out ? r.out : null; };
+  const here = tildePath(cwd);
+  let dir = gitRoot(cwd);
+  if (!dir && p.interactive) {
+    const guess = recentCheckout();
+    const given = (await p.ask(`${here} isn't a git checkout. Path to your project's checkout (its settings go in its .capcomd/)`, guess ? tildePath(guess) : "")).trim();
+    dir = given ? gitRoot(resolve(given.replace(/^~(?=$|\/)/, homedir()))) : null;
+    if (!dir) return [{ step: "project", ok: false, detail: given ? `${given} isn't a git checkout` : "no project checkout", hint: "Clone your repository, then run `capcomd setup project` inside it." }];
+  }
+  if (!dir) {
+    if (v.repo === undefined) return [{ step: "project", ok: false, detail: `${here} isn't a git checkout`, hint: "Run `capcomd setup project` inside your repository (its settings go in its .capcomd/), or pass --repo <url>." }];
+    dir = cwd;
+  }
+  // The project's config file must not be capcomd's own (setup run in the home directory, or CAPCOMD_HOME's parent).
+  const real = (f: string): string => { const d = dirname(f); if (d === f) return f; try { return join(realpathSync(d), f.slice(d.length + 1)); } catch { return join(real(d), f.slice(d.length + 1)); } };
+  if (real(join(dir, ".capcomd", "config.json")) === real(userConfigPath())) return [{ step: "project", ok: false, detail: "won't keep project settings in your home directory (that's where capcomd's own settings are)", hint: "Run `capcomd setup project` inside your repository, or pass --repo <url> in a directory for that project." }];
   const origin = sh("git", ["remote", "get-url", "origin"], dir).out;
   const repo = httpsRemote(String(v.repo ?? await p.ask("Repository the agents work on", origin)));
   if (!repo) return [{ step: "project", ok: false, detail: "no repository", hint: "Run setup inside a git checkout, or pass --repo <url>." }];
@@ -295,6 +311,20 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
     { step: "project", ok: true, detail: `${repo} → ${target} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${cfgPath}` },
     { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${af})` },
   ];
+}
+
+/** `~/x` for a path under the home directory. */
+const tildePath = (d: string) => { const h = resolve(homedir()); const r = resolve(d); return r === h ? "~" : r.startsWith(`${h}/`) ? `~${r.slice(h.length)}` : r; };
+/** The checkout of the most recent run started from one (the runs index records where), as a default to offer. */
+function recentCheckout(): string | null {
+  try {
+    const { recentRuns } = require("../../primitives/ops") as typeof import("../../primitives/ops");
+    for (const r of recentRuns(20)) {
+      const t = sh("git", ["rev-parse", "--show-toplevel"], r.cwd);
+      if (t.code === 0 && t.out) return t.out;
+    }
+  } catch {}
+  return null;
 }
 
 /** Where the capcomd plugin comes from: this repository's marketplace (CAPCOMD_PLUGIN_MARKETPLACE: a path, for tests). */

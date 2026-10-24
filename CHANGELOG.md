@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- `capcomd setup` run outside a git checkout (your home directory, say) now asks for the path to your project's
+  checkout and offers that repository's `origin` as the repository, as it does when run inside one. Before, it asked
+  for a repository URL with no default and saved the project's settings in the current directory, which from your
+  home directory meant capcomd's own config. Without a terminal, it says to run `capcomd setup project` in the
+  repository; it never writes project settings into capcomd's own config.
 - `capcomd tui [runId]` opens the terminal debugger: the run's agents live, a waterfall of what each did, a timeline,
   cost rollups and events (`--view` picks the first tab). With no runId it opens the latest run. Before, it ran only
   from a git checkout (`apps/tui`); it now ships with the CLI and the single executable.
