@@ -49,3 +49,22 @@ test("by default (no window set) a stuck agent is only noticed, never stopped", 
   for (let i = 0; i < 20; i++) w.observe(call('Read {"f":"a"}'), 10_000);
   expect(w.check(10_001)).toMatchObject({ kind: "spinning", stop: false });
 });
+
+test("no change in the workspace (opt-in): working but changing nothing is spinning, a change is progress", () => {
+  const w = new StuckWatch({ idleAfterMs: 60_000, repeats: 8, stopIdle: false, stopRepeats: false, noChangeAfterMs: 1000 }, 0);
+  const work = (i: number) => w.observe(call(`Read {"f":"${i}"}`), i * 100);
+  w.observeTree("t1", 0);
+  for (let i = 1; i <= 9; i++) work(i);
+  expect(w.check(900)).toBeNull();
+  for (let i = 10; i <= 15; i++) work(i);
+  expect(w.check(1500)).toMatchObject({ kind: "spinning", stop: false });
+  expect(w.check(1500)!.detail).toBe("no change in the workspace for 2s while it works");
+  w.observeTree("t1", 1600); // the same tree: still nothing
+  for (let i = 16; i <= 21; i++) work(i);
+  expect(w.check(2100)).toMatchObject({ kind: "spinning", stop: true });
+  w.observeTree("t2", 2200); // it changed something
+  work(22);
+  expect(w.check(2200)).toBeNull();
+  // off without the window, and before the first tree report
+  expect(new StuckWatch({ idleAfterMs: 60_000, repeats: 8, stopIdle: false, stopRepeats: false }, 0).check(30_000)).toBeNull();
+});

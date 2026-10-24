@@ -7,6 +7,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 - `capcomd send` (and `capcomd_send`) now tells you when the agent won't read your message now: a Codex agent can't
   read messages while it works, and a finished agent reads nothing (`note` in the result).
+- An agent that keeps working but changes nothing can now be caught: set `noChangeAfterMs` on its profile
+  (`capcomd agents set <profile> --no-change-after-ms 1200000`) and an agent with no change in its workspace for that
+  long gets a `spinning` notice, then is stopped (its work kept) after twice that. Off by default.
 - `capcomd logs <runId> <agent>` (and `capcomd_inspect`'s recent logs) now show what a working Claude Code or
   Codex agent does, a line per tool call, failed call, message and result; before, they were empty for agents that
   can't spawn. `capcomd logs … --follow` streams new lines until the agent finishes (`--json`: one object per line).

@@ -144,7 +144,7 @@ test("an agent repeating the same tool call is stopped as spinning after its sec
   const { agent, driveFailures } = await runToEnd("[spin] go round", "spin", "spin");
   expect(agent.status).toBe("failed");
   expect(agent.result).toMatchObject({ limit: "spinning" });
-  expect(agent.result.error).toContain("stopped after repeating the same tool call");
+  expect(agent.result.error).toContain("stopped after spinning (the same tool call again and again");
   expect(driveFailures).toBe(0);
   expect((await new Git(repo.bare).run(["log", "-1", "--format=%B", agent.result.branch])).stdout).toContain("Capcomd-Stop: spinning");
   expect(await repo.show(agent.result.branch, "src/sum.ts")).toContain("a + b");

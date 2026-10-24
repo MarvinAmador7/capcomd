@@ -83,7 +83,9 @@ The heuristics will have false positives, which is why the first window only not
 - **The signals.**
   - idle: no events for `idleAfterMs`; the stop is at twice that (it used to be at `idleAfterMs`).
   - spinning: the same call `stuckRepeats` times in a row (profile field, default 8); text between calls doesn't
-    break the run, a different call does. The "no change in the workspace for a window" variant isn't built.
+    break the run, a different call does. Also, opt-in with `noChangeAfterMs` (off by default, since reading code
+    for a long time is normal): events but no change in the workspace for that long. The supervisor then reports
+    the workspace's tree hash with each heartbeat; the stop is at twice the window, since setting it is the opt-in.
   - failing: the same call failing with the same error `stuckRepeats` times, numbers in the error ignored, and not
     necessarily in a row; that call succeeding clears it.
   - Stop at twice the repeats; the limit is the kind (`result.limit` idle, spinning, failing), and the work is

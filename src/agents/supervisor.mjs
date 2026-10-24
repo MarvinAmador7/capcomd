@@ -2,7 +2,8 @@
 // ADR-019 §1, §3: the in-VM supervisor. It runs next to the agent CLI (run.sh starts it when the VM has node), and
 // reports up through an outbox the engine drains: heartbeats while it is alive, and checkpoints of the workspace.
 // Dependency-free, like vm-cli.mjs. Config (JSON file, argv[2]):
-//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, input? }
+//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, input?, reportTree? }
+// With `reportTree`, each heartbeat carries the workspace's tree hash (for "no change in the workspace", ADR-019 §2).
 // It never pushes: the agent must not hold push credentials, so the engine pushes the checkpoint ref it reports.
 // With `input` ({ prompt, inbox }), the agent CLI reads user messages on stdin (claude --input-format stream-json):
 // the supervisor sends the prompt, then each message the engine appends to `inbox`, and closes stdin once the agent
@@ -57,6 +58,16 @@ function checkpoint(reason) {
   }
 }
 
+// The working tree as a tree hash (HEAD plus every change, untracked files included), without touching the index.
+function workTree() {
+  try {
+    const idx = { GIT_INDEX_FILE: `${cfg.dir}/tree.index` };
+    git(["read-tree", "HEAD"], idx);
+    git(["add", "-A"], idx);
+    return git(["write-tree"], idx);
+  } catch { return undefined; }
+}
+
 // The baseline, before the agent starts: an unchanged tree isn't a checkpoint.
 checkpoint("start");
 const child = spawn("/bin/sh", [cfg.script], { stdio: [cfg.input ? "pipe" : "inherit", "inherit", "inherit"] });
@@ -106,7 +117,7 @@ if (cfg.input) {
 
 const beat = setInterval(() => {
   sample();
-  report("heartbeat", { events, lastEventAt });
+  report("heartbeat", { events, lastEventAt, ...(cfg.reportTree ? { tree: workTree() } : {}) });
   // The agent committed (claude and codex may): checkpoint the new HEAD now rather than at the next interval.
   try { const h = git(["rev-parse", "HEAD"]); if (lastHead && h !== lastHead) checkpoint("commit"); } catch {}
   // The engine asks for one (the file says why): the agent looks stuck (ADR-019 §2), so the work is safe before
