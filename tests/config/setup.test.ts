@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { githubRepoOf, httpsRemote, suggestCheck } from "../../src/cli/commands/setup";
+import { githubRepoOf, httpsRemote, projectStep, suggestCheck } from "../../src/cli/commands/setup";
 
 const CLI = new URL("../../src/cli/index.ts", import.meta.url).pathname;
 const run = (args: string[], o: { cwd: string; env: Record<string, string> }) => {
@@ -27,6 +27,52 @@ describe("setup helpers", () => {
     expect(suggestCheck(d)).toBe("bun run test");
   });
 });
+
+describe("setup project outside a git checkout", () => {
+  const home = mkdtempSync(join(tmpdir(), "capcomd-setup-nogit-home-"));
+  const env = { HOME: home, CAPCOMD_HOME: join(home, ".capcomd") };
+  const step = (cwd: string, extra: string[] = []) => json(run(["setup", "project", "--yes", "--mode", "direct", ...extra, "--json"], { cwd, env }).out).steps?.find((s: any) => s.step === "project");
+
+  test("without --repo it says to run it in the repository, and writes nothing", () => {
+    const d = mkdtempSync(join(tmpdir(), "capcomd-setup-nogit-"));
+    expect(step(d)).toMatchObject({ ok: false, hint: expect.stringContaining("inside your repository") });
+    expect(existsSync(join(d, ".capcomd"))).toBe(false);
+  });
+
+  test("never keeps project settings in the home directory (where capcomd's own config is)", () => {
+    expect(step(home, ["--repo", "https://github.com/acme/app.git"])).toMatchObject({ ok: false, detail: expect.stringContaining("home directory") });
+    expect(existsSync(join(home, ".capcomd", "config.json")) ? JSON.parse(readFileSync(join(home, ".capcomd", "config.json"), "utf8")).env?.CAPCOMD_REPO : undefined).toBeUndefined();
+  });
+
+  test("with --repo in another directory, that directory keeps them (as before)", () => {
+    const d = mkdtempSync(join(tmpdir(), "capcomd-setup-nogit-repo-"));
+    expect(step(d, ["--repo", "https://github.com/acme/app.git"])).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(join(d, ".capcomd", "config.json"), "utf8")).env.CAPCOMD_REPO).toBe("https://github.com/acme/app.git");
+  });
+});
+
+test("in a terminal outside a checkout: asks for the project's checkout, then offers its origin as the repository", async () => {
+  const away = mkdtempSync(join(tmpdir(), "capcomd-setup-away-"));
+  const proj = mkdtempSync(join(tmpdir(), "capcomd-setup-proj-"));
+  Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: proj });
+  Bun.spawnSync(["git", "remote", "add", "origin", "git@github.com:acme/widgets.git"], { cwd: proj });
+  const asked: Array<[string, string]> = [];
+  const p: any = {
+    interactive: true,
+    ask: async (q: string, d: string) => { asked.push([q, d]); return q.includes("isn't a git checkout") ? proj : d; },
+    choose: async (_q: string, _o: unknown, d: string) => d, confirm: async () => true, secret: async () => "",
+  };
+  const saved = { HOME: process.env.HOME, CAPCOMD_HOME: process.env.CAPCOMD_HOME };
+  process.env.CAPCOMD_HOME = mkdtempSync(join(tmpdir(), "capcomd-setup-away-home-"));
+  try {
+    const steps = await projectStep(p, { mode: "direct", agents: "claude" } as any, away);
+    expect(asked[0]![0]).toContain("isn't a git checkout. Path to your project's checkout");
+    expect(asked.find(([q]) => q === "Repository the agents work on")?.[1]).toBe("git@github.com:acme/widgets.git");
+    expect(steps[0]).toMatchObject({ step: "project", ok: true });
+    expect(JSON.parse(readFileSync(join(proj, ".capcomd", "config.json"), "utf8")).env.CAPCOMD_REPO).toBe("https://github.com/acme/widgets.git");
+    expect(existsSync(join(away, ".capcomd"))).toBe(false);
+  } finally { for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+}, 60_000);
 
 describe("setup steps (non-interactive)", () => {
   const home = mkdtempSync(join(tmpdir(), "capcomd-setup-home-"));
