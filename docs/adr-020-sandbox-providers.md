@@ -1,6 +1,7 @@
 # ADR-020: Sandbox providers as a contract, and Docker as the second one
 
-**Status:** proposed (2026-10-24). Step 1 (the registry and capabilities) is built; Docker is next.
+**Status:** proposed (2026-10-24). Steps 1 (the registry and capabilities) and 2 (the Docker provider and the
+conformance suite) are built; plan logins on Docker and setup are next.
 
 ## Context
 

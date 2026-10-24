@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- capcomd can now run agents in Docker containers on your machine instead of boxd VMs: `CAPCOMD_SANDBOX=docker`
+  (Docker Desktop, OrbStack, Colima or Podman's docker). `capcomd env build` bakes the agent CLIs into a local image
+  and the engine removes expired containers. Differences from boxd: a container instead of a VM, an API key reaches
+  the agent in its environment (plan logins are unaffected), and no egress allowlist (a profile that sets `egress` is
+  refused). See [docs/providers.md](docs/providers.md).
 ## 0.6.0-rc.1 (2026-10-24)
 
 Release candidate: a single executable; agents that report up (checkpoints, stuck notices, grants, quota pauses,
