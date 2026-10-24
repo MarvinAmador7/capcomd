@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.6.0-rc.1 (2026-10-24)
+
+Release candidate: a single executable; agents that report up (checkpoints, stuck notices, grants, quota pauses,
+messages while they run); no restrictions by default; `capcomd run` with a planner agent.
+
 - `capcomd send` (and `capcomd_send`) now tells you when the agent won't read your message now: a Codex agent can't
   read messages while it works, and a finished agent reads nothing (`note` in the result).
 - An agent that keeps working but changes nothing can now be caught: set `noChangeAfterMs` on its profile
