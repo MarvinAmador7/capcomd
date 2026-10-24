@@ -3,7 +3,7 @@ import type { SandboxProvider } from "./providers/sandbox";
 import { FakeModelClient } from "./models/fake";
 import { FakeProvider } from "./providers/fake";
 import { traceMethods } from "./utils/tracing-simple";
-import { env as envVar } from "./utils/env";
+import { sandboxName } from "./providers/registry";
 
 interface Dependencies {
   model: ModelClient;
@@ -43,9 +43,9 @@ function tracedProvider(provider: SandboxProvider, name: string): SandboxProvide
   });
 }
 
-/** CAPCOMD_SANDBOX=boxd (or deprecated RELAY_SANDBOX) selects BoxdProvider; anything else (default) is the in-memory fake. */
+/** The provider CAPCOMD_SANDBOX names (src/providers/registry.ts); the in-memory fake by default. */
 export function providerFromEnv(env: Record<string, string | undefined> = process.env): SandboxProvider {
-  const kind = (envVar("SANDBOX", env) ?? "fake").toLowerCase();
+  const kind = sandboxName(env);
   if (kind === "boxd") {
     const { BoxdProvider } = require("./providers/boxd") as typeof import("./providers/boxd");
     // Agents push from the VM: give git network execs a short-lived GitHub credential (env of that exec only).
@@ -56,7 +56,6 @@ export function providerFromEnv(env: Record<string, string | undefined> = proces
   }
   // Test sandbox: exec runs on this host (agent adapter e2e with a fake claude binary).
   if (kind === "fake-host") return new FakeProvider({ hostExec: true });
-  if (kind !== "fake") throw new Error(`Unknown CAPCOMD_SANDBOX=${kind} (expected fake|boxd)`);
   return new FakeProvider(env.CAPCOMD_FAKE_ENSURE_ERROR === "auth" ? { failEnsure: "auth" } : {});
 }
 

@@ -2,17 +2,18 @@ import { createHash } from "crypto";
 import { readFileSync, renameSync, writeFileSync } from "fs";
 import { join } from "path";
 import type { Git } from "./git";
+import { realSandbox } from "../providers/registry";
 
 /**
- * Where verify's check command runs. The tree under test is agent-written code, so with real agents
- * (CAPCOMD_SANDBOX=boxd) it runs in a throwaway VM, never on the orchestrator host. Fake sandboxes
- * (tests, local dev) run it on the host. CAPCOMD_CHECKS=vm|host overrides.
+ * Where verify's check command runs. The tree under test is agent-written code, so with real agents (a provider
+ * that isolates them: a VM or a container) it runs in a throwaway sandbox of that provider ("vm"), never on the
+ * orchestrator host. The test fakes run it on the host. CAPCOMD_CHECKS=vm|host overrides.
  */
 export type ChecksMode = "vm" | "host";
 export function checksMode(source: Record<string, string | undefined> = process.env): ChecksMode {
   const m = (source.CAPCOMD_CHECKS ?? "").toLowerCase();
   if (m === "vm" || m === "host") return m;
-  return (source.CAPCOMD_SANDBOX ?? source.RELAY_SANDBOX ?? "fake") === "boxd" ? "vm" : "host";
+  return realSandbox(source) ? "vm" : "host";
 }
 
 /** Run the repo's test command in the merged worktree. No command configured = pass (reported). */

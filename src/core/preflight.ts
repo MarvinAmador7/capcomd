@@ -1,8 +1,8 @@
 // Preflight for real sandboxes: validate credentials with cheap calls before creating anything.
 // Messages never include key material.
-import { env as envVar } from "../utils/env";
 import { BOXD_AUTH_HINT, isBoxdAuthError } from "../providers/boxd-errors";
 import { Redactor } from "../agents/redact";
+import { realSandbox } from "../providers/registry";
 
 export interface PreflightCheck { name: string; ok: boolean; detail: string }
 
@@ -12,8 +12,9 @@ export interface PreflightDeps {
   fetch?: typeof fetch;
 }
 
+/** Credentials are checked before real agents start (a provider that runs them), not for the test fakes. */
 export function preflightNeeded(source: Record<string, string | undefined> = process.env): boolean {
-  return (envVar("SANDBOX", source) ?? "fake").toLowerCase() === "boxd" && source.CAPCOMD_SKIP_PREFLIGHT !== "1";
+  return realSandbox(source) && source.CAPCOMD_SKIP_PREFLIGHT !== "1";
 }
 
 async function defaultBoxdList(apiKey: string) {
