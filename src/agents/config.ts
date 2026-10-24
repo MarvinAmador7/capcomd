@@ -92,6 +92,8 @@ export interface AgentConfig {
    *  window: idleAfterMs for idle, stuckRepeats for spinning and failing. */
   stopIdle: boolean;
   stopStuck: boolean;
+  /** Opt-in (0: off): working with no change in the workspace for this long is spinning; twice stops it. */
+  noChangeAfterMs: number;
   /** ADR-019 §3: the in-VM supervisor checkpoints the workspace this often (0: never). */
   checkpointEveryMs: number;
   pollMs: number;
@@ -151,7 +153,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   const { resolveAgent } = require("./profiles") as typeof import("./profiles");
   const ra = resolveAgent(profileName, source);
   const spec = ra.spec;
-  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs, AGENT_STUCK_REPEATS: spec?.stuckRepeats, AGENT_CHECKPOINT_MS: spec?.checkpointEveryMs };
+  const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs, AGENT_STUCK_REPEATS: spec?.stuckRepeats, AGENT_NO_CHANGE_MS: spec?.noChangeAfterMs, AGENT_CHECKPOINT_MS: spec?.checkpointEveryMs };
   const opt = (name: string) => {
     const v = envVar(name, source);
     const n = v === undefined ? specNum[name] : Number(v);
@@ -175,6 +177,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     stuckRepeats: num("AGENT_STUCK_REPEATS", 8),
     stopIdle: opt("AGENT_IDLE_MS") !== undefined,
     stopStuck: opt("AGENT_STUCK_REPEATS") !== undefined,
+    noChangeAfterMs: opt("AGENT_NO_CHANGE_MS") ?? 0,
     checkpointEveryMs: num("AGENT_CHECKPOINT_MS", 10 * 60_000),
     pollMs: num("AGENT_POLL_MS", 2000),
     ...(envVar("AGENT_ALLOWED_TOOLS", source) !== undefined || spec?.allowedTools ? { allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? []) } : {}),

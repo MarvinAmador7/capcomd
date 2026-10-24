@@ -31,6 +31,7 @@ export function specFromFlags(v: Record<string, any>): Partial<AgentSpec> {
   set("idleAfterMs", num(v["idle-after-ms"], "idle-after-ms"));
   set("checkpointEveryMs", num(v["checkpoint-every-ms"], "checkpoint-every-ms"));
   set("stuckRepeats", num(v["stuck-repeats"], "stuck-repeats"));
+  set("noChangeAfterMs", num(v["no-change-after-ms"], "no-change-after-ms"));
   set("sandbox", v.sandbox);
   set("egress", list(v.egress));
   set("systemPrompt", v["system-prompt"]);

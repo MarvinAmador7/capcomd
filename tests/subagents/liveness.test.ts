@@ -18,7 +18,7 @@ beforeAll(async () => {
   const r = (repo = await bareRepo({ mode: "direct" }));
   const dir = mkdtempSync(join(tmpdir(), "capcomd-liveness-"));
   const agentsFile = join(dir, "agents.json");
-  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 }, spender: { provider: "claude", auth: "apikey" }, listener: { provider: "claude", auth: "apikey" } } }));
+  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, still: { provider: "claude", auth: "apikey", noChangeAfterMs: 1000 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 }, spender: { provider: "claude", auth: "apikey" }, listener: { provider: "claude", auth: "apikey" } } }));
   env = {
     ...r.env,
     CAPCOMD_AGENTS_FILE: agentsFile,
@@ -75,6 +75,18 @@ test("a worker without the in-VM CLI that keeps working is not flagged stuck", a
   expect(seen).toBeGreaterThan(0);
   const aw = await cj(["await", run, id, "--timeout-ms", "60000"]);
   expect(aw.j?.agents?.[0]?.status).toBe("done");
+}, 120_000);
+
+test("no change in the workspace (noChangeAfterMs): an agent that works but changes nothing is stopped as spinning", async () => {
+  // [steady]: an edit, then 3 s of output with nothing changed in its workspace.
+  const run = (await cj(["run", "new"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "still", "--task", "[steady] look around", "--key", "still"])).j?.agentId;
+  const agent = (await cj(["await", run, id, "--timeout-ms", "60000"])).j?.agents?.[0];
+  expect(agent.status).toBe("failed");
+  expect(agent.result).toMatchObject({ limit: "spinning" });
+  expect(agent.result.error).toContain("working with no change in its workspace");
+  expect(await repo.show(agent.result.branch, "src/sum.ts")).toContain("a + b"); // its work is kept
+  expect((await capcomd(["events", run, "--json"], env)).stdout).toContain("no change in the workspace");
 }, 120_000);
 
 // Keep this before the next test: that one merges src/sum.ts (which every fake agent here writes) into the shared

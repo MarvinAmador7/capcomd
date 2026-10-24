@@ -83,7 +83,9 @@ The heuristics will have false positives, which is why the first window only not
 - **The signals.**
   - idle: no events for `idleAfterMs`; the stop is at twice that (it used to be at `idleAfterMs`).
   - spinning: the same call `stuckRepeats` times in a row (profile field, default 8); text between calls doesn't
-    break the run, a different call does. The "no change in the workspace for a window" variant isn't built.
+    break the run, a different call does. Also, opt-in with `noChangeAfterMs` (off by default, since reading code
+    for a long time is normal): events but no change in the workspace for that long. The supervisor then reports
+    the workspace's tree hash with each heartbeat; the stop is at twice the window, since setting it is the opt-in.
   - failing: the same call failing with the same error `stuckRepeats` times, numbers in the error ignored, and not
     necessarily in a row; that call succeeding clears it.
   - Stop at twice the repeats; the limit is the kind (`result.limit` idle, spinning, failing), and the work is
@@ -93,14 +95,18 @@ The heuristics will have false positives, which is why the first window only not
   agent does something else, and when the agent finishes or pauses.
 - **dead** isn't stored: it is derived where agents are shown (no heartbeat for `CAPCOMD_STUCK_AFTER_MS`, or no
   live driver), and its action stays the driver takeover in `await`. `notice` shows all four; `stuck` keeps the
-  text for callers that only show a flag. The "confirm before acting on silence" check isn't built.
+  text for callers that only show a flag. No "confirm before acting on silence" check is needed: nothing acts on
+  silence. A takeover follows the driver's lease, not the agent's reports, and a new driver re-attaches to the
+  worker and the agent already running in its VM (every step is idempotent), so it can't start a duplicate.
 - **Waking.** `capcomd_await`, the in-VM `await`/`wait-any` and `capcomd await --notices` return early with
   `notices` when one is raised while they wait (not one already showing when the wait began). On the host CLI it
   is opt-in, so scripts that wait for the end keep working. Internal waits (`verify`'s reviewer, handoffs, the
   `run` recipe) don't return on notices.
 - **Messages reset it too.** A message delivered to a running agent (§3, `send` to a worker) restarts the
   runner's stuck watch, as a grant does (step 5).
-- **Not built:** profile presets for the windows.
+- **Spinning without changes** (`noChangeAfterMs`, opt-in) is above. No profile presets for the windows: a
+  profile sets them directly (`idleAfterMs`, `stuckRepeats`, `noChangeAfterMs`), and presets would be a second way
+  to say the same thing.
 
 ### 3. Checkpoints instead of caps
 

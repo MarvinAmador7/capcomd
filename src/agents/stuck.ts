@@ -17,9 +17,18 @@ export class StuckWatch {
   private calls = 0;
   /** Per call+error: how many times it failed so far; that call succeeding clears it. */
   private fails = new Map<string, number>();
+  /** The workspace as the supervisor last saw it (a tree hash), and when it last changed. */
+  private tree: string | null = null;
+  private changedAt: number;
 
-  constructor(private o: { idleAfterMs: number; repeats: number; stopIdle: boolean; stopRepeats: boolean }, now: number) {
+  constructor(private o: { idleAfterMs: number; repeats: number; stopIdle: boolean; stopRepeats: boolean; noChangeAfterMs?: number }, now: number) {
     this.lastEventAt = now;
+    this.changedAt = now;
+  }
+
+  /** The workspace's tree at a heartbeat (with noChangeAfterMs): a different one is progress. */
+  observeTree(tree: string, now: number) {
+    if (tree !== this.tree) { this.tree = tree; this.changedAt = now; }
   }
 
   observe(ev: AgentEvent, now: number) {
@@ -42,6 +51,7 @@ export class StuckWatch {
     this.call = "";
     this.calls = 0;
     this.fails.clear();
+    this.changedAt = now;
   }
 
   /** The current signal, if any; `stop` once its second window has passed (and that stop is on). */
@@ -56,6 +66,10 @@ export class StuckWatch {
       const [call, error] = worst[0].split("\n", 2) as [string, string];
       return { kind: "failing", detail: `the same ${toolName(call)} error ${worst[1]} times: ${error.slice(0, 120)}`, stop: stopRepeats && worst[1] >= 2 * repeats };
     }
+    // Working (not idle: that came first) but changing nothing; opt-in, so its second window stops it.
+    const still = now - this.changedAt;
+    if (this.o.noChangeAfterMs && this.tree !== null && still > this.o.noChangeAfterMs)
+      return { kind: "spinning", detail: `no change in the workspace for ${Math.round(still / 1000)}s while it works`, stop: still > 2 * this.o.noChangeAfterMs };
     return null;
   }
 }

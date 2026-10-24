@@ -26,6 +26,9 @@ export interface AgentSpec {
   /** How often the in-VM supervisor checkpoints the workspace (default 10 min; a cadence, not a limit). */
   checkpointEveryMs?: number;
   stuckRepeats?: number;
+  /** Opt-in: an agent that keeps working with no change in its workspace for this long is spinning (a notice; a stop
+   *  after twice that). Off by default, since reading and thinking for a long time is normal. Needs the supervisor. */
+  noChangeAfterMs?: number;
   /** codex --sandbox (claude ignores it; the VM is the boundary). */
   sandbox?: SandboxMode;
   /** Replaces the default egress allowlist (non-empty). */
@@ -90,6 +93,7 @@ export const AGENTS_JSON_SCHEMA = {
         idleAfterMs: { type: "integer", minimum: 1000 },
         checkpointEveryMs: { type: "integer", minimum: 1000 },
         stuckRepeats: { type: "integer", minimum: 2 },
+        noChangeAfterMs: { type: "integer", minimum: 1000 },
         sandbox: { enum: ["read-only", "workspace-write", "danger-full-access"] },
         egress: { type: "array", minItems: 1, items: { type: "string", pattern: "^[A-Za-z0-9.*-]+$" } },
         systemPrompt: { type: "string" },
@@ -135,7 +139,7 @@ export function validateSpec(name: string, raw: unknown): string[] {
   if (s.auth === undefined) at(legacyKey || legacySub ? `use auth: "${legacyKey ? "apikey" : "subscription"}" instead of a credential field` : "auth is required (\"apikey\" or \"subscription\"): neither is configured");
   else if (!["apikey", "subscription"].includes(s.auth as string)) at(`auth must be "apikey" or "subscription"`);
   const posInt = (k: string, min = 1) => { if (s[k] !== undefined && (!Number.isInteger(s[k]) || (s[k] as number) < min)) at(`${k} must be an integer >= ${min}`); };
-  posInt("maxTurns"); posInt("timeoutMs", 1000); posInt("idleAfterMs", 1000); posInt("checkpointEveryMs", 1000); posInt("stuckRepeats", 2);
+  posInt("maxTurns"); posInt("timeoutMs", 1000); posInt("idleAfterMs", 1000); posInt("checkpointEveryMs", 1000); posInt("stuckRepeats", 2); posInt("noChangeAfterMs", 1000);
   if (s.maxBudgetUsd !== undefined && !(typeof s.maxBudgetUsd === "number" && s.maxBudgetUsd > 0)) at("maxBudgetUsd must be > 0");
   if (s.sandbox !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(s.sandbox as string)) at("sandbox is invalid");
   if (s.model !== undefined && (typeof s.model !== "string" || !s.model)) at("model must be a non-empty string");
@@ -179,8 +183,8 @@ const DEFAULT_SANDBOX = "workspace-write";
  */
 export function widenings(base: AgentSpec, next: AgentSpec): string[] {
   const w: string[] = [];
-  const le = (k: "maxTurns" | "maxBudgetUsd" | "timeoutMs" | "idleAfterMs" | "stuckRepeats") => { if (next[k] !== undefined && base[k] !== undefined && next[k]! > base[k]!) w.push(`${k} ${next[k]} > ${base[k]}`); if (base[k] !== undefined && next[k] === undefined) w.push(`${k} unset (would lift ${base[k]})`); };
-  le("maxTurns"); le("maxBudgetUsd"); le("timeoutMs"); le("idleAfterMs"); le("stuckRepeats");
+  const le = (k: "maxTurns" | "maxBudgetUsd" | "timeoutMs" | "idleAfterMs" | "stuckRepeats" | "noChangeAfterMs") => { if (next[k] !== undefined && base[k] !== undefined && next[k]! > base[k]!) w.push(`${k} ${next[k]} > ${base[k]}`); if (base[k] !== undefined && next[k] === undefined) w.push(`${k} unset (would lift ${base[k]})`); };
+  le("maxTurns"); le("maxBudgetUsd"); le("timeoutMs"); le("idleAfterMs"); le("stuckRepeats"); le("noChangeAfterMs");
   if (next.provider !== base.provider) w.push(`provider ${base.provider} → ${next.provider}`);
   if (next.auth !== base.auth) w.push(`auth ${base.auth} → ${next.auth}`);
   if (SANDBOX_RANK[next.sandbox ?? DEFAULT_SANDBOX]! > SANDBOX_RANK[base.sandbox ?? DEFAULT_SANDBOX]!) w.push(`sandbox ${base.sandbox ?? DEFAULT_SANDBOX} → ${next.sandbox}`);
@@ -355,7 +359,7 @@ export function effectiveAgentRecord(ref?: string | null, source: Record<string,
     return {
       name: ra.name, kind: ra.kind, overridden: !!ra.overridden, operator: ref ? !!decodeAgentRef(ref).overrides?.operator : false,
       auth: c.credentialMode === "subscription" ? "subscription" : "apikey", credentialMode: c.credentialMode,
-      model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs,
+      model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, noChangeAfterMs: c.noChangeAfterMs || null, checkpointEveryMs: c.checkpointEveryMs,
       sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools,
       systemPrompt: !!c.systemPrompt, appendSystemPrompt: !!c.appendSystemPrompt,
       children: { allowSpawn: false, ...(ra.spec?.children ?? {}) },
