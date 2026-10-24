@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- `capcomd verify` on work that is already merged into the target now passes and says so (`alreadyMerged: true`)
+  instead of failing with `pass: false`.
 - `capcomd logs <runId> <agent>` (and `capcomd_inspect`'s recent logs) now show what a working Claude Code or
   Codex agent does, a line per tool call, failed call, message and result; before, they were empty for agents that
   can't spawn. `capcomd logs … --follow` streams new lines until the agent finishes (`--json`: one object per line).
