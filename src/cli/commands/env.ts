@@ -2,7 +2,7 @@
 import { providerFromEnv } from "../../dependencies";
 import { loadAgentConfig } from "../../agents/config";
 import { loadMergeConfig } from "../../merge/config";
-import { isEnvPlatform } from "../../env/platform";
+import { isSecretPlatform, isSnapshotPlatform } from "../../env/platform";
 import { envBuild, envRm, envStatus } from "../../env/build";
 import { secretsSync } from "../../env/secrets";
 import { doctor, formatDoctor } from "../../env/doctor";
@@ -14,9 +14,13 @@ import { sandboxName } from "../../providers/registry";
 /** env/auth/doctor work on the CLIs, not one agent's credentials: don't apply the strict auth check. */
 const toolCfg = () => loadAgentConfig({ ...process.env, CAPCOMD_CREDENTIALS: "auto", CAPCOMD_AGENT: "fake" });
 
-function platform() {
+/** The provider, for commands that need snapshots (env, auth) or host-bound secrets (secrets): ADR-020. */
+function platform(need: "snapshots" | "secrets" = "snapshots") {
   const p = providerFromEnv();
-  if (!isEnvPlatform(p)) throw new RelayError("config", `the ${sandboxName()} sandbox has no snapshots or secrets`, "Use a provider that has them: export CAPCOMD_SANDBOX=boxd BOXD_API_KEY=… (see `capcomd setup`).");
+  if (need === "snapshots" ? !isSnapshotPlatform(p) : !isSecretPlatform(p))
+    throw new RelayError("config", `the ${sandboxName()} sandbox has no ${need === "snapshots" ? "snapshots" : "host-bound secrets"}`, need === "secrets"
+      ? "Host-bound secrets are a boxd feature (an agent sees only a placeholder). Elsewhere an API key reaches the agent in its environment: nothing to sync."
+      : "Use a provider that has them: CAPCOMD_SANDBOX=docker or boxd (see `capcomd setup`).");
   return p as any;
 }
 const emit = (json: boolean, obj: Record<string, unknown>, text: string) => console.log(json ? JSON.stringify({ schema: SCHEMA, ok: obj.ok ?? true, ...obj }) : text);
@@ -26,7 +30,7 @@ export async function envCommand(command: string, pos: string[], values: Record<
   const log = (l: string) => { if (!json) console.error(`[env] ${l}`); };
   if (command === "secrets") {
     if (pos[1] !== "sync") throw new RelayError("usage", "usage: capcomd secrets sync", "");
-    const lines = await secretsSync(platform());
+    const lines = await secretsSync(platform("secrets"));
     // Optional: never fatal (subscription logins need no API keys; org-scoped boxd keys can't use secrets).
     const ok = lines.every((l) => l.status !== "verify_failed");
     emit(json, { ok, secrets: lines }, lines.map((l) => `  ${l.status.padEnd(13)} ${l.name.padEnd(18)} → ${l.domains.join(",")}  ${l.detail}`).join("\n") || "  nothing to sync");

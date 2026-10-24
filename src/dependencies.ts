@@ -54,6 +54,11 @@ export function providerFromEnv(env: Record<string, string | undefined> = proces
     const { githubGitCredentials } = require("./agents/credentials") as typeof import("./agents/credentials");
     return new BoxdProvider({ gitCredentials: githubGitCredentials() });
   }
+  if (kind === "docker") {
+    const { DockerProvider } = require("./providers/docker") as typeof import("./providers/docker");
+    const { githubGitCredentials } = require("./agents/credentials") as typeof import("./agents/credentials");
+    return new DockerProvider({ gitCredentials: githubGitCredentials() });
+  }
   // Test sandbox: exec runs on this host (agent adapter e2e with a fake claude binary).
   if (kind === "fake-host") return new FakeProvider({ hostExec: true });
   return new FakeProvider(env.CAPCOMD_FAKE_ENSURE_ERROR === "auth" ? { failEnsure: "auth" } : {});
