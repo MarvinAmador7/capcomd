@@ -14,6 +14,10 @@ Also built and tested on fakes, not yet run live with real agents: quota pauses 
 CLIs' usage-limit output was read from their code, not captured), spinning and failing notices, and `grant`
 (ADR-019).
 
+Verified live on 2026-10-24 (`CAPCOMD_E2E_VIA=run scripts/mac-subagents-e2e.sh`, `E2E PASS`, 186s): `capcomd run
+--planner planner` from a goal in plain words, with the run's gates from the project config: the planner had 2
+Claude and 1 Codex workers verified, reviewed and merged, and the command showed each agent's status as it changed.
+
 Verified live on 2026-10-23 (`scripts/mac-agent-ops-e2e.sh`, `E2E PASS`, 159s, three Claude agents): an `idle`
 notice that `await --notices` returned while the agent ran a long command; a message sent to it then, delivered
 mid-run and acted on (its branch has what the message asked for); an agent stopped at its timeout, continued with
@@ -41,27 +45,17 @@ each, every verify needing both its check and the verdict; the planner's verifie
    the boxd checks, a conformance suite every provider must pass, a "Writing a provider" guide, and a provider
    choice in setup. Then a second provider (a local one, e.g. containers or microVMs, so capcomd runs with no
    cloud account) proves the contract.
-3. **The `capcomd run` recipe still plans and judges with a fake model** (L). `src/models/` has only
-   `FakeModelClient`: the recipe's planner plans the same three generic tasks for any goal, and its run-level
-   judge always passes (`src/actors/judge.ts` also treats a reply that isn't JSON as a pass). Approach: the
-   recipe spawns a planner profile (as the sub-agent e2e already does) and judges the run with an agent; real
-   runs refuse the fake model; keep it for offline tests.
-4. **Agent logs** (S). `capcomd logs` doesn't stream a real agent's output; spans carry its events. The
-   VmSpool can tail `agent.jsonl`; it is unwired to keep exec traffic low. Approach: tail on demand
-   (`logs --follow`), not continuously.
-5. **Reviewer budget reserve** (S). A reviewer is paid from the caller's remaining budget; a planner that
-   spends everything on children gets "no budget left", the review fails closed and nothing merges. Approach:
-   reserve the reviewer's budget when the child is spawned (or warn at spawn time when the run has a
-   reviewer and the remainder can't cover one).
-6. **One checks VM for verify and merge** (S). A verify and its merge each boot a VM. Approach: keep the
-   verify's VM for its merge when the target hasn't moved (same tree), else reuse the snapshot only.
-7. **Messages to a Codex worker** (S). `send` reaches a running Claude agent (on its stdin), but `codex exec`
+3. **Messages to a Codex worker** (S). `send` reaches a running Claude agent (on its stdin), but `codex exec`
    reads no input after its prompt, so a message to a Codex worker waits in its inbox. Approach: when it finishes
    with messages it hasn't read, continue its session with them (`codex exec resume`), or say at send time that
    it can't read them.
-8. **ADR-019 leftovers** (S each): spinning detected as "events but no change in the workspace for a window"
+4. **ADR-019 leftovers** (S each): spinning detected as "events but no change in the workspace for a window"
    (opt-in, since reading code for a long time is normal); a check of the VM before acting on silence ("dead");
    profile presets for the stuck windows.
+
+Done on 2026-10-23/24: `capcomd run` with a planner agent, agent logs (`logs --follow`), one checks run for verify and
+merge (a pass is reused for the same tree), host checks without credentials. Dropped: a reviewer budget reserve
+(a reviewer is paid from its caller's budget, which only binds when a budget is set; `grant` the caller more).
 
 ## 3. Orchestration patterns that aren't possible yet
 
@@ -117,8 +111,9 @@ rework.
 - **Binary size** (S): each binary is 210–240 MB, most of it rivet-engine; the engine could be fetched on first
   `serve` instead, for a smaller download.
 - **Single local engine** (L): Rivet Cloud is deferred (ADR-009); no backup/restore of engine data.
-- **Engine data for test ports** (S): every engine started on a non-default port (tests, e2e runs) keeps a data dir in
-  `~/.capcomd/engine/<port>` that nothing removes.
+- **Engine data for test ports** (S): the live e2e scripts now keep the engine's data in their work dir, but
+  engines started on other ports (by hand, `serve --port N`) still keep `~/.capcomd/engine/<port>`, which nothing
+  removes.
 - **VM-ledger reconciliation** (S): no reaper reconciles `.relay/boxd.sqlite` rows whose VMs are gone (stale
   `created` rows were found on 2026-10-21; their VMs no longer existed).
 - **CI coverage** (M): CI runs the typecheck, `tests/machines`, the scenario suite, the killpoint tests (with
@@ -126,9 +121,6 @@ rework.
   recipe, primitives, seeds): one round on every push to main, all three rounds nightly and on manual dispatch.
   It doesn't run the live e2e, `tests/agents`, `tests/env`, `tests/merge` or `tests/cli`. Make the killpoint step
   strict and add those suites.
-- **Host-mode checks see the host environment** (S): with fake sandboxes, checks run on the host with
-  `process.env` (any `BOXD_API_KEY` or GitHub credentials included). Only the VM path is scrubbed; pass the
-  same minimal env on the host.
 
 ## 6. Known issues and test debt
 

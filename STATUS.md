@@ -8,8 +8,8 @@
 The orchestration primitives and in-VM sub-agents work end to end with real agents: Claude Code and
 Codex run in VMs from the first sandbox provider, boxd, on API keys or subscription logins, every merge is gated
 by operator-set checks and a reviewer agent, and runs survive crashes. An agent drives a run today through the
-capcomd plugin (MCP tools and skills; verified live from Claude Code) or the skill and the CLI, and boxd is still the only real provider (see Open work, items 1 and 2). The `capcomd run "<goal>"` recipe's
-planner and judge still answer from a fake model (item 3).
+capcomd plugin (MCP tools and skills; verified live from Claude Code), the skill and the CLI, or `capcomd run
+"<goal>"` with a planner agent, and boxd is still the only real provider (see Open work, items 1 and 2).
 
 ## What works
 
@@ -46,6 +46,9 @@ planner and judge still answer from a fake model (item 3).
 | Quota pause: an agent at its provider's usage limit is `paused` with its work kept, other agents on that login wait, and it wakes at the reset (scheduled by the engine) or on `resume` | Built; the CLIs' limit output was read from their code, not captured live | `tests/subagents/limits.test.ts` |
 | Messages to a running Claude worker (`send`): delivered on its stdin through the supervisor, read at its next step | Built, verified live 2026-10-23 (`scripts/mac-agent-ops-e2e.sh`) | `tests/subagents/liveness.test.ts`, `tests/agents/supervisor.test.ts` |
 | `spawn --continue <agt>`: a new agent starts from a finished agent's branch or last checkpoint | Built, verified live 2026-10-23 | `tests/subagents/limits.test.ts` |
+| `capcomd run "<goal>"` with a planner agent (`--planner P`; on boxd the `planner` profile setup writes): the run gets the project's gates, the planner splits, verifies and merges, and the command shows each agent's status; the built-in recipe's placeholder planner is for offline runs (`--recipe`) | Built, verified live 2026-10-24 | `tests/scenarios/run-planner.test.ts`, `CAPCOMD_E2E_VIA=run scripts/mac-subagents-e2e.sh` |
+| `capcomd logs <run> <agt> [--follow]`: a line per tool call, failed call, message and result of a working agent | Built | `tests/subagents/liveness.test.ts` |
+| Checks: on the host without the operator's credentials; a merge reuses verify's pass for the same tree and command instead of a second run (and checks VM) | Built | `tests/merge/host-checks.test.ts` |
 | Single executable (`install.sh`, Homebrew tap `MarvinAmador7/tap`, `capcomd upgrade`), built for macOS and Linux, x64 and arm64 | Built; linux-x64 and darwin-arm64 driven in CI and locally; the other two first run in the next release | `tests/cli/binary.test.ts`, `scripts/release-smoke.sh`, CI `binary` job |
 
 **Live end-to-end:** `scripts/mac-subagents-e2e.sh` runs a planner agent that splits a three-file fix across
@@ -63,11 +66,9 @@ The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The bi
 1. The plugin in Codex: built to OpenAI's plugin format, not yet run in Codex.
 2. Sandbox providers as a documented contract: boxd is still wired in (provider list, checks VMs, snapshots,
    setup); a registry, capabilities, a conformance suite and a second provider are next.
-3. The `capcomd run` recipe's planner and run-level judge still answer from a fake model (per-branch review
-   by an agent is built: `run new --reviewer`).
-4. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
+3. Patterns that aren't possible yet: stacked branches (dependent work goes interface first instead),
    verifying and landing several branches together, lead → team branch → main hierarchies, comparing candidates.
-5. Report mode, staging targets, approval requests and the interface-first pattern pass their tests but
+4. Report mode, staging targets, approval requests and the interface-first pattern pass their tests but
    haven't had a live boxd run yet; neither have quota pauses, spinning and failing notices, or grants.
 
 ## How to check it yourself
