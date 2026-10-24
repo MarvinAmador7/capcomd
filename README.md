@@ -156,8 +156,9 @@ including the plugin, and can be re-run safely; `capcomd setup check` shows what
 > tests in parallel; land on a `staging` branch.
 
 Your agent reports back as agents finish and merges land. Merges into protected branches wait for you:
-`capcomd approve <runId> <mrgId>`. Watch a run with `capcomd tree <runId>` or the terminal debugger (from a
-checkout: `cd apps/tui && bun run start --run <runId>`).
+`capcomd approve <runId> <mrgId>`. Watch a run with `capcomd tree <runId>`, or in the terminal debugger:
+`capcomd tui [runId]` (its agents live, a waterfall of what each did, a timeline, cost rollups and events; with no
+runId, the latest run).
 
 Each [release](https://github.com/MarvinAmador7/capcomd/releases) has the binaries for macOS and Linux (arm64 and
 x64) and the npm package, each with its SHA-256 (the installer and `capcomd upgrade` check it); the npm package is

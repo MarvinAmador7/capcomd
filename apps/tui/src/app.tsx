@@ -1,6 +1,6 @@
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { useEffect, useState } from "react";
-import { ThemeContext } from "@/hooks/use-theme";
+import { ThemeContext } from "./hooks/use-theme";
 import type { RunData } from "./adapters/types";
 import type { IconSet } from "./icons";
 import { cost, dur, usd } from "./format";

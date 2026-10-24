@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "../components/ui/badge";
 import { flattenAgents } from "../adapters/tree";
 import type { AgentNode, RunData } from "../adapters/types";
 import { bar, clock, cost, dur, lpad, pad, usd } from "../format";

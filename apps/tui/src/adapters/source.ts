@@ -102,7 +102,10 @@ export class InspectState {
   }
 }
 
-const cliBin = () => (process.env.CAPCOMD_BIN ?? `bun ${resolve(import.meta.dir, "../../../../src/cli/index.ts")}`).split(" ");
+/** The capcomd CLI the live views run: set by `capcomd tui` (itself), else CAPCOMD_BIN, else this checkout's. */
+let cliArgv: string[] | null = null;
+export function setCli(argv: string[]) { cliArgv = argv; }
+const cliBin = () => cliArgv ?? (process.env.CAPCOMD_BIN ?? `bun ${resolve(import.meta.dir, "../../../../src/cli/index.ts")}`).split(" ");
 
 /** One-shot: `capcomd inspect <runId> --json`. */
 export async function loadLive(runId: string): Promise<RunData> {

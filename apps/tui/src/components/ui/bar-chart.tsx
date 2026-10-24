@@ -1,15 +1,15 @@
 import { Box, Text } from "ink";
 import React from "react";
 
-import { useTheme } from "@/hooks/use-theme";
-import { useUnicode } from "@/hooks/use-unicode";
-import { summarizeSeries } from "@/lib/accessibility";
-import { resolveTerminalSymbol } from "@/lib/terminal-symbols";
+import { useTheme } from "../../hooks/use-theme";
+import { useUnicode } from "../../hooks/use-unicode";
+import { summarizeSeries } from "../../lib/accessibility";
+import { resolveTerminalSymbol } from "../../lib/terminal-symbols";
 import {
   padToTerminalWidth,
   terminalWidth,
   truncateToTerminalWidth,
-} from "@/lib/terminal-text";
+} from "../../lib/terminal-text";
 
 export interface BarChartItem {
   label: string;
@@ -132,7 +132,7 @@ export const BarChart = ({
         return (
           <Box key={rowIdx} flexDirection="row">
             {row.map((cell, colIdx) => {
-              const item = data[colIdx];
+              const item = data[colIdx]!;
               const resolvedColor = item.color ?? theme.colors.primary;
               const isFilled = item.value >= threshold;
               return (
