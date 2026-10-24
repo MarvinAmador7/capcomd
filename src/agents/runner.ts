@@ -112,7 +112,7 @@ const SPEND_REPORT_MS = 5_000;
 /** How a stop reads in errors and results (idle, spinning and failing aren't limits anyone set: ADR-019 §2). */
 const STUCK_STOPS: Record<string, string> = {
   idle: "stopped after going idle (no output from the agent)",
-  spinning: "stopped after repeating the same tool call (spinning)",
+  spinning: "stopped after spinning (the same tool call again and again, or working with no change in its workspace)",
   failing: "stopped after hitting the same error again and again (failing)",
   quota: "stopped by its provider's usage limit",
 };
@@ -382,6 +382,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       await provider.upload(vmId, `${W}/supervisor.json`, new TextEncoder().encode(JSON.stringify({
         script: `${W}/agent.sh`, dir: W, repo, jsonl, outbox, ref: ckptRef, agentId: task.agentId ?? task.taskId,
         heartbeatMs: opts.heartbeatMs ?? 30_000, checkpointEveryMs: task.review || task.report ? 0 : cfg.checkpointEveryMs,
+        ...(cfg.noChangeAfterMs ? { reportTree: true } : {}),
         ...(streaming ? { input: { prompt: `${W}/prompt.txt`, inbox: inboxFile } } : {}),
       })));
     }
@@ -407,7 +408,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const logLines: string[] = [];
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
-    const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck }, now());
+    const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck, noChangeAfterMs: cfg.noChangeAfterMs }, now());
     let noticed: string | null = null, grantSeen = 0, spendStep = 0, inboxSeq = 0;
     // The supervisor takes it at its next heartbeat; reviewers and reporting agents don't checkpoint.
     const requestCheckpoint = async (reason: string) => {
@@ -436,6 +437,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         outConsumed++;
         // Its start is a heartbeat too: the first interval hasn't passed yet.
         if (rep.type === "heartbeat" || rep.type === "start") opts.onReport?.({ type: "heartbeat", events: Number(rep.events ?? 0), lastEventAt: Number(rep.lastEventAt ?? now()), source: "supervisor" });
+        if (rep.type === "heartbeat" && typeof rep.tree === "string") watch.observeTree(rep.tree, now());
         if (rep.type === "checkpoint" && typeof rep.sha === "string") ckpt = { sha: rep.sha, reason: String(rep.reason ?? ""), files: Number(rep.files ?? 0) };
         else if (rep.type === "delivered") addSpanEvent(span, "agent.message_delivered", { "agent.message_seq": Number(rep.seq ?? 0) });
         else if (rep.type === "error" || rep.type === "start" || rep.type === "exit") addSpanEvent(span, `agent.supervisor.${rep.type}`, { ...(rep.message ? { "agent.text": r.text(String(rep.message)) } : {}), ...(rep.code !== undefined ? { "agent.exit_code": rep.code } : {}) });
