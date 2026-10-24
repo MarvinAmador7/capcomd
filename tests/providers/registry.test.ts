@@ -22,3 +22,10 @@ test("what depends on the provider follows its capabilities", () => {
   expect(preflightNeeded({ CAPCOMD_SANDBOX: "boxd", CAPCOMD_SKIP_PREFLIGHT: "1" })).toBe(false);
   expect(preflightNeeded({})).toBe(false);
 });
+
+test("each provider other than boxd keeps its own env and login ledgers", async () => {
+  const { providerStateFile } = await import("../../src/providers/registry");
+  expect(providerStateFile("envs.json", { CAPCOMD_SANDBOX: "boxd" })).toBe("envs.json");
+  expect(providerStateFile("auths.json", {})).toBe("auths.json");
+  expect(providerStateFile("envs.json", { CAPCOMD_SANDBOX: "docker" })).toBe("envs-docker.json");
+});
