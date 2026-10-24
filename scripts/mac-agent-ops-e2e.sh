@@ -56,7 +56,8 @@ git -C "$SRC" remote add origin "https://github.com/$REPO.git"
 git -C "$SRC" push -q -u origin main
 
 echo "== 2. engine on :$PORT"
-$C serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
+# Engine data in the run's work dir, not ~/.capcomd/engine/<port> (one per test port, never removed).
+CAPCOMD_ENGINE_DATA="$WORK/engine" $C serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
 ENGINE_PID=$!
 cleanup() { pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
