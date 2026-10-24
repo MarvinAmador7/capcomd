@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.6.0-rc.2 (2026-10-24)
+
+Release candidate: `capcomd setup` creates its boxd key again; `capcomd tui`; agents in Docker containers; no boxd
+key needed inside a boxd machine.
+
 - `capcomd tui [runId]` opens the terminal debugger: the run's agents live, a waterfall of what each did, a timeline,
   cost rollups and events (`--view` picks the first tab). With no runId it opens the latest run. Before, it ran only
   from a git checkout (`apps/tui`); it now ships with the CLI and the single executable.
