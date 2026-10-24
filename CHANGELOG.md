@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- `capcomd send` (and `capcomd_send`) now tells you when the agent won't read your message now: a Codex agent can't
+  read messages while it works, and a finished agent reads nothing (`note` in the result).
 - `capcomd logs <runId> <agent>` (and `capcomd_inspect`'s recent logs) now show what a working Claude Code or
   Codex agent does, a line per tool call, failed call, message and result; before, they were empty for agents that
   can't spawn. `capcomd logs … --follow` streams new lines until the agent finishes (`--json`: one object per line).

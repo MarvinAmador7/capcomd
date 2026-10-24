@@ -596,6 +596,21 @@ export async function awaitThroughPauses(runId: string, agentId: string, o: { ti
 }
 
 /**
+ * When the agent a message is sent to will read it, if not right away: a running Claude agent reads it at its next
+ * step (ADR-019 §3), but `codex exec` reads no input after its prompt, and a finished agent reads nothing. Null when
+ * it will read it now (or the agent isn't known here).
+ */
+export async function messageNote(runId: string, to: string): Promise<string | null> {
+  const a: ScopeAgent | null = await client().scope.getOrCreate([runId]).getAgent({ agentId: to }).catch(() => null);
+  if (!a) return null;
+  if (TERMINAL_AGENT.has(a.status)) return `${to} is ${a.status}: nothing will read this message`;
+  if ((a.spec as { provider?: string } | null)?.provider !== "codex") return null;
+  return a.limits.allowSpawn
+    ? `${to} is a Codex agent: it can't read messages while it works, only when it checks its inbox (capcomd inbox)`
+    : `${to} is a Codex agent that can't read messages while it works: this one stays in its inbox, unread`;
+}
+
+/**
  * ADR-019 §6: run paused agents again now (one, or every paused agent in the run), each from its work so far. It is
  * the operator saying the login can work: its recorded quota is cleared, so other waiting agents may go too.
  */

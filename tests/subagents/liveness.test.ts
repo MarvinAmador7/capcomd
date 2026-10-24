@@ -18,7 +18,7 @@ beforeAll(async () => {
   const r = (repo = await bareRepo({ mode: "direct" }));
   const dir = mkdtempSync(join(tmpdir(), "capcomd-liveness-"));
   const agentsFile = join(dir, "agents.json");
-  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 }, spender: { provider: "claude", auth: "apikey" }, listener: { provider: "claude", auth: "apikey" } } }));
+  writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey", maxTurns: 20 }, ckpt: { provider: "claude", auth: "apikey", checkpointEveryMs: 1000 }, spender: { provider: "claude", auth: "apikey" }, listener: { provider: "claude", auth: "apikey" }, coder: { provider: "codex", auth: "apikey" } } }));
   env = {
     ...r.env,
     CAPCOMD_AGENTS_FILE: agentsFile,
@@ -128,3 +128,13 @@ test("capcomd logs shows what a real (CLI) agent does, and --follow streams it u
   expect(["done", "failed"]).toContain(r.status);
   expect(r.lines.map((l: any) => l.line)).toEqual(expect.arrayContaining([expect.stringMatching(/^tool Edit/), expect.stringMatching(/^result/)]));
 }, 120_000);
+
+test("send says when the agent can't read the message now: a Codex worker, a finished agent; nothing for a Claude worker", async () => {
+  const run = (await cj(["run", "new"])).j?.runId;
+  const codex = (await cj(["spawn", run, "--profile", "coder", "--task", "x", "--key", "cx", "--no-start"])).j?.agentId;
+  expect((await cj(["send", run, codex, "hello"])).j?.note).toContain("Codex agent that can't read messages while it works");
+  const claude = (await cj(["spawn", run, "--profile", "listener", "--task", "y", "--key", "cl", "--no-start"])).j?.agentId;
+  expect((await cj(["send", run, claude, "hello"])).j?.note).toBeUndefined();
+  await cj(["cancel", run, claude]);
+  expect((await cj(["send", run, claude, "late"])).j?.note).toBe(`${claude} is cancelled: nothing will read this message`);
+}, 60_000);

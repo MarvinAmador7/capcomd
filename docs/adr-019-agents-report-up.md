@@ -145,8 +145,10 @@ Step 3 (built: the supervisor, its outbox and checkpoints):
   (a `result`) with nothing sent since. The runner gets the messages sent since its cursor with each spend report
   (every 5 s, no extra call), labelled with who sent them (the operator, or the parent or an ancestor: the only
   ones who can write to it). Reviewers don't take messages.
-- **Not built yet:** `send` to a Codex worker while it runs: `codex exec` reads no input after its prompt, so the
-  message waits in its inbox (agents that may spawn read theirs with `capcomd inbox`).
+- **Codex workers don't read messages while they run**: `codex exec` reads no input after its prompt, and it runs
+  `--ephemeral`, so there is no session to continue with the message afterwards. The message waits in its inbox
+  (agents that may spawn read theirs with `capcomd inbox`), and `send` says so in its answer (`note`), as it does for
+  an agent that has already finished.
 
 ### 4. Limits are optional
 
