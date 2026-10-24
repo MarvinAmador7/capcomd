@@ -32,8 +32,9 @@ Use for: quality bar not expressible as tests. Avoid it when tests already decid
 `spawn` n coders (the same task, different profiles/models; budget ÷ n) → `await` all → `verify --checks` each → pick the winner among the passing ones (there is no built-in compare op yet: spawn a judge agent with the passing refs in its task, or rank by `result.review.reasons`) → `merge` the winner, `cancel` the rest.
 Use for: high-variance, high-value changes. Avoid it when cost matters or the first attempt usually passes.
 
-## 6. Hierarchical planner (what `capcomd run` does — `src/recipes/hierarchical.ts`)
-`capcomd run <goal>` is this recipe over the primitives (`--legacy` keeps the old hard-wired loop):
+## 6. Hierarchical planner (what `capcomd run` does)
+`capcomd run <goal>` with a planner agent (`--planner P`; on boxd the default is the profile named `planner`, which `capcomd setup` writes) creates a run with the project's checks, reviewer and target, and spawns that planner with the goal: it splits the work into children, verifies and merges them from its VM, and ends with a summary. The command shows each agent's status as it changes (`src/recipes/planner-agent.ts`).
+Without a planner agent (`--recipe`, offline and tests) it runs a built-in recipe whose planner is a placeholder model (`--legacy` keeps the old hard-wired loop):
 planner actor → `task add` each plan task `--after` the previous one → per task: `task claim` → `spawn` (contract `{planTask, epoch}`; the commit trailer is `Capcomd-Task: <run>/<task>`) → `await` → `verify` → protected target? park in `awaiting_approval` until `capcomd approve <run> <task>` → `merge --require <vfy>` → `task done` → judge over the merged tasks.
 Every step is keyed by the run, task and ledger epoch, so rerunning with the same `--run-id` resumes after a crash. The task-board ledger keeps the public contract (`status`, `events`, `approve`, `cancel` are the same as legacy). Up to 4 attempts per task; a failed check or a conflict retries with the failure in the task. A run that merges nothing fails unless its goal is tagged `[noop]`.
 Nesting: for big tasks, spawn sub-planners (`maxDepth` ≤2, `maxTotalDescendants` cap, `budgetShare` ≤0.5).

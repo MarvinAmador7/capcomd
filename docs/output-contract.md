@@ -26,6 +26,10 @@ millisecond, a late arrival can sort before an emitted event. A consumer that ne
 reconnects should dedupe on (entity, entitySeq).
 
 `capcomd run --json` progress lines also carry `seq` (per-process line counter), `ts`, `epochMs`, `agentId`.
+With a planner agent (`--planner`, the default on boxd) the lines are `run.started` (`goal`, `planner`, `gates`),
+`run.resumed`, `planner.spawned` (`agentId`), `agent.status` (`agentId`, `parent`, `profile`, `status`) each time an
+agent in the run changes status, then `run.completed` (`summary`) or `run.failed` (`status`, `reason`), and
+`run.result` (`ok`, `state`) last.
 In-VM `capcomd events` (ADR-017) returns scope events with `seq`, `ts`, `epochMs`, `at`, `agentId`.
 
 ## Tree: `capcomd tree <runId> [--root agt] --json`

@@ -120,7 +120,7 @@ echo "== 3. capcomd run 'make the failing test pass' (run $RUN_ID)"
 T_RUN0=$(date +%s)
 # main counts as protected: the task parks in awaiting_approval after verification.
 # Approve exactly once, only when status says task-1 is awaiting approval; stop when the run exits.
-bun src/cli/index.ts run --json --run-id "$RUN_ID" 'make the failing test pass' > "$LOG" 2> "$WORK/run.err" &
+bun src/cli/index.ts run --recipe --json --run-id "$RUN_ID" 'make the failing test pass' > "$LOG" 2> "$WORK/run.err" &
 RUN_PID=$!
 APPROVED=0
 while kill -0 "$RUN_PID" 2>/dev/null; do
