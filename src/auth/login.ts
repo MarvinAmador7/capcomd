@@ -1,6 +1,6 @@
 // `capcomd auth login|status|logout` (ADR-015 §5): plan logins for Claude Code / Codex.
 import type { SandboxProvider } from "../providers/sandbox";
-import type { EnvPlatform, SnapshotInfo } from "../env/platform";
+import { isSecretPlatform, type SecretPlatform, type SnapshotPlatform, type SnapshotInfo } from "../env/platform";
 import type { AgentConfig } from "../agents/config";
 import { BASE_EGRESS } from "../agents/config";
 import { adapterFor } from "../agents/adapters";
@@ -10,7 +10,7 @@ import { Redactor } from "../agents/redact";
 import { AUTH_SHAPES, CLAUDE_TOKEN, bridge, hasInteractive, type InteractiveSession } from "./interactive";
 import { CLAUDE_TOKEN_SECRET, authSnapshotName, readAuthLedger, writeAuthLedger, type AuthProfile, type ProfileAgent } from "./profiles";
 
-type P = SandboxProvider & EnvPlatform & { streamExec?: any; secretDelete?: (n: string) => Promise<void> };
+type P = SandboxProvider & SnapshotPlatform & Partial<SecretPlatform> & { streamExec?: any };
 
 export interface LoginOptions {
   cfg: AgentConfig;
@@ -87,7 +87,8 @@ export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Pro
       const token = tokens.find((t) => CLAUDE_TOKEN.test(t));
       if (!token) throw new Error("claude setup-token finished but no token was seen in its output");
       const want = o.store ?? "auto";
-      if (want !== "snapshot") {
+      if (want === "secret" && !isSecretPlatform(p)) throw new Error("this sandbox provider has no host-bound secrets; keep the token in the auth snapshot (CAPCOMD_AUTH_STORE=snapshot)");
+      if (want !== "snapshot" && isSecretPlatform(p)) {
         try {
           await p.secretSet(CLAUDE_TOKEN_SECRET, token, { domains: ["api.anthropic.com"], scope: "private" });
           store = "secret";

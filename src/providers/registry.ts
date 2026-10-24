@@ -25,6 +25,8 @@ export const PROVIDERS = {
   "fake-host": { isolation: "host", snapshots: false, hostBoundSecrets: false, egressAllowlist: false, interactive: false },
   /** boxd cloud VMs. */
   boxd: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true },
+  /** Containers on this machine's Docker (Docker Desktop, OrbStack, Colima, Podman's docker): snapshots are images. */
+  docker: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true },
 } as const satisfies Record<string, ProviderCaps>;
 export type ProviderName = keyof typeof PROVIDERS;
 

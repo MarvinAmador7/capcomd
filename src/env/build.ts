@@ -1,7 +1,7 @@
 // `capcomd env build|status|rm`: a boxd snapshot with the agent CLIs, git config and the repo's
 // dependencies baked in, and no secrets. Workers boot from it (fromSnapshot). ADR-015.
 import type { SandboxProvider } from "../providers/sandbox";
-import type { EnvPlatform, SnapshotInfo } from "./platform";
+import type { SnapshotPlatform, SnapshotInfo } from "./platform";
 import type { AgentConfig } from "../agents/config";
 import { BASE_EGRESS } from "../agents/config";
 import { ALL_ADAPTERS } from "../agents/adapters";
@@ -38,7 +38,7 @@ export interface BuildOptions {
 
 export interface BuildResult { name: string; cached: boolean; record: EnvRecord; snapshot: SnapshotInfo }
 
-export async function envBuild(p: SandboxProvider & EnvPlatform, o: BuildOptions): Promise<BuildResult> {
+export async function envBuild(p: SandboxProvider & SnapshotPlatform, o: BuildOptions): Promise<BuildResult> {
   const log = o.log ?? (() => {});
   const now = o.now ?? Date.now;
   const t0 = now();
@@ -161,14 +161,14 @@ export async function envBuild(p: SandboxProvider & EnvPlatform, o: BuildOptions
   }
 }
 
-export async function envStatus(p: EnvPlatform, ledgerPath?: string) {
+export async function envStatus(p: SnapshotPlatform, ledgerPath?: string) {
   const l = readLedger(ledgerPath);
   const snaps = (await p.snapshotList()).filter((s) => s.name.startsWith(ENV_PREFIX));
   return { current: l.current, snapshots: snaps.map((s) => ({ ...s, current: s.name === l.current?.name, record: l.history.find((h) => h.name === s.name) })) };
 }
 
 /** Delete one env snapshot (or all capcomd-env-* when name is "all"). */
-export async function envRm(p: EnvPlatform, name: string | undefined, ledgerPath?: string): Promise<string[]> {
+export async function envRm(p: SnapshotPlatform, name: string | undefined, ledgerPath?: string): Promise<string[]> {
   const l = readLedger(ledgerPath);
   const target = name ?? l.current?.name;
   if (!target) throw new Error("no env snapshot to remove (none built; pass a name or `all`)");

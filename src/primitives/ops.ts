@@ -21,7 +21,8 @@ import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/t
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
 import { startDriver } from "./drivers";
-import { realSandbox, sandboxCaps } from "../providers/registry";
+import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
+import { OPEN_EGRESS } from "../providers/sandbox";
 export { startDriver };
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
@@ -196,6 +197,10 @@ export async function spawnAgent(o: SpawnOpts) {
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
   const envProblem = envSnapshotProblem(spec?.provider);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
+  // A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist).
+  const egress = spec?.egress as string[] | undefined;
+  if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox() && !sandboxCaps().egressAllowlist)
+    throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName()} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   // Requested budget: the contract's `budget` ({usd, turns, wallSeconds}), then --budget per unit.
   let requested: Budget;
   try { requested = { ...parseBudget(o.contract?.budget), ...(o.budget ?? {}) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Budget units: usd, turns, wallSeconds (e.g. --budget usd=2,turns=40)."); }

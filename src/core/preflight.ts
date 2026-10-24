@@ -2,7 +2,7 @@
 // Messages never include key material.
 import { BOXD_AUTH_HINT, isBoxdAuthError } from "../providers/boxd-errors";
 import { Redactor } from "../agents/redact";
-import { realSandbox } from "../providers/registry";
+import { realSandbox, sandboxName } from "../providers/registry";
 
 export interface PreflightCheck { name: string; ok: boolean; detail: string }
 
@@ -29,7 +29,16 @@ export async function runPreflight(source: Record<string, string | undefined> = 
   const anthKey = source.ANTHROPIC_API_KEY?.trim();
   const r = new Redactor([boxdKey, anthKey, source.BOXD_API_KEY, source.ANTHROPIC_API_KEY]);
 
-  if (!boxdKey) out.push({ name: "boxd", ok: false, detail: "BOXD_API_KEY is not set" });
+  const provider = sandboxName(source);
+  if (provider === "docker") {
+    const { dockerBin } = require("../providers/docker") as typeof import("../providers/docker");
+    const v = Bun.spawnSync([dockerBin(source), "version", "--format", "{{.Server.Version}}"], { stdout: "pipe", stderr: "pipe" });
+    out.push(v.exitCode === 0
+      ? { name: "docker", ok: true, detail: `Docker ${v.stdout.toString().trim()} answers` }
+      : { name: "docker", ok: false, detail: `Docker isn't running or reachable (${v.stderr.toString().trim().slice(-200) || "no docker CLI"}); start Docker or OrbStack` });
+  } else if (provider !== "boxd") {
+    // the test fakes need nothing
+  } else if (!boxdKey) out.push({ name: "boxd", ok: false, detail: "BOXD_API_KEY is not set" });
   else {
     try {
       await (deps.boxdList ?? defaultBoxdList)(boxdKey);

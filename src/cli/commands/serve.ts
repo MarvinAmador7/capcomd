@@ -115,6 +115,15 @@ export async function serve(opts: { port: number }) {
     process.exit(1);
   }
 
+  // Docker doesn't delete containers by itself (ADR-020): remove capcomd's expired ones now and every 5 minutes.
+  if ((await import("../../providers/registry")).sandboxName() === "docker") {
+    const { DockerProvider } = await import("../../providers/docker");
+    const docker = new DockerProvider();
+    const sweep = () => docker.sweep().then((gone) => { if (gone.length) console.log(`  removed ${gone.length} expired sandbox container(s)`); }, () => {});
+    void sweep();
+    setInterval(sweep, 5 * 60_000).unref?.();
+  }
+
   // Watchdog: up within 90s, then exit after ~20s of no answer (engine child died, port lost).
   const url = `http://127.0.0.1:${port}/`;
   const alive = () => fetch(url, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
