@@ -14,6 +14,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Checks that run on your machine (local fake sandboxes, or `CAPCOMD_CHECKS=host`) no longer see your credentials:
   capcomd's settings, provider and GitHub keys, anything named like a key, token, secret or password, git
   credential settings and the SSH agent are removed from their environment. Your toolchain variables stay.
+- `capcomd run "<goal>"` now plans real work with a planner agent: `--planner <profile>`, or on boxd by default
+  the profile named `planner` (which `capcomd setup` writes). The run gets your project's checks, reviewer and
+  target, the planner splits the goal into child agents, verifies and merges their work, and the command shows each
+  agent's status as it changes and ends with the planner's summary. **Breaking:** on boxd, `capcomd run` without a
+  planner profile now stops with a hint instead of running the built-in placeholder planner (which planned the same
+  three generic tasks for any goal); pass `--recipe` to use that anyway.
 - A paused agent (stopped by its provider's usage limit) now starts again by itself at the reset time, even when
   nothing is waiting on it; before, it only woke while something awaited it. `capcomd run` now waits through such a
   pause, however long, instead of failing the task after 6 hours (a weekly limit can reset days later).

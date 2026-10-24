@@ -47,7 +47,9 @@ Usage:
   capcomd env status | env rm [name|all] List / delete env snapshots
   capcomd agents list|show|add|set|rm|schema|validate
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
-  capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH; recipe = planner→worker→judge composed from primitives)
+  capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
+                                           (default on boxd: the profile named "planner", which capcomd setup writes)
+  capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
@@ -206,6 +208,7 @@ async function main(argv: string[]): Promise<number> {
         "since-seq": { type: "string" },
         recipe: { type: "boolean" },
         legacy: { type: "boolean" },
+        planner: { type: "string" },
         after: { type: "string", multiple: true },
         all: { type: "boolean" },
         // ADR-017: fan-out the parent grants a child (narrow-only)
@@ -289,8 +292,22 @@ async function main(argv: string[]): Promise<number> {
         }
         const rawGoal = positionals[1];
         if (!rawGoal) usage("goal required: capcomd run <goal>");
+        // A planner agent plans real work: --planner P, or on real VMs the profile named "planner" (capcomd setup writes
+        // it). The built-in recipe's planner is a placeholder model, so real VMs need --recipe/--legacy to use it.
+        const PA = await import("../recipes/planner-agent");
+        const realVms = (process.env.CAPCOMD_SANDBOX ?? process.env.RELAY_SANDBOX ?? "fake") === "boxd";
+        let planner: string | null = null;
+        if (values.planner !== undefined) {
+          if (values.recipe || values.legacy) usage("--planner runs a planner agent; don't combine it with --recipe/--legacy");
+          planner = PA.plannerProfile(values.planner as string);
+          if (!planner) throw PA.noPlannerError(values.planner as string);
+        } else if (!values.recipe && !values.legacy && !process.env.CAPCOMD_RUN_PATH && realVms) {
+          planner = PA.plannerProfile();
+          if (!planner) throw PA.noPlannerError();
+        }
+        if (planner && (values.profile || values.agent || (values.set as string[] | undefined)?.length || values.overrides)) usage("--profile/--set pick the worker of the built-in recipe; a planner agent picks its own workers (from its profile's children.allowedChildProfiles)");
         // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
-        if (process.stderr.isTTY) console.error("capcomd run is experimental: its planner and judge still use a fake model. For real work use the primitives (run new, spawn, verify, merge); see STATUS.md.");
+        if (!planner && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
         // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
         // the planner/worker/preflight read. Overrides may only narrow the profile unless --operator.
         const agentFlag = (values.profile ?? values.agent) as string | undefined;
@@ -318,7 +335,7 @@ async function main(argv: string[]): Promise<number> {
           mkdirSync(dir, { recursive: true });
           const log = join(dir, `${runId}.ndjson`);
           const fd = openSync(log, "a");
-          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), goal);
+          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), goal);
           const child = spawn(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
           child.unref();
           if (json) out({ runId, detached: true, log, pid: child.pid });
@@ -338,7 +355,9 @@ async function main(argv: string[]): Promise<number> {
           if (json) console.log(JSON.stringify({ schema: SCHEMA, type, runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: (data.agentId as string | undefined) ?? null, ...data }));
           else console.log(human);
         };
-        const result = runPath === "recipe"
+        const result = planner
+          ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: planner })
+          : runPath === "recipe"
           ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit })
           : await executeRun({ goal, runId, targetBranch, emit });
         if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
