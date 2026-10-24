@@ -158,7 +158,8 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       if (to !== me.parent) await assertWritable(c, to, true);
       const tr: Truncation[] = [];
       const body = capText(String(args.body ?? ""), MESSAGE_MAX_BYTES, "body", tr);
-      return { ...(await s.sendMessage({ to, from: c.sub, body, ...(args.key ? { key: `${c.sub}:${args.key}` } : {}) })), ...(tr.length ? { truncated: tr } : {}) };
+      const note = await O.messageNote(run, to);
+      return { ...(await s.sendMessage({ to, from: c.sub, body, ...(args.key ? { key: `${c.sub}:${args.key}` } : {}) })), ...(tr.length ? { truncated: tr } : {}), ...(note ? { note } : {}) };
     }
     case "inbox": {
       const msgs = await s.inbox({ agentId: c.sub, after: Number(args.after ?? 0) });

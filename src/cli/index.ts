@@ -565,7 +565,8 @@ async function main(argv: string[]): Promise<number> {
         const { client: cl, assertEngine: ae } = await import("../core/relay");
         await ae();
         const r = await cl().scope.getOrCreate([runId]).sendMessage({ to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}) });
-        if (json) out({ runId, to, ...r }); else console.log(`sent #${r.seq} to ${to}`);
+        const note = await (await import("../primitives/ops")).messageNote(runId, to);
+        if (json) out({ runId, to, ...r, ...(note ? { note } : {}) }); else console.log(`sent #${r.seq} to ${to}${note ? ` (${note})` : ""}`);
         return EXIT.ok;
       }
 
