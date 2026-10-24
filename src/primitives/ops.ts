@@ -774,14 +774,16 @@ async function verifyOnce(o: VerifyOpts) {
     verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(checks ? { testCommand: checks } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
-  const checksPassed = out.status === "verified";
+  // Already on the target (merged earlier): nothing new to check or review, so it passes as already merged.
+  const alreadyMerged = out.status === "merged";
+  const checksPassed = out.status === "verified" || alreadyMerged;
   // Checks first (cheap, deterministic); the reviewer only reads a commit that already passes them.
   const review = checksPassed && reviewProfile && out.status === "verified" && out.taskSha
     ? await reviewRef({ runId: o.runId, vfyId, profile: reviewProfile, branch, sha: out.taskSha, target, agentId, acceptance: o.acceptance, ...(o.reviewParent ? { parent: o.reviewParent } : {}) })
     : null;
   const pass = checksPassed && (review ? review.passed : true);
   const result = {
-    pass, branch, target, commit: out.status === "verified" ? (out.taskSha ?? null) : null,
+    pass, branch, target, commit: out.status === "verified" ? (out.taskSha ?? null) : null, ...(alreadyMerged ? { alreadyMerged: true, mergedSha: out.sha } : {}),
     checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
     // `judge` mirrors `review` for callers of the old --judge-profile contract.
     ...(review ? { review, judge: { profile: review.profile, passed: review.passed, feedback: (review.error ?? review.reasons.join("; ")).slice(0, 1000) } } : {}),
