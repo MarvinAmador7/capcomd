@@ -15,6 +15,25 @@
 
 Set it for both `capcomd serve` (which hosts the actors that call the provider) and `capcomd run`.
 
+## Inside a boxd machine: no key needed
+
+An agent that runs capcomd from its own boxd machine (Hermes on boxd, say) needs no `BOXD_API_KEY`. A machine that
+isn't isolated has a metadata service (`http://<gateway>:9002/v1/auth/token`) that mints short-lived credentials for
+the org that owns it, and the boxd SDK uses them when it has no key. capcomd checks for that token
+(`src/providers/boxd-machine.ts`; the `BOXD_VM_*` env vars are only a hint) and then:
+
+- `capcomd setup` skips the key step ("none needed: inside boxd machine X: using its credentials"); in a terminal it
+  asks first. `capcomd setup check` and preflight say the same.
+- An explicit `BOXD_API_KEY` still wins.
+- From a *shared* machine, boxd's credentials can't read secrets or other members' private machines: `capcomd
+  secrets sync` and a Claude login kept as a boxd secret need a key there (a login kept in its auth snapshot works).
+
+**Agent VMs never get these credentials.** Isolated machines are refused ("VM is isolated", 403), every VM capcomd
+starts for an agent is isolated, a snapshot's isolation is inherited, and `BoxdProvider.ensure` refuses to create
+or hand out a VM that isn't (checked live on 2026-10-24: an isolated VM got 403 whatever its egress; one that wasn't
+isolated got a token that could list the org's machines). `scripts/boxd-isolation-check.ts` repeats the check
+(`scripts/mac-agent-ops-e2e.sh` runs it).
+
 ## Idempotent create, crash-safe
 
 The SDK's `machines.create` has **no idempotency-key parameter**. Capcomd gets the same guarantee this way:

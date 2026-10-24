@@ -113,3 +113,15 @@ test("no OS keychain: a key setup created goes to the 0600 credentials file, not
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ BOXD_API_KEY: "bxd_made_org-a" });
   expect(statSync(f).mode & 0o777).toBe(0o600);
 });
+
+test("inside a boxd machine with credentials of its own (an agent on boxd): no key is created or stored", async () => {
+  const s = await boxdKeyStep(yes, {}, { ...deps(), machine: async () => ({ inside: true, credentials: true, detail: "inside boxd machine hermes: using its credentials" }) });
+  expect(s).toMatchObject({ ok: true, detail: "none needed: inside boxd machine hermes: using its credentials" });
+  expect(log()).not.toContain("auth keys create");
+  expect(kc.value).toBeNull();
+  expect(JSON.parse(readFileSync(join(process.env.CAPCOMD_HOME!, "config.json"), "utf8"))).toEqual({ env: { CAPCOMD_SANDBOX: "boxd" } });
+  // an isolated machine (no credentials) still goes the key way
+  const iso = await boxdKeyStep(yes, {}, { ...deps(), machine: async () => ({ inside: true, credentials: false, detail: "403: VM is isolated" }) });
+  expect(log()).toContain("auth keys create");
+  expect(iso.ok).toBe(true);
+});

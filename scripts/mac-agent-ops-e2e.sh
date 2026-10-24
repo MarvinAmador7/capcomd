@@ -4,6 +4,7 @@
 #      returns; a message sent to it then reaches it mid-run, and what it asked for ends up on its branch.
 #   2. --continue: a worker stopped at its timeout keeps its work on its branch; `spawn --continue` starts a new
 #      agent from that branch, which finishes the job.
+#   3. isolation: a process in an agent VM can't mint boxd org credentials from the machine's metadata service.
 # Needs: bun, gh (logged in), BOXD_API_KEY, a working claude login (capcomd auth status). No verify or merge: the
 # checks read the agents' branches. The GitHub repo is kept (the delete command is printed). From a git worktree,
 # point CAPCOMD_AUTH_LEDGER and CAPCOMD_ENV_LEDGER at the main checkout's .relay/ files (that's where logins live).
@@ -105,7 +106,11 @@ if [ -n "$NBRANCH" ]; then
 fi
 echo "   continued on ${NBRANCH:-(no branch)}: part1=$(echo $P1) part2=$(echo $P2)"
 
-echo "== 5. tree, VM cleanup"
+echo "== 5. isolation: an agent VM can't mint boxd org credentials (scripts/boxd-isolation-check.ts)"
+bun scripts/boxd-isolation-check.ts 2>&1 | sed 's/^/   /' | tee "$WORK/isolation.log"
+ISO=$(grep -c "^   ISOLATION OK" "$WORK/isolation.log" || true)
+
+echo "== 6. tree, VM cleanup"
 $C tree "$RUN"
 bun scripts/vm-cleanup-check.ts "$RUN" && VMS=clean || { [ $? = 1 ] && VMS=leaked || VMS=unchecked; }
 echo
@@ -121,5 +126,6 @@ echo "$NOTES" | grep -q BRAVO || FAILS="$FAILS message-not-acted-on"
 echo "$P1" | grep -q ONE || FAILS="$FAILS continued-without-part1"
 echo "$P2" | grep -q TWO || FAILS="$FAILS part2-missing"
 [ "$VMS" = clean ] || FAILS="$FAILS vms=$VMS"
+[ "${ISO:-0}" -ge 1 ] || FAILS="$FAILS agent-vm-not-isolated"
 if [ -n "$FAILS" ]; then echo "E2E FAIL:$FAILS"; exit 1; fi
-echo "E2E PASS: idle notice raised, message delivered and acted on, a stopped agent continued to the end, no VMs left"
+echo "E2E PASS: idle notice raised, message delivered and acted on, a stopped agent continued to the end, agent VMs isolated, no VMs left"

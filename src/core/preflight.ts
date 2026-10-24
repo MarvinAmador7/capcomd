@@ -8,7 +8,9 @@ export interface PreflightCheck { name: string; ok: boolean; detail: string }
 
 export interface PreflightDeps {
   /** Cheap authenticated boxd call (default: machines.list via @boxd-sh/sdk). */
-  boxdList?: (apiKey: string) => Promise<unknown>;
+  boxdList?: (apiKey?: string) => Promise<unknown>;
+  /** Inside a boxd machine with credentials of its own (default: the metadata probe in boxd-machine.ts). */
+  boxdMachine?: () => Promise<{ credentials: boolean; detail: string; inside: boolean }>;
   fetch?: typeof fetch;
 }
 
@@ -17,9 +19,9 @@ export function preflightNeeded(source: Record<string, string | undefined> = pro
   return realSandbox(source) && source.CAPCOMD_SKIP_PREFLIGHT !== "1";
 }
 
-async function defaultBoxdList(apiKey: string) {
+async function defaultBoxdList(apiKey?: string) {
   const { Boxd } = require("@boxd-sh/sdk") as typeof import("@boxd-sh/sdk");
-  const c: any = new Boxd({ apiKey });
+  const c: any = new Boxd(apiKey ? { apiKey } : {});
   try { return await c.machines.list(); } finally { await c.close?.().catch(() => {}); }
 }
 
@@ -38,8 +40,19 @@ export async function runPreflight(source: Record<string, string | undefined> = 
       : { name: "docker", ok: false, detail: `Docker isn't running or reachable (${v.stderr.toString().trim().slice(-200) || "no docker CLI"}); start Docker or OrbStack` });
   } else if (provider !== "boxd") {
     // the test fakes need nothing
-  } else if (!boxdKey) out.push({ name: "boxd", ok: false, detail: "BOXD_API_KEY is not set" });
-  else {
+  } else if (!boxdKey) {
+    // No key: inside a boxd machine that isn't isolated, its own credentials work (an agent like Hermes on boxd).
+    const m = await (deps.boxdMachine ?? (() => require("../providers/boxd-machine").boxdMachine(source)))();
+    if (!m.credentials) out.push({ name: "boxd", ok: false, detail: `BOXD_API_KEY is not set${m.inside ? ` (${m.detail})` : ""}` });
+    else {
+      try {
+        await (deps.boxdList ?? defaultBoxdList)();
+        out.push({ name: "boxd", ok: true, detail: `${m.detail} (machines.list)` });
+      } catch (err) {
+        out.push({ name: "boxd", ok: false, detail: `${m.detail}, but boxd refused them: ${r.text((err as Error)?.message ?? String(err)).slice(0, 200)}` });
+      }
+    }
+  } else {
     try {
       await (deps.boxdList ?? defaultBoxdList)(boxdKey);
       out.push({ name: "boxd", ok: true, detail: "BOXD_API_KEY accepted (machines.list)" });
