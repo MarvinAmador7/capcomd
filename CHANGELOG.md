@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.6.0 (2026-10-25)
+
+Stable release of 0.6.0-rc.2, with no code changes since it: agents in Docker containers, `capcomd tui` in the CLI,
+and `capcomd setup` fixes (boxd key, project checkout). See 0.6.0-rc.2 below for the details. The live Mac e2e
+(`scripts/mac-subagents-e2e.sh`) was skipped for this release by owner decision.
+
 ## 0.6.0-rc.2 (2026-10-25)
 
 Release candidate: agents in Docker containers, `capcomd tui` in the CLI, and `capcomd setup` fixes (boxd key, project checkout).
