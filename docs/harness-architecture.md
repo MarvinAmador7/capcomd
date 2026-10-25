@@ -470,3 +470,9 @@ repos (give each agent one workspace and coordinate at the project level), provi
 10. **Phase order:** contract → read API → transcripts → approvals/steer + menu bar v0 → projects/skills → CLI as pure client. Revised: transcripts and approvals run in parallel after phase 1, and menu bar v0 is gated on approvals only (section 11).
 11. **Swift client codegen:** generate from oRPC's OpenAPI (recommended; committed as `openapi/capcomd.json`, checked in CI), or hand-write a small client against the JSON Schema bundle? Transport: AsyncHTTPClient over the Unix socket, loopback HTTP + token as fallback.
 12. **Deferred items confirmed out of v1:** S2, turbopuffer, Upstash, remote mode, executable extensions, and multi-repo agents. Any of these you want earlier?
+
+### Decided (Oct 25, 2026)
+
+- **9. Event naming:** approved. `harness.v1` event types are dotted lowercase `noun.verb-past` (`run.started`, `approval.decided`). `merge.succeeded` is the final name for `MERGED`. `capcomd.v1` CLI output is unchanged.
+- **Thread text size:** clients show no limit. The daemon caps inline text at 64 KB. Anything longer is stored in full as an attachment, and the event carries a pointer to it. This ships in the first phase-1 PR, alongside the payload schemas.
+- **Product answers:** profile names stay lowercase, a project can hold several runs, and the skills picker stays visible before skills work.
