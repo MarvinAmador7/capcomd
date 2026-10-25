@@ -648,6 +648,18 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   "properties": {
     "id": {
       "type": "string"
+    },
+    "merged": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string"
+    },
+    "by": {},
+    "reason": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions"
     }
   },
   "required": [

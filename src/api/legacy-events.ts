@@ -59,7 +59,7 @@ export const LegacyEventShapes = {
 	"merge.failed": { id: S },
 	"merge.awaiting_approval": { id: S, target: U, ref: U, reason: T.nullable().optional() },
 	"merge.approved": { id: S, by: U },
-	"merge.denied": { id: S },
+	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
 	"task.added": { taskId: S, title: T, after: z.array(S).optional() },
 	"task.claimed": { ...task, leaseUntil: N, takeoverFrom: S.optional() },
 	"task.lease_expired": task,
