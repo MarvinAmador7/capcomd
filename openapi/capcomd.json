@@ -5,6 +5,40 @@
   },
   "openapi": "3.1.1",
   "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "health",
+        "description": "Liveness; no token needed.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "api": {
+                      "const": "harness.v1"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "api",
+                    "version"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/runs": {
       "get": {
         "operationId": "runs.list",
@@ -22,37 +56,27 @@
                         "type": "string"
                       },
                       "projectId": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": [
+                          "string",
+                          "null"
                         ]
                       },
                       "label": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": [
+                          "string",
+                          "null"
                         ]
                       },
                       "state": {
                         "type": "string"
                       },
                       "goal": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                        "x-untrusted": true
                       }
                     },
                     "required": [
@@ -63,6 +87,46 @@
                       "goal"
                     ]
                   }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -95,37 +159,27 @@
                       "type": "string"
                     },
                     "projectId": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
+                      "type": [
+                        "string",
+                        "null"
                       ]
                     },
                     "label": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
+                      "type": [
+                        "string",
+                        "null"
                       ]
                     },
                     "state": {
                       "type": "string"
                     },
                     "goal": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "x-untrusted": true
                     }
                   },
                   "required": [
@@ -135,6 +189,46 @@
                     "state",
                     "goal"
                   ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -172,13 +266,9 @@
                         "type": "string"
                       },
                       "parent": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": [
+                          "string",
+                          "null"
                         ]
                       },
                       "depth": {
@@ -187,13 +277,9 @@
                         "maximum": 9007199254740991
                       },
                       "profile": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": [
+                          "string",
+                          "null"
                         ]
                       },
                       "status": {
@@ -221,6 +307,46 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -228,14 +354,16 @@
     "/v1/events": {
       "get": {
         "operationId": "events.replay",
-        "description": "Durable events after `after` (resume cursor = seq). The live SSE stream uses the same envelope.",
+        "description": "Durable events of one scope after `after` (resume cursor = seq), same envelope as the stream.",
         "parameters": [
           {
             "name": "scope",
             "in": "query",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$",
+              "description": "daemon, prj-<id> or run-<id>"
             },
             "allowEmptyValue": true,
             "allowReserved": true
@@ -316,33 +444,21 @@
                         "maximum": 9007199254740991
                       },
                       "projectId": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": [
+                          "string",
+                          "null"
                         ]
                       },
                       "runId": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": [
+                          "string",
+                          "null"
                         ]
                       },
                       "agentId": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": [
+                          "string",
+                          "null"
                         ]
                       },
                       "data": {
@@ -374,6 +490,278 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/streams/{scope}/events": {
+      "get": {
+        "operationId": "events.stream",
+        "description": "SSE. Each event frame: `id: <seq>`, `event: <type>`, `data: <envelope JSON>`. Resume by sending `Last-Event-ID: <seq>`.\nIf that seq was compacted away, or this client's buffer overflowed (slow reader), the server sends `event: stream.reset` with {snapshotSeq, reason},\nthen `snapshot.*` frames ending with `snapshot.end`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.\nA `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to `daemon` and open a run stream on drill-in.",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$",
+              "description": "daemon, prj-<id> or run-<id>"
+            }
+          },
+          {
+            "name": "last-event-id",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "message"
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "v": {
+                              "const": 1
+                            },
+                            "id": {
+                              "type": "string",
+                              "pattern": "^evt_"
+                            },
+                            "scope": {
+                              "type": "string",
+                              "pattern": "^(run-|prj-|daemon$)"
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991,
+                              "description": "Resume cursor; persisted per scope with the event write, stable across daemon restarts"
+                            },
+                            "entity": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "entitySeq": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "type": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+                            },
+                            "typeVersion": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991,
+                              "exclusiveMinimum": 0
+                            },
+                            "durability": {
+                              "enum": [
+                                "durable",
+                                "ephemeral"
+                              ],
+                              "type": "string"
+                            },
+                            "ts": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "epochMs": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "projectId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "runId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "agentId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "data": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": [
+                            "v",
+                            "id",
+                            "scope",
+                            "seq",
+                            "entity",
+                            "entitySeq",
+                            "type",
+                            "typeVersion",
+                            "durability",
+                            "ts",
+                            "epochMs",
+                            "projectId",
+                            "runId",
+                            "agentId",
+                            "data"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event",
+                        "data"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "done"
+                        },
+                        "data": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "error"
+                        },
+                        "data": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -381,7 +769,7 @@
     "/v1/approvals/{approvalId}/decision": {
       "post": {
         "operationId": "approvals.decide",
-        "description": "Idempotent: deciding again returns the first decision unchanged. No prior read needed.",
+        "description": "No prior read needed. `Idempotency-Key` is scoped to the calling client. Same key + same body: 200 with the first result (replay). Same key + different body: 409 `idempotency_conflict`. New key on an approval already decided: 409 `already_decided` with the existing `decision` (who, when).",
         "parameters": [
           {
             "name": "approvalId",
@@ -391,6 +779,16 @@
               "type": "string",
               "pattern": "^apr-[A-Za-z0-9]+$",
               "description": "Stable approval id, carried on approval events; decide with it directly"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
             }
           }
         ],
@@ -409,7 +807,9 @@
                     "type": "string"
                   },
                   "reason": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                    "x-untrusted": true
                   }
                 },
                 "required": [
@@ -443,47 +843,37 @@
                       "type": "string"
                     },
                     "decidedBy": {
-                      "anyOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "clientId": {
-                              "type": "string"
-                            },
-                            "principal": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "clientId",
-                            "principal"
-                          ]
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "clientId": {
+                          "type": "string"
                         },
-                        {
-                          "type": "null"
+                        "principal": {
+                          "type": "string"
                         }
+                      },
+                      "required": [
+                        "clientId",
+                        "principal"
                       ]
                     },
                     "decidedAt": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "format": "date-time"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
                     },
                     "reason": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "x-untrusted": true
                     }
                   },
                   "required": [
@@ -496,8 +886,141 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "already_decided",
+              "idempotency_conflict",
+              "invalid",
+              "internal"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "decision": {
+            "description": "409 already_decided: the existing decision",
+            "type": "object",
+            "properties": {
+              "approvalId": {
+                "type": "string",
+                "pattern": "^apr-[A-Za-z0-9]+$",
+                "description": "Stable approval id, carried on approval events; decide with it directly"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "denied",
+                  "expired",
+                  "withdrawn"
+                ]
+              },
+              "decidedBy": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "principal": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "clientId",
+                  "principal"
+                ],
+                "additionalProperties": false
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              }
+            },
+            "required": [
+              "approvalId",
+              "status",
+              "decidedBy",
+              "decidedAt",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": false
       }
     }
   }

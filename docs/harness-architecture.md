@@ -332,6 +332,8 @@ carry kv values (as today), secrets, tokens, or env.
 | B | Same, but **WebSocket** for both commands and events (t3code) | One connection, lower latency for steering | Its own reconnect and resume protocol, harder to curl and debug, and no per-request HTTP semantics for idempotency or caching |
 | C | Keep shelling out to the `capcomd … --json --follow` CLI (today's SPEC §1) | Zero new code | One process per subscription, no auth model, polling, and a Swift app parsing CLI output. It doesn't scale past the TUI |
 
+Socket path (`src/api/socket.ts` harnessSocketPath; the server is wired into `capcomd serve` in phase 1): `--harness-socket <path>` > `CAPCOMD_HARNESS_SOCKET` > config `harness.socket` > `~/.capcomd/harness.sock` (so it can move into a macOS app-group container). Always created 0600 in a 0700 directory. The server ignores `Host` on the socket; clients should send `Host: localhost` (a hex-encoded socket path, as AsyncHTTPClient sends, is accepted too).
+
 ### 7.2 Authentication for the GUI process
 
 - **Pairing.** `capcomd clients add --label "Menu bar" --scopes read,steer,approve` prints a one-time pairing code, valid for 5 min.
