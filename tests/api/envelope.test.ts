@@ -5,7 +5,7 @@ import { HarnessEvent, dottedType, isoTs, Timestamp, TIMESTAMP_PATTERN } from ".
 const ok = {
 	v: 1, id: "evt_01JB", scope: "run-mvhd", seq: 1842, entity: "scope:agt-k30", entitySeq: 57,
 	type: "agent.turn.item", typeVersion: 1, durability: "durable",
-	ts: "2026-10-25T05:55:00.000Z", epochMs: 1792900500000,
+	ts: "2026-10-25T05:55:00.000Z", epochMs: 1792900500000, text: "Agent a1 was started.",
 	projectId: null, runId: "run-mvhd", agentId: "agt-k30", data: {},
 };
 

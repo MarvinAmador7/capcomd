@@ -275,7 +275,7 @@ descendants' approvals (one SQL query over the scope tree), so a collapsed ances
   "type": "agent.turn.item",      // dotted, lower-case
   "typeVersion": 1,               // schema version of this type's data
   "durability": "durable",        // or "ephemeral" (deltas, heartbeats, never replayed)
-  "ts": "2026-10-25T05:55:00.000Z", "epochMs": 1792900500000,
+  "ts": "2026-10-25T05:55:00.000Z", "epochMs": 1792900500000, "text": "Agent was started.",
   "projectId": "prj-…", "runId": "run-…", "agentId": "agt-…",   // null when not applicable
   "data": { /* type-specific, redacted, agent text fenced as {untrusted:true, by:"agt-…"} */ }
 }

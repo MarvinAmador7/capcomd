@@ -47,7 +47,7 @@ describe("harness.v1 contract", () => {
 	});
 	test("an old client decodes a payload with an unknown new field (§6.2)", () => {
 		const line = { v: 1, id: "evt_9", scope: "run-1", seq: 9, entity: "approval:apr-k1", entitySeq: 1, type: "approval.requested", typeVersion: 1, durability: "durable",
-			ts: "2026-10-25T03:55:00.000Z", epochMs: 1792900500000, projectId: null, runId: "run-1", agentId: null, futureEnvelopeField: 1,
+			ts: "2026-10-25T03:55:00.000Z", epochMs: 1792900500000, projectId: null, runId: "run-1", agentId: null, text: "Merged.", futureEnvelopeField: 1,
 			data: { approvalId: "apr-k1", kind: "merge", question: "q", requestedBy: { agentId: null, runId: "run-1" }, subject: {}, expiresAt: null, priority: "high" } };
 		const ev = HarnessEvent.parse(line);
 		expect(EventData["approval.requested"].parse(ev.data)).toMatchObject({ priority: "high" });

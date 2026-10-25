@@ -25,6 +25,7 @@ export const HarnessEvent = z.object({
 	projectId: z.string().nullable(),
 	runId: z.string().nullable(),
 	agentId: z.string().nullable(),
+	text: z.string().describe("Plain-language sentence for this step, written by the daemon from trusted fields only"),
 	data: z.record(z.string(), z.unknown()),
 });
 export type HarnessEvent = z.infer<typeof HarnessEvent>;

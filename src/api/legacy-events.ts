@@ -13,7 +13,27 @@ export const UntrustedText = z.string().meta({ "x-untrusted": true, description:
 const S = z.string(), N = z.number(), nS = z.string().nullable(), U = z.unknown(), T = UntrustedText, nT = UntrustedText.nullable();
 const task = { taskId: S, holder: S, epoch: N };
 const budget = { add: U, budget: U, by: U };
-const finish = { result: U, spent: U, budget: U };
+/** agent.done / agent.failed `result`. Every text field is agent-written. Unknown fields may appear (the agent's declared result bag). */
+export const AgentResult = z.looseObject({
+	summary: nT.optional(),
+	report: nT.optional(),
+	error: nT.optional(),
+	data: U.optional(),
+	verdict: U.optional(),
+	branch: nS.optional(),
+	commit: nS.optional(),
+	costUsd: N.optional(),
+	notionalCostUsd: N.optional(),
+	turns: N.optional(),
+	wallSeconds: N.optional(),
+	billing: S.optional(),
+	handoffTo: S.optional(),
+	exitCode: N.optional(),
+	adopted: z.boolean().optional(),
+	limit: U.optional(),
+	verification: U.optional(),
+}).meta({ "x-untrusted": true, description: "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions" });
+const finish = { result: AgentResult, spent: U, budget: U };
 const kv = { k: S, version: N, writer: S.optional() };
 
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
@@ -35,7 +55,7 @@ const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verif
 export const LegacyEventShapes = {
 	"run.created": { budget: U, label: nS, goal: nT.optional() },
 	"run.granted": budget,
-	"agent.spawned": { parent: nS, depth: N, profile: U, budget: U, limits: U, agent: U, task: T, key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional() },
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: U, task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional() },
 	"agent.started": {},
 	"agent.done": finish,
 	"agent.failed": finish,

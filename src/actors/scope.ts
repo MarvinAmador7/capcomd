@@ -312,9 +312,11 @@ export const scopeActor = actor({
           params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now
         );
         killpoint("scope.spawn.mid");
+        const taskInl = inlineOrAttach(params.task);
+        if (taskInl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", taskInl.attachment.id, taskInl.attachment.sha256, taskInl.attachment.bytes, taskInl.attachment.mediaType, taskInl.body, now);
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
-          agent: params.spec, task: params.task.slice(0, 500), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
+          agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
           ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}),
         }, `spawn-${params.agentId}`);
         out = await get(params.agentId);
