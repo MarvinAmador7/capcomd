@@ -1,0 +1,3625 @@
+{
+  "info": {
+    "title": "capcomd harness API",
+    "version": "harness.v1"
+  },
+  "openapi": "3.1.1",
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "health",
+        "description": "Liveness; no token needed.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "api": {
+                      "const": "harness.v1"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "api",
+                    "version"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects": {
+      "get": {
+        "operationId": "projects.list",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^prj-[A-Za-z0-9_-]+$"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "repo": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "goal": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                        "x-untrusted": true
+                      },
+                      "runIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Newest first"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "repo",
+                      "goal",
+                      "runIds"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs": {
+      "get": {
+        "operationId": "runs.list",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "label": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "goal": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                        "x-untrusted": true
+                      },
+                      "repo": {
+                        "description": "Repository the run works in (absolute path or remote URL)",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "createdAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time",
+                        "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "projectId",
+                      "label",
+                      "state",
+                      "goal",
+                      "repo",
+                      "createdAt"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}": {
+      "get": {
+        "operationId": "runs.get",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "goal": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "x-untrusted": true
+                    },
+                    "repo": {
+                      "description": "Repository the run works in (absolute path or remote URL)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time",
+                      "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "label",
+                    "state",
+                    "goal",
+                    "repo",
+                    "createdAt"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/trace": {
+      "get": {
+        "operationId": "runs.trace",
+        "description": "Trace spans of the run, in start order.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "traceId": {
+                        "type": "string"
+                      },
+                      "spanId": {
+                        "type": "string"
+                      },
+                      "parentSpanId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "start": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time",
+                        "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                      },
+                      "end": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time",
+                        "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                      },
+                      "status": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "attributes": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      }
+                    },
+                    "required": [
+                      "traceId",
+                      "spanId",
+                      "parentSpanId",
+                      "name",
+                      "start",
+                      "end",
+                      "status",
+                      "attributes"
+                    ],
+                    "additionalProperties": {}
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/messages": {
+      "get": {
+        "operationId": "runs.messages",
+        "description": "Thread history of the run.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "seq": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "to": {
+                        "type": "string"
+                      },
+                      "at": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time",
+                        "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                      },
+                      "text": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                        "x-untrusted": true
+                      },
+                      "attachment": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^att-[0-9a-f]+$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "mediaType": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "bytes",
+                          "sha256",
+                          "mediaType"
+                        ],
+                        "additionalProperties": {},
+                        "description": "Full text stored by the daemon; fetch it with attachments.get"
+                      }
+                    },
+                    "required": [
+                      "seq",
+                      "from",
+                      "to",
+                      "at",
+                      "text",
+                      "attachment"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/agents": {
+      "get": {
+        "operationId": "agents.tree",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "runId": {
+                        "type": "string"
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "depth": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "profile": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                        "description": "Profile name, lowercase"
+                      },
+                      "status": {
+                        "enum": [
+                          "pending",
+                          "running",
+                          "paused",
+                          "done",
+                          "failed",
+                          "cancelled",
+                          "handed-off"
+                        ],
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string",
+                        "description": "Plain-language status line written by the daemon (trusted)"
+                      },
+                      "task": {
+                        "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "x-untrusted": true
+                      },
+                      "taskAttachment": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^att-[0-9a-f]+$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "mediaType": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "bytes",
+                          "sha256",
+                          "mediaType"
+                        ],
+                        "additionalProperties": {},
+                        "description": "Full text stored by the daemon; fetch it with attachments.get"
+                      },
+                      "result": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "summary": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "x-untrusted": true
+                          },
+                          "report": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "x-untrusted": true
+                          },
+                          "error": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "x-untrusted": true
+                          },
+                          "data": {},
+                          "verdict": {},
+                          "branch": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "commit": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "costUsd": {
+                            "type": "number"
+                          },
+                          "notionalCostUsd": {
+                            "type": "number"
+                          },
+                          "turns": {
+                            "type": "number"
+                          },
+                          "wallSeconds": {
+                            "type": "number"
+                          },
+                          "billing": {
+                            "type": "string"
+                          },
+                          "handoffTo": {
+                            "type": "string"
+                          },
+                          "exitCode": {
+                            "type": "number"
+                          },
+                          "adopted": {
+                            "type": "boolean"
+                          },
+                          "limit": {},
+                          "verification": {}
+                        },
+                        "additionalProperties": {},
+                        "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions",
+                        "x-untrusted": true
+                      },
+                      "updatedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time",
+                        "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "runId",
+                      "parent",
+                      "depth",
+                      "profile",
+                      "status",
+                      "text",
+                      "task",
+                      "taskAttachment",
+                      "result",
+                      "updatedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/agents/{agentId}/transcript": {
+      "get": {
+        "operationId": "agents.transcript",
+        "description": "Full transcript, paged: `after` is the last seq you have, `limit` at most 500. Each item's text is at most 65536 bytes (§5 limits).",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 500,
+              "exclusiveMinimum": 0
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "seq": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "at": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time",
+                            "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                          },
+                          "stream": {
+                            "type": "string",
+                            "description": "stdout, stderr or a worker channel"
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "x-untrusted": true
+                          }
+                        },
+                        "required": [
+                          "seq",
+                          "at",
+                          "stream",
+                          "text"
+                        ]
+                      }
+                    },
+                    "next": {
+                      "description": "Pass as `after` for the next page; null at the end",
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/attachments/{attachmentId}": {
+      "get": {
+        "operationId": "attachments.get",
+        "description": "Full text of an over-64 KB body.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attachmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^att-[0-9a-f]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attachment": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^att-[0-9a-f]+$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "mediaType": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "bytes",
+                        "sha256",
+                        "mediaType"
+                      ],
+                      "additionalProperties": {},
+                      "description": "Full text stored by the daemon; fetch it with attachments.get"
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "x-untrusted": true
+                    }
+                  },
+                  "required": [
+                    "attachment",
+                    "text"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills": {
+      "get": {
+        "operationId": "skills.list",
+        "description": "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                        "description": "Profile name, lowercase"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "enum": [
+                          "bundled",
+                          "user"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "description",
+                      "source"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "events.replay",
+        "description": "Durable events of one scope after `after` (resume cursor = seq), same envelope as the stream.",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$",
+              "description": "daemon, prj-<id> or run-<id>"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "v": {
+                        "const": 1
+                      },
+                      "id": {
+                        "type": "string",
+                        "pattern": "^evt_"
+                      },
+                      "scope": {
+                        "type": "string",
+                        "pattern": "^(run-|prj-|daemon$)"
+                      },
+                      "seq": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991,
+                        "description": "Resume cursor; persisted per scope with the event write, stable across daemon restarts"
+                      },
+                      "entity": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "entitySeq": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "type": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+                      },
+                      "typeVersion": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991,
+                        "exclusiveMinimum": 0
+                      },
+                      "durability": {
+                        "enum": [
+                          "durable",
+                          "ephemeral"
+                        ],
+                        "type": "string"
+                      },
+                      "ts": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time",
+                        "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                      },
+                      "epochMs": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "projectId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "runId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "agentId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "text": {
+                        "type": "string",
+                        "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+                      },
+                      "data": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      }
+                    },
+                    "required": [
+                      "v",
+                      "id",
+                      "scope",
+                      "seq",
+                      "entity",
+                      "entitySeq",
+                      "type",
+                      "typeVersion",
+                      "durability",
+                      "ts",
+                      "epochMs",
+                      "projectId",
+                      "runId",
+                      "agentId",
+                      "text",
+                      "data"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/streams/{scope}/events": {
+      "get": {
+        "operationId": "events.stream",
+        "description": "SSE. Each event frame: `id: <seq>`, `event: <type>`, `data: <envelope JSON>`. Resume by sending `Last-Event-ID: <seq>`.\nIf that seq was compacted away, or this client's buffer overflowed (slow reader), the server sends `event: stream.reset` with {snapshotSeq, reason},\nthen `snapshot.*` frames ending with `snapshot.end`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.\nA `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to `daemon` and open a run stream on drill-in.\nThe SSE `event:` field is the frame type: the envelope's dotted `type` for events, else `stream.reset` or `snapshot.*`.\nTimestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z.",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$",
+              "description": "daemon, prj-<id> or run-<id>"
+            }
+          },
+          {
+            "name": "last-event-id",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "type": "string",
+                          "description": "Frame type: the envelope's dotted type, or stream.reset / snapshot.*"
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "v": {
+                              "const": 1
+                            },
+                            "id": {
+                              "type": "string",
+                              "pattern": "^evt_"
+                            },
+                            "scope": {
+                              "type": "string",
+                              "pattern": "^(run-|prj-|daemon$)"
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991,
+                              "description": "Resume cursor; persisted per scope with the event write, stable across daemon restarts"
+                            },
+                            "entity": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "entitySeq": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "type": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+                            },
+                            "typeVersion": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991,
+                              "exclusiveMinimum": 0
+                            },
+                            "durability": {
+                              "enum": [
+                                "durable",
+                                "ephemeral"
+                              ],
+                              "type": "string"
+                            },
+                            "ts": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                              "format": "date-time",
+                              "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                            },
+                            "epochMs": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "projectId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "runId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "agentId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "text": {
+                              "type": "string",
+                              "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+                            },
+                            "data": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": [
+                            "v",
+                            "id",
+                            "scope",
+                            "seq",
+                            "entity",
+                            "entitySeq",
+                            "type",
+                            "typeVersion",
+                            "durability",
+                            "ts",
+                            "epochMs",
+                            "projectId",
+                            "runId",
+                            "agentId",
+                            "text",
+                            "data"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event",
+                        "data"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "done"
+                        },
+                        "data": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "error"
+                        },
+                        "data": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/approvals/{approvalId}/decision": {
+      "post": {
+        "operationId": "approvals.decide",
+        "description": "No prior read needed. `Idempotency-Key` is scoped to the calling client. Same key + same body: 200 with the first result (replay). Same key + different body: 409 `idempotency_conflict`. New key on an approval already decided: 409 `already_decided` with the existing `decision` (who, when).",
+        "parameters": [
+          {
+            "name": "approvalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^apr-[A-Za-z0-9]+$",
+              "description": "Stable approval id, carried on approval events; decide with it directly"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "enum": [
+                      "approve",
+                      "deny"
+                    ],
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                    "x-untrusted": true
+                  }
+                },
+                "required": [
+                  "decision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "approvalId": {
+                      "type": "string",
+                      "pattern": "^apr-[A-Za-z0-9]+$",
+                      "description": "Stable approval id, carried on approval events; decide with it directly"
+                    },
+                    "status": {
+                      "enum": [
+                        "pending",
+                        "approved",
+                        "denied",
+                        "expired",
+                        "withdrawn"
+                      ],
+                      "type": "string"
+                    },
+                    "decidedBy": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "clientId": {
+                          "type": "string"
+                        },
+                        "principal": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "clientId",
+                        "principal"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    "decidedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time",
+                      "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                    },
+                    "reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7).",
+                      "x-untrusted": true
+                    }
+                  },
+                  "required": [
+                    "approvalId",
+                    "status",
+                    "decidedBy",
+                    "decidedAt",
+                    "reason"
+                  ],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "already_decided",
+              "idempotency_conflict",
+              "invalid",
+              "internal"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "decision": {
+            "description": "409 already_decided: the existing decision",
+            "type": "object",
+            "properties": {
+              "approvalId": {
+                "type": "string",
+                "pattern": "^apr-[A-Za-z0-9]+$",
+                "description": "Stable approval id, carried on approval events; decide with it directly"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "denied",
+                  "expired",
+                  "withdrawn"
+                ]
+              },
+              "decidedBy": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "principal": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "clientId",
+                  "principal"
+                ],
+                "additionalProperties": {}
+              },
+              "decidedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time",
+                "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)."
+              }
+            },
+            "required": [
+              "approvalId",
+              "status",
+              "decidedBy",
+              "decidedAt",
+              "reason"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": {}
+      },
+      "RunCreatedData": {
+        "type": "object",
+        "properties": {
+          "budget": {},
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          }
+        },
+        "required": [
+          "budget",
+          "label"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.created"
+      },
+      "RunGrantedData": {
+        "type": "object",
+        "properties": {
+          "add": {},
+          "budget": {},
+          "by": {}
+        },
+        "required": [
+          "add",
+          "budget",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.granted"
+      },
+      "AgentSpawnedData": {
+        "type": "object",
+        "properties": {
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "depth": {
+            "type": "number"
+          },
+          "profile": {
+            "description": "Profile name, lowercase (same type as Agent.profile)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "budget": {},
+          "limits": {},
+          "agent": {},
+          "task": {
+            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "taskAttachment": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^att-[0-9a-f]+$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "mediaType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "bytes",
+              "sha256",
+              "mediaType"
+            ],
+            "additionalProperties": {},
+            "description": "Full text stored by the daemon; fetch it with attachments.get"
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operator": {
+            "type": "boolean"
+          },
+          "review": {
+            "type": "boolean"
+          },
+          "grant": {}
+        },
+        "required": [
+          "parent",
+          "depth",
+          "profile",
+          "budget",
+          "limits",
+          "agent",
+          "task",
+          "key",
+          "operator"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.spawned"
+      },
+      "AgentStartedData": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": {},
+        "x-event-type": "agent.started"
+      },
+      "AgentDoneData": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "report": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "data": {},
+              "verdict": {},
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "commit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "costUsd": {
+                "type": "number"
+              },
+              "notionalCostUsd": {
+                "type": "number"
+              },
+              "turns": {
+                "type": "number"
+              },
+              "wallSeconds": {
+                "type": "number"
+              },
+              "billing": {
+                "type": "string"
+              },
+              "handoffTo": {
+                "type": "string"
+              },
+              "exitCode": {
+                "type": "number"
+              },
+              "adopted": {
+                "type": "boolean"
+              },
+              "limit": {},
+              "verification": {}
+            },
+            "additionalProperties": {},
+            "x-untrusted": true,
+            "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
+          },
+          "spent": {},
+          "budget": {}
+        },
+        "required": [
+          "result",
+          "spent",
+          "budget"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.done"
+      },
+      "AgentFailedData": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "report": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "data": {},
+              "verdict": {},
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "commit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "costUsd": {
+                "type": "number"
+              },
+              "notionalCostUsd": {
+                "type": "number"
+              },
+              "turns": {
+                "type": "number"
+              },
+              "wallSeconds": {
+                "type": "number"
+              },
+              "billing": {
+                "type": "string"
+              },
+              "handoffTo": {
+                "type": "string"
+              },
+              "exitCode": {
+                "type": "number"
+              },
+              "adopted": {
+                "type": "boolean"
+              },
+              "limit": {},
+              "verification": {}
+            },
+            "additionalProperties": {},
+            "x-untrusted": true,
+            "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
+          },
+          "spent": {},
+          "budget": {}
+        },
+        "required": [
+          "result",
+          "spent",
+          "budget"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.failed"
+      },
+      "AgentCheckpointedData": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "at": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "files": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "ref",
+          "sha",
+          "at",
+          "reason",
+          "files"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.checkpointed"
+      },
+      "AgentNoticeRaisedData": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "at": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "detail",
+          "at"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.notice_raised"
+      },
+      "AgentNoticeClearedData": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.notice_cleared"
+      },
+      "AgentPausedData": {
+        "type": "object",
+        "properties": {
+          "result": {},
+          "until": {}
+        },
+        "required": [
+          "result",
+          "until"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.paused"
+      },
+      "AgentResumedData": {
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "type": "number"
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "epoch",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.resumed"
+      },
+      "AgentGrantedData": {
+        "type": "object",
+        "properties": {
+          "add": {},
+          "budget": {},
+          "by": {}
+        },
+        "required": [
+          "add",
+          "budget",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.granted"
+      },
+      "AgentAdoptedData": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.adopted"
+      },
+      "AgentReapedData": {
+        "type": "object",
+        "properties": {
+          "orphanOf": {
+            "type": "string"
+          },
+          "parentStatus": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "orphanOf",
+          "parentStatus"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.reaped"
+      },
+      "AgentCancelledData": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.cancelled"
+      },
+      "DeadlockDetectedData": {
+        "type": "object",
+        "properties": {
+          "cycle": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "cycle"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "deadlock.detected"
+      },
+      "DriveFailedData": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "error_kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "attempt": {
+            "type": "number"
+          },
+          "driver": {},
+          "consecutive": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "error_kind",
+          "message",
+          "attempt",
+          "driver",
+          "consecutive"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "drive.failed"
+      },
+      "TokenRevokedData": {
+        "type": "object",
+        "properties": {
+          "jti": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          }
+        },
+        "required": [
+          "jti",
+          "reason"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "token.revoked"
+      },
+      "MessageSentData": {
+        "type": "object",
+        "properties": {
+          "to": {},
+          "seq": {
+            "type": "number"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "text": {
+            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "attachment": {
+            "description": "Full text stored by the daemon; fetch it with attachments.get",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^att-[0-9a-f]+$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "mediaType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "bytes",
+              "sha256",
+              "mediaType"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "to",
+          "seq",
+          "bytes",
+          "text",
+          "attachment"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "message.sent"
+      },
+      "VerifyStartedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "verify.started"
+      },
+      "VerifyPassedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "verify.passed"
+      },
+      "VerifyFailedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "verify.failed"
+      },
+      "MergeStartedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.started"
+      },
+      "MergeSucceededData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.succeeded"
+      },
+      "MergeFailedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.failed"
+      },
+      "MergeApprovalRequestedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "target": {},
+          "ref": {},
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          }
+        },
+        "required": [
+          "id",
+          "target",
+          "ref"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.approval_requested"
+      },
+      "MergeApprovedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "by": {}
+        },
+        "required": [
+          "id",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.approved"
+      },
+      "MergeDeniedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "merged": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "by": {},
+          "reason": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.denied"
+      },
+      "TaskAddedData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "taskId",
+          "title"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.added"
+      },
+      "TaskClaimedData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "number"
+          },
+          "leaseUntil": {
+            "type": "number"
+          },
+          "takeoverFrom": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "holder",
+          "epoch",
+          "leaseUntil"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.claimed"
+      },
+      "TaskLeaseExpiredData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "taskId",
+          "holder",
+          "epoch"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.lease_expired"
+      },
+      "TaskDoneData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "number"
+          },
+          "result": {}
+        },
+        "required": [
+          "taskId",
+          "holder",
+          "epoch"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.done"
+      },
+      "TaskReleasedData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "taskId",
+          "holder",
+          "epoch"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.released"
+      },
+      "KvPutData": {
+        "type": "object",
+        "properties": {
+          "k": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "writer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "k",
+          "version"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "kv.put"
+      },
+      "KvDeletedData": {
+        "type": "object",
+        "properties": {
+          "k": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "writer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "k",
+          "version"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "kv.deleted"
+      },
+      "KvSwappedData": {
+        "type": "object",
+        "properties": {
+          "k": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "writer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "k",
+          "version"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "kv.swapped"
+      },
+      "AgentStatusChangedData": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "paused",
+              "done",
+              "failed",
+              "cancelled",
+              "handed-off"
+            ]
+          }
+        },
+        "required": [
+          "agentId",
+          "status"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.status_changed"
+      },
+      "ApprovalRequestedData": {
+        "type": "object",
+        "properties": {
+          "approvalId": {
+            "type": "string",
+            "pattern": "^apr-[A-Za-z0-9]+$",
+            "description": "Stable approval id, carried on approval events; decide with it directly"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "budget",
+              "egress",
+              "secret",
+              "spawn_widen",
+              "custom"
+            ]
+          },
+          "question": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "requestedBy": {
+            "type": "object",
+            "properties": {
+              "agentId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "agentId",
+              "runId"
+            ],
+            "description": "Who asked; ancestors of agentId may decide within their budget cap"
+          },
+          "subject": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+            "format": "date-time",
+            "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+          }
+        },
+        "required": [
+          "approvalId",
+          "kind",
+          "question",
+          "requestedBy",
+          "subject",
+          "expiresAt"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "approval.requested"
+      },
+      "ApprovalDecidedData": {
+        "type": "object",
+        "properties": {
+          "approvalId": {
+            "type": "string",
+            "pattern": "^apr-[A-Za-z0-9]+$",
+            "description": "Stable approval id, carried on approval events; decide with it directly"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "withdrawn"
+            ]
+          },
+          "decidedBy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "clientId": {
+                "type": "string"
+              },
+              "principal": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientId",
+              "principal"
+            ],
+            "additionalProperties": {}
+          },
+          "decidedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+            "format": "date-time",
+            "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)."
+          }
+        },
+        "required": [
+          "approvalId",
+          "status",
+          "decidedBy",
+          "decidedAt",
+          "reason"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "approval.decided"
+      },
+      "StreamResetFrame": {
+        "type": "object",
+        "properties": {
+          "snapshotSeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "compacted",
+              "overflow"
+            ]
+          }
+        },
+        "required": [
+          "snapshotSeq",
+          "reason"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "stream.reset"
+      },
+      "SnapshotRunFrame": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "projectId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "type": "string"
+              },
+              "goal": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "repo": {
+                "description": "Repository the run works in (absolute path or remote URL)",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time",
+                "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+              }
+            },
+            "required": [
+              "id",
+              "projectId",
+              "label",
+              "state",
+              "goal",
+              "repo",
+              "createdAt"
+            ]
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.run"
+      },
+      "SnapshotAgentsFrame": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "runId": {
+                  "type": "string"
+                },
+                "parent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "depth": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                  "description": "Profile name, lowercase"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "paused",
+                    "done",
+                    "failed",
+                    "cancelled",
+                    "handed-off"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Plain-language status line written by the daemon (trusted)"
+                },
+                "task": {
+                  "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "x-untrusted": true
+                },
+                "taskAttachment": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^att-[0-9a-f]+$"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "mediaType": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "bytes",
+                    "sha256",
+                    "mediaType"
+                  ],
+                  "additionalProperties": {},
+                  "description": "Full text stored by the daemon; fetch it with attachments.get"
+                },
+                "result": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "summary": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "report": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "data": {},
+                    "verdict": {},
+                    "branch": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "commit": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "costUsd": {
+                      "type": "number"
+                    },
+                    "notionalCostUsd": {
+                      "type": "number"
+                    },
+                    "turns": {
+                      "type": "number"
+                    },
+                    "wallSeconds": {
+                      "type": "number"
+                    },
+                    "billing": {
+                      "type": "string"
+                    },
+                    "handoffTo": {
+                      "type": "string"
+                    },
+                    "exitCode": {
+                      "type": "number"
+                    },
+                    "adopted": {
+                      "type": "boolean"
+                    },
+                    "limit": {},
+                    "verification": {}
+                  },
+                  "additionalProperties": {},
+                  "x-untrusted": true,
+                  "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
+                },
+                "updatedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time",
+                  "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                }
+              },
+              "required": [
+                "id",
+                "runId",
+                "parent",
+                "depth",
+                "profile",
+                "status",
+                "text",
+                "task",
+                "taskAttachment",
+                "result",
+                "updatedAt"
+              ]
+            }
+          }
+        },
+        "required": [
+          "agents"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.agents"
+      },
+      "SnapshotApprovalsFrame": {
+        "type": "object",
+        "properties": {
+          "approvals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "approvalId": {
+                  "type": "string",
+                  "pattern": "^apr-[A-Za-z0-9]+$",
+                  "description": "Stable approval id, carried on approval events; decide with it directly"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "merge",
+                    "budget",
+                    "egress",
+                    "secret",
+                    "spawn_widen",
+                    "custom"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "approved",
+                    "denied",
+                    "expired",
+                    "withdrawn"
+                  ]
+                },
+                "question": {
+                  "type": "string",
+                  "x-untrusted": true,
+                  "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                },
+                "requestedBy": {
+                  "type": "object",
+                  "properties": {
+                    "agentId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "runId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "agentId",
+                    "runId"
+                  ],
+                  "description": "Who asked; ancestors of agentId may decide within their budget cap"
+                },
+                "subject": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {},
+                  "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+                }
+              },
+              "required": [
+                "approvalId",
+                "kind",
+                "status",
+                "question",
+                "requestedBy",
+                "subject"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "approvals"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.approvals"
+      },
+      "SnapshotStepsFrame": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "v": {
+                  "type": "number",
+                  "const": 1
+                },
+                "id": {
+                  "type": "string",
+                  "pattern": "^evt_"
+                },
+                "scope": {
+                  "type": "string",
+                  "pattern": "^(run-|prj-|daemon$)"
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991,
+                  "description": "Resume cursor; persisted per scope with the event write, stable across daemon restarts"
+                },
+                "entity": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "entitySeq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "type": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+                },
+                "typeVersion": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "durability": {
+                  "type": "string",
+                  "enum": [
+                    "durable",
+                    "ephemeral"
+                  ]
+                },
+                "ts": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time",
+                  "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                },
+                "epochMs": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "projectId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "runId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "agentId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+                },
+                "data": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "v",
+                "id",
+                "scope",
+                "seq",
+                "entity",
+                "entitySeq",
+                "type",
+                "typeVersion",
+                "durability",
+                "ts",
+                "epochMs",
+                "projectId",
+                "runId",
+                "agentId",
+                "text",
+                "data"
+              ]
+            },
+            "description": "Recent durable events of the scope, oldest first (step history)"
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.steps"
+      },
+      "SnapshotThreadsFrame": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time",
+                  "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                },
+                "text": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "x-untrusted": true,
+                  "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                },
+                "attachment": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^att-[0-9a-f]+$"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "mediaType": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "bytes",
+                    "sha256",
+                    "mediaType"
+                  ],
+                  "additionalProperties": {},
+                  "description": "Full text stored by the daemon; fetch it with attachments.get"
+                }
+              },
+              "required": [
+                "seq",
+                "from",
+                "to",
+                "at",
+                "text",
+                "attachment"
+              ]
+            },
+            "description": "Recent thread messages, oldest first"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.threads"
+      },
+      "SnapshotEndFrame": {
+        "type": "object",
+        "properties": {
+          "snapshotSeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "snapshotSeq"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.end"
+      }
+    }
+  }
+}

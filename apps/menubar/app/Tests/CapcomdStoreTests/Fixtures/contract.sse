@@ -1,0 +1,44 @@
+id: 1
+event: message
+data: {"v": 1, "id": "evt_1", "scope": "run-a1", "seq": 1, "entity": "run-a1", "entitySeq": 1, "type": "run.created", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000001000, "projectId": "prj-1", "runId": "run-a1", "agentId": null, "data": {"runId": "run-a1", "goal": "Fix flaky login tests\nsecond line"}}
+
+id: 2
+event: message
+data: {"v": 1, "id": "evt_2", "scope": "run-a1", "seq": 2, "entity": "agt-p", "entitySeq": 1, "type": "agent.spawned", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000002000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-p", "data": {"agentId": "agt-p", "parent": null, "profile": "planner", "task": "Plan the fix"}}
+
+id: 3
+event: message
+data: {"v": 1, "id": "evt_3", "scope": "run-a1", "seq": 3, "entity": "agt-p", "entitySeq": 1, "type": "agent.started", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000003000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-p", "data": {"agentId": "agt-p"}}
+
+id: 4
+event: message
+data: {"v": 1, "id": "evt_4", "scope": "run-a1", "seq": 4, "entity": "agt-w1", "entitySeq": 1, "type": "agent.spawned", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000004000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-w1", "data": {"agentId": "agt-w1", "parent": "agt-p", "profile": "worker", "key": "task-7a3f", "task": "Fix auth"}}
+
+id: 5
+event: message
+data: {"v": 1, "id": "evt_5", "scope": "run-a1", "seq": 5, "entity": "agt-w2", "entitySeq": 1, "type": "agent.spawned", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000005000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-w2", "data": {"agentId": "agt-w2", "parent": "agt-p", "profile": "worker", "key": "task-9b21", "task": "Fix \u202eUI\u0007"}}
+
+id: 6
+event: message
+data: {"v": 1, "id": "evt_6", "scope": "run-a1", "seq": 6, "entity": "agt-c", "entitySeq": 1, "type": "agent.spawned", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000006000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-c", "data": {"agentId": "agt-c", "parent": "agt-p", "profile": "critic"}}
+
+id: 7
+event: message
+data: {"v": 1, "id": "evt_7", "scope": "run-a1", "seq": 7, "entity": "agt-x", "entitySeq": 1, "type": "agent.spawned", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000007000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-x", "data": {"agentId": "agt-x", "parent": "agt-p", "profile": "mystery"}}
+
+id: 8
+event: message
+data: {"v": 1, "id": "evt_8", "scope": "run-a1", "seq": 8, "entity": "agt-w1", "entitySeq": 1, "type": "agent.started", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000008000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-w1", "data": {"agentId": "agt-w1"}}
+
+id: 9
+event: message
+data: {"v": 1, "id": "evt_9", "scope": "run-a1", "seq": 9, "entity": "agt-w2", "entitySeq": 1, "type": "agent.done", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000009000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-w2", "data": {"agentId": "agt-w2", "result": {"summary": "Patched [link](http://evil)", "artifacts": [{"name": "diff.patch"}]}}}
+
+id: 10
+event: message
+data: {"v": 1, "id": "evt_10", "scope": "run-a1", "seq": 10, "entity": "apr-9", "entitySeq": 1, "type": "approval.requested", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000010000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-w1", "data": {"approvalId": "apr-9", "agentId": "agt-w1", "kind": "merge", "question": "Merge fix/auth into main?", "requestedBy": {"agentId": "agt-w1", "runId": "run-a1"}, "subject": {"target": "main", "ref": "fix/auth"}, "expiresAt": null}}
+
+id: 11
+event: message
+data: {"v": 1, "id": "evt_11", "scope": "run-a1", "seq": 11, "entity": "vfy-1", "entitySeq": 1, "type": "verify.started", "typeVersion": 1, "durability": "durable", "ts": "2026-10-25T12:00:00Z", "epochMs": 1793000011000, "projectId": "prj-1", "runId": "run-a1", "agentId": "agt-c", "data": {"agentId": "agt-c"}}
+
