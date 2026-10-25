@@ -1031,6 +1031,1125 @@
           "message"
         ],
         "additionalProperties": {}
+      },
+      "RunNewData": {
+        "type": "object",
+        "properties": {
+          "budget": {},
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "budget",
+          "label"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.new"
+      },
+      "RunGrantedData": {
+        "type": "object",
+        "properties": {
+          "add": {},
+          "budget": {},
+          "by": {}
+        },
+        "required": [
+          "add",
+          "budget",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.granted"
+      },
+      "AgentSpawnedData": {
+        "type": "object",
+        "properties": {
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "depth": {
+            "type": "number"
+          },
+          "profile": {},
+          "budget": {},
+          "limits": {},
+          "agent": {},
+          "task": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operator": {
+            "type": "boolean"
+          },
+          "review": {
+            "type": "boolean"
+          },
+          "grant": {}
+        },
+        "required": [
+          "parent",
+          "depth",
+          "profile",
+          "budget",
+          "limits",
+          "agent",
+          "task",
+          "key",
+          "operator"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.spawned"
+      },
+      "AgentStartedData": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": {},
+        "x-event-type": "agent.started"
+      },
+      "AgentDoneData": {
+        "type": "object",
+        "properties": {
+          "result": {},
+          "spent": {},
+          "budget": {}
+        },
+        "required": [
+          "result",
+          "spent",
+          "budget"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.done"
+      },
+      "AgentFailedData": {
+        "type": "object",
+        "properties": {
+          "result": {},
+          "spent": {},
+          "budget": {}
+        },
+        "required": [
+          "result",
+          "spent",
+          "budget"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.failed"
+      },
+      "AgentCheckpointData": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "at": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "files": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "ref",
+          "sha",
+          "at",
+          "reason",
+          "files"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.checkpoint"
+      },
+      "AgentNoticeData": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "at": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "detail",
+          "at"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.notice"
+      },
+      "AgentNoticeClearedData": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.notice_cleared"
+      },
+      "AgentPausedData": {
+        "type": "object",
+        "properties": {
+          "result": {},
+          "until": {}
+        },
+        "required": [
+          "result",
+          "until"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.paused"
+      },
+      "AgentResumedData": {
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "type": "number"
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "epoch",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.resumed"
+      },
+      "AgentGrantedData": {
+        "type": "object",
+        "properties": {
+          "add": {},
+          "budget": {},
+          "by": {}
+        },
+        "required": [
+          "add",
+          "budget",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.granted"
+      },
+      "AgentAdoptedData": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.adopted"
+      },
+      "AgentReapedData": {
+        "type": "object",
+        "properties": {
+          "orphanOf": {
+            "type": "string"
+          },
+          "parentStatus": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "orphanOf",
+          "parentStatus"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.reaped"
+      },
+      "AgentCancelledData": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.cancelled"
+      },
+      "DeadlockDetectedData": {
+        "type": "object",
+        "properties": {
+          "cycle": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "cycle"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "deadlock.detected"
+      },
+      "DriveFailedData": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "error_kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "attempt": {
+            "type": "number"
+          },
+          "driver": {},
+          "consecutive": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "error_kind",
+          "message",
+          "attempt",
+          "driver",
+          "consecutive"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "drive.failed"
+      },
+      "TokenRevokedData": {
+        "type": "object",
+        "properties": {
+          "jti": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          }
+        },
+        "required": [
+          "jti",
+          "reason"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "token.revoked"
+      },
+      "MessageSentData": {
+        "type": "object",
+        "properties": {
+          "to": {},
+          "seq": {
+            "type": "number"
+          },
+          "bytes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "to",
+          "seq",
+          "bytes"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "message.sent"
+      },
+      "VerifyStartedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "verify.started"
+      },
+      "VerifyPassedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "verify.passed"
+      },
+      "VerifyFailedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "verify.failed"
+      },
+      "MergeStartedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.started"
+      },
+      "MergeSucceededData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.succeeded"
+      },
+      "MergeFailedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.failed"
+      },
+      "MergeAwaitingApprovalData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "target": {},
+          "ref": {},
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          }
+        },
+        "required": [
+          "id",
+          "target",
+          "ref"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.awaiting_approval"
+      },
+      "MergeApprovedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "by": {}
+        },
+        "required": [
+          "id",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.approved"
+      },
+      "MergeDeniedData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "merged": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "by": {},
+          "reason": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "merge.denied"
+      },
+      "TaskAddedData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "taskId",
+          "title"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.added"
+      },
+      "TaskClaimedData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "number"
+          },
+          "leaseUntil": {
+            "type": "number"
+          },
+          "takeoverFrom": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "holder",
+          "epoch",
+          "leaseUntil"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.claimed"
+      },
+      "TaskLeaseExpiredData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "taskId",
+          "holder",
+          "epoch"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.lease_expired"
+      },
+      "TaskDoneData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "number"
+          },
+          "result": {}
+        },
+        "required": [
+          "taskId",
+          "holder",
+          "epoch"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.done"
+      },
+      "TaskReleasedData": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "taskId",
+          "holder",
+          "epoch"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "task.released"
+      },
+      "KvPutData": {
+        "type": "object",
+        "properties": {
+          "k": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "writer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "k",
+          "version"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "kv.put"
+      },
+      "KvDeleteData": {
+        "type": "object",
+        "properties": {
+          "k": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "writer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "k",
+          "version"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "kv.delete"
+      },
+      "KvCasData": {
+        "type": "object",
+        "properties": {
+          "k": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "writer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "k",
+          "version"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "kv.cas"
+      },
+      "RunCreatedData": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          }
+        },
+        "required": [
+          "runId",
+          "goal"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.created"
+      },
+      "AgentStatusData": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "paused",
+              "done",
+              "failed",
+              "cancelled",
+              "handed-off"
+            ]
+          }
+        },
+        "required": [
+          "agentId",
+          "status"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.status"
+      },
+      "ApprovalRequestedData": {
+        "type": "object",
+        "properties": {
+          "approvalId": {
+            "type": "string",
+            "pattern": "^apr-[A-Za-z0-9]+$",
+            "description": "Stable approval id, carried on approval events; decide with it directly"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "budget",
+              "egress",
+              "secret",
+              "spawn_widen",
+              "custom"
+            ]
+          },
+          "question": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "requestedBy": {
+            "type": "object",
+            "properties": {
+              "agentId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "agentId",
+              "runId"
+            ],
+            "description": "Who asked; ancestors of agentId may decide within their budget cap"
+          },
+          "subject": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+            "format": "date-time",
+            "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+          }
+        },
+        "required": [
+          "approvalId",
+          "kind",
+          "question",
+          "requestedBy",
+          "subject",
+          "expiresAt"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "approval.requested"
+      },
+      "ApprovalDecidedData": {
+        "type": "object",
+        "properties": {
+          "approvalId": {
+            "type": "string",
+            "pattern": "^apr-[A-Za-z0-9]+$",
+            "description": "Stable approval id, carried on approval events; decide with it directly"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "withdrawn"
+            ]
+          },
+          "decidedBy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "clientId": {
+                "type": "string"
+              },
+              "principal": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "clientId",
+              "principal"
+            ],
+            "additionalProperties": {}
+          },
+          "decidedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+            "format": "date-time",
+            "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)."
+          }
+        },
+        "required": [
+          "approvalId",
+          "status",
+          "decidedBy",
+          "decidedAt",
+          "reason"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "approval.decided"
+      },
+      "StreamResetFrame": {
+        "type": "object",
+        "properties": {
+          "snapshotSeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "compacted",
+              "overflow"
+            ]
+          }
+        },
+        "required": [
+          "snapshotSeq",
+          "reason"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "stream.reset"
+      },
+      "SnapshotRunFrame": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "projectId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "type": "string"
+              },
+              "goal": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              }
+            },
+            "required": [
+              "id",
+              "projectId",
+              "label",
+              "state",
+              "goal"
+            ]
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.run"
+      },
+      "SnapshotAgentsFrame": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "runId": {
+                  "type": "string"
+                },
+                "parent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "depth": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "paused",
+                    "done",
+                    "failed",
+                    "cancelled",
+                    "handed-off"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "runId",
+                "parent",
+                "depth",
+                "profile",
+                "status"
+              ]
+            }
+          }
+        },
+        "required": [
+          "agents"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.agents"
+      },
+      "SnapshotApprovalsFrame": {
+        "type": "object",
+        "properties": {
+          "approvals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "approvalId": {
+                  "type": "string",
+                  "pattern": "^apr-[A-Za-z0-9]+$",
+                  "description": "Stable approval id, carried on approval events; decide with it directly"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "merge",
+                    "budget",
+                    "egress",
+                    "secret",
+                    "spawn_widen",
+                    "custom"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "approved",
+                    "denied",
+                    "expired",
+                    "withdrawn"
+                  ]
+                },
+                "question": {
+                  "type": "string",
+                  "x-untrusted": true,
+                  "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                },
+                "requestedBy": {
+                  "type": "object",
+                  "properties": {
+                    "agentId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "runId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "agentId",
+                    "runId"
+                  ],
+                  "description": "Who asked; ancestors of agentId may decide within their budget cap"
+                },
+                "subject": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {},
+                  "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+                }
+              },
+              "required": [
+                "approvalId",
+                "kind",
+                "status",
+                "question",
+                "requestedBy",
+                "subject"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "approvals"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.approvals"
+      },
+      "SnapshotEndFrame": {
+        "type": "object",
+        "properties": {
+          "snapshotSeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "snapshotSeq"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "snapshot.end"
       }
     }
   }

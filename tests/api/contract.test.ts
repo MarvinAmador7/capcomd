@@ -75,3 +75,18 @@ describe("decision idempotency (§7.4)", () => {
 		expect(resolveDecide({ prior: undefined, approvalId: "apr-k1", body, existingDecision: null })).toEqual({ kind: "apply" });
 	});
 });
+
+describe("published payload schemas (phase 1)", () => {
+	const schemas = (spec as any).components.schemas as Record<string, any>;
+	const byType = new Map(Object.values(schemas).filter((s) => s["x-event-type"]).map((s) => [s["x-event-type"], s]));
+	test("every event payload and stream frame is under components.schemas", () => {
+		for (const t of [...Object.keys(EventData), ...Object.keys(StreamFrames)]) expect(byType.has(t)).toBe(true);
+		expect(byType.get("stream.reset").required).toEqual(["snapshotSeq", "reason"]);
+	});
+	test("timestamps carry one pattern and format date-time, no allOf", () => {
+		const ts = schemas.ApprovalRequestedData.properties.expiresAt;
+		expect(ts.format).toBe("date-time");
+		expect(ts.allOf).toBeUndefined();
+		expect(typeof ts.pattern).toBe("string");
+	});
+});
