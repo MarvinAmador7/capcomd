@@ -79,12 +79,12 @@ final class TransportTests: XCTestCase {
     let items = await box.items
     let seqs = items.compactMap { if case .event(let e) = $0 { return e.seq }; return nil }
     XCTAssertEqual(seqs, Array(1...30), "no gaps, no dupes")
-    // In-band reset on conn #1 after seq 12: reset → snapshot.run/agents/approvals → snapshot.end, all before seq 13.
+    // In-band reset on conn #1 after seq 12: reset → snapshot.run/agents/approvals/steps/threads → snapshot.end, all before seq 13.
     let i = items.firstIndex(of: .reset(snapshotSeq: 12, reason: "overflow"))!
-    let names = items[(i + 1)...].prefix(4).map { (it: StreamItem) -> String in
+    let names = items[(i + 1)...].prefix(6).map { (it: StreamItem) -> String in
       switch it { case .snapshot(let n, _): return n; case .snapshotEnd: return "snapshot.end"; default: return "?" } }
-    XCTAssertEqual(names, ["snapshot.run", "snapshot.agents", "snapshot.approvals", "snapshot.end"])
-    if case .event(let e) = items[i + 5] { XCTAssertEqual(e.seq, 13) } else { XCTFail("live events resume at snapshotSeq+1") }
+    XCTAssertEqual(names, ["snapshot.run", "snapshot.agents", "snapshot.approvals", "snapshot.steps", "snapshot.threads", "snapshot.end"])
+    if case .event(let e) = items[i + 7] { XCTAssertEqual(e.seq, 13) } else { XCTFail("live events resume at snapshotSeq+1") }
     let st = await es.stats
     XCTAssertEqual(st.resets, 1); XCTAssertEqual(st.drops, 1); XCTAssertEqual(st.connections, 2); XCTAssertEqual(st.dupesDropped, 1)
     let (_, logData) = try await t.get("/__log")
