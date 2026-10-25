@@ -7,7 +7,8 @@ export const HarnessEvent = z.object({
 	v: z.literal(1),
 	id: z.string().regex(/^evt_/),
 	scope: z.string().regex(/^(run-|prj-|daemon$)/),
-	seq: z.number().int().nonnegative(),
+	// Persisted per scope in the same transaction as the event write: survives daemon restarts, never reused or skipped.
+	seq: z.number().int().nonnegative().describe("Resume cursor; persisted per scope with the event write, stable across daemon restarts"),
 	entity: z.string().min(1),
 	entitySeq: z.number().int().nonnegative(),
 	type: z.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/),

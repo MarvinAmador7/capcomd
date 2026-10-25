@@ -425,6 +425,12 @@ Each phase's exit criteria include regression evals in CI, on the fake provider 
 | **4. Projects + skills + profiles** | Project and workspace actors, multi-repo runs (one workspace per agent in v1), skills registry and attach on spawn and send, profile CRUD | Swarm-outcome eval across 2 repos in one project. A skill attached in the app appears (hashed) in the agent's prompt and transcript |
 | **5. CLI as pure client** | Remaining CLI verbs go through the API. Direct actor calls removed from `src/cli` | The full existing test suite plus scenarios pass with the CLI talking only to the socket |
 
+**Revisions (2026-10-25):**
+- **Redaction happens on ingest in the daemon.** Every event, transcript item and blob passes the redactor before it is written; the in-VM scrub is best-effort only and never relied on.
+- **`seq` is persisted per scope in the same transaction as the event write**, so a restart never reuses or skips a cursor. The stream-resume eval adds a daemon-restart killpoint (`api.stream.daemon_restart`): clients reconnect with their last seq and converge with no gaps or duplicates.
+- **Swift transport:** AsyncHTTPClient over the Unix socket (URLSession can't dial a Unix socket); loopback HTTP on 127.0.0.1 plus a client token is the fallback.
+- **Order after phase 1:** transcripts (2) and approvals/steering (3) run in parallel. Menu bar v0 is gated on approvals only, not on transcripts.
+
 **Premature complexity, called out and not planned:** a message broker or S2 for local events (actors plus SSE suffice), turbopuffer
 transcript search (grep plus SQLite FTS first), multi-user auth or OAuth, DPoP, a plugin/extension runtime, one agent across multiple
 repos (give each agent one workspace and coordinate at the project level), provider SDK or app-server adapters, and transcript branching.
@@ -459,6 +465,6 @@ repos (give each agent one workspace and coordinate at the project level), provi
 7. **Who can approve:** human only for protected merges, secrets, and egress. May ancestor agents approve budget grants and spawn widening for their subtree via `children.approve`?
 8. **Skills sources and trust:** built-in, user (`~/.capcomd/skills`), project (`.capcomd/skills`), and plugin. Should project skills need a one-time operator trust prompt per hash?
 9. **Event contract naming:** rename to dotted lower-case types in `harness.v1` (keeping `capcomd.v1` CLI output unchanged), or keep upper-case types everywhere?
-10. **Phase order:** contract → read API → transcripts → approvals/steer + menu bar v0 → projects/skills → CLI as pure client. Should approvals come before transcripts so the menu bar ships sooner?
-11. **Swift client codegen:** generate from oRPC's OpenAPI (recommended), or hand-write a small client against the JSON Schema bundle?
+10. **Phase order:** contract → read API → transcripts → approvals/steer + menu bar v0 → projects/skills → CLI as pure client. Revised: transcripts and approvals run in parallel after phase 1, and menu bar v0 is gated on approvals only (section 11).
+11. **Swift client codegen:** generate from oRPC's OpenAPI (recommended; committed as `openapi/capcomd.json`, checked in CI), or hand-write a small client against the JSON Schema bundle? Transport: AsyncHTTPClient over the Unix socket, loopback HTTP + token as fallback.
 12. **Deferred items confirmed out of v1:** S2, turbopuffer, Upstash, remote mode, executable extensions, and multi-repo agents. Any of these you want earlier?
