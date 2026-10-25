@@ -3,7 +3,8 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { LegacyEventData, UntrustedText } from "./legacy-events";
+import { AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
+import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 
 export const ApprovalId = z.string().regex(/^apr-[A-Za-z0-9]+$/).describe("Stable approval id, carried on approval events; decide with it directly");
 export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom"]);
@@ -21,8 +22,77 @@ export const ApiError = z.looseObject({
 });
 export const ERROR_STATUSES = [401, 404, 409, 422] as const;
 
-export const Run = z.object({ id: z.string(), projectId: z.string().nullable(), label: z.string().nullable(), state: z.string(), goal: UntrustedText.nullable() });
-export const Agent = z.object({ id: z.string(), runId: z.string(), parent: z.string().nullable(), depth: z.number().int(), profile: z.string().nullable(), status: AgentStatus });
+/** One profile type everywhere (Agent.profile, agent.spawned.profile, skills): a lowercase name. */
+export const ProfileName = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/).describe("Profile name, lowercase");
+
+export const Run = z.object({
+	id: z.string(),
+	projectId: z.string().nullable(),
+	label: z.string().nullable(),
+	state: z.string(),
+	goal: UntrustedText.nullable(),
+	repo: z.string().nullable().describe("Repository the run works in (absolute path or remote URL)"),
+	createdAt: Timestamp.nullable(),
+});
+/** A project groups runs on one repo toward one goal; a project holds any number of runs. */
+export const Project = z.object({
+	id: z.string().regex(/^prj-[A-Za-z0-9_-]+$/),
+	name: z.string(),
+	repo: z.string().nullable(),
+	goal: UntrustedText.nullable(),
+	runIds: z.array(z.string()).describe("Newest first"),
+});
+export const Agent = z.object({
+	id: z.string(),
+	runId: z.string(),
+	parent: z.string().nullable(),
+	depth: z.number().int(),
+	profile: ProfileName.nullable(),
+	status: AgentStatus,
+	text: z.string().describe("Plain-language status line written by the daemon (trusted)"),
+	task: UntrustedText.nullable().describe("Task text, inline when ≤ 64 KB; null when over (see taskAttachment)"),
+	taskAttachment: AttachmentRef.nullable(),
+	result: AgentResult.nullable(),
+	updatedAt: Timestamp.nullable(),
+});
+/** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */
+export const Message = z.object({
+	seq: z.number().int().nonnegative(),
+	from: z.string(),
+	to: z.string(),
+	at: Timestamp,
+	text: UntrustedText.nullable(),
+	attachment: AttachmentRef.nullable(),
+});
+/** Transcript item: one line of the agent's worker output (model turns, tool calls, stderr), oldest first. */
+export const TranscriptItem = z.object({
+	seq: z.number().int().nonnegative(),
+	at: Timestamp,
+	stream: z.string().describe("stdout, stderr or a worker channel"),
+	text: UntrustedText,
+});
+export const TRANSCRIPT_PAGE_MAX = 500;
+export const TranscriptPage = z.object({
+	items: z.array(TranscriptItem),
+	next: z.number().int().nonnegative().nullable().describe("Pass as `after` for the next page; null at the end"),
+});
+/** Trace span (OpenTelemetry-shaped), from the run's trace file. */
+export const Span = z.looseObject({
+	traceId: z.string(),
+	spanId: z.string(),
+	parentSpanId: z.string().nullable(),
+	name: z.string(),
+	start: Timestamp,
+	end: Timestamp.nullable(),
+	status: z.number().int(),
+	attributes: z.record(z.string(), z.unknown()),
+});
+export const Skill = z.object({
+	name: ProfileName,
+	description: z.string(),
+	source: z.enum(["bundled", "user"]),
+});
+export const Attachment = z.object({ attachment: AttachmentRef, text: UntrustedText });
 export const Decision = z.looseObject({
 	approvalId: ApprovalId,
 	status: ApprovalStatus,
@@ -40,6 +110,8 @@ export const StreamFrames = {
 	"snapshot.run": z.looseObject({ run: z.lazy(() => Run) }),
 	"snapshot.agents": z.looseObject({ agents: z.array(z.lazy(() => Agent)) }),
 	"snapshot.approvals": z.looseObject({ approvals: z.array(z.looseObject({ approvalId: ApprovalId, kind: ApprovalKind, status: ApprovalStatus, question: UntrustedText, requestedBy: RequestedBy, subject: ApprovalSubject })) }),
+	"snapshot.steps": z.looseObject({ steps: z.array(z.lazy(() => HarnessEvent)).describe("Recent durable events of the scope, oldest first (step history)") }),
+	"snapshot.threads": z.looseObject({ messages: z.array(z.lazy(() => Message)).describe("Recent thread messages, oldest first") }),
 	"snapshot.end": z.looseObject({ snapshotSeq: z.number().int().nonnegative() }),
 } as const;
 
@@ -53,8 +125,7 @@ Timestamps (ts, decidedAt, expiresAt): ${TIMESTAMP_DOC}.`;
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
 	...LegacyEventData,
-	"run.created": z.looseObject({ runId: z.string(), goal: UntrustedText.nullable() }),
-	"agent.status": z.looseObject({ agentId: z.string(), status: AgentStatus }),
+	"agent.status_changed": z.looseObject({ agentId: z.string(), status: AgentStatus }),
 	"approval.requested": z.looseObject({
 		approvalId: ApprovalId,
 		kind: ApprovalKind,
@@ -71,12 +142,30 @@ const DecideBody = z.object({ decision: z.enum(["approve", "deny"]), reason: Unt
 
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed." }).output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string() })),
+	projects: {
+		list: oc.route({ method: "GET", path: "/v1/projects" }).output(z.array(Project)),
+	},
 	runs: {
 		list: oc.route({ method: "GET", path: "/v1/runs" }).output(z.array(Run)),
 		get: oc.route({ method: "GET", path: "/v1/runs/{runId}" }).input(z.object({ runId: z.string() })).output(Run),
+		trace: oc.route({ method: "GET", path: "/v1/runs/{runId}/trace", description: "Trace spans of the run, in start order." }).input(z.object({ runId: z.string() })).output(z.array(Span)),
+		messages: oc.route({ method: "GET", path: "/v1/runs/{runId}/messages", description: "Thread history of the run." })
+			.input(z.object({ runId: z.string(), after: z.coerce.number().int().nonnegative().optional() })).output(z.array(Message)),
 	},
 	agents: {
 		tree: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents" }).input(z.object({ runId: z.string() })).output(z.array(Agent)),
+		transcript: oc.route({
+			method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/transcript",
+			description: `Full transcript, paged: \`after\` is the last seq you have, \`limit\` at most ${TRANSCRIPT_PAGE_MAX}. Each item's text is at most ${INLINE_TEXT_MAX_BYTES} bytes (§5 limits).`,
+		}).input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(TRANSCRIPT_PAGE_MAX).optional() }))
+			.output(TranscriptPage),
+	},
+	attachments: {
+		get: oc.route({ method: "GET", path: "/v1/runs/{runId}/attachments/{attachmentId}", description: "Full text of an over-64 KB body." })
+			.input(z.object({ runId: z.string(), attachmentId: z.string().regex(/^att-[0-9a-f]+$/) })).output(Attachment),
+	},
+	skills: {
+		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),
 	},
 	events: {
 		replay: oc

@@ -16,18 +16,15 @@ export function harnessSocketPath(o: { flag?: string; env?: Record<string, strin
  * (recommended) or anything else, e.g. AsyncHTTPClient's hex-encoded socket path. Auth is the socket mode plus the token.
  */
 export function serveHarnessSocket(path: string, fetch: (req: Request) => Response | Promise<Response>) {
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	const dir = dirname(path);
+	const fresh = !existsSync(dir);
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+	if (fresh) chmodSync(dir, 0o700);
 	if (existsSync(path)) unlinkSync(path);
-	const server = Bun.serve({ unix: path, fetch });
+	// Create the socket already 0600: no window where another local user could connect. chmod stays as belt-and-braces.
+	const prev = process.umask(0o177);
+	let server: ReturnType<typeof Bun.serve>;
+	try { server = Bun.serve({ unix: path, fetch }); } finally { process.umask(prev); }
 	chmodSync(path, 0o600);
 	return server;
-}
-
-/** Phase-1 stub of the API on the socket; today only GET /v1/health. */
-export function harnessFetch(version: string) {
-	return (req: Request): Response => {
-		const url = new URL(req.url);
-		if (req.method === "GET" && url.pathname === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version });
-		return Response.json({ code: "not_found", message: `${req.method} ${url.pathname}` }, { status: 404 });
-	};
 }

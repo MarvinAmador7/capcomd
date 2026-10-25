@@ -38,3 +38,17 @@ test("the daemon-side check is strict except for op bags", () => {
 	expect(strictEventData("verify.passed", { id: "vfy-1", checks: [] }).ok).toBe(true);
 	expect(strictEventData("nope.x", {}).ok).toBe(false);
 });
+
+test("decision 9: every harness.v1 type is dotted lowercase noun.verb-past; MERGED → merge.succeeded is final", () => {
+	// Past verbs and participles; `cleared`, `expired` etc. all end in -ed. `done`, `sent` are irregular past participles.
+	const past = /(ed|done|sent|put)$/;
+	for (const t of Object.keys(EventData)) {
+		expect(t).toMatch(/^[a-z]+(\.[a-z_]+)+$/);
+		expect(t.split(".").at(-1)!).toMatch(past);
+	}
+	expect(dottedType("MERGED")).toBe("merge.succeeded");
+	expect(dottedType("RUN_NEW")).toBe("run.created");
+	expect(dottedType("AGENT_CHECKPOINT")).toBe("agent.checkpointed");
+	expect(dottedType("MERGE_AWAITING_APPROVAL")).toBe("merge.approval_requested");
+	expect(readFileSync("src/api/envelope.ts", "utf8")).not.toMatch(/temporar/i);
+});

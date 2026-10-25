@@ -5,6 +5,7 @@ import { redactShapes } from "../agents/redact";
 // either leaves the whole spawn or none of it.
 import { strictEventData, type ScopeEventType } from "../api/legacy-events";
 import { dottedType } from "../api/envelope";
+import { inlineOrAttach } from "../api/inline-cap";
 import type { RawAccess } from "rivetkit/db";
 import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -213,6 +214,7 @@ export const scopeActor = actor({
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, media_type TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS agent_logs (seq INTEGER PRIMARY KEY, agent_id TEXT NOT NULL, at INTEGER NOT NULL, stream TEXT NOT NULL, line TEXT NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS idem (idem_key TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`
@@ -224,7 +226,7 @@ export const scopeActor = actor({
   }),
 
   actions: traceActions("scope", {
-    async init(c, params: { runId: string; budget: Budget; label?: string; paramsHash: string }) {
+    async init(c, params: { runId: string; budget: Budget; label?: string; goal?: string; paramsHash: string }) {
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (have.length) {
         const prev = JSON.parse(have[0]!.v as string);
@@ -232,8 +234,8 @@ export const scopeActor = actor({
         return { runId: params.runId, created: false, budget: prev.budget as Budget };
       }
       await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, paramsHash: params.paramsHash, createdAt: Date.now() }));
-        await addEvent(tx, "RUN_NEW", null, { budget: params.budget, label: params.label ?? null }, `run-new`);
+        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, ...(params.goal ? { goal: params.goal } : {}), paramsHash: params.paramsHash, createdAt: Date.now() }));
+        await addEvent(tx, "RUN_NEW", null, { budget: params.budget, label: params.label ?? null, ...(params.goal ? { goal: params.goal.slice(0, 65536) } : {}) }, `run-new`);
       }, { name: "scopeInit" });
       return { runId: params.runId, created: true, budget: params.budget };
     },
@@ -250,7 +252,7 @@ export const scopeActor = actor({
         if (sp) spent[u] = Math.round(sp * 1e6) / 1e6;
       }
       const unallocated = available(meta.budget, {}, all.filter((a) => !a.parent).map((a) => ({ ...a, tree: tree.get(a.agentId) })));
-      return { budget: meta.budget as Budget, label: meta.label as string | null, createdAt: meta.createdAt as number, spent, unallocated };
+      return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated };
     },
 
     async spawn(
@@ -310,9 +312,11 @@ export const scopeActor = actor({
           params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now
         );
         killpoint("scope.spawn.mid");
+        const taskInl = inlineOrAttach(params.task);
+        if (taskInl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", taskInl.attachment.id, taskInl.attachment.sha256, taskInl.attachment.bytes, taskInl.attachment.mediaType, taskInl.body, now);
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
-          agent: params.spec, task: params.task.slice(0, 500), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
+          agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
           ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}),
         }, `spawn-${params.agentId}`);
         out = await get(params.agentId);
@@ -571,9 +575,17 @@ export const scopeActor = actor({
         const m = await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM messages");
         seq = Number(m[0]!.m) + 1;
         await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key) VALUES (?, ?, ?, ?, ?, ?)", seq, params.to, params.from, params.body, Date.now(), params.key ?? null);
-        await addEvent(tx, "MESSAGE_SENT", params.from, { to: params.to, seq, bytes: params.body.length }, `msg-${seq}`);
+        // 64 KB inline cap: longer bodies are stored in full as an attachment and the event carries a pointer.
+        const inl = inlineOrAttach(redactShapes(params.body));
+        if (inl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", inl.attachment.id, inl.attachment.sha256, inl.attachment.bytes, inl.attachment.mediaType, inl.body, Date.now());
+        await addEvent(tx, "MESSAGE_SENT", params.from, { to: params.to, seq, bytes: params.body.length, text: inl.text, attachment: inl.attachment }, `msg-${seq}`);
       }, { name: "scopeSend" });
       return { seq };
+    },
+    /** Full text of an attachment written by the 64 KB inline cap. */
+    async getAttachment(c, params: { id: string }) {
+      const r = (await c.db.execute("SELECT * FROM attachments WHERE id = ?", params.id)) as any[];
+      return r.length ? { id: r[0].id as string, sha256: r[0].sha256 as string, bytes: Number(r[0].bytes), mediaType: r[0].media_type as string, body: r[0].body as string } : null;
     },
     async inbox(c, params: { agentId: string; after?: number }) {
       return ((await c.db.execute("SELECT * FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, params.after ?? 0)) as any[])

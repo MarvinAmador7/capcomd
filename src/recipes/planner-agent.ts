@@ -39,7 +39,7 @@ export async function runWithPlanner(opts: RunOptions & { profile: string; budge
   // Gates come from the project (`capcomd setup`), as for an MCP driver's runs.
   const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
   const target = opts.targetBranch ?? d.target;
-  const run = await runNew({ runId, budget: opts.budget ?? {}, label: opts.goal, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(target ? { target } : {}) });
+  const run = await runNew({ runId, budget: opts.budget ?? {}, label: opts.goal, goal: opts.goal, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(target ? { target } : {}) });
   const gates = { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null };
   emit("run.started", { goal: opts.goal, planner: opts.profile, gates, recipe: "planner" }, `Starting run: ${runId}\nGoal: ${opts.goal}\nPlanner: ${opts.profile}${gates.checks.length ? `  checks: ${gates.checks.join(", ")}` : ""}${gates.reviewer ? `  reviewer: ${gates.reviewer}` : ""}${gates.target ? `  target: ${gates.target}` : ""}\n`);
   if (!run.created) emit("run.resumed", { runId }, "✓ Run resumed");

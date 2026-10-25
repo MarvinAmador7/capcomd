@@ -5,7 +5,7 @@ Timestamps: RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:5
 Every event uses the envelope in `src/api/envelope.ts`; the payload below is its `data`.
 Payloads are open: clients must ignore unknown fields (§6.2, new fields don't bump the version); the daemon emits only declared fields. Fields with `"x-untrusted": true` are agent-written: render as plain text, never markdown, links or actions.
 
-## `run.new`
+## `run.created`
 
 ```json
 {
@@ -18,6 +18,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "goal": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions"
     }
   },
   "required": [
@@ -64,14 +72,55 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "depth": {
       "type": "number"
     },
-    "profile": {},
+    "profile": {
+      "description": "Profile name, lowercase (same type as Agent.profile)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "budget": {},
     "limits": {},
     "agent": {},
     "task": {
-      "type": "string",
-      "x-untrusted": true,
-      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "taskAttachment": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^att-[0-9a-f]+$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mediaType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "bytes",
+        "sha256",
+        "mediaType"
+      ],
+      "additionalProperties": {},
+      "description": "Full text stored by the daemon; fetch it with attachments.get"
     },
     "key": {
       "type": [
@@ -120,7 +169,78 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "result": {},
+    "result": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        "report": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        "data": {},
+        "verdict": {},
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "costUsd": {
+          "type": "number"
+        },
+        "notionalCostUsd": {
+          "type": "number"
+        },
+        "turns": {
+          "type": "number"
+        },
+        "wallSeconds": {
+          "type": "number"
+        },
+        "billing": {
+          "type": "string"
+        },
+        "handoffTo": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "number"
+        },
+        "adopted": {
+          "type": "boolean"
+        },
+        "limit": {},
+        "verification": {}
+      },
+      "additionalProperties": {},
+      "x-untrusted": true,
+      "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
+    },
     "spent": {},
     "budget": {}
   },
@@ -140,7 +260,78 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "result": {},
+    "result": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        "report": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        "data": {},
+        "verdict": {},
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "costUsd": {
+          "type": "number"
+        },
+        "notionalCostUsd": {
+          "type": "number"
+        },
+        "turns": {
+          "type": "number"
+        },
+        "wallSeconds": {
+          "type": "number"
+        },
+        "billing": {
+          "type": "string"
+        },
+        "handoffTo": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "number"
+        },
+        "adopted": {
+          "type": "boolean"
+        },
+        "limit": {},
+        "verification": {}
+      },
+      "additionalProperties": {},
+      "x-untrusted": true,
+      "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
+    },
     "spent": {},
     "budget": {}
   },
@@ -153,7 +344,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `agent.checkpoint`
+## `agent.checkpointed`
 
 ```json
 {
@@ -189,7 +380,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `agent.notice`
+## `agent.notice_raised`
 
 ```json
 {
@@ -471,12 +662,54 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "bytes": {
       "type": "number"
+    },
+    "text": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "attachment": {
+      "description": "Full text stored by the daemon; fetch it with attachments.get",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^att-[0-9a-f]+$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mediaType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "bytes",
+        "sha256",
+        "mediaType"
+      ],
+      "additionalProperties": {}
     }
   },
   "required": [
     "to",
     "seq",
-    "bytes"
+    "bytes",
+    "text",
+    "attachment"
   ],
   "additionalProperties": {}
 }
@@ -590,7 +823,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `merge.awaiting_approval`
+## `merge.approval_requested`
 
 ```json
 {
@@ -837,7 +1070,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `kv.delete`
+## `kv.deleted`
 
 ```json
 {
@@ -862,7 +1095,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `kv.cas`
+## `kv.swapped`
 
 ```json
 {
@@ -887,34 +1120,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `run.created`
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {
-    "runId": {
-      "type": "string"
-    },
-    "goal": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-untrusted": true,
-      "description": "Agent-written text: render as plain text, never markdown, links or actions"
-    }
-  },
-  "required": [
-    "runId",
-    "goal"
-  ],
-  "additionalProperties": {}
-}
-```
-
-## `agent.status`
+## `agent.status_changed`
 
 ```json
 {
@@ -1174,6 +1380,27 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           ],
           "x-untrusted": true,
           "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        "repo": {
+          "description": "Repository the run works in (absolute path or remote URL)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "allOf": [
+            {
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            },
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            }
+          ]
         }
       },
       "required": [
@@ -1181,7 +1408,9 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
         "projectId",
         "label",
         "state",
-        "goal"
+        "goal",
+        "repo",
+        "createdAt"
       ]
     }
   },
@@ -1225,7 +1454,9 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "pattern": "^[a-z0-9][a-z0-9._-]*$",
+            "description": "Profile name, lowercase"
           },
           "status": {
             "type": "string",
@@ -1238,6 +1469,139 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "cancelled",
               "handed-off"
             ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Plain-language status line written by the daemon (trusted)"
+          },
+          "task": {
+            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "taskAttachment": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^att-[0-9a-f]+$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "mediaType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "bytes",
+              "sha256",
+              "mediaType"
+            ],
+            "additionalProperties": {},
+            "description": "Full text stored by the daemon; fetch it with attachments.get"
+          },
+          "result": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "report": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "data": {},
+              "verdict": {},
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "commit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "costUsd": {
+                "type": "number"
+              },
+              "notionalCostUsd": {
+                "type": "number"
+              },
+              "turns": {
+                "type": "number"
+              },
+              "wallSeconds": {
+                "type": "number"
+              },
+              "billing": {
+                "type": "string"
+              },
+              "handoffTo": {
+                "type": "string"
+              },
+              "exitCode": {
+                "type": "number"
+              },
+              "adopted": {
+                "type": "boolean"
+              },
+              "limit": {},
+              "verification": {}
+            },
+            "additionalProperties": {},
+            "x-untrusted": true,
+            "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "allOf": [
+              {
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            ]
           }
         },
         "required": [
@@ -1246,7 +1610,12 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "parent",
           "depth",
           "profile",
-          "status"
+          "status",
+          "text",
+          "task",
+          "taskAttachment",
+          "result",
+          "updatedAt"
         ]
       }
     }
@@ -1343,6 +1712,230 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
   },
   "required": [
     "approvals"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `snapshot.steps`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "v": {
+            "type": "number",
+            "const": 1
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "scope": {
+            "type": "string",
+            "pattern": "^(run-|prj-|daemon$)"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Resume cursor; persisted per scope with the event write, stable across daemon restarts"
+          },
+          "entity": {
+            "type": "string",
+            "minLength": 1
+          },
+          "entitySeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "type": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+          },
+          "typeVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "durability": {
+            "type": "string",
+            "enum": [
+              "durable",
+              "ephemeral"
+            ]
+          },
+          "ts": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            ]
+          },
+          "epochMs": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "projectId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+          },
+          "data": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "v",
+          "id",
+          "scope",
+          "seq",
+          "entity",
+          "entitySeq",
+          "type",
+          "typeVersion",
+          "durability",
+          "ts",
+          "epochMs",
+          "projectId",
+          "runId",
+          "agentId",
+          "text",
+          "data"
+        ]
+      },
+      "description": "Recent durable events of the scope, oldest first (step history)"
+    }
+  },
+  "required": [
+    "steps"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `snapshot.threads`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "attachment": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^att-[0-9a-f]+$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "mediaType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "bytes",
+              "sha256",
+              "mediaType"
+            ],
+            "additionalProperties": {},
+            "description": "Full text stored by the daemon; fetch it with attachments.get"
+          }
+        },
+        "required": [
+          "seq",
+          "from",
+          "to",
+          "at",
+          "text",
+          "attachment"
+        ]
+      },
+      "description": "Recent thread messages, oldest first"
+    }
+  },
+  "required": [
+    "messages"
   ],
   "additionalProperties": {}
 }

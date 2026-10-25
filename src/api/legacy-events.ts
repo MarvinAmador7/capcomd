@@ -5,6 +5,7 @@
 // SCOPE_EVENT_TYPES is the closed list scope.ts may emit (addEvent's `type` is typed by it), and
 // tests/api/legacy-events.test.ts fails when a type has no schema.
 import { z } from "zod";
+import { AttachmentRef } from "./inline-cap";
 
 /** Text written by an agent or worker. Render as plain text only: never as markdown, links or actions. */
 export const UntrustedText = z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions" });
@@ -12,7 +13,27 @@ export const UntrustedText = z.string().meta({ "x-untrusted": true, description:
 const S = z.string(), N = z.number(), nS = z.string().nullable(), U = z.unknown(), T = UntrustedText, nT = UntrustedText.nullable();
 const task = { taskId: S, holder: S, epoch: N };
 const budget = { add: U, budget: U, by: U };
-const finish = { result: U, spent: U, budget: U };
+/** agent.done / agent.failed `result`. Every text field is agent-written. Unknown fields may appear (the agent's declared result bag). */
+export const AgentResult = z.looseObject({
+	summary: nT.optional(),
+	report: nT.optional(),
+	error: nT.optional(),
+	data: U.optional(),
+	verdict: U.optional(),
+	branch: nS.optional(),
+	commit: nS.optional(),
+	costUsd: N.optional(),
+	notionalCostUsd: N.optional(),
+	turns: N.optional(),
+	wallSeconds: N.optional(),
+	billing: S.optional(),
+	handoffTo: S.optional(),
+	exitCode: N.optional(),
+	adopted: z.boolean().optional(),
+	limit: U.optional(),
+	verification: U.optional(),
+}).meta({ "x-untrusted": true, description: "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions" });
+const finish = { result: AgentResult, spent: U, budget: U };
 const kv = { k: S, version: N, writer: S.optional() };
 
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
@@ -32,14 +53,14 @@ export type ScopeEventType = (typeof SCOPE_EVENT_TYPES)[number];
 const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verify.failed", "merge.succeeded", "merge.failed"]);
 
 export const LegacyEventShapes = {
-	"run.new": { budget: U, label: nS },
+	"run.created": { budget: U, label: nS, goal: nT.optional() },
 	"run.granted": budget,
-	"agent.spawned": { parent: nS, depth: N, profile: U, budget: U, limits: U, agent: U, task: T, key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional() },
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: U, task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional() },
 	"agent.started": {},
 	"agent.done": finish,
 	"agent.failed": finish,
-	"agent.checkpoint": { ref: S, sha: S, at: N, reason: T, files: N },
-	"agent.notice": { kind: S, detail: T, at: N },
+	"agent.checkpointed": { ref: S, sha: S, at: N, reason: T, files: N },
+	"agent.notice_raised": { kind: S, detail: T, at: N },
 	"agent.notice_cleared": { kind: nS },
 	"agent.paused": { result: U, until: U },
 	"agent.resumed": { epoch: N, by: nS },
@@ -50,14 +71,14 @@ export const LegacyEventShapes = {
 	"deadlock.detected": { cycle: z.array(S) },
 	"drive.failed": { kind: S, error_kind: S, message: T, attempt: N, driver: U, consecutive: N },
 	"token.revoked": { jti: S, reason: nT },
-	"message.sent": { to: U, seq: N, bytes: N },
+	"message.sent": { to: U, seq: N, bytes: N, text: nT.describe("Message body, inline when ≤ 64 KB (UTF-8); null when stored as `attachment`"), attachment: AttachmentRef.nullable().describe("Set when the body is over 64 KB: the full body is stored as this attachment") },
 	"verify.started": { id: S },
 	"verify.passed": { id: S },
 	"verify.failed": { id: S },
 	"merge.started": { id: S },
 	"merge.succeeded": { id: S },
 	"merge.failed": { id: S },
-	"merge.awaiting_approval": { id: S, target: U, ref: U, reason: T.nullable().optional() },
+	"merge.approval_requested": { id: S, target: U, ref: U, reason: T.nullable().optional() },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
 	"task.added": { taskId: S, title: T, after: z.array(S).optional() },
@@ -66,8 +87,8 @@ export const LegacyEventShapes = {
 	"task.done": { ...task, result: U.optional() },
 	"task.released": task,
 	"kv.put": kv,
-	"kv.delete": kv,
-	"kv.cas": kv,
+	"kv.deleted": kv,
+	"kv.swapped": kv,
 } as const satisfies Record<string, z.ZodRawShape>;
 
 export const LegacyEventData = Object.fromEntries(

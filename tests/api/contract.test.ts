@@ -47,7 +47,7 @@ describe("harness.v1 contract", () => {
 	});
 	test("an old client decodes a payload with an unknown new field (§6.2)", () => {
 		const line = { v: 1, id: "evt_9", scope: "run-1", seq: 9, entity: "approval:apr-k1", entitySeq: 1, type: "approval.requested", typeVersion: 1, durability: "durable",
-			ts: "2026-10-25T03:55:00.000Z", epochMs: 1792900500000, projectId: null, runId: "run-1", agentId: null, futureEnvelopeField: 1,
+			ts: "2026-10-25T03:55:00.000Z", epochMs: 1792900500000, projectId: null, runId: "run-1", agentId: null, text: "Merged.", futureEnvelopeField: 1,
 			data: { approvalId: "apr-k1", kind: "merge", question: "q", requestedBy: { agentId: null, runId: "run-1" }, subject: {}, expiresAt: null, priority: "high" } };
 		const ev = HarnessEvent.parse(line);
 		expect(EventData["approval.requested"].parse(ev.data)).toMatchObject({ priority: "high" });
@@ -73,5 +73,20 @@ describe("decision idempotency (§7.4)", () => {
 	test("new key on a decided approval: 409 already_decided with who and when", () => {
 		expect(resolveDecide({ prior: undefined, approvalId: "apr-k1", body, existingDecision: decided })).toEqual({ kind: "error", status: 409, code: "already_decided", existing: decided });
 		expect(resolveDecide({ prior: undefined, approvalId: "apr-k1", body, existingDecision: null })).toEqual({ kind: "apply" });
+	});
+});
+
+describe("published payload schemas (phase 1)", () => {
+	const schemas = (spec as any).components.schemas as Record<string, any>;
+	const byType = new Map(Object.values(schemas).filter((s) => s["x-event-type"]).map((s) => [s["x-event-type"], s]));
+	test("every event payload and stream frame is under components.schemas", () => {
+		for (const t of [...Object.keys(EventData), ...Object.keys(StreamFrames)]) expect(byType.has(t)).toBe(true);
+		expect(byType.get("stream.reset").required).toEqual(["snapshotSeq", "reason"]);
+	});
+	test("timestamps carry one pattern and format date-time, no allOf", () => {
+		const ts = schemas.ApprovalRequestedData.properties.expiresAt;
+		expect(ts.format).toBe("date-time");
+		expect(ts.allOf).toBeUndefined();
+		expect(typeof ts.pattern).toBe("string");
 	});
 });

@@ -38,7 +38,14 @@ const nullFold = (n: any): any => {
 };
 const errorSchema = z.toJSONSchema(ApiError, { unrepresentable: "any" }) as any;
 delete errorSchema.$schema; delete errorSchema.id;
-(spec as any).components = { ...(spec as any).components, schemas: { ...(spec as any).components?.schemas, Error: errorSchema } };
+// Every event payload and stream frame is a named component so the Swift client gets one type per event.
+const schemaName = (t: string) => t.split(/[._]/).map((w) => w[0]!.toUpperCase() + w.slice(1)).join("");
+const payloads: Record<string, any> = {};
+for (const m of [EventData, StreamFrames]) for (const [t, sc] of Object.entries<z.ZodType>(m)) {
+	const j = z.toJSONSchema(sc, { unrepresentable: "any" }) as any; delete j.$schema; delete j.id;
+	payloads[`${schemaName(t)}${t.startsWith("stream.") || t.startsWith("snapshot.") ? "Frame" : "Data"}`] = { ...j, "x-event-type": t };
+}
+(spec as any).components = { ...(spec as any).components, schemas: { ...(spec as any).components?.schemas, Error: errorSchema, ...payloads } };
 for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) {
 	if (op.operationId === "health") continue;
 	for (const s of ERROR_STATUSES) op.responses[String(s)] ??= { description: `Error (${s})`, content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
