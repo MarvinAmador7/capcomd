@@ -114,11 +114,31 @@ describe("lifecycle API", () => {
 		expect(t).not.toContain("snapshot.steps");
 		expect(t).not.toContain("event: message.sent");
 		expect(t).not.toContain("event: task.added");
-		expect(t).toMatch(/id: 6\nevent: agent\.done/);
+		expect(t).toMatch(/\n\nevent: agent\.done/); // shares seq 6 with run.completed: no id on the first frame of the group
+		expect(t).not.toMatch(/id: 6\nevent: agent\.done/);
 		expect(t).toMatch(/id: 6\nevent: run\.completed\ndata: [^\n]*"text":"The run finished/);
 		const again = await readUntil(await req("/v1/streams/run-1/events?feed=lifecycle", { "last-event-id": "3" }), /run\.completed/);
 		expect(again).not.toContain("snapshot.");
 		expect(again).toContain("event: agent.done");
+	});
+
+	test("cut between agent.done and run.completed (same seq): resume from the id the client saw redelivers run.completed", async () => {
+		for (const path of ["/v1/streams/run-1/events?feed=lifecycle", "/v1/streams/run-1/events"]) {
+			const { src, req } = app();
+			const res = await req(path);
+			setTimeout(() => src.push("run-1", { at: at + 60_000, type: "AGENT_DONE", agentId: "a1", data: { result: {}, spent: {}, budget: {} } }), 60);
+			const t = await readUntil(res, /id: \d+\nevent: (agent\.done|run\.completed)/);
+			const n = Number(t.match(/id: (\d+)\nevent: (agent\.done|run\.completed)/)![1]);
+			// Simulate a drop right after the agent.done frame: the client only parsed what precedes it.
+			const seen = t.slice(0, t.lastIndexOf("\n\n", t.indexOf("event: agent.done")) + 2); // up to the start of the agent.done frame
+			const lastSeen = [...seen.matchAll(/^id: (\d+)$/gm)].map((m) => m[1]!).at(-1)!;
+			expect(Number(lastSeen)).toBeLessThan(n);
+			const again = await readUntil(await req(path, { "last-event-id": lastSeen }), new RegExp(`id: ${n}\\n`));
+			if (path.includes("lifecycle")) {
+				expect(t).not.toMatch(new RegExp(`id: ${n}\\nevent: agent\\.done`)); // only the last frame of the group has the id
+				expect(again).toMatch(new RegExp(`event: agent\\.done[\\s\\S]*id: ${n}\\nevent: run\\.completed`));
+			} else expect(again).toMatch(new RegExp(`id: ${n}\\nevent: agent\\.done`)); // full feed: one frame for this seq
+		}
 	});
 });
 
