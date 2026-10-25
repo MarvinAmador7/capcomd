@@ -436,7 +436,12 @@
                       },
                       "ts": {
                         "type": "string",
-                        "format": "date-time"
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                        "allOf": [
+                          {
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        ]
                       },
                       "epochMs": {
                         "type": "integer",
@@ -537,7 +542,7 @@
     "/v1/streams/{scope}/events": {
       "get": {
         "operationId": "events.stream",
-        "description": "SSE. Each event frame: `id: <seq>`, `event: <type>`, `data: <envelope JSON>`. Resume by sending `Last-Event-ID: <seq>`.\nIf that seq was compacted away, or this client's buffer overflowed (slow reader), the server sends `event: stream.reset` with {snapshotSeq, reason},\nthen `snapshot.*` frames ending with `snapshot.end`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.\nA `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to `daemon` and open a run stream on drill-in.",
+        "description": "SSE. Each event frame: `id: <seq>`, `event: <type>`, `data: <envelope JSON>`. Resume by sending `Last-Event-ID: <seq>`.\nIf that seq was compacted away, or this client's buffer overflowed (slow reader), the server sends `event: stream.reset` with {snapshotSeq, reason},\nthen `snapshot.*` frames ending with `snapshot.end`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.\nA `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to `daemon` and open a run stream on drill-in.\nThe SSE `event:` field is the frame type: the envelope's dotted `type` for events, else `stream.reset` or `snapshot.*`.\nTimestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z.",
         "parameters": [
           {
             "name": "scope",
@@ -569,7 +574,8 @@
                       "type": "object",
                       "properties": {
                         "event": {
-                          "const": "message"
+                          "type": "string",
+                          "description": "Frame type: the envelope's dotted type, or stream.reset / snapshot.*"
                         },
                         "data": {
                           "type": "object",
@@ -619,7 +625,12 @@
                             },
                             "ts": {
                               "type": "string",
-                              "format": "date-time"
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                              "allOf": [
+                                {
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                                }
+                              ]
                             },
                             "epochMs": {
                               "type": "integer",
@@ -866,7 +877,12 @@
                         "string",
                         "null"
                       ],
-                      "format": "date-time"
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                      "allOf": [
+                        {
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        }
+                      ]
                     },
                     "reason": {
                       "type": [
@@ -996,8 +1012,14 @@
                   "string",
                   "null"
                 ],
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                "allOf": [
+                  {
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                  },
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                ]
               },
               "reason": {
                 "type": [

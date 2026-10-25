@@ -1,6 +1,12 @@
 // harness.v1 event envelope (docs/harness-architecture.md §6.1). Phase 0 of the harness: the contract first.
 import { z } from "zod";
 
+/** Every server timestamp: RFC 3339 UTC, exactly 3 millisecond digits (2026-10-25T07:57:00.000Z). Date#toISOString() always produces this. */
+export const TIMESTAMP_PATTERN = "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$";
+export const TIMESTAMP_DOC = "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z";
+export const Timestamp = z.iso.datetime({ precision: 3 }).regex(new RegExp(TIMESTAMP_PATTERN));
+export const isoTs = (epochMs: number): string => new Date(epochMs).toISOString();
+
 export const Durability = z.enum(["durable", "ephemeral"]);
 
 export const HarnessEvent = z.object({
@@ -14,7 +20,7 @@ export const HarnessEvent = z.object({
 	type: z.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/),
 	typeVersion: z.number().int().positive(),
 	durability: Durability,
-	ts: z.iso.datetime(),
+	ts: Timestamp,
 	epochMs: z.number().int(),
 	projectId: z.string().nullable(),
 	runId: z.string().nullable(),
