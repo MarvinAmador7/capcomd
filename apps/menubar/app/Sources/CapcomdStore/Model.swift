@@ -1,4 +1,4 @@
-/// Agent status per contract `agent.status` enum.
+/// Agent status per contract `agent.status_changed` / agents.tree `status` enum.
 public enum AgentStatus: String, Sendable, Hashable, CaseIterable {
   case pending, running, paused, done, failed, cancelled, handedOff = "handed-off", unknown
   public init(wire: String?) { self = wire.flatMap(AgentStatus.init(rawValue:)) ?? .unknown }
@@ -37,11 +37,13 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// Repo, if capcomd ever sends one (not in contract 7b4cb74; read from `repo` or `agent.repo` when present).
   public var repo: String?
   public var spawnedAtMs: Int
+  /// Plain-language status line from agents.tree / snapshot.agents `text` (daemon-written, trusted). Shown as the activity line.
+  public var activity: String? = nil
   public var kind: ProfileKind { ProfileKind(profile: profile) }
-  /// "lead" → "Lead"; nil → "Agent". (SPEC open question 1: unknown profiles are sentence-cased.)
+  /// Profile names stay lowercase as the contract sends them ("lead"); nil → "agent".
   public var displayName: String {
-    guard let p = profile, let f = p.first else { return "Agent" }
-    return f.uppercased() + p.dropFirst()
+    guard let p = profile, !p.isEmpty else { return "agent" }
+    return p
   }
 }
 
@@ -132,6 +134,8 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   public var suffix: String?
   public var kind: ProfileKind
   public var status: AgentStatus
+  /// Daemon-written activity line (trusted plain text), if known.
+  public var activity: String? = nil
   public var depth: Int
   public var waiting: Bool            // this node has a pending approval
   public var descendantWaiting: Bool  // bubbled up for collapsed ancestors

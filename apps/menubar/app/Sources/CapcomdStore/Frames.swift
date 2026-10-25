@@ -37,7 +37,14 @@ public enum StreamFrame: Sendable, Hashable {
 }
 
 public struct SnapshotRun: Codable, Sendable, Hashable { public var id: String; public var projectId: String?; public var label: String?; public var state: String; public var goal: String? }
-public struct SnapshotAgent: Codable, Sendable, Hashable { public var id: String; public var runId: String; public var parent: String?; public var depth: Int; public var profile: String?; public var status: String }
+public struct SnapshotAgent: Codable, Sendable, Hashable {
+  public var id: String; public var runId: String; public var parent: String?; public var depth: Int; public var profile: String?; public var status: String
+  /// Daemon-written status line (trusted). Optional so older daemons still decode.
+  public var text: String?
+  /// Agent-written (x-untrusted): wrap in UntrustedText, render as plain text only.
+  public var task: String?
+  public var updatedAt: String?
+}
 public struct SnapshotApproval: Codable, Sendable, Hashable {
   public var approvalId: String; public var kind: String; public var status: String; public var question: String
   public var requestedBy: RequestedBy?; public var subject: [String: JSONValue]?

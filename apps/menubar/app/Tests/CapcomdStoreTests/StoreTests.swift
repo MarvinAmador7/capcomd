@@ -42,9 +42,9 @@ final class StoreTests: XCTestCase {
   func testAgentTreeProfilesSuffixesAndBubbling() async throws {
     let s = CapcomdStore(); try feed(s, "contract")
     let tree = s.agentTree(runId: "run-a1")
-    XCTAssertEqual(tree.map(\.name), ["Planner"])
+    XCTAssertEqual(tree.map(\.name), ["planner"])
     let kids = tree[0].children
-    XCTAssertEqual(kids.map(\.name), ["Worker", "Worker", "Critic", "Mystery"])
+    XCTAssertEqual(kids.map(\.name), ["worker", "worker", "critic", "mystery"])
     XCTAssertEqual(kids[0].suffix, "7a3f"); XCTAssertEqual(kids[1].suffix, "9b21")   // repeated profile → short task id
     XCTAssertNil(kids[2].suffix)
     XCTAssertEqual(kids.map(\.kind.symbol), ["hammer", "hammer", "checkmark.seal", "hexagon"])
@@ -143,5 +143,29 @@ final class StoreTests: XCTestCase {
     let a = CapcomdStore(prefs: p); XCTAssertEqual(a.prefs.drillView, .activity); XCTAssertFalse(a.prefs.activityCollapsed)
     a.prefs.drillView = .trace; a.prefs.activityCollapsed = true
     let b = CapcomdStore(prefs: p); XCTAssertEqual(b.prefs.drillView, .trace); XCTAssertTrue(b.prefs.activityCollapsed)
+  }
+
+  /// Phase-1 (d5c8bc6): `agent.status_changed`, snapshot agent `text` as the activity line, untrusted `task` as plain detail,
+  /// snapshot.steps/threads tolerated, lowercase profile names.
+  func testPhase1StatusChangedAndSnapshotActivity() async throws {
+    let s = CapcomdStore()
+    let env = { (seq: Int, type: String, data: String) in
+      #"{"v":1,"id":"evt_\#(seq)","scope":"run-z","seq":\#(seq),"entity":"agt-1","entitySeq":1,"type":"\#(type)","typeVersion":1,"durability":"durable","ts":"2026-10-25T06:00:00.000Z","epochMs":\#(seq),"projectId":"prj-z","runId":"run-z","agentId":"agt-1","text":"Agent agt-1 is now running.","data":\#(data)}"# }
+    let frames: [(String, String)] = [
+      ("stream.reset", #"{"snapshotSeq":5,"reason":"compacted"}"#),
+      ("snapshot.agents", #"{"agents":[{"id":"agt-1","runId":"run-z","parent":null,"depth":0,"profile":"lead","status":"pending","text":"Waiting to start","task":"**Do** [it](http://evil)","taskAttachment":null,"result":null,"updatedAt":null}]}"#),
+      ("snapshot.approvals", #"{"approvals":[]}"#),
+      ("snapshot.steps", #"{"steps":[]}"#),
+      ("snapshot.threads", #"{"messages":[]}"#),
+      ("snapshot.end", #"{"snapshotSeq":5}"#),
+      ("agent.status_changed", env(6, "agent.status_changed", #"{"agentId":"agt-1","status":"running"}"#)),
+    ]
+    for (e, d) in frames { s.receive(StreamFrame.parse(event: e, data: d), scope: "run-z") }
+    let node = try XCTUnwrap(s.agentTree(runId: "run-z").first)
+    XCTAssertEqual(node.name, "lead"); XCTAssertEqual(node.status, .running); XCTAssertEqual(node.activity, "Waiting to start")
+    let step = try XCTUnwrap(s.steps(forRun: "run-z").first)
+    XCTAssertEqual(step.text, "Waiting to start"); XCTAssertEqual(step.status, .running)
+    XCTAssertEqual(step.detail?.plain, "**Do** [it](http://evil)")   // untrusted task kept literal
+    XCTAssertEqual(s.lastSeq["run-z"], 6)
   }
 }

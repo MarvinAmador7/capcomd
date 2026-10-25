@@ -34,6 +34,8 @@ struct AgentTreeRow: View {
           HStack(spacing: 4) {
             Text(verbatim: node.name).font(Theme.treeRowFont)
             if let s = node.suffix { Text(verbatim: s).font(Theme.monoTime).foregroundStyle(.tertiary) }
+            // Daemon-written activity line (trusted, but still verbatim: never markdown).
+            if let act = node.activity { Text(verbatim: act).font(Theme.monoTime).foregroundStyle(.secondary).lineLimit(1) }
           }
         }
         .buttonStyle(.plain)

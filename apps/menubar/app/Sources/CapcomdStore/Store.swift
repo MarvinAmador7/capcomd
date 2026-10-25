@@ -62,7 +62,7 @@ public final class CapcomdStore {
       return kids.map { a in
         let children = build(a.id, depth: depth + 1)
         let w = waiting.contains(a.id)
-        return AgentNode(id: a.id, name: a.displayName, suffix: suffixes[a.id], kind: a.kind, status: a.status, depth: depth,
+        return AgentNode(id: a.id, name: a.displayName, suffix: suffixes[a.id], kind: a.kind, status: a.status, activity: a.activity, depth: depth,
                          waiting: w, descendantWaiting: children.contains { $0.waiting || $0.descendantWaiting }, children: children)
       }
     }
@@ -146,11 +146,12 @@ public final class CapcomdStore {
     for rid in agentRuns { runs[rid, default: Run(id: rid, projectId: nil, label: nil, goal: nil, state: "running", startedAtMs: nil, lastEventMs: 0)].agents = [:]; runs[rid]?.steps = [] }
     for (i, a) in b.agents.enumerated() {
       let ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                     task: nil, key: nil, repo: nil, spawnedAtMs: i)
+                     task: a.task.map(UntrustedText.init), key: nil, repo: nil, spawnedAtMs: i, activity: a.text)
       runs[a.runId]?.agents[a.id] = ag
-      // Snapshots carry no step history (contract gap): synthesize one Activity row per agent.
+      // One Activity row per agent: the daemon's `text` is the activity line, the (untrusted) task is the detail.
+      // TODO: snapshot.steps carries real step history (phase 1); not rendered yet.
       upsertStep(runId: a.runId, Step(id: "agent:\(a.id)", seq: snapshotSeq, epochMs: 0, agentId: a.id, kind: .agent, phase: Self.phase(ag.kind),
-                                      text: ag.displayName, detail: nil, status: Self.stepStatus(ag.status)))
+                                      text: a.text ?? ag.displayName, detail: ag.task, status: Self.stepStatus(ag.status)))
     }
     for a in b.approvals where a.status == "pending" {
       let rid = a.requestedBy?.runId ?? (scope.hasPrefix("run-") ? scope : nil)
@@ -191,7 +192,7 @@ public final class CapcomdStore {
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
                                     phase: Self.phase(a.kind), text: a.displayName, detail: a.task, status: .queued))
     case "agent.started", "agent.resumed": setStatus(runId, agentId, .running, e)
-    case "agent.status": setStatus(runId, agentId, AgentStatus(wire: d["status"]?.string), e)
+    case "agent.status_changed", "agent.status": setStatus(runId, agentId, AgentStatus(wire: d["status"]?.string), e)
     case "agent.done": setStatus(runId, agentId, .done, e)
     case "agent.failed", "drive.failed": setStatus(runId, agentId, .failed, e)
     case "agent.cancelled", "agent.reaped": setStatus(runId, agentId, .cancelled, e)
@@ -201,14 +202,14 @@ public final class CapcomdStore {
       let st: StepStatus = e.type == "verify.started" ? .running : e.type == "verify.passed" ? .done : .failed
       let text = e.type == "verify.started" ? "Verifying" : e.type == "verify.passed" ? "Verified" : "Verification failed"
       upsertStep(runId: runId, Step(id: "verify:\(e.entity)", seq: e.seq, epochMs: e.epochMs, agentId: agentId, kind: .verify, phase: .ship, text: text, detail: nil, status: st))
-    case "merge.started", "merge.succeeded", "merge.failed", "merge.awaiting_approval", "merge.approved", "merge.denied":
+    case "merge.started", "merge.succeeded", "merge.failed", "merge.approval_requested", "merge.awaiting_approval", "merge.approved", "merge.denied":
       guard let runId else { return }
       let key = d["id"]?.string ?? e.entity
       let (st, text): (StepStatus, String) = switch e.type {
         case "merge.started": (.running, "Merging")
         case "merge.succeeded": (.done, "Merged")
         case "merge.failed": (.failed, "Merge failed")
-        case "merge.awaiting_approval": (.waiting, "Waiting for merge approval")
+        case "merge.approval_requested", "merge.awaiting_approval": (.waiting, "Waiting for merge approval")
         case "merge.approved": (.running, "Merge approved")
         default: (.failed, "Merge denied")
       }
