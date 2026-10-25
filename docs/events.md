@@ -67,7 +67,9 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
     "limits": {},
     "agent": {},
     "task": {
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions"
     },
     "key": {
       "type": [
@@ -80,7 +82,8 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
     },
     "review": {
       "type": "boolean"
-    }
+    },
+    "grant": {}
   },
   "required": [
     "parent",
@@ -108,13 +111,127 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
 }
 ```
 
+## `agent.done`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "result": {},
+    "spent": {},
+    "budget": {}
+  },
+  "required": [
+    "result",
+    "spent",
+    "budget"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.failed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "result": {},
+    "spent": {},
+    "budget": {}
+  },
+  "required": [
+    "result",
+    "spent",
+    "budget"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `agent.checkpoint`
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "properties": {},
+  "properties": {
+    "ref": {
+      "type": "string"
+    },
+    "sha": {
+      "type": "string"
+    },
+    "at": {
+      "type": "number"
+    },
+    "reason": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+    },
+    "files": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "ref",
+    "sha",
+    "at",
+    "reason",
+    "files"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.notice`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+    },
+    "at": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "kind",
+    "detail",
+    "at"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.notice_cleared`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "kind"
+  ],
   "additionalProperties": {}
 }
 ```
@@ -234,9 +351,15 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
   "type": "object",
   "properties": {
     "reason": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string",
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "by": {
@@ -286,7 +409,9 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
       "type": "string"
     },
     "message": {
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions"
     },
     "attempt": {
       "type": "number"
@@ -319,9 +444,15 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
       "type": "string"
     },
     "reason": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string",
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        {
+          "type": "null"
+        }
       ]
     }
   },
@@ -357,6 +488,114 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
 }
 ```
 
+## `verify.started`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `verify.passed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `verify.failed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `merge.started`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `merge.succeeded`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `merge.failed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `merge.awaiting_approval`
 
 ```json
@@ -369,13 +608,23 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
     },
     "target": {},
     "ref": {},
-    "reason": {}
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string",
+          "x-untrusted": true,
+          "description": "Agent-written text: render as plain text, never markdown, links or actions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
   },
   "required": [
     "id",
     "target",
-    "ref",
-    "reason"
+    "ref"
   ],
   "additionalProperties": {}
 }
@@ -430,7 +679,9 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
       "type": "string"
     },
     "title": {
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions"
     },
     "after": {
       "type": "array",
@@ -554,6 +805,81 @@ Every event uses the envelope in `src/api/envelope.ts`; the payload below is its
     "taskId",
     "holder",
     "epoch"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `kv.put`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "k": {
+      "type": "string"
+    },
+    "version": {
+      "type": "number"
+    },
+    "writer": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "k",
+    "version"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `kv.delete`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "k": {
+      "type": "string"
+    },
+    "version": {
+      "type": "number"
+    },
+    "writer": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "k",
+    "version"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `kv.cas`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "k": {
+      "type": "string"
+    },
+    "version": {
+      "type": "number"
+    },
+    "writer": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "k",
+    "version"
   ],
   "additionalProperties": {}
 }

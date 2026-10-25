@@ -23,8 +23,12 @@ export const HarnessEvent = z.object({
 });
 export type HarnessEvent = z.infer<typeof HarnessEvent>;
 
-/** Today's upper-case event types (capcomd.v1) map to dotted lower-case names in harness.v1: AGENT_SPAWNED → agent.spawned. */
+/** Single-word legacy types have no namespace; they get an explicit dotted name (decision 9). */
+const DOTTED_OVERRIDES: Record<string, string> = { MERGED: "merge.succeeded" };
+
+/** Today's upper-case event types (capcomd.v1) map to dotted lower-case names in harness.v1: AGENT_SPAWNED → agent.spawned, MERGED → merge.succeeded. */
 export function dottedType(legacy: string): string {
+	if (legacy in DOTTED_OVERRIDES) return DOTTED_OVERRIDES[legacy]!;
 	if (!/^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$/.test(legacy)) throw new Error(`not a capcomd.v1 event type: ${legacy}`);
 	const [head, ...rest] = legacy.toLowerCase().split("_");
 	return `${head}.${rest.join("_")}`;
