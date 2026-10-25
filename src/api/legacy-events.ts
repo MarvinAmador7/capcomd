@@ -5,6 +5,7 @@
 // SCOPE_EVENT_TYPES is the closed list scope.ts may emit (addEvent's `type` is typed by it), and
 // tests/api/legacy-events.test.ts fails when a type has no schema.
 import { z } from "zod";
+import { AttachmentRef } from "./inline-cap";
 
 /** Text written by an agent or worker. Render as plain text only: never as markdown, links or actions. */
 export const UntrustedText = z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions" });
@@ -50,7 +51,7 @@ export const LegacyEventShapes = {
 	"deadlock.detected": { cycle: z.array(S) },
 	"drive.failed": { kind: S, error_kind: S, message: T, attempt: N, driver: U, consecutive: N },
 	"token.revoked": { jti: S, reason: nT },
-	"message.sent": { to: U, seq: N, bytes: N },
+	"message.sent": { to: U, seq: N, bytes: N, text: nT.describe("Message body, inline when ≤ 64 KB (UTF-8); null when stored as `attachment`"), attachment: AttachmentRef.nullable().describe("Set when the body is over 64 KB: the full body is stored as this attachment") },
 	"verify.started": { id: S },
 	"verify.passed": { id: S },
 	"verify.failed": { id: S },

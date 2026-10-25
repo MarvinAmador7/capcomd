@@ -479,12 +479,54 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "bytes": {
       "type": "number"
+    },
+    "text": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "attachment": {
+      "description": "Full text stored by the daemon; fetch it with attachments.get",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^att-[0-9a-f]+$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mediaType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "bytes",
+        "sha256",
+        "mediaType"
+      ],
+      "additionalProperties": {}
     }
   },
   "required": [
     "to",
     "seq",
-    "bytes"
+    "bytes",
+    "text",
+    "attachment"
   ],
   "additionalProperties": {}
 }

@@ -5,6 +5,7 @@ import { redactShapes } from "../agents/redact";
 // either leaves the whole spawn or none of it.
 import { strictEventData, type ScopeEventType } from "../api/legacy-events";
 import { dottedType } from "../api/envelope";
+import { inlineOrAttach } from "../api/inline-cap";
 import type { RawAccess } from "rivetkit/db";
 import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -213,6 +214,7 @@ export const scopeActor = actor({
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, media_type TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS agent_logs (seq INTEGER PRIMARY KEY, agent_id TEXT NOT NULL, at INTEGER NOT NULL, stream TEXT NOT NULL, line TEXT NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS idem (idem_key TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`
@@ -571,9 +573,17 @@ export const scopeActor = actor({
         const m = await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM messages");
         seq = Number(m[0]!.m) + 1;
         await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key) VALUES (?, ?, ?, ?, ?, ?)", seq, params.to, params.from, params.body, Date.now(), params.key ?? null);
-        await addEvent(tx, "MESSAGE_SENT", params.from, { to: params.to, seq, bytes: params.body.length }, `msg-${seq}`);
+        // 64 KB inline cap: longer bodies are stored in full as an attachment and the event carries a pointer.
+        const inl = inlineOrAttach(redactShapes(params.body));
+        if (inl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", inl.attachment.id, inl.attachment.sha256, inl.attachment.bytes, inl.attachment.mediaType, inl.body, Date.now());
+        await addEvent(tx, "MESSAGE_SENT", params.from, { to: params.to, seq, bytes: params.body.length, text: inl.text, attachment: inl.attachment }, `msg-${seq}`);
       }, { name: "scopeSend" });
       return { seq };
+    },
+    /** Full text of an attachment written by the 64 KB inline cap. */
+    async getAttachment(c, params: { id: string }) {
+      const r = (await c.db.execute("SELECT * FROM attachments WHERE id = ?", params.id)) as any[];
+      return r.length ? { id: r[0].id as string, sha256: r[0].sha256 as string, bytes: Number(r[0].bytes), mediaType: r[0].media_type as string, body: r[0].body as string } : null;
     },
     async inbox(c, params: { agentId: string; after?: number }) {
       return ((await c.db.execute("SELECT * FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, params.after ?? 0)) as any[])
