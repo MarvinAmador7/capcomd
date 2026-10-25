@@ -20,7 +20,11 @@ const nullFold = (n: any): any => {
 	// Published schemas stay open (§6.2: old clients ignore new fields); the daemon checks its own output strictly.
 	if (o.additionalProperties === false) delete o.additionalProperties;
 	// Pin the timestamp wire format (Date#toISOString): every date-time carries the exact pattern.
-	if (o.format === "date-time") { o.pattern = TIMESTAMP_PATTERN; o.description ??= TIMESTAMP_DOC; }
+	if (o.format === "date-time") {
+		o.pattern = TIMESTAMP_PATTERN; o.description ??= TIMESTAMP_DOC;
+		// One pattern per timestamp: zod's stacked allOf patterns make generators wrap the string (value1/value2).
+		if (Array.isArray(o.allOf) && o.allOf.every((a: any) => a && Object.keys(a).every((k) => k === "pattern" || k === "format"))) delete o.allOf;
+	}
 	const alts = o.anyOf;
 	if (Array.isArray(alts) && alts.length === 2) {
 		const i = alts.findIndex((a: any) => a && a.type === "null" && Object.keys(a).length === 1);
@@ -47,8 +51,17 @@ const sseEvent = (n: any): any => {
 };
 for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) for (const r of Object.values<any>(op.responses ?? {})) sseEvent(r.content?.["text/event-stream"]);
 const folded = nullFold(spec);
+// One pattern per timestamp: zod stacks extra patterns in allOf, which makes generators wrap the string (value1/value2).
+const onePattern = (n: any): void => {
+	if (!n || typeof n !== "object") return;
+	if (Array.isArray(n.allOf) && n.allOf.length && n.allOf.every((a: any) => a && Object.keys(a).length === 1 && "pattern" in a)) {
+		delete n.allOf; n.pattern = TIMESTAMP_PATTERN; n.format = "date-time"; n.description ??= TIMESTAMP_DOC;
+	}
+	for (const v of Object.values(n)) onePattern(v);
+};
+onePattern(folded);
 const loose = (n: any, path: string): string[] => !n || typeof n !== "object" ? [] :
-	[...(n.format === "date-time" && n.pattern !== TIMESTAMP_PATTERN ? [path] : []), ...(n.const === "message" ? [path] : []), ...Object.entries(n).flatMap(([k, v]) => loose(v, `${path}/${k}`))];
+	[...(n.format === "date-time" && (n.pattern !== TIMESTAMP_PATTERN || n.allOf) ? [path] : []), ...(n.const === "message" ? [path] : []), ...Object.entries(n).flatMap(([k, v]) => loose(v, `${path}/${k}`))];
 const unpinned = loose(folded, "#");
 if (unpinned.length) { console.error(`timestamp without pattern, or SSE event "message":\n${unpinned.join("\n")}`); process.exit(1); }
 const anyOfNull = (n: any, path: string): string[] => !n || typeof n !== "object" ? [] :
