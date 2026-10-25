@@ -3,6 +3,7 @@
 import { oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent } from "./envelope";
+import { LegacyEventData } from "./legacy-events";
 
 export const ApprovalId = z.string().regex(/^apr-[A-Za-z0-9]+$/).describe("Stable approval id, carried on approval events; decide with it directly");
 export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom"]);
@@ -21,8 +22,8 @@ export const Decision = z.object({
 
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
+	...LegacyEventData,
 	"run.created": z.object({ runId: z.string(), goal: z.string().nullable() }),
-	"agent.spawned": z.object({ agentId: z.string(), parent: z.string().nullable(), profile: z.string().nullable() }),
 	"agent.status": z.object({ agentId: z.string(), status: AgentStatus }),
 	"approval.requested": z.object({ approvalId: ApprovalId, kind: ApprovalKind, question: z.string(), subject: z.record(z.string(), z.unknown()), expiresAt: z.iso.datetime().nullable() }),
 	"approval.decided": Decision,
