@@ -1,0 +1,106 @@
+// Writes openapi/capcomd.json, docs/events.md and docs/harness-contract.md from src/api/contract.ts. --check fails if either is stale.
+import { readFileSync, writeFileSync } from "node:fs";
+import { OpenAPIGenerator } from "@orpc/openapi";
+import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import { z } from "zod";
+import { ApiError, contract, ERROR_STATUSES, EventData, StreamFrames, STREAM_DOC } from "../src/api/contract";
+import { HarnessEvent, TIMESTAMP_DOC, TIMESTAMP_PATTERN } from "../src/api/envelope";
+
+const spec = await new OpenAPIGenerator({ schemaConverters: [new ZodToJsonSchemaConverter()] }).generate(contract, {
+	info: { title: "capcomd harness API", version: "harness.v1" },
+});
+
+// Swift (swift-openapi-generator) handles OpenAPI 3.1 `type: [T, "null"]` but drops fields typed `anyOf: [T, {type: null}]`.
+const nullFold = (n: any): any => {
+	if (Array.isArray(n)) return n.map(nullFold);
+	if (!n || typeof n !== "object") return n;
+	const o: any = Object.fromEntries(Object.entries(n).map(([k, v]) => [k, nullFold(v)]));
+	// The oRPC converter drops zod .meta() extensions; restore x-untrusted from UntrustedText's description.
+	if (typeof o.description === "string" && o.description.startsWith("Agent-written text")) o["x-untrusted"] = true;
+	// Published schemas stay open (§6.2: old clients ignore new fields); the daemon checks its own output strictly.
+	if (o.additionalProperties === false) delete o.additionalProperties;
+	// Pin the timestamp wire format (Date#toISOString): every date-time carries the exact pattern.
+	if (o.format === "date-time") {
+		o.pattern = TIMESTAMP_PATTERN; o.description ??= TIMESTAMP_DOC;
+		// One pattern per timestamp: zod's stacked allOf patterns make generators wrap the string (value1/value2).
+		if (Array.isArray(o.allOf) && o.allOf.every((a: any) => a && Object.keys(a).every((k) => k === "pattern" || k === "format"))) delete o.allOf;
+	}
+	const alts = o.anyOf;
+	if (Array.isArray(alts) && alts.length === 2) {
+		const i = alts.findIndex((a: any) => a && a.type === "null" && Object.keys(a).length === 1);
+		const t = alts[1 - i];
+		if (i >= 0 && t && typeof t.type === "string" && !t.anyOf) {
+			const { anyOf: _, ...rest } = o;
+			return { ...rest, ...t, type: [t.type, "null"], ...(t.enum ? { enum: [...t.enum, null] } : {}) };
+		}
+	}
+	return o;
+};
+const errorSchema = z.toJSONSchema(ApiError, { unrepresentable: "any" }) as any;
+delete errorSchema.$schema; delete errorSchema.id;
+(spec as any).components = { ...(spec as any).components, schemas: { ...(spec as any).components?.schemas, Error: errorSchema } };
+for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) {
+	if (op.operationId === "health") continue;
+	for (const s of ERROR_STATUSES) op.responses[String(s)] ??= { description: `Error (${s})`, content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+}
+// oRPC's eventIterator says event is always "message"; capcomd names each frame by its type.
+const sseEvent = (n: any): any => {
+	if (!n || typeof n !== "object") return;
+	if (n.properties?.event?.const === "message") n.properties.event = { type: "string", description: "Frame type: the envelope's dotted type, or stream.reset / snapshot.*" };
+	for (const v of Object.values(n)) sseEvent(v);
+};
+for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) for (const r of Object.values<any>(op.responses ?? {})) sseEvent(r.content?.["text/event-stream"]);
+const folded = nullFold(spec);
+// One pattern per timestamp: zod stacks extra patterns in allOf, which makes generators wrap the string (value1/value2).
+const onePattern = (n: any): void => {
+	if (!n || typeof n !== "object") return;
+	if (Array.isArray(n.allOf) && n.allOf.length && n.allOf.every((a: any) => a && Object.keys(a).length === 1 && "pattern" in a)) {
+		delete n.allOf; n.pattern = TIMESTAMP_PATTERN; n.format = "date-time"; n.description ??= TIMESTAMP_DOC;
+	}
+	for (const v of Object.values(n)) onePattern(v);
+};
+onePattern(folded);
+const loose = (n: any, path: string): string[] => !n || typeof n !== "object" ? [] :
+	[...(n.format === "date-time" && (n.pattern !== TIMESTAMP_PATTERN || n.allOf) ? [path] : []), ...(n.const === "message" ? [path] : []), ...Object.entries(n).flatMap(([k, v]) => loose(v, `${path}/${k}`))];
+const unpinned = loose(folded, "#");
+if (unpinned.length) { console.error(`timestamp without pattern, or SSE event "message":\n${unpinned.join("\n")}`); process.exit(1); }
+const anyOfNull = (n: any, path: string): string[] => !n || typeof n !== "object" ? [] :
+	[...(Array.isArray(n.anyOf) && n.anyOf.some((a: any) => a?.type === "null") ? [path] : []), ...Object.entries(n).flatMap(([k, v]) => anyOfNull(v, `${path}/${k}`))];
+const closed = (n: any, path: string): string[] => !n || typeof n !== "object" ? [] :
+	[...(n.additionalProperties === false ? [path] : []), ...Object.entries(n).flatMap(([k, v]) => closed(v, `${path}/${k}`))];
+const shut = closed(folded, "#");
+if (shut.length) { console.error(`additionalProperties:false remains (published schemas must stay open):\n${shut.join("\n")}`); process.exit(1); }
+const left = anyOfNull(folded, "#");
+if (left.length) { console.error(`anyOf-null unions remain (Swift drops these fields):\n${left.join("\n")}`); process.exit(1); }
+const openapi = `${JSON.stringify(folded, null, 2)}\n`;
+
+let md = "# harness.v1 events\n\nGenerated by `bun scripts/gen-harness-contract.ts` from `src/api/contract.ts`; do not edit.\n";
+md += `Timestamps: ${TIMESTAMP_DOC} (pattern \`${TIMESTAMP_PATTERN}\`).\n`;
+md += "Every event uses the envelope in `src/api/envelope.ts`; the payload below is its `data`.\n";
+md += "Payloads are open: clients must ignore unknown fields (§6.2, new fields don't bump the version); the daemon emits only declared fields. ";
+md += "Fields with `\"x-untrusted\": true` are agent-written: render as plain text, never markdown, links or actions.\n";
+const js = (sc: z.ZodType) => JSON.stringify(nullFold(z.toJSONSchema(sc, { unrepresentable: "any" })), null, 2);
+for (const [type, schema] of Object.entries(EventData)) md += `\n## \`${type}\`\n\n\`\`\`json\n${js(schema)}\n\`\`\`\n`;
+md += `\n# Stream frames\n\n\`GET /v1/streams/{scope}/events\`: ${STREAM_DOC}\n`;
+for (const [type, schema] of Object.entries(StreamFrames)) md += `\n## \`${type}\`\n\n\`\`\`json\n${js(schema)}\n\`\`\`\n`;
+
+let hc = "# harness.v1 contract\n\nGenerated by `bun scripts/gen-harness-contract.ts` from `src/api/`; do not edit. ";
+hc += "Design: [harness-architecture.md](harness-architecture.md). Machine-readable: [openapi/capcomd.json](../openapi/capcomd.json); event payloads: [events.md](events.md).\n";
+hc += "\n## Procedures\n\n| Procedure | Method | Path | Notes |\n|---|---|---|---|\n";
+const walk = (node: any, name: string[]): void => {
+	if (node?.["~orpc"]) { const r = node["~orpc"].route; hc += `| \`${name.join(".")}\` | ${r.method} | \`${r.path}\` | ${r.description ?? ""} |\n`; return; }
+	for (const [k, v] of Object.entries(node)) walk(v, [...name, k]);
+};
+walk(contract, []);
+hc += "\n## Event envelope\n\nEvery SSE event and replayed event has this shape. `seq` is persisted per scope in the same transaction as the event write, ";
+hc += "so it is a stable resume cursor across daemon restarts; `(entity, entitySeq)` is the exactly-once dedupe key. ";
+hc += "Today's upper-case types map to dotted names (`AGENT_SPAWNED` → `agent.spawned`); the CLI's `capcomd.v1` output is unchanged.\n\n";
+hc += `\`\`\`json\n${JSON.stringify(nullFold(z.toJSONSchema(HarnessEvent)), null, 2)}\n\`\`\`\n`;
+hc += `\n## Event types\n\n${Object.keys(EventData).map((t) => `- [\`${t}\`](events.md#${t.replace(/\./g, "")})`).join("\n")}\n`;
+
+const out: [string, string][] = [["openapi/capcomd.json", openapi], ["docs/events.md", md], ["docs/harness-contract.md", hc]];
+if (process.argv.includes("--check")) {
+	const stale = out.filter(([f, c]) => { try { return readFileSync(f, "utf8") !== c; } catch { return true; } }).map(([f]) => f);
+	if (stale.length) { console.error(`stale: ${stale.join(", ")} (run bun scripts/gen-harness-contract.ts)`); process.exit(1); }
+	console.log("harness contract files are up to date");
+} else for (const [f, c] of out) writeFileSync(f, c);

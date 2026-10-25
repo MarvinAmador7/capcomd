@@ -19,6 +19,8 @@ export interface CapcomdConfig {
    * `maxRunBudget`: a cap per run, e.g. "usd=20,turns=400" (units over it are refused, not clamped).
    */
   driver?: { approvals?: "human" | "client-confirmed"; maxRunBudget?: string };
+  /** harness.v1 API (docs/harness-architecture.md §6). `socket`: Unix socket path (default ~/.capcomd/harness.sock), e.g. a macOS app-group container. */
+  harness?: { socket?: string };
 }
 
 type Source = Record<string, string | undefined>;

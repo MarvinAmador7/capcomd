@@ -10,6 +10,7 @@ import { isProtectedBranch } from "../utils/protected";
 import { env } from "../utils/env";
 import { loadMergeConfig, taskBranch } from "../merge/config";
 import type { MergeOutcome } from "../merge/types";
+import { isoTs } from "../api/envelope";
 
 export function endpoint(): string {
   return env("ENDPOINT") ?? "http://127.0.0.1:6420";
@@ -552,7 +553,7 @@ export async function listEvents(runId: string): Promise<EventRecord[]> {
   const scopeEvents = await c.scope.getOrCreate([runId]).getEvents({}).catch(() => [] as any[]);
   for (const ev of scopeEvents) out.push({ entity: ev.agentId ? `scope:${ev.agentId}` : "scope", seq: ev.seq, at: ev.at, type: ev.type, agentId: ev.agentId ?? null, event: { type: ev.type, ...ev.data } });
   out.sort((a, b) => a.at - b.at || a.entity.localeCompare(b.entity) || a.seq - b.seq);
-  return out.map((e, i) => ({ seq: i + 1, entitySeq: e.seq, ts: new Date(e.at).toISOString(), epochMs: e.at, at: e.at, agentId: e.agentId, entity: e.entity, type: e.type, event: e.event }));
+  return out.map((e, i) => ({ seq: i + 1, entitySeq: e.seq, ts: isoTs(e.at), epochMs: e.at, at: e.at, agentId: e.agentId, entity: e.entity, type: e.type, event: e.event }));
 }
 
 export function paginate<T>(items: T[], cursor: string | undefined, limit: number) {

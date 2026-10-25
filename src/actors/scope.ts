@@ -3,6 +3,8 @@ import { redactShapes } from "../agents/redact";
 // idempotency keys and the primitive event log. Every spawn and cancel is a single
 // transaction, so children limits and the budget carve can't be raced, and a crash
 // either leaves the whole spawn or none of it.
+import { strictEventData, type ScopeEventType } from "../api/legacy-events";
+import { dottedType } from "../api/envelope";
 import type { RawAccess } from "rivetkit/db";
 import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -96,7 +98,13 @@ function opRow(r: any) {
 }
 export type ScopeOp = ReturnType<typeof opRow>;
 
-async function addEvent(tx: any, type: string, agentId: string | null, data: Record<string, unknown>, idemKey: string) {
+async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, data: Record<string, unknown>, idemKey: string) {
+  // harness.v1 §6.2: the published payload schemas are open, but the daemon emits only declared fields.
+  const chk = strictEventData(dottedType(type), data);
+  if (!chk.ok) {
+    if (process.env.NODE_ENV === "test" || process.env.CAPCOMD_STRICT_EVENTS === "1") throw new Error(`event ${type} payload: ${chk.error}`);
+    console.warn(`capcomd: event ${type} payload does not match its schema: ${chk.error}`);
+  }
   const dup = await tx.execute("SELECT seq FROM scope_events WHERE idem_key = ?", idemKey);
   if (dup.length) return;
   const last = await tx.execute("SELECT COALESCE(MAX(seq), 0) AS s FROM scope_events");

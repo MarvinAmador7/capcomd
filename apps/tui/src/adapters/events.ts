@@ -38,8 +38,10 @@ function fromRecord(r: any): RunEvent | null {
   const type = String(r.type ?? inner.type ?? "unknown");
   const at = toMs(r.epochMs ?? r.at ?? r.ts ?? inner.epochMs ?? inner.at ?? inner.ts);
   if (at === null) return null;
-  const data: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(inner)) if (!META.has(k)) data[k] = v;
+  // harness.v1 envelopes ({ v: 1, ..., data }) carry the payload in `data`.
+  const harness = r.v === 1 && r.data && typeof r.data === "object" && !Array.isArray(r.data);
+  const data: Record<string, unknown> = harness ? { ...r.data } : {};
+  if (!harness) for (const [k, v] of Object.entries(inner)) if (!META.has(k)) data[k] = v;
   const agentId = (r.agentId ?? inner.agentId ?? null) as string | null;
   const entity = String(r.entity ?? inner.taskId ?? agentId ?? "run");
   const ev: RunEvent = { at, type, entity, data };

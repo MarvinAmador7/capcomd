@@ -31,6 +31,9 @@ jobs:
       - name: Install dependencies (CLI/engine, apps/canvas, apps/tui)
         run: bun run setup
 
+      - name: openapi/capcomd.json, docs/events.md and docs/harness-contract.md match src/api
+        run: bun scripts/gen-harness-contract.ts --check
+
       - name: Type check
         run: bun run typecheck
 

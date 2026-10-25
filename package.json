@@ -48,7 +48,7 @@
     "test:chaos": "bun test tests/chaos/*.test.ts",
     "chaos:fast": "bun tests/chaos/fast.ts",
     "chaos:slow": "bun test tests/chaos/subprocess.test.ts",
-    "test:fast": "bun test tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers",
+    "test:fast": "bun test tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers",
     "test:scenarios": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts"
   },
   "devDependencies": {
@@ -59,6 +59,9 @@
   "dependencies": {
     "@boxd-sh/sdk": "0.2.18",
     "@modelcontextprotocol/sdk": "1.32.1",
+    "@orpc/contract": "^1.16.1",
+    "@orpc/openapi": "^1.16.1",
+    "@orpc/zod": "^1.16.1",
     "@xyflow/react": "^12.12.0",
     "commander": "^15.0.0",
     "elkjs": "^0.12.0",
