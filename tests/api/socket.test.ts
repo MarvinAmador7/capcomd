@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { connect } from "node:net";
 import { harnessSocketPath, serveHarnessSocket } from "../../src/api/socket";
 import { harnessApp } from "../../src/api/server";
+import { harnessState } from "../../src/api/state";
 import { memorySource } from "../../src/api/source";
 
 const dir = mkdtempSync(join(tmpdir(), "hs-"));
 const sock = join(dir, "harness.sock");
-const server = serveHarnessSocket(sock, harnessApp({ source: memorySource(), clients: () => [] }).fetch);
+const server = serveHarnessSocket(sock, harnessApp({ source: memorySource(), clients: () => [], state: harnessState(null) }).fetch);
 afterAll(() => server.stop(true));
 
 test("socket path: flag > env > config > ~/.capcomd/harness.sock", () => {

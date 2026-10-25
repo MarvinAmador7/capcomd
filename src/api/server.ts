@@ -6,24 +6,26 @@ import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { contract, StreamFrames, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
-import { bodyHash, resolveDecide, type DecideBody, type StoredKey } from "./idempotency";
+import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
 import { envelopes, messagesOf, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
+import { harnessState, type HarnessState } from "./state";
 
 export const HEARTBEAT_MS = 15_000;
 const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "already_decided", 422: "invalid" };
 const err = (c: Context, status: 401 | 403 | 404 | 409 | 422, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
 
-export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; heartbeatMs?: number; pollMs?: number; snapshotSteps?: number };
+export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; heartbeatMs?: number; pollMs?: number; snapshotSteps?: number; state?: HarnessState };
 
 export function harnessApp(o: ServerOptions) {
 	const src = o.source;
 	const clients = o.clients ?? (() => loadClients());
 	const heartbeatMs = o.heartbeatMs ?? HEARTBEAT_MS;
 	const pollMs = o.pollMs ?? 500;
-	// (clientId, key) → stored outcome; approvalId → decision. In memory for phase 1 (lost on restart; the actor state is the truth).
-	const keys = new Map<string, StoredKey>();
-	const decisions = new Map<string, Record<string, unknown>>();
+	// (clientId, key) → stored outcome and approvalId → decision, persisted so a retry after restart replays.
+	const state = o.state ?? harnessState();
+	// approvalId → in-flight decision; claimed synchronously before any await so concurrent requests cannot both decide.
+	const inflight = new Map<string, { kid: string; hash: string; done: Promise<Record<string, unknown> | null> }>();
 
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
@@ -77,17 +79,38 @@ export function harnessApp(o: ServerOptions) {
 		const body: DecideBody = { decision: raw.decision, ...(raw.reason !== undefined ? { reason: raw.reason } : {}) };
 		const client = c.get("client");
 		const kid = `${client.clientId}\u0000${key}`;
-		const where = await src.approval(approvalId);
+		const hash = bodyHash(approvalId, body);
+		const conflict = (existing?: unknown) => err(c, 409, "already_decided", "approval already decided", existing ? { decision: existing } : {});
+		const pend = inflight.get(approvalId);
+		if (pend) {
+			if (pend.kid !== kid) return conflict();
+			if (pend.hash !== hash) return err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different body");
+			const r = await pend.done;
+			return r ? c.json(r, 200) : err(c, 409, "already_decided", "approval decision failed; retry");
+		}
+		const prior = state.key(kid);
+		if (!prior && !state.decision(approvalId)) {
+			// claim before the first await
+			let resolve!: (v: Record<string, unknown> | null) => void;
+			const done = new Promise<Record<string, unknown> | null>((r) => (resolve = r));
+			inflight.set(approvalId, { kid, hash, done });
+			try {
+				const where = await src.approval(approvalId);
+				if (!where) { resolve(null); return err(c, 404, "not_found", `approval ${approvalId} not found`); }
+				if (!where.pending) { resolve(null); return conflict(where.decision ?? { approvalId, status: "approved", decidedBy: null, decidedAt: null, reason: null }); }
+				await src.decide(approvalId, body.decision === "approve", `client:${client.clientId}`, body.reason);
+				const decision = { approvalId, status: body.decision === "approve" ? "approved" : "denied", decidedBy: { clientId: client.clientId, principal: client.name }, decidedAt: isoTs(Date.now()), reason: body.reason ?? null };
+				state.recordDecision(kid, { approvalId, bodyHash: hash, status: 200, result: decision }, decision);
+				resolve(decision);
+				return c.json(decision, 200);
+			} catch (e) { resolve(null); throw e; } finally { inflight.delete(approvalId); }
+		}
+		const where = prior ? true : await src.approval(approvalId);
 		if (!where) return err(c, 404, "not_found", `approval ${approvalId} not found`);
-		const existing = decisions.get(approvalId) ?? (where.pending ? null : where.decision ?? { approvalId, status: "approved", decidedBy: null, decidedAt: null, reason: null });
-		const out = resolveDecide({ prior: keys.get(kid), approvalId, body, existingDecision: existing });
+		const out = resolveDecide({ prior, approvalId, body, existingDecision: state.decision(approvalId) ?? null });
 		if (out.kind === "replay") return c.json(out.result as object, out.status as 200);
 		if (out.kind === "error") return err(c, 409, out.code, out.code === "already_decided" ? "approval already decided" : "Idempotency-Key reused with a different body", out.existing ? { decision: out.existing } : {});
-		await src.decide(approvalId, body.decision === "approve", `client:${client.clientId}`, body.reason);
-		const decision = { approvalId, status: body.decision === "approve" ? "approved" : "denied", decidedBy: { clientId: client.clientId, principal: client.name }, decidedAt: isoTs(Date.now()), reason: body.reason ?? null };
-		decisions.set(approvalId, decision);
-		keys.set(kid, { approvalId, bodyHash: bodyHash(approvalId, body), status: 200, result: decision });
-		return c.json(decision, 200);
+		return conflict();
 	});
 
 	app.get("/v1/streams/:scope/events", (c) => {
@@ -104,15 +127,20 @@ export function harnessApp(o: ServerOptions) {
 				hb = setInterval(() => { if (!closed) ctl.enqueue(enc.encode(": heartbeat\n\n")); }, heartbeatMs);
 				ctl.enqueue(enc.encode(": connected\n\n"));
 				if (!scope.startsWith("run-")) {
-					// daemon and project scopes: run.created per run, in creation order; seq is the position.
+					// daemon and project scopes: run.created per run; seq is the run's persisted seq (stable across deletes/ties).
 					let seen = last ?? 0;
 					const tick = async () => {
-						const runs = [...await src.runs()].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-						runs.forEach((r, i) => {
+						const all = await src.runs();
+						const seqOf = state.seqs(all);
+						const runs = [...all].sort((a, b) => seqOf.get(a.id)! - seqOf.get(b.id)!);
+						let top = seen;
+						runs.forEach((r) => {
+							const i = seqOf.get(r.id)! - 1;
+							top = Math.max(top, i + 1);
 							if (i + 1 <= seen || (scope.startsWith("prj-") && r.projectId !== scope)) return;
 							send("run.created", { v: 1, id: `evt_${scope}_${i + 1}`, scope, seq: i + 1, entity: r.id, entitySeq: 1, type: "run.created", typeVersion: 1, durability: "durable", ts: r.createdAt ?? isoTs(Date.now()), epochMs: r.createdAt ? Date.parse(r.createdAt) : Date.now(), projectId: r.projectId, runId: r.id, agentId: null, text: "Run created.", data: { label: r.label, goal: r.goal, budget: null } }, i + 1);
 						});
-						seen = Math.max(seen, runs.length);
+						seen = top;
 					};
 					await tick();
 					timer = setInterval(() => { tick().catch(() => {}); }, pollMs);

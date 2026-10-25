@@ -7,6 +7,7 @@ import { addClient, loadClients, revokeClient } from "../../src/api/clients";
 import { HarnessEvent } from "../../src/api/envelope";
 import { harnessApp } from "../../src/api/server";
 import { serveHarnessSocket } from "../../src/api/socket";
+import { harnessState } from "../../src/api/state";
 import { memorySource } from "../../src/api/source";
 
 const dir = mkdtempSync(join(tmpdir(), "harness-"));
@@ -21,7 +22,7 @@ function setup(heartbeatMs = 60_000) {
 		{ seq: 1, at: 1792900500000, type: "RUN_NEW", agentId: null, data: { budget: {}, label: "demo" } },
 		{ seq: 2, at: 1792900501000, type: "MESSAGE_SENT", agentId: "a1", data: { to: "a2", seq: 1, bytes: 2, text: "hi", attachment: null } },
 	] } });
-	const app = harnessApp({ source: src, clients: () => loadClients(path), heartbeatMs, pollMs: 20 });
+	const app = harnessApp({ source: src, clients: () => loadClients(path), heartbeatMs, pollMs: 20, state: harnessState(null) });
 	return { src, req: (p: string, init: RequestInit & { token?: string } = {}) => app.request(p, { ...init, headers: { ...(init.token ? { authorization: `Bearer ${init.token}` } : {}), ...(init.headers as any) } }) };
 }
 
@@ -53,7 +54,7 @@ describe("harness server", () => {
 	});
 	test("revoked tokens stop working", async () => {
 		const p2 = join(dir, "c2.json"); const { client, token } = addClient("x", ["read"], p2);
-		const app = harnessApp({ source: memorySource(), clients: () => loadClients(p2) });
+		const app = harnessApp({ source: memorySource(), clients: () => loadClients(p2), state: harnessState(null) });
 		expect((await app.request("/v1/runs", { headers: { authorization: `Bearer ${token}` } })).status).toBe(200);
 		revokeClient(client.id, p2);
 		expect((await app.request("/v1/runs", { headers: { authorization: `Bearer ${token}` } })).status).toBe(401);
@@ -142,7 +143,7 @@ describe("harness server", () => {
 	});
 	test("served on a 0600 socket", async () => {
 		const sock = join(mkdtempSync(join(tmpdir(), "hs-")), "sub", "h.sock");
-		const app = harnessApp({ source: memorySource(), clients: () => [] });
+		const app = harnessApp({ source: memorySource(), clients: () => [], state: harnessState(null) });
 		const s = serveHarnessSocket(sock, app.fetch);
 		try {
 			expect(statSync(sock).mode & 0o777).toBe(0o600);

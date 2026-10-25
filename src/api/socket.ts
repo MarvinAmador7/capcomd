@@ -21,7 +21,10 @@ export function serveHarnessSocket(path: string, fetch: (req: Request) => Respon
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	if (fresh) chmodSync(dir, 0o700);
 	if (existsSync(path)) unlinkSync(path);
-	const server = Bun.serve({ unix: path, fetch });
+	// Create the socket already 0600: no window where another local user could connect. chmod stays as belt-and-braces.
+	const prev = process.umask(0o177);
+	let server: ReturnType<typeof Bun.serve>;
+	try { server = Bun.serve({ unix: path, fetch }); } finally { process.umask(prev); }
 	chmodSync(path, 0o600);
 	return server;
 }
