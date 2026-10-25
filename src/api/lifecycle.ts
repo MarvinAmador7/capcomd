@@ -11,13 +11,13 @@ import { dottedType, type HarnessEvent } from "./envelope";
 /** Trusted, machine-readable reason for a state change. Agent-written detail (cancel reason, error) stays in its own untrusted field. */
 export const LifecycleCause = z.enum([
 	"created", "spawned", "started", "resumed", "paused", "usage_limit", "finished", "error", "cancelled", "parent_ended",
-	"all_agents_done", "agent_failed", "all_agents_cancelled", "all_agents_paused", "approval_needed", "approved", "denied",
+	"all_agents_done", "agent_failed", "all_agents_cancelled", "all_agents_paused", "approval_needed", "approved", "denied", "deleted",
 ]).describe("Why the state changed (trusted, machine-readable)");
 export type LifecycleCause = z.infer<typeof LifecycleCause>;
 
 /** Every lifecycle type. Agent and approval names reuse the existing harness.v1 names (decision 9). */
 export const LIFECYCLE_TYPES = [
-	"run.created", "run.started", "run.paused", "run.resumed", "run.completed", "run.failed", "run.cancelled",
+	"run.created", "run.started", "run.paused", "run.resumed", "run.completed", "run.failed", "run.cancelled", "run.deleted",
 	"agent.spawned", "agent.started", "agent.paused", "agent.resumed", "agent.done", "agent.failed", "agent.cancelled", "agent.reaped",
 	"approval.requested", "approval.decided",
 ] as const;
@@ -27,7 +27,7 @@ const runData = z.looseObject({ cause: LifecycleCause, agentId: z.string().nulla
 /** New run.* payloads (agent/approval payloads are the existing ones plus `cause`). */
 export const RunLifecycleData = {
 	"run.started": runData, "run.paused": runData, "run.resumed": runData,
-	"run.completed": runData, "run.failed": runData, "run.cancelled": runData,
+	"run.completed": runData, "run.failed": runData, "run.cancelled": runData, "run.deleted": runData,
 } as const;
 
 const AGENT_CAUSE: Record<string, LifecycleCause> = {
@@ -38,7 +38,7 @@ const TERMINAL = new Set(["AGENT_DONE", "AGENT_FAILED", "AGENT_CANCELLED", "AGEN
 
 const RUN_TEXT: Record<string, string> = {
 	"run.started": "The run started.", "run.paused": "The run is paused: every working agent is paused.", "run.resumed": "The run resumed.",
-	"run.completed": "The run finished: all agents are done.", "run.failed": "The run ended with a failed agent.", "run.cancelled": "The run was cancelled.",
+	"run.completed": "The run finished: all agents are done.", "run.failed": "The run ended with a failed agent.", "run.cancelled": "The run was cancelled.", "run.deleted": "The run was deleted.",
 };
 const AGENT_TEXT_CAUSE: Partial<Record<LifecycleCause, string>> = { usage_limit: " (usage limit reached)", parent_ended: " (its parent ended)" };
 
@@ -62,6 +62,7 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 			const env = toEnvelope(runId, { ...e, type: "RUN_NEW", data: { ...e.data, cause: "created" } }, next(runId), projectId);
 			out.push(env); continue;
 		}
+		if (t === "RUN_DELETED" || t === "run.deleted") { runEvt({ ...e, agentId: null }, "run.deleted", "deleted"); run = "ended"; continue; }
 		if (t === "MERGE_AWAITING_APPROVAL") {
 			const d = e.data as any;
 			const env = toEnvelope(runId, { ...e, type: "approval.requested", data: {

@@ -137,6 +137,9 @@ export function harnessApp(o: ServerOptions) {
 					const tick = async () => {
 						const all = await src.runs();
 						const seqOf = state.seqs(all);
+						// Drop a seq only on a confirmed deletion (run.deleted in the run's log), never because the list came back short.
+						const listed = new Set(all.map((r) => r.id));
+						for (const id of state.knownRuns()) if (!listed.has(id) && (await src.events(id, 0).catch(() => [])).some((e) => e.type === "run.deleted" || e.type === "RUN_DELETED")) state.runDeleted(id);
 						const runs = [...all].sort((a, b) => seqOf.get(a.id)! - seqOf.get(b.id)!);
 						let top = seen;
 						runs.forEach((r) => {

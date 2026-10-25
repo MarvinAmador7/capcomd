@@ -647,7 +647,7 @@
     "/v1/runs/{runId}/lifecycle": {
       "get": {
         "operationId": "runs.lifecycle",
-        "description": "Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.\nEach event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.",
+        "description": "Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.\nEach event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.",
         "parameters": [
           {
             "name": "runId",
@@ -3208,7 +3208,8 @@
               "all_agents_paused",
               "approval_needed",
               "approved",
-              "denied"
+              "denied",
+              "deleted"
             ],
             "description": "Why the state changed (trusted, machine-readable)"
           }
@@ -3297,7 +3298,8 @@
               "all_agents_paused",
               "approval_needed",
               "approved",
-              "denied"
+              "denied",
+              "deleted"
             ],
             "description": "Why the state changed (trusted, machine-readable)"
           }
@@ -3334,7 +3336,8 @@
               "all_agents_paused",
               "approval_needed",
               "approved",
-              "denied"
+              "denied",
+              "deleted"
             ],
             "description": "Why the state changed (trusted, machine-readable)"
           },
@@ -3375,7 +3378,8 @@
               "all_agents_paused",
               "approval_needed",
               "approved",
-              "denied"
+              "denied",
+              "deleted"
             ],
             "description": "Why the state changed (trusted, machine-readable)"
           },
@@ -3416,7 +3420,8 @@
               "all_agents_paused",
               "approval_needed",
               "approved",
-              "denied"
+              "denied",
+              "deleted"
             ],
             "description": "Why the state changed (trusted, machine-readable)"
           },
@@ -3457,7 +3462,8 @@
               "all_agents_paused",
               "approval_needed",
               "approved",
-              "denied"
+              "denied",
+              "deleted"
             ],
             "description": "Why the state changed (trusted, machine-readable)"
           },
@@ -3498,7 +3504,8 @@
               "all_agents_paused",
               "approval_needed",
               "approved",
-              "denied"
+              "denied",
+              "deleted"
             ],
             "description": "Why the state changed (trusted, machine-readable)"
           },
@@ -3539,7 +3546,8 @@
               "all_agents_paused",
               "approval_needed",
               "approved",
-              "denied"
+              "denied",
+              "deleted"
             ],
             "description": "Why the state changed (trusted, machine-readable)"
           },
@@ -3557,6 +3565,48 @@
         ],
         "additionalProperties": {},
         "x-event-type": "run.cancelled"
+      },
+      "RunDeletedData": {
+        "type": "object",
+        "properties": {
+          "cause": {
+            "type": "string",
+            "enum": [
+              "created",
+              "spawned",
+              "started",
+              "resumed",
+              "paused",
+              "usage_limit",
+              "finished",
+              "error",
+              "cancelled",
+              "parent_ended",
+              "all_agents_done",
+              "agent_failed",
+              "all_agents_cancelled",
+              "all_agents_paused",
+              "approval_needed",
+              "approved",
+              "denied",
+              "deleted"
+            ],
+            "description": "Why the state changed (trusted, machine-readable)"
+          },
+          "agentId": {
+            "description": "Agent whose change moved the run, if any",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cause",
+          "agentId"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.deleted"
       },
       "StreamResetFrame": {
         "type": "object",

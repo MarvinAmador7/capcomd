@@ -1276,7 +1276,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "all_agents_paused",
         "approval_needed",
         "approved",
-        "denied"
+        "denied",
+        "deleted"
       ],
       "description": "Why the state changed (trusted, machine-readable)"
     }
@@ -1375,7 +1376,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "all_agents_paused",
         "approval_needed",
         "approved",
-        "denied"
+        "denied",
+        "deleted"
       ],
       "description": "Why the state changed (trusted, machine-readable)"
     }
@@ -1417,7 +1419,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "all_agents_paused",
         "approval_needed",
         "approved",
-        "denied"
+        "denied",
+        "deleted"
       ],
       "description": "Why the state changed (trusted, machine-readable)"
     },
@@ -1463,7 +1466,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "all_agents_paused",
         "approval_needed",
         "approved",
-        "denied"
+        "denied",
+        "deleted"
       ],
       "description": "Why the state changed (trusted, machine-readable)"
     },
@@ -1509,7 +1513,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "all_agents_paused",
         "approval_needed",
         "approved",
-        "denied"
+        "denied",
+        "deleted"
       ],
       "description": "Why the state changed (trusted, machine-readable)"
     },
@@ -1555,7 +1560,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "all_agents_paused",
         "approval_needed",
         "approved",
-        "denied"
+        "denied",
+        "deleted"
       ],
       "description": "Why the state changed (trusted, machine-readable)"
     },
@@ -1601,7 +1607,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "all_agents_paused",
         "approval_needed",
         "approved",
-        "denied"
+        "denied",
+        "deleted"
       ],
       "description": "Why the state changed (trusted, machine-readable)"
     },
@@ -1647,7 +1654,55 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "all_agents_paused",
         "approval_needed",
         "approved",
-        "denied"
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
+    },
+    "agentId": {
+      "description": "Agent whose change moved the run, if any",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cause",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.deleted`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
       ],
       "description": "Why the state changed (trusted, machine-readable)"
     },
@@ -1669,7 +1724,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 
 # Lifecycle feed
 
-Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
+Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
 
 # Stream frames

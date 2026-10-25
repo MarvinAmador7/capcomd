@@ -138,3 +138,8 @@ describe("spawn task redaction", () => {
 		expect(await Bun.file("src/api/rivet-source.ts").text()).toContain("inlineOrAttach(redactShapes(String(a.task");
 	});
 });
+
+test("RUN_DELETED in the scope log projects to run.deleted with cause deleted", () => {
+	const out = lifecycleEvents("run-x", [{ seq: 1, type: "RUN_DELETED", at: "2026-10-25T00:00:00.000Z" } as any]);
+	expect(out.map((e: any) => [e.type, e.data?.cause])).toContainEqual(["run.deleted", "deleted"]);
+});

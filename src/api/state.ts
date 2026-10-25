@@ -49,17 +49,18 @@ export function harnessState(path: string | null = defaultStatePath(), opts: { n
 		decision: (id: string) => d.decisions[id],
 		/** Record decision and its key together in one write. */
 		recordDecision(kid: string, k: StoredKey, decision: Record<string, unknown>) { d.decisions[k.approvalId] = decision; d.keys[kid] = { ...k, at: now() }; save(); },
-		/** Stable seq for each run; unseen runs get fresh seqs in (createdAt, id) order. `runs` is the full current list:
-		 * entries for runs no longer present (deleted) are dropped; nextSeq never goes down. */
+		/** Stable seq for each run; unseen runs get fresh seqs in (createdAt, id) order. Never prunes: an empty or partial
+		 * `runs` list (source hiccup, slow actor) must not lose seqs. Only runDeleted() drops one; nextSeq never goes down. */
 		seqs(runs: Array<{ id: string; createdAt?: string | null }>): Map<string, number> {
-			const live = new Set(runs.map((r) => r.id));
-			let dropped = false;
-			for (const id of Object.keys(d.runSeq)) if (!live.has(id)) { delete d.runSeq[id]; dropped = true; }
 			const fresh = runs.filter((r) => d.runSeq[r.id] === undefined).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id));
 			for (const r of fresh) d.runSeq[r.id] = d.nextSeq++;
-			if (fresh.length || dropped) save();
+			if (fresh.length) save();
 			return new Map(runs.map((r) => [r.id, d.runSeq[r.id]!]));
 		},
+		/** Run ids that hold a seq. */
+		knownRuns: () => Object.keys(d.runSeq),
+		/** Confirmed deletion (a run.deleted lifecycle event was seen): drop the run's seq. The seq is never reused. */
+		runDeleted(runId: string) { if (d.runSeq[runId] !== undefined) { delete d.runSeq[runId]; save(); } },
 	};
 }
 export type HarnessState = ReturnType<typeof harnessState>;
