@@ -10,6 +10,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: echo "BUN_BIN=$(which bun)" >> "$GITHUB_ENV"
       - name: Client tests
         working-directory: apps/menubar/client
         run: swift test
