@@ -328,7 +328,7 @@ carry kv values (as today), secrets, tokens, or env.
 
 | Option | Shape | For | Against |
 |---|---|---|---|
-| **A (recommended)** | Hono + oRPC over a **Unix socket** at `~/.capcomd/harness.sock` (0600), plus an optional loopback HTTP on `127.0.0.1:<port>` for dev. **SSE** for streams | Socket permissions are the first auth factor. No port collisions (an issue already hit with the engine ports). Swift `URLSession` and Bun both handle it. SSE resume via `Last-Event-ID` is free. OpenAPI from oRPC lets the Swift client be generated | SSE is one-way, so commands are separate POSTs (fine: that is also how idempotency works) |
+| **A (recommended)** | Hono + oRPC over a **Unix socket** at `~/.capcomd/harness.sock` (0600), plus an optional loopback HTTP on `127.0.0.1:<port>` for dev. **SSE** for streams | Socket permissions are the first auth factor. No port collisions (an issue already hit with the engine ports). Swift AsyncHTTPClient (URLSession cannot dial a Unix socket) and Bun both handle it. SSE resume via `Last-Event-ID` is free. OpenAPI from oRPC lets the Swift client be generated | SSE is one-way, so commands are separate POSTs (fine: that is also how idempotency works) |
 | B | Same, but **WebSocket** for both commands and events (t3code) | One connection, lower latency for steering | Its own reconnect and resume protocol, harder to curl and debug, and no per-request HTTP semantics for idempotency or caching |
 | C | Keep shelling out to the `capcomd … --json --follow` CLI (today's SPEC §1) | Zero new code | One process per subscription, no auth model, polling, and a Swift app parsing CLI output. It doesn't scale past the TUI |
 
