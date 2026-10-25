@@ -1,4 +1,5 @@
 import { isBoxdAuthError } from "../providers/boxd-errors";
+import type { NamedChecks } from "../actors/scope";
 import { resolveEnvSnapshot } from "../env/resolve";
 // ADR-016 step 1: run new / spawn / await / wait-any / cancel, on top of the existing worker
 // actor. The CLI is a thin client; durable state lives in the scope actor (agent tree, keys,
@@ -42,13 +43,14 @@ export function asRelay(e: unknown): never {
   throw e;
 }
 
-export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string }
+export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string; checks?: NamedChecks }
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
   const runId = o.runId ?? stableId("run", "run", o.key);
   const c = client();
-  const ph = paramsHash({ budget: o.budget, label: o.label ?? null });
-  const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, paramsHash: ph }).catch(asRelay);
+  if (o.checks) validateNamedChecks(o.checks);
+  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(o.checks ? { checks: o.checks } : {}) });
+  const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, paramsHash: ph, ...(o.checks ? { checks: o.checks } : {}) }).catch(asRelay);
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
   return { runId, created: res.created, budget: res.budget };
@@ -424,7 +426,31 @@ async function resolveRef(runId: string, ref: string): Promise<{ branch: string;
   return { branch: ref, agentId: null, label: ref };
 }
 
-export interface VerifyOpts { runId: string; ref: string; checks?: string; acceptance?: unknown; judgeProfile?: string; target?: string; key?: string }
+export const CHECK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export function validateNamedChecks(n: NamedChecks) {
+  const names = Object.keys(n.sets ?? {});
+  if (!names.length) throw new RelayError("usage", "named checks: none given", "Use --checks-set name=CMD (repeatable) or --checks-file JSON.");
+  for (const k of names) {
+    if (!CHECK_NAME.test(k)) throw new RelayError("usage", `bad check name ${JSON.stringify(k)}`, "Names: letters, digits, . _ - (max 64).");
+    if (typeof n.sets[k] !== "string" || !n.sets[k]!.trim()) throw new RelayError("usage", `check ${k} has an empty command`, "Use --checks-set name='CMD'.");
+  }
+  if (n.default !== undefined && !names.includes(n.default)) throw new RelayError("usage", `default check ${n.default} is not one of: ${names.join(", ")}`, "Pick a name you set with --checks-set.");
+}
+/** Resolve a check name against the run's operator-set checks. Unknown names list what exists. */
+export async function peekScopeChecks(runId: string): Promise<string[]> {
+  const sc: any = await client().scope.getOrCreate([runId]).getScope({}).catch(() => null);
+  return Object.keys(sc?.checks?.sets ?? {});
+}
+export async function resolveNamedCheck(runId: string, name: string | undefined): Promise<{ name: string; command: string } | null> {
+  const sc: any = await client().scope.getOrCreate([runId]).getScope({}).catch(() => null);
+  const n: NamedChecks | null = sc?.checks ?? null;
+  const names = Object.keys(n?.sets ?? {});
+  if (name === undefined) return n?.default ? { name: n.default, command: n.sets[n.default]! } : null;
+  if (!n || !n.sets[name]) throw new RelayError("usage", `unknown check ${JSON.stringify(name)}; available: ${names.length ? names.join(", ") : "(none set for this run)"}`, names.length ? `Use --check <${names.join("|")}>.` : "The operator sets named checks at `capcomd run new --checks-set name=CMD`.");
+  return { name, command: n.sets[name]! };
+}
+
+export interface VerifyOpts { runId: string; ref: string; checks?: string; check?: string; acceptance?: unknown; judgeProfile?: string; target?: string; key?: string }
 
 /**
  * Run checks (the repo's test command or --checks) on the ref merged with the latest target, in
@@ -440,12 +466,16 @@ export async function verifyRef(o: VerifyOpts) {
   const cfg = loadMergeConfig();
   const target = o.target ?? cfg?.target ?? "main";
   const { branch, agentId, label } = await resolveRef(o.runId, o.ref);
+  if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "Named checks are the operator's; --checks is a raw command (host only).");
+  // Named check (explicit, or the run's default when no raw --checks was given) wins over the raw command.
+  const named = o.check !== undefined || !o.checks ? await resolveNamedCheck(o.runId, o.check) : null;
+  const command = named?.command ?? o.checks;
   const vfyId = stableId("vfy", `${o.runId}\0${o.ref}`, o.key);
-  const data = { ref: o.ref, agentId, branch, target, checks: o.checks ?? null, acceptance: o.acceptance ?? null, judgeProfile: o.judgeProfile ?? null };
+  const data = { ref: o.ref, agentId, branch, target, checks: command ?? null, check: named?.name ?? null, acceptance: o.acceptance ?? null, judgeProfile: o.judgeProfile ?? null };
   const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   const res: any = await c.verifier.getOrCreate([o.runId, vfyId]).verify({
-    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(o.checks ? { testCommand: o.checks } : {}),
+    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(command ? { testCommand: command } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const checksPassed = out.status === "verified";
@@ -459,11 +489,11 @@ export async function verifyRef(o: VerifyOpts) {
   const pass = checksPassed && (judge ? judge.passed === true : true);
   const result = {
     pass, branch, target, commit: out.status === "verified" ? (out.taskSha ?? null) : null,
-    checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
+    checks: { name: named?.name ?? null, command: command ?? "(repo test command)", passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
     ...(judge ? { judge } : {}),
   };
   const fin = opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
-  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status } } } }).catch(() => {});
+  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { name: named?.name ?? null, passed: checksPassed, status: out.status } } } }).catch(() => {});
   return fin;
 }
 

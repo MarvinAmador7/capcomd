@@ -44,6 +44,9 @@ async function remember(tx: any, key: string | undefined, kind: string, hash: st
   if (key) await tx.execute("INSERT INTO idem (idem_key, kind, params_hash, result, at) VALUES (?, ?, ?, ?, ?)", key, kind, hash, JSON.stringify(result), Date.now());
 }
 
+/** Operator-named checks (ADR-017): set at `run new` only; agents pick by name, never by command. */
+export interface NamedChecks { sets: Record<string, string>; default?: string }
+
 const fail = (code: string, message: string): never => { throw new UserError(message, { code }); };
 
 function rowToAgent(r: any) {
@@ -184,7 +187,7 @@ export const scopeActor = actor({
   }),
 
   actions: traceActions("scope", {
-    async init(c, params: { runId: string; budget: Budget; label?: string; paramsHash: string }) {
+    async init(c, params: { runId: string; budget: Budget; label?: string; paramsHash: string; checks?: NamedChecks }) {
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (have.length) {
         const prev = JSON.parse(have[0]!.v as string);
@@ -192,7 +195,7 @@ export const scopeActor = actor({
         return { runId: params.runId, created: false, budget: prev.budget as Budget };
       }
       await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, paramsHash: params.paramsHash, createdAt: Date.now() }));
+        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, paramsHash: params.paramsHash, createdAt: Date.now(), ...(params.checks ? { checks: params.checks } : {}) }));
         await addEvent(tx, "RUN_NEW", null, { budget: params.budget, label: params.label ?? null }, `run-new`);
       }, { name: "scopeInit" });
       return { runId: params.runId, created: true, budget: params.budget };
@@ -212,7 +215,7 @@ export const scopeActor = actor({
         const held = roots.reduce((x, r) => x + ((TERMINAL_AGENT.has(r.status) ? r.spent[u] : r.budget[u] ?? r.spent[u]) ?? 0), 0);
         unallocated[u] = Math.max(0, Math.round((meta.budget[u] - held) * 1e6) / 1e6);
       }
-      return { budget: meta.budget as Budget, label: meta.label as string | null, createdAt: meta.createdAt as number, spent, unallocated };
+      return { budget: meta.budget as Budget, label: meta.label as string | null, createdAt: meta.createdAt as number, spent, unallocated, checks: (meta.checks ?? null) as NamedChecks | null };
     },
 
     async spawn(

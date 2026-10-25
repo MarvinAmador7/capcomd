@@ -141,6 +141,10 @@ async function main(argv: string[]): Promise<number> {
         "no-start": { type: "boolean" },
         ref: { type: "string" },
         checks: { type: "string" },
+        check: { type: "string" },
+        "checks-set": { type: "string", multiple: true },
+        "checks-file": { type: "string" },
+        "checks-default": { type: "string" },
         acceptance: { type: "string" },
         "judge-profile": { type: "string" },
         require: { type: "string" },
@@ -228,7 +232,17 @@ async function main(argv: string[]): Promise<number> {
           let budget: Record<string, number> = { usd: 10 };
           try { if (values.budget !== undefined) budget = parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message} (e.g. 5 or usd=5,turns=200,wallSeconds=3600)`); }
           const P = await import("../primitives/ops");
-          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined });
+          // Operator-named checks: agents pick one by name (`verify --check NAME`), never send a command.
+          let checks: { sets: Record<string, string>; default?: string } | undefined;
+          if (values["checks-file"]) {
+            try { const raw = String(values["checks-file"]); const j = JSON.parse(raw.trim().startsWith("{") ? raw : readFileSync(raw, "utf8")); checks = j.sets ? j : { sets: j }; } catch (e) { usage(`bad --checks-file (JSON {"sets":{name:cmd},"default"?} or {name:cmd}): ${(e as Error).message}`); }
+          }
+          for (const kv of (values["checks-set"] as string[] | undefined) ?? []) {
+            const i = kv.indexOf("="); if (i < 1) usage(`--checks-set wants name=CMD, got ${JSON.stringify(kv)}`);
+            checks = { ...(checks ?? { sets: {} }), sets: { ...(checks?.sets ?? {}), [kv.slice(0, i)]: kv.slice(i + 1) } };
+          }
+          if (values["checks-default"]) { if (!checks) usage("--checks-default needs --checks-set/--checks-file"); checks!.default = String(values["checks-default"]); }
+          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined, ...(checks ? { checks } : {}) });
           if (json) out(r); else console.log(r.runId);
           return EXIT.ok;
         }
@@ -360,7 +374,7 @@ async function main(argv: string[]): Promise<number> {
           try { acceptance = raw.trim().startsWith("{") || raw.trim().startsWith("[") ? JSON.parse(raw) : existsSync(raw) ? JSON.parse(readFileSync(raw, "utf8")) : raw; } catch (e) { usage(`bad --acceptance: ${(e as Error).message}`); }
         }
         const r: any = await (await import("../primitives/ops")).verifyRef({
-          runId, ref, checks: values.checks as string | undefined, acceptance, judgeProfile: values["judge-profile"] as string | undefined,
+          runId, ref, checks: values.checks as string | undefined, ...(values.check !== undefined ? { check: String(values.check) } : {}), acceptance, judgeProfile: values["judge-profile"] as string | undefined,
           target: values.target as string | undefined, key: values.key as string | undefined,
         });
         if (json) out(r);

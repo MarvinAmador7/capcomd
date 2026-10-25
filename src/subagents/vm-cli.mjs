@@ -101,7 +101,7 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
   task add --title T [--data JSON] [--after tsk,…] [--key K] | list [--status S] | show <tsk>
        | claim [tsk] [--lease-ms N] | renew|release|done <tsk> --epoch E [--result JSON]
   kv get <k> | put <k> <json> [--key K] | cas <k> <json> --expect V | del <k> [--expect V] | list [--prefix P]
-  verify --ref <agt> [--acceptance JSON] [--key K]   merge --ref <agt> --require <vfy> [--key K]
+  verify --ref <agt> [--check NAME] [--acceptance JSON] [--key K]   (NAME: one of the operator-set checks; raw commands are refused)   merge --ref <agt> --require <vfy> [--key K]
   mcp   (serve these as MCP tools over stdio)`;
 
 export function toCall(argv) {
@@ -147,7 +147,7 @@ export function toCall(argv) {
       if (action === "list") return { op: "kv", args: { action, prefix: fl.prefix } };
       return usage("kv get|put|cas|del|list");
     }
-    case "verify": if (!fl.ref) usage("verify needs --ref <agt>"); return { op: "verify", args: { ref: fl.ref, acceptance: json(fl.acceptance, "--acceptance"), key } };
+    case "verify": if (!fl.ref) usage("verify needs --ref <agt>"); return { op: "verify", args: { ref: fl.ref, ...(fl.check !== undefined ? { check: fl.check } : {}), ...(fl.checks !== undefined ? { checks: fl.checks } : {}), acceptance: json(fl.acceptance, "--acceptance"), key } };
     case "merge": if (!fl.ref || !fl.require) usage("merge needs --ref <agt> --require <vfy>"); return { op: "merge", args: { ref: fl.ref, require: fl.require, key } };
   }
   return usage(cmd ? `unknown command ${cmd}` : "no command");
@@ -172,7 +172,7 @@ export const TOOLS = [
   ["budget", "Your budget, spend, what is left to give children, and subtree rollup.", S({})],
   ["task", "Shared task board: action add|list|show|claim|renew|release|done.", S({ action: str, title: str, task: str, epoch: num, leaseMs: num, after: ids, data: {}, result: {}, status: str, key: str }, ["action"])],
   ["kv", "Shared blackboard: action get|put|cas|del|list (cas needs expect=version).", S({ action: str, k: str, value: {}, expect: num, prefix: str, key: str }, ["action"])],
-  ["verify", "Run the run's checks on a child's branch (never self-reported).", S({ ref: str, acceptance: {}, key: str }, ["ref"])],
+  ["verify", "Run an operator-named check (or the run's default) on a child's branch (never self-reported). check: a check NAME, not a command.", S({ ref: str, check: str, acceptance: {}, key: str }, ["ref"])],
   ["merge", "Merge a child's verified commit (needs require=vfy id).", S({ ref: str, require: str, key: str }, ["ref", "require"])],
   ["inspect", "Everything about one agent: record, children, awaits, VM, logs, events.", S({ agent: str, tail: num }, ["agent"])],
   ["logs", "Tail an agent's logs (fenced).", S({ agent: str, tail: num }, ["agent"])],

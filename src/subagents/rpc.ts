@@ -219,7 +219,17 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       const ref = String(args.ref ?? "");
       if (!ref.startsWith("agt-")) deny("in-VM verify takes a child agent id, not a branch");
       await assertWritable(c, ref, true);
-      // Checks never come from the VM: the run's root contract (operator-set) or the repo's test command.
+      // Checks never come from the VM: an operator-named check (by name only), the run's root contract
+      // (operator-set) or the repo's test command. A raw command is refused, naming what's allowed.
+      if (args.checks !== undefined) {
+        const sc: any = await O.peekScopeChecks(run);
+        throw new RelayError("policy", `in-VM verify takes --check <name>, not a raw --checks command; available: ${sc.length ? sc.join(", ") : "(none set for this run)"}`, sc.length ? `capcomd verify --ref ${ref} --check <${sc.join("|")}>` : "The operator sets named checks at `capcomd run new --checks-set name=CMD`.");
+      }
+      if (args.check !== undefined || (await O.peekScopeChecks(run)).length) {
+        const check = args.check !== undefined ? String(args.check) : undefined;
+        const named = await O.resolveNamedCheck(run, check);
+        if (named) return O.verifyRef({ runId: run, ref, check: named.name, acceptance: args.acceptance, key: args.key ? `${c.sub}:${args.key}` : undefined });
+      }
       return O.verifyRef({ runId: run, ref, checks: await operatorChecks(c), acceptance: args.acceptance, key: args.key ? `${c.sub}:${args.key}` : undefined });
     }
     case "merge": {
