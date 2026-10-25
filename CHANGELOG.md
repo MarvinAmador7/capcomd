@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.6.0-rc.2 (2026-10-25)
+
+Release candidate: agents in Docker containers, `capcomd tui` in the CLI, and `capcomd setup` fixes (boxd key, project checkout).
+
 - `capcomd setup` run outside a git checkout (your home directory, say) now asks for the path to your project's
   checkout and offers that repository's `origin` as the repository, as it does when run inside one. Before, it asked
   for a repository URL with no default and saved the project's settings in the current directory, which from your
