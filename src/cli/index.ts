@@ -28,7 +28,7 @@ const HELP = `
 capcomd - agent orchestration CLI
 
 Usage:
-  capcomd serve                          Start the Rivet engine (port 6420)
+  capcomd serve [--harness-socket PATH]  Start the Rivet engine (port 6420) and the harness.v1 API socket
   capcomd run <goal> [--run-id ID] [--target-branch B] [--detach]
              [--profile NAME] [--set key=value]... [--overrides JSON] [--operator]
                                        Pick an agent profile; overrides only narrow it
@@ -50,7 +50,8 @@ Usage:
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
                                            (default on boxd: the profile named "planner", which capcomd setup writes)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
-  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
+  capcomd clients add <name> [--scopes read,approve] | list | revoke <id>   harness.v1 API tokens (shown once)
+  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
@@ -170,6 +171,9 @@ async function main(argv: string[]): Promise<number> {
         contract: { type: "string" },
         reason: { type: "string" },
         label: { type: "string" },
+        goal: { type: "string" },
+        "harness-socket": { type: "string" },
+        scopes: { type: "string" },
         "no-start": { type: "boolean" },
         report: { type: "boolean" },
         continue: { type: "string" },
@@ -269,8 +273,22 @@ async function main(argv: string[]): Promise<number> {
         const { agentsCommand } = await import("./commands/agents");
         return await agentsCommand(positionals, values as any);
       }
+      case "clients": {
+        const C = await import("../api/clients");
+        const [, sub, arg] = positionals;
+        if (sub === "add" && arg) {
+          const scopes = String(values.scopes ?? "read").split(",").map((x) => x.trim()).filter(Boolean) as import("../api/clients").ClientScope[];
+          const { client, token } = C.addClient(arg, scopes);
+          console.log(JSON.stringify({ id: client.id, name: client.name, scopes: client.scopes, token, note: "shown once; store it in the client" }, null, 2));
+          return EXIT.ok;
+        }
+        if (sub === "list") { console.log(JSON.stringify(C.loadClients().map(({ sha256: _h, ...c }) => c), null, 2)); return EXIT.ok; }
+        if (sub === "revoke" && arg) { if (!C.revokeClient(arg)) usage(`no active client ${arg}`); console.log(JSON.stringify({ revoked: arg })); return EXIT.ok; }
+        usage("capcomd clients add <name> [--scopes read,steer,approve] | list | revoke <id>");
+        return EXIT.usage;
+      }
       case "serve":
-        await serve({ port: parseInt(values.port as string, 10) });
+        await serve({ port: parseInt(values.port as string, 10), ...(values["harness-socket"] ? { harnessSocket: values["harness-socket"] as string } : {}) });
         return EXIT.ok;
 
       case "ui":
@@ -294,7 +312,7 @@ async function main(argv: string[]): Promise<number> {
           const checks = values["checks-set"] ? P.parseCheckSet(values["checks-set"] as string[]) : (d.checks ?? {});
           const reviewer = (values.reviewer as string | undefined) ?? d.reviewer;
           const target = (values.target as string | undefined) ?? d.target;
-          const r = await P.runNew({ budget, label: values.label as string | undefined, key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}), ...(target ? { target } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) });
+          const r = await P.runNew({ budget, label: values.label as string | undefined, ...(values.goal ? { goal: values.goal as string } : {}), key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}), ...(target ? { target } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) });
           if (json) out(r); else console.log(r.runId);
           return EXIT.ok;
         }

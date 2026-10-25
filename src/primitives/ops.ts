@@ -119,7 +119,7 @@ export async function namedCheck(runId: string, name: string): Promise<string> {
   return cmd;
 }
 
-export interface RunNewOpts { budget: Budget; label?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string }
+export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string }
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
   const runId = o.runId ?? stableId("run", "run", o.key);
@@ -129,7 +129,7 @@ export async function runNew(o: RunNewOpts) {
   if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
   if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from main.");
   const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}) });
-  const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, paramsHash: ph }).catch(asRelay);
+  const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, ...(o.goal ? { goal: o.goal } : {}), paramsHash: ph }).catch(asRelay);
   // The run carries its repository settings, so the engine (e.g. a background service) needn't have them.
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
   const repoEnv = repoEnvOf(process.env);

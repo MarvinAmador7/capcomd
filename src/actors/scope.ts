@@ -226,7 +226,7 @@ export const scopeActor = actor({
   }),
 
   actions: traceActions("scope", {
-    async init(c, params: { runId: string; budget: Budget; label?: string; paramsHash: string }) {
+    async init(c, params: { runId: string; budget: Budget; label?: string; goal?: string; paramsHash: string }) {
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (have.length) {
         const prev = JSON.parse(have[0]!.v as string);
@@ -234,8 +234,8 @@ export const scopeActor = actor({
         return { runId: params.runId, created: false, budget: prev.budget as Budget };
       }
       await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, paramsHash: params.paramsHash, createdAt: Date.now() }));
-        await addEvent(tx, "RUN_NEW", null, { budget: params.budget, label: params.label ?? null }, `run-new`);
+        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, ...(params.goal ? { goal: params.goal } : {}), paramsHash: params.paramsHash, createdAt: Date.now() }));
+        await addEvent(tx, "RUN_NEW", null, { budget: params.budget, label: params.label ?? null, ...(params.goal ? { goal: params.goal.slice(0, 65536) } : {}) }, `run-new`);
       }, { name: "scopeInit" });
       return { runId: params.runId, created: true, budget: params.budget };
     },
@@ -252,7 +252,7 @@ export const scopeActor = actor({
         if (sp) spent[u] = Math.round(sp * 1e6) / 1e6;
       }
       const unallocated = available(meta.budget, {}, all.filter((a) => !a.parent).map((a) => ({ ...a, tree: tree.get(a.agentId) })));
-      return { budget: meta.budget as Budget, label: meta.label as string | null, createdAt: meta.createdAt as number, spent, unallocated };
+      return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated };
     },
 
     async spawn(

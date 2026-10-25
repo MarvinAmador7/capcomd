@@ -3,11 +3,13 @@ import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
-import { harnessFetch, harnessSocketPath, serveHarnessSocket } from "../../src/api/socket";
+import { harnessSocketPath, serveHarnessSocket } from "../../src/api/socket";
+import { harnessApp } from "../../src/api/server";
+import { memorySource } from "../../src/api/source";
 
 const dir = mkdtempSync(join(tmpdir(), "hs-"));
 const sock = join(dir, "harness.sock");
-const server = serveHarnessSocket(sock, harnessFetch("test"));
+const server = serveHarnessSocket(sock, harnessApp({ source: memorySource(), clients: () => [] }).fetch);
 afterAll(() => server.stop(true));
 
 test("socket path: flag > env > config > ~/.capcomd/harness.sock", () => {

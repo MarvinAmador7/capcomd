@@ -23,7 +23,7 @@ function portFree(port: number): Promise<boolean> {
  *  - those ports are checked free before starting; a busy one exits 1 with the reason;
  *  - a watchdog exits 1 if the engine never answers on our port, or stops answering.
  */
-export async function serve(opts: { port: number }) {
+export async function serve(opts: { port: number; harnessSocket?: string }) {
   const port = opts.port;
   if (!Number.isInteger(port) || port < 1 || port > 65535 - 10) {
     console.error(`capcomd serve: invalid --port ${port}`);
@@ -135,6 +135,19 @@ export async function serve(opts: { port: number }) {
     if (up && ++misses >= 10) { console.error(`capcomd serve: engine on :${port} stopped answering; exiting`); process.exit(1); }
   }, 2000);
 
+  // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
+  try {
+    const { harnessSocketPath, serveHarnessSocket } = await import("../../api/socket");
+    const { harnessApp } = await import("../../api/server");
+    const { rivetSource } = await import("../../api/rivet-source");
+    const { readConfig, userConfigPath, projectConfigPath } = await import("../../config/store");
+    const config = { ...readConfig(userConfigPath()), ...readConfig(projectConfigPath()) };
+    const sock = harnessSocketPath({ flag: opts.harnessSocket, config });
+    serveHarnessSocket(sock, harnessApp({ source: rivetSource() }).fetch);
+    console.log(`✓ harness.v1 API on ${sock}`);
+  } catch (e) {
+    console.error(`capcomd serve: harness API failed to start: ${(e as Error).message}`);
+  }
   console.log("  Press Ctrl+C to stop");
   await new Promise(() => {});
 }
