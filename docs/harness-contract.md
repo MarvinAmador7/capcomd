@@ -121,8 +121,7 @@ Every SSE event and replayed event has this shape. `seq` is persisted per scope 
     "runId",
     "agentId",
     "data"
-  ],
-  "additionalProperties": false
+  ]
 }
 ```
 

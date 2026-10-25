@@ -17,6 +17,8 @@ const nullFold = (n: any): any => {
 	const o: any = Object.fromEntries(Object.entries(n).map(([k, v]) => [k, nullFold(v)]));
 	// The oRPC converter drops zod .meta() extensions; restore x-untrusted from UntrustedText's description.
 	if (typeof o.description === "string" && o.description.startsWith("Agent-written text")) o["x-untrusted"] = true;
+	// Published schemas stay open (§6.2: old clients ignore new fields); the daemon checks its own output strictly.
+	if (o.additionalProperties === false) delete o.additionalProperties;
 	const alts = o.anyOf;
 	if (Array.isArray(alts) && alts.length === 2) {
 		const i = alts.findIndex((a: any) => a && a.type === "null" && Object.keys(a).length === 1);
@@ -38,6 +40,10 @@ for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.
 const folded = nullFold(spec);
 const anyOfNull = (n: any, path: string): string[] => !n || typeof n !== "object" ? [] :
 	[...(Array.isArray(n.anyOf) && n.anyOf.some((a: any) => a?.type === "null") ? [path] : []), ...Object.entries(n).flatMap(([k, v]) => anyOfNull(v, `${path}/${k}`))];
+const closed = (n: any, path: string): string[] => !n || typeof n !== "object" ? [] :
+	[...(n.additionalProperties === false ? [path] : []), ...Object.entries(n).flatMap(([k, v]) => closed(v, `${path}/${k}`))];
+const shut = closed(folded, "#");
+if (shut.length) { console.error(`additionalProperties:false remains (published schemas must stay open):\n${shut.join("\n")}`); process.exit(1); }
 const left = anyOfNull(folded, "#");
 if (left.length) { console.error(`anyOf-null unions remain (Swift drops these fields):\n${left.join("\n")}`); process.exit(1); }
 const openapi = `${JSON.stringify(folded, null, 2)}\n`;

@@ -858,7 +858,8 @@
                       "required": [
                         "clientId",
                         "principal"
-                      ]
+                      ],
+                      "additionalProperties": {}
                     },
                     "decidedAt": {
                       "type": [
@@ -872,7 +873,7 @@
                         "string",
                         "null"
                       ],
-                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7).",
                       "x-untrusted": true
                     }
                   },
@@ -882,7 +883,8 @@
                     "decidedBy",
                     "decidedAt",
                     "reason"
-                  ]
+                  ],
+                  "additionalProperties": {}
                 }
               }
             }
@@ -987,7 +989,7 @@
                   "clientId",
                   "principal"
                 ],
-                "additionalProperties": false
+                "additionalProperties": {}
               },
               "decidedAt": {
                 "type": [
@@ -1003,7 +1005,7 @@
                   "null"
                 ],
                 "x-untrusted": true,
-                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)."
               }
             },
             "required": [
@@ -1013,14 +1015,14 @@
               "decidedAt",
               "reason"
             ],
-            "additionalProperties": false
+            "additionalProperties": {}
           }
         },
         "required": [
           "code",
           "message"
         ],
-        "additionalProperties": false
+        "additionalProperties": {}
       }
     }
   }

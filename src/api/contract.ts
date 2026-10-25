@@ -14,7 +14,7 @@ export const AgentStatus = z.enum(["pending", "running", "paused", "done", "fail
 export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$/).describe("daemon, prj-<id> or run-<id>");
 
 /** Every non-2xx response. Switch on `code`. */
-export const ApiError = z.object({
+export const ApiError = z.looseObject({
 	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "invalid", "internal"]),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
@@ -23,12 +23,12 @@ export const ERROR_STATUSES = [401, 404, 409, 422] as const;
 
 export const Run = z.object({ id: z.string(), projectId: z.string().nullable(), label: z.string().nullable(), state: z.string(), goal: UntrustedText.nullable() });
 export const Agent = z.object({ id: z.string(), runId: z.string(), parent: z.string().nullable(), depth: z.number().int(), profile: z.string().nullable(), status: AgentStatus });
-export const Decision = z.object({
+export const Decision = z.looseObject({
 	approvalId: ApprovalId,
 	status: ApprovalStatus,
-	decidedBy: z.object({ clientId: z.string(), principal: z.string() }).nullable(),
+	decidedBy: z.looseObject({ clientId: z.string(), principal: z.string() }).nullable(),
 	decidedAt: z.iso.datetime().nullable(),
-	reason: UntrustedText.nullable(),
+	reason: z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)." }).nullable(),
 });
 
 /** Frames on GET /v1/streams/{scope}/events besides ordinary events (SSE `event:` names). */

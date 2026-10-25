@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApprovalId, contract, EventData, Scope, StreamFrames } from "../../src/api/contract";
+import { ApiError, ApprovalId, contract, EventData, Scope, StreamFrames } from "../../src/api/contract";
 import { HarnessEvent } from "../../src/api/envelope";
 import { bodyHash, resolveDecide } from "../../src/api/idempotency";
 import spec from "../../openapi/capcomd.json";
@@ -52,6 +52,10 @@ describe("harness.v1 contract", () => {
 		const ev = HarnessEvent.parse(line);
 		expect(EventData["approval.requested"].parse(ev.data)).toMatchObject({ priority: "high" });
 		expect(EventData["kv.put"].safeParse({ k: "a", version: 1, newField: true }).success).toBe(true);
+		const err = ApiError.parse({ code: "already_decided", message: "m", retryAfter: 3,
+			decision: { approvalId: "apr-k1", status: "approved", decidedBy: { clientId: "c", principal: "p", via: "x" }, decidedAt: null, reason: null, extra: 1 } });
+		expect(err).toMatchObject({ retryAfter: 3, decision: { extra: 1, decidedBy: { via: "x" } } });
+		expect(JSON.stringify(spec)).not.toContain('"additionalProperties":false');
 	});
 });
 

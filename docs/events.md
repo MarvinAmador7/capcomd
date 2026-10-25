@@ -989,7 +989,6 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "agentId",
         "runId"
       ],
-      "additionalProperties": false,
       "description": "Who asked; ancestors of agentId may decide within their budget cap"
     },
     "subject": {
@@ -1060,7 +1059,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "clientId",
         "principal"
       ],
-      "additionalProperties": false
+      "additionalProperties": {}
     },
     "decidedAt": {
       "type": [
@@ -1076,7 +1075,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "null"
       ],
       "x-untrusted": true,
-      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+      "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)."
     }
   },
   "required": [
@@ -1168,8 +1167,7 @@ A `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There
         "label",
         "state",
         "goal"
-      ],
-      "additionalProperties": false
+      ]
     }
   },
   "required": [
@@ -1234,8 +1232,7 @@ A `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There
           "depth",
           "profile",
           "status"
-        ],
-        "additionalProperties": false
+        ]
       }
     }
   },
