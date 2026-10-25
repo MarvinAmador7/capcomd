@@ -9,6 +9,7 @@ import { authenticate, loadClients, type AuthedClient, type ClientRecord, type C
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
 import { envelopes, messagesOf, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
+import { lifecycleEvents } from "./lifecycle";
 import { harnessState, type HarnessState } from "./state";
 
 export const HEARTBEAT_MS = 15_000;
@@ -37,6 +38,10 @@ export function harnessApp(o: ServerOptions) {
 			get: os.runs.get.handler(async ({ input }) => (await src.runs()).find((r) => r.id === input.runId) ?? (() => { throw nf(input.runId); })()),
 			trace: os.runs.trace.handler(({ input }) => src.trace(input.runId)),
 			messages: os.runs.messages.handler(async ({ input }) => messagesOf(await src.events(input.runId, 0)).filter((m) => m.seq > (input.after ?? 0))),
+			lifecycle: os.runs.lifecycle.handler(async ({ input }) => {
+				if ((await src.agents(input.runId)) === null) throw nf(input.runId);
+				return lifecycleEvents(input.runId, await src.events(input.runId, 0)).filter((e) => e.seq > (input.after ?? 0));
+			}),
 		},
 		agents: {
 			tree: os.agents.tree.handler(async ({ input }) => (await src.agents(input.runId)) ?? (() => { throw nf(input.runId); })()),
@@ -148,6 +153,34 @@ export function harnessApp(o: ServerOptions) {
 				}
 				const runId = scope;
 				const all = await src.events(runId, 0);
+				if (c.req.query("feed") === "lifecycle") {
+					// Lifecycle feed: snapshot of state (run, agents, approvals), then only lifecycle events. Folded from the full log each tick.
+					const head = all.at(-1)?.seq ?? 0;
+					let cursor: number;
+					if (last !== null && last <= head) cursor = last;
+					else {
+						if (last !== null) frame("stream.reset", { snapshotSeq: head, reason: "compacted" });
+						const run = (await src.runs()).find((r) => r.id === runId) ?? null;
+						if (run) frame("snapshot.run", { run });
+						frame("snapshot.agents", { agents: (await src.agents(runId)) ?? [] });
+						frame("snapshot.approvals", { approvals: await src.approvals(runId) });
+						frame("snapshot.end", { snapshotSeq: head }, head);
+						cursor = head;
+					}
+					let busy = false;
+					const tick = async () => {
+						if (busy || closed) return;
+						busy = true;
+						try {
+							const evs = await src.events(runId, 0);
+							for (const e of lifecycleEvents(runId, evs)) if (e.seq > cursor) send(e.type, e, e.seq);
+							cursor = Math.max(cursor, evs.at(-1)?.seq ?? 0);
+						} finally { busy = false; }
+					};
+					await tick();
+					timer = setInterval(() => { tick().catch(() => {}); }, pollMs);
+					return;
+				}
 				const head = all.at(-1)?.seq ?? 0;
 				let cursor: number;
 				if (last !== null && last <= head) {

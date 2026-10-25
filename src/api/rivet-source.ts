@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { client } from "../core/relay";
+import { redactShapes } from "../agents/redact";
 import { recentRuns, decideMerge } from "../primitives/ops";
 import { tracePath } from "../utils/tracing-simple";
 import { VERSION } from "../utils/self";
@@ -50,7 +51,7 @@ export function rivetSource(): HarnessSource {
 			if (!runsIndex().some((r) => r.runId === runId) && !(await scope(runId).getScope({}).catch(() => null))) return null;
 			const all = (await scope(runId).listAgents({})) as any[];
 			return all.map((a) => {
-				const inl = inlineOrAttach(String(a.task ?? ""));
+				const inl = inlineOrAttach(redactShapes(String(a.task ?? "")));
 				return {
 					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile), status: a.status,
 					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId),

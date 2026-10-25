@@ -312,7 +312,8 @@ export const scopeActor = actor({
           params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now
         );
         killpoint("scope.spawn.mid");
-        const taskInl = inlineOrAttach(params.task);
+        // Same redaction path as message bodies: the row keeps the raw task for the worker; event + attachment are redacted.
+        const taskInl = inlineOrAttach(redactShapes(params.task));
         if (taskInl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", taskInl.attachment.id, taskInl.attachment.sha256, taskInl.attachment.bytes, taskInl.attachment.mediaType, taskInl.body, now);
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,

@@ -7,6 +7,12 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 	const d = data as Record<string, any>;
 	switch (type) {
 		case "run.created": return "Run created.";
+		case "run.started": return "The run started.";
+		case "run.paused": return "The run is paused: every working agent is paused.";
+		case "run.resumed": return "The run resumed.";
+		case "run.completed": return "The run finished: all agents are done.";
+		case "run.failed": return "The run ended with a failed agent.";
+		case "run.cancelled": return "The run was cancelled.";
 		case "run.granted": return "The run's budget was raised.";
 		case "agent.spawned": return `${a} was started${d.parent ? ` by ${d.parent}` : ""}${d.profile ? ` as ${String(d.profile).toLowerCase()}` : ""}.`;
 		case "agent.started": return `${a} began working.`;

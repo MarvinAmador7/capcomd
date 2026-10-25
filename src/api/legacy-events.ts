@@ -34,6 +34,8 @@ export const AgentResult = z.looseObject({
 	verification: U.optional(),
 }).meta({ "x-untrusted": true, description: "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions" });
 const finish = { result: AgentResult, spent: U, budget: U };
+/** Set on lifecycle-feed copies of state-change events (GET /v1/runs/{runId}/lifecycle, ?feed=lifecycle): trusted reason code. */
+const cause = { cause: S.optional().describe("Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)") };
 const kv = { k: S, version: N, writer: S.optional() };
 
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
@@ -53,21 +55,21 @@ export type ScopeEventType = (typeof SCOPE_EVENT_TYPES)[number];
 const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verify.failed", "merge.succeeded", "merge.failed"]);
 
 export const LegacyEventShapes = {
-	"run.created": { budget: U, label: nS, goal: nT.optional() },
+	"run.created": { budget: U, label: nS, goal: nT.optional(), ...cause },
 	"run.granted": budget,
-	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: U, task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional() },
-	"agent.started": {},
-	"agent.done": finish,
-	"agent.failed": finish,
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: U, task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), ...cause },
+	"agent.started": { ...cause },
+	"agent.done": { ...finish, ...cause },
+	"agent.failed": { ...finish, ...cause },
 	"agent.checkpointed": { ref: S, sha: S, at: N, reason: T, files: N },
 	"agent.notice_raised": { kind: S, detail: T, at: N },
 	"agent.notice_cleared": { kind: nS },
-	"agent.paused": { result: U, until: U },
-	"agent.resumed": { epoch: N, by: nS },
+	"agent.paused": { result: U, until: U, ...cause },
+	"agent.resumed": { epoch: N, by: nS, ...cause },
 	"agent.granted": budget,
 	"agent.adopted": { from: S, to: S },
-	"agent.reaped": { orphanOf: S, parentStatus: S },
-	"agent.cancelled": { reason: nT, by: S },
+	"agent.reaped": { orphanOf: S, parentStatus: S, ...cause },
+	"agent.cancelled": { reason: nT, by: S, ...cause },
 	"deadlock.detected": { cycle: z.array(S) },
 	"drive.failed": { kind: S, error_kind: S, message: T, attempt: N, driver: U, consecutive: N },
 	"token.revoked": { jti: S, reason: nT },

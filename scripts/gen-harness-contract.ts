@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { z } from "zod";
-import { ApiError, contract, ERROR_STATUSES, EventData, StreamFrames, STREAM_DOC } from "../src/api/contract";
+import { ApiError, contract, ERROR_STATUSES, EventData, LIFECYCLE_DOC, StreamFrames, STREAM_DOC } from "../src/api/contract";
 import { HarnessEvent, TIMESTAMP_DOC, TIMESTAMP_PATTERN } from "../src/api/envelope";
 
 const spec = await new OpenAPIGenerator({ schemaConverters: [new ZodToJsonSchemaConverter()] }).generate(contract, {
@@ -88,6 +88,7 @@ md += "Payloads are open: clients must ignore unknown fields (§6.2, new fields 
 md += "Fields with `\"x-untrusted\": true` are agent-written: render as plain text, never markdown, links or actions.\n";
 const js = (sc: z.ZodType) => JSON.stringify(nullFold(z.toJSONSchema(sc, { unrepresentable: "any" })), null, 2);
 for (const [type, schema] of Object.entries(EventData)) md += `\n## \`${type}\`\n\n\`\`\`json\n${js(schema)}\n\`\`\`\n`;
+md += `\n# Lifecycle feed\n\n${LIFECYCLE_DOC}\n`;
 md += `\n# Stream frames\n\n\`GET /v1/streams/{scope}/events\`: ${STREAM_DOC}\n`;
 for (const [type, schema] of Object.entries(StreamFrames)) md += `\n## \`${type}\`\n\n\`\`\`json\n${js(schema)}\n\`\`\`\n`;
 
