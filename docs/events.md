@@ -5,7 +5,7 @@ Timestamps: RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:5
 Every event uses the envelope in `src/api/envelope.ts`; the payload below is its `data`.
 Payloads are open: clients must ignore unknown fields (§6.2, new fields don't bump the version); the daemon emits only declared fields. Fields with `"x-untrusted": true` are agent-written: render as plain text, never markdown, links or actions.
 
-## `run.new`
+## `run.created`
 
 ```json
 {
@@ -18,6 +18,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "goal": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions"
     }
   },
   "required": [
@@ -153,7 +161,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `agent.checkpoint`
+## `agent.checkpointed`
 
 ```json
 {
@@ -189,7 +197,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `agent.notice`
+## `agent.notice_raised`
 
 ```json
 {
@@ -590,7 +598,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `merge.awaiting_approval`
+## `merge.approval_requested`
 
 ```json
 {
@@ -837,7 +845,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `kv.delete`
+## `kv.deleted`
 
 ```json
 {
@@ -862,7 +870,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `kv.cas`
+## `kv.swapped`
 
 ```json
 {
@@ -887,34 +895,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
-## `run.created`
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {
-    "runId": {
-      "type": "string"
-    },
-    "goal": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-untrusted": true,
-      "description": "Agent-written text: render as plain text, never markdown, links or actions"
-    }
-  },
-  "required": [
-    "runId",
-    "goal"
-  ],
-  "additionalProperties": {}
-}
-```
-
-## `agent.status`
+## `agent.status_changed`
 
 ```json
 {

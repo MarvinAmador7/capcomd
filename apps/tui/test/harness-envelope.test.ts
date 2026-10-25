@@ -17,7 +17,7 @@ test("the harness-v1 fixture validates against the contract", () => {
 
 test("the TUI's inspect adapter parses harness.v1 envelopes", () => {
 	const evs = parseEvents(text);
-	expect(evs.map((e) => e.type)).toEqual(["run.new", "agent.spawned", "agent.started", "approval.requested", "approval.decided"]);
+	expect(evs.map((e) => e.type)).toEqual(["run.created", "agent.spawned", "agent.started", "approval.requested", "approval.decided"]);
 	expect(evs[0]!.at).toBe(1792900500000);
 	expect(evs[3]!.data).toMatchObject({ approvalId: "apr-k1", kind: "merge" });
 	expect(evs[1]!.seq).toBe(2);

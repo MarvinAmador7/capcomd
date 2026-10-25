@@ -32,14 +32,14 @@ export type ScopeEventType = (typeof SCOPE_EVENT_TYPES)[number];
 const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verify.failed", "merge.succeeded", "merge.failed"]);
 
 export const LegacyEventShapes = {
-	"run.new": { budget: U, label: nS },
+	"run.created": { budget: U, label: nS, goal: nT.optional() },
 	"run.granted": budget,
 	"agent.spawned": { parent: nS, depth: N, profile: U, budget: U, limits: U, agent: U, task: T, key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional() },
 	"agent.started": {},
 	"agent.done": finish,
 	"agent.failed": finish,
-	"agent.checkpoint": { ref: S, sha: S, at: N, reason: T, files: N },
-	"agent.notice": { kind: S, detail: T, at: N },
+	"agent.checkpointed": { ref: S, sha: S, at: N, reason: T, files: N },
+	"agent.notice_raised": { kind: S, detail: T, at: N },
 	"agent.notice_cleared": { kind: nS },
 	"agent.paused": { result: U, until: U },
 	"agent.resumed": { epoch: N, by: nS },
@@ -57,7 +57,7 @@ export const LegacyEventShapes = {
 	"merge.started": { id: S },
 	"merge.succeeded": { id: S },
 	"merge.failed": { id: S },
-	"merge.awaiting_approval": { id: S, target: U, ref: U, reason: T.nullable().optional() },
+	"merge.approval_requested": { id: S, target: U, ref: U, reason: T.nullable().optional() },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
 	"task.added": { taskId: S, title: T, after: z.array(S).optional() },
@@ -66,8 +66,8 @@ export const LegacyEventShapes = {
 	"task.done": { ...task, result: U.optional() },
 	"task.released": task,
 	"kv.put": kv,
-	"kv.delete": kv,
-	"kv.cas": kv,
+	"kv.deleted": kv,
+	"kv.swapped": kv,
 } as const satisfies Record<string, z.ZodRawShape>;
 
 export const LegacyEventData = Object.fromEntries(

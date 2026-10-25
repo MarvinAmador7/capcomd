@@ -53,8 +53,7 @@ Timestamps (ts, decidedAt, expiresAt): ${TIMESTAMP_DOC}.`;
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
 	...LegacyEventData,
-	"run.created": z.looseObject({ runId: z.string(), goal: UntrustedText.nullable() }),
-	"agent.status": z.looseObject({ agentId: z.string(), status: AgentStatus }),
+	"agent.status_changed": z.looseObject({ agentId: z.string(), status: AgentStatus }),
 	"approval.requested": z.looseObject({
 		approvalId: ApprovalId,
 		kind: ApprovalKind,

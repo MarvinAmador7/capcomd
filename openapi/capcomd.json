@@ -1032,7 +1032,7 @@
         ],
         "additionalProperties": {}
       },
-      "RunNewData": {
+      "RunCreatedData": {
         "type": "object",
         "properties": {
           "budget": {},
@@ -1041,6 +1041,14 @@
               "string",
               "null"
             ]
+          },
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions"
           }
         },
         "required": [
@@ -1048,7 +1056,7 @@
           "label"
         ],
         "additionalProperties": {},
-        "x-event-type": "run.new"
+        "x-event-type": "run.created"
       },
       "RunGrantedData": {
         "type": "object",
@@ -1150,7 +1158,7 @@
         "additionalProperties": {},
         "x-event-type": "agent.failed"
       },
-      "AgentCheckpointData": {
+      "AgentCheckpointedData": {
         "type": "object",
         "properties": {
           "ref": {
@@ -1179,9 +1187,9 @@
           "files"
         ],
         "additionalProperties": {},
-        "x-event-type": "agent.checkpoint"
+        "x-event-type": "agent.checkpointed"
       },
-      "AgentNoticeData": {
+      "AgentNoticeRaisedData": {
         "type": "object",
         "properties": {
           "kind": {
@@ -1202,7 +1210,7 @@
           "at"
         ],
         "additionalProperties": {},
-        "x-event-type": "agent.notice"
+        "x-event-type": "agent.notice_raised"
       },
       "AgentNoticeClearedData": {
         "type": "object",
@@ -1492,7 +1500,7 @@
         "additionalProperties": {},
         "x-event-type": "merge.failed"
       },
-      "MergeAwaitingApprovalData": {
+      "MergeApprovalRequestedData": {
         "type": "object",
         "properties": {
           "id": {
@@ -1515,7 +1523,7 @@
           "ref"
         ],
         "additionalProperties": {},
-        "x-event-type": "merge.awaiting_approval"
+        "x-event-type": "merge.approval_requested"
       },
       "MergeApprovedData": {
         "type": "object",
@@ -1694,7 +1702,7 @@
         "additionalProperties": {},
         "x-event-type": "kv.put"
       },
-      "KvDeleteData": {
+      "KvDeletedData": {
         "type": "object",
         "properties": {
           "k": {
@@ -1712,9 +1720,9 @@
           "version"
         ],
         "additionalProperties": {},
-        "x-event-type": "kv.delete"
+        "x-event-type": "kv.deleted"
       },
-      "KvCasData": {
+      "KvSwappedData": {
         "type": "object",
         "properties": {
           "k": {
@@ -1732,31 +1740,9 @@
           "version"
         ],
         "additionalProperties": {},
-        "x-event-type": "kv.cas"
+        "x-event-type": "kv.swapped"
       },
-      "RunCreatedData": {
-        "type": "object",
-        "properties": {
-          "runId": {
-            "type": "string"
-          },
-          "goal": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "x-untrusted": true,
-            "description": "Agent-written text: render as plain text, never markdown, links or actions"
-          }
-        },
-        "required": [
-          "runId",
-          "goal"
-        ],
-        "additionalProperties": {},
-        "x-event-type": "run.created"
-      },
-      "AgentStatusData": {
+      "AgentStatusChangedData": {
         "type": "object",
         "properties": {
           "agentId": {
@@ -1780,7 +1766,7 @@
           "status"
         ],
         "additionalProperties": {},
-        "x-event-type": "agent.status"
+        "x-event-type": "agent.status_changed"
       },
       "ApprovalRequestedData": {
         "type": "object",
