@@ -39,6 +39,10 @@ public struct Agent: Sendable, Hashable, Identifiable {
   public var spawnedAtMs: Int
   /// Plain-language status line from agents.tree / snapshot.agents `text` (daemon-written, trusted). Shown as the activity line.
   public var activity: String? = nil
+  /// `taskAttachment`: the full task is stored by the daemon; only its metadata is shown.
+  public var taskAttachment: AttachmentRef? = nil
+  /// `result.summary` once the agent finished (agent-written, untrusted).
+  public var resultSummary: UntrustedText? = nil
   public var kind: ProfileKind { ProfileKind(profile: profile) }
   /// Profile names stay lowercase as the contract sends them ("lead"); nil → "agent".
   public var displayName: String {
@@ -112,7 +116,13 @@ public struct Run: Sendable, Hashable, Identifiable {
   public var lastEventMs: Int
   public var agents: [String: Agent] = [:]
   public var steps: [Step] = []
-  public var isRunning: Bool { state == "running" || agents.values.contains { $0.status == .running } }
+  /// `run.*` lifecycle transitions applied to this run, in order (lifecycle feed).
+  public var lifecycle: [RunTransition] = []
+  public static let terminalStates: Set<String> = ["completed", "failed", "cancelled", "deleted"]
+  public var isRunning: Bool {
+    if Self.terminalStates.contains(state) { return false }
+    return state == "running" || agents.values.contains { $0.status == .running }
+  }
   public var title: String { goal?.firstLine ?? label ?? id }
 }
 
@@ -136,6 +146,10 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   public var status: AgentStatus
   /// Daemon-written activity line (trusted plain text), if known.
   public var activity: String? = nil
+  /// `taskAttachment`: the full task is stored by the daemon; only its metadata is shown.
+  public var taskAttachment: AttachmentRef? = nil
+  /// `result.summary` once the agent finished (agent-written, untrusted).
+  public var resultSummary: UntrustedText? = nil
   public var depth: Int
   public var waiting: Bool            // this node has a pending approval
   public var descendantWaiting: Bool  // bubbled up for collapsed ancestors
@@ -151,4 +165,48 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
     let state = waiting ? "waiting for approval" : status.rawValue.replacingOccurrences(of: "-", with: " ")
     return [name + (suffix.map { " \($0)" } ?? ""), state, "level \(depth + 1)"].joined(separator: ", ")
   }
+}
+
+/// One `run.*` lifecycle event (run.started/paused/resumed/completed/failed/cancelled/deleted).
+public struct RunTransition: Sendable, Hashable {
+  public var type: String
+  /// LifecycleCause (trusted daemon code), e.g. "all_agents_done".
+  public var cause: String?
+  public var agentId: String?
+  public var seq: Int
+  public var epochMs: Int
+  /// run.state after this transition.
+  public var state: String { Self.state(for: type) ?? "running" }
+  public static func state(for type: String) -> String? {
+    switch type {
+    case "run.started", "run.resumed": "running"
+    case "run.paused": "paused"
+    case "run.completed": "completed"
+    case "run.failed": "failed"
+    case "run.cancelled": "cancelled"
+    case "run.deleted": "deleted"
+    default: nil
+    }
+  }
+}
+
+/// Daemon-stored attachment metadata (`taskAttachment`, `message.sent.attachment`). Never fetched or opened here.
+public struct AttachmentRef: Sendable, Hashable {
+  public var id: String; public var bytes: Int; public var mediaType: String
+  public init(id: String, bytes: Int, mediaType: String) { self.id = id; self.bytes = bytes; self.mediaType = mediaType }
+  public init?(_ v: JSONValue?) {
+    guard let v, let id = v["id"]?.string else { return nil }
+    self.init(id: id, bytes: v["bytes"]?.int ?? 0, mediaType: v["mediaType"]?.string ?? "text/plain")
+  }
+  /// "Full text stored · 12 KB" (client-composed; mediaType is shown via UntrustedText by the caller if at all).
+  public var label: String {
+    let kb = bytes >= 1024 ? "\(bytes / 1024) KB" : "\(bytes) bytes"
+    return "Full text stored · \(kb)"
+  }
+}
+
+/// Something the user should hear about (macOS notification), raised only for live lifecycle events.
+public enum Notice: Sendable, Hashable {
+  case approvalRequested(approvalId: String, runId: String?, question: UntrustedText)
+  case runFinished(runId: String, type: String, title: String)
 }

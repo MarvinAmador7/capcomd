@@ -1,7 +1,8 @@
 // Mock capcomd harness API on a 0600 Unix socket.
-// Contract: MarvinAmador7/capcomd main @ d5c8bc6 (phase 1, PR #38) — openapi/capcomd.json, docs/events.md. Check with validate.ts.
-// Routes: GET /v1/health (no token), /v1/runs, /v1/runs/:runId, /v1/runs/:runId/agents, /v1/events?scope&after,
-//         GET /v1/streams/:scope/events (SSE), POST /v1/approvals/:approvalId/decision (Idempotency-Key required).
+// Contract: MarvinAmador7/capcomd PR #40 (lifecycle events) — openapi/capcomd.json, docs/events.md. Check with validate.ts.
+// Routes: GET /v1/health (no token), /v1/runs, /v1/runs/:runId, /v1/runs/:runId/agents, /v1/runs/:runId/lifecycle?after=
+//         (404 for an unknown run), /v1/events?scope&after, GET /v1/streams/:scope/events[?feed=lifecycle] (SSE),
+//         POST /v1/approvals/:approvalId/decision (Idempotency-Key required).
 // SSE frames per contract: `id: <seq>` / `event: <type>` / `data: <envelope>`; `event: stream.reset` {snapshotSeq, reason}
 //   then snapshot.run / agents / approvals / steps / threads / snapshot.end {snapshotSeq}, then live from snapshotSeq+1;
 //   `: heartbeat` comment every HEARTBEAT_MS (default 15000).
@@ -10,6 +11,12 @@
 //   Any Last-Event-ID below COMPACTED_BELOW gets reset(compacted) with a snapshot at head.
 // Test-only scopes: run-silent sends nothing at all (no heartbeat) to exercise the client's dead-socket timeout;
 //   daemon sends a compacted reset with the head snapshot (approvals carry requestedBy/subject), then heartbeats only.
+// Lifecycle feed (run-demo?feed=lifecycle), projected like src/api/lifecycle.ts: run.created, agent.spawned, agent.started
+//   (from status_changed→running), approval.*, each with data.cause; run.started {cause, agentId} shares agt-1's start seq.
+//   Shared-seq groups go out in ONE enqueue and only the group's LAST frame carries `id:`.
+//   Script: lifecycle conn #1 (no Last-Event-ID) sends snapshot.run/agents/approvals + snapshot.end (`id: 1`), then seq 2, then
+//   only the first frame of the seq-4 group (agent.started, no id) and drops. Conn #2 resumes from Last-Event-ID 2, so the whole
+//   seq-4 group is re-sent; the client must deliver run.started (and agent.started) exactly once. Then heartbeats only.
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/harness.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
@@ -51,6 +58,35 @@ for (let i = 1; fixture.length < 30; i++) {
 }
 const TOTAL = fixture.length;
 
+// Lifecycle projection of the fixture (mirrors src/api/lifecycle.ts for the types the fixture has).
+const lifecycle: any[] = [];
+{
+  let started = false;
+  for (const e of fixture) {
+    if (e.type === "run.created") lifecycle.push({ ...e, data: { ...e.data, cause: "created" } });
+    else if (e.type === "agent.spawned") lifecycle.push({ ...e, data: { ...e.data, cause: "spawned" } });
+    else if (e.type === "agent.status_changed" && e.data.status === "running") {
+      lifecycle.push({ ...e, type: "agent.started", text: `Agent ${e.agentId} started.`, data: { cause: "started" } });
+      if (!started) {
+        started = true;
+        lifecycle.push({ ...e, id: `evt_${RUN}_${e.seq}_run.started`, entity: RUN, entitySeq: 2, type: "run.started", text: "The run started.",
+          agentId: e.agentId, data: { cause: "started", agentId: e.agentId } });
+      }
+    } else if (e.type === "approval.requested") lifecycle.push({ ...e, data: { ...e.data, cause: "approval_needed" } });
+    else if (e.type === "approval.decided") lifecycle.push({ ...e, data: { ...e.data, cause: e.data.status } });
+  }
+}
+/** Lifecycle envelopes with seq > after, grouped by shared seq (in order). */
+const lifecycleGroups = (after: number) => {
+  const groups: any[][] = [];
+  for (const e of lifecycle.filter(e => e.seq > after)) {
+    const g = groups.at(-1);
+    if (g && g[0].seq === e.seq) g.push(e); else groups.push([e]);
+  }
+  return groups;
+};
+const LC_SNAPSHOT = 1, LC_CUT_SEQ = 4;
+
 // State at seq s, in the contract's snapshot.* shapes.
 const runBody = { id: RUN, projectId: PRJ, label: "demo", state: "running", goal: GOAL, repo: "/tmp/demo-repo", createdAt: iso(T0 + 1000) };
 const agentNode = (e: any, status: string, updatedMs: number) => ({ id: e.agentId, runId: RUN, parent: e.data.parent, depth: e.data.depth,
@@ -82,23 +118,26 @@ const snapshotFrames = (s: number) => {
 
 const decisions = new Map<string, any>();
 const idem = new Map<string, { body: string; res: any }>();
-let conns = 0; const log: string[] = [];
+let conns = 0, lcConns = 0; const log: string[] = [];
 if (existsSync(sock)) unlinkSync(sock);
 const sse = (id: number | null, event: string, data: unknown) =>
   (id !== null ? `id: ${id}\n` : "") + `event: ${event}\n` + `data: ${JSON.stringify(data)}\n\n`;
+/** One shared-seq group as a single string: only the LAST frame carries `id:` (like sendGroups in src/api/server.ts). */
+const group = (g: any[]) => g.map((e, i) => sse(i === g.length - 1 ? e.seq : null, e.type, e)).join("");
 
 Bun.serve({
   unix: sock,
   idleTimeout: 0,
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
-    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-d5c8bc6" });
+    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-pr40" });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
     if (p === "/__log") return Response.json({ conns, log });
     if (p === "/v1/runs") return Response.json([runBody]);
     if (p === `/v1/runs/${RUN}`) return Response.json(runBody);
     if (p === `/v1/runs/${RUN}/agents`) return Response.json(agentsAt(TOTAL));
-    if (/^\/v1\/runs\/[^/]+(\/agents)?$/.test(p)) return err(404, "not_found", "no such run");
+    if (p === `/v1/runs/${RUN}/lifecycle`) { const after = Number(url.searchParams.get("after") ?? 0); return Response.json(lifecycle.filter(e => e.seq > after)); }
+    if (/^\/v1\/runs\/[^/]+(\/agents|\/lifecycle)?$/.test(p)) return err(404, "not_found", "no such run");
     if (p === "/v1/events") { const after = Number(url.searchParams.get("after") ?? 0); return Response.json(fixture.filter(e => e.scope === url.searchParams.get("scope") && e.seq > after)); }
 
     const m = p.match(/^\/v1\/approvals\/(apr-[A-Za-z0-9]+)\/decision$/);
@@ -124,6 +163,9 @@ Bun.serve({
     if (!s) return err(404, "not_found", "no such route");
     const scope = s[1];
     if (!/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$/.test(scope)) return err(422, "invalid", "bad scope");
+    const feed = url.searchParams.get("feed");
+    if (feed !== null && feed !== "lifecycle") return err(422, "invalid", "feed must be lifecycle");
+    if (feed === "lifecycle" && !scope.startsWith("run-")) return err(422, "invalid", "lifecycle feed is for run scopes");
     const enc = new TextEncoder();
     const headers = { "content-type": "text/event-stream", "cache-control": "no-cache" };
     if (scope === "run-silent") return new Response(new ReadableStream({ start() {} }), { headers });
@@ -135,6 +177,37 @@ Bun.serve({
       startHeartbeat(c);
     }, cancel() { clearInterval(hb); } }), { headers });
     if (scope !== RUN) return new Response(new ReadableStream({ start: startHeartbeat, cancel() { clearInterval(hb); } }), { headers });
+    if (feed === "lifecycle") {
+      const n = ++lcConns, lastId = req.headers.get("last-event-id"), after = Number(lastId ?? 0);
+      log.push(`lc${n} after=${lastId === null ? "none" : after}`);
+      return new Response(new ReadableStream({
+        async start(c) {
+          startHeartbeat(c);
+          const snapshot = (at: number) => {
+            const ev = fixture.slice(0, at), approvals = new Map<string, any>();
+            for (const e of ev) {
+              if (e.type === "approval.requested") approvals.set(e.data.approvalId, { approvalId: e.data.approvalId, kind: e.data.kind, status: "pending",
+                question: e.data.question, requestedBy: e.data.requestedBy, subject: e.data.subject });
+              if (e.type === "approval.decided") approvals.delete(e.data.approvalId);
+            }
+            c.enqueue(enc.encode(sse(null, "snapshot.run", { run: runBody }) + sse(null, "snapshot.agents", { agents: agentsAt(at) })
+              + sse(null, "snapshot.approvals", { approvals: [...approvals.values()] }) + sse(at, "snapshot.end", { snapshotSeq: at })));
+          };
+          let from = after;
+          if (lastId === null) { snapshot(LC_SNAPSHOT); from = LC_SNAPSHOT; }
+          else if (after > TOTAL) { c.enqueue(enc.encode(sse(null, "stream.reset", { snapshotSeq: TOTAL, reason: "compacted" }))); snapshot(TOTAL); from = TOTAL; }
+          for (const g of lifecycleGroups(from)) {
+            await Bun.sleep(5);
+            if (n === 1 && g[0].seq === LC_CUT_SEQ) {   // cut mid-group: first frame (no id) only, then the socket dies
+              c.enqueue(enc.encode(sse(null, g[0].type, g[0]))); await Bun.sleep(5);
+              clearInterval(hb); c.error(new Error("simulated drop mid-group")); return;
+            }
+            c.enqueue(enc.encode(group(g)));
+          }
+        },
+        cancel() { clearInterval(hb); },
+      }), { headers });
+    }
 
     const n = ++conns;
     const lastId = req.headers.get("last-event-id");

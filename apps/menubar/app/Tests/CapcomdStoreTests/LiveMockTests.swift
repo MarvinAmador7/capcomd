@@ -69,6 +69,12 @@ final class LiveMockTests: XCTestCase {
     XCTAssertEqual(store.pendingApprovals.map(\.id), ["apr-6"])
     XCTAssertEqual(a.runId, "run-demo"); XCTAssertEqual(a.agentId, "agt-6")
     XCTAssertEqual(a.branchLine, "fix/task-6 → main")
+    // lifecycle feed for the unfinished run: cut mid-group, resumed from the last SSE id, run.started applied exactly once
+    let d2 = Date().addingTimeInterval(10)
+    while store.runs["run-demo"]?.lifecycle.isEmpty ?? true, Date() < d2 { try await Task.sleep(for: .milliseconds(50)) }
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertEqual(store.runs["run-demo"]?.lifecycle.map(\.type), ["run.started"])
+    XCTAssertEqual(store.runs["run-demo"]?.state, "running")
     store.stop()
   }
 }

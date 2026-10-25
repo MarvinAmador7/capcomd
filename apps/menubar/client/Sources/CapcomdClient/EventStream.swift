@@ -17,14 +17,22 @@ public struct StreamStats: Sendable {
 }
 
 /// Resumable stream on `GET /v1/streams/{scope}/events`: resumes with Last-Event-ID, applies reset+snapshot in-band
-/// (cursor jumps to snapshotSeq at `snapshot.end`), dedupes by seq, and treats `idleTimeout` of silence as a dead socket.
+/// (cursor jumps to snapshotSeq at `snapshot.end`), dedupes by envelope id, and treats `idleTimeout` of silence as a dead socket.
+///
+/// Shared-seq groups: one source event can yield several envelopes (e.g. `agent.started` + `run.started`) with the
+/// same seq. The server sends a group in one write and only its LAST frame carries `id:`. So the resume cursor
+/// (`lastSeq`) advances only on frames with an SSE id, and a connection cut mid-group resumes before the group;
+/// the re-sent members already delivered are dropped by envelope id.
 public actor ResumableEventStream {
   let transport: UnixSocketTransport; let path: String
   public private(set) var lastSeq: Int; public private(set) var stats = StreamStats()
+  /// Envelope ids delivered (id → seq), pruned below the cursor: a resend never starts below it.
+  var seen: [String: Int] = [:]
   let maxReconnects: Int; let backoff: Duration; let idleTimeout: Duration
-  public init(transport: UnixSocketTransport, scope: String = "run-demo", startAfter: Int = 0, maxReconnects: Int = 10,
+  /// `feed: "lifecycle"` opens the run's lifecycle feed (`?feed=lifecycle`).
+  public init(transport: UnixSocketTransport, scope: String = "run-demo", feed: String? = nil, startAfter: Int = 0, maxReconnects: Int = 10,
               backoff: Duration = .milliseconds(50), idleTimeout: Duration = .seconds(45)) {
-    self.transport = transport; self.path = "/v1/streams/\(scope)/events"; self.lastSeq = startAfter
+    self.transport = transport; self.path = "/v1/streams/\(scope)/events" + (feed.map { "?feed=\($0)" } ?? ""); self.lastSeq = startAfter
     self.maxReconnects = maxReconnects; self.backoff = backoff; self.idleTimeout = idleTimeout
   }
 
@@ -47,15 +55,17 @@ public actor ResumableEventStream {
             let r = try JSONDecoder().decode(ResetBody.self, from: d); stats.resets += 1; inSnapshot = true
             it = .reset(snapshotSeq: r.snapshotSeq, reason: r.reason)
           case "snapshot.end":
-            let e = try JSONDecoder().decode(EndBody.self, from: d); lastSeq = e.snapshotSeq; inSnapshot = false; attempts = 0
+            let e = try JSONDecoder().decode(EndBody.self, from: d); lastSeq = e.snapshotSeq; inSnapshot = false; attempts = 0; seen = [:]
             it = .snapshotEnd(snapshotSeq: e.snapshotSeq)
           case let n where n.hasPrefix("snapshot."):
             it = .snapshot(name: n, json: f.data)
           default:
             if inSnapshot { continue } // live events only after snapshot.end
             let e = try JSONDecoder.harness.decode(HarnessEvent.self, from: d)
-            guard e.seq > lastSeq else { stats.dupesDropped += 1; continue }
-            lastSeq = e.seq; attempts = 0
+            if let id = f.id, let n = Int(id) { lastSeq = max(lastSeq, n); attempts = 0 }   // cursor: SSE id only
+            guard seen[e.id] == nil else { stats.dupesDropped += 1; continue }
+            seen[e.id] = e.seq
+            if seen.count > 1024 { let c = lastSeq; seen = seen.filter { $0.value >= c } }
             it = .event(e)
           }
           await onItem(it); if until(it) { return }

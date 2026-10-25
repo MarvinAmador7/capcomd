@@ -71,6 +71,28 @@ final class TransportTests: XCTestCase {
     do { try await es.run { _ in }; XCTFail("expected 401") } catch let e as HTTPStatusError { XCTAssertEqual(e.status, 401) }
   }
 
+  /// Lifecycle feed: the mock cuts conn #1 after the first frame (no `id:`) of the seq-4 group {agent.started, run.started}.
+  /// The cursor must stay at 2 (the last SSE id), conn #2 re-sends the whole group, and run.started is delivered once.
+  func testLifecycleDropMidGroupDeliversRunEventOnce() async throws {
+    let t = make(token)
+    let es = ResumableEventStream(transport: t, scope: "run-demo", feed: "lifecycle")
+    let box = Collector()
+    try await es.run(until: { if case .event(let e) = $0 { return e.seq == 30 }; return false }) { await box.add($0) }
+    let events = await box.items.compactMap { if case .event(let e) = $0 { return e }; return nil }
+    let ids = events.map(\.id)
+    XCTAssertEqual(ids.count, Set(ids).count, "no envelope delivered twice")
+    XCTAssertEqual(events.filter { $0._type == "run.started" }.count, 1)
+    XCTAssertEqual(events.filter { $0._type == "agent.started" && $0.agentId == "agt-1" }.count, 1)
+    XCTAssertEqual(events.first { $0._type == "run.started" }?.id, "evt_run-demo_4_run.started")
+    let stats = await es.stats
+    XCTAssertEqual(stats.drops, 1); XCTAssertEqual(stats.dupesDropped, 1)   // the re-sent agent.started
+    let last = await es.lastSeq; XCTAssertEqual(last, 30)
+    let (_, raw) = try await make(token).get("/__log")
+    let log = String(decoding: raw, as: UTF8.self)
+    XCTAssertTrue(log.contains("lc1 after=none") && log.contains("lc2 after=2"), "resumed from the last SSE id, not the cut frame's seq: \(log)")
+    XCTAssertEqual(events.map(\.seq).filter { $0 <= 1 }, [], "nothing at or below the snapshot")
+  }
+
   func testResumeAfterResetAndDropHasNoGapsOrDupes() async throws {
     let t = make(token)
     let es = ResumableEventStream(transport: t)

@@ -13,7 +13,7 @@ struct ApprovalCard: View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(alignment: .firstTextBaseline, spacing: 6) {
         Image(systemName: "hand.raised").foregroundStyle(Theme.amber).opacity(appeared ? 1 : 0)
-        Text(verbatim: approval.question.plain).font(.system(size: 13, weight: .medium)).lineLimit(3)
+        RedactableText(text: approval.question).font(.system(size: 13, weight: .medium)).lineLimit(3)
       }
       if let line = approval.branchLine {
         Text(verbatim: line).font(Theme.monoCode).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)

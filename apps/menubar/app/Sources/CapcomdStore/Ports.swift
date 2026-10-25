@@ -30,7 +30,18 @@ public protocol SubscriptionHandle: Sendable { func cancel() }
 /// Opens `GET /v1/streams/{scope}/events` resuming after `after`, delivering parsed frames in order.
 public protocol StreamSubscribing: Sendable {
   func subscribe(scope: String, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle
+  /// `feed: "lifecycle"` opens `?feed=lifecycle` (run scopes only): snapshot, then run/agent/approval lifecycle events.
+  func subscribe(scope: String, feed: String?, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle
 }
+public extension StreamSubscribing {
+  func subscribe(scope: String, feed: String?, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
+    feed == nil ? subscribe(scope: scope, after: after, onFrame: onFrame) : NoSubscription()
+  }
+}
+struct NoSubscription: SubscriptionHandle { func cancel() {} }
+
+/// Thrown by adapters when the daemon answers 401; the app reopens the token prompt.
+public struct Unauthorized: Error, Sendable { public init() {} }
 
 /// Tiny persistence seam for UI choices (UserDefaults on macOS, in-memory in tests).
 public protocol PreferenceStoring: AnyObject { func string(forKey: String) -> String?; func set(_ v: String?, forKey: String) }

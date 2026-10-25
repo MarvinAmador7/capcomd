@@ -20,4 +20,19 @@ public struct UntrustedText: Hashable, Sendable, CustomStringConvertible {
   public var description: String { plain }
   /// First line, for one-row summaries.
   public var firstLine: String { plain.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? "" }
+
+  /// The daemon's literal redaction marker. Rendered dimmed, still as plain text.
+  public static let redactionMarker = "[REDACTED]"
+  /// Splits `plain` into runs of text and redaction markers, in order, for dimmed rendering of `[REDACTED]`.
+  public var segments: [Segment] { Self.segments(plain) }
+  public static func segments(_ s: String) -> [Segment] {
+    var out: [Segment] = []; var rest = Substring(s)
+    while let r = rest.range(of: redactionMarker) {
+      if r.lowerBound > rest.startIndex { out.append(.text(String(rest[rest.startIndex..<r.lowerBound]))) }
+      out.append(.redacted); rest = rest[r.upperBound...]
+    }
+    if !rest.isEmpty { out.append(.text(String(rest))) }
+    return out
+  }
+  public enum Segment: Hashable, Sendable { case text(String), redacted }
 }
