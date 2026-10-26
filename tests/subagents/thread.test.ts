@@ -73,12 +73,14 @@ const get = async (p: string) => (await app.request(p, { headers: { authorizatio
 test("a lead's thread: markdown as blocks, a timed tool call open → done, a child's hand-back; logs unchanged", async () => {
   const run = (await cj(["run", "new"])).j?.runId;
   expect(run).toMatch(/^run-/);
-  const lead = (await cj(["spawn", run, "--profile", "lead", "--task", "[thread] plan the backfill", "--key", "lead"])).j?.agentId;
+  // The lead starts only after its child has handed back: a lead that finishes first reaps a live child (ADR-017 orphans).
+  const lead = (await cj(["spawn", run, "--profile", "lead", "--task", "[thread] plan the backfill", "--key", "lead", "--no-start"])).j?.agentId;
   expect(lead).toMatch(/^agt-/);
   const sp = await cj(["spawn", run, "--profile", "worker", "--parent", lead, "--task", "make the failing test pass", "--key", "child"]);
   const child = sp.j?.agentId;
   if (!child) console.log(sp.stdout, sp.stderr);
   expect(child).toMatch(/^agt-/);
+  expect((await cj(["await", run, child, "--timeout-ms", "90000"])).j?.agents?.[0]?.status).toBe("done");
   const done = await cj(["await", run, lead, child, "--timeout-ms", "90000"]);
   expect(done.j?.agents?.map((a: any) => a.status).every((s: string) => ["done", "failed"].includes(s))).toBe(true);
 
