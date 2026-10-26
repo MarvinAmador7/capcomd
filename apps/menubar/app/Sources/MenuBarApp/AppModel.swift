@@ -19,6 +19,9 @@ final class DefaultsPreferences: PreferenceStoring {
 final class AppModel {
   /// Replaceable: a new token builds a fresh transport + store (the old one is stopped).
   @ObservationIgnored private(set) var store: CapcomdStore
+  /// The transport behind `store`. AsyncHTTPClient traps in debug if its client is freed without shutdown(),
+  /// so a replaced transport must be shut down explicitly before it is released.
+  @ObservationIgnored private var transport: UnixSocketTransport
   private(set) var revision = 0
   var path: [Route] = []
   /// No Keychain token yet (first launch) or the daemon answered 401: the panel shows the token prompt.
@@ -27,8 +30,8 @@ final class AppModel {
 
   enum Route: Hashable { case run(String), thread(runId: String, agentId: String) }
 
-  init(store: CapcomdStore, tokenMissing: Bool = false) {
-    self.store = store; self.tokenMissing = tokenMissing
+  init(_ pair: (CapcomdStore, UnixSocketTransport), tokenMissing: Bool = false) {
+    self.store = pair.0; self.transport = pair.1; self.tokenMissing = tokenMissing
     attach(store)
   }
 
@@ -42,17 +45,17 @@ final class AppModel {
       ?? (NSHomeDirectory() as NSString).appendingPathComponent(".capcomd/harness.sock")
   }
 
-  static func makeStore(token: String) -> CapcomdStore {
+  static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) {
     let t = UnixSocketTransport(socketPath: socketPath, token: token)
-    return CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), prefs: DefaultsPreferences())
+    return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), prefs: DefaultsPreferences()), t)
   }
 
   static func live() -> AppModel {
     Notifier.requestAuthorization()
     guard let token = Keychain.token(), !token.isEmpty else {
-      return AppModel(store: makeStore(token: ""), tokenMissing: true)   // not started: nothing to authenticate with
+      return AppModel(makeStore(token: ""), tokenMissing: true)   // not started: nothing to authenticate with
     }
-    let m = AppModel(store: makeStore(token: token)); m.store.start(); return m
+    let m = AppModel(makeStore(token: token)); m.store.start(); return m
   }
 
   /// Saves the pasted token (generic password, service "capcomd", account NSUserName()) and reconnects with it.
@@ -60,7 +63,9 @@ final class AppModel {
     let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !token.isEmpty, Keychain.save(token) else { return false }
     store.stop()
-    let s = Self.makeStore(token: token); store = s; attach(s)
+    let old = transport
+    Task { try? await old.shutdown() }   // keeps `old` alive until its client is shut down
+    let (s, t) = Self.makeStore(token: token); store = s; transport = t; attach(s)
     tokenMissing = false; path = []
     s.start(); revision &+= 1
     return true
