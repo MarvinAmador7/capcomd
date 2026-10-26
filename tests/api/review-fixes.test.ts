@@ -56,19 +56,19 @@ test("idempotent replay survives a daemon restart", async () => {
 	expect(((await (await post(app2, "key-other001")).json()) as any).code).toBe("already_decided");
 });
 
-test("socket is created under umask 0177 (0600 at creation) and umask is restored", () => {
+test("socket is created under umask 0177 (0600 at creation) and umask is restored", async () => {
 	const orig = Bun.serve;
 	let umaskAtServe = -1;
 	(Bun as any).serve = (o: any) => { umaskAtServe = process.umask(); process.umask(umaskAtServe); return orig(o); };
 	const before = process.umask();
 	const sock = join(mkdtempSync(join(tmpdir(), "hs-um-")), "d", "h.sock");
 	try {
-		const s = serveHarnessSocket(sock, () => new Response("ok"));
+		const s = await serveHarnessSocket(sock, () => new Response("ok"));
 		expect(umaskAtServe).toBe(0o177);
 		expect(process.umask()).toBe(before);
 		expect(statSync(sock).mode & 0o777).toBe(0o600);
 		expect(statSync(join(sock, "..")).mode & 0o777).toBe(0o700);
-		s.stop(true);
+		s.close();
 	} finally { (Bun as any).serve = orig; }
 });
 

@@ -10,8 +10,8 @@ import { memorySource } from "../../src/api/source";
 
 const dir = mkdtempSync(join(tmpdir(), "hs-"));
 const sock = join(dir, "harness.sock");
-const server = serveHarnessSocket(sock, harnessApp({ source: memorySource(), clients: () => [], state: harnessState(null) }).fetch);
-afterAll(() => server.stop(true));
+const harness = await serveHarnessSocket(sock, harnessApp({ source: memorySource(), clients: () => [], state: harnessState(null) }).fetch);
+afterAll(() => harness.close());
 
 test("socket path: flag > env > config > ~/.capcomd/harness.sock", () => {
 	expect(harnessSocketPath({ flag: "/a.sock", env: { CAPCOMD_HARNESS_SOCKET: "/b.sock" } })).toBe("/a.sock");

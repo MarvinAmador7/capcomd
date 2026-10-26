@@ -144,12 +144,12 @@ describe("harness server", () => {
 	test("served on a 0600 socket", async () => {
 		const sock = join(mkdtempSync(join(tmpdir(), "hs-")), "sub", "h.sock");
 		const app = harnessApp({ source: memorySource(), clients: () => [], state: harnessState(null) });
-		const s = serveHarnessSocket(sock, app.fetch);
+		const s = await serveHarnessSocket(sock, app.fetch);
 		try {
 			expect(statSync(sock).mode & 0o777).toBe(0o600);
 			expect(statSync(join(sock, "..")).mode & 0o777).toBe(0o700);
 			const r = await fetch("http://localhost/v1/health", { unix: sock } as any);
 			expect(((await r.json()) as any).api).toBe("harness.v1");
-		} finally { s.stop(true); }
+		} finally { s.close(); }
 	});
 });

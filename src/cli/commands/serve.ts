@@ -13,6 +13,14 @@ function portFree(port: number): Promise<boolean> {
   });
 }
 
+/** The harness socket path: --harness-socket > CAPCOMD_HARNESS_SOCKET > config harness.socket (unless CAPCOMD_NO_CONFIG) > ~/.capcomd/harness.sock. */
+async function harnessSocket(flag?: string): Promise<string> {
+  const { harnessSocketPath } = await import("../../api/socket");
+  const { readConfig, userConfigPath, projectConfigPath } = await import("../../config/store");
+  const config = process.env.CAPCOMD_NO_CONFIG ? {} : { ...readConfig(userConfigPath()), ...readConfig(projectConfigPath()) };
+  return harnessSocketPath({ ...(flag ? { flag } : {}), config });
+}
+
 /**
  * Run the engine on --port. RivetKit reads the engine port from RIVET_RUN_ENGINE_PORT when the
  * registry config is parsed (at start), not from any argument: before this, `serve --port N`
@@ -28,6 +36,15 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   if (!Number.isInteger(port) || port < 1 || port > 65535 - 10) {
     console.error(`capcomd serve: invalid --port ${port}`);
     process.exit(2);
+  }
+  // One harness.v1 socket per daemon: never take over one that another daemon is serving (it would lose its clients).
+  // Checked before the engine starts (a clear error, nothing touched); serveHarnessSocket checks again when it binds.
+  const { probeHarnessSocket, serveHarnessSocket, HarnessSocketInUseError } = await import("../../api/socket");
+  const sock = await harnessSocket(opts.harnessSocket);
+  const held = await probeHarnessSocket(sock);
+  if (held.state === "live") {
+    console.error(`capcomd serve: ${new HarnessSocketInUseError(sock, held.version, held.detail).message}`);
+    process.exit(1);
   }
   const busy: number[] = [];
   for (const p of [port, port + 1, port + 10]) if (!(await portFree(p))) busy.push(p);
@@ -137,15 +154,14 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
 
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {
-    const { harnessSocketPath, serveHarnessSocket } = await import("../../api/socket");
     const { harnessApp } = await import("../../api/server");
     const { rivetSource } = await import("../../api/rivet-source");
-    const { readConfig, userConfigPath, projectConfigPath } = await import("../../config/store");
-    const config = { ...readConfig(userConfigPath()), ...readConfig(projectConfigPath()) };
-    const sock = harnessSocketPath({ flag: opts.harnessSocket, config });
-    serveHarnessSocket(sock, harnessApp({ source: rivetSource() }).fetch);
+    const harness = await serveHarnessSocket(sock, harnessApp({ source: rivetSource() }).fetch);
+    // Removed on the way out only while it is still ours: never another daemon's socket.
+    process.on("exit", () => harness.release());
     console.log(`✓ harness.v1 API on ${sock}`);
   } catch (e) {
+    if (e instanceof HarnessSocketInUseError) { console.error(`capcomd serve: ${e.message}`); process.exit(1); }
     console.error(`capcomd serve: harness API failed to start: ${(e as Error).message}`);
   }
   console.log("  Press Ctrl+C to stop");

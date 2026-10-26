@@ -10,7 +10,7 @@ const saved = { ...process.env };
 let started: number | undefined;
 afterAll(() => {
   if (started) { try { process.kill(started, "SIGTERM"); } catch {} }
-  for (const k of ["CAPCOMD_ENDPOINT", "CAPCOMD_HOME", "CAPCOMD_NO_ENGINE_AUTOSTART"]) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+  for (const k of ["CAPCOMD_ENDPOINT", "CAPCOMD_HOME", "CAPCOMD_NO_ENGINE_AUTOSTART", "CAPCOMD_ENGINE_DATA", "CAPCOMD_ENGINE_PIDFILE"]) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
 });
 
 test("only a local endpoint is started", () => {
@@ -30,6 +30,10 @@ test("no engine and autostart off: a typed error that says how to start one", as
 test("no engine: starts `capcomd serve` detached, waits for it, and a second call finds it up", async () => {
   delete process.env.CAPCOMD_NO_ENGINE_AUTOSTART;
   process.env.CAPCOMD_HOME = mkdtempSync(join(tmpdir(), "capcomd-autostart-"));
+  // The engine's data and pid file too (serve keeps them under ~/.capcomd/engine otherwise); the harness socket is
+  // the preload's private one (tests/helpers/isolate-config.ts).
+  process.env.CAPCOMD_ENGINE_DATA = join(process.env.CAPCOMD_HOME, "engine");
+  process.env.CAPCOMD_ENGINE_PIDFILE = join(process.env.CAPCOMD_HOME, "engine.pid");
   process.env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${await testPort()}`;
   const r = await ensureEngine({ timeoutMs: 90_000 });
   started = r.pid;

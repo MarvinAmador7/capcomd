@@ -68,7 +68,7 @@ export async function demoStep(log: (s: string) => void): Promise<Step> {
   const home = mkdtempSync(join(tmpdir(), "capcomd-demo-"));
   const port = 20000 + Math.floor(Math.random() * 20000);
   const env = { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_SANDBOX: "fake", CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_SKIP_PREFLIGHT: "1",
-    CAPCOMD_ENDPOINT: `http://127.0.0.1:${port}`, CAPCOMD_ENGINE_DATA: join(home, "engine"), CAPCOMD_REPO: undefined, CAPCOMD_AGENTS_FILE: join(home, "agents.json") };
+    CAPCOMD_ENDPOINT: `http://127.0.0.1:${port}`, CAPCOMD_ENGINE_DATA: join(home, "engine"), CAPCOMD_HARNESS_SOCKET: join(home, "harness.sock"), CAPCOMD_REPO: undefined, CAPCOMD_AGENTS_FILE: join(home, "agents.json") };
   const engine = Bun.spawn(selfArgv("serve", "--port", String(port)), { env: envWith(env), stdout: "ignore", stderr: "ignore" });
   try {
     log("  starting a private engine with fake agents…");
