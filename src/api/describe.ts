@@ -31,6 +31,7 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "agent.status_changed": return `${a} is now ${d.status}.`;
 		// The server sets this event's text to the activity line itself (built from the stored kind and count).
 		case "agent.activity_changed": return `${a} is ${d.status === "running" ? "working" : `now ${d.status ?? "idle"}`}.`;
+		case "agent.thread_item_changed": return `${a}'s thread changed.`;
 		case "deadlock.detected": return "Agents are waiting on each other; capcomd broke the deadlock.";
 		case "drive.failed": return `${a} could not be driven (attempt ${Number(d.attempt) || 1}).`;
 		case "token.revoked": return "An agent token was revoked.";

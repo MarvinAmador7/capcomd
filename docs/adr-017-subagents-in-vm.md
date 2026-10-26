@@ -135,6 +135,7 @@ appended to the prompt. Agents without `children.allowSpawn` get no CLI, no MCP 
 - Real-VM token refresh and spool re-attach after a host crash rely on boxd exec; covered by
   VmSpool unit tests and `scripts/mac-subagents-e2e.sh`, not by CI.
 - Real agents' own logs are not yet streamed into `capcomd logs` (the VmSpool can tail
-  `agent.jsonl`; not wired, to keep exec traffic low). Spans carry the agent events.
+  `agent.jsonl`; not wired, to keep exec traffic low). Spans carry the agent events, and since harness.v1 threads
+  the runner writes their thread items (GET /v1/runs/{runId}/agents/{agentId}/thread) like any other agent's.
 - Spend of real agents is known only when they finish; budget checks at spawn time use the
   carve, not live spend.

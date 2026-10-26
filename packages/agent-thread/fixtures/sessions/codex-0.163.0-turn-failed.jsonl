@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"th_2"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"bash -lc 'sleep 600'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again at 3:05 PM."}}

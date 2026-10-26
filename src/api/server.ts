@@ -4,7 +4,8 @@
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { contract, CreateRunBody, StreamFrames, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { contract, CreateRunBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
 import { CreateRunError, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
@@ -14,12 +15,26 @@ import { harnessState, type HarnessState } from "./state";
 import { runFiles } from "./run-files";
 
 export const HEARTBEAT_MS = 15_000;
+
+/** What a raw-bytes route serves a file as (see the routes). */
+export function servedType(bytes: Uint8Array, hint: string | null): { type: string; inline: boolean } {
+	const img = sniffImage(bytes);
+	if (img) return { type: img, inline: true };
+	if (hint && /^(video|audio)\//.test(hint)) return { type: hint, inline: true };
+	const text = bytes.length <= 5 * 1024 * 1024 && !bytes.includes(0) ? new TextDecoder("utf-8", { fatal: true }) : null;
+	try { if (text) { text.decode(bytes); return { type: "text/plain; charset=utf-8", inline: true }; } } catch { /* not UTF-8 */ }
+	return { type: "application/octet-stream", inline: false };
+}
 const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "already_decided", 422: "invalid" };
 const err = (c: Context, status: 401 | 403 | 404 | 409 | 422, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
 
 /** agent.activity_changed: at most one frame per agent per this many ms (ACTIVITY_DOC). */
 export const ACTIVITY_MS = 1000;
-export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; heartbeatMs?: number; pollMs?: number; activityMs?: number; snapshotSteps?: number; state?: HarnessState };
+/** agent.thread_item_changed: the thread is polled at most this often, latest rev per item (at most four frames per item per second). */
+export const THREAD_MS = 250;
+/** GET …/thread: a page stops at about this many bytes of items (`next` says where to go on). */
+export const THREAD_PAGE_MAX_BYTES = 4 * 1024 * 1024;
+export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState };
 
 export function harnessApp(o: ServerOptions) {
 	const src = o.source;
@@ -27,6 +42,7 @@ export function harnessApp(o: ServerOptions) {
 	const heartbeatMs = o.heartbeatMs ?? HEARTBEAT_MS;
 	const pollMs = o.pollMs ?? 500;
 	const activityMs = o.activityMs ?? ACTIVITY_MS;
+	const threadMs = o.threadMs ?? THREAD_MS;
 	// (clientId, key) → stored outcome and approvalId → decision, persisted so a retry after restart replays.
 	const state = o.state ?? harnessState();
 	// approvalId → in-flight decision; claimed synchronously before any await so concurrent requests cannot both decide.
@@ -66,8 +82,27 @@ export function harnessApp(o: ServerOptions) {
 				const page = items.slice(0, limit);
 				return { items: page, next: items.length > limit ? page.at(-1)!.seq : null };
 			}),
+			thread: os.agents.thread.handler(async ({ input }) => {
+				const limit = Math.min(input.limit ?? 200, THREAD_PAGE_MAX);
+				const items = await src.thread(input.runId, input.agentId, input.after ?? 0, limit + 1);
+				if (!items) throw nf(input.agentId);
+				// At most `limit` items and about THREAD_PAGE_MAX_BYTES of them (always at least one).
+				const page: typeof items = [];
+				let bytes = 0;
+				for (const it of items.slice(0, limit)) {
+					const n = Buffer.byteLength(JSON.stringify(it));
+					if (page.length && bytes + n > THREAD_PAGE_MAX_BYTES) break;
+					page.push(it); bytes += n;
+				}
+				return { items: page, next: items.length > page.length ? page.at(-1)!.seq : null };
+			}),
+			// Raw bytes: served by the native route below (this handler is never reached).
+			workspace: os.agents.workspace.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
-		attachments: { get: os.attachments.get.handler(async ({ input }) => (await src.attachment(input.runId, input.attachmentId)) ?? (() => { throw nf(input.attachmentId); })()) },
+		attachments: {
+			get: os.attachments.get.handler(async ({ input }) => (await src.attachment(input.runId, input.attachmentId)) ?? (() => { throw nf(input.attachmentId); })()),
+			content: os.attachments.content.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+		},
 		skills: { list: os.skills.list.handler(() => src.skills()) },
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
@@ -167,13 +202,36 @@ export function harnessApp(o: ServerOptions) {
 		} finally { creating.delete(kid); }
 	});
 
+	// Raw bytes for thread media (contract: attachments.content, agents.workspace). The type comes from the bytes, never
+	// from the agent: images by signature, video/audio by extension, UTF-8 text as text/plain, the rest a download.
+	// Never HTML or svg; nosniff, and a CSP that runs nothing if a browser opens it anyway.
+	const raw = (bytes: Uint8Array, hint: string | null) => {
+		const t = servedType(bytes, hint);
+		return new Response(bytes, { headers: { "content-type": t.type, "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox", "content-disposition": t.inline ? "inline" : "attachment", "cache-control": "private, no-store" } });
+	};
+	app.get("/v1/runs/:runId/attachments/:attachmentId/content", async (c) => {
+		const id = c.req.param("attachmentId");
+		if (!/^att-[0-9a-f]+$/.test(id)) return err(c, 422, "invalid", "attachmentId is att-<hex>");
+		const a = await src.attachmentContent(c.req.param("runId"), id);
+		return a ? raw(a.bytes, a.mime) : err(c, 404, "not_found", `${id} not found`);
+	});
+	app.get("/v1/runs/:runId/agents/:agentId/workspace", async (c) => {
+		const asked = c.req.query("path") ?? "";
+		const path = workspacePath(asked);
+		if (!path || path !== asked) return err(c, 422, "invalid", "path must be relative to the repository root, '/'-separated and normalized (no .., no .git)");
+		const f = await src.workspaceFile(c.req.param("runId"), c.req.param("agentId"), path);
+		if (!f) return err(c, 404, "not_found", `${c.req.param("agentId")} not found`);
+		if ("error" in f) return err(c, f.error === "too_large" ? 422 : 404, f.error === "too_large" ? "invalid" : "not_found", f.message);
+		return raw(f.bytes, mediaOfPath(path)?.mime ?? null);
+	});
+
 	app.get("/v1/streams/:scope/events", (c) => {
 		const scope = c.req.param("scope");
 		if (!/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$/.test(scope)) return err(c, 422, "invalid", "scope is daemon, prj-<id> or run-<id>");
 		const lastRaw = c.req.header("last-event-id");
 		const last = lastRaw && /^\d+$/.test(lastRaw) ? Number(lastRaw) : null;
 		const enc = new TextEncoder();
-		let timer: ReturnType<typeof setInterval> | undefined, hb: ReturnType<typeof setInterval> | undefined, closed = false;
+		let timer: ReturnType<typeof setInterval> | undefined, hb: ReturnType<typeof setInterval> | undefined, threadTimer: ReturnType<typeof setInterval> | undefined, closed = false;
 		const stream = new ReadableStream<Uint8Array>({
 			start: async (ctl) => {
 				const send = (event: string, data: unknown, id?: number) => { if (!closed) ctl.enqueue(enc.encode(`${id !== undefined ? `id: ${id}\n` : ""}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); };
@@ -227,7 +285,32 @@ export function harnessApp(o: ServerOptions) {
 				let activityAt = 0, activityN = 0;
 				const activitySig = (a: { activity: { kind: string; text: string } | null }) => (a.activity ? `${a.activity.kind}\u0000${a.activity.text}` : "");
 				const seedActivity = (agents: Array<{ id: string; activity: { kind: string; text: string } | null }>) => { for (const a of agents) sentActivity.set(a.id, activitySig(a)); activityAt = Date.now(); };
+				// ?thread=1: ephemeral agent.thread_item_changed frames (THREAD_STREAM_DOC). Only a connection that asked polls the
+				// run's thread writes, at most every threadMs, and sends the latest rev of each item it found; no SSE id.
+				const wantThread = c.req.query("thread") === "1";
+				let durable = all.at(-1)?.seq ?? 0, threadN = 0;
+				const startThread = async () => {
+					if (!wantThread || closed) return;
+					let tcur = await src.threadHead(runId).catch(() => 0), tbusy = false;
+					threadTimer = setInterval(async () => {
+						if (tbusy || closed) return;
+						tbusy = true;
+						try {
+							const latest = new Map<string, Awaited<ReturnType<HarnessSource["threadAfter"]>>[number]>();
+							for (const it of await src.threadAfter(runId, tcur, 500)) { latest.set(it.id, it); tcur = Math.max(tcur, it.seq); }
+							for (const it of latest.values()) {
+								const now = Date.now();
+								send("agent.thread_item_changed", {
+									v: 1, id: `evt_${runId}_thread_${it.id}_${it.rev}_${++threadN}`, scope: runId, seq: durable, entity: it.agentId, entitySeq: 0, type: "agent.thread_item_changed", typeVersion: 1,
+									durability: "ephemeral", ts: isoTs(now), epochMs: now, projectId: null, runId, agentId: it.agentId, text: `Thread: ${it.kind} ${it.status === "open" ? "started" : "updated"}.`,
+									data: { agentId: it.agentId, item: it },
+								});
+							}
+						} catch { /* next tick */ } finally { tbusy = false; }
+					}, threadMs);
+				};
 				const sendActivity = async (seq: number) => {
+					durable = Math.max(durable, seq);
 					if (!wantActivity || closed || Date.now() - activityAt < activityMs) return;
 					activityAt = Date.now();
 					for (const a of (await src.agents(runId)) ?? []) {
@@ -270,6 +353,7 @@ export function harnessApp(o: ServerOptions) {
 						} finally { busy = false; }
 					};
 					await tick();
+					await startThread();
 					timer = setInterval(() => { tick().catch(() => {}); }, pollMs);
 					return;
 				}
@@ -310,11 +394,12 @@ export function harnessApp(o: ServerOptions) {
 					} finally { busy = false; }
 				};
 				await tick();
+				await startThread();
 				timer = setInterval(() => { tick().catch(() => {}); }, pollMs);
 			},
-			cancel: () => { closed = true; clearInterval(timer); clearInterval(hb); },
+			cancel: () => { closed = true; clearInterval(timer); clearInterval(hb); clearInterval(threadTimer); },
 		});
-		c.req.raw.signal?.addEventListener?.("abort", () => { closed = true; clearInterval(timer); clearInterval(hb); });
+		c.req.raw.signal?.addEventListener?.("abort", () => { closed = true; clearInterval(timer); clearInterval(hb); clearInterval(threadTimer); });
 		return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
 	});
 
