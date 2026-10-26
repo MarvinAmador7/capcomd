@@ -1,5 +1,6 @@
 // Where the harness.v1 server reads from. The server only speaks this interface: the Rivet-backed source reads the
 // scope actors (src/primitives/ops.ts); tests use memorySource so tests/api stays fast and engine-free.
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Agent, Attachment, Decision, Message, Project, Run, Skill, Span, TranscriptItem } from "./contract";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
@@ -8,6 +9,14 @@ import { describeEvent } from "./describe";
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
 type O<T extends z.ZodType> = z.infer<T>;
+
+/** runs.create input after validation (goal trimmed). */
+export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string };
+/** A run that can't be started as asked (bad repo, no repository, refused by `capcomd run`): 422 with this message. */
+export class CreateRunError extends Error {}
+
+/** A project groups runs on one repository: its id is derived from the run's repository (CAPCOMD_REPO). */
+export const projectIdOf = (repo: string | null) => (repo ? `prj-${createHash("sha256").update(repo).digest("hex").slice(0, 12)}` : null);
 
 export interface HarnessSource {
 	version: string;
@@ -24,6 +33,8 @@ export interface HarnessSource {
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
 	decide(approvalId: string, approve: boolean, by: string, reason?: string): Promise<void>;
+	/** Start a run, detached; resolves once it is started (not finished). Throws CreateRunError for a 422. */
+	createRun(input: CreateRunInput): Promise<O<typeof Run>>;
 }
 
 /** Legacy scope event → harness.v1 envelope. entitySeq counts per entity in seq order within what the caller saw. */
@@ -56,15 +67,18 @@ export function parseApprovalId(id: string): { runId: string; opId: string } | n
 }
 
 /** In-memory source for tests and fixtures. */
-export function memorySource(seed: Partial<{ runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]> }> = {}): HarnessSource & { push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }> } {
+export function memorySource(seed: Partial<{ runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]> }> = {}): HarnessSource & { push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[] } {
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
+	const runs = seed.runs ?? [];
 	const decided: Array<{ approvalId: string; approve: boolean; by: string }> = [];
+	const created: CreateRunInput[] = [];
 	return {
 		version: "test",
 		decided,
+		created,
 		push(runId, e) { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); return r; },
-		runs: async () => seed.runs ?? [],
+		runs: async () => runs,
 		projects: async () => [],
 		agents: async (r) => seed.agents?.[r] ?? (seed.runs?.some((x) => x.id === r) ? [] : null),
 		events: async (r, after) => (events[r] ?? []).filter((e) => e.seq > after),
@@ -78,6 +92,13 @@ export function memorySource(seed: Partial<{ runs: O<typeof Run>[]; agents: Reco
 			return null;
 		},
 		decide: async (approvalId, approve, by) => { decided.push({ approvalId, approve, by }); },
+		createRun: async (input) => {
+			created.push(input);
+			const repo = input.repo ?? "/default-repo";
+			const run = { id: `run-mem-${created.length}`, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, repo, createdAt: isoTs(Date.now()) };
+			runs.push(run);
+			return run;
+		},
 	};
 }
 export type { Decision };

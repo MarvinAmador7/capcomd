@@ -23,6 +23,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   you get `agent.activity_changed` frames, at most one per agent per second, sent live only (never replayed, no SSE
   `id`). The daemon writes the line from tool names, commands and capcomd calls; file names and command text never
   appear in it. Without `?activity=1` the streams are unchanged.
+- The harness.v1 API can start a run: `POST /v1/runs` with `{goal, repo?, profile?, targetBranch?}` and an
+  `Idempotency-Key` header does what `capcomd run --detach <goal>` does in that project's checkout and returns the
+  new run at once (`state: "starting"`); it then appears on the `daemon` stream with `run.created` like a run started
+  from the CLI. `repo` is the absolute path of a checkout you ran `capcomd setup project` in; without it the daemon's
+  own repository settings (`CAPCOMD_REPO`) are used, and with neither the request is refused (422) with what to do.
+  Retrying with the same key returns the same run instead of starting another. The client's token needs the `steer`
+  scope: `capcomd clients add <name> --scopes read,steer,approve`.
+- `capcomd run --detach -- "<goal>"` with a goal that starts with `-` now runs; the background run used to read the
+  goal as a flag and fail.
 
 ## 0.6.0 (2026-10-25)
 

@@ -1,7 +1,8 @@
 // harness.v1 §7.4: POST /v1/approvals/{approvalId}/decision idempotency, as a pure function the server (phase 1) calls
 // inside the same transaction as the decision write. Keys are scoped per client: (clientId, key).
 export type DecideBody = { decision: "approve" | "deny"; reason?: string };
-export type StoredKey = { approvalId: string; bodyHash: string; status: number; result: unknown };
+/** A recorded outcome under (clientId, key): approvals.decide sets approvalId, runs.create sets runId. */
+export type StoredKey = { approvalId?: string; runId?: string; bodyHash: string; status: number; result: unknown };
 export type Outcome =
 	| { kind: "apply" }
 	| { kind: "replay"; status: number; result: unknown }
