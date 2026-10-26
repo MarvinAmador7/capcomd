@@ -12,6 +12,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   when another app is in front.
 - Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
   once, and clicks could land on the hidden cards).
+- harness.v1 now says what each agent is doing right now, in plain language: "Reading 4 files", "Running the tests",
+  "Waiting for sub-agents", and in past tense once it stopped ("Read 4 files"). It is the new `activity`
+  (`{text, kind, at}`, or null) on each agent in `GET /v1/runs/{runId}/agents` and `snapshot.agents`. For live updates,
+  add `?activity=1` to a run stream, lifecycle feed included (`/v1/streams/{runId}/events?feed=lifecycle&activity=1`):
+  you get `agent.activity_changed` frames, at most one per agent per second, sent live only (never replayed, no SSE
+  `id`). The daemon writes the line from tool names, commands and capcomd calls; file names and command text never
+  appear in it. Without `?activity=1` the streams are unchanged.
 
 ## 0.6.0 (2026-10-25)
 

@@ -13,6 +13,7 @@ import type { ScopeAgent } from "../actors/scope";
 import { handleRpc } from "./rpc";
 import { LocalSpool, VmSpool, startPump } from "./spool";
 import { mint, opsFor } from "./token";
+import { activityReporter } from "../agents/activity";
 import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
 import type { SandboxProvider, VmId } from "../providers/sandbox";
@@ -25,12 +26,16 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   const s = client().scope.getOrCreate([runId]);
   const ttlMs = Number(env("TOKEN_TTL_MS") ?? 30 * 60_000);
   let jti: string | null = null;
+  // The capcomd ops it calls (spawn, await, send, …) are what it is doing too (harness.v1 Agent.activity).
+  const activity = activityReporter((act) => s.setActivity({ agentId: a.agentId, activity: act }));
   const pump = startPump({
     spool, intervalMs, refreshMs: Math.max(1000, ttlMs / 2),
     mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits), ttlMs }); jti = t.claims.jti; return t.token; },
     handle: async (req) => {
       driverKillpoint(`rpc.${req.op}.before`);
       const r = await handleRpc(req, { runId, agentId: a.agentId });
+      // Counted by request: each spawn/send/verify/merge is one more; polls of await are the same wait.
+      if (r.ok) activity.op(req.op, ["spawn", "send", "verify", "merge"].includes(req.op) ? String(req.id) : "");
       driverKillpoint(`rpc.${req.op}.before_reply`); // handled (e.g. child spawned) but the VM never got the answer
       return r;
     },
@@ -39,6 +44,7 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   return {
     stop: async () => {
       await pump.stop();
+      activity.stop();
       // The agent is done with its token: revoke it so a copy left in the VM is dead now, not at exp.
       if (jti) await s.revokeToken({ jti, agentId: a.agentId, reason: `agent ${a.agentId} finished` }).catch(() => {});
     },

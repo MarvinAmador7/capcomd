@@ -478,3 +478,17 @@ repos (give each agent one workspace and coordinate at the project level), provi
 - **Product answers:** profile names stay lowercase, a project can hold several runs, and the skills picker stays visible before skills work.
 - **lifecycle_events scope:** approved. The feed carries only run and agent state changes: `run.created|started|paused|resumed|completed|failed|cancelled`, `agent.spawned|started|paused|resumed|done|failed|cancelled|reaped`, plus `approval.requested` and `approval.decided`. Every event has the trusted envelope `text` and a trusted `data.cause` code (the reason); agent-written detail such as a cancel reason stays in its existing untrusted field. Tool calls and messages stay in step and thread events. It is a deterministic projection of the run's durable `scope_events` log (written in the same transaction as each state change), so `seq` is the source event's seq and survives restarts; run states are folded from agent states. ADR-008's per-actor `lifecycle_events` table remains the actors' machine-transition log. Served as `GET /v1/runs/{runId}/lifecycle?after=` and `GET /v1/streams/{runId}/events?feed=lifecycle`.
 - **Spawn task redaction:** approved. Spawn task text takes the same path as message bodies: `redactShapes` (ADR-015 patterns, each match replaced by `[REDACTED]`) before the 64 KB inline cap, in both the `agent.spawned` event and its attachment, and again in the API agent view. The agent row keeps the raw task for the worker, as the mailbox keeps the raw message body.
+
+### Decided (Oct 26, 2026)
+
+- **Agent activity line:** the menu bar's per-agent "what is it doing now" line ("Reading 4 files", "Running the tests") is
+  a new nullable `Agent.activity {text, kind, at}`, not a new meaning for `Agent.text` (which stays the status sentence
+  that matches `agent.status_changed`). The daemon writes it from structured fields only: claude `tool_use` names and
+  inputs, codex items, and the capcomd ops a VM calls. Paths and commands pick the kind and are counted but never shown,
+  so `text` is trusted; `kind` is an icon hint. Progressive while the agent runs, past tense once it stopped. The runner
+  coalesces a streak of one kind ("Reading 4 files") and writes it to the agent row at most once a second (not to the
+  event log: it is not a state change). Live updates are `agent.activity_changed`, **ephemeral** and **opt-in**:
+  `?activity=1` on a run stream, including `?feed=lifecycle`, at most one frame per agent per second, no SSE `id:`, never
+  replayed. Why there: the lifecycle feed stays state changes only for every client that doesn't ask, the `daemon` stream
+  stays one frame per run, and the panel already holds a lifecycle stream per unfinished run, so the line costs it no
+  extra connection and its volume is bounded by the agents in that run.

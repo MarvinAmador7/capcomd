@@ -1188,6 +1188,72 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `agent.activity_changed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "agentId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "paused",
+        "done",
+        "failed",
+        "cancelled",
+        "handed-off"
+      ]
+    },
+    "activity": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Plain-language line, sentence case, no period, written by the daemon (trusted): progressive while the agent works (\"Reading 4 files\"), past tense once it stopped (\"Read 4 files\")"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool. More may be added: treat an unknown kind as tool"
+        },
+        "at": {
+          "type": "string",
+          "allOf": [
+            {
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            },
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            }
+          ],
+          "description": "When the activity last changed"
+        }
+      },
+      "required": [
+        "text",
+        "kind",
+        "at"
+      ]
+    }
+  },
+  "required": [
+    "agentId",
+    "status",
+    "activity"
+  ],
+  "additionalProperties": {},
+  "description": "Ephemeral, only on run streams with ?activity=1: the agent's new Agent.activity. The envelope text is the same line"
+}
+```
+
 ## `approval.requested`
 
 ```json
@@ -1726,6 +1792,15 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 
 Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
+Activity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).
+
+# Agent activity
+
+Agent activity: `?activity=1` on a run stream (with or without `feed=lifecycle`) adds `agent.activity_changed` frames: what each agent is doing now, the line in Agent.activity.
+They are ephemeral (`durability: "ephemeral"`): sent only live, never replayed, not in GET /v1/runs/{runId}/lifecycle or /v1/events, and their SSE frames carry no `id:`, so they never move the Last-Event-ID cursor.
+Their envelope `seq` is the last durable seq at the time (not a cursor), `entitySeq` is 0 and `id` is unique per frame; the latest frame per agent wins.
+Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
+Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.
 
 # Stream frames
 
@@ -1734,7 +1809,7 @@ If that seq was compacted away, or this client's buffer overflowed (slow reader)
 then `snapshot.*` frames ending with `snapshot.end`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.
 A `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to `daemon` and open a run stream on drill-in.
 The SSE `event:` field is the frame type: the envelope's dotted `type` for events, else `stream.reset` or `snapshot.*`.
-Run scopes accept `?feed=lifecycle`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot.
+Run scopes accept `?feed=lifecycle`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot, and `?activity=1`: live, ephemeral agent.activity_changed frames (at most one per agent per second).
 Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z.
 
 ## `stream.reset`
@@ -1894,6 +1969,40 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "type": "string",
             "description": "Plain-language status line written by the daemon (trusted)"
           },
+          "activity": {
+            "description": "What it is doing now (or, once it stopped, the last thing it did); null until it reports a step. Live updates: agent.activity_changed with ?activity=1 on a run stream",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Plain-language line, sentence case, no period, written by the daemon (trusted): progressive while the agent works (\"Reading 4 files\"), past tense once it stopped (\"Read 4 files\")"
+              },
+              "kind": {
+                "type": "string",
+                "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool. More may be added: treat an unknown kind as tool"
+              },
+              "at": {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                  },
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                ],
+                "description": "When the activity last changed"
+              }
+            },
+            "required": [
+              "text",
+              "kind",
+              "at"
+            ]
+          },
           "task": {
             "description": "Agent-written text: render as plain text, never markdown, links or actions",
             "type": [
@@ -2032,6 +2141,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "profile",
           "status",
           "text",
+          "activity",
           "task",
           "taskAttachment",
           "result",

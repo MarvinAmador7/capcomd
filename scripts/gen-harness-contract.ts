@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { z } from "zod";
-import { ApiError, contract, ERROR_STATUSES, EventData, LIFECYCLE_DOC, StreamFrames, STREAM_DOC } from "../src/api/contract";
+import { ACTIVITY_DOC, ApiError, contract, ERROR_STATUSES, EventData, LIFECYCLE_DOC, StreamFrames, STREAM_DOC } from "../src/api/contract";
 import { HarnessEvent, TIMESTAMP_DOC, TIMESTAMP_PATTERN } from "../src/api/envelope";
 
 const spec = await new OpenAPIGenerator({ schemaConverters: [new ZodToJsonSchemaConverter()] }).generate(contract, {
@@ -89,6 +89,7 @@ md += "Fields with `\"x-untrusted\": true` are agent-written: render as plain te
 const js = (sc: z.ZodType) => JSON.stringify(nullFold(z.toJSONSchema(sc, { unrepresentable: "any" })), null, 2);
 for (const [type, schema] of Object.entries(EventData)) md += `\n## \`${type}\`\n\n\`\`\`json\n${js(schema)}\n\`\`\`\n`;
 md += `\n# Lifecycle feed\n\n${LIFECYCLE_DOC}\n`;
+md += `\n# Agent activity\n\n${ACTIVITY_DOC}\n`;
 md += `\n# Stream frames\n\n\`GET /v1/streams/{scope}/events\`: ${STREAM_DOC}\n`;
 for (const [type, schema] of Object.entries(StreamFrames)) md += `\n## \`${type}\`\n\n\`\`\`json\n${js(schema)}\n\`\`\`\n`;
 
@@ -104,6 +105,7 @@ hc += "\n## Event envelope\n\nEvery SSE event and replayed event has this shape.
 hc += "so it is a stable resume cursor across daemon restarts; `(entity, entitySeq)` is the exactly-once dedupe key. ";
 hc += "Today's upper-case types map to dotted names (`AGENT_SPAWNED` → `agent.spawned`); the CLI's `capcomd.v1` output is unchanged.\n\n";
 hc += `\`\`\`json\n${JSON.stringify(nullFold(z.toJSONSchema(HarnessEvent)), null, 2)}\n\`\`\`\n`;
+hc += `\n## Agent activity\n\n${ACTIVITY_DOC}\n`;
 hc += `\n## Event types\n\n${Object.keys(EventData).map((t) => `- [\`${t}\`](events.md#${t.replace(/\./g, "")})`).join("\n")}\n`;
 
 const out: [string, string][] = [["openapi/capcomd.json", openapi], ["docs/events.md", md], ["docs/harness-contract.md", hc]];

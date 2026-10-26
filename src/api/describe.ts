@@ -29,6 +29,8 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "agent.reaped": return `${a} was stopped because its parent ${d.orphanOf} ended.`;
 		case "agent.cancelled": return `${a} was cancelled.`;
 		case "agent.status_changed": return `${a} is now ${d.status}.`;
+		// The server sets this event's text to the activity line itself (built from the stored kind and count).
+		case "agent.activity_changed": return `${a} is ${d.status === "running" ? "working" : `now ${d.status ?? "idle"}`}.`;
 		case "deadlock.detected": return "Agents are waiting on each other; capcomd broke the deadlock.";
 		case "drive.failed": return `${a} could not be driven (attempt ${Number(d.attempt) || 1}).`;
 		case "token.revoked": return "An agent token was revoked.";
@@ -52,4 +54,46 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "kv.put": case "kv.deleted": case "kv.swapped": return "A shared value changed.";
 		default: return type.replace(/[._]/g, " ") + ".";
 	}
+}
+
+// Agent.activity / agent.activity_changed: what the agent is doing, from the daemon's fixed vocabulary plus a count
+// (src/agents/activity.ts). Sentence case, no period; progressive while the agent works, past tense once it stopped.
+// [now one, now many (# = count), done one, done many]
+const ACTIVITY_TEXT: Record<string, [string, string, string, string]> = {
+	read: ["Reading a file", "Reading # files", "Read a file", "Read # files"],
+	edit: ["Editing a file", "Editing # files", "Edited a file", "Edited # files"],
+	write: ["Writing a new file", "Writing # new files", "Wrote a new file", "Wrote # new files"],
+	search: ["Searching the code", "Searching the code", "Searched the code", "Searched the code"],
+	run: ["Running a command", "Running # commands", "Ran a command", "Ran # commands"],
+	test: ["Running the tests", "Running the tests", "Ran the tests", "Ran the tests"],
+	build: ["Building the project", "Building the project", "Built the project", "Built the project"],
+	install: ["Installing dependencies", "Installing dependencies", "Installed dependencies", "Installed dependencies"],
+	check: ["Checking the code", "Checking the code", "Checked the code", "Checked the code"],
+	git: ["Looking at the changes", "Looking at the changes", "Looked at the changes", "Looked at the changes"],
+	web: ["Looking something up online", "Looking things up online", "Looked something up online", "Looked things up online"],
+	spawn: ["Starting a sub-agent", "Starting # sub-agents", "Started a sub-agent", "Started # sub-agents"],
+	wait: ["Waiting for sub-agents", "Waiting for sub-agents", "Waited for sub-agents", "Waited for sub-agents"],
+	message: ["Sending a message", "Sending # messages", "Sent a message", "Sent # messages"],
+	verify: ["Verifying a change", "Verifying # changes", "Asked to verify a change", "Asked to verify # changes"],
+	merge: ["Requesting a merge", "Requesting # merges", "Requested a merge", "Requested # merges"],
+	report: ["Reporting back", "Reporting back", "Reported back", "Reported back"],
+	delegate: ["Handing a step to a helper", "Handing # steps to helpers", "Handed a step to a helper", "Handed # steps to helpers"],
+	plan: ["Planning the work", "Planning the work", "Planned the work", "Planned the work"],
+	think: ["Thinking", "Thinking", "Thought it through", "Thought it through"],
+	tool: ["Using a tool", "Using # tools", "Used a tool", "Used # tools"],
+};
+
+/** The activity line for a kind and count; `done` gives the past tense (the agent is no longer working). */
+export function describeActivity(kind: string, n: number, done: boolean): string {
+	const t = ACTIVITY_TEXT[kind] ?? ACTIVITY_TEXT.tool!;
+	const count = Math.max(1, Math.floor(Number(n) || 1));
+	return t[(done ? 2 : 0) + (count > 1 ? 1 : 0)]!.replace("#", String(count));
+}
+
+/** Agent.activity from what the scope actor stores ({kind, n, at}) and the agent's status. */
+export function agentActivity(stored: { kind?: unknown; n?: unknown; at?: unknown } | null | undefined, status: string): { text: string; kind: string; at: string } | null {
+	if (!stored || typeof stored.kind !== "string") return null;
+	const kind = stored.kind in ACTIVITY_TEXT ? stored.kind : "tool";
+	const at = Number(stored.at);
+	return { text: describeActivity(kind, Number(stored.n), status !== "running" && status !== "pending"), kind, at: new Date(Number.isFinite(at) ? at : 0).toISOString() };
 }
