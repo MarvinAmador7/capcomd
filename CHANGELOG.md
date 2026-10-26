@@ -38,6 +38,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Menu bar app: start a run from the panel. Type a goal in "Start a project…" at the top (⌘K focuses it) and press
   Return; the new run shows up in the list. If capcomd has no default repository, the app asks once for the project's
   folder and remembers it. Needs a daemon with `POST /v1/runs` and a token with the steer scope.
+- Menu bar app: the agent tree on each card matches the approved design: outline guide lines (they carry on past an
+  approval or activity line), the folder each agent works in on its row when a run spans more than one, lowercase
+  profile names with a short task id when two siblings share a profile, and profile icons drawn at one size
+  (planner, lead, worker, critic; a hexagon with a dot for others). Folders come from capcomd's agent workspace.
 - Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
   once, and clicks could land on the hidden cards).
 - harness.v1 now says what each agent is doing right now, in plain language: "Reading 4 files", "Running the tests",

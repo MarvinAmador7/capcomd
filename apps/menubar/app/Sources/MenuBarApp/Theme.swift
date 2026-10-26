@@ -16,8 +16,6 @@ enum Theme {
 
   static let panelWidth: CGFloat = 380, panelRadius: CGFloat = 16, inset: CGFloat = 16
   static let cardRadius: CGFloat = 11, cardPadding: CGFloat = 12, cardGap: CGFloat = 8
-  static let treeRow: CGFloat = 26, activityRow: CGFloat = 18, activityRegion: CGFloat = 172
-  static let stripHeight: CGFloat = 30, stripCell: CGFloat = 24
 
   /// Project list and cards, measured from tree-card-v3.html (`.panel`, `.sec`, `.card`, `.chips`, `.tree`).
   enum Card {
@@ -55,6 +53,31 @@ enum Theme {
     static let activityFont = Font.system(size: 11.5)
     static let activityText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.5)
     static let activityHeight: CGFloat = 16, activityTop: CGFloat = -4, activityBottom: CGFloat = 4
+    // Rows (.tr 26 pt, 12.5 pt; .cur running; .dimr queued), guides (.gd), suffix (.sfx), folder chip (.rc), status (.stt).
+    static let rowHeight: CGFloat = 26
+    static let nameFont = Font.system(size: 12.5)
+    static let nameRunningFont = Font.system(size: 12.5, weight: .medium)
+    static let nameText = Color.white.opacity(0.78)
+    static let nameRunning = Color.white
+    static let nameQueued = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.42)
+    static let suffixFont = Font.system(size: 10.5, design: .monospaced)
+    static let suffixText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.32)
+    static let suffixLeading: CGFloat = 6
+    static let chipFont = Font.system(size: 11)
+    static let chipIcon = Font.system(size: 9)
+    static let chipText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.5)
+    static let chipGap: CGFloat = 3, chipLeading: CGFloat = 8
+    static let statusColumn: CGFloat = 14, statusLeading: CGFloat = 8
+    static let chevronFont = Font.system(size: 9, weight: .semibold)
+    static let chevronText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.35)
+    /// Profile glyphs on the mockups' 14 pt outline grid (agent-icons.png, tree-card-v3.png): SF Symbols differ in
+    /// natural size, so each gets the point size that lands it at the mockup's ~11–12 pt (measured on 2× captures).
+    static func iconSize(_ k: ProfileKind) -> CGFloat {
+      switch k { case .planner: 12; case .lead: 11.5; case .worker: 9; case .critic: 10.5; case .other: 11 }
+    }
+    static let iconBox: CGFloat = 14, iconDot: CGFloat = 3
+    static let guide = Color.white.opacity(0.18), guideWidth: CGFloat = 0.5
+    static let guideX: CGFloat = 7.5, guideElbowY: CGFloat = 13, guideArm: CGFloat = 7   // .gd:before/:after
   }
   /// Approval inline under the waiting agent (tree-card-v3.html `.apx`, `.q`, `.cmd`, `.btn`).
   enum Approval {
@@ -254,12 +277,8 @@ enum Theme {
 
   static let panelTitle = Font.system(size: 15, weight: .semibold)
   static let body = Font.system(size: 13)
-  static let treeRowFont = Font.system(size: 12.5)
-  static let activityFont = Font.system(size: 12)
   static let chip = Font.system(size: 11)
-  static let caption = Font.system(size: 10.5, weight: .semibold)
   static let monoTime = Font.system(size: 10.5, design: .monospaced)
-  static let monoCode = Font.system(size: 11.5, design: .monospaced)
 
   static func color(_ t: Tint) -> Color {
     switch t {
@@ -285,10 +304,11 @@ struct ProfileIcon: View {
   var body: some View {
     ZStack {
       Image(systemName: kind.symbol)
-      if kind.hasCentreDot { Circle().frame(width: 3, height: 3) }
+      if kind.hasCentreDot { Circle().frame(width: Theme.Tree.iconDot, height: Theme.Tree.iconDot) }
     }
+    .font(.system(size: Theme.Tree.iconSize(kind)))
     .foregroundStyle(Theme.color(tint))
-    .frame(width: 14, height: 14)
+    .frame(width: Theme.Tree.iconBox, height: Theme.Tree.iconBox)
     .accessibilityHidden(true)
   }
 }

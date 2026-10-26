@@ -8,7 +8,7 @@
 // Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
 // store's rebuild picks up repo/key (scope chips, suffixes) without a run stream; lifecycle feeds re-send the same
-// state per run. Repos ride in `agent.spawned.data.agent.repo` (the contract leaves `agent` open).
+// state per run. Folders ride in `Agent.workspace` / `agent.spawned.data.workspace` (harness #46).
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
@@ -107,12 +107,18 @@ const env = (r: RunSpec, type: string, entity: string, agentId: string | null, m
 for (const r of runs) {
   env(r, "run.created", r.id, null, NOW - r.startedAgo, { runId: r.id, budget: {}, label: null, goal: r.goal });
   for (const a of r.agents) env(r, "agent.spawned", a.id, a.id, NOW - a.ago, { parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile,
-    budget: {}, limits: {}, agent: a.repo ? { repo: a.repo } : {}, task: a.task ?? null, key: a.key ?? null, operator: false });
+    budget: {}, limits: {}, agent: {}, task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a) });
   for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - r.lastAgo, { approvalId: p.id, kind: "merge", question: p.question,
     requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target }, expiresAt: null });
   env(r, "run.started", r.id, null, NOW - r.lastAgo, { cause: "started" });   // bumps lastEventMs to the run's recency
   const end = { completed: "run.completed", failed: "run.failed", cancelled: "run.cancelled" }[r.state];
   if (end) env(r, end, r.id, null, NOW - r.lastAgo, { cause: r.state });
+}
+/** harness #46 Agent.workspace: a folder like "ids/v1" is a sub-path of its repo; "matchkey" is a repo of its own. */
+function workspaceOf(a: AgentSpec) {
+  if (!a.repo) return null;
+  const [repo, ...rest] = a.repo.split("/");
+  return { repo: `/src/${repo}`, path: rest.length ? a.repo : null, label: a.repo };
 }
 function depthOf(r: RunSpec, a: AgentSpec): number { let d = 0, p = a.parent; while (p) { d++; p = r.agents.find(x => x.id === p)?.parent; } return d; }
 const HEAD = seq;
@@ -120,7 +126,7 @@ const HEAD = seq;
 const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, repo: null, createdAt: iso(NOW - r.startedAgo) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
   text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
-  task: a.task ?? null, taskAttachment: null, result: null, updatedAt: iso(NOW - a.ago) });
+  task: a.task ?? null, taskAttachment: null, result: null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago) });
 const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind: "merge", status: decided.has(p.id) ? decided.get(p.id).status : "pending",
   question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target } });
 const decided = new Map<string, any>();
