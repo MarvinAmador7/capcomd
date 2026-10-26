@@ -332,7 +332,7 @@ carry kv values (as today), secrets, tokens, or env.
 | B | Same, but **WebSocket** for both commands and events (t3code) | One connection, lower latency for steering | Its own reconnect and resume protocol, harder to curl and debug, and no per-request HTTP semantics for idempotency or caching |
 | C | Keep shelling out to the `capcomd … --json --follow` CLI (today's SPEC §1) | Zero new code | One process per subscription, no auth model, polling, and a Swift app parsing CLI output. It doesn't scale past the TUI |
 
-Socket path (`src/api/socket.ts` harnessSocketPath; the server is wired into `capcomd serve` in phase 1): `--harness-socket <path>` > `CAPCOMD_HARNESS_SOCKET` > config `harness.socket` > `~/.capcomd/harness.sock` (so it can move into a macOS app-group container). Always created 0600 in a 0700 directory. The server ignores `Host` on the socket; clients should send `Host: localhost` (a hex-encoded socket path, as AsyncHTTPClient sends, is accepted too).
+Socket path (`src/api/socket.ts` harnessSocketPath; the server is wired into `capcomd serve` in phase 1): `--harness-socket <path>` > `CAPCOMD_HARNESS_SOCKET` > config `harness.socket` > `~/.capcomd/harness.sock` (so it can move into a macOS app-group container). Always created 0600 in a 0700 directory. One daemon per socket: `serve` first calls `GET /v1/health` on an existing socket and, if anything answers, exits 1 without touching it; only a stale socket (connection refused, or not a socket) is replaced. On exit it removes the socket only if the file there is still the one it bound. The server ignores `Host` on the socket; clients should send `Host: localhost` (a hex-encoded socket path, as AsyncHTTPClient sends, is accepted too).
 
 ### 7.2 Authentication for the GUI process
 

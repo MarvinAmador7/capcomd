@@ -68,7 +68,7 @@ echo "   https://github.com/$REPO  (target branch: integration)"
 
 echo "== 2. engine on :$PORT"
 # Engine data in the run's work dir, not ~/.capcomd/engine/<port> (one per test port, never removed).
-CAPCOMD_ENGINE_DATA="$WORK/engine" bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
+CAPCOMD_ENGINE_DATA="$WORK/engine" CAPCOMD_HARNESS_SOCKET="$WORK/harness.sock" bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
 ENGINE_PID=$!
 cleanup() { pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT

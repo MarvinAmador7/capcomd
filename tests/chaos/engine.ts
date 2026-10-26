@@ -4,6 +4,7 @@ import { createRequire } from "module";
 import { homedir } from "os";
 import { join } from "path";
 import { openSync, readFileSync, readdirSync, readlinkSync } from "fs";
+import { privateHarnessSocket } from "../helpers/harness-socket";
 
 const DEFAULT_PORT = 6420;
 const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
@@ -187,6 +188,8 @@ export class Engine {
   readonly logPath: string;
   readonly port: number;
   readonly opts: EngineOpts;
+  /** This engine's own harness.v1 socket (opts.env may name one): parallel engines never share or steal one. */
+  readonly harnessSocket: string;
   private child: ChildProcess | null = null;
   private dataFiles: string[] = [];
   private stopping = false;
@@ -195,6 +198,7 @@ export class Engine {
   constructor(label: string, opts: EngineOpts = {}) {
     this.opts = opts;
     this.port = opts.port ?? DEFAULT_PORT;
+    this.harnessSocket = opts.env?.CAPCOMD_HARNESS_SOCKET ?? privateHarnessSocket();
     this.logPath = `/tmp/relay-chaos-${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180)}.log`;
   }
 
@@ -261,7 +265,7 @@ export class Engine {
   async start(killpoint: string | null): Promise<void> {
     this.stopping = false;
     this.sawKill = false;
-    const env = { ...process.env, ...engineEnv(this.opts) };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...engineEnv(this.opts), CAPCOMD_HARNESS_SOCKET: this.harnessSocket };
     delete env.CAPCOMD_KILLPOINT;
     delete env.RELAY_KILLPOINT;
     if (killpoint) env.CAPCOMD_KILLPOINT = killpoint;

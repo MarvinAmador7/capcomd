@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- `capcomd serve` no longer takes over a harness socket another daemon is serving. Before, a second `serve` (or a
+  test run) replaced `~/.capcomd/harness.sock`, and the running daemon's menu bar app and other harness.v1 clients
+  lost it (connection refused) until that daemon was restarted. Now `serve` exits 1 with an error naming the socket and
+  the running daemon's version; to run a second daemon, give it its own socket with `--harness-socket PATH` or
+  `CAPCOMD_HARNESS_SOCKET`. A socket left behind by a daemon that died is still replaced, and on shutdown `serve`
+  removes the socket only if it is still its own. `CAPCOMD_NO_CONFIG=1` now also skips the config's `harness.socket`.
+
 - Menu bar app: project cards now match the approved design. Each card is titled by the project's goal, shows the
   folders its agents work in as chips (up to three, then `+n`), and nests every run of the project as an agent tree.
   Run ids no longer appear on cards (they stay in the run view), and a card waiting for your approval gets a faint
