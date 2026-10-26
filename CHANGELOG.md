@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: in the run view, the Activity list and the collapsed step strip sit 4 pt closer to the step bar, as
+  designed.
 - `capcomd serve` no longer takes over a harness socket another daemon is serving. Before, a second `serve` (or a
   test run) replaced `~/.capcomd/harness.sock`, and the running daemon's menu bar app and other harness.v1 clients
   lost it (connection refused) until that daemon was restarted. Now `serve` exits 1 with an error naming the socket and
