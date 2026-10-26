@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Agent, Attachment, Decision, Message, Project, Run, Skill, Span, TranscriptItem } from "./contract";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
+import type { RunRepo } from "./run-files";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
@@ -35,6 +36,8 @@ export interface HarnessSource {
 	decide(approvalId: string, approve: boolean, by: string, reason?: string): Promise<void>;
 	/** Start a run, detached; resolves once it is started (not finished). Throws CreateRunError for a 422. */
 	createRun(input: CreateRunInput): Promise<O<typeof Run>>;
+	/** The run's repository and target branch (GET /v1/runs/{runId}/files); null when the run has none. */
+	repo(runId: string): Promise<RunRepo | null>;
 }
 
 /** Legacy scope event → harness.v1 envelope. entitySeq counts per entity in seq order within what the caller saw. */
@@ -67,7 +70,7 @@ export function parseApprovalId(id: string): { runId: string; opId: string } | n
 }
 
 /** In-memory source for tests and fixtures. */
-export function memorySource(seed: Partial<{ runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]> }> = {}): HarnessSource & { push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[] } {
+export function memorySource(seed: Partial<{ runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo> }> = {}): HarnessSource & { push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[] } {
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
 	const runs = seed.runs ?? [];
@@ -99,6 +102,7 @@ export function memorySource(seed: Partial<{ runs: O<typeof Run>[]; agents: Reco
 			runs.push(run);
 			return run;
 		},
+		repo: async (r) => seed.repos?.[r] ?? null,
 	};
 }
 export type { Decision };

@@ -861,7 +861,7 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   // Its checkpoints were only for continuing the work, which has landed now (best effort).
   if (merged && d.agentId) await dropCheckpoints(runId, d.agentId).catch(() => {});
   const result = merged
-    ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}) }
+    ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}), ...(out.targetBefore ? { targetBefore: out.targetBefore } : {}) }
     : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}) };
   return opView(await s.finishOp({ opId: op.id, state: merged ? "merged" : "failed", result }));
 }

@@ -6,13 +6,18 @@ export class GitError extends Error {
   }
 }
 
-export interface GitResult { code: number; stdout: string; stderr: string }
+export interface GitResult { code: number; stdout: string; stderr: string; timedOut?: boolean }
 
 export class Git {
   constructor(readonly cwd: string, readonly extraEnv: Record<string, string> = {}) {}
 
-  async run(args: string[], opts: { input?: string; env?: Record<string, string> } = {}): Promise<GitResult> {
+  /**
+   * `timeoutMs` (default: none) bounds a call that can hang on the network: git runs in its own process group, and at
+   * the deadline the whole group (git, ssh, a remote helper) is killed and the result is `{ code: 124, timedOut: true }`.
+   */
+  async run(args: string[], opts: { input?: string; env?: Record<string, string>; timeoutMs?: number } = {}): Promise<GitResult> {
     const proc = Bun.spawn(["git", ...args], {
+      ...(opts.timeoutMs ? { detached: true } : {}),
       cwd: this.cwd,
       env: {
         ...process.env,
@@ -30,12 +35,33 @@ export class Git {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [stdout, stderr, code] = await Promise.all([
+    const done = Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
-    return { code, stdout, stderr };
+    if (!opts.timeoutMs) {
+      const [stdout, stderr, code] = await done;
+      return { code, stdout, stderr };
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined, fired = false;
+    const expired = new Promise<null>((resolve) => {
+      timer = setTimeout(() => {
+        fired = true;
+        try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
+        // Don't wait for the pipes: a grandchild outside the group could still hold them open.
+        proc.exited.then(() => resolve(null), () => resolve(null));
+      }, opts.timeoutMs);
+    });
+    done.catch(() => {});
+    try {
+      const r = await Promise.race([done, expired]);
+      if (!r || fired) return { code: 124, stdout: "", stderr: `git ${args[0]} timed out after ${opts.timeoutMs} ms`, timedOut: true };
+      const [stdout, stderr, code] = r;
+      return { code, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Run and throw GitError on non-zero exit. Returns trimmed stdout. */
