@@ -1,84 +1,59 @@
+// A serve hard-killed at merge.before_cas leaves nothing bound, and a restart on the same data dir comes up
+// without coordinator "transaction closed" errors.
+//
+// Every process this test kills is one it started: the serve runs in its own process group on a private port
+// block, data dir and harness socket, and Engine (./engine) kills that group plus the rivet-engine found by this
+// instance's own ports or pid file. It used to `pkill -9 bun`, which took down every Bun process on the machine:
+// a developer's `capcomd serve` daemon, editors' language servers, other test runs and this test runner itself.
 import { describe, test, expect } from "bun:test";
-import { spawn, exec } from "child_process";
-import { promisify } from "util";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { Engine, pidsListening, runClient, sleep, type EngineOpts } from "./engine";
+import { testPort } from "../helpers/engine";
 
-const execAsync = promisify(exec);
+const logSize = (path: string) => (existsSync(path) ? statSync(path).size : 0);
 
-async function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+async function waitPortsFree(ports: number[], ms: number): Promise<number[]> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const holders = (await Promise.all(ports.map((p) => pidsListening(p)))).flat();
+    if (holders.length === 0 || Date.now() > deadline) return holders;
+    await sleep(100);
+  }
 }
 
 describe("Chaos - Fixed Harness", () => {
   test("merge.before_cas with proper cleanup", async () => {
-    // Clean start
-    await execAsync("pkill -9 rivet-eng; pkill -9 rivet-ser; pkill -9 bun || true").catch(() => {});
-    await sleep(2000);
-    await execAsync("rm -rf /workspace/.rivet");
-    
-    let coordinatorErrors = 0;
-    let success = false;
-    
-    // Start serve with killpoint
-    const serve1 = spawn("bun", ["src/cli/index.ts", "serve"], {
-      cwd: "/workspace",
-      env: { ...process.env, CAPCOMD_KILLPOINT: "merge.before_cas:1" },
-      stdio: "pipe",
-    });
-    
-    await sleep(3000);
-    
-    // Start run
-    const run = spawn("bun", ["src/cli/index.ts", "run", "Test"], {
-      cwd: "/workspace",
-      stdio: "pipe",
-    });
-    
-    // Wait for kill
-    await new Promise<void>((resolve) => {
-      serve1.on("exit", async (code) => {
-        if (code === 137) {
-          console.log("  Serve killed, cleaning children...");
-          await execAsync("pkill -9 rivet-eng; pkill -9 rivet-ser").catch(() => {});
-          await sleep(2000);
-          resolve();
-        }
-      });
-    });
-    
-    // Verify port free
+    const port = await testPort();
+    const dataDir = mkdtempSync(join(tmpdir(), "capcomd-harness-fix-"));
+    const opts: EngineOpts = { port, dataDir, env: { CAPCOMD_HOME: join(dataDir, "home") } };
+    const engine = new Engine(`harness-fix-${port}`, opts);
+    const runId = `chaos-harness-fix-${Date.now()}-p${port}`;
     try {
-      await execAsync("lsof -i :6420");
-      console.log("  ERROR: Port still in use");
-      expect(false).toBe(true);
-      return;
-    } catch {
-      console.log("  ✓ Port free");
+      // Serve with the killpoint; the run's merge reaches it and serve dies by SIGKILL. Engine then
+      // SIGKILLs serve's process group and this instance's rivet-engine (its own ports), nothing else.
+      await engine.start("merge.before_cas:1");
+      await runClient(runId, opts);
+      expect(engine.sawKill).toBe(true);
+      expect(readFileSync(engine.logPath, "utf8")).toContain("[KILLPOINT] Exiting at merge.before_cas:1");
+
+      // Nothing of the killed instance still listens (guard, api-peer, metrics).
+      expect(await waitPortsFree([port, port + 1, port + 10], 5_000)).toEqual([]);
+      console.log("  ✓ ports free");
+
+      // Restart on the same data dir and watch it for coordinator errors.
+      console.log("  Restarting serve...");
+      const offset = logSize(engine.logPath);
+      await engine.start(null);
+      await sleep(8_000);
+      const output = readFileSync(engine.logPath, "utf8").slice(offset);
+      const coordinatorErrors = output.match(/transaction.*closed/g)?.length ?? 0;
+      console.log(`  Coordinator errors: ${coordinatorErrors}`);
+      expect(coordinatorErrors).toBe(0);
+    } finally {
+      await engine.stop().catch((e) => console.log(`  cleanup error: ${e instanceof Error ? e.message : e}`));
+      rmSync(dataDir, { recursive: true, force: true });
     }
-    
-    // Restart
-    console.log("  Restarting serve...");
-    const serve2 = spawn("bun", ["src/cli/index.ts", "serve"], {
-      cwd: "/workspace",
-      stdio: "pipe",
-    });
-    
-    let output = "";
-    serve2.stdout.on("data", d => output += d.toString());
-    serve2.stderr.on("data", d => output += d.toString());
-    
-    await sleep(8000);
-    
-    // Check for errors
-    const matches = output.match(/transaction.*closed/g);
-    coordinatorErrors = matches ? matches.length : 0;
-    
-    console.log(`  Coordinator errors: ${coordinatorErrors}`);
-    
-    // Cleanup
-    serve2.kill("SIGKILL");
-    run.kill("SIGKILL");
-    await execAsync("pkill -9 rivet-eng; pkill -9 rivet-ser; pkill -9 bun").catch(() => {});
-    
-    expect(coordinatorErrors).toBe(0);
-  }, 30000);
+  }, 180_000);
 });
