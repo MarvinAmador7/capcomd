@@ -9,7 +9,7 @@ export { threadBuilder, ARGS_MAX_BYTES, OUTPUT_MAX_BYTES, type ThreadOptions, ty
 export { ACTIVITY_KINDS, commandKind, opKind, claudeToolKind, codexItemKind, type ActivityKind } from "./kinds";
 export { claudeSummary, codexSummary, shellCommand } from "./summary";
 
-import { classifyLink, resolveMedia, type LinkContext } from "./links";
+import { classifyLink, mediaOfPath, resolveMedia, type LinkContext } from "./links";
 import { toBlocks } from "./markdown";
 import { THREAD_FORMAT, type BlockNode, type ItemDraft } from "./schema";
 
@@ -21,8 +21,12 @@ export function handoffDraft(o: { id: string; at: number; child: { agentId: stri
 	const p = toBlocks(o.summary, o.link);
 	const media: BlockNode[] = [], links: BlockNode[] = [];
 	for (const a of o.artifacts ?? []) {
-		const m = resolveMedia(a.ref, a.name, o.link);
-		if (m.t === "media" && m.kind !== "file") media.push(m);
+		// Media only when it evidently is (a media file name, or an attachment the daemon knows is one): else a link chip.
+		const l = classifyLink(a.ref, a.name || a.ref, o.link);
+		const known = l.target === "artifact" ? o.link?.attachment?.(l.id!) : null;
+		const looksMedia = !!mediaOfPath(a.ref) || !!(known && /^(image|video|audio)\//.test(known.mime));
+		const m = looksMedia ? resolveMedia(a.ref, a.name, o.link) : null;
+		if (m?.t === "media" && m.kind !== "file") media.push(m);
 		else links.push({ t: "paragraph", children: [classifyLink(a.ref, a.name || a.ref, o.link)] });
 	}
 	const extra: BlockNode[] = [...media, ...(links.length ? [{ t: "list", ordered: false, start: null, items: links.map((b) => ({ checked: null, blocks: [b] })) } as BlockNode] : [])];

@@ -1,6 +1,6 @@
 // Adapter behaviour beyond the golden sessions: dedupe, pairing, durations, suppression, unknown events, garbage.
 import { describe, expect, test } from "bun:test";
-import { threadBuilder, ThreadItem, type ItemDraft } from "../src/index";
+import { handoffDraft, threadBuilder, ThreadItem, type ItemDraft } from "../src/index";
 
 const run = (cli: "claude" | "codex", events: unknown[], o: { onImage?: (x: any) => void } = {}) => {
 	const b = threadBuilder({ cli, idPrefix: "itm-t", now: () => 0, link: { root: "/w/repo" }, ...o });
@@ -75,6 +75,21 @@ describe("codex", () => {
 	test("a tool step still running when the turn completes is closed unfinished... only at finish", () => {
 		const { updates } = run("codex", [{ type: "item.started", item: { id: "i", type: "command_execution", command: "sleep 9" } }, { type: "turn.completed" }]);
 		expect(updates.map((u) => [u.rev, u.status, u.error?.code ?? null])).toEqual([[1, "open", null], [2, "done", "unfinished"]]);
+	});
+});
+
+describe("hand-back", () => {
+	test("a child's artifacts become media (images, video) and classified links (files, attachments, web, none)", () => {
+		const d = handoffDraft({
+			id: "itm-p-handoff-c", at: 0, child: { agentId: "agt-c", status: "done" }, summary: "Wrote shards **1-118**.",
+			artifacts: [{ name: "chart", ref: "charts/rows.png" }, { name: "report.md", ref: "report.md" }, { name: "log", ref: "att-0123456789abcdef" }, { name: "dash", ref: "https://grafana.example.com/d/1" }, { name: "bucket", ref: "r2://matchkey/v3.2/" }],
+		});
+		expect(ThreadItem.safeParse({ ...d, seq: 1, order: 1, agentId: "agt-p" }).success).toBe(true);
+		expect(d).toMatchObject({ kind: "handoff", child: { agentId: "agt-c", status: "done" }, text: "Wrote shards **1-118**." });
+		expect(d.blocks.map((b) => b.t)).toEqual(["paragraph", "media", "list"]);
+		expect(d.blocks[1]).toMatchObject({ kind: "image", source: { type: "workspace", path: "charts/rows.png" }, alt: "chart" });
+		const links = (d.blocks[2] as any).items.map((i: any) => i.blocks[0].children[0]);
+		expect(links.map((l: any) => [l.text, l.target])).toEqual([["report.md", "file"], ["log", "artifact"], ["dash", "web"], ["bucket", "none"]]);
 	});
 });
 
