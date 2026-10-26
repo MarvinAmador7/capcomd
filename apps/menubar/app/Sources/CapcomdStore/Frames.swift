@@ -48,7 +48,11 @@ public enum StreamFrame: Sendable, Hashable {
   static func reencode(_ o: [String: JSONValue]) -> Data { (try? JSONEncoder().encode(o)) ?? Data() }
 }
 
-public struct SnapshotRun: Codable, Sendable, Hashable { public var id: String; public var projectId: String?; public var label: String?; public var state: String; public var goal: String? }
+public struct SnapshotRun: Codable, Sendable, Hashable {
+  public var id: String; public var projectId: String?; public var label: String?; public var state: String; public var goal: String?
+  /// When the run was created: a finished run's start when its run.created isn't replayed.
+  public var createdAt: String?
+}
 public struct SnapshotAgent: Codable, Sendable, Hashable {
   public var id: String; public var runId: String; public var parent: String?; public var depth: Int; public var profile: String?; public var status: String
   /// Daemon-written status line (trusted). Optional so older daemons still decode. Not shown: `activity` is the live line.

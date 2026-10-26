@@ -16,21 +16,23 @@ struct PanelView: View {
     NavigationStack(path: $model.path) {
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
+          let projects = model.projects
+          let active = projects.filter(\.isActive)
+          let finished = Array(projects.filter { !$0.isActive }.prefix(Theme.Finished.maxRows))
           Text("Active").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
             .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
-          ForEach(model.projects) { p in
-            Group {
-              if p.isRunning { ProjectCard(project: p) } else { FinishedRow(project: p) }
-            }
-            .padding(.bottom, Theme.cardGap)
-            .transition(.opacity)
+          ForEach(active) { p in
+            ProjectCard(project: p).padding(.bottom, Theme.cardGap).transition(.opacity)
           }
-          if model.projects.isEmpty {
-            Text("No projects yet").font(Theme.body).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 24)
+          if active.isEmpty {
+            Text(projects.isEmpty ? "No projects yet" : "Nothing running").font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)
+              .padding(.vertical, Theme.Finished.paddingVertical).padding(.horizontal, Theme.Finished.paddingHorizontal)
           }
+          // Finished and failed projects leave the Active cards: the latest few stay as one-line rows.
+          ForEach(finished) { p in FinishedRow(project: p).transition(.opacity) }
         }
         .padding(Theme.Card.listPadding)
-        .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map(\.id))
+        .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map { "\($0.id)\($0.isActive)" })
       }
       .safeAreaInset(edge: .bottom) { footer }
       // macOS keeps the root under a pushed view, and pushed views are clear (a material would only blur the list
@@ -78,7 +80,7 @@ struct ProjectCard: View {
         .accessibilityLabel(project.title + (needsApproval ? ", waiting for approval" : ""))
         .accessibilityHint("Opens the run")
       VStack(alignment: .leading, spacing: 0) {
-        ForEach(project.runs) { run in
+        ForEach(project.activeRuns) { run in   // finished and failed runs leave the card
           AgentTreeView(runId: run.id, compact: true)
           // Approvals sit under their waiting agent; one with no agent in the tree goes under the run's tree.
           let inTree = Set(model.tree(run.id).flatMap(\.subtreeIds))
@@ -126,20 +128,43 @@ struct ProjectCard: View {
 
   /// Opens the run that is doing something now, else the most recent one.
   private func open() {
-    if let run = project.runs.first(where: \.isRunning) ?? project.runs.first { model.open(run: run.id) }
+    if let run = project.activeRuns.first ?? project.runs.first { model.open(run: run.id) }
   }
 }
 
-/// Finished project: one line, title + "Done" (tertiary). No counts.
+/// Finished project (v5-a-final `.done`): its goal, then how its latest run ended and how long it took, and its folders
+/// ("Done in 4m · 3 repos"). Click opens that run.
 struct FinishedRow: View {
+  @Environment(AppModel.self) private var model
   let project: Project
   var body: some View {
-    HStack {
-      Text(verbatim: project.title).font(Theme.body).lineLimit(1)
-      Spacer()
-      Text("Done").font(Theme.chip).foregroundStyle(.tertiary)
+    let line = project.endedLine ?? "Done"
+    Button {
+      if let run = project.latestRun { model.open(run: run.id) }
+    } label: {
+      HStack(spacing: Theme.Finished.gap) {
+        Text(verbatim: project.title)   // untrusted goal: verbatim, never markdown
+          .font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.titleText).lineLimit(1).truncationMode(.tail)
+          .padding(.leading, Theme.Finished.titleIndent)
+        Spacer(minLength: 0)
+        Text(verbatim: line).font(Theme.Finished.trailingFont).foregroundStyle(Theme.Finished.trailingText)
+          .lineLimit(1).fixedSize()
+      }
+      .padding(.vertical, Theme.Finished.paddingVertical).padding(.horizontal, Theme.Finished.paddingHorizontal)
     }
-    .padding(.horizontal, Theme.cardPadding).frame(height: 28)
+    .buttonStyle(PressableStyle())
+    .accessibilityLabel("\(project.title), \(spoken(line))")
+    .accessibilityHint("Opens the run")
+  }
+
+  /// "Done in 4m · 3 repos" → "Done in 4 minutes, 3 repos" for VoiceOver.
+  private func spoken(_ line: String) -> String {
+    var s = line.replacingOccurrences(of: " · ", with: ", ")
+    if let ms = project.endedDurationMs {
+      let f = DateComponentsFormatter(); f.unitsStyle = .full; f.allowedUnits = [.day, .hour, .minute, .second]; f.maximumUnitCount = 2
+      if let full = f.string(from: Double(ms) / 1000) { s = s.replacingOccurrences(of: shortDuration(ms: ms), with: full) }
+    }
+    return s
   }
 }
 #endif

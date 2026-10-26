@@ -14,6 +14,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   files"), updated live. An agent waiting for your approval shows the question there instead, with the branch line
   beneath it and Deny / Approve; Approve stays blue even when another app is in front. Needs a capcomd daemon that
   reports agent activity; with an older one the line is simply absent.
+- Menu bar app: the Active list shows only work in progress. A run that finished, failed or was stopped leaves its
+  project's card, and a project with nothing left running drops below the cards as one line saying how its latest run
+  ended, how long it took and how many folders it touched ("Done in 4m · 3 repos", "Failed after 12m"); the newest
+  three are kept, and clicking one opens its run. A paused run stays in the Active list.
 - Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
   once, and clicks could land on the hidden cards).
 - harness.v1 now says what each agent is doing right now, in plain language: "Reading 4 files", "Running the tests",

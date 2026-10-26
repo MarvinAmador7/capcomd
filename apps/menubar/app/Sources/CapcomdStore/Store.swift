@@ -56,9 +56,9 @@ public final class CapcomdStore {
   public var projects: [Project] {
     let grouped = Dictionary(grouping: runs.values) { $0.projectId ?? $0.id }
     return grouped.map { id, rs in
-      let sorted = rs.sorted { $0.lastEventMs > $1.lastEventMs }
+      let sorted = rs.sorted { ($0.recencyMs, $0.id) > ($1.recencyMs, $1.id) }
       return Project(id: id, goal: sorted.first(where: { $0.goal != nil })?.goal, runs: sorted)
-    }.sorted { ($0.isRunning ? 1 : 0, $0.lastEventMs, $0.id) > ($1.isRunning ? 1 : 0, $1.lastEventMs, $1.id) }
+    }.sorted { ($0.isActive ? 1 : 0, $0.recencyMs, $0.id) > ($1.isActive ? 1 : 0, $1.recencyMs, $1.id) }
   }
   /// Undecided approvals in request order.
   public var pendingApprovals: [PendingApproval] {
@@ -187,6 +187,7 @@ public final class CapcomdStore {
     for r in b.runs {
       var run = runs[r.id] ?? Run(id: r.id, projectId: r.projectId, label: r.label, goal: nil, state: r.state, startedAtMs: nil, lastEventMs: 0)
       run.projectId = r.projectId; run.label = r.label; run.state = r.state; run.goal = r.goal.map(UntrustedText.init)
+      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt)
       runs[r.id] = run
     }
     let agentRuns = Set(b.agents.map(\.runId)).union(b.steps.compactMap { $0.runId ?? ($0.scope.hasPrefix("run-") ? $0.scope : nil) })
@@ -204,7 +205,7 @@ public final class CapcomdStore {
       let old = runs[a.runId]?.agents[a.id]
       var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
                      task: a.task.map(UntrustedText.init), key: old?.key, repo: old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.activity?.text)
-      ag.taskAttachment = AttachmentRef(a.taskAttachment)
+      ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
@@ -337,17 +338,20 @@ public final class CapcomdStore {
       var run = runs[r.id] ?? Run(id: r.id, projectId: r.projectId, label: r.label, goal: nil, state: r.state, startedAtMs: nil, lastEventMs: 0)
       run.projectId = r.projectId ?? run.projectId; run.label = r.label ?? run.label; run.state = r.state
       if let g = r.goal { run.goal = UntrustedText(g) }
+      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt)
       runs[r.id] = run
     }
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {
       if var old = runs[a.runId]?.agents[a.id] {
         old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
+        old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
                        task: a.task.map(UntrustedText.init), key: nil, repo: nil, spawnedAtMs: i, activity: a.activity?.text)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
+        ag.updatedAtMs = epochMs(iso: a.updatedAt)
         runs[a.runId]?.agents[a.id] = ag
       }
     }
@@ -361,7 +365,7 @@ public final class CapcomdStore {
 
   func setStatus(_ runId: String?, _ agentId: String?, _ s: AgentStatus, _ e: Envelope) {
     guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
-    runs[runId]?.agents[agentId]?.status = s
+    runs[runId]?.agents[agentId]?.status = s; runs[runId]?.agents[agentId]?.updatedAtMs = e.epochMs
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == "agent:\(agentId)" }) {
       runs[runId]?.steps[i].status = Self.stepStatus(s); runs[runId]?.steps[i].epochMs = e.epochMs
     }

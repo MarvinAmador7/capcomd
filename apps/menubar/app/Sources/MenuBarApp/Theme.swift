@@ -74,6 +74,19 @@ enum Theme {
     static let statusFont = Font.system(size: 11.5)
     static let appearRise: CGFloat = 4                       // SPEC §7: fade + 4 pt rise
   }
+  /// A finished project's one-line row under the Active cards (tree-card-v3.html / v5-a-final.html `.done`).
+  enum Finished {
+    static let gap: CGFloat = 8
+    static let paddingVertical: CGFloat = 9, paddingHorizontal: CGFloat = 12
+    /// `.done` opens with an empty span, so the flex gap indents the title 8 pt past the cards' text.
+    static let titleIndent: CGFloat = 8
+    static let titleFont = Font.system(size: 13)
+    static let titleText = Color.white.opacity(0.70)
+    static let trailingFont = Font.system(size: 12)
+    static let trailingText = Color.white.opacity(0.40)
+    /// The most recent few: the panel is for what's happening, not history.
+    static let maxRows = 3
+  }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {
     static let pressScale: CGFloat = 0.97
