@@ -53,14 +53,19 @@ struct PanelView: View {
     }
   }
 
+  /// v5-a-final `.ft`: a `.bar` material under a hairline, so cards scrolling beneath blur instead of showing through.
   private var footer: some View {
-    HStack {
-      Text("Open capcomd").font(Theme.chip).foregroundStyle(.secondary)
-      Spacer()
-      Text("Summon ⌥Space").font(Theme.chip).foregroundStyle(.tertiary)
+    HStack(spacing: 0) {
+      Text("Open capcomd").font(Theme.Footer.font).foregroundStyle(Theme.Footer.text)
+      Spacer(minLength: 0)
+      (Text("Summon ").font(Theme.Footer.font) + Text(verbatim: "⌥Space").font(Theme.Footer.monoFont))
+        .foregroundStyle(Theme.Footer.hintText)
+        .accessibilityLabel("Summon with Option Space")
     }
-    .padding(.horizontal, Theme.inset).padding(.vertical, 8)
-    .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
+    .padding(.horizontal, Theme.Footer.paddingHorizontal).padding(.vertical, Theme.Footer.paddingVertical)
+    .frame(maxWidth: .infinity)
+    .background(Theme.Footer.material)
+    .overlay(alignment: .top) { Rectangle().fill(Theme.Footer.divider).frame(height: Theme.Footer.dividerHeight) }
   }
 }
 
