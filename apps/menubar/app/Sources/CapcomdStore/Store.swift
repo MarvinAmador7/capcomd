@@ -31,6 +31,10 @@ public final class CapcomdStore {
   var logCursor: [String: Int] = [:]
   public internal(set) var controlState: [String: ControlState] = [:]
   public internal(set) var startState: StartState = .idle
+  /// Steers typed in a thread, per agent, until confirmed (StoreThread.swift).
+  public internal(set) var outbox: [String: [PendingSteer]] = [:]
+  public internal(set) var capabilities: Set<String> = []
+  public internal(set) var skills: Fetched<[SkillInfo]>?
   var pendingStartKey: (goal: String, repo: String?, key: String)?
 
   let subscriber: StreamSubscribing?
@@ -38,6 +42,8 @@ public final class CapcomdStore {
   let detail: RunDetailFetching?
   let controls: RunControlling?
   let starter: RunStarting?
+  let messenger: AgentMessaging?
+  let daemonInfo: DaemonInfoFetching?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -60,8 +66,10 @@ public final class CapcomdStore {
   public static let maxLifecycleFeeds = 16
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
-              starter: RunStarting? = nil, prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
-    self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
+              starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil,
+              prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
+    self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter
+    self.messenger = messenger; self.daemonInfo = daemonInfo; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 

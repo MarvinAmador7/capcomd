@@ -138,3 +138,43 @@ public struct LiveStarter: RunStarting {
     }
   }
 }
+
+/// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50). 409 `conflict` (the agent has ended) and 422 carry
+/// the daemon's sentence; a 404 that names the run or agent is a refusal, any other 404 means the route is missing.
+public struct LiveMessenger: AgentMessaging {
+  let transport: UnixSocketTransport
+  public init(transport: UnixSocketTransport) { self.transport = transport }
+  public func send(runId: String, agentId: String, body: String, skills: [String], idempotencyKey: String) async throws -> SentMessage {
+    var payload: [String: Any] = ["body": body]; if !skills.isEmpty { payload["skills"] = skills }
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/messages"
+    let (status, data) = try await transport.post(path, headers: [("Idempotency-Key", idempotencyKey)], json: try JSONSerialization.data(withJSONObject: payload))
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let message = obj?["message"] as? String ?? "capcomd refused"
+    switch status {
+    case 200, 201:
+      guard let seq = obj?["seq"] as? Int else { throw DetailUnavailable.failed("unexpected response") }
+      return SentMessage(seq: seq, note: obj?["note"] as? String)
+    case 401: throw Unauthorized()
+    case 403: throw MessageRefused("This app's capcomd token can't send messages (needs the steer scope)")
+    case 404 where (obj?["code"] as? String) == "not_found" && (message.hasPrefix("run ") || message.hasPrefix("agent ")): throw MessageRefused(message)
+    case 404: throw DetailUnavailable.unsupported
+    case 409, 422: throw MessageRefused(message)
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
+
+/// `GET /v1/health` (`capabilities`, absent on older daemons) and `GET /v1/skills`.
+public struct LiveDaemonInfo: DaemonInfoFetching {
+  let transport: UnixSocketTransport
+  public init(transport: UnixSocketTransport) { self.transport = transport }
+  public func capabilities() async throws -> Set<String> {
+    let (s, d) = try await transport.get("/v1/health")
+    guard s == 200, let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return [] }
+    return Set(o["capabilities"] as? [String] ?? [])
+  }
+  public func skills() async throws -> [SkillInfo] {
+    do { return try await transport.getJSON("/v1/skills", as: [SkillInfo].self) }
+    catch let e as HTTPStatusError { if e.status == 401 { throw Unauthorized() }; throw e.status == 404 ? DetailUnavailable.unsupported : DetailUnavailable.failed("HTTP \(e.status)") }
+  }
+}
