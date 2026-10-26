@@ -1,0 +1,15 @@
+event: stream.reset
+data: {"snapshotSeq": 40, "reason": "compacted"}
+
+event: snapshot.run
+data: {"run": {"id": "run-a1", "projectId": "prj-1", "label": "a1", "state": "running", "goal": "Fix flaky login tests"}}
+
+event: snapshot.agents
+data: {"agents": [{"id": "agt-p", "runId": "run-a1", "parent": null, "depth": 0, "profile": "planner", "status": "running"}, {"id": "agt-w1", "runId": "run-a1", "parent": "agt-p", "depth": 1, "profile": "worker", "status": "done"}]}
+
+event: snapshot.approvals
+data: {"approvals": [{"approvalId": "apr-10", "kind": "merge", "status": "pending", "question": "Merge fix/ui into main?", "requestedBy": {"agentId": "agt-p", "runId": "run-a1"}, "subject": {"target": "main", "ref": "fix/ui"}}]}
+
+event: snapshot.end
+data: {"snapshotSeq": 40}
+
