@@ -81,6 +81,14 @@ case "$prompt" in *"[listen]"*)
     else [ "$stream" = 1 ] || sleep 1; emit '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'; fi
   done;;
 esac
+# [thread]: a markdown message and a timed tool call, for the thread items (harness.v1 GET …/thread)
+case "$prompt" in *"[thread]"*)
+  emit '{"type":"assistant","message":{"id":"msg_plan","content":[{"type":"thinking","thinking":"Plan the backfill first."}]}}'
+  emit '{"type":"assistant","message":{"id":"msg_plan","content":[{"type":"text","text":"## Plan\n\n- Normalize emails\n- Fan out on `ids/v1`\n\n```sql\nSELECT 1;\n```\n\n| shard | rows |\n|--|--:|\n| 1 | 10 |\n\nSee [the schema](ids/v1/schema.json)."}]}}'
+  emit '{"type":"assistant","message":{"id":"msg_glob","content":[{"type":"tool_use","id":"g1","name":"Glob","input":{"pattern":"**/*.ts"}}]}}'
+  sleep 0.5
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"g1","content":"src/sum.ts"}]},"tool_use_result":{"filenames":["src/sum.ts"],"durationMs":412,"numFiles":1}}';;
+esac
 # [wip]: edit, then hang (a limit with work to keep)
 case "$prompt" in *"[wip]"*) sleep 120;; esac
 emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'

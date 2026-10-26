@@ -19,6 +19,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   the daemon serves (`GET …/attachments/{id}/content`, `GET …/agents/{agentId}/workspace?path=`) or at remote URLs a
   client loads only on a click. Add `?thread=1` to a run stream for live `agent.thread_item_changed` updates. The
   transcript route and `capcomd logs` are unchanged.
+- Agents that can spawn (planners, leads) now have a thread too; before, nothing they did themselves was recorded
+  for a client to show. When a child finishes, its parent's thread gets a hand-back item with the child's summary and
+  its artifacts as links and thumbnails.
 
 - Menu bar app: project cards now match the approved design. Each card is titled by the project's goal, shows the
   folders its agents work in as chips (up to three, then `+n`), and nests every run of the project as an agent tree.
