@@ -21,10 +21,21 @@ final class TransportTests: XCTestCase {
     for _ in 0..<100 where !FileManager.default.fileExists(atPath: Self.sock) { try await Task.sleep(for: .milliseconds(50)) }
     try await Task.sleep(for: .milliseconds(100))
   }
-  override func tearDown() async throws { for t in transports { try? await t.shutdown() }; transports = []; Self.server.terminate(); Self.server.waitUntilExit()
+  override func tearDown() async throws {
+    // Stop the server first: it closes any stream a test left open. AsyncHTTPClient's shutdown() waits for in-flight
+    // requests, so shutting a transport down while the server still holds its SSE stream open never returns.
+    Self.server.terminate()
+    if !(await Self.exited(Self.server, within: .seconds(3))) { kill(Self.server.processIdentifier, SIGKILL); Self.server.waitUntilExit() }
+    for t in transports { try? await t.shutdown() }; transports = []
     // bun's launcher is a shell wrapper; make sure the real child is gone too.
     let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill"); k.arguments = ["-f", Self.sock]; try? k.run(); k.waitUntilExit()
     try? FileManager.default.removeItem(atPath: Self.sock) }
+
+  static func exited(_ p: Process, within limit: Duration) async -> Bool {
+    let end = ContinuousClock.now + limit
+    while p.isRunning && ContinuousClock.now < end { try? await Task.sleep(for: .milliseconds(50)) }
+    return !p.isRunning
+  }
 
   func testSocketIs0600() throws {
     let a = try FileManager.default.attributesOfItem(atPath: Self.sock)
