@@ -136,7 +136,7 @@ enum Theme {
     static let barCurrent = Theme.accent.opacity(0.45)
     static let barQueued = Color.white.opacity(0.12)
     // Activity (.reg 172, .ph, .ar)
-    static let regionTop: CGFloat = 14, regionHeight: CGFloat = 172
+    static let regionTop: CGFloat = 10, regionHeight: CGFloat = 172   // .reg margin-top 14 collapses with the bar's 4: 14 under the bar
     static let phaseFont = Font.system(size: 10.5, weight: .semibold)
     static let phaseText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.3)
     static let phaseHeight: CGFloat = 14
@@ -153,7 +153,7 @@ enum Theme {
     static let timeGap: CGFloat = 6
     static let statusFont = Font.system(size: 11)
     // Collapsed strip (.strip, .si2, .pdv, .cvx)
-    static let stripTop: CGFloat = 12, stripHeight: CGFloat = 30, stripRadius: CGFloat = 8
+    static let stripTop: CGFloat = 8, stripHeight: CGFloat = 30, stripRadius: CGFloat = 8   // .strip margin-top 12 collapses with the bar's 4
     static let stripFill = Color.white.opacity(0.04)
     static let stripPadding: CGFloat = 6, cellGap: CGFloat = 2
     static let cell: CGFloat = 24, cellRadius: CGFloat = 6
@@ -263,9 +263,9 @@ enum Theme {
     static let errorFont = Font.system(size: 11.5)
     static let sectionTop: CGFloat = 0                       // .in sits at the list padding; .sec adds 14 below it
   }
-  /// Panel height follows its content (measured mockups: list 525.5–566, run view 285–429.5, thread 614.5 pt).
+  /// Panel height follows its content (measured mockups, border to border: list 535.5–576, run view 295.5–439.5, thread 624.5 pt).
   enum Panel {
-    static let maxHeight: CGFloat = 640          // the tallest approved panel (thread-panel-v2, 614.5) fits
+    static let maxHeight: CGFloat = 640          // the tallest approved panel (thread-panel-v2, 624.5) fits
     static let minHeight: CGFloat = 200          // an empty or loading screen doesn't collapse
     static let screenMargin: CGFloat = 48        // never taller than the screen's visible frame minus this
     static let initialHeight: CGFloat = 520      // until the first measurement lands
