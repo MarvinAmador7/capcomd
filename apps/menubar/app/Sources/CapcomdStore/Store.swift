@@ -10,6 +10,14 @@ public final class CapcomdStore {
   public private(set) var openRunId: String?
   public private(set) var lastSeq: [String: Int] = [:]
   public private(set) var resetCount = 0
+  /// Resume cursor per subscription key: the last SSE `id:` seen (shared-seq groups carry it on the last frame only).
+  public private(set) var cursor: [String: Int] = [:]
+  /// Frames dropped because their envelope id was already applied (a resumed group re-sends earlier members).
+  public private(set) var duplicatesDropped = 0
+  /// The daemon rejected the token (401 on a stream or a decision). The app reopens the token prompt.
+  public private(set) var unauthorized = false
+  /// Live lifecycle events worth a notification (approval requested, run completed/failed). Never fired for snapshots.
+  public var onNotify: (@MainActor (Notice) -> Void)?
   public internal(set) var threads: [String: [ThreadItem]] = [:]
   public let prefs: UIPreferences
   public var onChange: (@MainActor () -> Void)?
@@ -19,11 +27,23 @@ public final class CapcomdStore {
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
+  /// Envelope ids already applied per key (id → seq). Dedupe is by id, not seq: a group shares one seq.
+  var seen: [String: [String: Int]] = [:]
+  /// Events at or below the last snapshot's seq are already folded into it.
+  var floor: [String: Int] = [:]
   var approvalSeq: [String: Int] = [:]
   var keyCounter = 0
   let makeKey: () -> String
 
-  struct ResetBuffer { var snapshotSeq: Int?; var runs: [SnapshotRun] = []; var agents: [SnapshotAgent] = []; var approvals: [SnapshotApproval] = [] }
+  struct ResetBuffer {
+    var snapshotSeq: Int?; var runs: [SnapshotRun] = []; var agents: [SnapshotAgent] = []; var approvals: [SnapshotApproval] = []
+    var steps: [Envelope] = []; var messages: [SnapshotMessage] = []
+  }
+  /// Subscription key for a run's lifecycle feed.
+  public nonisolated static func lifecycleKey(_ runId: String) -> String { "lifecycle:\(runId)" }
+  nonisolated static func lifecycleRun(_ key: String) -> String? { key.hasPrefix("lifecycle:") ? String(key.dropFirst(10)) : nil }
+  /// At most this many runs keep a lifecycle feed open (most recent, not finished).
+  public static let maxLifecycleFeeds = 16
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, prefs: PreferenceStoring = InMemoryPreferences(),
               clientId: String = "menubar", makeKey: (() -> String)? = nil) {
@@ -99,13 +119,23 @@ public final class CapcomdStore {
     subs.removeValue(forKey: scope)?.cancel(); openRunId = nil; changed()
   }
   public func stop() { subs.values.forEach { $0.cancel() }; subs = [:] }
+
+  /// Badge and notifications come from each run's lifecycle feed (`?feed=lifecycle`): one per known, unfinished run.
+  func syncLifecycleFeeds() {
+    guard subscriber != nil, subs["daemon"] != nil else { return }
+    let want = runs.values.filter { !Run.terminalStates.contains($0.state) }
+      .sorted { ($0.lastEventMs, $0.id) > ($1.lastEventMs, $1.id) }.prefix(Self.maxLifecycleFeeds).map(\.id)
+    for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }
+  }
   public var activeScopes: [String] { subs.keys.sorted() }
 
-  func subscribe(_ scope: String) {
-    guard subs[scope] == nil, let subscriber else { return }
-    subs[scope] = subscriber.subscribe(scope: scope, after: lastSeq[scope] ?? 0) { [weak self] f in
-      await self?.receive(f, scope: scope)
-    }
+  func subscribe(_ scope: String) { subscribe(scope, scope: scope, feed: nil) }
+  func subscribe(_ key: String, scope: String, feed: String?) {
+    guard subs[key] == nil, let subscriber else { return }
+    let after = cursor[key] ?? 0
+    let onFrame: @Sendable (StreamFrame) async -> Void = { [weak self] f in await self?.receive(f, scope: key) }
+    subs[key] = feed == nil ? subscriber.subscribe(scope: scope, after: after, onFrame: onFrame)
+                            : subscriber.subscribe(scope: scope, feed: feed, after: after, onFrame: onFrame)
   }
 
   // MARK: frames
@@ -113,9 +143,21 @@ public final class CapcomdStore {
     switch frame {
     case .event(let e):
       if pendingReset[scope] != nil, let s = pendingReset[scope]?.snapshotSeq, e.seq <= s { return }
-      guard e.seq > (lastSeq[scope] ?? 0) else { return }      // dedupe by seq per scope
-      lastSeq[scope] = e.seq
+      if e.seq <= (floor[scope] ?? 0) { return }                 // already in the snapshot
+      if seen[scope]?[e.id] != nil { duplicatesDropped += 1; return }   // dedupe by envelope id (groups share a seq)
+      let top = max(lastSeq[scope] ?? 0, e.seq)
+      seen[scope, default: [:]][e.id] = e.seq
+      if seen[scope]!.count > 512 { seen[scope] = seen[scope]!.filter { $0.value >= top } }  // a resend never goes below the cursor
+      lastSeq[scope] = top
       apply(e)
+      if Self.lifecycleRun(scope) != nil { notify(e) }
+      if scope == "daemon" || e.type == "run.created" { syncLifecycleFeeds() }
+    case .cursor(let n):
+      cursor[scope] = n; return
+    case .unauthorized:
+      unauthorized = true
+    case .snapshotSteps(let st): pendingReset[scope, default: ResetBuffer()].steps += st; return
+    case .snapshotThreads(let m): pendingReset[scope, default: ResetBuffer()].messages += m; return
     case .reset(let s, _):
       pendingReset[scope] = ResetBuffer(snapshotSeq: s)
       return
@@ -124,7 +166,10 @@ public final class CapcomdStore {
     case .snapshotApprovals(let a): pendingReset[scope, default: ResetBuffer()].approvals += a; return
     case .snapshotEnd(let s):
       let buf = pendingReset.removeValue(forKey: scope) ?? ResetBuffer()
-      rebuild(scope: scope, from: buf, snapshotSeq: s)
+      if let rid = Self.lifecycleRun(scope) { mergeLifecycle(runId: rid, key: scope, from: buf, snapshotSeq: s) }
+      else { rebuild(scope: scope, from: buf, snapshotSeq: s) }
+      floor[scope] = s; seen[scope] = [:]; cursor[scope] = max(cursor[scope] ?? 0, s)
+      if scope == "daemon" { syncLifecycleFeeds() }
     case .ignored: return
     }
     changed()
@@ -142,17 +187,29 @@ public final class CapcomdStore {
       run.projectId = r.projectId; run.label = r.label; run.state = r.state; run.goal = r.goal.map(UntrustedText.init)
       runs[r.id] = run
     }
-    let agentRuns = Set(b.agents.map(\.runId))
-    for rid in agentRuns { runs[rid, default: Run(id: rid, projectId: nil, label: nil, goal: nil, state: "running", startedAtMs: nil, lastEventMs: 0)].agents = [:]; runs[rid]?.steps = [] }
-    for (i, a) in b.agents.enumerated() {
-      let ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                     task: a.task.map(UntrustedText.init), key: nil, repo: nil, spawnedAtMs: i, activity: a.text)
-      runs[a.runId]?.agents[a.id] = ag
-      // One Activity row per agent: the daemon's `text` is the activity line, the (untrusted) task is the detail.
-      // TODO: snapshot.steps carries real step history (phase 1); not rendered yet.
-      upsertStep(runId: a.runId, Step(id: "agent:\(a.id)", seq: snapshotSeq, epochMs: 0, agentId: a.id, kind: .agent, phase: Self.phase(ag.kind),
-                                      text: a.text ?? ag.displayName, detail: ag.task, status: Self.stepStatus(ag.status)))
+    let agentRuns = Set(b.agents.map(\.runId)).union(b.steps.compactMap { $0.runId ?? ($0.scope.hasPrefix("run-") ? $0.scope : nil) })
+    for rid in agentRuns {
+      runs[rid]?.agents.keys.forEach { threads.removeValue(forKey: $0) }
+      runs[rid, default: Run(id: rid, projectId: nil, label: nil, goal: nil, state: "running", startedAtMs: nil, lastEventMs: 0)].agents = [:]
+      runs[rid]?.steps = []; runs[rid]?.lifecycle = []
     }
+    // Activity: replay snapshot.steps (real step history, oldest first) through the reducer.
+    let state = Dictionary(b.runs.map { ($0.id, $0.state) }, uniquingKeysWith: { $1 })
+    for e in b.steps.sorted(by: { $0.seq < $1.seq }) { apply(e) }
+    for (rid, st) in state { runs[rid]?.state = st }          // the snapshot's state wins over replayed transitions
+    // Agents: the snapshot is authoritative for status/text/task; replay supplies key/repo/spawn order.
+    for (i, a) in b.agents.enumerated() {
+      let old = runs[a.runId]?.agents[a.id]
+      var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
+                     task: a.task.map(UntrustedText.init), key: old?.key, repo: old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.text)
+      ag.taskAttachment = AttachmentRef(a.taskAttachment)
+      ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
+      runs[a.runId]?.agents[a.id] = ag
+      if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
+    }
+    // Replayed approval.requested may be stale; snapshot.approvals is the pending set.
+    for (id, a) in approvals where a.runId.map(agentRuns.contains) ?? false { approvals.removeValue(forKey: id) }
+    for m in b.messages { appendMessage(m) }
     for a in b.approvals where a.status == "pending" {
       let rid = a.requestedBy?.runId ?? (scope.hasPrefix("run-") ? scope : nil)
       approvals[a.approvalId] = PendingApproval(id: a.approvalId, runId: rid, agentId: a.requestedBy?.agentId, kind: a.kind,
@@ -177,6 +234,17 @@ public final class CapcomdStore {
     case "run.created":
       guard let runId else { return }
       runs[runId]?.goal = d["goal"]?.string.map(UntrustedText.init); runs[runId]?.startedAtMs = e.epochMs
+      if let l = d["label"]?.string { runs[runId]?.label = l }
+    case "run.started", "run.paused", "run.resumed", "run.completed", "run.failed", "run.cancelled", "run.deleted":
+      guard let runId else { return }
+      let t = RunTransition(type: e.type, cause: d["cause"]?.string, agentId: d["agentId"]?.string ?? e.agentId, seq: e.seq, epochMs: e.epochMs)
+      runs[runId]?.state = t.state; runs[runId]?.lifecycle.append(t)
+      if e.type == "run.deleted" {
+        runs[runId]?.agents.keys.forEach { threads.removeValue(forKey: $0) }
+        runs.removeValue(forKey: runId)
+        for (id, a) in approvals where a.runId == runId { approvals.removeValue(forKey: id) }
+        subs.removeValue(forKey: Self.lifecycleKey(runId))?.cancel()
+      }
     case "run.new":
       guard let runId else { return }
       runs[runId]?.label = d["label"]?.string
@@ -185,15 +253,18 @@ public final class CapcomdStore {
       let parent = d["parent"]?.string
       let profile = d["profile"]?.string ?? d["profile"]?["name"]?.string ?? d["agent"]?["profile"]?.string
       let depth = d["depth"]?.int ?? parent.flatMap { runs[runId]?.agents[$0].map { $0.depth + 1 } } ?? 0
-      let a = Agent(id: id, runId: runId, parent: parent, depth: depth, profile: profile, status: .pending,
+      var a = Agent(id: id, runId: runId, parent: parent, depth: depth, profile: profile, status: .pending,
                     task: d["task"]?.string.map(UntrustedText.init), key: d["key"]?.string,
                     repo: d["repo"]?.string ?? d["agent"]?["repo"]?.string, spawnedAtMs: e.epochMs)
+      a.taskAttachment = AttachmentRef(d["taskAttachment"])
       runs[runId]?.agents[id] = a
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
                                     phase: Self.phase(a.kind), text: a.displayName, detail: a.task, status: .queued))
     case "agent.started", "agent.resumed": setStatus(runId, agentId, .running, e)
     case "agent.status_changed", "agent.status": setStatus(runId, agentId, AgentStatus(wire: d["status"]?.string), e)
-    case "agent.done": setStatus(runId, agentId, .done, e)
+    case "agent.done":
+      setStatus(runId, agentId, .done, e)
+      if let runId, let agentId, let sum = d["result"]?["summary"]?.string { runs[runId]?.agents[agentId]?.resultSummary = UntrustedText(sum) }
     case "agent.failed", "drive.failed": setStatus(runId, agentId, .failed, e)
     case "agent.cancelled", "agent.reaped": setStatus(runId, agentId, .cancelled, e)
     case "agent.paused": setStatus(runId, agentId, .paused, e)
@@ -238,6 +309,48 @@ public final class CapcomdStore {
       }
     default: break   // unknown types are ignored (payloads and type set are open)
     }
+  }
+
+  func notify(_ e: Envelope) {
+    guard let onNotify else { return }
+    switch e.type {
+    case "approval.requested":
+      guard let id = e.data["approvalId"]?.string, let a = approvals[id] else { return }
+      onNotify(.approvalRequested(approvalId: id, runId: a.runId, question: a.question))
+    case "run.completed", "run.failed":
+      guard let rid = e.runId ?? e.data["runId"]?.string else { return }
+      onNotify(.runFinished(runId: rid, type: e.type, title: runs[rid]?.title ?? rid))
+    default: return
+    }
+  }
+
+  /// Lifecycle feed snapshot: run state, agent statuses and pending approvals for one run. Leaves Activity alone
+  /// (the run stream owns it when open).
+  func mergeLifecycle(runId: String, key: String, from b: ResetBuffer, snapshotSeq: Int) {
+    for r in b.runs {
+      var run = runs[r.id] ?? Run(id: r.id, projectId: r.projectId, label: r.label, goal: nil, state: r.state, startedAtMs: nil, lastEventMs: 0)
+      run.projectId = r.projectId ?? run.projectId; run.label = r.label ?? run.label; run.state = r.state
+      if let g = r.goal { run.goal = UntrustedText(g) }
+      runs[r.id] = run
+    }
+    for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {
+      if var old = runs[a.runId]?.agents[a.id] {
+        old.status = AgentStatus(wire: a.status); if let t = a.text { old.activity = t }
+        if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
+        runs[a.runId]?.agents[a.id] = old
+      } else {
+        var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
+                       task: a.task.map(UntrustedText.init), key: nil, repo: nil, spawnedAtMs: i, activity: a.text)
+        ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
+        runs[a.runId]?.agents[a.id] = ag
+      }
+    }
+    for a in b.approvals where a.status == "pending" && approvals[a.approvalId] == nil {
+      approvals[a.approvalId] = PendingApproval(id: a.approvalId, runId: a.requestedBy?.runId ?? runId, agentId: a.requestedBy?.agentId, kind: a.kind,
+                                                question: UntrustedText(a.question), branchLine: Self.branchLine(kind: a.kind, subject: a.subject ?? [:]))
+      approvalSeq[a.approvalId] = approvalSeq[a.approvalId] ?? snapshotSeq
+    }
+    lastSeq[key] = snapshotSeq
   }
 
   func setStatus(_ runId: String?, _ agentId: String?, _ s: AgentStatus, _ e: Envelope) {
@@ -287,7 +400,8 @@ public final class CapcomdStore {
         approvals[approvalId]?.idempotencyKeys[decision] = nil   // key is poisoned; next tap mints a fresh one
         result = .failed(m)
       }
-    } catch { result = .failed("Couldn't reach capcomd") }   // key kept for a safe retry
+    } catch is Unauthorized { unauthorized = true; result = .failed("capcomd rejected the token") }
+    catch { result = .failed("Couldn't reach capcomd") }   // key kept for a safe retry
     approvals[approvalId]?.decision = result
     changed()
     return result

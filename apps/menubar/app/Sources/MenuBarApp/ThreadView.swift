@@ -25,11 +25,18 @@ struct ThreadView: View {
         StatusMark(status: node?.statusSymbol)
       }
       if let task = agent?.task {
-        Text(verbatim: task.plain).font(Theme.body).foregroundStyle(.primary.opacity(0.88)).textSelection(.enabled)
+        RedactableText(text: task).font(Theme.body).foregroundStyle(.primary.opacity(0.88)).textSelection(.enabled)
+      }
+      if let att = agent?.taskAttachment { Text(verbatim: att.label).font(Theme.chip).foregroundStyle(.tertiary) }
+      if let sum = agent?.resultSummary {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Result").font(Theme.chip).foregroundStyle(.tertiary)
+          RedactableText(text: sum).font(Theme.body).textSelection(.enabled)   // untrusted: plain text only
+        }
       }
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
-          ForEach(model.thread(agentId)) { ThreadItemView(runId: runId, item: $0) }
+          ForEach(model.thread(agentId)) { ThreadItemView(runId: runId, agentId: agentId, item: $0) }
         }
       }
       .mask(VStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16) })
@@ -47,6 +54,7 @@ struct ThreadView: View {
 struct ThreadItemView: View {
   @Environment(AppModel.self) private var model
   let runId: String
+  let agentId: String
   let item: ThreadItem
   var body: some View {
     switch item.kind {
@@ -56,12 +64,12 @@ struct ThreadItemView: View {
       HStack(alignment: .firstTextBaseline, spacing: 6) {
         Image(systemName: "wrench").foregroundStyle(.secondary).font(.system(size: 11))
         Text(verbatim: kind).font(Theme.monoTime).foregroundStyle(.tertiary)
-        Text(verbatim: detail.plain).font(Theme.body)
+        RedactableText(text: detail).font(Theme.body)
       }
     case .checkpoint(let reason, let files):
       HStack(alignment: .firstTextBaseline, spacing: 6) {
         Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary).font(.system(size: 11))
-        Text(verbatim: reason.plain).font(Theme.body)
+        RedactableText(text: reason).font(Theme.body)
         if let f = files { Text(verbatim: "\(f) files").font(Theme.monoTime).foregroundStyle(.tertiary) }
       }
     case .steer(let bytes):
@@ -69,6 +77,18 @@ struct ThreadItemView: View {
         Text(verbatim: bytes.map { "Message sent (\($0) bytes)" } ?? "Message sent").font(Theme.body)
           .padding(.horizontal, 10).padding(.vertical, 6)
           .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.07)))
+      }
+    case .message(let from, let to, let text, let attachment):
+      let outgoing = from == agentId
+      HStack { if outgoing { Spacer() }
+        VStack(alignment: outgoing ? .trailing : .leading, spacing: 4) {
+          Text(verbatim: outgoing ? "to \(to)" : "from \(from)").font(Theme.monoTime).foregroundStyle(.tertiary)
+          if let t = text { RedactableText(text: t).font(Theme.body).textSelection(.enabled) }
+          if let a = attachment { Text(verbatim: a.label).font(Theme.chip).foregroundStyle(.tertiary) }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(outgoing ? 0.07 : 0.04)))
+        if !outgoing { Spacer() }
       }
     case .handoff(let childId, let name, let summary, let artifacts):
       Button { model.path.append(.thread(runId: runId, agentId: childId)) } label: {
@@ -79,7 +99,7 @@ struct ThreadItemView: View {
             Spacer()
             Image(systemName: "chevron.right").foregroundStyle(.tertiary)
           }
-          if let s = summary { Text(verbatim: s.plain).font(Theme.body).foregroundStyle(.primary.opacity(0.88)).multilineTextAlignment(.leading) }
+          if let s = summary { RedactableText(text: s).font(Theme.body).foregroundStyle(.primary.opacity(0.88)).multilineTextAlignment(.leading) }
           if !artifacts.isEmpty {
             HStack(spacing: 4) { ForEach(artifacts, id: \.self) { Chip(text: $0.plain) } }
           }

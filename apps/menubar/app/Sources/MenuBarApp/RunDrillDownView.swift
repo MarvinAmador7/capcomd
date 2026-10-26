@@ -45,7 +45,7 @@ struct RunDrillDownView: View {
       }
     }
     if let current = steps.last(where: { $0.status == .running }) ?? steps.last {
-      Text(verbatim: current.detail?.firstLine ?? current.text).font(Theme.panelTitle).lineLimit(2)
+      RedactableText(text: UntrustedText(current.detail?.firstLine ?? current.text)).font(Theme.panelTitle).lineLimit(2)
     }
   }
 
@@ -138,7 +138,7 @@ struct ActivityRow: View {
     HStack(spacing: 6) {
       Image(systemName: step.kind.symbol).font(.system(size: 11))
         .foregroundStyle(Theme.color(step.status == .done ? .grey : step.status.tint)).frame(width: 14)
-      Text(verbatim: step.detail.map { "\(step.text) · \($0.firstLine)" } ?? step.text)
+      RedactableText(text: UntrustedText(step.detail.map { "\(step.text) · \($0.firstLine)" } ?? step.text))
         .font(Theme.activityFont).lineLimit(1)
         .foregroundStyle(step.status == .running ? AnyShapeStyle(.primary) : step.status == .queued ? AnyShapeStyle(.tertiary)
                          : step.status == .failed ? AnyShapeStyle(Theme.red) : AnyShapeStyle(.secondary))

@@ -15,23 +15,27 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   final class Handle: SubscriptionHandle, @unchecked Sendable { var task: Task<Void, Never>?; func cancel() { task?.cancel() } }
 
   public func subscribe(scope: String, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
+    subscribe(scope: scope, feed: nil, after: after, onFrame: onFrame)
+  }
+
+  /// Resume cursor = last SSE `id:` seen, never an envelope seq: in a shared-seq group only the last frame has an id, so a
+  /// cut mid-group resumes before the group and the store drops the re-sent members by envelope id.
+  public func subscribe(scope: String, feed: String?, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
+    let path = "/v1/streams/\(scope)/events" + (feed.map { "?feed=\($0)" } ?? "")
     let h = Handle(); let t = transport, maxR = maxReconnects, bo = backoff, idle = idleTimeout
     h.task = Task {
       var last = after, attempts = 0
       while !Task.isCancelled {
         do {
-          for try await item in t.sseItems("/v1/streams/\(scope)/events", lastEventID: last > 0 ? String(last) : nil, idleTimeout: idle) {
+          for try await item in t.sseItems(path, lastEventID: last > 0 ? String(last) : nil, idleTimeout: idle) {
             guard case .frame(let f) = item else { continue } // heartbeat: activity only
             let frame = StreamFrame.parse(event: f.event, data: f.data)
-            switch frame {
-            case .event(let e): if e.seq > last { last = e.seq; attempts = 0 }
-            case .snapshotEnd(let s): last = s; attempts = 0
-            default: break
-            }
+            if case .snapshotEnd(let s) = frame, f.id == nil { last = s; attempts = 0 }
             await onFrame(frame)
+            if let id = f.id, let n = Int(id) { last = n; attempts = 0; await onFrame(.cursor(n)) }
           }
           return // clean close: stream finished
-        } catch is HTTPStatusError { return }
+        } catch let e as HTTPStatusError { if e.status == 401 { await onFrame(.unauthorized) }; return }
         catch is CancellationError { return }
         catch {
           if Task.isCancelled { return }
@@ -66,7 +70,7 @@ public struct LiveDecider: ApprovalDeciding {
           decidedBy: d.decidedBy.map { DecisionRecord.By(clientId: $0.clientId, principal: $0.principal) }, decidedAt: d.decidedAt.map(HarnessTime.string)) })
       default: return .idempotencyConflict(e.message)
       }
-    case .unauthorized: throw HTTPStatusError(status: 401)
+    case .unauthorized: throw Unauthorized()
     case .notFound: throw HTTPStatusError(status: 404)
     case .unprocessableContent: throw HTTPStatusError(status: 422)
     case .undocumented(let code, _): throw HTTPStatusError(status: code)

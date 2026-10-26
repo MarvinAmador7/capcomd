@@ -155,7 +155,7 @@ final class StoreTests: XCTestCase {
       ("stream.reset", #"{"snapshotSeq":5,"reason":"compacted"}"#),
       ("snapshot.agents", #"{"agents":[{"id":"agt-1","runId":"run-z","parent":null,"depth":0,"profile":"lead","status":"pending","text":"Waiting to start","task":"**Do** [it](http://evil)","taskAttachment":null,"result":null,"updatedAt":null}]}"#),
       ("snapshot.approvals", #"{"approvals":[]}"#),
-      ("snapshot.steps", #"{"steps":[]}"#),
+      ("snapshot.steps", #"{"steps":[\#(env(2, "agent.spawned", #"{"agentId":"agt-1","parent":null,"depth":0,"profile":"lead","task":"**Do** [it](http://evil)","taskAttachment":null}"#))]}"#),
       ("snapshot.threads", #"{"messages":[]}"#),
       ("snapshot.end", #"{"snapshotSeq":5}"#),
       ("agent.status_changed", env(6, "agent.status_changed", #"{"agentId":"agt-1","status":"running"}"#)),
@@ -164,8 +164,53 @@ final class StoreTests: XCTestCase {
     let node = try XCTUnwrap(s.agentTree(runId: "run-z").first)
     XCTAssertEqual(node.name, "lead"); XCTAssertEqual(node.status, .running); XCTAssertEqual(node.activity, "Waiting to start")
     let step = try XCTUnwrap(s.steps(forRun: "run-z").first)
-    XCTAssertEqual(step.text, "Waiting to start"); XCTAssertEqual(step.status, .running)
+    XCTAssertEqual(step.status, .running)   // step comes from snapshot.steps replay, status from the live event
     XCTAssertEqual(step.detail?.plain, "**Do** [it](http://evil)")   // untrusted task kept literal
     XCTAssertEqual(s.lastSeq["run-z"], 6)
+  }
+
+  // MARK: lifecycle (PR #40)
+  static func envelope(_ id: String, seq: Int, type: String, run: String = "run-l", agent: String? = nil, data: String) -> String {
+    #"{"v":1,"id":"\#(id)","scope":"\#(run)","seq":\#(seq),"entity":"\#(agent ?? run)","entitySeq":1,"type":"\#(type)","typeVersion":1,"durability":"durable","ts":"2026-10-25T06:00:00.000Z","epochMs":\#(seq),"projectId":"prj-l","runId":"\#(run)","agentId":\#(agent.map { "\"\($0)\"" } ?? "null"),"text":"x","data":\#(data)}"#
+  }
+
+  func testRunLifecycleDrivesStatusAndGroupDedupesById() async throws {
+    let s = CapcomdStore(); var notices: [Notice] = []; s.onNotify = { notices.append($0) }
+    let frames: [(String, String)] = [
+      ("run.created", Self.envelope("evt_c", seq: 1, type: "run.created", agent: nil, data: #"{"cause":"created","label":"demo"}"#)),
+      ("agent.started", Self.envelope("evt_a", seq: 2, type: "agent.started", agent: "agt-1", data: #"{"agentId":"agt-1","cause":"started"}"#)),
+      // group cut after its first member, then re-sent whole: agent.started must be dropped by id, run.started applied once
+      ("agent.started", Self.envelope("evt_a", seq: 2, type: "agent.started", agent: "agt-1", data: #"{"agentId":"agt-1","cause":"started"}"#)),
+      ("run.started", Self.envelope("evt_run-l_2_run.started", seq: 2, type: "run.started", data: #"{"cause":"agent.started","agentId":"agt-1"}"#)),
+      ("run.completed", Self.envelope("evt_d", seq: 3, type: "run.completed", data: #"{"cause":"agent.done","agentId":"agt-1"}"#)),
+    ]
+    for (e, d) in frames { s.receive(StreamFrame.parse(event: e, data: d), scope: "lifecycle:run-l") }   // the lifecycle feed notifies
+    let run = try XCTUnwrap(s.runs["run-l"])
+    XCTAssertEqual(run.lifecycle.map(\.type), ["run.started", "run.completed"])
+    XCTAssertEqual(run.lifecycle.first?.agentId, "agt-1")
+    XCTAssertEqual(run.state, "completed"); XCTAssertFalse(run.isRunning)
+    XCTAssertEqual(s.duplicatesDropped, 1)
+    XCTAssertEqual(s.lastSeq["lifecycle:run-l"], 3)
+    XCTAssertEqual(notices.count, 1)
+  }
+
+  func testRedactedSegments() async {
+    let u = UntrustedText("token [REDACTED] and **[REDACTED]**")
+    XCTAssertEqual(u.segments, [.text("token "), .redacted, .text(" and **"), .redacted, .text("**")])
+    XCTAssertEqual(UntrustedText("plain").segments, [.text("plain")])
+  }
+
+  func testMessageAndResultInThread() async throws {
+    let s = CapcomdStore()
+    let frames: [(String, String)] = [
+      ("agent.spawned", Self.envelope("e1", seq: 1, type: "agent.spawned", agent: "agt-1", data: #"{"agentId":"agt-1","parent":null,"depth":0,"profile":"lead","task":"t","taskAttachment":{"id":"att-1","bytes":4096,"mediaType":"text/plain"}}"#)),
+      ("message.sent", Self.envelope("e2", seq: 2, type: "message.sent", agent: "agt-1", data: #"{"from":"agt-1","to":"agt-2","text":"*hi* <b>"}"#)),
+      ("agent.done", Self.envelope("e3", seq: 3, type: "agent.done", agent: "agt-1", data: #"{"agentId":"agt-1","result":{"summary":"[done](http://x) [REDACTED]"}}"#)),
+    ]
+    for (e, d) in frames { s.receive(StreamFrame.parse(event: e, data: d), scope: "run-l") }
+    let a = try XCTUnwrap(s.runs["run-l"]?.agents["agt-1"])
+    XCTAssertEqual(a.taskAttachment?.label, "Full text stored · 4 KB")
+    XCTAssertEqual(a.resultSummary?.plain, "[done](http://x) [REDACTED]")
+    XCTAssertTrue(s.thread(agentId: "agt-1").contains { if case .message(_, "agt-2", let t, _) = $0.kind { return t?.plain == "*hi* <b>" }; return false })
   }
 }

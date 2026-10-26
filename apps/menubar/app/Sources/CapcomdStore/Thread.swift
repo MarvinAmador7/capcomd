@@ -1,3 +1,5 @@
+import Foundation
+
 /// One item in an agent's thread (SPEC §4.5), built only from what harness.v1 carries today.
 /// No transcript text is in the contract (gap G3); every agent-written string is `UntrustedText`.
 public struct ThreadItem: Sendable, Hashable, Identifiable {
@@ -8,8 +10,10 @@ public struct ThreadItem: Sendable, Hashable, Identifiable {
     case notice(kind: String, detail: UntrustedText)
     /// `agent.checkpoint`: reason + file count.
     case checkpoint(reason: UntrustedText, files: Int?)
-    /// Steer sent to this agent. `message.sent` has no body in the contract, only `bytes`.
+    /// Steer sent to this agent when `message.sent` carries no text (older daemons), only `bytes`.
     case steer(bytes: Int?)
+    /// `message.sent` / `snapshot.threads` message with agent-written text (untrusted) and/or a stored attachment.
+    case message(from: String, to: String, text: UntrustedText?, attachment: AttachmentRef?)
     /// Child handed back: `agent.done.result` (ChildResult {summary, artifacts[{name,ref}]}).
     case handoff(childId: String, childName: String, summary: UntrustedText?, artifacts: [UntrustedText])
   }
@@ -41,7 +45,14 @@ extension CapcomdStore {
         kind: .checkpoint(reason: UntrustedText(d["reason"]?.string ?? ""), files: d["files"]?.int)))
     case "message.sent":
       let to = d["to"]?.string ?? d["to"]?["agentId"]?.string ?? agentId
-      appendThread(runId, to, .init(id: id, seq: e.seq, epochMs: e.epochMs, kind: .steer(bytes: d["bytes"]?.int)))
+      let text = d["text"]?.string.map(UntrustedText.init), att = AttachmentRef(d["attachment"])
+      if text == nil && att == nil {
+        appendThread(runId, to, .init(id: id, seq: e.seq, epochMs: e.epochMs, kind: .steer(bytes: d["bytes"]?.int)))
+      } else {
+        let from = e.agentId ?? "operator", mid = d["seq"]?.int.map { "msg:\(from):\(to):\($0)" } ?? id
+        let item = ThreadItem(id: mid, seq: e.seq, epochMs: e.epochMs, kind: .message(from: from, to: to, text: text, attachment: att))
+        appendThread(runId, to, item); if from != to { appendThread(runId, from, item) }
+      }
     case "agent.done":
       appendThread(runId, agentId, .init(id: id, seq: e.seq, epochMs: e.epochMs, kind: .status("Finished")))
       guard let a = runs[runId]?.agents[agentId], let parent = a.parent else { return }
@@ -53,5 +64,22 @@ extension CapcomdStore {
     }
   }
 
+  /// `snapshot.threads` entry: same id scheme as live `message.sent`, so a replayed one isn't shown twice.
+  func appendMessage(_ m: SnapshotMessage) {
+    guard let runId = runs.values.first(where: { $0.agents[m.to] != nil || $0.agents[m.from] != nil })?.id else { return }
+    let ms = m.at.flatMap(Self.parseISO).map { Int($0.timeIntervalSince1970 * 1000) } ?? 0
+    let item = ThreadItem(id: "msg:\(m.from):\(m.to):\(m.seq)", seq: m.seq, epochMs: ms,
+                          kind: .message(from: m.from, to: m.to, text: m.text.map(UntrustedText.init), attachment: AttachmentRef(m.attachment)))
+    appendThread(runId, m.to, item); if m.from != m.to { appendThread(runId, m.from, item) }
+  }
+
   public func thread(agentId: String) -> [ThreadItem] { threads[agentId] ?? [] }
+}
+
+extension CapcomdStore {
+  nonisolated static func parseISO(_ s: String) -> Date? {
+    let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let d = f.date(from: s) { return d }
+    f.formatOptions = [.withInternetDateTime]; return f.date(from: s)
+  }
 }

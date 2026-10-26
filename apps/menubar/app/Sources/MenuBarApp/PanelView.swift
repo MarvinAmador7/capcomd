@@ -9,6 +9,10 @@ struct PanelView: View {
 
   var body: some View {
     @Bindable var model = model
+    if model.needsToken {
+      TokenPrompt(rejected: model.store.unauthorized)
+        .frame(width: Theme.panelWidth).background(.ultraThinMaterial)
+    } else {
     NavigationStack(path: $model.path) {
       ScrollView {
         VStack(alignment: .leading, spacing: Theme.cardGap) {
@@ -33,6 +37,7 @@ struct PanelView: View {
     .frame(width: Theme.panelWidth, height: 520)
     .background(.ultraThinMaterial)   // HUD-style vibrancy; MenuBarExtra(.window) supplies the 16 pt rounded window
     .animation(.capcomd(reduceMotion), value: model.path)
+    }
   }
 
   private var footer: some View {
