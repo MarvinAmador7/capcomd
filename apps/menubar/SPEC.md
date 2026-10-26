@@ -41,6 +41,7 @@ Resume after reconnect with `--since-seq <last seq>`.
 | Project state | `status.state`, `status.scope.state` | running / done / failed |
 | Elapsed | `status.startedAtMs` | the drill-down `6:15` timer (mono) |
 | Agent node | tree node `agentId, parent, profile, depth, status, children[], createdAt, startedAt, endedAt, taskId, spanId, stuck?` | `status ∈ pending\|running\|done\|failed\|cancelled` |
+| Live activity | `Agent.activity {text, kind, at}` in snapshot.agents; live `agent.activity_changed` (ephemeral) on the lifecycle feed with `?activity=1` | the line under a running agent's row |
 | Approval | `status.pendingApprovals[] {taskId, kind:"merge", targetBranch, since}` | mapped to the tree node whose `taskId` matches, then bubbled to ancestors |
 | Activity / Log | events (`AGENT_SPAWNED, AGENT_STARTED, AGENT_DONE, AGENT_FAILED, KV_PUT, …`) | grouped into phases client-side |
 | Trace | `trace` spans: `agent.run` (`agent.profile, agent.status, agent.cost_usd, agent.turns`), `agent.claude_code`/`agent.codex` (`stop_reason, error_kind`) | Trace view only |
@@ -68,8 +69,8 @@ Resume after reconnect with `--since-seq <last seq>`.
 
 ## 4.2 Approval card — `v5-a-final.png`, `tree-card-v3.png`
 
-- Lives inline under the waiting node (`.apx`, indented to the name column).
-- Order: **question first** ("Merge backfill into main?", 13 pt medium), then the branch/command line in mono (`fix/backfill → main`), then **Deny** (grey) / **Approve** (blue) full-width pair.
+- Lives inline under the waiting node (`.apx`, 2 pt right of its name column, 2 pt above / 8 pt below). An approval whose agent isn't in the tree sits under the run's tree.
+- Order: **question first** ("Merge backfill into main?", 12 pt medium, white), then the branch/command line in 12 pt mono at 60 % (`fix/backfill → main`), then **Deny** (white 10 % fill) / **Approve** (`#0A84FF` fill) full-width pair: 27 pt high, radius 7, 12.5 pt medium, 8 pt apart. Fixed fills, so Approve stays blue when the app isn't active. Once decided the buttons give way to "Approved by …".
 - No timer, no footer, no "since". Waiting node shows amber hand.raised in its status column.
 
 ## 4.3 Run drill-down — `view-activity.png`, `view-trace.png`, `activity-collapse.png`, `drill-collapsed.png`, `long-follow-iconsA.png`, `long-scrolled-iconsA.png`, `drill-a2-log-iconsA.png`, `drill-a2-files-iconsA.png`
@@ -83,7 +84,8 @@ Resume after reconnect with `--since-seq <last seq>`.
 
 ## 4.4 Agent tree — `tree-card-v3.png`, `tree-detail-v2.png`, `tree-alt.png`
 
-- Outline tree with hairline guides, 26 pt rows: chevron · profile icon · name · repo chip · status icon.
+- Outline tree with hairline guides, 26 pt rows: chevron · profile icon · name · repo chip · status icon. Geometry: 16 pt per level, 12 pt chevron column, 16 pt icon with 2/6 margins.
+- **Live activity:** a running agent shows one line under its row at the name column (`Agent.activity.text`, 11.5 pt, `rgba(235,235,245,.5)`, one line, tail-truncated), e.g. "Reading 4 files". A waiting agent shows its approval there instead; other states show nothing. The daemon's status sentence (`Agent.text`) is never shown.
 - Names = profile (Planner, Lead, Worker, Critic); duplicate siblings add a mono tertiary ID suffix (`d3ce`).
 - Approvals bubble up: a collapsed ancestor shows the amber hand when any descendant waits.
 - Selecting a node opens the agent thread (§4.5). Lanes view (`tree-alt.png`) is not used in cards; timing lives in Trace.

@@ -45,6 +45,35 @@ enum Theme {
     static let radius: CGFloat = 5, paddingHorizontal: CGFloat = 6, paddingVertical: CGFloat = 2
     static let iconGap: CGFloat = 4, iconSize: CGFloat = 9.5, iconOpacity: Double = 0.6   // 12×10 folder outline
   }
+  /// Agent tree geometry (tree-card-v3.html `.gd`, `.cv`, `.ic`): a 16 pt guide per level, a 12 pt chevron column,
+  /// then the 16 pt icon with 2/6 margins. Anything indented "to the name column" uses `nameInset`.
+  enum Tree {
+    static let indent: CGFloat = 16, chevron: CGFloat = 12, icon: CGFloat = 16
+    static let iconLeading: CGFloat = 2, iconTrailing: CGFloat = 6
+    static func nameInset(_ depth: Int) -> CGFloat { CGFloat(depth) * indent + chevron + iconLeading + icon + iconTrailing }
+    /// Live activity under a running agent's row (not in the mockup; sized like the row's repo chip `.rc`).
+    static let activityFont = Font.system(size: 11.5)
+    static let activityText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.5)
+    static let activityHeight: CGFloat = 16, activityTop: CGFloat = -4, activityBottom: CGFloat = 4
+  }
+  /// Approval inline under the waiting agent (tree-card-v3.html `.apx`, `.q`, `.cmd`, `.btn`).
+  enum Approval {
+    static let leadingExtra: CGFloat = 2                     // .apx sits 2 pt right of the name column
+    static let top: CGFloat = 2, bottom: CGFloat = 8
+    static let questionFont = Font.system(size: 12, weight: .medium)
+    static let questionText = Color.white
+    static let questionBottom: CGFloat = 3
+    static let branchFont = Font.system(size: 12, design: .monospaced)
+    static let branchText = Color.white.opacity(0.6)
+    static let branchBottom: CGFloat = 8
+    static let buttonHeight: CGFloat = 27, buttonRadius: CGFloat = 7, buttonGap: CGFloat = 8
+    static let buttonFont = Font.system(size: 12.5, weight: .medium)
+    static let denyFill = Color.white.opacity(0.10)
+    static let buttonText = Color.white
+    static let disabledOpacity: Double = 0.5
+    static let statusFont = Font.system(size: 11.5)
+    static let appearRise: CGFloat = 4                       // SPEC §7: fade + 4 pt rise
+  }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {
     static let pressScale: CGFloat = 0.97
@@ -115,13 +144,20 @@ struct StatusMark: View {
 /// Press feedback for mouse presses: 0.97 scale, or a dim under Reduce Motion. Keyboard activation never sets
 /// `isPressed`, so keyboard-initiated actions stay unanimated.
 struct PressableStyle: ButtonStyle {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .contentShape(Rectangle())
-      .scaleEffect(configuration.isPressed && !reduceMotion ? Theme.Motion.pressScale : 1)
-      .opacity(configuration.isPressed && reduceMotion ? Theme.Motion.pressedOpacity : 1)
-      .animation(Theme.Motion.fast, value: configuration.isPressed)
+    configuration.label.contentShape(Rectangle()).modifier(PressFeedback(isPressed: configuration.isPressed))
+  }
+}
+
+/// The press scale (or Reduce Motion dim) shared by every custom button style.
+struct PressFeedback: ViewModifier {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let isPressed: Bool
+  func body(content: Content) -> some View {
+    content
+      .scaleEffect(isPressed && !reduceMotion ? Theme.Motion.pressScale : 1)
+      .opacity(isPressed && reduceMotion ? Theme.Motion.pressedOpacity : 1)
+      .animation(Theme.Motion.fast, value: isPressed)
   }
 }
 

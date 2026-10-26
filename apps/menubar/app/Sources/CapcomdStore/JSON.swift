@@ -43,6 +43,8 @@ public struct Envelope: Codable, Hashable, Sendable {
   public var projectId: String?
   public var runId: String?
   public var agentId: String?
+  /// `durable` or `ephemeral`; ephemeral frames (agent.activity_changed) are live-only and never a resume cursor.
+  public var durability: String?
   public var data: [String: JSONValue]
   public init(id: String, scope: String, seq: Int, entity: String, type: String, epochMs: Int, projectId: String?, runId: String?, agentId: String?, data: [String: JSONValue]) {
     self.v = 1; self.id = id; self.scope = scope; self.seq = seq; self.entity = entity; self.type = type; self.ts = nil

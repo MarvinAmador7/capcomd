@@ -51,8 +51,10 @@ public enum StreamFrame: Sendable, Hashable {
 public struct SnapshotRun: Codable, Sendable, Hashable { public var id: String; public var projectId: String?; public var label: String?; public var state: String; public var goal: String? }
 public struct SnapshotAgent: Codable, Sendable, Hashable {
   public var id: String; public var runId: String; public var parent: String?; public var depth: Int; public var profile: String?; public var status: String
-  /// Daemon-written status line (trusted). Optional so older daemons still decode.
+  /// Daemon-written status line (trusted). Optional so older daemons still decode. Not shown: `activity` is the live line.
   public var text: String?
+  /// What the agent is doing now, or last did (`Agent.activity`, daemon-written, trusted); nil until it reports a step.
+  public var activity: SnapshotActivity?
   /// Agent-written (x-untrusted): wrap in UntrustedText, render as plain text only.
   public var task: String?
   /// Full task stored by the daemon (metadata only).
@@ -66,6 +68,8 @@ public struct SnapshotApproval: Codable, Sendable, Hashable {
   public var requestedBy: RequestedBy?; public var subject: [String: JSONValue]?
   public struct RequestedBy: Codable, Sendable, Hashable { public var agentId: String?; public var runId: String }
 }
+/// `Agent.activity`: `text` is a daemon-written plain line ("Reading 4 files"); `kind` is an icon hint.
+public struct SnapshotActivity: Codable, Sendable, Hashable { public var text: String; public var kind: String?; public var at: String? }
 struct SnapshotRunFrame: Codable { var run: SnapshotRun }
 struct SnapshotAgentsFrame: Codable { var agents: [SnapshotAgent] }
 struct SnapshotApprovalsFrame: Codable { var approvals: [SnapshotApproval] }

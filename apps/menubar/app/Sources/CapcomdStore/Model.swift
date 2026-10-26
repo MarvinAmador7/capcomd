@@ -37,7 +37,7 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// Repo, if capcomd ever sends one (not in contract 7b4cb74; read from `repo` or `agent.repo` when present).
   public var repo: String?
   public var spawnedAtMs: Int
-  /// Plain-language status line from agents.tree / snapshot.agents `text` (daemon-written, trusted). Shown as the activity line.
+  /// What it is doing now (`Agent.activity.text`, daemon-written, trusted): shown under a running agent's row.
   public var activity: String? = nil
   /// `taskAttachment`: the full task is stored by the daemon; only its metadata is shown.
   public var taskAttachment: AttachmentRef? = nil
@@ -162,6 +162,8 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   public var descendantWaiting: Bool  // bubbled up for collapsed ancestors
   public var children: [AgentNode]
   public var childrenOrNil: [AgentNode]? { children.isEmpty ? nil : children }   // for OutlineGroup
+  /// This node's id and every descendant's, depth first.
+  public var subtreeIds: [String] { [id] + children.flatMap(\.subtreeIds) }
   public var iconTint: Tint { waiting ? .amber : status == .running ? .blue : status == .failed ? .red : .grey }
   public var statusSymbol: StepStatus? {
     if waiting { return .waiting }

@@ -125,7 +125,7 @@ public final class CapcomdStore {
     guard subscriber != nil, subs["daemon"] != nil else { return }
     let want = runs.values.filter { !Run.terminalStates.contains($0.state) }
       .sorted { ($0.lastEventMs, $0.id) > ($1.lastEventMs, $1.id) }.prefix(Self.maxLifecycleFeeds).map(\.id)
-    for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }
+    for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }   // live activity rides along (Live adds ?activity=1)
   }
   public var activeScopes: [String] { subs.keys.sorted() }
 
@@ -141,6 +141,8 @@ public final class CapcomdStore {
   // MARK: frames
   public func receive(_ frame: StreamFrame, scope: String) {
     switch frame {
+    case .event(let e) where e.durability == "ephemeral":
+      apply(e)   // live-only: its seq is the last durable one, so it never touches dedupe or the cursor
     case .event(let e):
       if pendingReset[scope] != nil, let s = pendingReset[scope]?.snapshotSeq, e.seq <= s { return }
       if e.seq <= (floor[scope] ?? 0) { return }                 // already in the snapshot
@@ -201,7 +203,7 @@ public final class CapcomdStore {
     for (i, a) in b.agents.enumerated() {
       let old = runs[a.runId]?.agents[a.id]
       var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                     task: a.task.map(UntrustedText.init), key: old?.key, repo: old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.text)
+                     task: a.task.map(UntrustedText.init), key: old?.key, repo: old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.activity?.text)
       ag.taskAttachment = AttachmentRef(a.taskAttachment)
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
       runs[a.runId]?.agents[a.id] = ag
@@ -268,6 +270,10 @@ public final class CapcomdStore {
     case "agent.failed", "drive.failed": setStatus(runId, agentId, .failed, e)
     case "agent.cancelled", "agent.reaped": setStatus(runId, agentId, .cancelled, e)
     case "agent.paused": setStatus(runId, agentId, .paused, e)
+    case "agent.activity_changed":
+      guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
+      runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string
+      if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
     case "verify.started", "verify.passed", "verify.failed":
       guard let runId else { return }
       let st: StepStatus = e.type == "verify.started" ? .running : e.type == "verify.passed" ? .done : .failed
@@ -335,12 +341,12 @@ public final class CapcomdStore {
     }
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {
       if var old = runs[a.runId]?.agents[a.id] {
-        old.status = AgentStatus(wire: a.status); if let t = a.text { old.activity = t }
+        old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                       task: a.task.map(UntrustedText.init), key: nil, repo: nil, spawnedAtMs: i, activity: a.text)
+                       task: a.task.map(UntrustedText.init), key: nil, repo: nil, spawnedAtMs: i, activity: a.activity?.text)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
         runs[a.runId]?.agents[a.id] = ag
       }

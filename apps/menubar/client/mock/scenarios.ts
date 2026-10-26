@@ -15,7 +15,7 @@ const TOKEN = process.env.TOKEN ?? "test-token";
 const SCENARIO = process.env.SCENARIO ?? "panel";
 const NOW = Date.now(), min = 60_000, iso = (ms: number) => new Date(ms).toISOString();
 
-type AgentSpec = { id: string; parent?: string; profile: string; status: string; repo?: string; key?: string; text?: string; ago: number };
+type AgentSpec = { id: string; parent?: string; profile: string; status: string; repo?: string; key?: string; activity?: string; ago: number };
 type ApprovalSpec = { id: string; agentId: string; question: string; ref: string; target: string };
 type RunSpec = { id: string; projectId: string; goal: string; state: string; startedAgo: number; lastAgo: number; agents: AgentSpec[]; approvals?: ApprovalSpec[] };
 
@@ -26,15 +26,15 @@ const scenes: Record<string, RunSpec[]> = {
       agents: [
         { id: "agt-pl01", profile: "planner", status: "running", ago: 6.2 * min },
         { id: "agt-wk01", parent: "agt-pl01", profile: "worker", status: "done", repo: "matchkey", key: "task-7a10", ago: 6 * min },
-        { id: "agt-ld01", parent: "agt-pl01", profile: "lead", status: "running", repo: "ids/v1", key: "task-1b2c", ago: 5.5 * min },
-        { id: "agt-wk02", parent: "agt-ld01", profile: "worker", status: "running", repo: "ids/v1", key: "task-d3ce", ago: 5 * min },
+        { id: "agt-ld01", parent: "agt-pl01", profile: "lead", status: "running", repo: "ids/v1", key: "task-1b2c", activity: "Reading 4 files", ago: 5.5 * min },
+        { id: "agt-wk02", parent: "agt-ld01", profile: "worker", status: "running", repo: "ids/v1", key: "task-d3ce", activity: "Writing parquet shards to R2", ago: 5 * min },
         { id: "agt-wk04", parent: "agt-wk02", profile: "worker", status: "done", repo: "ids/v1", key: "task-90ab", ago: 4 * min },
         { id: "agt-wk03", parent: "agt-ld01", profile: "worker", status: "running", repo: "ids/v1", key: "task-4423", ago: 4.5 * min },
         { id: "agt-cr01", parent: "agt-pl01", profile: "critic", status: "pending", repo: "addriva", key: "task-c0de", ago: 4.4 * min },
       ],
       approvals: [{ id: "apr-mk1", agentId: "agt-wk03", question: "Merge backfill into main?", ref: "fix/backfill", target: "main" }] },
     { id: "run-pr01", projectId: "prj-billing", goal: "Fix proration rounding in billing", state: "running", startedAgo: 2 * min, lastAgo: 0.5 * min,
-      agents: [{ id: "agt-pl02", profile: "planner", status: "running", repo: "relay", ago: 2 * min }] },
+      agents: [{ id: "agt-pl02", profile: "planner", status: "running", repo: "relay", activity: "Reading the proration module", ago: 2 * min }] },
     { id: "run-av01", projectId: "prj-addriva", goal: "Launch Addriva Verify docs", state: "completed", startedAgo: 30 * min, lastAgo: 26 * min,
       agents: [{ id: "agt-pl03", profile: "planner", status: "done", repo: "addriva", ago: 30 * min }] },
   ],
@@ -61,7 +61,8 @@ const HEAD = seq;
 
 const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, repo: null, createdAt: iso(NOW - r.startedAgo) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
-  text: a.text ?? null, task: null, taskAttachment: null, result: null, updatedAt: iso(NOW - a.ago) });
+  text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: "read", at: iso(NOW - a.ago) } : null,
+  task: null, taskAttachment: null, result: null, updatedAt: iso(NOW - a.ago) });
 const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind: "merge", status: decided.has(p.id) ? decided.get(p.id).status : "pending",
   question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target } });
 const decided = new Map<string, any>();
