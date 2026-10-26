@@ -21,7 +21,10 @@ Activity is not a state change, so it is not in this feed by default: a stream c
 Refetch when the run stream shows agent.checkpointed, agent.done, agent.failed, agent.paused or merge.succeeded with a seq above `asOf`. Work the daemon cannot read (no repository, a deleted branch) is a `sources[].error`, not an HTTP error. |
 | `agents.tree` | GET | `/v1/runs/{runId}/agents` |  |
 | `agents.transcript` | GET | `/v1/runs/{runId}/agents/{agentId}/transcript` | Full transcript, paged: `after` is the last seq you have, `limit` at most 500. Each item's text is at most 65536 bytes (§5 limits). |
-| `attachments.get` | GET | `/v1/runs/{runId}/attachments/{attachmentId}` | Full text of an over-64 KB body. |
+| `agents.thread` | GET | `/v1/runs/{runId}/agents/{agentId}/thread` | The agent's thread items (format blocks/1), paged by write cursor: `after` is the highest seq you have, `limit` at most 500. See "Agent threads" in docs/harness-contract.md. |
+| `agents.workspace` | GET | `/v1/runs/{runId}/agents/{agentId}/workspace` | A file of the agent's latest work, raw bytes (workspace media). See "Agent threads" in docs/harness-contract.md. |
+| `attachments.get` | GET | `/v1/runs/{runId}/attachments/{attachmentId}` | Full text of an over-64 KB body, or an image a tool returned (base64, `encoding: "base64"`; prefer …/content for its bytes). |
+| `attachments.content` | GET | `/v1/runs/{runId}/attachments/{attachmentId}/content` | An attachment's bytes with its media type: images a tool returned (`inline` media) and long bodies (text/plain). Served with nosniff and a sandboxing CSP. |
 | `skills.list` | GET | `/v1/skills` | Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills. |
 | `events.replay` | GET | `/v1/events` | Durable events of one scope after `after` (resume cursor = seq), same envelope as the stream. |
 | `events.stream` | GET | `/v1/streams/{scope}/events` | SSE. Each event frame: `id: <seq>`, `event: <type>`, `data: <envelope JSON>`. Resume by sending `Last-Event-ID: <seq>`.
@@ -29,7 +32,7 @@ If that seq was compacted away, or this client's buffer overflowed (slow reader)
 then `snapshot.*` frames ending with `snapshot.end`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.
 A `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to `daemon` and open a run stream on drill-in.
 The SSE `event:` field is the frame type: the envelope's dotted `type` for events, else `stream.reset` or `snapshot.*`.
-Run scopes accept `?feed=lifecycle`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot, and `?activity=1`: live, ephemeral agent.activity_changed frames (at most one per agent per second).
+Run scopes accept `?feed=lifecycle`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot, and `?activity=1`: live, ephemeral agent.activity_changed frames (at most one per agent per second), and `?thread=1`: live, ephemeral agent.thread_item_changed frames (Agent threads, below).
 Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z. |
 | `approvals.decide` | POST | `/v1/approvals/{approvalId}/decision` | No prior read needed. `Idempotency-Key` is scoped to the calling client. Same key + same body: 200 with the first result (replay). Same key + different body: 409 `idempotency_conflict`. New key on an approval already decided: 409 `already_decided` with the existing `decision` (who, when). |
 
@@ -160,6 +163,891 @@ Their envelope `seq` is the last durable seq at the time (not a cursor), `entity
 Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
 Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.
 
+## Agent threads
+
+An agent's thread: typed items with stable ids, each message parsed once by the daemon into a sanitized block tree (format `blocks/1`), so a client renders it without parsing markdown.
+`after` is a run-wide write cursor (`seq`): items created *or changed* since come back, in write order, so a tool item is seen `open` at the call and again `done` (isError, durationMs when the CLI reports one) at its result. Sort by `order`; the highest `rev` of an id wins.
+Kinds: say, thinking (`redacted` when the CLI withheld it), tool (`tool.summary` is one daemon-built line), error, result (omitted when it only repeats the last say), plan (the agent's todo list as a task list), handoff (a child that finished: its summary, artifacts as links and media), other (an event the daemon doesn't know, as one plain line). Render an unknown kind as a plain line of `text`.
+Every string in an item is agent-written plain text (x-untrusted): never HTML, never a link followed or media loaded without the user's click. Links carry the daemon's `target` (web: show `host`, and the full URL when `mismatch`; file, artifact, agent, run; none: plain text). Media: `remote` never loads by itself; `attachment` and `inline` come from GET /v1/runs/{runId}/attachments/{id}/content, `workspace` from GET /v1/runs/{runId}/agents/{agentId}/workspace?path=.
+Caps (block boundaries only): 65536 bytes of blocks and of `text` per item (whole trailing blocks dropped, `truncated` says how many); code blocks keep their first 400 lines (`truncatedLines`); tables 50 rows × 8 columns (`truncatedRows`/`truncatedCols`).
+Reserved for token streaming (not emitted yet): a say or thinking item may be `open` with its last block `{t:"open", text}` (the unfinished block as plain text) and `rev` rising as it grows. Live updates: `?thread=1` on a run stream (agent.thread_item_changed frames).
+
+### Live items
+
+Live thread items: `?thread=1` on a run stream (with or without `feed=lifecycle`) adds `agent.thread_item_changed` frames, each carrying a full item as GET /v1/runs/{runId}/agents/{agentId}/thread serves it.
+Like agent.activity_changed they are ephemeral (`durability: "ephemeral"`): sent only live, never replayed, and their SSE frames carry no `id:`, so they never move the Last-Event-ID cursor. Envelope `seq` is the last durable seq at the time, `entitySeq` 0, `entity` the agent.
+Coalesced: the daemon looks for new writes at most four times a second and sends only the latest rev of each item, so an item gets at most four frames a second. Frames start with writes after the client connected, and only connections that asked for `thread=1` cost anything.
+On (re)connect: open the stream, then read the thread route from your cursor (the highest item `seq` you have), then apply frames. Nothing is lost between the two; an item may arrive both ways, and the highest `rev` of an id wins.
+
+### Media files
+
+A file of the agent's latest work (the commit it pushed, else its latest checkpoint), for `workspace` media and file links in its thread. Raw bytes, at most 5 MB.
+`path` is relative to the repository root, '/'-separated and normalized (no `..`, no `.git`): anything else is 422. Only regular files: a directory, symlink or submodule is 404 (no listings).
+Content-Type is sniffed from the bytes (png, jpeg, gif, webp; video and audio by extension; UTF-8 text as text/plain), never svg or HTML: everything else is application/octet-stream with Content-Disposition: attachment. A file the agent has not checkpointed yet is 404 until it does.
+
+An attachment's bytes with its media type: images a tool returned (`inline` media) and long bodies (text/plain). Served with nosniff and a sandboxing CSP.
+
+### Security
+
+Agent text stays untrusted inside the tree. Clients show a web link's host next to its text, and the full URL when `mismatch` is set; `none` links are plain text; remote media never loads by itself (only on an explicit click), and attachment, inline and workspace media load through the daemon only (the raw routes above: nosniff, a CSP that runs nothing, never HTML or svg). No client action is ever derived from item text.
+
+### Item schema (`blocks/1`)
+
+Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessions for other languages' decoders are in packages/agent-thread/fixtures/golden.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable: an update has the same id and a higher rev"
+    },
+    "rev": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Run-wide cursor, advanced by every write (create or update): ?after=<seq> returns items created or changed since"
+    },
+    "order": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Position in the thread: sort by this (it never changes)"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "description": "say, thinking, tool, error, result, plan, handoff, other. More may be added: render an unknown kind as a plain line of `text`"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "done"
+      ],
+      "description": "open: a tool call still running (or, later, a message still streaming); done: final"
+    },
+    "at": {
+      "type": "string",
+      "description": "When it started (ISO 8601 UTC, ms precision)"
+    },
+    "durationMs": {
+      "description": "tool: as the CLI reported it (Glob, Grep, WebFetch, WebSearch, Task); null otherwise",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "text": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: the item as plain text, for copy, search and kinds a client doesn't know: the message (cut at a block boundary like blocks), the tool summary, the error, or a one-line summary. Plain text: never markdown, HTML, or a link to follow"
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "format": {
+      "type": "string",
+      "const": "blocks/1"
+    },
+    "redacted": {
+      "type": "boolean",
+      "description": "thinking: the CLI withheld the text (redacted or empty)"
+    },
+    "tool": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "callId": {
+          "type": "string",
+          "description": "The CLI's call id (Claude tool_use id, Codex item id)"
+        },
+        "name": {
+          "type": "string",
+          "x-untrusted": true,
+          "description": "Agent-written text: the tool's name as the CLI reported it (Read, Bash, command_execution, capcomd.capcomd_spawn). Plain text: never markdown, HTML, or a link to follow"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Icon hint, Agent.activity's kinds (read, edit, run, test, …); treat an unknown one as tool"
+        },
+        "summary": {
+          "type": "string",
+          "x-untrusted": true,
+          "description": "Agent-written text: one line built by the daemon from the call's fields, e.g. \"Read ids/v1/schema.json\", \"Run bun test\". Plain text: never markdown, HTML, or a link to follow"
+        },
+        "isError": {
+          "type": "boolean"
+        },
+        "args": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: the call's input as JSON, at most 4 KB. Plain text: never markdown, HTML, or a link to follow"
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true,
+          "description": "Agent-written text: the result's text, at most 16 KB (the end kept); null while open. Plain text: never markdown, HTML, or a link to follow"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "string",
+                "const": "link"
+              },
+              "text": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: the link's text. Plain text: never markdown, HTML, or a link to follow"
+              },
+              "href": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: where it points, for display (credentials removed); null for target none. Plain text: never markdown, HTML, or a link to follow"
+              },
+              "target": {
+                "type": "string",
+                "enum": [
+                  "web",
+                  "artifact",
+                  "file",
+                  "agent",
+                  "run",
+                  "none"
+                ],
+                "description": "Classified by the daemon. web: http(s) only; artifact: an attachment the daemon holds (id); file: a path in the agent's workspace (path); agent / run: a capcomd id (id); none: anything else (javascript:, data:, mailto:, custom schemes, paths outside the workspace): show `text` as plain text"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: web: the URL's host, show it next to the text. Plain text: never markdown, HTML, or a link to follow"
+              },
+              "id": {
+                "description": "artifact: attachment id (att-…); agent: agt-…; run: run-…",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true,
+                "description": "Agent-written text: file: relative to the workspace root, '/'-separated, normalized (never ..). Plain text: never markdown, HTML, or a link to follow"
+              },
+              "mismatch": {
+                "type": "boolean",
+                "description": "The text looks like a URL or host other than where the link goes: show the real destination (host, or the full URL)"
+              }
+            },
+            "required": [
+              "t",
+              "text",
+              "href",
+              "target",
+              "host",
+              "id",
+              "path",
+              "mismatch"
+            ]
+          },
+          "description": "Files the call wrote or changed, as file links"
+        }
+      },
+      "required": [
+        "callId",
+        "name",
+        "kind",
+        "summary",
+        "isError",
+        "args",
+        "output",
+        "files"
+      ]
+    },
+    "error": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "x-untrusted": true,
+          "description": "Agent-written text: what failed. Plain text: never markdown, HTML, or a link to follow"
+        },
+        "code": {
+          "description": "The CLI's code when it gave one (error_max_turns, rate_limit, turn_failed)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "code"
+      ]
+    },
+    "truncated": {
+      "description": "Over the per-item cap: whole trailing blocks were dropped (never cut inside a code block or table)",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "blocks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Trailing blocks dropped"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Size of the original text"
+        }
+      },
+      "required": [
+        "blocks",
+        "bytes"
+      ]
+    },
+    "child": {
+      "description": "handoff: the child agent that handed back (its summary is the blocks; artifacts are links and media)",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "status"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "rev",
+    "seq",
+    "order",
+    "agentId",
+    "kind",
+    "status",
+    "at",
+    "durationMs",
+    "text",
+    "blocks",
+    "format",
+    "redacted",
+    "tool",
+    "error",
+    "truncated",
+    "child"
+  ],
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "paragraph"
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            }
+          },
+          "required": [
+            "t",
+            "children"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "heading"
+            },
+            "level": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "const": 1
+                },
+                {
+                  "type": "number",
+                  "const": 2
+                },
+                {
+                  "type": "number",
+                  "const": 3
+                }
+              ],
+              "description": "Deeper markdown headings are 3"
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            }
+          },
+          "required": [
+            "t",
+            "level",
+            "children"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "list"
+            },
+            "ordered": {
+              "type": "boolean"
+            },
+            "start": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "checked": {
+                    "description": "Task list item: done or not; null for a plain item",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "blocks": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  }
+                },
+                "required": [
+                  "checked",
+                  "blocks"
+                ]
+              }
+            }
+          },
+          "required": [
+            "t",
+            "ordered",
+            "start",
+            "items"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "code"
+            },
+            "lang": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-untrusted": true,
+              "description": "Agent-written text: the fence's info word. Plain text: never markdown, HTML, or a link to follow"
+            },
+            "text": {
+              "type": "string",
+              "x-untrusted": true,
+              "description": "Agent-written text: code, newlines kept. Plain text: never markdown, HTML, or a link to follow"
+            },
+            "truncatedLines": {
+              "description": "Lines dropped from the end",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "t",
+            "lang",
+            "text",
+            "truncatedLines"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "table"
+            },
+            "align": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "left",
+                  "center",
+                  "right",
+                  null
+                ]
+              }
+            },
+            "header": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/__schema1"
+                }
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/__schema1"
+                  }
+                }
+              }
+            },
+            "truncatedRows": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "truncatedCols": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "t",
+            "align",
+            "header",
+            "rows",
+            "truncatedRows",
+            "truncatedCols"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "quote"
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            }
+          },
+          "required": [
+            "t",
+            "blocks"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "rule"
+            }
+          },
+          "required": [
+            "t"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "media"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "image",
+                "video",
+                "audio",
+                "file"
+              ]
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "attachment"
+                    },
+                    "id": {
+                      "type": "string",
+                      "description": "att-…: GET /v1/runs/{runId}/attachments/{id}/content"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "id"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "workspace"
+                    },
+                    "path": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: file in the agent's workspace, relative and normalized: GET /v1/runs/{runId}/agents/{agentId}/workspace?path=. Plain text: never markdown, HTML, or a link to follow"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "path"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "inline"
+                    },
+                    "attachmentId": {
+                      "type": "string",
+                      "description": "att-…: an image a tool returned, stored by the daemon (png, jpeg, gif, webp only)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "attachmentId"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "remote"
+                    },
+                    "url": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: http(s) URL, credentials removed. The daemon never fetches it; load it only on an explicit click. Plain text: never markdown, HTML, or a link to follow"
+                    },
+                    "host": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: the URL's host. Plain text: never markdown, HTML, or a link to follow"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "url",
+                    "host"
+                  ]
+                }
+              ]
+            },
+            "alt": {
+              "type": "string",
+              "x-untrusted": true,
+              "description": "Agent-written text: alt text. Plain text: never markdown, HTML, or a link to follow"
+            },
+            "mime": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bytes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "width": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "height": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "t",
+            "kind",
+            "source",
+            "alt",
+            "mime",
+            "bytes",
+            "width",
+            "height"
+          ],
+          "description": "Remote media never loads by itself; attachment, inline and workspace media load through the daemon only"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "open"
+            },
+            "text": {
+              "type": "string",
+              "x-untrusted": true,
+              "description": "Agent-written text: the trailing block still being written. Plain text: never markdown, HTML, or a link to follow"
+            }
+          },
+          "required": [
+            "t",
+            "text"
+          ],
+          "description": "Reserved for token streaming: the last block of an open say/thinking item, as plain text. Not emitted yet"
+        }
+      ]
+    },
+    "__schema1": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "type": "string",
+              "x-untrusted": true,
+              "description": "Agent-written text: text run. Plain text: never markdown, HTML, or a link to follow"
+            }
+          },
+          "required": [
+            "t",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "code"
+            },
+            "text": {
+              "type": "string",
+              "x-untrusted": true,
+              "description": "Agent-written text: inline code. Plain text: never markdown, HTML, or a link to follow"
+            }
+          },
+          "required": [
+            "t",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "enum": [
+                "strong",
+                "em",
+                "strike"
+              ]
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            }
+          },
+          "required": [
+            "t",
+            "children"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "link"
+            },
+            "text": {
+              "type": "string",
+              "x-untrusted": true,
+              "description": "Agent-written text: the link's text. Plain text: never markdown, HTML, or a link to follow"
+            },
+            "href": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-untrusted": true,
+              "description": "Agent-written text: where it points, for display (credentials removed); null for target none. Plain text: never markdown, HTML, or a link to follow"
+            },
+            "target": {
+              "type": "string",
+              "enum": [
+                "web",
+                "artifact",
+                "file",
+                "agent",
+                "run",
+                "none"
+              ],
+              "description": "Classified by the daemon. web: http(s) only; artifact: an attachment the daemon holds (id); file: a path in the agent's workspace (path); agent / run: a capcomd id (id); none: anything else (javascript:, data:, mailto:, custom schemes, paths outside the workspace): show `text` as plain text"
+            },
+            "host": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-untrusted": true,
+              "description": "Agent-written text: web: the URL's host, show it next to the text. Plain text: never markdown, HTML, or a link to follow"
+            },
+            "id": {
+              "description": "artifact: attachment id (att-…); agent: agt-…; run: run-…",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-untrusted": true,
+              "description": "Agent-written text: file: relative to the workspace root, '/'-separated, normalized (never ..). Plain text: never markdown, HTML, or a link to follow"
+            },
+            "mismatch": {
+              "type": "boolean",
+              "description": "The text looks like a URL or host other than where the link goes: show the real destination (host, or the full URL)"
+            }
+          },
+          "required": [
+            "t",
+            "text",
+            "href",
+            "target",
+            "host",
+            "id",
+            "path",
+            "mismatch"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "type": "string",
+              "const": "break"
+            }
+          },
+          "required": [
+            "t"
+          ],
+          "description": "Hard line break"
+        }
+      ]
+    }
+  }
+}
+```
+
 ## Event types
 
 - [`run.created`](events.md#runcreated)
@@ -200,6 +1088,7 @@ Why opt-in on the run stream: the lifecycle feed stays state changes only for cl
 - [`kv.swapped`](events.md#kvswapped)
 - [`agent.status_changed`](events.md#agentstatus_changed)
 - [`agent.activity_changed`](events.md#agentactivity_changed)
+- [`agent.thread_item_changed`](events.md#agentthread_item_changed)
 - [`approval.requested`](events.md#approvalrequested)
 - [`approval.decided`](events.md#approvaldecided)
 - [`run.started`](events.md#runstarted)

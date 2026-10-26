@@ -2,7 +2,8 @@
 // scope actors (src/primitives/ops.ts); tests use memorySource so tests/api stays fast and engine-free.
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, Attachment, Decision, Message, Project, Run, Skill, Span, TranscriptItem } from "./contract";
+import type { Agent, Attachment, Decision, Message, Project, Run, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
 import type { RunRepo } from "./run-files";
@@ -28,6 +29,16 @@ export interface HarnessSource {
 	events(runId: string, after: number): Promise<RawEvent[]>;
 	transcript(runId: string, agentId: string, after: number, limit: number): Promise<O<typeof TranscriptItem>[] | null>;
 	attachment(runId: string, id: string): Promise<O<typeof Attachment> | null>;
+	/** An agent's thread items after `after` (seq), in write order; null when the run or agent is unknown. */
+	thread(runId: string, agentId: string, after: number, limit: number): Promise<O<typeof ThreadItem>[] | null>;
+	/** The whole run's thread writes after `after` (live frames). */
+	threadAfter(runId: string, after: number, limit: number): Promise<O<typeof ThreadItem>[]>;
+	/** The run's newest thread write (0 when none). */
+	threadHead(runId: string): Promise<number>;
+	/** An attachment's bytes and media type. */
+	attachmentContent(runId: string, id: string): Promise<{ mime: string; bytes: Uint8Array } | null>;
+	/** A file of an agent's latest work (path already normalized); null when the run or agent is unknown. */
+	workspaceFile(runId: string, agentId: string, path: string): Promise<WorkspaceFile | null>;
 	trace(runId: string): Promise<O<typeof Span>[]>;
 	skills(): Promise<O<typeof Skill>[]>;
 	approvals(runId: string): Promise<PendingApproval[]>;
@@ -70,7 +81,13 @@ export function parseApprovalId(id: string): { runId: string; opId: string } | n
 }
 
 /** In-memory source for tests and fixtures. */
-export function memorySource(seed: Partial<{ runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo> }> = {}): HarnessSource & { push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[] } {
+export function memorySource(seed: Partial<{
+	runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo>;
+	/** Thread items by run (tests push more as the agent "works"). */
+	items: Record<string, O<typeof ThreadItem>[]>;
+	attachments: Record<string, Record<string, { mime: string; bytes: Uint8Array }>>;
+	files: Record<string, Record<string, Record<string, Uint8Array>>>;
+}> = {}): HarnessSource & { push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[] } {
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
 	const runs = seed.runs ?? [];
@@ -86,7 +103,19 @@ export function memorySource(seed: Partial<{ runs: O<typeof Run>[]; agents: Reco
 		agents: async (r) => seed.agents?.[r] ?? (seed.runs?.some((x) => x.id === r) ? [] : null),
 		events: async (r, after) => (events[r] ?? []).filter((e) => e.seq > after),
 		transcript: async () => [],
-		attachment: async () => null,
+		attachment: async (r, id) => { const a = seed.attachments?.[r]?.[id]; return a ? { attachment: { id, bytes: a.bytes.length, sha256: "0".repeat(64), mediaType: a.mime }, text: Buffer.from(a.bytes).toString(a.mime.startsWith("text/") ? "utf8" : "base64"), encoding: a.mime.startsWith("text/") ? "utf8" as const : "base64" as const } : null; },
+		thread: async (r, agentId, after, limit) => {
+			if (!seed.agents?.[r]?.some((a) => a.id === agentId)) return null;
+			return (seed.items?.[r] ?? []).filter((i) => i.agentId === agentId && i.seq > after).sort((a, b) => a.seq - b.seq).slice(0, limit);
+		},
+		threadAfter: async (r, after, limit) => (seed.items?.[r] ?? []).filter((i) => i.seq > after).sort((a, b) => a.seq - b.seq).slice(0, limit),
+		threadHead: async (r) => Math.max(0, ...(seed.items?.[r] ?? []).map((i) => i.seq)),
+		attachmentContent: async (r, id) => seed.attachments?.[r]?.[id] ?? null,
+		workspaceFile: async (r, agentId, path) => {
+			if (!seed.agents?.[r]?.some((a) => a.id === agentId)) return null;
+			const b = seed.files?.[r]?.[agentId]?.[path];
+			return b ? { bytes: b, path, sha: "0".repeat(40) } : { error: "not_found", message: `${path} is not in the agent's latest work` };
+		},
 		trace: async () => [],
 		skills: async () => [],
 		approvals: async (r) => (approvals[r] ?? []).filter((a) => !decided.some((d) => d.approvalId === a.approvalId)),

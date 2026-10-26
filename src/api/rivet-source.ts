@@ -14,6 +14,7 @@ import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { approvalIdFor, parseApprovalId, projectIdOf, type HarnessSource, type PendingApproval } from "./source";
 import { startDetachedRun } from "./create-run";
 import { workspaceOf } from "./workspace";
+import { mirrorFor, workTips } from "./run-files";
 import { RUN_REPO_KV } from "../merge/run-config";
 
 const lower = (p: string | null) => (p ? p.toLowerCase() : null);
@@ -75,7 +76,32 @@ export function rivetSource(): HarnessSource {
 		},
 		attachment: async (runId, id) => {
 			const r = await scope(runId).getAttachment({ id }).catch(() => null);
-			return r ? { attachment: { id: r.id, bytes: r.bytes, sha256: r.sha256, mediaType: r.mediaType }, text: r.body } : null;
+			if (!r) return null;
+			// Tool images are stored base64 with a `;base64` media type suffix (scope.putItems).
+			const b64 = r.mediaType.endsWith(";base64");
+			return { attachment: { id: r.id, bytes: r.bytes, sha256: r.sha256, mediaType: b64 ? r.mediaType.slice(0, -7) : r.mediaType }, text: r.body, encoding: b64 ? "base64" : "utf8" };
+		},
+		attachmentContent: async (runId, id) => {
+			const r = await scope(runId).getAttachment({ id }).catch(() => null);
+			if (!r) return null;
+			const b64 = r.mediaType.endsWith(";base64");
+			return { mime: b64 ? r.mediaType.slice(0, -7) : r.mediaType, bytes: new Uint8Array(Buffer.from(r.body, b64 ? "base64" : "utf8")) };
+		},
+		thread: async (runId, agentId, after, limit) => {
+			const a = await scope(runId).getAgent({ agentId }).catch(() => null);
+			if (!a) return null;
+			return (await scope(runId).getItems({ agentId, after, limit })) as any;
+		},
+		threadAfter: async (runId, after, limit) => ((await scope(runId).getItems({ after, limit }).catch(() => [])) as any),
+		threadHead: async (runId) => Number(await scope(runId).itemsHead().catch(() => 0)),
+		workspaceFile: async (runId, agentId, path) => {
+			const a = await scope(runId).getAgent({ agentId }).catch(() => null);
+			if (!a) return null;
+			const tip = workTips((await scope(runId).getEvents({ since: 0 }).catch(() => [])) as any).find((w) => w.agentId === agentId);
+			if (!tip) return { error: "not_found", message: "the agent has no pushed work or checkpoint yet" };
+			const cfg = await mergeConfigFor(runId).catch(() => null);
+			if (!cfg) return { error: "unavailable", message: "no repository is configured for this run" };
+			return mirrorFor({ remote: cfg.remote, target: cfg.target, workdir: cfg.workdir }).readFile(tip, path);
 		},
 		trace: async (runId) => {
 			const p = tracePath(runId);

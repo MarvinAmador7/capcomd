@@ -18,6 +18,7 @@ import { startDriver } from "../primitives/drivers";
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
+import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
@@ -38,6 +39,28 @@ async function addColumn(db: any, table: string, col: string, decl: string) {
   const cols = await db.execute(`PRAGMA table_info(${table})`);
   if (!cols.some((c: any) => c.name === col)) await db.execute(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
 }
+/** An image a tool returned, stored as an attachment (base64 body, media type `<mime>;base64`). */
+export type ThreadAttachment = { id: string; sha256: string; bytes: number; mime: string; base64: string };
+
+/** Write one thread item (a new rev only): a fresh seq on every write, its position kept from its first. */
+async function putItemTx(tx: RawAccess, agentId: string, it: ItemDraft): Promise<number | null> {
+  const prev = (await tx.execute("SELECT rev, ord, agent_id FROM agent_items WHERE id = ?", it.id)) as any[];
+  if (prev.length && (Number(prev[0].rev) >= it.rev || prev[0].agent_id !== agentId)) return null;
+  const seq = Number(((await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM agent_items")) as any[])[0].m) + 1;
+  const body = JSON.stringify(redactShapes(it));
+  await tx.execute("INSERT OR REPLACE INTO agent_items (id, agent_id, seq, ord, rev, at, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    it.id, agentId, seq, prev.length ? Number(prev[0].ord) : seq, it.rev, Date.parse(it.at) || Date.now(), body);
+  return seq;
+}
+
+/** A finished child's hand-back card for its parent's thread. */
+function handoffOf(parent: string, child: string, status: string, result: Record<string, unknown>): ItemDraft {
+  const s = (x: unknown) => (typeof x === "string" ? x : "");
+  const summary = s(result.summary) || s(result.report) || s(result.error) || (status === "done" ? "Finished." : "Failed.");
+  const artifacts = Array.isArray(result.artifacts) ? result.artifacts.filter((a: any) => a && typeof a.ref === "string").map((a: any) => ({ name: s(a.name), ref: s(a.ref) })) : [];
+  return handoffDraft({ id: `itm-${parent}-handoff-${child}`, at: Date.now(), child: { agentId: child, status }, summary, artifacts });
+}
+
 export type KvEntry = ReturnType<typeof kvRow>;
 
 /** Replay a keyed write: same key + same params returns the recorded result; other params = conflict. */
@@ -226,6 +249,10 @@ export const scopeActor = actor({
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, media_type TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS agent_logs (seq INTEGER PRIMARY KEY, agent_id TEXT NOT NULL, at INTEGER NOT NULL, stream TEXT NOT NULL, line TEXT NOT NULL)`);
+      // harness.v1 thread items (packages/agent-thread): one row per item, rewritten on each rev; seq is the run-wide
+      // cursor (advanced by every write), ord its position in the thread (fixed at creation).
+      await database.execute(`CREATE TABLE IF NOT EXISTS agent_items (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, seq INTEGER NOT NULL UNIQUE, ord INTEGER NOT NULL, rev INTEGER NOT NULL, at INTEGER NOT NULL, body TEXT NOT NULL)`);
+      await database.execute(`CREATE INDEX IF NOT EXISTS agent_items_agent_seq ON agent_items (agent_id, seq)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS idem (idem_key TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`
         CREATE TABLE IF NOT EXISTS scope_events (
@@ -370,6 +397,8 @@ export const scopeActor = actor({
           params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? a.spent, budget: a.budget }, `finish-${params.agentId}`);
         await tx.execute("DELETE FROM awaits WHERE waiter = ?", params.agentId);
+        // The parent's thread gets a hand-back card: the child's summary, its artifacts as links and media.
+        if (a.parent) await putItemTx(tx, a.parent, handoffOf(a.parent, params.agentId, params.status, params.result));
       }, { name: "scopeFinish" });
       const orphans = await reapOrphans(c, { ...a, status: params.status });
       return { changed: true, orphans, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
@@ -620,6 +649,36 @@ export const scopeActor = actor({
       }, { name: "scopeLog" });
       return { ok: true };
     },
+    /**
+     * Thread items an agent's runner built (packages/agent-thread), and the images its tools returned. An item whose
+     * stored rev is already this high is left alone (a replayed write). Agent text is redacted again here.
+     */
+    async putItems(c, params: { agentId: string; items: ItemDraft[]; attachments?: ThreadAttachment[] }) {
+      if (!params.items.length && !params.attachments?.length) return { seq: null };
+      let last: number | null = null;
+      await c.db.transaction(async (tx: RawAccess) => {
+        for (const a of params.attachments ?? []) {
+          if (!/^att-[0-9a-f]{24}$/.test(a.id) || !IMAGE_TYPES.includes(a.mime as any) || a.bytes > IMAGE_MAX_BYTES) continue;
+          await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", a.id, a.sha256, a.bytes, `${a.mime};base64`, a.base64, Date.now());
+        }
+        for (const it of params.items) last = (await putItemTx(tx, params.agentId, it)) ?? last;
+        await tx.execute("UPDATE agents_v2 SET heartbeat_at = ? WHERE agent_id = ?", Date.now(), params.agentId);
+      }, { name: "scopeItems" });
+      return { seq: last };
+    },
+    /** Thread items after `after` (seq), oldest write first; one agent's, or the whole run's. */
+    async getItems(c, params: { agentId?: string; after?: number; limit?: number }) {
+      const rows = (params.agentId
+        ? await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?", params.agentId, params.after ?? 0, params.limit ?? 200)
+        : await c.db.execute("SELECT * FROM agent_items WHERE seq > ? ORDER BY seq LIMIT ?", params.after ?? 0, params.limit ?? 200)) as any[];
+      return rows.map((r) => ({ ...JSON.parse(r.body as string), seq: Number(r.seq), order: Number(r.ord), agentId: r.agent_id as string }));
+    },
+    /** The run's newest thread write (a live-frame cursor). */
+    async itemsHead(c) {
+      const r = (await c.db.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM agent_items")) as any[];
+      return Number(r[0]?.m ?? 0);
+    },
+
     async getLogs(c, params: { agentId: string; tail?: number; after?: number }) {
       const rows = (params.after !== undefined
         ? await c.db.execute("SELECT * FROM agent_logs WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?", params.agentId, params.after, params.tail ?? 200)

@@ -10,6 +10,8 @@ import { taskKey } from "../merge/config";
 import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils/tracing-simple";
 import { readFileSync } from "fs";
 import { StuckWatch, type Stuck } from "./stuck";
+import { threadBuilder, type ItemDraft } from "../../packages/agent-thread/src/index";
+import type { ThreadAttachment } from "../actors/scope";
 
 /** Where an agent's checkpoints are pushed (ADR-019 §3); deleted once its work merges. */
 export const checkpointRef = (agentId: string) => `refs/capcomd/checkpoints/${agentId}`;
@@ -84,6 +86,11 @@ export interface AgentRunOptions {
   heartbeatMs?: number;
   /** What the agent does, a line per tool call, failed result, message and result (`capcomd logs`). */
   onLog?: (lines: string[]) => void;
+  /**
+   * harness.v1 thread items (packages/agent-thread) built from the same events: new items and new revs of open ones
+   * (a tool call open → done), with the images tools returned to store as attachments.
+   */
+  onItems?: (items: ItemDraft[], attachments: ThreadAttachment[]) => void;
   /** How often spend is reported to onSpend (default 5s). */
   spendEveryMs?: number;
   /**
@@ -406,6 +413,14 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const state: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     live = state;
     const logLines: string[] = [];
+    // The thread: parsed once here (markdown → blocks, links classified against the checkout), stored by the scope.
+    // Ids are unique per agent and per run of it, so a re-run never overwrites an earlier run's items.
+    const items = new Map<string, ItemDraft>(), images: ThreadAttachment[] = [];
+    const thread = opts.onItems ? threadBuilder({
+      cli: adapter.kind === "codex" ? "codex" : "claude", idPrefix: `itm-${task.agentId ?? `${task.taskId}-e${task.epoch}`}-${now().toString(36)}`, now,
+      link: { root: repo }, onImage: (img) => images.push({ id: img.id, sha256: img.sha256, bytes: img.bytes, mime: img.mime, base64: img.base64 }),
+    }) : null;
+    const flushItems = () => { if (items.size || images.length) { opts.onItems?.([...items.values()], images.splice(0)); items.clear(); } };
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck, noChangeAfterMs: cfg.noChangeAfterMs }, now());
@@ -457,8 +472,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         });
         opts.onEvent?.(ev);
         logLines.push(...logLinesOf(ev));
+        if (thread) for (const d of thread.event(ev.raw)) items.set(d.id, d);
       }
       if (logLines.length) { opts.onLog?.(logLines.splice(0)); }
+      if (thread && final) for (const d of thread.finish()) items.set(d.id, d);
+      flushItems();
       // The agent CLI's own events are a heartbeat too (PR #3's path, the only one without a supervisor): any sign of
       // life counts, so the supervisor's start-up and first interval don't open a gap.
       if (state.events > beatEvents) { beatEvents = state.events; opts.onReport?.({ type: "heartbeat", events: state.events, lastEventAt: now(), source: "events" }); }

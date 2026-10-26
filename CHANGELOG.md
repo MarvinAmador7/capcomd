@@ -11,6 +11,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   the running daemon's version; to run a second daemon, give it its own socket with `--harness-socket PATH` or
   `CAPCOMD_HARNESS_SOCKET`. A socket left behind by a daemon that died is still replaced, and on shutdown `serve`
   removes the socket only if it is still its own. `CAPCOMD_NO_CONFIG=1` now also skips the config's `harness.socket`.
+- Harness API: `GET /v1/runs/{runId}/agents/{agentId}/thread` returns an agent's thread ready to render: its messages
+  and thinking as a sanitized block tree (headings, lists, code, tables, quotes, links, images), each tool call as one
+  line ("Run bun test", "Read ids/v1/schema.json") that shows as running and then finished, with its duration when the
+  agent's CLI reports one, its plan as a checklist, errors, and its final result. Links say where they really go (web
+  host, a file in the agent's workspace, an attachment, another agent or run, or nowhere), and images point at files
+  the daemon serves (`GET …/attachments/{id}/content`, `GET …/agents/{agentId}/workspace?path=`) or at remote URLs a
+  client loads only on a click. Add `?thread=1` to a run stream for live `agent.thread_item_changed` updates. The
+  transcript route and `capcomd logs` are unchanged.
 
 - Menu bar app: project cards now match the approved design. Each card is titled by the project's goal, shows the
   folders its agents work in as chips (up to three, then `+n`), and nests every run of the project as an agent tree.

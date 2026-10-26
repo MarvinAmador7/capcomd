@@ -8,6 +8,9 @@ import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 import { ACTIVITY_KINDS } from "../agents/activity";
 import { AgentWorkspace } from "./workspace";
+import { CODE_MAX_LINES, ITEM_MAX_BYTES, TABLE_MAX_COLS, TABLE_MAX_ROWS, THREAD_FORMAT, ThreadItem } from "../../packages/agent-thread/src/index";
+
+export { ThreadItem };
 
 export const ApprovalId = z.string().regex(/^apr-[A-Za-z0-9]+$/).describe("Stable approval id, carried on approval events; decide with it directly");
 export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom"]);
@@ -88,6 +91,19 @@ export const TranscriptPage = z.object({
 	items: z.array(TranscriptItem),
 	next: z.number().int().nonnegative().nullable().describe("Pass as `after` for the next page; null at the end"),
 });
+/** GET …/thread: an agent's thread items (packages/agent-thread), by write cursor. */
+export const THREAD_PAGE_MAX = 500;
+export const ThreadPage = z.object({
+	items: z.array(ThreadItem).describe("Items created or changed after `after`, in write order (seq). Place each by `order`; a later rev of the same id replaces the earlier one"),
+	next: z.number().int().nonnegative().nullable().describe("More are waiting: pass this as `after`. null: you have everything; keep the last item's seq as your cursor"),
+});
+export const THREAD_DOC = `An agent's thread: typed items with stable ids, each message parsed once by the daemon into a sanitized block tree (format \`${THREAD_FORMAT}\`), so a client renders it without parsing markdown.
+\`after\` is a run-wide write cursor (\`seq\`): items created *or changed* since come back, in write order, so a tool item is seen \`open\` at the call and again \`done\` (isError, durationMs when the CLI reports one) at its result. Sort by \`order\`; the highest \`rev\` of an id wins.
+Kinds: say, thinking (\`redacted\` when the CLI withheld it), tool (\`tool.summary\` is one daemon-built line), error, result (omitted when it only repeats the last say), plan (the agent's todo list as a task list), handoff (a child that finished: its summary, artifacts as links and media), other (an event the daemon doesn't know, as one plain line). Render an unknown kind as a plain line of \`text\`.
+Every string in an item is agent-written plain text (x-untrusted): never HTML, never a link followed or media loaded without the user's click. Links carry the daemon's \`target\` (web: show \`host\`, and the full URL when \`mismatch\`; file, artifact, agent, run; none: plain text). Media: \`remote\` never loads by itself; \`attachment\` and \`inline\` come from GET /v1/runs/{runId}/attachments/{id}/content, \`workspace\` from GET /v1/runs/{runId}/agents/{agentId}/workspace?path=.
+Caps (block boundaries only): ${ITEM_MAX_BYTES} bytes of blocks and of \`text\` per item (whole trailing blocks dropped, \`truncated\` says how many); code blocks keep their first ${CODE_MAX_LINES} lines (\`truncatedLines\`); tables ${TABLE_MAX_ROWS} rows × ${TABLE_MAX_COLS} columns (\`truncatedRows\`/\`truncatedCols\`).
+Reserved for token streaming (not emitted yet): a say or thinking item may be \`open\` with its last block \`{t:"open", text}\` (the unfinished block as plain text) and \`rev\` rising as it grows. Live updates: \`?thread=1\` on a run stream (agent.thread_item_changed frames).`;
+
 /** Trace span (OpenTelemetry-shaped), from the run's trace file. */
 export const Span = z.looseObject({
 	traceId: z.string(),
@@ -137,7 +153,17 @@ export const Skill = z.object({
 	description: z.string(),
 	source: z.enum(["bundled", "user"]),
 });
-export const Attachment = z.object({ attachment: AttachmentRef, text: UntrustedText });
+export const Attachment = z.object({
+	attachment: AttachmentRef,
+	text: UntrustedText.describe("Agent-written text: the body (base64 when encoding is base64). Render as plain text, never markdown, links or actions"),
+	encoding: z.enum(["utf8", "base64"]).describe("base64: an image a tool returned (its bytes are at …/content)"),
+});
+/** Raw-bytes routes (served natively; their OpenAPI response is binary). */
+export const BINARY_ROUTES = ["agents.workspace", "attachments.content"] as const;
+export const WORKSPACE_FILE_DOC = `A file of the agent's latest work (the commit it pushed, else its latest checkpoint), for \`workspace\` media and file links in its thread. Raw bytes, at most 5 MB.
+\`path\` is relative to the repository root, '/'-separated and normalized (no \`..\`, no \`.git\`): anything else is 422. Only regular files: a directory, symlink or submodule is 404 (no listings).
+Content-Type is sniffed from the bytes (png, jpeg, gif, webp; video and audio by extension; UTF-8 text as text/plain), never svg or HTML: everything else is application/octet-stream with Content-Disposition: attachment. A file the agent has not checkpointed yet is 404 until it does.`;
+export const ATTACHMENT_CONTENT_DOC = "An attachment's bytes with its media type: images a tool returned (`inline` media) and long bodies (text/plain). Served with nosniff and a sandboxing CSP.";
 export const Decision = z.looseObject({
 	approvalId: ApprovalId,
 	status: ApprovalStatus,
@@ -170,12 +196,17 @@ Their envelope \`seq\` is the last durable seq at the time (not a cursor), \`ent
 Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
 Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.`;
 
-export const STREAM_DOC = `SSE. Each event frame: \`id: <seq>\`, \`event: <type>\`, \`data: <envelope JSON>\`. Resume by sending \`Last-Event-ID: <seq>\`.
+export const THREAD_STREAM_DOC = `Live thread items: \`?thread=1\` on a run stream (with or without \`feed=lifecycle\`) adds \`agent.thread_item_changed\` frames, each carrying a full item as GET /v1/runs/{runId}/agents/{agentId}/thread serves it.
+Like agent.activity_changed they are ephemeral (\`durability: "ephemeral"\`): sent only live, never replayed, and their SSE frames carry no \`id:\`, so they never move the Last-Event-ID cursor. Envelope \`seq\` is the last durable seq at the time, \`entitySeq\` 0, \`entity\` the agent.
+Coalesced: the daemon looks for new writes at most four times a second and sends only the latest rev of each item, so an item gets at most four frames a second. Frames start with writes after the client connected, and only connections that asked for \`thread=1\` cost anything.
+On (re)connect: open the stream, then read the thread route from your cursor (the highest item \`seq\` you have), then apply frames. Nothing is lost between the two; an item may arrive both ways, and the highest \`rev\` of an id wins.`;
+
+export const STREAM_DOC =`SSE. Each event frame: \`id: <seq>\`, \`event: <type>\`, \`data: <envelope JSON>\`. Resume by sending \`Last-Event-ID: <seq>\`.
 If that seq was compacted away, or this client's buffer overflowed (slow reader), the server sends \`event: stream.reset\` with {snapshotSeq, reason},
 then \`snapshot.*\` frames ending with \`snapshot.end\`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.
 A \`: heartbeat\` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to \`daemon\` and open a run stream on drill-in.
 The SSE \`event:\` field is the frame type: the envelope's dotted \`type\` for events, else \`stream.reset\` or \`snapshot.*\`.
-Run scopes accept \`?feed=lifecycle\`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot, and \`?activity=1\`: live, ephemeral agent.activity_changed frames (at most one per agent per second).
+Run scopes accept \`?feed=lifecycle\`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot, and \`?activity=1\`: live, ephemeral agent.activity_changed frames (at most one per agent per second), and \`?thread=1\`: live, ephemeral agent.thread_item_changed frames (Agent threads, below).
 Timestamps (ts, decidedAt, expiresAt): ${TIMESTAMP_DOC}.`;
 
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
@@ -183,6 +214,7 @@ export const EventData = {
 	...LegacyEventData,
 	"agent.status_changed": z.looseObject({ agentId: z.string(), status: AgentStatus }),
 	"agent.activity_changed": z.looseObject({ agentId: z.string(), status: AgentStatus, activity: AgentActivity.nullable() }).describe("Ephemeral, only on run streams with ?activity=1: the agent's new Agent.activity. The envelope text is the same line"),
+	"agent.thread_item_changed": z.looseObject({ agentId: z.string(), item: ThreadItem }).describe("Ephemeral, only on run streams with ?thread=1: an item created or changed, as GET …/thread serves it (latest rev wins). The envelope text is daemon-written"),
 	"approval.requested": z.looseObject({
 		approvalId: ApprovalId,
 		kind: ApprovalKind,
@@ -246,10 +278,17 @@ export const contract = {
 			description: `Full transcript, paged: \`after\` is the last seq you have, \`limit\` at most ${TRANSCRIPT_PAGE_MAX}. Each item's text is at most ${INLINE_TEXT_MAX_BYTES} bytes (§5 limits).`,
 		}).input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(TRANSCRIPT_PAGE_MAX).optional() }))
 			.output(TranscriptPage),
+		thread: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/thread", description: `The agent's thread items (format ${THREAD_FORMAT}), paged by write cursor: \`after\` is the highest seq you have, \`limit\` at most ${THREAD_PAGE_MAX}. See "Agent threads" in docs/harness-contract.md.` })
+			.input(z.object({ runId: z.string(), agentId: z.string(), after: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(THREAD_PAGE_MAX).optional() }))
+			.output(ThreadPage),
+		workspace: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/workspace", description: "A file of the agent's latest work, raw bytes (workspace media). See \"Agent threads\" in docs/harness-contract.md." })
+			.input(z.object({ runId: z.string(), agentId: z.string(), path: z.string().min(1).max(1024) })).output(z.string().describe("The file's bytes")),
 	},
 	attachments: {
-		get: oc.route({ method: "GET", path: "/v1/runs/{runId}/attachments/{attachmentId}", description: "Full text of an over-64 KB body." })
+		get: oc.route({ method: "GET", path: "/v1/runs/{runId}/attachments/{attachmentId}", description: "Full text of an over-64 KB body, or an image a tool returned (base64, `encoding: \"base64\"`; prefer …/content for its bytes)." })
 			.input(z.object({ runId: z.string(), attachmentId: z.string().regex(/^att-[0-9a-f]+$/) })).output(Attachment),
+		content: oc.route({ method: "GET", path: "/v1/runs/{runId}/attachments/{attachmentId}/content", description: ATTACHMENT_CONTENT_DOC })
+			.input(z.object({ runId: z.string(), attachmentId: z.string().regex(/^att-[0-9a-f]+$/) })).output(z.string().describe("The attachment's bytes")),
 	},
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),
@@ -261,7 +300,7 @@ export const contract = {
 			.output(z.array(HarnessEvent)),
 		stream: oc
 			.route({ method: "GET", path: "/v1/streams/{scope}/events", inputStructure: "detailed", description: STREAM_DOC })
-			.input(z.object({ params: z.object({ scope: Scope }), query: z.object({ feed: z.enum(["lifecycle"]).optional().describe("Run scopes: lifecycle events only"), activity: z.enum(["0", "1"]).optional().describe("Run scopes: 1 adds live, ephemeral agent.activity_changed frames (at most one per agent per second)") }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
+			.input(z.object({ params: z.object({ scope: Scope }), query: z.object({ feed: z.enum(["lifecycle"]).optional().describe("Run scopes: lifecycle events only"), activity: z.enum(["0", "1"]).optional().describe("Run scopes: 1 adds live, ephemeral agent.activity_changed frames (at most one per agent per second)"), thread: z.enum(["0", "1"]).optional().describe("Run scopes: 1 adds live, ephemeral agent.thread_item_changed frames (at most four per item per second)") }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
 			.output(eventIterator(HarnessEvent)),
 	},
 	approvals: {

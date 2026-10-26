@@ -115,6 +115,11 @@ export class FilesMirror {
 		return git;
 	}
 
+	/** A regular file (no tree, symlink or submodule) of one agent's latest work, at most WORKSPACE_FILE_MAX_BYTES. */
+	readFile(tip: WorkTip, path: string): Promise<WorkspaceFile> {
+		return this.serial(async () => readFileFrom(await this.git().catch(() => null), this.dir, this.env, tip, path));
+	}
+
 	/** Diff each tip against its base; tips already diffed come from memory without touching git. */
 	diff(tips: WorkTip[], target: string): Promise<Map<string, Diff>> {
 		const key = (w: WorkTip) => `${target}\0${w.sha}\0${w.targetBefore ?? ""}`;
@@ -190,6 +195,38 @@ export class FilesMirror {
 			});
 			return out;
 		});
+	}
+}
+
+/** GET …/workspace: a file of an agent's latest work, read from the mirror (never from the VM, which may be gone). */
+export const WORKSPACE_FILE_MAX_BYTES = 5 * 1024 * 1024;
+export type WorkspaceFile = { bytes: Uint8Array; path: string; sha: string } | { error: "not_found" | "too_large" | "unavailable"; message: string };
+
+/** Bytes of `git cat-file blob <oid>` (Git.run decodes text; a blob may be an image). */
+async function blobBytes(dir: string, oid: string, env: Record<string, string>): Promise<Uint8Array | null> {
+	const p = Bun.spawn(["git", "cat-file", "blob", oid], { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env }, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+	const [buf, code] = await Promise.all([new Response(p.stdout).arrayBuffer(), p.exited]);
+	return code === 0 ? new Uint8Array(buf) : null;
+}
+
+async function readFileFrom(git: Git | null, dir: string, env: Record<string, string>, tip: WorkTip, path: string): Promise<WorkspaceFile> {
+	{
+		if (!git) return { error: "unavailable", message: "could not open a local mirror of the run's repository" };
+		const has = async () => (await git.run(["cat-file", "-e", `${tip.sha}^{commit}`])).code === 0;
+		if (!(await has())) {
+			const fetched = tip.ref ? (await git.run(["fetch", "-q", "--no-tags", "origin", `+${tip.ref}:refs/keep/${tip.sha}-fetched`], { timeoutMs: FilesMirror.FETCH_TIMEOUT_MS })).code === 0 : false;
+			if (!fetched) await git.run(["fetch", "-q", "--no-tags", "origin", tip.sha], { timeoutMs: FilesMirror.FETCH_TIMEOUT_MS });
+			if (!(await has())) return { error: "unavailable", message: "the agent's work is not on the remote (yet)" };
+			await git.run(["update-ref", `refs/keep/${tip.sha}`, tip.sha]);
+		}
+		// Exactly this path, as a regular file: no trees (no listing), no symlinks, no submodules.
+		const ls = await git.run(["-c", "core.quotepath=off", "ls-tree", "-z", "--long", tip.sha, "--", path]);
+		const m1 = /^(\d{6}) (\w+) ([0-9a-f]{40,64}) +(-|\d+)\t([\s\S]*?)\0/.exec(ls.stdout);
+		if (ls.code !== 0 || !m1 || m1[5] !== path) return { error: "not_found", message: `${path} is not in the agent's latest work` };
+		if (m1[2] !== "blob" || (m1[1] !== "100644" && m1[1] !== "100755")) return { error: "not_found", message: `${path} is not a regular file` };
+		if (Number(m1[4]) > WORKSPACE_FILE_MAX_BYTES) return { error: "too_large", message: `${path} is larger than ${WORKSPACE_FILE_MAX_BYTES / (1024 * 1024)} MB` };
+		const bytes = await blobBytes(dir, m1[3]!, env);
+		return bytes ? { bytes, path, sha: tip.sha } : { error: "unavailable", message: "git cat-file failed" };
 	}
 }
 
