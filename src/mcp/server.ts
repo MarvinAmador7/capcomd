@@ -143,7 +143,7 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_resume", {
     title: "Resume",
-    description: "Run a paused agent (or every paused agent in the run, when agent is omitted) again now. An agent is paused, not failed, when its provider's usage limit is reached, and resumes by itself at the reset time; resume it sooner when the limit was lifted (e.g. a plan upgrade). It continues from its work on its branch.",
+    description: "Run a paused agent (or every paused agent in the run, when agent is omitted) again now. An agent is paused, not failed, when its provider's usage limit is reached (it resumes by itself at the reset time; resume it sooner when the limit was lifted, e.g. a plan upgrade), or when the operator paused it (`capcomd pause`; it waits for resume). It continues from its work on its branch.",
     inputSchema: { runId: run, agent: z.string().optional() }, annotations: WRITE,
   }, (a) => handle(() => D.resume(a)));
 
