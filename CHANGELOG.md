@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: project cards now match the approved design. Each card is titled by the project's goal, shows the
+  folders its agents work in as chips (up to three, then `+n`), and nests every run of the project as an agent tree.
+  Run ids no longer appear on cards (they stay in the run view), and a card waiting for your approval gets a faint
+  amber tint instead of a coloured border. Click a card's title to open its run. Running status marks are blue even
+  when another app is in front.
+- Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
+  once, and clicks could land on the hidden cards).
+
 ## 0.6.0 (2026-10-25)
 
 Stable release of 0.6.0-rc.2, with no code changes since it: agents in Docker containers, `capcomd tui` in the CLI,

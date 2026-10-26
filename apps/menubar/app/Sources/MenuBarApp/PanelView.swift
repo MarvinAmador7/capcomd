@@ -15,24 +15,35 @@ struct PanelView: View {
     } else {
     NavigationStack(path: $model.path) {
       ScrollView {
-        VStack(alignment: .leading, spacing: Theme.cardGap) {
-          Text("Active").font(Theme.caption).foregroundStyle(.tertiary).padding(.top, 4)
+        VStack(alignment: .leading, spacing: 0) {
+          Text("Active").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
+            .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
           ForEach(model.projects) { p in
-            if p.isRunning { ProjectCard(project: p) } else { FinishedRow(project: p) }
+            Group {
+              if p.isRunning { ProjectCard(project: p) } else { FinishedRow(project: p) }
+            }
+            .padding(.bottom, Theme.cardGap)
+            .transition(.opacity)
           }
           if model.projects.isEmpty {
             Text("No projects yet").font(Theme.body).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 24)
           }
         }
-        .padding(Theme.inset)
+        .padding(Theme.Card.listPadding)
+        .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map(\.id))
       }
+      .safeAreaInset(edge: .bottom) { footer }
+      // macOS keeps the root under a pushed view, and pushed views are clear (a material would only blur the list
+      // behind it), so the list steps out entirely while anything is pushed.
+      .opacity(model.path.isEmpty ? 1 : 0)
+      .allowsHitTesting(model.path.isEmpty)
+      .accessibilityHidden(!model.path.isEmpty)
       .navigationDestination(for: AppModel.Route.self) { r in
         switch r {
         case .run(let id): RunDrillDownView(runId: id)
         case .thread(let runId, let agentId): ThreadView(runId: runId, agentId: agentId)
         }
       }
-      .safeAreaInset(edge: .bottom) { footer }
     }
     .frame(width: Theme.panelWidth, height: 520)
     .background(.ultraThinMaterial)   // HUD-style vibrancy; MenuBarExtra(.window) supplies the 16 pt rounded window
@@ -51,53 +62,67 @@ struct PanelView: View {
   }
 }
 
-/// Running project card: goal, scope chips, runs. No counts; state via amber tint, status marks, step bar.
+/// Project card (tree-card-v3): the goal as title, scope chips, then each run's agent tree, grouped by project id.
+/// No counts or progress text: state shows as the amber tint (an approval is waiting) and the tree's status marks.
+/// Run ids stay in the drill-down.
 struct ProjectCard: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let project: Project
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text(verbatim: project.title).font(Theme.cardTitle).lineLimit(2)   // untrusted goal: verbatim, never markdown
-      HStack(spacing: 4) {
-        Chip(text: project.id)                    // scope chip (prj-…/run-…); repo chips await G1
-      }
-      ForEach(project.runs) { run in
-        let approvals = model.approvals(run.id)
-        VStack(alignment: .leading, spacing: 6) {
-          Button { model.open(run: run.id) } label: {
-            HStack(spacing: 6) {
-              Text(verbatim: run.label ?? run.id).font(Theme.chip.monospaced()).foregroundStyle(.secondary)
-              Spacer()
-              StatusMark(status: approvals.isEmpty ? (run.isRunning ? .running : nil) : .waiting)
-            }
-          }
-          .buttonStyle(.plain)
-          StepBar(steps: model.steps(run.id))
+    let needsApproval = project.runs.contains { !model.approvals($0.id).isEmpty }
+    VStack(alignment: .leading, spacing: 0) {
+      Button(action: open) { header }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel(project.title + (needsApproval ? ", waiting for approval" : ""))
+        .accessibilityHint("Opens the run")
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(project.runs) { run in
           AgentTreeView(runId: run.id, compact: true)
-          ForEach(approvals) { ApprovalCard(approval: $0).padding(.leading, 20) }   // indented to the name column
+          ForEach(model.approvals(run.id)) { ApprovalCard(approval: $0).padding(.leading, 20) }   // indented to the name column
         }
       }
+      .padding(.top, Theme.Card.treeInnerTop)
+      .overlay(alignment: .top) {
+        Rectangle().fill(Theme.Card.divider).frame(height: Theme.Card.stroke).padding(.horizontal, -Theme.Card.treeBleed)
+      }
+      .padding(.top, Theme.Card.treeTop)
     }
-    .padding(Theme.cardPadding)
-    .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.cardFill))
-    .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
-      .strokeBorder(project.runs.contains { !model.approvals($0.id).isEmpty } ? Theme.amber.opacity(0.35) : Theme.hairline, lineWidth: 0.5))
+    .padding(.top, Theme.Card.paddingTop).padding(.horizontal, Theme.Card.paddingHorizontal).padding(.bottom, Theme.Card.paddingBottom)
+    .background {
+      // The tint crossfades (opacity only) instead of animating the fill colour.
+      let shape = RoundedRectangle(cornerRadius: Theme.cardRadius)
+      ZStack {
+        shape.fill(Theme.cardFill).opacity(needsApproval ? 0 : 1)
+        shape.fill(Theme.Card.approvalFill)
+          .overlay(shape.strokeBorder(Theme.Card.approvalStroke, lineWidth: Theme.Card.stroke))
+          .opacity(needsApproval ? 1 : 0)
+      }
+      .animation(Theme.Motion.ease(reduceMotion), value: needsApproval)
+    }
   }
-}
 
-/// Thin segmented bar, one segment per step, no numbers.
-struct StepBar: View {
-  let steps: [Step]
-  var body: some View {
-    HStack(spacing: 2) {
-      ForEach(steps) { s in
-        Capsule().fill(color(s.status)).frame(height: 3)
+  private var header: some View {
+    let scopes = project.scopes
+    return VStack(alignment: .leading, spacing: 0) {
+      Text(verbatim: project.title)   // untrusted goal: verbatim, never markdown
+        .font(Theme.Card.titleFont).tracking(Theme.Card.titleTracking).foregroundStyle(Theme.Card.titleText)
+        .lineLimit(2).multilineTextAlignment(.leading)
+      if !scopes.isEmpty {
+        HStack(spacing: Theme.Card.chipGap) {
+          ForEach(scopes.prefix(Theme.Card.maxChips), id: \.self) { ScopeChip(text: $0) }
+          if scopes.count > Theme.Card.maxChips { ScopeChip(text: "+\(scopes.count - Theme.Card.maxChips)", folder: false) }
+        }
+        .padding(.top, Theme.Card.chipsTop)
       }
     }
-    .accessibilityHidden(true)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
-  func color(_ s: StepStatus) -> Color {
-    switch s { case .done: .secondary.opacity(0.5); case .running: Theme.accent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued: .white.opacity(0.08) }
+
+  /// Opens the run that is doing something now, else the most recent one.
+  private func open() {
+    if let run = project.runs.first(where: \.isRunning) ?? project.runs.first { model.open(run: run.id) }
   }
 }
 

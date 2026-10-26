@@ -134,6 +134,13 @@ public struct Project: Sendable, Hashable, Identifiable {
   public var title: String { goal?.firstLine ?? runs.first?.title ?? id }
   public var isRunning: Bool { runs.contains(where: \.isRunning) }
   public var lastEventMs: Int { runs.map(\.lastEventMs).max() ?? 0 }
+  /// Scope chips: the distinct folders its agents work in, newest run first, then spawn order. Empty until the
+  /// daemon reports agent repos (gap G1).
+  public var scopes: [String] {
+    var seen = Set<String>()
+    return runs.flatMap { $0.agents.values.sorted { ($0.spawnedAtMs, $0.id) < ($1.spawnedAtMs, $1.id) } }
+      .compactMap(\.repo).filter { seen.insert($0).inserted }
+  }
 }
 
 /// Display node for the outline tree.

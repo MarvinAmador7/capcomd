@@ -62,4 +62,6 @@ Generators (run from `design/`; they read/write HTML in this folder):
 
 Some generators read other mockups' HTML as input, so re-run in dependency order if you change a base. Prefer editing the generator over the HTML so changes aren't lost. `spec.css` is the stylesheet for the HTML spec render.
 
+`fidelity/` holds the side-by-sides (mockup · before · after) from each fidelity PR, captured from the running app against `../client/mock/scenarios.ts`.
+
 Rejected/superseded variants are intentionally not committed — don't reintroduce them.
