@@ -29,7 +29,7 @@ Swift views live in `apps/menubar/app/Sources/MenuBarApp/`.
 - **No count/progress text** on cards. State is shown visually: **amber tint** when approval is needed, **status marks**, and the **step bar**.
 - The card body line shows live activity (or the approval question), never a repeat of the title. Run IDs belong in detail, not on the card chip.
 - **Lowercase profile names** (`planner`, `lead`, `worker`, `critic`).
-- Profile icons (SF Symbols): planner = dotted path (`point.topleft.down.to.point.bottomright.curvepath`), lead = `flag`, worker = `hammer`, critic = `checkmark.seal`, unknown = `hexagon` + dot.
+- Profile icons (SF Symbols): planner = dotted path (`point.3.connected.trianglepath.dotted`), lead = `flag`, worker = `hammer`, critic = `checkmark.seal`, unknown = `hexagon` + dot.
 - Step icons: icon set **A** (outline monochrome; blue only on the current span, red on errors).
 - **Finished steps have no status icons**; only queued/running/failed steps carry a status mark.
 
