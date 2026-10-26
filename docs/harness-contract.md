@@ -206,3 +206,42 @@ Why opt-in on the run stream: the lifecycle feed stays state changes only for cl
 - [`run.failed`](events.md#runfailed)
 - [`run.cancelled`](events.md#runcancelled)
 - [`run.deleted`](events.md#rundeleted)
+
+## Agent workspace
+
+`Agent.workspace` (`agents.tree`, `snapshot.agents`) and `agent.spawned` `data.workspace` say where an agent works, so a client can show a folder chip per agent and a run's distinct folders.
+Show `label` verbatim: the sub-folder (`path`, e.g. `ids/v1`) when the agent is scoped to one, else the repository's base name (`matchkey`). Group by `repo` + `path` for distinct folders.
+Today every agent works at the root of its run's repository (the one `capcomd run new` recorded, else the engine's `CAPCOMD_REPO`), so `repo` equals the run's repository without credentials and `path` is null.
+`workspace` is null when the run has no repository. It is fixed when the agent is spawned; agents spawned by older daemons report the run's repository, and their `agent.spawned` events have no `workspace`.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string",
+      "description": "Repository the agent works in: absolute path or remote URL, without credentials. Today always the run's repository"
+    },
+    "path": {
+      "description": "Sub-folder of `repo` the agent is scoped to, relative, '/'-separated; null = the whole repository (always null today)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short display name, show it verbatim: `path` when set (e.g. \"ids/v1\"), else the repository's base name without .git (e.g. \"matchkey\")"
+    }
+  },
+  "required": [
+    "repo",
+    "path",
+    "label"
+  ],
+  "additionalProperties": {},
+  "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
+}
+```

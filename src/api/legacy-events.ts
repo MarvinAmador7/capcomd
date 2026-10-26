@@ -6,6 +6,7 @@
 // tests/api/legacy-events.test.ts fails when a type has no schema.
 import { z } from "zod";
 import { AttachmentRef } from "./inline-cap";
+import { AgentWorkspace } from "./workspace";
 
 /** Text written by an agent or worker. Render as plain text only: never as markdown, links or actions. */
 export const UntrustedText = z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions" });
@@ -57,7 +58,7 @@ const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verif
 export const LegacyEventShapes = {
 	"run.created": { budget: U, label: nS, goal: nT.optional(), ...cause },
 	"run.granted": budget,
-	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: U, task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), ...cause },
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: U, task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(), ...cause },
 	"agent.started": { ...cause },
 	"agent.done": { ...finish, ...cause },
 	"agent.failed": { ...finish, ...cause },

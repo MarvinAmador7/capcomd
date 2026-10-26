@@ -139,6 +139,37 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "type": "boolean"
     },
     "grant": {},
+    "workspace": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "Repository the agent works in: absolute path or remote URL, without credentials. Today always the run's repository"
+        },
+        "path": {
+          "description": "Sub-folder of `repo` the agent is scoped to, relative, '/'-separated; null = the whole repository (always null today)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short display name, show it verbatim: `path` when set (e.g. \"ids/v1\"), else the repository's base name without .git (e.g. \"matchkey\")"
+        }
+      },
+      "required": [
+        "repo",
+        "path",
+        "label"
+      ],
+      "additionalProperties": {},
+      "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
+    },
     "cause": {
       "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
       "type": "string"
@@ -2119,6 +2150,37 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "x-untrusted": true,
             "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
           },
+          "workspace": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "repo": {
+                "type": "string",
+                "description": "Repository the agent works in: absolute path or remote URL, without credentials. Today always the run's repository"
+              },
+              "path": {
+                "description": "Sub-folder of `repo` the agent is scoped to, relative, '/'-separated; null = the whole repository (always null today)",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Short display name, show it verbatim: `path` when set (e.g. \"ids/v1\"), else the repository's base name without .git (e.g. \"matchkey\")"
+              }
+            },
+            "required": [
+              "repo",
+              "path",
+              "label"
+            ],
+            "additionalProperties": {},
+            "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
+          },
           "updatedAt": {
             "type": [
               "string",
@@ -2146,6 +2208,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "task",
           "taskAttachment",
           "result",
+          "workspace",
           "updatedAt"
         ]
       }

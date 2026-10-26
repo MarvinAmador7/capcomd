@@ -2,7 +2,9 @@
 // (kv _repo), and the engine (the verifier, the worker's push) uses the run's. The engine here starts WITHOUT
 // any repo settings, like a background service would; the CLI has them. The change must still land on trunk.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { world, spawnRoot, waitAll, WORKER, type World } from "./harness";
+import { Agent } from "../../src/api/contract";
+import { rivetSource } from "../../src/api/rivet-source";
+import { world, spawnRoot, trajectory, waitAll, WORKER, type World } from "./harness";
 
 const REPO_KEYS = ["CAPCOMD_REPO", "CAPCOMD_MERGE_MODE", "CAPCOMD_MERGE_STRATEGY", "CAPCOMD_MERGE_TARGET", "CAPCOMD_TEST_COMMAND", "CAPCOMD_GITHUB_REPO"];
 let w: World;
@@ -29,4 +31,14 @@ capcomd result --summary done >/dev/null`);
   expect(logs).not.toContain("no repository configured");
   await w.repo.seed.ok(["fetch", "-q", "origin"]);
   expect((await w.repo.seed.ok(["ls-tree", "-r", "--name-only", "origin/trunk"])).split("\n")).toContain("src/r.txt");
+
+  // harness.v1: every agent (root and the child it spawned over RPC) works in the run's recorded repository, which
+  // the engine itself was never given; agent.spawned and the agents snapshot say so.
+  const want = { repo: w.env.CAPCOMD_REPO!, path: null, label: "origin" };
+  const spawned = (await trajectory(w, run)).filter((e) => e.type === "AGENT_SPAWNED");
+  expect(spawned.length).toBe(2);
+  for (const e of spawned) expect(e.data.workspace).toEqual(want);
+  const agents = await rivetSource().agents(run);
+  expect(agents!.length).toBe(2);
+  for (const a of agents!) expect(Agent.parse(a).workspace).toEqual(want);
 }, 120_000);

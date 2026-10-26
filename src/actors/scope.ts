@@ -6,6 +6,9 @@ import { redactShapes } from "../agents/redact";
 import { strictEventData, type ScopeEventType } from "../api/legacy-events";
 import { dottedType } from "../api/envelope";
 import { inlineOrAttach } from "../api/inline-cap";
+import { workspaceOf, type AgentWorkspace } from "../api/workspace";
+import { RUN_REPO_KV } from "../merge/run-config";
+import { env as envVar } from "../utils/env";
 import type { RawAccess } from "rivetkit/db";
 import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
@@ -89,6 +92,8 @@ function rowToAgent(r: any) {
     grantedAt: Number(r.granted_at ?? 0),
     /** What it is doing now, as the daemon classified its events (src/agents/activity.ts); not an event, kept on the row. */
     activity: r.activity ? (JSON.parse(r.activity as string) as StoredActivity) : null,
+    /** Where it works (harness.v1 Agent.workspace), fixed at spawn; null when the run had no repository (or the row predates it). */
+    workspace: r.workspace ? (JSON.parse(r.workspace as string) as AgentWorkspace) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -215,6 +220,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "notice", "TEXT");
       await addColumn(database, "agents_v2", "granted_at", "INTEGER");
       await addColumn(database, "agents_v2", "activity", "TEXT");
+      await addColumn(database, "agents_v2", "workspace", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -309,12 +315,19 @@ export const scopeActor = actor({
         if (!d.ok) fail(d.code, d.error);
         if (!d.ok) return;
         const now = Date.now();
+        // The worker clones the run's recorded repository (kv _repo), else this engine's CAPCOMD_REPO (mergeConfigFor),
+        // and works at its root: that is the agent's workspace.
+        const repoKv = await tx.execute("SELECT v FROM kv WHERE k = ? AND deleted = 0", RUN_REPO_KV);
+        let runRepo: string | undefined;
+        try { if (repoKv.length) runRepo = envVar("REPO", JSON.parse(repoKv[0]!.v as string) ?? {}); } catch { /* unreadable: fall back */ }
+        const workspace = workspaceOf(runRepo ?? envVar("REPO"));
         await tx.execute(
-          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?)`,
+          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?)`,
           params.agentId, params.runId, params.parent ?? null, d.depth, params.profile, params.ref,
           params.spec ? JSON.stringify(params.spec) : null, JSON.stringify(d.limits), params.task,
-          params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now
+          params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now,
+          workspace ? JSON.stringify(workspace) : null
         );
         killpoint("scope.spawn.mid");
         // Same redaction path as message bodies: the row keeps the raw task for the worker; event + attachment are redacted.
@@ -323,7 +336,7 @@ export const scopeActor = actor({
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
           agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
-          ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}),
+          ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}), workspace,
         }, `spawn-${params.agentId}`);
         out = await get(params.agentId);
         created = true;
