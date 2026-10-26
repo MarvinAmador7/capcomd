@@ -48,6 +48,12 @@ describe("golden items", () => {
 		for (const k of ["say", "thinking", "tool", "error", "result", "plan", "other"]) expect(kinds).toContain(k);
 		expect(open).toBeGreaterThan(0);
 		expect(doneAfterOpen).toBeGreaterThan(0);
+		// tool.diff: an edit (context, removed and added lines) and a created file, and tools without one.
+		const ops = new Set<string>(), diffs = goldens.flatMap((g) => g.got.updates.flatMap((u) => (u.tool?.diff ? [u.tool.diff] : [])));
+		diffs.forEach((d) => d.lines.forEach((l) => ops.add(l.op)));
+		expect([...ops].sort()).toEqual([" ", "+", "-"]);
+		expect(diffs.some((d) => d.removed === 0 && d.added > 0)).toBe(true);
+		expect(goldens.some((g) => g.got.updates.some((u) => u.tool && u.tool.diff === null))).toBe(true);
 	});
 
 	test("the JSON Schema is exported and names blocks/1", () => {

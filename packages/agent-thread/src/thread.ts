@@ -8,11 +8,13 @@
 import { claudeToolKind, codexItemKind } from "./kinds";
 import { classifyLink, workspacePath, type LinkContext } from "./links";
 import { plainBlocks, toBlocks } from "./markdown";
+import { claudeInputDiff, claudeResultDiff } from "./diff";
 import { checkImage, type StoredImage } from "./images";
 import { capBytes, oneLine, sanitize, tailBytes } from "./sanitize";
 import { claudeSummary, codexSummary } from "./summary";
-import { THREAD_FORMAT, type BlockNode, type ItemDraft, type LinkNode, type ToolInfoT } from "./schema";
+import { THREAD_FORMAT, type BlockNode, type ItemDraft, type LinkNode, type ToolDiffT, type ToolInfoT } from "./schema";
 
+const EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 export const ARGS_MAX_BYTES = 4 * 1024;
 export const OUTPUT_MAX_BYTES = 16 * 1024;
 const ERROR_MAX_BYTES = 8 * 1024;
@@ -50,6 +52,7 @@ export function threadBuilder(o: ThreadOptions) {
 	const plans = new Map<string, string>(); // codex todo_list item id → item id
 	const ignoredCalls = new Set<string>(); // calls shown as something else (TodoWrite → plan)
 	const seenBlocks = new Set<string>();
+	const editPaths = new Map<string, unknown>(); // claude file-editing call id → its input's path
 	let n = 0, lastText: string | null = null;
 	const rel = (p: unknown) => { const s = str(p); return workspacePath(s, ctx.root) ?? s; };
 
@@ -86,12 +89,12 @@ export function threadBuilder(o: ThreadOptions) {
 	const fileLinks = (paths: unknown[]): LinkNode[] =>
 		paths.flatMap((p) => { const s = str(p); if (!s) return []; const l = classifyLink(s, workspacePath(s, ctx.root) ?? s, ctx); return l.target === "file" ? [l] : []; });
 	const openTool = (callId: string, t: Omit<ToolInfoT, "callId" | "isError" | "output">): ItemDraft => {
-		const tool: ToolInfoT = { callId, name: oneLine(t.name, 200), kind: t.kind, summary: t.summary, isError: false, args: t.args, output: null, files: t.files };
+		const tool: ToolInfoT = { callId, name: oneLine(t.name, 200), kind: t.kind, summary: t.summary, isError: false, args: t.args, output: null, files: t.files, diff: t.diff };
 		const item = create({ kind: "tool", status: "open", text: tool.summary, tool });
 		tools.set(callId, item.id);
 		return item;
 	};
-	const closeTool = (callId: string, r: { isError: boolean; output: string | null; durationMs: number | null; blocks?: BlockNode[]; error?: string | null; code?: string | null }): ItemDraft | null => {
+	const closeTool = (callId: string, r: { isError: boolean; output: string | null; durationMs: number | null; blocks?: BlockNode[]; error?: string | null; code?: string | null; diff?: ToolDiffT | null }): ItemDraft | null => {
 		const id = tools.get(callId);
 		if (!id) return null;
 		tools.delete(callId);
@@ -100,7 +103,7 @@ export function threadBuilder(o: ThreadOptions) {
 		const errorText = r.isError ? capBytes(sanitize(r.error ?? r.output ?? "failed"), ERROR_MAX_BYTES) : null;
 		return update(id, {
 			status: "done", durationMs: r.durationMs, blocks: r.blocks ?? prev.blocks,
-			tool: { ...prev.tool!, isError: r.isError, output }, error: errorText !== null ? { message: errorText, code: r.code ?? null } : null,
+			tool: { ...prev.tool!, isError: r.isError, output, diff: r.diff === undefined ? prev.tool!.diff : r.diff }, error: errorText !== null ? { message: errorText, code: r.code ?? null } : null,
 		});
 	};
 	/** Calls still open when the turn or the agent ended. */
@@ -156,9 +159,12 @@ export function threadBuilder(o: ThreadOptions) {
 						out.push(planItem(input.todos.map((t: any) => ({ text: str(t?.content) || str(t?.activeForm), done: t?.status === "completed" })), "done"));
 						continue;
 					}
+					const edits = EDIT_TOOLS.includes(name);
+					if (edits) editPaths.set(callId, input.file_path ?? input.notebook_path);
 					out.push(openTool(callId, {
 						name, kind: claudeToolKind(name, input), summary: claudeSummary(name, input, rel), args: capBytes(json(input), ARGS_MAX_BYTES),
-						files: ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(name) ? fileLinks([input.file_path ?? input.notebook_path]) : [],
+						files: edits ? fileLinks([input.file_path ?? input.notebook_path]) : [],
+						diff: edits ? claudeInputDiff(name, input, ctx.root) : null,
 					}));
 				} else out.push(other(`Assistant ${bt || "block"}`));
 			}
@@ -168,7 +174,12 @@ export function threadBuilder(o: ThreadOptions) {
 				const callId = str(r.tool_use_id);
 				if (ignoredCalls.delete(callId)) continue;
 				const res = claudeResult(r.content);
-				const closed = closeTool(callId, { isError: !!r.is_error, output: res.text, durationMs: results.length === 1 ? reportedMs(raw.tool_use_result) : null, blocks: res.blocks, error: r.is_error ? res.text : null });
+				// tool_use_result describes the event's only result; with several, it can't be matched to one.
+				const one = results.length === 1 ? raw.tool_use_result : undefined;
+				// The applied change, with context, replaces the input's; a failed call keeps what it proposed.
+				const diff = editPaths.has(callId) && !r.is_error ? claudeResultDiff(one, editPaths.get(callId), ctx.root) : undefined;
+				editPaths.delete(callId);
+				const closed = closeTool(callId, { isError: !!r.is_error, output: res.text, durationMs: one !== undefined ? reportedMs(one) : null, blocks: res.blocks, error: r.is_error ? res.text : null, diff });
 				out.push(closed ?? other("A tool result for a call this thread didn't see"));
 			}
 		} else if (type === "result") {
@@ -201,7 +212,8 @@ export function threadBuilder(o: ThreadOptions) {
 						const name = item.type === "mcp_tool_call" ? `${str(item.server)}.${str(item.tool)}` : str(item.type);
 						const args = item.type === "command_execution" ? str(item.command) : item.type === "mcp_tool_call" ? json(item.arguments) : item.type === "file_change" ? json(item.changes) : str(item.query);
 						const files = item.type === "file_change" && Array.isArray(item.changes) ? fileLinks(item.changes.filter((ch: any) => ch?.kind !== "delete").map((ch: any) => ch?.path)) : [];
-						out.push(openTool(id, { name, kind: codexItemKind(item) ?? "tool", summary: codexSummary(item, rel), args: capBytes(args, ARGS_MAX_BYTES), files }));
+						// file_change carries paths and kinds, not lines: no diff (the files are links).
+						out.push(openTool(id, { name, kind: codexItemKind(item) ?? "tool", summary: codexSummary(item, rel), args: capBytes(args, ARGS_MAX_BYTES), files, diff: null }));
 					}
 					if (done) {
 						const failed = item.status === "failed" || (item.type === "command_execution" && item.exit_code != null && Number(item.exit_code) !== 0);

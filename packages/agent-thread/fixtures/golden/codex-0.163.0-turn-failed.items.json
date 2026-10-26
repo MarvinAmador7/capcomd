@@ -21,7 +21,8 @@
         "isError": false,
         "args": "bash -lc 'sleep 600'",
         "output": null,
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": null,
       "truncated": null,
@@ -46,7 +47,8 @@
         "isError": true,
         "args": "bash -lc 'sleep 600'",
         "output": null,
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": {
         "message": "The turn failed before this call returned",

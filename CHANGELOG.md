@@ -22,6 +22,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Agents that can spawn (planners, leads) now have a thread too; before, nothing they did themselves was recorded
   for a client to show. When a child finishes, its parent's thread gets a hand-back item with the child's summary and
   its artifacts as links and thumbnails.
+- Harness API: a thread's tool items for Claude Code file edits (Edit, MultiEdit, Write, an inserted notebook cell)
+  now carry `tool.diff`: the file's path in the workspace, `added` / `removed` line counts for the whole change, and
+  its first 40 lines as context, removed and added lines (`op` " ", "-", "+", and "@" between hunks), ready to draw as
+  a diff card. While the call runs it shows the change the agent asked for; when it returns, the patch Claude Code
+  applied, with surrounding lines. The daemon never reads the file: everything comes from the agent's own events.
+  `tool.diff` is null for other tools and for Codex file changes (Codex reports which files changed, not the lines;
+  they stay in `tool.files`). The thread format stays `blocks/1`.
 
 - Menu bar app: project cards now match the approved design. Each card is titled by the project's goal, shows the
   folders its agents work in as chips (up to three, then `+n`), and nests every run of the project as an agent tree.
