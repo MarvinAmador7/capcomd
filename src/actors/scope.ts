@@ -400,8 +400,10 @@ export const scopeActor = actor({
       const now = Date.now();
       if (a.driver && a.driver !== params.driver && a.driverUntil > now) return { ok: false, agent: a };
       await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("UPDATE agents_v2 SET driver = ?, driver_until = ?, status = CASE WHEN status = 'pending' THEN 'running' ELSE status END, updated_at = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')",
-          params.driver, now + params.ttlMs, now, params.agentId);
+        // Starting it is its first sign of life: its liveness window runs from here, not from spawn, so the time its
+        // VM takes to come up doesn't read as "no heartbeat" (resume does the same). A takeover keeps the last heartbeat.
+        await tx.execute("UPDATE agents_v2 SET driver = ?, driver_until = ?, heartbeat_at = CASE WHEN status = 'pending' THEN ? ELSE heartbeat_at END, status = CASE WHEN status = 'pending' THEN 'running' ELSE status END, updated_at = ? WHERE agent_id = ? AND status NOT IN ('done','failed','cancelled')",
+          params.driver, now + params.ttlMs, now, now, params.agentId);
         if (a.status === "pending") await addEvent(tx, "AGENT_STARTED", params.agentId, {}, `start-${params.agentId}`);
       }, { name: "scopeClaim" });
       return { ok: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };

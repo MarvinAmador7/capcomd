@@ -89,6 +89,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `agent.resumed`, `run.cancelled`, `message.sent` with the `seq` the call returned). See docs/harness-contract.md.
 - A run stopped with `capcomd cancel <runId>` now ends as `run.cancelled` in the lifecycle feed even when some of its
   agents had already finished (before, it could show as `run.completed` or `run.failed`).
+- An agent that has just started no longer shows as stuck ("no heartbeat for Ns") in `tree`, `inspect` and the
+  harness API while its VM is still coming up: its liveness is now counted from when it started, not from its spawn.
 
 ## 0.6.0 (2026-10-25)
 
