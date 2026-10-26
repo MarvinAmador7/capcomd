@@ -32,6 +32,8 @@ const err = (c: Context, status: 401 | 403 | 404 | 409 | 422, code: string, mess
 export const ACTIVITY_MS = 1000;
 /** agent.thread_item_changed: the thread is polled at most this often, latest rev per item (at most four frames per item per second). */
 export const THREAD_MS = 250;
+/** GET …/thread: a page stops at about this many bytes of items (`next` says where to go on). */
+export const THREAD_PAGE_MAX_BYTES = 4 * 1024 * 1024;
 export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState };
 
 export function harnessApp(o: ServerOptions) {
@@ -84,8 +86,15 @@ export function harnessApp(o: ServerOptions) {
 				const limit = Math.min(input.limit ?? 200, THREAD_PAGE_MAX);
 				const items = await src.thread(input.runId, input.agentId, input.after ?? 0, limit + 1);
 				if (!items) throw nf(input.agentId);
-				const page = items.slice(0, limit);
-				return { items: page, next: items.length > limit ? page.at(-1)!.seq : null };
+				// At most `limit` items and about THREAD_PAGE_MAX_BYTES of them (always at least one).
+				const page: typeof items = [];
+				let bytes = 0;
+				for (const it of items.slice(0, limit)) {
+					const n = Buffer.byteLength(JSON.stringify(it));
+					if (page.length && bytes + n > THREAD_PAGE_MAX_BYTES) break;
+					page.push(it); bytes += n;
+				}
+				return { items: page, next: items.length > page.length ? page.at(-1)!.seq : null };
 			}),
 			// Raw bytes: served by the native route below (this handler is never reached).
 			workspace: os.agents.workspace.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
