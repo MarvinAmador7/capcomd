@@ -32,21 +32,31 @@ test("expired keys are pruned on load; legacy keys without a timestamp get a fre
 	expect(harnessState(p, { now: () => t }).key("legacy")).toBeUndefined();
 });
 
-test("deleted runs drop their seq, but seqs are never reused (also across restart)", () => {
+test("only a confirmed deletion drops a seq, and seqs are never reused (also across restart)", () => {
 	const p = tmp();
 	const s = harnessState(p);
 	const m1 = s.seqs([{ id: "r1", createdAt: "1" }, { id: "r2", createdAt: "2" }, { id: "r3", createdAt: "3" }]);
 	expect([...m1.values()]).toEqual([1, 2, 3]);
+	s.runDeleted("r2"); s.runDeleted("r3");
 	const m2 = s.seqs([{ id: "r1", createdAt: "1" }, { id: "r4", createdAt: "4" }]);
 	expect(m2.get("r1")).toBe(1);
 	expect(m2.get("r4")).toBe(4);
 	const disk = JSON.parse(readFileSync(p, "utf8"));
 	expect(disk.runSeq).toEqual({ r1: 1, r4: 4 });
 	expect(disk.nextSeq).toBe(5);
-	const s2 = harnessState(p);
-	expect(s2.seqs([{ id: "r5", createdAt: "5" }]).get("r5")).toBe(5);
-	expect(harnessState(p).seqs([]).size).toBe(0);
+	expect(harnessState(p).seqs([{ id: "r5", createdAt: "5" }]).get("r5")).toBe(5);
 	expect(harnessState(p).seqs([{ id: "r6" }]).get("r6")).toBe(6);
+});
+
+test("regression: an empty or partial run list keeps every seq", () => {
+	const p = tmp();
+	const s = harnessState(p);
+	s.seqs([{ id: "r1", createdAt: "1" }, { id: "r2", createdAt: "2" }, { id: "r3", createdAt: "3" }]);
+	expect(s.seqs([]).size).toBe(0);
+	expect(s.seqs([{ id: "r2", createdAt: "2" }]).get("r2")).toBe(2);
+	expect(JSON.parse(readFileSync(p, "utf8")).runSeq).toEqual({ r1: 1, r2: 2, r3: 3 });
+	const back = harnessState(p).seqs([{ id: "r1" }, { id: "r2" }, { id: "r3" }, { id: "r4" }]);
+	expect([...back.values()]).toEqual([1, 2, 3, 4]);
 });
 
 test("a state file whose nextSeq is behind its runSeq is repaired on load", () => {

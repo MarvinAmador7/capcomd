@@ -26,6 +26,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       ],
       "x-untrusted": true,
       "description": "Agent-written text: render as plain text, never markdown, links or actions"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
     }
   },
   "required": [
@@ -134,7 +138,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "review": {
       "type": "boolean"
     },
-    "grant": {}
+    "grant": {},
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
   },
   "required": [
     "parent",
@@ -157,7 +165,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "properties": {},
+  "properties": {
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
   "additionalProperties": {}
 }
 ```
@@ -242,7 +255,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
     },
     "spent": {},
-    "budget": {}
+    "budget": {},
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
   },
   "required": [
     "result",
@@ -333,7 +350,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions"
     },
     "spent": {},
-    "budget": {}
+    "budget": {},
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
   },
   "required": [
     "result",
@@ -437,7 +458,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   "type": "object",
   "properties": {
     "result": {},
-    "until": {}
+    "until": {},
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
   },
   "required": [
     "result",
@@ -462,6 +487,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
     }
   },
   "required": [
@@ -526,6 +555,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "parentStatus": {
       "type": "string"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
     }
   },
   "required": [
@@ -552,6 +585,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "description": "Agent-written text: render as plain text, never markdown, links or actions"
     },
     "by": {
+      "type": "string"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
       "type": "string"
     }
   },
@@ -1219,6 +1256,30 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
         }
       ]
+    },
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
     }
   },
   "required": [
@@ -1295,6 +1356,30 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       ],
       "x-untrusted": true,
       "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)."
+    },
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
     }
   },
   "required": [
@@ -1308,6 +1393,340 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `run.started`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
+    },
+    "agentId": {
+      "description": "Agent whose change moved the run, if any",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cause",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.paused`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
+    },
+    "agentId": {
+      "description": "Agent whose change moved the run, if any",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cause",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.resumed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
+    },
+    "agentId": {
+      "description": "Agent whose change moved the run, if any",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cause",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.completed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
+    },
+    "agentId": {
+      "description": "Agent whose change moved the run, if any",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cause",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.failed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
+    },
+    "agentId": {
+      "description": "Agent whose change moved the run, if any",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cause",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.cancelled`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
+    },
+    "agentId": {
+      "description": "Agent whose change moved the run, if any",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cause",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.deleted`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "cause": {
+      "type": "string",
+      "enum": [
+        "created",
+        "spawned",
+        "started",
+        "resumed",
+        "paused",
+        "usage_limit",
+        "finished",
+        "error",
+        "cancelled",
+        "parent_ended",
+        "all_agents_done",
+        "agent_failed",
+        "all_agents_cancelled",
+        "all_agents_paused",
+        "approval_needed",
+        "approved",
+        "denied",
+        "deleted"
+      ],
+      "description": "Why the state changed (trusted, machine-readable)"
+    },
+    "agentId": {
+      "description": "Agent whose change moved the run, if any",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cause",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+# Lifecycle feed
+
+Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
+Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
+
 # Stream frames
 
 `GET /v1/streams/{scope}/events`: SSE. Each event frame: `id: <seq>`, `event: <type>`, `data: <envelope JSON>`. Resume by sending `Last-Event-ID: <seq>`.
@@ -1315,6 +1734,7 @@ If that seq was compacted away, or this client's buffer overflowed (slow reader)
 then `snapshot.*` frames ending with `snapshot.end`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.
 A `: heartbeat` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to `daemon` and open a run stream on drill-in.
 The SSE `event:` field is the frame type: the envelope's dotted `type` for events, else `stream.reset` or `snapshot.*`.
+Run scopes accept `?feed=lifecycle`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot.
 Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z.
 
 ## `stream.reset`

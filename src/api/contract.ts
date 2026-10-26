@@ -5,6 +5,7 @@ import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
 import { AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
+import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 
 export const ApprovalId = z.string().regex(/^apr-[A-Za-z0-9]+$/).describe("Stable approval id, carried on approval events; decide with it directly");
 export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom"]);
@@ -115,11 +116,15 @@ export const StreamFrames = {
 	"snapshot.end": z.looseObject({ snapshotSeq: z.number().int().nonnegative() }),
 } as const;
 
+export const LIFECYCLE_DOC = `Lifecycle feed: only run and agent state changes (${LIFECYCLE_TYPES.join(", ")}). Tool calls and messages are not here; they stay in step and thread events.
+Each event carries a trusted \`data.cause\` code and the envelope's trusted \`text\`; \`seq\` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.`;
+
 export const STREAM_DOC = `SSE. Each event frame: \`id: <seq>\`, \`event: <type>\`, \`data: <envelope JSON>\`. Resume by sending \`Last-Event-ID: <seq>\`.
 If that seq was compacted away, or this client's buffer overflowed (slow reader), the server sends \`event: stream.reset\` with {snapshotSeq, reason},
 then \`snapshot.*\` frames ending with \`snapshot.end\`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.
 A \`: heartbeat\` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to \`daemon\` and open a run stream on drill-in.
 The SSE \`event:\` field is the frame type: the envelope's dotted \`type\` for events, else \`stream.reset\` or \`snapshot.*\`.
+Run scopes accept \`?feed=lifecycle\`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot.
 Timestamps (ts, decidedAt, expiresAt): ${TIMESTAMP_DOC}.`;
 
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
@@ -133,8 +138,10 @@ export const EventData = {
 		requestedBy: RequestedBy,
 		subject: ApprovalSubject,
 		expiresAt: Timestamp.nullable(),
+		cause: LifecycleCause.optional(),
 	}),
-	"approval.decided": Decision.loose(),
+	"approval.decided": Decision.extend({ cause: LifecycleCause.optional() }).loose(),
+	...RunLifecycleData,
 } as const;
 export type EventType = keyof typeof EventData;
 
@@ -151,6 +158,8 @@ export const contract = {
 		trace: oc.route({ method: "GET", path: "/v1/runs/{runId}/trace", description: "Trace spans of the run, in start order." }).input(z.object({ runId: z.string() })).output(z.array(Span)),
 		messages: oc.route({ method: "GET", path: "/v1/runs/{runId}/messages", description: "Thread history of the run." })
 			.input(z.object({ runId: z.string(), after: z.coerce.number().int().nonnegative().optional() })).output(z.array(Message)),
+		lifecycle: oc.route({ method: "GET", path: "/v1/runs/{runId}/lifecycle", description: LIFECYCLE_DOC })
+			.input(z.object({ runId: z.string(), after: z.coerce.number().int().nonnegative().optional() })).output(z.array(HarnessEvent)),
 	},
 	agents: {
 		tree: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents" }).input(z.object({ runId: z.string() })).output(z.array(Agent)),
@@ -174,7 +183,7 @@ export const contract = {
 			.output(z.array(HarnessEvent)),
 		stream: oc
 			.route({ method: "GET", path: "/v1/streams/{scope}/events", inputStructure: "detailed", description: STREAM_DOC })
-			.input(z.object({ params: z.object({ scope: Scope }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
+			.input(z.object({ params: z.object({ scope: Scope }), query: z.object({ feed: z.enum(["lifecycle"]).optional().describe("Run scopes: lifecycle events only") }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
 			.output(eventIterator(HarnessEvent)),
 	},
 	approvals: {

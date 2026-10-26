@@ -9,6 +9,7 @@ import { authenticate, loadClients, type AuthedClient, type ClientRecord, type C
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
 import { envelopes, messagesOf, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
+import { lifecycleEvents } from "./lifecycle";
 import { harnessState, type HarnessState } from "./state";
 
 export const HEARTBEAT_MS = 15_000;
@@ -37,6 +38,10 @@ export function harnessApp(o: ServerOptions) {
 			get: os.runs.get.handler(async ({ input }) => (await src.runs()).find((r) => r.id === input.runId) ?? (() => { throw nf(input.runId); })()),
 			trace: os.runs.trace.handler(({ input }) => src.trace(input.runId)),
 			messages: os.runs.messages.handler(async ({ input }) => messagesOf(await src.events(input.runId, 0)).filter((m) => m.seq > (input.after ?? 0))),
+			lifecycle: os.runs.lifecycle.handler(async ({ input }) => {
+				if ((await src.agents(input.runId)) === null) throw nf(input.runId);
+				return lifecycleEvents(input.runId, await src.events(input.runId, 0)).filter((e) => e.seq > (input.after ?? 0));
+			}),
 		},
 		agents: {
 			tree: os.agents.tree.handler(async ({ input }) => (await src.agents(input.runId)) ?? (() => { throw nf(input.runId); })()),
@@ -123,6 +128,18 @@ export function harnessApp(o: ServerOptions) {
 		const stream = new ReadableStream<Uint8Array>({
 			start: async (ctl) => {
 				const send = (event: string, data: unknown, id?: number) => { if (!closed) ctl.enqueue(enc.encode(`${id !== undefined ? `id: ${id}\n` : ""}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); };
+				// Frames sharing a seq (an agent event + the run.* event it caused) form a group: only the LAST frame carries `id: N`
+				// and each group is written in one enqueue, so a cut mid-group resumes from N-1 and the group is resent
+				// (clients dedupe by envelope id). Every stream path writes through here.
+				const sendGroups = (fs: Array<{ event: string; data: unknown; seq: number }>) => {
+					if (closed || !fs.length) return;
+					let buf = "";
+					fs.forEach((f, i) => {
+						const lastOfGroup = fs[i + 1]?.seq !== f.seq;
+						buf += `${lastOfGroup ? `id: ${f.seq}\n` : ""}event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`;
+						if (lastOfGroup) { ctl.enqueue(enc.encode(buf)); buf = ""; }
+					});
+				};
 				const frame = (name: keyof typeof StreamFrames, data: unknown, id?: number) => send(name, data, id);
 				hb = setInterval(() => { if (!closed) ctl.enqueue(enc.encode(": heartbeat\n\n")); }, heartbeatMs);
 				ctl.enqueue(enc.encode(": connected\n\n"));
@@ -132,14 +149,19 @@ export function harnessApp(o: ServerOptions) {
 					const tick = async () => {
 						const all = await src.runs();
 						const seqOf = state.seqs(all);
+						// Drop a seq only on a confirmed deletion (run.deleted in the run's log), never because the list came back short.
+						const listed = new Set(all.map((r) => r.id));
+						for (const id of state.knownRuns()) if (!listed.has(id) && (await src.events(id, 0).catch(() => [])).some((e) => e.type === "run.deleted" || e.type === "RUN_DELETED")) state.runDeleted(id);
 						const runs = [...all].sort((a, b) => seqOf.get(a.id)! - seqOf.get(b.id)!);
 						let top = seen;
+						const out: Array<{ event: string; data: unknown; seq: number }> = [];
 						runs.forEach((r) => {
 							const i = seqOf.get(r.id)! - 1;
 							top = Math.max(top, i + 1);
 							if (i + 1 <= seen || (scope.startsWith("prj-") && r.projectId !== scope)) return;
-							send("run.created", { v: 1, id: `evt_${scope}_${i + 1}`, scope, seq: i + 1, entity: r.id, entitySeq: 1, type: "run.created", typeVersion: 1, durability: "durable", ts: r.createdAt ?? isoTs(Date.now()), epochMs: r.createdAt ? Date.parse(r.createdAt) : Date.now(), projectId: r.projectId, runId: r.id, agentId: null, text: "Run created.", data: { label: r.label, goal: r.goal, budget: null } }, i + 1);
+							out.push({ event: "run.created", seq: i + 1, data: { v: 1, id: `evt_${scope}_${i + 1}`, scope, seq: i + 1, entity: r.id, entitySeq: 1, type: "run.created", typeVersion: 1, durability: "durable", ts: r.createdAt ?? isoTs(Date.now()), epochMs: r.createdAt ? Date.parse(r.createdAt) : Date.now(), projectId: r.projectId, runId: r.id, agentId: null, text: "Run created.", data: { label: r.label, goal: r.goal, budget: null } } });
 						});
+						sendGroups(out);
 						seen = top;
 					};
 					await tick();
@@ -148,6 +170,34 @@ export function harnessApp(o: ServerOptions) {
 				}
 				const runId = scope;
 				const all = await src.events(runId, 0);
+				if (c.req.query("feed") === "lifecycle") {
+					// Lifecycle feed: snapshot of state (run, agents, approvals), then only lifecycle events. Folded from the full log each tick.
+					const head = all.at(-1)?.seq ?? 0;
+					let cursor: number;
+					if (last !== null && last <= head) cursor = last;
+					else {
+						if (last !== null) frame("stream.reset", { snapshotSeq: head, reason: "compacted" });
+						const run = (await src.runs()).find((r) => r.id === runId) ?? null;
+						if (run) frame("snapshot.run", { run });
+						frame("snapshot.agents", { agents: (await src.agents(runId)) ?? [] });
+						frame("snapshot.approvals", { approvals: await src.approvals(runId) });
+						frame("snapshot.end", { snapshotSeq: head }, head);
+						cursor = head;
+					}
+					let busy = false;
+					const tick = async () => {
+						if (busy || closed) return;
+						busy = true;
+						try {
+							const evs = await src.events(runId, 0);
+							sendGroups(lifecycleEvents(runId, evs).filter((e) => e.seq > cursor).map((e) => ({ event: e.type, data: e, seq: e.seq })));
+							cursor = Math.max(cursor, evs.at(-1)?.seq ?? 0);
+						} finally { busy = false; }
+					};
+					await tick();
+					timer = setInterval(() => { tick().catch(() => {}); }, pollMs);
+					return;
+				}
 				const head = all.at(-1)?.seq ?? 0;
 				let cursor: number;
 				if (last !== null && last <= head) {
@@ -171,12 +221,14 @@ export function harnessApp(o: ServerOptions) {
 					if (busy || closed) return;
 					busy = true;
 					try {
+						const out: Array<{ event: string; data: unknown; seq: number }> = [];
 						for (const e of await src.events(runId, cursor)) {
 							const k = e.agentId ?? runId; const n = (counts.get(k) ?? 0) + 1; counts.set(k, n);
 							const env = envelopes(runId, [e])[0]!; env.entitySeq = n;
-							send(env.type, env, e.seq);
+							out.push({ event: env.type, data: env, seq: e.seq });
 							cursor = e.seq;
 						}
+						sendGroups(out);
 					} finally { busy = false; }
 				};
 				await tick();
