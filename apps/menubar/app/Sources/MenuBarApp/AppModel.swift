@@ -47,7 +47,8 @@ final class AppModel {
 
   static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) {
     let t = UnixSocketTransport(socketPath: socketPath, token: token)
-    return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), prefs: DefaultsPreferences()), t)
+    return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), detail: LiveDetail(transport: t),
+                         controls: LiveControls(transport: t), prefs: DefaultsPreferences()), t)
   }
 
   static func live() -> AppModel {
@@ -84,9 +85,30 @@ final class AppModel {
     get { _ = revision; return store.prefs.drillView }
     set { store.prefs.drillView = newValue; revision &+= 1 }
   }
+  var detailTab: DetailTab {
+    get { _ = revision; return store.prefs.detailTab }
+    set { store.prefs.detailTab = newValue; revision &+= 1 }
+  }
   var activityCollapsed: Bool {
     get { _ = revision; return store.prefs.activityCollapsed }
     set { store.prefs.activityCollapsed = newValue; revision &+= 1 }
+  }
+
+  // Run detail (drill-down)
+  func traceRows(_ runId: String, nowMs: Int, collapsed: Set<String>) -> [TraceRow] { _ = revision; return store.traceRows(runId: runId, nowMs: nowMs, collapsed: collapsed) }
+  func traceState(_ runId: String) -> Fetched<[TraceSpan]>? { _ = revision; return store.traces[runId] }
+  func filesState(_ runId: String) -> Fetched<RunFiles>? { _ = revision; return store.files[runId] }
+  func log(_ agentId: String) -> [LogLine] { _ = revision; return store.logs[agentId] ?? [] }
+  func logUnavailable(_ agentId: String) -> DetailUnavailable? { _ = revision; return store.logUnavailable[agentId] }
+  func focusAgent(_ runId: String) -> Agent? { _ = revision; return store.focusAgent(runId: runId) }
+  func controlState(_ runId: String) -> ControlState { _ = revision; return store.controlState[runId] ?? .idle }
+  func pauseAction(_ runId: String) -> RunControl { _ = revision; return store.pauseAction(runId: runId) }
+  func control(_ runId: String, _ action: RunControl) { Task { _ = await store.control(runId, action) } }
+  /// One refresh of what the drill-down shows: the trace when it is on screen, and the visible Log or Files tab.
+  func refreshDetail(_ runId: String, trace: Bool, files: Bool, logAgent: String?) async {
+    if trace { await store.refreshTrace(runId) }
+    if files { await store.refreshFiles(runId) }
+    if let a = logAgent { await store.refreshLog(runId: runId, agentId: a) }
   }
 
   func open(run id: String) { store.openRun(id); path = [.run(id)] }

@@ -5,7 +5,8 @@
 //   SCENARIO=panel TOKEN=… bun scenarios.ts /tmp/capcomd-ui.sock
 //   swift run CapcomdMenuBar -capcomd.socketPath /tmp/capcomd-ui.sock     (argument domain: nothing is persisted)
 //
-// Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
+// Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
+// trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
 // store's rebuild picks up repo/key (scope chips, suffixes) without a run stream; lifecycle feeds re-send the same
 // state per run. Repos ride in `agent.spawned.data.agent.repo` (the contract leaves `agent` open).
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
@@ -15,9 +16,12 @@ const TOKEN = process.env.TOKEN ?? "test-token";
 const SCENARIO = process.env.SCENARIO ?? "panel";
 const NOW = Date.now(), min = 60_000, iso = (ms: number) => new Date(ms).toISOString();
 
-type AgentSpec = { id: string; parent?: string; profile: string; status: string; repo?: string; key?: string; activity?: string; ago: number };
+type AgentSpec = { id: string; parent?: string; profile: string; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number };
 type ApprovalSpec = { id: string; agentId: string; question: string; ref: string; target: string };
-type RunSpec = { id: string; projectId: string; goal: string; state: string; startedAgo: number; lastAgo: number; agents: AgentSpec[]; approvals?: ApprovalSpec[] };
+type SpanSpec = { id: string; parent?: string; name: string; from: number; took: number; error?: boolean; attrs?: Record<string, unknown> };   // from/took: seconds after the run started
+type FileSpec = { path: string; status: string; added: number | null; removed: number | null; agentId: string };
+type RunSpec = { id: string; projectId: string; goal: string; state: string; startedAgo: number; lastAgo: number; agents: AgentSpec[]; approvals?: ApprovalSpec[];
+  spans?: SpanSpec[]; transcript?: Record<string, string[]>; files?: FileSpec[] };
 
 const scenes: Record<string, RunSpec[]> = {
   // tree-card-v3.png: approval-tinted card with a nested tree, a quiet running card, one finished project.
@@ -45,6 +49,39 @@ const scenes: Record<string, RunSpec[]> = {
     { id: "run-mk31", projectId: "prj-matchkey", goal: "Migrate matchkey to v3.2", state: "completed", startedAgo: 120 * min, lastAgo: 100 * min,
       agents: [{ id: "agt-pl00", profile: "planner", status: "done", repo: "matchkey", ago: 120 * min }] },
   ],
+  // view-activity / view-trace / drill-a2-*: one run seen from its drill-down.
+  run: [
+    { id: "run-mk32", projectId: "prj-matchkey", goal: "Migrate matchkey to v3.2", state: "running", startedAgo: 6.25 * min, lastAgo: 0.05 * min,
+      agents: [
+        { id: "agt-pl01", profile: "planner", status: "done", repo: "matchkey", activity: "Planned the work", kind: "plan", ago: 6 * min },
+        { id: "agt-wk01", parent: "agt-pl01", profile: "worker", status: "done", repo: "ids/v1", key: "task-7a10", activity: "Read 4 files", kind: "read", ago: 5.8 * min },
+        { id: "agt-ld01", parent: "agt-pl01", profile: "lead", status: "done", repo: "ids/v1", key: "task-1b2c", activity: "Started 2 sub-agents", kind: "spawn", ago: 5 * min },
+        { id: "agt-wk02", parent: "agt-ld01", profile: "worker", status: "failed", repo: "ids/v1", key: "task-d3ce", activity: "Ran the tests", kind: "test", ago: 3 * min },
+        { id: "agt-wk03", parent: "agt-ld01", profile: "worker", status: "running", repo: "ids/v1", key: "task-4423", activity: "Editing 3 files", kind: "edit", ago: 2 * min },
+        { id: "agt-cr01", parent: "agt-pl01", profile: "critic", status: "pending", repo: "addriva", key: "task-c0de", task: "Validate row counts", ago: 1.5 * min },
+        { id: "agt-cr02", parent: "agt-pl01", profile: "critic", status: "pending", repo: "matchkey", key: "task-c0df", task: "Commit to matchkey", ago: 1.4 * min },
+      ],
+      spans: [
+        { id: "s1", name: "sandbox.ensure", from: 2, took: 6, attrs: { "sandbox.provider": "boxd" } },
+        { id: "s1a", parent: "s1", name: "sandbox.waitReady", from: 3, took: 4 },
+        { id: "s1b", parent: "s1", name: "actor.scope.kvGet", from: 4, took: 1 },
+        { id: "s2", name: "agent.claude_code", from: 9, took: 33, attrs: { "agent.kind": "claude" } },
+        { id: "s3", name: "transition.task", from: 40, took: 1 },
+        { id: "s4", name: "agent.claude_code", from: 60, took: 62 },
+        { id: "s5", name: "agent.claude_code", from: 130, took: 9, error: true, attrs: { "agent.error_kind": "timeout" } },
+        { id: "s6", name: "agent.claude_code", from: 140, took: 12 },
+        { id: "s7", name: "git.push", from: 160, took: 4, attrs: { "git.operation": "push", "git.ref": "fix/backfill" } },
+        { id: "s8", name: "agent.claude_code", from: 180, took: 108 },
+      ],
+      transcript: { "agt-wk03": [
+        "reading ids/v1/schema.json", "shard 116/256 ok  412k rows", "shard 117/256 ok  409k rows", "shard 118/256 ok  415k rows",
+        "writing shard 119 \u2192 r2://matchkey/v3.2/part-0119.parquet" ] },
+      files: [
+        { path: "matchkey/v3.2/schema.json", status: "modified", added: 42, removed: 0, agentId: "agt-wk03" },
+        { path: "ids/v1/join_addriva_id.sql", status: "modified", added: 18, removed: 3, agentId: "agt-wk03" },
+        { path: "addriva/src/matchkey.ts", status: "modified", added: 7, removed: 7, agentId: "agt-wk02" },
+      ] },
+  ],
   // Nothing active: finished, failed and stopped projects as one-line rows (newest first, at most three).
   finished: [
     { id: "run-f1", projectId: "prj-f1", goal: "Launch Addriva Verify docs", state: "completed", startedAgo: 30 * min, lastAgo: 26 * min,
@@ -70,7 +107,7 @@ const env = (r: RunSpec, type: string, entity: string, agentId: string | null, m
 for (const r of runs) {
   env(r, "run.created", r.id, null, NOW - r.startedAgo, { runId: r.id, budget: {}, label: null, goal: r.goal });
   for (const a of r.agents) env(r, "agent.spawned", a.id, a.id, NOW - a.ago, { parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile,
-    budget: {}, limits: {}, agent: a.repo ? { repo: a.repo } : {}, task: null, key: a.key ?? null, operator: false });
+    budget: {}, limits: {}, agent: a.repo ? { repo: a.repo } : {}, task: a.task ?? null, key: a.key ?? null, operator: false });
   for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - r.lastAgo, { approvalId: p.id, kind: "merge", question: p.question,
     requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target }, expiresAt: null });
   env(r, "run.started", r.id, null, NOW - r.lastAgo, { cause: "started" });   // bumps lastEventMs to the run's recency
@@ -82,8 +119,8 @@ const HEAD = seq;
 
 const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, repo: null, createdAt: iso(NOW - r.startedAgo) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
-  text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: "read", at: iso(NOW - a.ago) } : null,
-  task: null, taskAttachment: null, result: null, updatedAt: iso(NOW - a.ago) });
+  text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
+  task: a.task ?? null, taskAttachment: null, result: null, updatedAt: iso(NOW - a.ago) });
 const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind: "merge", status: decided.has(p.id) ? decided.get(p.id).status : "pending",
   question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target } });
 const decided = new Map<string, any>();
@@ -109,6 +146,21 @@ Bun.serve({
     if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: `mock-ui-${SCENARIO}` });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
     if (p === "/v1/runs") return Response.json(runs.map(runBody));
+    const r1 = p.match(/^\/v1\/runs\/([^/]+)\/(trace|files)$/), run1 = r1 && runs.find(r => r.id === r1[1]);
+    if (r1 && !run1) return err(404, "not_found", `run ${r1[1]} not found`);
+    if (r1 && r1[2] === "trace") { const t0 = NOW - run1!.startedAgo; return Response.json((run1!.spans ?? []).map(sp => ({ traceId: "t-" + run1!.id, spanId: sp.id,
+      parentSpanId: sp.parent ?? null, name: sp.name, start: iso(t0 + sp.from * 1000), end: iso(t0 + (sp.from + sp.took) * 1000), status: sp.error ? 2 : 1, attributes: sp.attrs ?? {} }))); }
+    if (r1 && r1[2] === "files") { const f = run1!.files ?? []; return Response.json({ runId: run1!.id, asOf: HEAD, computedAt: iso(Date.now()), target: "main",
+      files: f.map(x => ({ ...x, oldPath: null })), total: f.length, truncated: false, sources: [] }); }
+    const tr = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/transcript$/);
+    if (tr) { const lines = runs.find(r => r.id === tr[1])?.transcript?.[tr[2]] ?? []; const after = Number(url.searchParams.get("after") ?? 0);
+      return Response.json({ items: lines.map((text, i) => ({ seq: i + 1, at: iso(Date.now() - (lines.length - i) * 2500), stream: "stdout", text })).filter(x => x.seq > after), next: null }); }
+    const ctl = p.match(/^\/v1\/runs\/([^/]+)\/(pause|resume|cancel)$/);
+    if (ctl && req.method === "POST") {
+      if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+      const r = runs.find(x => x.id === ctl[1]); if (!r) return err(404, "not_found", `run ${ctl[1]} not found`);
+      return Response.json({ runId: r.id, action: ctl[2], changed: [], pending: r.agents.filter(a => a.status === "running").map(a => a.id) });
+    }
     const m = p.match(/^\/v1\/approvals\/([A-Za-z0-9_-]+)\/decision$/);
     if (m && req.method === "POST") {
       const body: any = await req.json();
