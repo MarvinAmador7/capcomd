@@ -1,9 +1,11 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
 import CapcomdStore
+import CapcomdThread
 
-/// SPEC §4.5 agent thread, limited to what harness.v1 carries (gap G3). All agent text is `Text(verbatim:)`:
-/// no markdown, no autolinks, no actions.
+/// SPEC §4.5 agent thread (thread-panel-v2): header, then the agent's thread (the daemon's structured items, harness #59,
+/// with your steers between them; against an older daemon, the event-built lines), then the composer. Agent text is
+/// never markdown, links or actions beyond what the daemon classified (ThreadContent.swift).
 struct ThreadView: View {
   @Environment(AppModel.self) private var model
   let runId: String
@@ -12,32 +14,29 @@ struct ThreadView: View {
 
   var body: some View {
     let agent = model.run(runId)?.agents[agentId]
-    let node = findNode(model.tree(runId))
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(spacing: 6) {
-        Button { model.back() } label: { Image(systemName: "chevron.left") }
-          .buttonStyle(.plain).keyboardShortcut("[", modifiers: .command).accessibilityLabel("Back")
-        Text(verbatim: "\(model.run(runId)?.title ?? runId) / \(agent?.displayName ?? "Agent")").font(Theme.chip).foregroundStyle(.secondary).lineLimit(1)
-      }
-      HStack(spacing: 6) {
-        ProfileIcon(kind: agent?.kind ?? .other, tint: node?.iconTint ?? .grey)
-        Text(verbatim: agent?.displayName ?? "Agent").font(Theme.panelTitle)
-        if let s = node?.suffix { Text(verbatim: s).font(Theme.monoTime).foregroundStyle(.tertiary) }
-        StatusMark(status: node?.statusSymbol)
-      }
-      if let task = agent?.task {
-        RedactableText(text: task).font(Theme.body).foregroundStyle(.primary.opacity(0.88)).textSelection(.enabled)
-      }
-      if let att = agent?.taskAttachment { Text(verbatim: att.label).font(Theme.chip).foregroundStyle(.tertiary) }
-      if let sum = agent?.resultSummary {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Result").font(Theme.chip).foregroundStyle(.tertiary)
-          RedactableText(text: sum).font(Theme.body).textSelection(.enabled)   // untrusted: plain text only
-        }
-      }
+    let entries = model.threadEntries(agentId)
+    VStack(alignment: .leading, spacing: 0) {
+      ThreadHeader(runId: runId, agentId: agentId)
       ScrollView {
-        VStack(alignment: .leading, spacing: 8) {
-          ForEach(model.thread(agentId)) { ThreadItemView(runId: runId, agentId: agentId, item: $0) }
+        LazyVStack(alignment: .leading, spacing: 0) {
+          if let task = agent?.task {
+            RedactableText(text: task).font(Theme.Content.thoughtFont).foregroundStyle(Theme.Content.thoughtText)
+              .lineSpacing(Theme.Content.thoughtSpacing).lineLimit(4).textSelection(.enabled)
+              .padding(.bottom, Theme.Content.proseBottom)
+          }
+          ForEach(entries) { e in
+            switch e {
+            case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next)
+            case .event(let ev): ThreadItemView(runId: runId, agentId: agentId, item: ev).padding(.bottom, Theme.Content.proseBottom)
+            }
+          }
+          if case .failed(let why)? = model.threadUnavailable(agentId) {
+            HStack(spacing: Theme.Content.toolGap) {
+              Text(verbatim: "Couldn't load the thread (\(why))")
+              Button("Retry") { Task { await model.refreshThread(runId: runId, agentId: agentId) } }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+            }
+            .font(Theme.Content.otherFont).foregroundStyle(Theme.Content.otherText).padding(.bottom, Theme.Content.proseBottom)
+          }
           // Steers still on their way; each is replaced by its message.sent once the daemon confirms it.
           ForEach(model.pendingSteers(agentId)) { p in
             SteerBubble(text: p.body, state: p.state,
@@ -45,23 +44,85 @@ struct ThreadView: View {
                         onDiscard: { model.discardSteer(agentId: agentId, id: p.id) })
           }
         }
+        .padding(Theme.Content.padding)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.content = $0; report() }
       }
       .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.scroll = $0; report() }
       .defaultScrollAnchor(.bottom)
-      .mask(VStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16) })
+      .padding(.horizontal, -Theme.Content.padding.leading + Theme.Drill.headerPadding.leading)   // .th bleeds to 16 inside the panel
+      .mask(VStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Theme.Content.fade) })
+      .environment(\.openURL, OpenURLAction { url in open(url) })
       ThreadComposer(runId: runId, agentId: agentId)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)   // an empty thread stays left-aligned
-    .padding(Theme.inset)
+    .padding(Theme.Drill.padding)
     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.total = $0; report() }
     .navigationBarBackButtonHidden(true)
+    // Follow live (thread=1 on the run's feed) and read from the cursor; a slow re-read covers a dropped stream.
+    .task(id: agentId) {
+      model.openThread(runId: runId, agentId: agentId)
+      while !Task.isCancelled {
+        await model.refreshThread(runId: runId, agentId: agentId)
+        try? await Task.sleep(for: .seconds(Theme.Drill.threadRefreshSeconds))
+      }
+    }
+    .onDisappear { model.closeThread(agentId: agentId) }
   }
 
-  /// The thread's natural height: everything around the scroll (header, task, input) plus the scroll's content.
+  /// The thread's natural height: everything around the scroll (header, composer) plus the scroll's content.
   private func report() {
     guard size.total > 0 else { return }
     model.routeHeight = size.total - size.scroll + size.content
+  }
+
+  /// Link clicks: web links open in the browser (http/https only, checked when the link was built); agent and run
+  /// links navigate. Anything else is ignored.
+  private func open(_ url: URL) -> OpenURLAction.Result {
+    switch url.scheme?.lowercased() {
+    case "http", "https": NSWorkspace.shared.open(url); return .handled
+    case ThreadLinkURL.scheme:
+      let id = url.lastPathComponent
+      switch url.host {
+      case "agent": model.path.append(.thread(runId: runId, agentId: id)); return .handled
+      case "run": model.open(run: id); return .handled
+      default: return .discarded
+      }
+    default: return .discarded
+    }
+  }
+}
+
+/// `.hdr` at agent level: back, "Project / Agent", profile icon · name · suffix · status.
+struct ThreadHeader: View {
+  @Environment(AppModel.self) private var model
+  let runId: String
+  let agentId: String
+
+  var body: some View {
+    let agent = model.run(runId)?.agents[agentId]
+    let node = findNode(model.tree(runId))
+    HStack(spacing: Theme.Drill.headerGap) {
+      Button { model.back() } label: {
+        Image(systemName: "chevron.left").font(Theme.Drill.backIcon).foregroundStyle(Theme.Drill.switchOn)
+          .frame(width: Theme.Drill.backSize, height: Theme.Drill.backSize)
+          .background(RoundedRectangle(cornerRadius: Theme.Drill.backRadius).fill(Theme.Drill.backFill))
+      }
+      .buttonStyle(PressableStyle()).accessibilityLabel("Back")
+      .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }
+      VStack(alignment: .leading, spacing: Theme.Drill.titleTop) {
+        Text(verbatim: "\(model.run(runId)?.title ?? runId) / \(agent?.displayName ?? "Agent")")
+          .font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).lineLimit(1)
+        HStack(spacing: Theme.Content.handoffGap) {
+          ProfileIcon(kind: agent?.kind ?? .other, tint: node?.iconTint ?? .grey)
+          Text(verbatim: agent?.displayName ?? "Agent").font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn)
+          if let s = node?.suffix { Text(verbatim: s).font(Theme.monoTime).foregroundStyle(.tertiary) }
+          StatusMark(status: node?.statusSymbol)
+        }
+        .lineLimit(1)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(Theme.Drill.headerPadding)
   }
 
   private func findNode(_ ns: [AgentNode]) -> AgentNode? {

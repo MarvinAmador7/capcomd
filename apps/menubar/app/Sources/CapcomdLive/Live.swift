@@ -1,5 +1,6 @@
 import CapcomdClient
 import CapcomdStore
+import CapcomdThread
 import Foundation
 
 /// SSE subscription per scope on `GET /v1/streams/{scope}/events` over the CapcomdClient Unix-socket transport.
@@ -21,7 +22,12 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   /// Resume cursor = last SSE `id:` seen, never an envelope seq: in a shared-seq group only the last frame has an id, so a
   /// cut mid-group resumes before the group and the store drops the re-sent members by envelope id.
   public func subscribe(scope: String, feed: String?, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
-    let path = "/v1/streams/\(scope)/events" + (feed.map { "?feed=\($0)&activity=1" } ?? "")
+    subscribe(scope: scope, feed: feed, thread: false, after: after, onFrame: onFrame)
+  }
+
+  public func subscribe(scope: String, feed: String?, thread: Bool, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
+    let query = (feed.map { ["feed=\($0)", "activity=1"] } ?? []) + (thread ? ["thread=1"] : [])
+    let path = "/v1/streams/\(scope)/events" + (query.isEmpty ? "" : "?" + query.joined(separator: "&"))
     let h = Handle(); let t = transport, maxR = maxReconnects, bo = backoff, idle = idleTimeout
     h.task = Task {
       var last = after, attempts = 0
@@ -96,6 +102,37 @@ public struct LiveDetail: RunDetailFetching {
     try await get("/v1/runs/\(Self.seg(runId))/agents/\(Self.seg(agentId))/transcript?limit=\(limit)" + (after.map { "&after=\($0)" } ?? ""), as: TranscriptPage.self)
   }
   public func files(runId: String) async throws -> RunFiles { try await get("/v1/runs/\(Self.seg(runId))/files", as: RunFiles.self) }
+}
+
+/// Agent threads (harness #59). Pages are at most 100 items (each up to 64 KB of blocks plus its text), read with a 16 MB
+/// cap; media is at most 5 MB on the daemon's side.
+public struct LiveThread: ThreadFetching {
+  let transport: UnixSocketTransport
+  public init(transport: UnixSocketTransport) { self.transport = transport }
+  public func thread(runId: String, agentId: String, after: Int, limit: Int) async throws -> CapcomdThread.Page {
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread?after=\(after)&limit=\(limit)"
+    do { return try await transport.getJSON(path, as: CapcomdThread.Page.self, maxBytes: 16 << 20) }
+    catch let e as HTTPStatusError {
+      switch e.status { case 401: throw Unauthorized(); case 404: throw DetailUnavailable.unsupported; default: throw DetailUnavailable.failed("HTTP \(e.status)") }
+    }
+    catch is DecodingError { throw DetailUnavailable.failed("unexpected response") }
+  }
+  public func attachment(runId: String, id: String) async throws -> Data {
+    try await bytes("/v1/runs/\(LiveDetail.seg(runId))/attachments/\(LiveDetail.seg(id))/content")
+  }
+  public func workspaceFile(runId: String, agentId: String, path: String) async throws -> Data {
+    let q = path.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~/"))) ?? path
+    return try await bytes("/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/workspace?path=\(q)")
+  }
+  func bytes(_ path: String) async throws -> Data {
+    let (status, data) = try await transport.get(path, maxBytes: 6 << 20)
+    switch status {
+    case 200: return data
+    case 401: throw Unauthorized()
+    case 404: throw DetailUnavailable.failed("not found")
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
 }
 
 /// `POST /v1/runs/{runId}/{pause|resume|cancel}` (harness #50): Idempotency-Key, steer scope. 409 `conflict` carries

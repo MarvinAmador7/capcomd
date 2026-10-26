@@ -1,3 +1,6 @@
+import Foundation
+import CapcomdThread
+
 /// Server's decision record (200 body, and `Error.decision` on 409 already_decided).
 public struct DecisionRecord: Codable, Sendable, Hashable {
   public var approvalId: String
@@ -33,10 +36,15 @@ public protocol StreamSubscribing: Sendable {
   /// `feed: "lifecycle"` opens `?feed=lifecycle&activity=1` (run scopes only): snapshot, then run/agent/approval lifecycle
   /// events plus live, ephemeral `agent.activity_changed` frames.
   func subscribe(scope: String, feed: String?, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle
+  /// `thread: true` adds `&thread=1`: live, ephemeral `agent.thread_item_changed` frames for every agent of the run.
+  func subscribe(scope: String, feed: String?, thread: Bool, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle
 }
 public extension StreamSubscribing {
   func subscribe(scope: String, feed: String?, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
     feed == nil ? subscribe(scope: scope, after: after, onFrame: onFrame) : NoSubscription()
+  }
+  func subscribe(scope: String, feed: String?, thread: Bool, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
+    subscribe(scope: scope, feed: feed, after: after, onFrame: onFrame)
   }
 }
 struct NoSubscription: SubscriptionHandle { func cancel() {} }
@@ -86,6 +94,16 @@ public protocol RunDetailFetching: Sendable {
   func trace(runId: String) async throws -> [TraceSpan]
   func transcript(runId: String, agentId: String, after: Int?, limit: Int) async throws -> TranscriptPage
   func files(runId: String) async throws -> RunFiles
+}
+
+/// Agent threads (harness #59): `GET /v1/runs/{runId}/agents/{agentId}/thread` pages, and the bytes behind media.
+/// Throws `DetailUnavailable` (`.unsupported` when the daemon predates the route) or `Unauthorized`.
+public protocol ThreadFetching: Sendable {
+  func thread(runId: String, agentId: String, after: Int, limit: Int) async throws -> CapcomdThread.Page
+  /// `GET /v1/runs/{runId}/attachments/{id}/content`.
+  func attachment(runId: String, id: String) async throws -> Data
+  /// `GET /v1/runs/{runId}/agents/{agentId}/workspace?path=`.
+  func workspaceFile(runId: String, agentId: String, path: String) async throws -> Data
 }
 
 /// `POST /v1/runs/{runId}/{pause|resume|cancel}` with `Idempotency-Key` (steer scope).
