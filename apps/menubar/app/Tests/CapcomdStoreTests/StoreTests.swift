@@ -39,6 +39,24 @@ final class StoreTests: XCTestCase {
     XCTAssertTrue(s.projects[0].isRunning)
   }
 
+  func testProjectGroupsRunsByIdAndScopesFromAgentRepos() async throws {
+    let s = CapcomdStore()
+    func send(_ seq: Int, _ run: String, _ type: String, agent: String? = nil, _ data: [String: JSONValue]) {
+      s.receive(.event(Envelope(id: "e\(seq)", scope: run, seq: seq, entity: agent ?? run, type: type, epochMs: seq * 1000,
+                                projectId: "prj-mk", runId: run, agentId: agent, data: data)), scope: run)
+    }
+    send(1, "run-a", "run.created", ["goal": .string("Migrate matchkey to v3.2")])
+    send(2, "run-a", "agent.spawned", agent: "agt-1", ["profile": .string("planner")])
+    send(3, "run-a", "agent.spawned", agent: "agt-2", ["profile": .string("worker"), "agent": .object(["repo": .string("matchkey")])])
+    send(4, "run-a", "agent.spawned", agent: "agt-3", ["profile": .string("lead"), "repo": .string("ids/v1")])
+    send(5, "run-a", "agent.spawned", agent: "agt-4", ["profile": .string("worker"), "repo": .string("matchkey")])
+    send(1, "run-b", "agent.spawned", agent: "agt-9", ["profile": .string("critic"), "repo": .string("addriva")])
+    XCTAssertEqual(s.projects.count, 1)                                       // grouped by project id, not goal text
+    XCTAssertEqual(s.projects[0].title, "Migrate matchkey to v3.2")
+    XCTAssertEqual(s.projects[0].runs.map(\.id), ["run-a", "run-b"])
+    XCTAssertEqual(s.projects[0].scopes, ["matchkey", "ids/v1", "addriva"])   // distinct, spawn order, no run ids
+  }
+
   func testAgentTreeProfilesSuffixesAndBubbling() async throws {
     let s = CapcomdStore(); try feed(s, "contract")
     let tree = s.agentTree(runId: "run-a1")

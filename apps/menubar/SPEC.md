@@ -14,7 +14,7 @@ A macOS menu bar app that shows capcomd runs ("projects") and lets you approve, 
 
 - **HIG glass, variant A.** Dark vibrant material (`.popover`/`.hudWindow` style), 16 pt panel radius, hairline separators, grouping by space before borders.
 - **One accent.** System blue `#0A84FF` marks the current/running thing, focus, primary buttons and send. Nothing else is blue.
-- **Amber only for approvals.** `#FFB020` hand.raised, never as a tile or fill.
+- **Amber only for approvals.** `#FFB020` hand.raised; a card waiting for approval gets a faint amber tint (fill `.08`, 0.5 pt stroke `.35`). Never a solid tile.
 - **Red only for failures/retries.** `#FF6961`.
 - **No counts, no progress text.** No "3/7", no "42%", no status tallies. The approval badge on the menu bar icon is the one allowed number (pending approvals).
 - **Finished steps show no status icon.** Status icons exist only for running, failed, queued and waiting.
@@ -61,7 +61,7 @@ Resume after reconnect with `--since-seq <last seq>`.
 ## 4.1 Main panel and project cards — `v5-a-final.png`, `tree-card-v3.png`
 
 - Top: "Start a project…" field with `⌘K` hint. Section label "Active".
-- **Project card:** title (`goal`, 13 pt semibold), repo chips (G1), then the agent tree (§4.4). Running cards first, by most recent event.
+- **Project card:** title (`goal`, 14 pt semibold), folder chips (the distinct folders its agents work in, up to 3 then `+n`; G1), a hairline, then each run's agent tree (§4.4). Runs are grouped by project id. Run ids never appear on the card. Running cards first, by most recent event.
 - Finished projects collapse to one line: title + "Done in 4m" (tertiary, right). No counts.
 - Footer: "Open capcomd" · "Summon ⌥Space".
 - Menu bar icon: capcomd mark; amber dot + number when approvals are pending.
@@ -151,11 +151,11 @@ Skill: `book.closed`. Add: `plus`. Send: `arrow.up`. Stop: `stop.fill`. Collapse
 
 | Role | Size / weight |
 |---|---|
-| Panel title / card title | 15 / semibold; 13 / semibold |
+| Panel title / card title | 15 / semibold; 14 / semibold |
 | Body, thread prose | 13 / regular, line 19 |
 | Tree rows | 12.5 |
 | Activity rows | 12 |
-| Breadcrumb, chips | 11–11.5 |
+| Breadcrumb; scope chips | 11; 11.5 |
 | Phase labels, captions | 10.5 / semibold, tertiary |
 | Mono code / times | 11.5 code; 10.5 times |
 
@@ -173,25 +173,26 @@ Skill: `book.closed`. Add: `plus`. Send: `arrow.up`. Stop: `stop.fill`. Collapse
 | card fill | `rgba(255,255,255,.06)`; field `.07`, focused `.10` |
 | hairline | `rgba(255,255,255,.08–.14)`, 0.5 pt |
 
-**Sizes & spacing.** Panel 380 pt wide, radius 16; content inset 16; cards radius 11, padding 12, gap 8; tree row 26; activity row 18; Activity region 172 (collapsed strip 30, cells 24, dividers 1×12); input radius 10, send 22–24; thread window 620; code radius 8; chips radius 5–6. 4 pt grid throughout.
+**Sizes & spacing.** Panel 380 pt wide, radius 16; content inset 16 (project list 10); cards radius 11, padding 12 (bottom 6), gap 8, no border unless tinted; card hairline above the tree bleeds 4 past the content; tree row 26; activity row 18; Activity region 172 (collapsed strip 30, cells 24, dividers 1×12); input radius 10, send 22–24; thread window 620; code radius 8; chips radius 5–6. 4 pt grid throughout.
 
 # 7. Motion
 
-Springs, no bounce (damping 1.0) unless noted; all interruptible from current value. Respect **Reduce Motion** → 150 ms crossfade, no translation.
+UI motion animates **transform and opacity only**, eases out, and finishes **under 300 ms**. Layout changes (height, width) snap while the content crossfades. Pressed controls scale to **0.97**. Nothing animates when the action came from the keyboard. Respect **Reduce Motion** → 150 ms crossfade, no translation or scale (presses dim instead).
 
 | Interaction | Motion |
 |---|---|
-| Panel open | fade + 4 pt drop, 0.2 s ease-out |
-| Drill-down / thread push | slide 100 % horizontal, spring 0.35 s; back reverses |
-| Activity ⇄ Trace, Log ⇄ Files | crossfade 0.15 s, height animates |
-| Timeline collapse | spring 0.3 s: height 172→30, icons slide into strip (12 ms stagger), row text fades in first 120 ms |
-| Approval appears | expand 0.25 s + one gentle amber icon fade-in (no pulse loop) |
-| Tool / thinking expand | height 0.18 s ease-out, chevron rotates 90° |
+| Panel open | fade + 4 pt drop, 0.2 s |
+| Press (cards, rows, buttons) | scale 0.97, 0.12 s; Reduce Motion: dim to 75 % |
+| Drill-down / thread push | slide 100 % horizontal, 0.25 s; back reverses |
+| Activity ⇄ Trace, Log ⇄ Files | crossfade 0.15 s; height snaps |
+| Timeline collapse | 0.25 s: rows fade out, icons slide into the strip (12 ms stagger, capped so the move ends under 300 ms); height snaps |
+| Approval appears / card tint | fade + 4 pt rise 0.2 s; card tint crossfades 0.2 s; one gentle amber icon fade-in (no pulse loop) |
+| Tool / thinking expand | content fades in 0.15 s, chevron rotates 90° in 0.15 s |
 | Streaming text | per-block fade-in 0.12 s, no typewriter |
-| Follow / Jump to now | smooth scroll 0.3 s; pill fades 0.15 s |
+| Follow / Jump to now | scroll 0.25 s; pill fades 0.15 s |
 | Steer send | text moves from field to bubble, 0.22 s |
-| Open in window | panel content scales into window, 0.3 s |
-| Running icon | no spin; static ring (Reduce Motion irrelevant) |
+| Open in window | content scales into the window, 0.25 s |
+| Running icon | no spin; static ring |
 
 # 8. Accessibility
 
