@@ -1,5 +1,5 @@
 // Scoped client tokens for harness.v1 (docs/harness-architecture.md §6.3). Tokens are shown once at creation; only their
-// sha256 is stored, in ~/.capcomd/harness-clients.json (mode 0600). Scopes: read (GET), steer (reserved for phase 2), approve (decisions).
+// sha256 is stored, in ~/.capcomd/harness-clients.json (mode 0600). Scopes: read (GET), steer (start runs: POST /v1/runs), approve (decisions).
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -31,7 +31,7 @@ export const Run = z.object({
 	id: z.string(),
 	projectId: z.string().nullable(),
 	label: z.string().nullable(),
-	state: z.string(),
+	state: z.string().describe("new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"),
 	goal: UntrustedText.nullable(),
 	repo: z.string().nullable().describe("Repository the run works in (absolute path or remote URL)"),
 	createdAt: Timestamp.nullable(),
@@ -164,6 +164,27 @@ export type EventType = keyof typeof EventData;
 
 const DecideBody = z.object({ decision: z.enum(["approve", "deny"]), reason: UntrustedText.optional() });
 
+/** runs.create: the goal is user-written text, stored as the run's goal (Run.goal); at most this many UTF-8 bytes. */
+export const GOAL_MAX_BYTES = 16 * 1024;
+export const BranchName = z.string().regex(/^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*[./]$)[A-Za-z0-9._/-]{1,200}$/).describe("Branch name, e.g. capcomd/integration");
+export const CreateRunBody = z.object({
+	goal: z.string().min(1)
+		.refine((g) => g.trim().length > 0, "goal is empty")
+		.refine((g) => Buffer.byteLength(g.trim()) <= GOAL_MAX_BYTES, `goal is longer than ${GOAL_MAX_BYTES} bytes (UTF-8)`)
+		.refine((g) => !g.includes("\u0000"), "goal contains a NUL character")
+		.refine((g) => !/^\s*\[agent:/i.test(g), "goal starts with an [agent:…] directive; pick the profile with `profile` instead")
+		.describe(`What the run should do, as the user wrote it (leading and trailing whitespace trimmed; at most ${GOAL_MAX_BYTES} bytes, UTF-8). Stored as the run's goal.`),
+	repo: z.string().refine((p) => p.startsWith("/"), "repo must be an absolute path").optional()
+		.describe("Absolute path of a project checkout on the daemon's machine, one `capcomd setup project` ran in: its .capcomd/config.json gives the run's repository, merge mode, target, checks and agent profiles. Omitted: the daemon's own repository settings (CAPCOMD_REPO); 422 when it has none."),
+	profile: ProfileName.max(63).optional().describe("Agent profile, as `capcomd run --profile`: the worker of the built-in recipe. Refused (422) when the run uses a planner agent, which picks its own workers."),
+	targetBranch: BranchName.optional().describe("Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target."),
+});
+export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; " +
+	"the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. " +
+	"`Idempotency-Key` is scoped to the calling client: same key + same body replays the first response (201, header `Idempotent-Replayed: true`) without starting another run; " +
+	"same key + different body: 409 `idempotency_conflict`. Keys are kept 24 h; a request that failed (422, 500) is not recorded, so retrying it with the same key tries again. " +
+	"422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.";
+
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed." }).output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string() })),
 	projects: {
@@ -171,6 +192,9 @@ export const contract = {
 	},
 	runs: {
 		list: oc.route({ method: "GET", path: "/v1/runs" }).output(z.array(Run)),
+		create: oc.route({ method: "POST", path: "/v1/runs", successStatus: 201, inputStructure: "detailed", description: CREATE_RUN_DOC })
+			.input(z.object({ headers: z.object({ "idempotency-key": z.string().min(8).max(200) }), body: CreateRunBody }))
+			.output(Run),
 		get: oc.route({ method: "GET", path: "/v1/runs/{runId}" }).input(z.object({ runId: z.string() })).output(Run),
 		trace: oc.route({ method: "GET", path: "/v1/runs/{runId}/trace", description: "Trace spans of the run, in start order." }).input(z.object({ runId: z.string() })).output(z.array(Span)),
 		messages: oc.route({ method: "GET", path: "/v1/runs/{runId}/messages", description: "Thread history of the run." })

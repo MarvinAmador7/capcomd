@@ -48,7 +48,9 @@ export function harnessState(path: string | null = defaultStatePath(), opts: { n
 		},
 		decision: (id: string) => d.decisions[id],
 		/** Record decision and its key together in one write. */
-		recordDecision(kid: string, k: StoredKey, decision: Record<string, unknown>) { d.decisions[k.approvalId] = decision; d.keys[kid] = { ...k, at: now() }; save(); },
+		recordDecision(kid: string, k: StoredKey & { approvalId: string }, decision: Record<string, unknown>) { d.decisions[k.approvalId] = decision; d.keys[kid] = { ...k, at: now() }; save(); },
+		/** Record an outcome under its key (runs.create); kept 24h like every key. */
+		recordKey(kid: string, k: StoredKey) { d.keys[kid] = { ...k, at: now() }; save(); },
 		/** Stable seq for each run; unseen runs get fresh seqs in (createdAt, id) order. Never prunes: an empty or partial
 		 * `runs` list (source hiccup, slow actor) must not lose seqs. Only runDeleted() drops one; nextSeq never goes down. */
 		seqs(runs: Array<{ id: string; createdAt?: string | null }>): Map<string, number> {

@@ -1866,7 +1866,8 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           ]
         },
         "state": {
-          "type": "string"
+          "type": "string",
+          "description": "new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"
         },
         "goal": {
           "type": [

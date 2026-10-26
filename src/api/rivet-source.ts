@@ -1,9 +1,8 @@
 // HarnessSource over the Rivet scope actors: what `capcomd serve` exposes on the harness socket.
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { client } from "../core/relay";
+import { client, generateRunId } from "../core/relay";
 import { redactShapes } from "../agents/redact";
 import { recentRuns, decideMerge } from "../primitives/ops";
 import { tracePath } from "../utils/tracing-simple";
@@ -11,9 +10,8 @@ import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
 import { agentActivity, describeEvent } from "./describe";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
-import { approvalIdFor, parseApprovalId, type HarnessSource, type PendingApproval } from "./source";
-
-const projectIdOf = (repo: string | null) => (repo ? `prj-${createHash("sha256").update(repo).digest("hex").slice(0, 12)}` : null);
+import { approvalIdFor, parseApprovalId, projectIdOf, type HarnessSource, type PendingApproval } from "./source";
+import { startDetachedRun } from "./create-run";
 const lower = (p: string | null) => (p ? p.toLowerCase() : null);
 const cap = (t: string) => (Buffer.byteLength(t) <= INLINE_TEXT_MAX_BYTES ? t : Buffer.from(t).subarray(0, INLINE_TEXT_MAX_BYTES).toString("utf8").replace(/\uFFFD+$/, ""));
 const scope = (runId: string) => client().scope.getOrCreate([runId]);
@@ -114,6 +112,12 @@ export function rivetSource(): HarnessSource {
 		decide: async (approvalId, approve, by, reason) => {
 			const id = parseApprovalId(approvalId)!;
 			await decideMerge(id.runId, id.opId, { approve, by, ...(reason ? { reason } : {}) });
+		},
+		createRun: async (input) => {
+			const runId = generateRunId();
+			const { repo } = await startDetachedRun({ ...input, runId });
+			// What GET /v1/runs/{runId} shows once the run's process has registered it, but for the state.
+			return { id: runId, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, repo, createdAt: isoTs(Date.now()) };
 		},
 	};
 }

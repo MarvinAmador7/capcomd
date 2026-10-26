@@ -165,7 +165,8 @@
                         ]
                       },
                       "state": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"
                       },
                       "goal": {
                         "type": [
@@ -202,6 +203,163 @@
                       "createdAt"
                     ]
                   }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "runs.create",
+        "description": "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. `Idempotency-Key` is scoped to the calling client: same key + same body replays the first response (201, header `Idempotent-Replayed: true`) without starting another run; same key + different body: 409 `idempotency_conflict`. Keys are kept 24 h; a request that failed (422, 500) is not recorded, so retrying it with the same key tries again. 422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "goal": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "What the run should do, as the user wrote it (leading and trailing whitespace trimmed; at most 16384 bytes, UTF-8). Stored as the run's goal."
+                  },
+                  "repo": {
+                    "type": "string",
+                    "description": "Absolute path of a project checkout on the daemon's machine, one `capcomd setup project` ran in: its .capcomd/config.json gives the run's repository, merge mode, target, checks and agent profiles. Omitted: the daemon's own repository settings (CAPCOMD_REPO); 422 when it has none."
+                  },
+                  "profile": {
+                    "type": "string",
+                    "maxLength": 63,
+                    "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                    "description": "Agent profile, as `capcomd run --profile`: the worker of the built-in recipe. Refused (422) when the run uses a planner agent, which picks its own workers."
+                  },
+                  "targetBranch": {
+                    "type": "string",
+                    "pattern": "^(?!-)(?!.*\\.\\.)(?!.*\\/\\/)(?!.*[./]$)[A-Za-z0-9._/-]{1,200}$",
+                    "description": "Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target."
+                  }
+                },
+                "required": [
+                  "goal"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"
+                    },
+                    "goal": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "x-untrusted": true
+                    },
+                    "repo": {
+                      "description": "Repository the run works in (absolute path or remote URL)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time",
+                      "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "label",
+                    "state",
+                    "goal",
+                    "repo",
+                    "createdAt"
+                  ]
                 }
               }
             }
@@ -286,7 +444,8 @@
                       ]
                     },
                     "state": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"
                     },
                     "goal": {
                       "type": [
@@ -3751,7 +3910,8 @@
                 ]
               },
               "state": {
-                "type": "string"
+                "type": "string",
+                "description": "new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"
               },
               "goal": {
                 "type": [

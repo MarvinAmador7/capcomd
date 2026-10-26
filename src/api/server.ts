@@ -1,13 +1,13 @@
 // harness.v1 server (docs/harness-architecture.md §6-7): Hono app on the 0600 Unix socket. JSON routes are the oRPC
-// contract (src/api/contract.ts) served by OpenAPIHandler; the SSE stream and the decision endpoint are native Hono
-// routes because they need SSE framing, Last-Event-ID and Idempotency-Key. Every non-2xx body is ApiError {code, message}.
+// contract (src/api/contract.ts) served by OpenAPIHandler; the SSE stream, the decision endpoint and runs.create are
+// native Hono routes because they need SSE framing, Last-Event-ID and Idempotency-Key. Every non-2xx body is ApiError {code, message}.
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { contract, StreamFrames, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { contract, CreateRunBody, StreamFrames, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
-import { envelopes, messagesOf, type HarnessSource } from "./source";
+import { CreateRunError, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
 import { harnessState, type HarnessState } from "./state";
@@ -30,6 +30,9 @@ export function harnessApp(o: ServerOptions) {
 	const state = o.state ?? harnessState();
 	// approvalId → in-flight decision; claimed synchronously before any await so concurrent requests cannot both decide.
 	const inflight = new Map<string, { kid: string; hash: string; done: Promise<Record<string, unknown> | null> }>();
+	// runs.create: (clientId, key) → in-flight start.
+	type Outcome = { status: number; body: object };
+	const creating = new Map<string, { hash: string; done: Promise<Outcome> }>();
 
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
@@ -119,6 +122,41 @@ export function harnessApp(o: ServerOptions) {
 		if (out.kind === "replay") return c.json(out.result as object, out.status as 200);
 		if (out.kind === "error") return err(c, 409, out.code, out.code === "already_decided" ? "approval already decided" : "Idempotency-Key reused with a different body", out.existing ? { decision: out.existing } : {});
 		return conflict();
+	});
+
+	// runs.create: start a run (always detached). Keys are scoped to (clientId, procedure) (§7.4); only a started run is
+	// recorded, so a request that failed can be retried with the same key.
+	app.post("/v1/runs", async (c) => {
+		const key = c.req.header("idempotency-key");
+		if (!key || key.length < 8 || key.length > 200) return err(c, 422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+		const parsed = CreateRunBody.safeParse(await c.req.json().catch(() => undefined));
+		if (!parsed.success) {
+			const i = parsed.error.issues[0];
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?}");
+		}
+		const p = parsed.data;
+		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}) };
+		const kid = `${c.get("client").clientId}\u0000runs.create\u0000${key}`;
+		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null]);
+		const conflict = () => err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different body");
+		const replay = (r: Outcome) => c.json(r.body, r.status as 201, r.status === 201 ? { "idempotent-replayed": "true" } : {});
+		const prior = state.key(kid);
+		if (prior) return prior.bodyHash === hash ? replay({ status: prior.status, body: prior.result as object }) : conflict();
+		const pend = creating.get(kid);
+		if (pend) return pend.hash === hash ? replay(await pend.done) : conflict();
+		// claim before the first await: a concurrent retry with this key waits for this outcome instead of starting a second run
+		let resolve!: (o: Outcome) => void;
+		creating.set(kid, { hash, done: new Promise<Outcome>((r) => (resolve = r)) });
+		try {
+			const run = await src.createRun(input);
+			state.recordKey(kid, { runId: run.id, bodyHash: hash, status: 201, result: run });
+			resolve({ status: 201, body: run });
+			return c.json(run, 201);
+		} catch (e) {
+			const out: Outcome = e instanceof CreateRunError ? { status: 422, body: { code: "invalid", message: e.message } } : { status: 500, body: { code: "internal", message: (e as Error).message } };
+			resolve(out);
+			return c.json(out.body, out.status as 422);
+		} finally { creating.delete(kid); }
 	});
 
 	app.get("/v1/streams/:scope/events", (c) => {
