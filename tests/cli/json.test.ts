@@ -39,10 +39,13 @@ describe("capcomd CLI exit codes without an engine", () => {
 
 describe("capcomd CLI against a live engine", () => {
   let engine: { stop: () => Promise<void> };
+  const created: string[] = [];
   beforeAll(async () => {
     engine = await ensureEngine("cli");
   }, 120_000);
   afterAll(async () => {
+    // No run delete API yet (#41): cancel what this suite created so it leaves Active.
+    for (const id of created) await capcomd(["cancel", id, "--json"]).catch(() => {});
     await engine?.stop();
   });
 
@@ -50,6 +53,7 @@ describe("capcomd CLI against a live engine", () => {
 
   test("run --json streams NDJSON and ends with run.result", async () => {
     runId = `run-clijson-${Date.now()}`;
+    created.push(runId);
     const r = await capcomd(["run", "--json", "--run-id", runId, "Build a thing"]);
     expect(r.code).toBe(0);
     const evs = lines(r.stdout);
@@ -126,6 +130,7 @@ describe("capcomd CLI against a live engine", () => {
 
   test("run --json --detach returns {runId}; protected merge waits for approve", async () => {
     const id = `run-approve-${Date.now()}`;
+    created.push(id);
     const r = await capcomd(["run", "--json", "--detach", "--run-id", id, "--target-branch", "main", "Ship to main"]);
     expect(r.code).toBe(0);
     const started = JSON.parse(r.stdout);

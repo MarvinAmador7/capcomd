@@ -13,6 +13,23 @@ function portFree(port: number): Promise<boolean> {
   });
 }
 
+/** "pid N (command)" of whoever listens on 127.0.0.1:port, when lsof can tell; else null. */
+function portOwner(port: number): string | null {
+  try {
+    const out = (spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { encoding: "utf8", timeout: 2000 }).stdout ?? "");
+    const pid = /^p(\d+)/m.exec(out)?.[1], cmd = /^c(.+)/m.exec(out)?.[1];
+    return pid ? `pid ${pid}${cmd ? ` (${cmd})` : ""}` : null;
+  } catch { return null; }
+}
+
+/** Signal pid's whole process group (the engine leads its own; rivet-services etc. are in it) and any stray descendants. */
+function killTree(pid: number, sig: NodeJS.Signals) {
+  const kids = (spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8", timeout: 2000 }).stdout ?? "").split(/\s+/).filter(Boolean).map(Number);
+  for (const k of kids) killTree(k, sig);
+  try { process.kill(-pid, sig); } catch {}
+  try { process.kill(pid, sig); } catch {}
+}
+
 /**
  * Run the engine on --port. RivetKit reads the engine port from RIVET_RUN_ENGINE_PORT when the
  * registry config is parsed (at start), not from any argument: before this, `serve --port N`
@@ -30,8 +47,11 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     process.exit(2);
   }
   const busy: number[] = [];
-  for (const p of [port, port + 1, port + 10]) if (!(await portFree(p))) busy.push(p);
+  // rivet-services binds a fixed :8642 when it runs (default port only; see RIVET_RUN_SERVICES below).
+  const needed = [port, port + 1, port + 10, ...(port === 6420 && process.env.RIVET_RUN_SERVICES !== "0" ? [8642] : [])];
+  for (const p of needed) if (!(await portFree(p))) busy.push(p);
   if (busy.length) {
+    for (const p of busy) { const who = portOwner(p); if (who) console.error(`capcomd serve: :${p} is held by ${who}`); }
     console.error(`capcomd serve: port${busy.length > 1 ? "s" : ""} ${busy.join(", ")} already in use (the engine needs ${port}, ${port + 1} and ${port + 10}); stop the other engine or pick another --port`);
     process.exit(1);
   }
@@ -67,19 +87,19 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   const stale = enginePid();
   if (stale && isAlive(stale)) {
     console.log(`  stopping a stale engine (pid ${stale}) left by an earlier serve on :${port}`);
-    try { process.kill(stale, "SIGKILL"); } catch {}
+    killTree(stale, "SIGKILL");
     for (let i = 0; i < 50 && isAlive(stale); i++) await new Promise((r) => setTimeout(r, 100));
   }
   rmSync(pidFile, { force: true });
   // rivet-engine runs in its own process group: kill it whenever serve exits. On a signal, wait for it to go (its
   // graceful shutdown can take seconds on a slow host), then SIGKILL; `exit` can only ask, as a last resort.
-  const reap = () => { const pid = enginePid(); if (pid && isAlive(pid)) { try { process.kill(pid, "SIGTERM"); } catch {} } rmSync(pidFile, { force: true }); };
+  const reap = () => { const pid = enginePid(); if (pid) killTree(pid, isAlive(pid) ? "SIGTERM" : "SIGKILL"); rmSync(pidFile, { force: true }); };
   const stopEngine = async () => {
     const pid = enginePid();
-    if (pid && isAlive(pid)) {
-      try { process.kill(pid, "SIGTERM"); } catch {}
+    if (pid) {
+      killTree(pid, "SIGTERM");
       for (let i = 0; i < 50 && isAlive(pid); i++) await new Promise((r) => setTimeout(r, 100));
-      if (isAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch {}
+      killTree(pid, "SIGKILL"); // the engine and anything it left behind (rivet-services held :8642 after a watchdog exit)
     }
     rmSync(pidFile, { force: true });
   };
@@ -124,15 +144,22 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     setInterval(sweep, 5 * 60_000).unref?.();
   }
 
+  const inflight = new Set<string>(); // "METHOD /path" of harness requests not yet answered
   // Watchdog: up within 90s, then exit after ~20s of no answer (engine child died, port lost).
   const url = `http://127.0.0.1:${port}/`;
   const alive = () => fetch(url, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
   const t0 = Date.now();
   let up = false, misses = 0;
+  const die = async (msg: string) => {
+    console.error(msg);
+    if (inflight.size) console.error(`  ${inflight.size} harness request(s) in flight: ${[...inflight].slice(0, 20).join(", ")}`);
+    await stopEngine();
+    process.exit(1);
+  };
   setInterval(async () => {
     if (await alive()) { if (!up) console.log(`✓ Rivet engine running at http://localhost:${port}`); up = true; misses = 0; return; }
-    if (!up && Date.now() - t0 > 90_000) { console.error(`capcomd serve: engine never answered on :${port} within 90s; exiting`); process.exit(1); }
-    if (up && ++misses >= 10) { console.error(`capcomd serve: engine on :${port} stopped answering; exiting`); process.exit(1); }
+    if (!up && Date.now() - t0 > 90_000) return die(`capcomd serve: engine never answered on :${port} within 90s; exiting`);
+    if (up && ++misses >= 10) return die(`capcomd serve: engine on :${port} stopped answering; exiting`);
   }, 2000);
 
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
@@ -143,7 +170,13 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     const { readConfig, userConfigPath, projectConfigPath } = await import("../../config/store");
     const config = { ...readConfig(userConfigPath()), ...readConfig(projectConfigPath()) };
     const sock = harnessSocketPath({ flag: opts.harnessSocket, config });
-    serveHarnessSocket(sock, harnessApp({ source: rivetSource() }).fetch);
+    const app = harnessApp({ source: rivetSource() });
+    let seq = 0;
+    serveHarnessSocket(sock, async (req: Request) => {
+      const key = `${req.method} ${new URL(req.url).pathname}#${++seq}`;
+      inflight.add(key);
+      try { return await app.fetch(req); } finally { inflight.delete(key); }
+    });
     console.log(`✓ harness.v1 API on ${sock}`);
   } catch (e) {
     console.error(`capcomd serve: harness API failed to start: ${(e as Error).message}`);

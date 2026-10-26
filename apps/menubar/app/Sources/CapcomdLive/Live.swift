@@ -9,7 +9,7 @@ import Foundation
 public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   let transport: UnixSocketTransport
   let maxReconnects: Int; let backoff: Duration; let idleTimeout: Duration
-  public init(transport: UnixSocketTransport, maxReconnects: Int = 10, backoff: Duration = .milliseconds(50), idleTimeout: Duration = .seconds(45)) {
+  public init(transport: UnixSocketTransport, maxReconnects: Int = 10, backoff: Duration = .milliseconds(500), idleTimeout: Duration = .seconds(45)) {
     self.transport = transport; self.maxReconnects = maxReconnects; self.backoff = backoff; self.idleTimeout = idleTimeout
   }
   final class Handle: SubscriptionHandle, @unchecked Sendable { var task: Task<Void, Never>?; func cancel() { task?.cancel() } }
@@ -40,7 +40,7 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
         catch {
           if Task.isCancelled { return }
           attempts += 1; if attempts > maxR { return }
-          try? await Task.sleep(for: bo * attempts)
+          try? await Task.sleep(for: liveBackoff(base: bo, attempt: attempts))
         }
       }
     }
@@ -76,4 +76,12 @@ public struct LiveDecider: ApprovalDeciding {
     case .undocumented(let code, _): throw HTTPStatusError(status: code)
     }
   }
+}
+
+/// Exponential backoff with full jitter: a random delay in [0, min(cap, base * 2^(attempt-1))].
+/// Spreads reconnects out after an engine restart instead of every client hammering it at once.
+func liveBackoff(base: Duration, attempt: Int, cap: Duration = .seconds(30)) -> Duration {
+  func ms(_ d: Duration) -> Double { Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15 }
+  let ceiling = min(ms(cap), ms(base) * pow(2, Double(max(0, min(attempt - 1, 30)))))
+  return .microseconds(Int64(Double.random(in: 0...max(0, ceiling)) * 1000))
 }

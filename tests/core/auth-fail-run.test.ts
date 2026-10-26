@@ -15,13 +15,17 @@ beforeAll(async () => {
   engine = new Engine("auth-fail", { port: PORT, dataDir: mkdtempSync(join(tmpdir(), "capcomd-authfail-")) });
   await engine.start(null);
 }, 120_000);
+const created: string[] = [];
 afterAll(async () => {
+  // No run delete API yet (#41): cancel what this test created so it leaves Active.
+  for (const id of created) await capcomd(["cancel", id, "--json"], { CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}` }).catch(() => {});
   await engine?.stop();
   if (saved === undefined) delete process.env.CAPCOMD_FAKE_ENSURE_ERROR; else process.env.CAPCOMD_FAKE_ENSURE_ERROR = saved;
 });
 
 test("run fails with kind=config, retryable=false; status shows failed", async () => {
   const runId = `run-authfail-${Date.now()}`;
+  created.push(runId);
   const env = { CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}` };
   const r = await capcomd(["run", "--json", "--run-id", runId, "anything"], env);
   expect(r.code).toBe(1);
