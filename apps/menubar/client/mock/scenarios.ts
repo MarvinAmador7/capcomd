@@ -5,7 +5,7 @@
 //   SCENARIO=panel TOKEN=… bun scenarios.ts /tmp/capcomd-ui.sock
 //   swift run CapcomdMenuBar -capcomd.socketPath /tmp/capcomd-ui.sock     (argument domain: nothing is persisted)
 //
-// Scenes: panel (tree-card-v3.png). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
+// Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
 // store's rebuild picks up repo/key (scope chips, suffixes) without a run stream; lifecycle feeds re-send the same
 // state per run. Repos ride in `agent.spawned.data.agent.repo` (the contract leaves `agent` open).
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
@@ -36,7 +36,26 @@ const scenes: Record<string, RunSpec[]> = {
     { id: "run-pr01", projectId: "prj-billing", goal: "Fix proration rounding in billing", state: "running", startedAgo: 2 * min, lastAgo: 0.5 * min,
       agents: [{ id: "agt-pl02", profile: "planner", status: "running", repo: "relay", activity: "Reading the proration module", ago: 2 * min }] },
     { id: "run-av01", projectId: "prj-addriva", goal: "Launch Addriva Verify docs", state: "completed", startedAgo: 30 * min, lastAgo: 26 * min,
-      agents: [{ id: "agt-pl03", profile: "planner", status: "done", repo: "addriva", ago: 30 * min }] },
+      agents: [
+        { id: "agt-pl03", profile: "planner", status: "done", repo: "addriva", ago: 30 * min },
+        { id: "agt-wk05", parent: "agt-pl03", profile: "worker", status: "done", repo: "relay", key: "task-5e11", ago: 29 * min },
+        { id: "agt-wk06", parent: "agt-pl03", profile: "worker", status: "done", repo: "docs", key: "task-6f22", ago: 29 * min },
+      ] },
+    // An earlier run of the matchkey project that finished: it must not appear in the card (finished runs leave it).
+    { id: "run-mk31", projectId: "prj-matchkey", goal: "Migrate matchkey to v3.2", state: "completed", startedAgo: 120 * min, lastAgo: 100 * min,
+      agents: [{ id: "agt-pl00", profile: "planner", status: "done", repo: "matchkey", ago: 120 * min }] },
+  ],
+  // Nothing active: finished, failed and stopped projects as one-line rows (newest first, at most three).
+  finished: [
+    { id: "run-f1", projectId: "prj-f1", goal: "Launch Addriva Verify docs", state: "completed", startedAgo: 30 * min, lastAgo: 26 * min,
+      agents: [{ id: "agt-f1", profile: "planner", status: "done", repo: "addriva", ago: 30 * min },
+               { id: "agt-f2", parent: "agt-f1", profile: "worker", status: "done", repo: "docs", key: "task-a1b2", ago: 29 * min }] },
+    { id: "run-f2", projectId: "prj-f2", goal: "Fix proration rounding in billing", state: "failed", startedAgo: 15 * min, lastAgo: 3 * min,
+      agents: [{ id: "agt-f3", profile: "planner", status: "failed", repo: "relay", ago: 15 * min }] },
+    { id: "run-f3", projectId: "prj-f3", goal: "Bump the docker base image", state: "cancelled", startedAgo: 9 * min, lastAgo: 8.5 * min,
+      agents: [{ id: "agt-f4", profile: "planner", status: "cancelled", ago: 9 * min }] },
+    { id: "run-f4", projectId: "prj-f4", goal: "An older project past the three-row cap", state: "completed", startedAgo: 300 * min, lastAgo: 290 * min,
+      agents: [{ id: "agt-f5", profile: "planner", status: "done", ago: 300 * min }] },
   ],
 };
 const runs = scenes[SCENARIO];
@@ -55,6 +74,8 @@ for (const r of runs) {
   for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - r.lastAgo, { approvalId: p.id, kind: "merge", question: p.question,
     requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target }, expiresAt: null });
   env(r, "run.started", r.id, null, NOW - r.lastAgo, { cause: "started" });   // bumps lastEventMs to the run's recency
+  const end = { completed: "run.completed", failed: "run.failed", cancelled: "run.cancelled" }[r.state];
+  if (end) env(r, end, r.id, null, NOW - r.lastAgo, { cause: r.state });
 }
 function depthOf(r: RunSpec, a: AgentSpec): number { let d = 0, p = a.parent; while (p) { d++; p = r.agents.find(x => x.id === p)?.parent; } return d; }
 const HEAD = seq;

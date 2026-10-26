@@ -30,6 +30,15 @@ public enum JSONValue: Codable, Hashable, Sendable {
   public var isNull: Bool { if case .null = self { return true }; return false }
 }
 
+/// Contract timestamps (UTC, ISO 8601, 3 fraction digits) → epoch ms.
+public func epochMs(iso: String?) -> Int? {
+  guard let iso else { return nil }
+  let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  if let d = f.date(from: iso) { return Int(d.timeIntervalSince1970 * 1000) }
+  f.formatOptions = [.withInternetDateTime]
+  return f.date(from: iso).map { Int($0.timeIntervalSince1970 * 1000) }
+}
+
 /// harness.v1 envelope (openapi `events.replay` item / SSE frame data). Decoded leniently: unknown keys ignored.
 public struct Envelope: Codable, Hashable, Sendable {
   public var v: Int?

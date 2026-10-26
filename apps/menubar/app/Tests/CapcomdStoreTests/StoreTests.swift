@@ -57,6 +57,75 @@ final class StoreTests: XCTestCase {
     XCTAssertEqual(s.projects[0].scopes, ["matchkey", "ids/v1", "addriva"])   // distinct, spawn order, no run ids
   }
 
+  func testRunOutcomeFromStateThenAgents() {
+    func run(_ state: String, _ statuses: [AgentStatus] = [], startedAtMs: Int? = nil) -> Run {
+      var r = Run(id: "run-x", projectId: "prj-x", label: nil, goal: nil, state: state, startedAtMs: startedAtMs, lastEventMs: 0)
+      for (i, s) in statuses.enumerated() { r.agents["a\(i)"] = Agent(id: "a\(i)", runId: "run-x", parent: nil, depth: 0, profile: "worker", status: s, task: nil, key: nil, repo: nil, spawnedAtMs: i) }
+      return r
+    }
+    let now = 10 * 60_000
+    XCTAssertEqual(run("completed").outcome(nowMs: now), .done)
+    XCTAssertEqual(run("failed").outcome(nowMs: now), .failed)
+    XCTAssertEqual(run("cancelled").outcome(nowMs: now), .stopped)
+    XCTAssertEqual(run("running").outcome(nowMs: now), .active)
+    XCTAssertEqual(run("paused").outcome(nowMs: now), .active)               // waiting on the operator still needs attention
+    // The daemon snapshot says "idle" once every agent ended: their statuses tell how.
+    XCTAssertEqual(run("idle", [.done, .done]).outcome(nowMs: now), .done)
+    XCTAssertEqual(run("idle", [.done, .failed]).outcome(nowMs: now), .failed)
+    XCTAssertEqual(run("idle", [.done, .cancelled]).outcome(nowMs: now), .stopped)
+    XCTAssertEqual(run("idle", [.done, .running]).outcome(nowMs: now), .active)
+    // "new" (no agent spawned yet) is active for a short grace, then counts as stopped.
+    XCTAssertEqual(run("new", startedAtMs: now - 60_000).outcome(nowMs: now), .active)
+    XCTAssertEqual(run("new", startedAtMs: now - Run.startGraceMs).outcome(nowMs: now), .stopped)
+  }
+
+  func testFinishedRunsLeaveTheCardAndProjectsGetAnEndedLine() {
+    let s = CapcomdStore()
+    func send(_ seq: Int, _ run: String, _ project: String, _ type: String, ms: Int, agent: String? = nil, _ data: [String: JSONValue] = [:]) {
+      s.receive(.event(Envelope(id: "e\(run)\(seq)", scope: run, seq: seq, entity: agent ?? run, type: type, epochMs: ms,
+                                projectId: project, runId: run, agentId: agent, data: data)), scope: run)
+    }
+    // prj-a: an older run that finished and a newer one still running.
+    send(1, "run-old", "prj-a", "run.created", ms: 1_000, ["goal": .string("Migrate matchkey")])
+    send(2, "run-old", "prj-a", "run.completed", ms: 200_000)
+    send(1, "run-new", "prj-a", "run.created", ms: 300_000, ["goal": .string("Migrate matchkey")])
+    send(2, "run-new", "prj-a", "agent.spawned", ms: 300_100, agent: "agt-1", ["profile": .string("planner")])
+    send(3, "run-new", "prj-a", "agent.started", ms: 300_200, agent: "agt-1")
+    // prj-b: finished in 4m across three folders.
+    send(1, "run-b", "prj-b", "run.created", ms: 10_000, ["goal": .string("Launch Addriva Verify docs")])
+    for (i, repo) in ["addriva", "relay", "docs"].enumerated() {
+      send(2 + i, "run-b", "prj-b", "agent.spawned", ms: 11_000, agent: "agt-b\(i)", ["profile": .string("worker"), "repo": .string(repo)])
+    }
+    send(9, "run-b", "prj-b", "run.completed", ms: 250_000)
+    // prj-c: failed after 45s, no folders known.
+    send(1, "run-c", "prj-c", "run.created", ms: 400_000, ["goal": .string("Fix proration")])
+    send(2, "run-c", "prj-c", "run.failed", ms: 445_000)
+
+    let ps = s.projects
+    XCTAssertEqual(ps.map(\.id), ["prj-a", "prj-c", "prj-b"])            // active first, then most recent
+    XCTAssertEqual(ps[0].activeRuns.map(\.id), ["run-new"])               // the finished run left the card
+    XCTAssertTrue(ps[0].isActive); XCTAssertNil(ps[0].endedLine)
+    XCTAssertEqual(ps[2].endedLine, "Done in 4m · 3 repos")
+    XCTAssertEqual(ps[1].endedLine, "Failed after 45s")
+    XCTAssertEqual(shortDuration(ms: 59_999), "59s"); XCTAssertEqual(shortDuration(ms: 3_600_000), "1h")
+    XCTAssertEqual(shortDuration(ms: 3_900_000), "1h 5m"); XCTAssertEqual(shortDuration(ms: 2 * 86_400_000), "2d")
+  }
+
+  func testSnapshotRunCreatedAtAndAgentUpdatedAtGiveDuration() async throws {
+    let s = CapcomdStore()
+    let frames: [(String, String)] = [
+      ("stream.reset", #"{"snapshotSeq":3,"reason":"compacted"}"#),
+      ("snapshot.run", #"{"run":{"id":"run-s","projectId":"prj-s","label":null,"state":"idle","goal":"Ship docs","repo":null,"createdAt":"2026-10-26T10:00:00.000Z"}}"#),
+      ("snapshot.agents", #"{"agents":[{"id":"agt-1","runId":"run-s","parent":null,"depth":0,"profile":"planner","status":"done","text":"x","task":null,"taskAttachment":null,"result":null,"updatedAt":"2026-10-26T10:12:30.000Z"}]}"#),
+      ("snapshot.approvals", #"{"approvals":[]}"#),
+      ("snapshot.end", #"{"snapshotSeq":3}"#),
+    ]
+    for (e, d) in frames { s.receive(StreamFrame.parse(event: e, data: d), scope: "daemon") }
+    let p = try XCTUnwrap(s.projects.first)
+    XCTAssertFalse(p.isActive)
+    XCTAssertEqual(p.endedLine, "Done in 12m")
+  }
+
   func testAgentTreeProfilesSuffixesAndBubbling() async throws {
     let s = CapcomdStore(); try feed(s, "contract")
     let tree = s.agentTree(runId: "run-a1")

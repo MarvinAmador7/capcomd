@@ -1,3 +1,5 @@
+import Foundation
+
 /// Agent status per contract `agent.status_changed` / agents.tree `status` enum.
 public enum AgentStatus: String, Sendable, Hashable, CaseIterable {
   case pending, running, paused, done, failed, cancelled, handedOff = "handed-off", unknown
@@ -37,6 +39,8 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// Repo, if capcomd ever sends one (not in contract 7b4cb74; read from `repo` or `agent.repo` when present).
   public var repo: String?
   public var spawnedAtMs: Int
+  /// When its status last changed (snapshot `updatedAt`, or the event that changed it): a finished run's end.
+  public var updatedAtMs: Int? = nil
   /// What it is doing now (`Agent.activity.text`, daemon-written, trusted): shown under a running agent's row.
   public var activity: String? = nil
   /// `taskAttachment`: the full task is stored by the daemon; only its metadata is shown.
@@ -124,6 +128,46 @@ public struct Run: Sendable, Hashable, Identifiable {
     return state == "running" || agents.values.contains { $0.status == .running }
   }
   public var title: String { goal?.firstLine ?? label ?? id }
+
+  /// Where a run stands for the panel: still doing something (it stays in the Active list), or how it ended.
+  public enum Outcome: Sendable, Hashable { case active, done, failed, stopped }
+  /// A run that never spawned an agent (snapshot state `new`) counts as active this long after it was created.
+  public static let startGraceMs = 5 * 60_000
+  /// Lifecycle states win; otherwise the daemon's own state, then its agents. The daemon snapshot says `idle` for a run
+  /// whose agents all ended (it doesn't replay run.completed), so their statuses tell how it ended.
+  public func outcome(nowMs: Int) -> Outcome {
+    switch state {
+    case "completed": return .done
+    case "failed": return .failed
+    case "cancelled", "deleted": return .stopped
+    case "running", "paused", "starting": return .active
+    case "new": return nowMs - (startedAtMs ?? nowMs) < Self.startGraceMs ? .active : .stopped
+    default: break
+    }
+    let statuses = agents.values.map(\.status)
+    if statuses.contains(where: { !$0.isTerminal }) { return .active }
+    if statuses.contains(.failed) { return .failed }
+    if statuses.contains(.cancelled) { return .stopped }
+    return .done
+  }
+  public var outcome: Outcome { outcome(nowMs: Int(Date().timeIntervalSince1970 * 1000)) }
+  public var isActive: Bool { outcome == .active }
+  /// When it ended: its terminal lifecycle transition, else its agents' last change, else its last event.
+  public var endedAtMs: Int? {
+    if let t = lifecycle.last(where: { Self.terminalStates.contains($0.state) }) { return t.epochMs }
+    return agents.values.compactMap(\.updatedAtMs).max() ?? (lastEventMs > 0 ? lastEventMs : nil)
+  }
+  /// For ordering: the latest thing known about it.
+  public var recencyMs: Int { max(lastEventMs, endedAtMs ?? 0, startedAtMs ?? 0) }
+}
+
+/// "45s", "4m", "1h 5m", "3d": the finished row's duration.
+public func shortDuration(ms: Int) -> String {
+  let s = max(0, ms / 1000)
+  if s < 60 { return "\(s)s" }
+  if s < 3600 { return "\(s / 60)m" }
+  if s < 86_400 { let m = (s % 3600) / 60; return m == 0 ? "\(s / 3600)h" : "\(s / 3600)h \(m)m" }
+  return "\(s / 86_400)d"
 }
 
 public struct Project: Sendable, Hashable, Identifiable {
@@ -134,6 +178,27 @@ public struct Project: Sendable, Hashable, Identifiable {
   public var title: String { goal?.firstLine ?? runs.first?.title ?? id }
   public var isRunning: Bool { runs.contains(where: \.isRunning) }
   public var lastEventMs: Int { runs.map(\.lastEventMs).max() ?? 0 }
+  public var recencyMs: Int { runs.map(\.recencyMs).max() ?? 0 }
+  public var latestRun: Run? { runs.max { ($0.recencyMs, $0.id) < ($1.recencyMs, $1.id) } }
+  /// How long its latest run took, once it ended (nil while active or when start/end aren't known).
+  public var endedDurationMs: Int? {
+    guard !isActive, let r = latestRun, let s = r.startedAtMs, let e = r.endedAtMs, e >= s else { return nil }
+    return e - s
+  }
+  /// Runs still doing something: the card nests only these; finished and failed runs leave it.
+  public var activeRuns: [Run] { runs.filter(\.isActive) }
+  /// In the Active list while any run is active; otherwise a one-line finished row.
+  public var isActive: Bool { runs.contains(where: \.isActive) }
+  /// The finished row's trailing text (v5-a-final): how its latest run ended and how long it took, then its folders.
+  /// "Done in 4m · 3 repos", "Failed after 12m", "Stopped". Nil while active.
+  public var endedLine: String? {
+    guard !isActive, let last = latestRun else { return nil }
+    let took = endedDurationMs.map { shortDuration(ms: $0) }
+    let verb: (String, String) = switch last.outcome { case .failed: ("Failed", "after"); case .stopped: ("Stopped", "after"); default: ("Done", "in") }
+    let head = took.map { "\(verb.0) \(verb.1) \($0)" } ?? verb.0
+    let n = scopes.count
+    return n == 0 ? head : "\(head) · \(n) \(n == 1 ? "repo" : "repos")"
+  }
   /// Scope chips: the distinct folders its agents work in, newest run first, then spawn order. Empty until the
   /// daemon reports agent repos (gap G1).
   public var scopes: [String] {

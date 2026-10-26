@@ -16,7 +16,7 @@ A macOS menu bar app that shows capcomd runs ("projects") and lets you approve, 
 - **One accent.** System blue `#0A84FF` marks the current/running thing, focus, primary buttons and send. Nothing else is blue.
 - **Amber only for approvals.** `#FFB020` hand.raised; a card waiting for approval gets a faint amber tint (fill `.08`, 0.5 pt stroke `.35`). Never a solid tile.
 - **Red only for failures/retries.** `#FF6961`.
-- **No counts, no progress text.** No "3/7", no "42%", no status tallies. The approval badge on the menu bar icon is the one allowed number (pending approvals).
+- **No counts, no progress text.** No "3/7", no "42%", no status tallies. Allowed numbers: the approval badge on the menu bar icon (pending approvals), durations ("Done in 4m"), and the plain counts the approved designs use: a finished row's folders ("· 3 repos") and an activity line's targets ("Reading 4 files").
 - **Finished steps show no status icon.** Status icons exist only for running, failed, queued and waiting.
 - **Plain-language step text**, sentence case, past tense for done ("Read the ids/v1 schema"), progressive for now ("Writing parquet shards to R2").
 - **No gradient text, no rainbow colors.** Icon tint is secondary grey unless state demands otherwise.
@@ -63,7 +63,8 @@ Resume after reconnect with `--since-seq <last seq>`.
 
 - Top: "Start a project…" field with `⌘K` hint. Section label "Active".
 - **Project card:** title (`goal`, 14 pt semibold), folder chips (the distinct folders its agents work in, up to 3 then `+n`; G1), a hairline, then each run's agent tree (§4.4). Runs are grouped by project id. Run ids never appear on the card. Running cards first, by most recent event.
-- Finished projects collapse to one line: title + "Done in 4m" (tertiary, right). No counts.
+- **Active means work in progress.** A run is active while the daemon says `running`, `paused` or `starting`, or any of its agents hasn't ended. A run that never spawned an agent (`new`) counts for its first 5 minutes. Lifecycle `completed`/`failed`/`cancelled` win; a snapshot `idle` run is judged by its agents (any failed → failed, any cancelled → stopped, else done). A card nests only its active runs: finished and failed runs leave it.
+- **Finished projects** (no active run) leave the Active cards and collapse to one line under them, newest first, at most three (`.done`): title (13 pt, white 70 %, indented 8 pt past the cards' text, tail-truncated) and how its latest run ended, right-aligned (12 pt, white 40 %): "Done in 4m · 3 repos", "Failed after 12m", "Stopped after 30s". The duration runs from the run's creation to its terminal transition (else its agents' last change); the folder count is omitted when unknown. Click opens that run. With nothing active, "Nothing running" sits under the section label.
 - Footer: "Open capcomd" · "Summon ⌥Space".
 - Menu bar icon: capcomd mark; amber dot + number when approvals are pending.
 
