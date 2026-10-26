@@ -468,6 +468,7 @@ export const workerActor = actor({
         // ADR-019 §1: liveness is reported up by the in-VM supervisor (or, without one, the agent CLI's own events), for
         // every agent, so one that can't spawn isn't flagged stuck while it works. Checkpoints are recorded too.
         const scope = workerId.startsWith("agt-") ? (c as any).client().scope.getOrCreate([runId]) : null;
+        let pauseAsked = false;
         const beatEvery = heartbeatEveryMs();
         let beatAt = 0;
         // What it is doing now (harness.v1 Agent.activity): classified from its events, written at most once a second.
@@ -502,10 +503,12 @@ export const workerActor = actor({
             // Spawned agents (ADR-016): the worker id is the agent id in the run's scope actor.
             if (!workerId.startsWith("agt-")) return false;
             const a = await (c as any).client().scope.getOrCreate([runId]).getAgent({ agentId: workerId }).catch(() => null);
+            pauseAsked = !!a?.pauseRequested;
             return a?.status === "cancelled";
           },
           // The operator's pause (scope requestPause): the runner stops the agent and keeps its work; the driver pauses it.
-          ...(scope ? { isPaused: async () => !!(await scope.getAgent({ agentId: workerId }).catch(() => null))?.pauseRequested } : {}),
+          // Read from the agent row isCancelled just fetched (the runner asks right after it), so no extra actor call per poll.
+          ...(scope ? { isPaused: async () => pauseAsked } : {}),
         }).finally(async () => { activity?.stop(); await items?.flush(); });
         sha = res.sha;
         costUsd = res.costUsd;
