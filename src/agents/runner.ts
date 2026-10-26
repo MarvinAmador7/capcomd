@@ -70,6 +70,8 @@ export interface AgentRunOptions {
   /** Real API key for env-injection fallback. Unused when the VM carries a bxds_ placeholder. */
   apiKey?: string;
   isCancelled?: () => Promise<boolean>;
+  /** The operator asked to pause the agent: stop it like a limit ("paused"), keeping its work on the branch. */
+  isPaused?: () => Promise<boolean>;
   onEvent?: (e: AgentEvent) => void;
   /**
    * ADR-019: spend so far (usd is 0 on a subscription), reported every few seconds while the agent runs. The engine
@@ -122,6 +124,7 @@ const STUCK_STOPS: Record<string, string> = {
   spinning: "stopped after spinning (the same tool call again and again, or working with no change in its workspace)",
   failing: "stopped after hitting the same error again and again (failing)",
   quota: "stopped by its provider's usage limit",
+  paused: "paused by the operator",
 };
 export const stoppedAt = (limit: string) => STUCK_STOPS[limit] ?? `stopped at its ${limit} limit`;
 /** The CLI's own stop reasons that mean "out of budget", not "broken" (claude result subtypes; `timeout` exit 124). */
@@ -161,7 +164,7 @@ export function buildPrompt(t: AgentTask): string {
     "- Do not print environment variables or credentials.",
   ];
   if (t.from) lines.push(`- This continues the work of agent ${t.from.agentId}, which stopped (${t.from.stopped}) before finishing. Its changes are already in your checkout (see \`git log\` and \`git diff ${t.target}\`): continue from them instead of starting over.`);
-  if (t.resumed) lines.push("- You were stopped earlier by your provider's usage limit. Whatever you had done is already on this branch (see `git log`); continue the task from there instead of starting over.");
+  if (t.resumed) lines.push("- You were stopped earlier by your provider's usage limit or paused by the operator. Whatever you had done is already on this branch (see `git log`); continue the task from there instead of starting over.");
   if (t.conflictFiles?.length) lines.push(`- A previous attempt conflicted with ${t.target} in: ${t.conflictFiles.join(", ")}. Re-apply the change on top of the current ${t.target}.`);
   return lines.join("\n");
 }
@@ -543,6 +546,13 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         addSpanEvent(span, "agent.cancelled");
         throw new AgentError("cancelled", `${name} cancelled for ${key}`);
       }
+      // The operator's pause: a stop that keeps the work (committed and pushed below); the agent resumes from it.
+      if (opts.isPaused && (await opts.isPaused().catch(() => false))) {
+        await kill(); await drain(true);
+        addSpanEvent(span, "agent.paused");
+        limit = "paused";
+        break;
+      }
       if (now() > deadline) {
         await kill(); await drain(true);
         limit = "timeout";
@@ -584,7 +594,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
 
     // A reviewer or a reporting agent only answers: nothing it changed is committed or pushed.
     if (task.review || task.report) {
-      if (limit === "quota") return { sha: "", already: false, costUsd, turns, stopReason: limit, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, limit, ...resetAt };
+      if (limit === "quota" || limit === "paused") return { sha: "", already: false, costUsd, turns, stopReason: limit, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, limit, ...resetAt };
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before answering`);
       setSpanAttributes(span, task.review ? { "agent.review": true } : { "agent.report": true });
       return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.report ? 8000 : 4000)) };
@@ -596,8 +606,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     const ahead = await git(["rev-list", "--count", `origin/${task.target}..HEAD`], repo);
     if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) {
       // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine. A paused agent
-      // (quota) has nothing to keep yet either: it starts over when it resumes.
-      if (opts.subagents || limit === "quota") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt }; }
+      // (quota, or the operator's pause) has nothing to keep yet either: it starts over when it resumes.
+      if (opts.subagents || limit === "quota" || limit === "paused") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt }; }
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before changing anything`);
       throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
     }

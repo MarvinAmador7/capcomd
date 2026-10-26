@@ -95,6 +95,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   500) to cap the rows; `truncated` says rows were left out. Refetch when the run stream shows a checkpoint, an
   agent finishing or pausing, or a merge with a seq above the answer's `asOf`. Merges now also record the target's
   commit before the merge (`targetBefore` on `merge.succeeded`).
+- `capcomd pause <runId> [agt]` pauses agents: one that hasn't started is paused at once, and a running one stops at
+  its next check with its work pushed to its branch (`Capcomd-Stop: paused`). `capcomd resume` runs them on from there.
+- The harness API (what the menu bar app uses) can now control runs and steer agents, with a token that has the
+  `steer` scope (`capcomd clients add <name> --scopes read,steer,approve`):
+  `POST /v1/runs/{runId}/pause`, `/resume` and `/cancel`, and `POST /v1/runs/{runId}/agents/{agentId}/messages` with
+  `{"body": "…"}` to send an agent a message. Each needs an `Idempotency-Key` header (a retry with the same key returns
+  the first result), and the change shows up as the usual events on the run's stream (`agent.paused`, `run.paused`,
+  `agent.resumed`, `run.cancelled`, `message.sent` with the `seq` the call returned). See docs/harness-contract.md.
+- A run stopped with `capcomd cancel <runId>` now ends as `run.cancelled` in the lifecycle feed even when some of its
+  agents had already finished (before, it could show as `run.completed` or `run.failed`).
+- An agent that has just started no longer shows as stuck ("no heartbeat for Ns") in `tree`, `inspect` and the
+  harness API while its VM is still coming up: its liveness is now counted from when it started, not from its spawn.
 
 ## 0.6.0 (2026-10-25)
 

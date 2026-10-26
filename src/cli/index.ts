@@ -15,7 +15,6 @@ export const DEFAULT_RUN_PATH: "recipe" | "legacy" = "recipe";
 import {
   approveTask,
   assertEngine,
-  cancelRun,
   executeRun,
   generateRunId,
   getStatus,
@@ -50,12 +49,13 @@ Usage:
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
                                            (default on boxd: the profile named "planner", which capcomd setup writes)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
-  capcomd clients add <name> [--scopes read,steer,approve] | list | revoke <id>   harness.v1 API tokens (shown once; steer starts runs)
+  capcomd clients add <name> [--scopes read,steer,approve] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages)
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
-  capcomd resume <runId> [agt]                  run paused agents again now (paused by a provider usage limit)
+  capcomd pause <runId> [agt]                   pause agents (and their descendants): each stops with its work kept on its branch
+  capcomd resume <runId> [agt]                  run paused agents again now (paused with \`capcomd pause\` or by a provider usage limit)
   capcomd grant <runId> [agt] --budget usd=…,turns=…,wallSeconds=… [--key K]   give a live agent more budget (from its parent's), or raise the run's
   capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--review-profile P] [--target T] [--key K]  → vfy-…
                                        (checks, then the reviewer agent: the run's --reviewer or --review-profile; both must pass)
@@ -588,10 +588,7 @@ async function main(argv: string[]): Promise<number> {
         const runId = positionals[1] ?? usage("capcomd send <runId> <agt> <text> [--from agt|operator]");
         const to = positionals[2] ?? usage("capcomd send <runId> <agt> <text>");
         const body = positionals.slice(3).join(" ") || usage("message text required");
-        const { client: cl, assertEngine: ae } = await import("../core/relay");
-        await ae();
-        const r = await cl().scope.getOrCreate([runId]).sendMessage({ to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}) });
-        const note = await (await import("../primitives/ops")).messageNote(runId, to);
+        const { note, ...r } = await (await import("../primitives/ops")).sendToAgent(runId, { to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}) });
         if (json) out({ runId, to, ...r, ...(note ? { note } : {}) }); else console.log(`sent #${r.seq} to ${to}${note ? ` (${note})` : ""}`);
         return EXIT.ok;
       }
@@ -636,28 +633,28 @@ async function main(argv: string[]): Promise<number> {
 
       case "cancel": {
         const runId = positionals[1] ?? usage("runId required: capcomd cancel <runId> [agentId]");
-        const P = await import("../primitives/ops");
-        const S = await import("../primitives/state");
         // A recipe run (planner flow over the primitives) keeps the run-level cancel contract
         // ({runId, state, changed}); its scope agents are cancelled alongside.
-        const scoped = await P.listScope(runId).then(() => true, () => false);
-        const recipeRun = !positionals[2] && scoped && await S.kvGet(runId, "recipe/plan").then((e: any) => e.version > 0, () => false);
-        if (recipeRun) {
-          const r = await cancelRun(runId);
-          if (r.changed) await P.cancelAgents(runId, undefined, (values.reason as string | undefined) ?? "run cancelled").catch(() => {});
-          if (json) out(r);
-          else console.log(r.changed ? `✓ Run ${runId} cancelled` : `Run ${runId} is ${r.state}; nothing to cancel`);
-          return EXIT.ok;
-        }
-        if (positionals[2] || scoped) {
-          const r = await P.cancelAgents(runId, positionals[2], values.reason as string | undefined);
+        const c = await (await import("../primitives/ops")).cancelAny(runId, positionals[2], values.reason as string | undefined);
+        if (c.kind === "agents") {
+          const r = c.agents;
           if (json) out(r);
           else console.log(r.cancelled.length ? `✓ cancelled ${r.cancelled.join(", ")}` : `nothing to cancel (${r.affected.map((a: { agentId: string; status: string }) => `${a.agentId}=${a.status}`).join(", ") || "no agents"})`);
           return EXIT.ok;
         }
-        const r = await cancelRun(runId);
+        const r = c.run;
         if (json) out(r);
         else console.log(r.changed ? `✓ Run ${runId} cancelled` : `Run ${runId} is ${r.state}; nothing to cancel`);
+        return EXIT.ok;
+      }
+
+      case "pause": {
+        const runId = positionals[1] ?? usage("runId required: capcomd pause <runId> [agentId]");
+        const r = await (await import("../primitives/ops")).pauseAgents(runId, positionals[2]);
+        if (json) out(r);
+        else console.log(r.paused.length || r.pausing.length
+          ? [r.paused.length ? `✓ paused ${r.paused.join(", ")}` : "", r.pausing.length ? `pausing ${r.pausing.join(", ")} (each stops at its next check, keeping its work)` : ""].filter(Boolean).join("; ")
+          : "no pending or running agents to pause");
         return EXIT.ok;
       }
 

@@ -89,8 +89,8 @@ case "$prompt" in *"[thread]"*)
   sleep 0.5
   emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"g1","content":"src/sum.ts"}]},"tool_use_result":{"filenames":["src/sum.ts"],"durationMs":412,"numFiles":1}}';;
 esac
-# [wip]: edit, then hang (a limit with work to keep)
-case "$prompt" in *"[wip]"*) sleep 120;; esac
+# [wip]: edit, then hang (a limit with work to keep); a resumed run (paused, then `capcomd resume`) finishes normally
+case "$prompt" in *"stopped earlier by"*) ;; *"[wip]"*) sleep 120;; esac
 emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'
 result="fixed sum"
 [[ "$prompt" == *"[leak]"* ]] && result="done with $ANTHROPIC_API_KEY"

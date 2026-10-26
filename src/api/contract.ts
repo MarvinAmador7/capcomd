@@ -22,7 +22,8 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
-	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "invalid", "internal"]),
+	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "invalid", "internal"])
+		.describe("conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended)"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
 });
@@ -230,6 +231,30 @@ export const EventData = {
 export type EventType = keyof typeof EventData;
 
 const DecideBody = z.object({ decision: z.enum(["approve", "deny"]), reason: UntrustedText.optional() });
+const IdempotencyHeaders = z.object({ "idempotency-key": z.string().min(8).max(200) });
+
+/** Body of a steer message (POST …/agents/{agentId}/messages): at most this many bytes of UTF-8. */
+export const MESSAGE_BODY_MAX_BYTES = 1024 * 1024;
+export const RunAction = z.enum(["pause", "resume", "cancel"]);
+/** Result of POST /v1/runs/{runId}/pause|resume|cancel. The state change itself arrives as events on the run's streams. */
+export const RunControl = z.object({
+	runId: z.string(),
+	action: RunAction,
+	changed: z.array(z.string()).describe("Agents this call changed now. Each is confirmed by agent.paused / agent.resumed / agent.cancelled on the run stream"),
+	pending: z.array(z.string()).describe("pause only (else empty): running agents asked to stop. Each stops at its next check with its work pushed to its branch, confirmed by agent.paused (or agent.done / agent.failed when it finished first)"),
+});
+const SendBody = z.object({ body: z.string().min(1).describe(`Message text (UTF-8, at most ${MESSAGE_BODY_MAX_BYTES} bytes). Delivered to a running Claude agent at its next step; a Codex agent reads it only from its inbox (see note)`) });
+/** Result of POST /v1/runs/{runId}/agents/{agentId}/messages. */
+export const SentMessage = z.object({
+	runId: z.string(),
+	to: z.string().describe("The agent the message was sent to"),
+	from: z.string().describe("Sender as threads show it: operator"),
+	seq: z.number().int().positive().describe("Thread message seq. The confirming message.sent event carries the same value as data.seq (with data.to = the agent), as does Message.seq in GET /v1/runs/{runId}/messages and snapshot.threads"),
+	note: z.string().nullable().describe("When the agent won't read it right away (a Codex agent reads messages only from its inbox); null when it will"),
+});
+
+const WRITE_DOC = "Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); " +
+	"same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.";
 
 /** runs.create: the goal is user-written text, stored as the run's goal (Run.goal); at most this many UTF-8 bytes. */
 export const GOAL_MAX_BYTES = 16 * 1024;
@@ -270,6 +295,24 @@ export const contract = {
 			.input(z.object({ runId: z.string(), after: z.coerce.number().int().nonnegative().optional() })).output(z.array(HarnessEvent)),
 		files: oc.route({ method: "GET", path: "/v1/runs/{runId}/files", description: FILES_DOC })
 			.input(z.object({ runId: z.string(), agentId: z.string().optional(), limit: z.coerce.number().int().positive().max(FILES_MAX).optional() })).output(RunFiles),
+		pause: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/pause", inputStructure: "detailed",
+			description: `Pause every pending or running agent of the run (no body). An agent that hasn't started is paused now (\`changed\`); a running one is asked to stop (\`pending\`): ` +
+				"at its next check it stops, its work is committed and pushed to its branch, and it is paused. Confirmed by agent.paused per agent and run.paused once every live agent is paused. " +
+				`409 \`conflict\` when no agent is pending or running. ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunControl),
+		resume: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/resume", inputStructure: "detailed",
+			description: "Run every paused agent of the run again now (no body): paused here, with `capcomd pause`, or by a provider usage limit (that login's recorded limit is cleared). " +
+				"Each continues from its work on its branch as its next attempt. Confirmed by agent.resumed per agent and run.resumed. " +
+				`409 \`conflict\` when no agent is paused. ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunControl),
+		cancel: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/cancel", inputStructure: "detailed",
+			description: "Stop the run (no body): every agent that hasn't ended is cancelled and its VM destroyed (`capcomd cancel <runId>`). " +
+				"Confirmed by agent.cancelled per agent and run.cancelled. " +
+				`409 \`conflict\` when nothing is left to cancel. ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunControl),
 	},
 	agents: {
 		tree: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents" }).input(z.object({ runId: z.string() })).output(z.array(Agent)),
@@ -283,6 +326,12 @@ export const contract = {
 			.output(ThreadPage),
 		workspace: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents/{agentId}/workspace", description: "A file of the agent's latest work, raw bytes (workspace media). See \"Agent threads\" in docs/harness-contract.md." })
 			.input(z.object({ runId: z.string(), agentId: z.string(), path: z.string().min(1).max(1024) })).output(z.string().describe("The file's bytes")),
+		send: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/messages", inputStructure: "detailed",
+			description: "Steer: send the agent a message from the operator (`capcomd send <runId> <agt> <text>`). Returns the thread `seq`; the message.sent event on the run stream " +
+				"with the same `data.seq` (and `data.to` = agentId) confirms it, so a client can match its optimistic bubble. 409 `conflict` when the agent has ended (nothing would read it). " +
+				`422 \`invalid\` when \`body\` is empty or over ${MESSAGE_BODY_MAX_BYTES} bytes. ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders, body: SendBody })).output(SentMessage),
 	},
 	attachments: {
 		get: oc.route({ method: "GET", path: "/v1/runs/{runId}/attachments/{attachmentId}", description: "Full text of an over-64 KB body, or an image a tool returned (base64, `encoding: \"base64\"`; prefer …/content for its bytes)." })
@@ -310,7 +359,7 @@ export const contract = {
 				description: "No prior read needed. `Idempotency-Key` is scoped to the calling client. Same key + same body: 200 with the first result (replay). " +
 					"Same key + different body: 409 `idempotency_conflict`. New key on an approval already decided: 409 `already_decided` with the existing `decision` (who, when).",
 			})
-			.input(z.object({ params: z.object({ approvalId: ApprovalId }), headers: z.object({ "idempotency-key": z.string().min(8).max(200) }), body: DecideBody }))
+			.input(z.object({ params: z.object({ approvalId: ApprovalId }), headers: IdempotencyHeaders, body: DecideBody }))
 			.output(Decision),
 	},
 };
