@@ -207,3 +207,9 @@ Springs, no bounce (damping 1.0) unless noted; all interruptible from current va
 3. **Project grouping** (G1): is a project one run, or several runs grouped by goal? Where do repo/folder chips come from?
 4. Approve/deny verb and auth from a GUI process (subscription vs API key) — confirm the CLI command to call.
 5. Thread fidelity with the 500-char `text` cap: acceptable for v1?
+
+## Design fidelity
+
+- `design/` holds the approved mockups (see `design/README.md` for the screen → mockup → Swift view index). UI changes must match the mockup in `design/`.
+- PRs that touch the UI must include a side-by-side screenshot: mockup next to the running app, for each screen changed.
+- If the design needs to change, update the mockup (generator + PNG) in the same PR first, then the app.
