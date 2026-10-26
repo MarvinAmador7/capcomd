@@ -190,13 +190,24 @@ enum Theme {
     static let actionFill = Color.white.opacity(0.10)
     static let actionText = Color.white
     static let terminalText = Color.white.opacity(0.75), terminalPadding: CGFloat = 4
-    static let footerMaterial: Material = .bar
-    static let footerDivider = Color.white.opacity(0.10), footerDividerHeight: CGFloat = 0.5   // .acts border-top
+    // The bar under .acts is the panel footer's (Theme.Footer: .bar material, 0.5 pt white 10 % border-top).
     static let stopConfirmFill = Theme.red.opacity(0.22)
     static let stopConfirmSeconds: Double = 4
     static let errorFont = Font.system(size: 11.5)
     /// While the drill-down is open, its REST parts refresh this often.
     static let refreshSeconds: Double = 2
+  }
+  /// Panel footer (v5-a-final.html `.ft`): full-bleed bar over a `.bar` material, so the list scrolling under it blurs
+  /// instead of showing through, with a hairline on top.
+  enum Footer {
+    static let paddingVertical: CGFloat = 10, paddingHorizontal: CGFloat = 16
+    static let font = Font.system(size: 12.5)
+    static let monoFont = Font.system(size: 12.5, design: .monospaced)
+    static let text = Theme.Card.titleText                   // inherits the panel's #F2F2F7
+    static let hintText = Color.white.opacity(0.40)          // .ft .h
+    static let divider = Color.white.opacity(0.10)
+    static let dividerHeight: CGFloat = 0.5
+    static let material: Material = .bar
   }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {

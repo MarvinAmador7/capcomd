@@ -26,6 +26,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   time. The footer can **Pause**/**Resume** and **Stop** the run (Stop asks once) and **Open in terminal** runs
   `capcomd tui` for it. Pause, Stop and Files need a daemon with the new run controls and files routes; an older one
   says so instead.
+- Menu bar app: the footer ("Open capcomd", "Summon ⌥Space") now sits on its own bar with a thin line above it, so
+  projects scrolling underneath blur out instead of showing through the text.
 - Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
   once, and clicks could land on the hidden cards).
 - harness.v1 now says what each agent is doing right now, in plain language: "Reading 4 files", "Running the tests",

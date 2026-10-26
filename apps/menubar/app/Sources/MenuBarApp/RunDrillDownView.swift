@@ -593,8 +593,8 @@ struct DrillFooter: View {
     }
     .padding(Theme.Drill.footerPadding)
     .frame(maxWidth: .infinity)
-    .background(Theme.Drill.footerMaterial)
-    .overlay(alignment: .top) { Rectangle().fill(Theme.Drill.footerDivider).frame(height: Theme.Drill.footerDividerHeight) }
+    .background(Theme.Footer.material)
+    .overlay(alignment: .top) { Rectangle().fill(Theme.Footer.divider).frame(height: Theme.Footer.dividerHeight) }
   }
 
   private var pauseButton: some View {
