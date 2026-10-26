@@ -10,6 +10,10 @@ import { capcomd, sleep, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 import { Git } from "../../src/merge/git";
 import { awaitThroughPauses } from "../../src/primitives/ops";
+import { addClient, loadClients } from "../../src/api/clients";
+import { harnessApp } from "../../src/api/server";
+import { harnessState } from "../../src/api/state";
+import { rivetSource } from "../../src/api/rivet-source";
 
 let engine: Engine;
 let env: Record<string, string>;
@@ -175,6 +179,80 @@ const until = async (run: string, id: string, status: string) => {
   for (let i = 0; i < 120; i++) { const a = await statusOf(run, id); if (a?.status === status) return a; await sleep(500); }
   throw new Error(`${id} never reached ${status}`);
 };
+
+test("pause: a running agent stops with its work pushed and is paused, a pending one pauses at once; resume runs both on", async () => {
+  const run = (await cj(["run", "new"])).j?.runId;
+  const busy = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "p1"])).j?.agentId;
+  const waiting = (await cj(["spawn", run, "--profile", "open", "--task", "plain job", "--key", "p2", "--no-start"])).j?.agentId;
+  // working: its CLI has reported a heartbeat (it edited, then hangs)
+  for (let i = 0; i < 120 && !(await statusOf(run, busy))?.heartbeatAt; i++) await sleep(250);
+  const p = await cj(["pause", run]);
+  expect(p.code).toBe(0);
+  expect(p.j).toMatchObject({ runId: run, paused: [waiting], pausing: [busy] });
+  const a = await until(run, busy, "paused");
+  expect({ ...a.result }).toMatchObject({ limit: "paused", by: "operator", branch: expect.stringMatching(/^capcomd\//) });
+  expect(a.result.error).toContain("paused by the operator");
+  expect(a.pausedUntil).toBeUndefined(); // no reset time: it waits for resume
+  expect((await new Git(repo.bare).run(["log", "-1", "--format=%B", a.result.branch])).stdout).toContain("Capcomd-Stop: paused");
+  expect((await statusOf(run, waiting)).status).toBe("paused");
+  expect((await cj(["pause", run])).j).toMatchObject({ paused: [], pausing: [] });
+
+  const r = await cj(["resume", run]);
+  expect(r.j.resumed.sort()).toEqual([busy, waiting].sort());
+  const done = (await cj(["await", run, busy, waiting, "--timeout-ms", "90000"])).j?.agents;
+  expect(done.map((x: any) => x.status)).toEqual(["done", "done"]);
+  expect(done[0].epoch).toBe(2); // a new attempt that continued on its branch
+  const log = (await new Git(repo.bare).run(["log", "--format=%B", done[0].result.branch])).stdout;
+  expect(log).toContain("Capcomd-Stop: paused");
+  const types: string[] = (await cj(["events", run])).j.events.map((e: any) => e.type);
+  expect(types.filter((t) => t === "AGENT_PAUSED").length).toBe(2);
+  expect(types.filter((t) => t === "AGENT_RESUMED").length).toBe(2);
+  expect(types).not.toContain("DRIVE_FAILED");
+}, 180_000);
+
+test("harness API (menu bar): steer message, pause, resume and cancel go through the CLI's paths; the run's events confirm each", async () => {
+  process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT; // in-process callers (rivetSource, the drivers resume starts) use this engine
+  const clientsPath = join(mkdtempSync(join(tmpdir(), "capcomd-clients-")), "clients.json");
+  const token = addClient("Menu bar", ["read", "steer"], clientsPath).token;
+  const app = harnessApp({ source: rivetSource(), clients: () => loadClients(clientsPath), state: harnessState(null) });
+  let n = 0;
+  const post = async (p: string, body?: unknown) => {
+    const r = await app.request(p, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "idempotency-key": `menubar-${++n}` }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    return { status: r.status, j: (await r.json()) as any };
+  };
+  const get = async (p: string) => (await app.request(p, { headers: { authorization: `Bearer ${token}` } })).json() as Promise<any>;
+  const lifecycle = async (run: string) => ((await get(`/v1/runs/${run}/lifecycle`)) as any[]).map((e) => e.type);
+  const working = async (run: string, id: string) => { for (let i = 0; i < 120 && !(await statusOf(run, id))?.heartbeatAt; i++) await sleep(250); };
+
+  const run = (await cj(["run", "new"])).j?.runId;
+  const a = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "h1"])).j?.agentId;
+  await working(run, a);
+
+  const sent = await post(`/v1/runs/${run}/agents/${a}/messages`, { body: "use the v2 API" });
+  expect(sent).toMatchObject({ status: 200, j: { runId: run, to: a, from: "operator", seq: 1 } });
+  const msg = ((await get(`/v1/events?scope=${run}`)) as any[]).find((e) => e.type === "message.sent");
+  expect(msg.data).toMatchObject({ seq: sent.j.seq, to: a, text: "use the v2 API" });
+
+  const p = await post(`/v1/runs/${run}/pause`);
+  expect(p).toMatchObject({ status: 200, j: { action: "pause", changed: [], pending: [a] } });
+  const paused = await until(run, a, "paused");
+  expect(paused.result.by).toMatch(/^client:cli-/);
+  expect(await lifecycle(run)).toContain("run.paused");
+
+  const r = await post(`/v1/runs/${run}/resume`);
+  expect(r).toMatchObject({ status: 200, j: { action: "resume", changed: [a], pending: [] } });
+  await until(run, a, "done");
+  expect((await lifecycle(run)).filter((t) => t.startsWith("run."))).toEqual(["run.created", "run.started", "run.paused", "run.resumed", "run.completed"]);
+
+  const b = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "h2"])).j?.agentId;
+  await working(run, b);
+  const c = await post(`/v1/runs/${run}/cancel`);
+  expect(c).toMatchObject({ status: 200, j: { action: "cancel", changed: [b], pending: [] } });
+  expect((await statusOf(run, b)).status).toBe("cancelled");
+  expect((await lifecycle(run)).at(-1)).toBe("run.cancelled");
+  expect(await post(`/v1/runs/${run}/cancel`)).toMatchObject({ status: 409, j: { code: "conflict" } });
+  expect(await post(`/v1/runs/${run}/agents/${b}/messages`, { body: "too late" })).toMatchObject({ status: 409, j: { code: "conflict" } });
+}, 180_000);
 
 test("a usage limit pauses the agent with its work kept; other agents on the login wait; resume runs them on", async () => {
   const run = (await cj(["run", "new"])).j?.runId;

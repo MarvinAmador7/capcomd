@@ -117,6 +117,8 @@ function rowToAgent(r: any) {
     activity: r.activity ? (JSON.parse(r.activity as string) as StoredActivity) : null,
     /** Where it works (harness.v1 Agent.workspace), fixed at spawn; null when the run had no repository (or the row predates it). */
     workspace: r.workspace ? (JSON.parse(r.workspace as string) as AgentWorkspace) : null,
+    /** Who asked this running agent to pause (`requestPause`): its runner stops it, keeps its work and pauses it. */
+    pauseRequested: (r.pause_requested as string | null) ?? null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -195,13 +197,30 @@ async function reapOrphans(c: any, parent: ScopeAgent): Promise<{ reaped: string
   return out;
 }
 
+/** An agent and its descendants (or every agent of the run when agentId is omitted), target first. */
+async function preorder(c: { db: RawAccess }, agentId?: string): Promise<ScopeAgent[]> {
+  const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
+  const kids = new Map<string | null, ScopeAgent[]>();
+  for (const a of all) kids.set(a.parent, [...(kids.get(a.parent) ?? []), a]);
+  let targets: ScopeAgent[];
+  if (agentId) {
+    const t = all.find((a) => a.agentId === agentId);
+    if (!t) fail("not_found", `agent ${agentId} not found`);
+    targets = [t!];
+  } else targets = kids.get(null) ?? [];
+  const order: ScopeAgent[] = [];
+  const walk = (a: ScopeAgent) => { order.push(a); for (const k of kids.get(a.agentId) ?? []) walk(k); };
+  targets.forEach(walk);
+  return order;
+}
+
 async function resumeAgent(c: { db: RawAccess }, agentId: string, by?: string) {
   const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", agentId);
   if (!r.length) fail("not_found", `agent ${agentId} not found`);
   const a = rowToAgent(r[0]);
   if (a.status !== "paused") return { changed: false, agent: a };
   await c.db.transaction(async (tx: RawAccess) => {
-    await tx.execute("UPDATE agents_v2 SET status = 'running', epoch = ?, paused_until = NULL, result = NULL, activity = NULL, heartbeat_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'paused'",
+    await tx.execute("UPDATE agents_v2 SET status = 'running', epoch = ?, paused_until = NULL, pause_requested = NULL, result = NULL, activity = NULL, heartbeat_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'paused'",
       a.epoch + 1, Date.now(), Date.now(), agentId);
     await addEvent(tx, "AGENT_RESUMED", agentId, { epoch: a.epoch + 1, by: by ?? null }, `resume-${agentId}-e${a.epoch + 1}`);
   }, { name: "scopeResume" });
@@ -244,6 +263,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "granted_at", "INTEGER");
       await addColumn(database, "agents_v2", "activity", "TEXT");
       await addColumn(database, "agents_v2", "workspace", "TEXT");
+      await addColumn(database, "agents_v2", "pause_requested", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -438,13 +458,40 @@ export const scopeActor = actor({
       const a = rowToAgent(r[0]);
       if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { changed: false, agent: a };
       await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("UPDATE agents_v2 SET status = 'paused', paused_until = ?, result = ?, spent = ?, notice = NULL, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
+        await tx.execute("UPDATE agents_v2 SET status = 'paused', paused_until = ?, pause_requested = NULL, result = ?, spent = ?, notice = NULL, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
           params.until, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, "AGENT_PAUSED", params.agentId, { result: params.result, until: params.until || null }, `pause-${params.agentId}-e${a.epoch}`);
       }, { name: "scopePause" });
       // Wake at the reset even when nobody awaits it (the engine host starts its driver).
       if (params.until > 0) await c.schedule.at(params.until, "wakeDue", { agentId: params.agentId, epoch: a.epoch });
       return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+    },
+
+    /**
+     * The operator pauses an agent and its descendants (or every agent of the run). One that hasn't started is paused
+     * now; a running one is asked to stop (`pause_requested`): its runner stops it at its next poll, pushes its work and
+     * pauses it like a usage limit, and `resume` runs it on. Idempotent: an agent already asked is reported again.
+     */
+    async requestPause(c, params: { agentId?: string; by: string }) {
+      const order = await preorder(c, params.agentId);
+      const paused: string[] = [], pausing: string[] = [];
+      for (const o of order) {
+        // Read and write in one transaction, so a driver claiming the agent meanwhile can't start it and see it paused.
+        await c.db.transaction(async (tx: RawAccess) => {
+          const a = rowToAgent((await tx.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", o.agentId))[0]);
+          if (a.status === "pending") {
+            const result = { limit: "paused", by: params.by, error: `paused by the operator${params.by === "operator" ? "" : ` (${params.by})`} before it started; it runs on \`capcomd resume\`` };
+            await tx.execute("UPDATE agents_v2 SET status = 'paused', paused_until = NULL, pause_requested = NULL, result = ?, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ? AND status = 'pending'",
+              JSON.stringify(result), Date.now(), a.agentId);
+            await addEvent(tx, "AGENT_PAUSED", a.agentId, { result, until: null }, `pause-${a.agentId}-e${a.epoch}`);
+            paused.push(a.agentId);
+          } else if (a.status === "running") {
+            if (!a.pauseRequested) await tx.execute("UPDATE agents_v2 SET pause_requested = ?, updated_at = ? WHERE agent_id = ? AND status = 'running'", params.by, Date.now(), a.agentId);
+            pausing.push(a.agentId);
+          }
+        }, { name: "scopeRequestPause" });
+      }
+      return { paused, pausing, affected: order.map((a) => a.agentId) };
     },
 
     /** A paused agent runs again as its next epoch (a new worker and VM, continuing on its branch). */
@@ -692,18 +739,7 @@ export const scopeActor = actor({
      * so a crash mid-way leaves a prefix that the retried (idempotent) call completes.
      */
     async cancel(c, params: { agentId?: string; reason?: string }) {
-      const all: ScopeAgent[] = (await c.db.execute("SELECT * FROM agents_v2")).map(rowToAgent);
-      const kids = new Map<string | null, ScopeAgent[]>();
-      for (const a of all) kids.set(a.parent, [...(kids.get(a.parent) ?? []), a]);
-      let targets: ScopeAgent[];
-      if (params.agentId) {
-        const t = all.find((a) => a.agentId === params.agentId);
-        if (!t) fail("not_found", `agent ${params.agentId} not found`);
-        targets = [t!];
-      } else targets = kids.get(null) ?? [];
-      const order: ScopeAgent[] = [];
-      const walk = (a: ScopeAgent) => { order.push(a); for (const k of kids.get(a.agentId) ?? []) walk(k); };
-      targets.forEach(walk);
+      const order = await preorder(c, params.agentId);
       const cancelled: string[] = [];
       let i = 0;
       for (const a of order) {

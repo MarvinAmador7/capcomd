@@ -6,7 +6,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { client, assertEngine } from "../core/relay";
+import { client, assertEngine, cancelRun } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
@@ -425,12 +425,17 @@ async function resultOf(runId: string, agentId: string): Promise<Record<string, 
   return v ? { summary: v.summary, artifacts: v.artifacts, ...(v.data !== undefined ? { data: v.data } : {}), ...(v.truncated ? { truncated: v.truncated } : {}) } : {};
 }
 
+/** "paused by the operator", naming the API client when one asked (client:<id>). */
+const pausedBy = (by: string) => `${stoppedAt("paused")}${by === "operator" ? "" : ` (${by})`}`;
+
 async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`): Promise<ScopeAgent> {
   const c = client();
   const s = c.scope.getOrCreate([runId]);
   const claim = await s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(asRelay);
   if (!claim.ok) return claim.agent;
   const a = claim.agent;
+  // The operator asked to pause it while no driver ran it: pause it now, before a VM is made.
+  if (a.pauseRequested) return (await s.pause({ agentId, until: 0, result: { limit: "paused", by: a.pauseRequested, error: `${pausedBy(a.pauseRequested)}; it runs on \`capcomd resume\`` } })).agent;
   const hb = setInterval(() => { s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(() => {}); }, Math.max(500, LEASE_MS / 3));
   const w = workerOf(runId, agentId, a.epoch);
   const epoch = a.epoch;
@@ -509,6 +514,12 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
       const until = Number(rec.resetAt) || Date.now() + quotaRetryMs();
       if (login) recordQuota(login, { until, at: Date.now(), runId, agentId });
       const p = await s.pause({ agentId, until, spent, result: { limit: "quota", login, resetAt: Number(rec.resetAt) || null, error: `${stoppedAt("quota")}; it resumes at ${new Date(until).toISOString()} (or on \`capcomd resume\`)${pushed.sha ? `, from its work on ${branch}` : ""}`, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds } });
+      return p.agent;
+    }
+    // The operator's pause: stopped with its work kept, it waits for `resume` (no reset time).
+    if (rec.limit === "paused") {
+      const by = (await s.getAgent({ agentId }))?.pauseRequested ?? "operator";
+      const p = await s.pause({ agentId, until: 0, spent, result: { limit: "paused", by, error: `${pausedBy(by)}; it runs on \`capcomd resume\`${pushed.sha ? `, from its work on ${branch}` : ""}`, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds } });
       return p.agent;
     }
     const declared = await resultOf(runId, agentId);
@@ -619,11 +630,18 @@ export async function messageNote(runId: string, to: string): Promise<string | n
     : `${to} is a Codex agent that can't read messages while it works: this one stays in its inbox, unread`;
 }
 
+/** `capcomd send`: append a message to `to`'s mailbox (idempotent by key), with a note when it won't be read right away. */
+export async function sendToAgent(runId: string, o: { to: string; from: string; body: string; key?: string }) {
+  await assertEngine();
+  const r = await client().scope.getOrCreate([runId]).sendMessage({ to: o.to, from: o.from, body: o.body, ...(o.key ? { key: o.key } : {}) });
+  return { ...r, note: await messageNote(runId, o.to) };
+}
+
 /**
  * ADR-019 §6: run paused agents again now (one, or every paused agent in the run), each from its work so far. It is
  * the operator saying the login can work: its recorded quota is cleared, so other waiting agents may go too.
  */
-export async function resumeAgents(runId: string, agentId?: string) {
+export async function resumeAgents(runId: string, agentId?: string, by = "operator") {
   await assertEngine();
   const s = client().scope.getOrCreate([runId]);
   const all: ScopeAgent[] = agentId ? [await getAgentOrThrow(runId, agentId)] : await s.listAgents({});
@@ -633,10 +651,41 @@ export async function resumeAgents(runId: string, agentId?: string) {
   for (const a of paused) {
     const login = loginOf(a.spec);
     if (login) clearQuota(login);
-    const r = await s.resume({ agentId: a.agentId, by: "operator" });
+    const r = await s.resume({ agentId: a.agentId, by });
     if (r.changed) { resumed.push(a.agentId); startDriver(runId, a.agentId); }
   }
   return { runId, resumed };
+}
+
+/**
+ * The operator pauses an agent and its descendants (or the whole run). One that hasn't started is paused now; a running
+ * one stops at its runner's next poll with its work pushed to its branch, then is paused (`resume` runs it on as its
+ * next epoch). `paused`: paused now; `pausing`: asked to stop (each ends as paused, or done/failed if it finished first).
+ */
+export async function pauseAgents(runId: string, agentId?: string, by = "operator") {
+  await assertEngine();
+  const r = await client().scope.getOrCreate([runId]).requestPause({ ...(agentId ? { agentId } : {}), by }).catch(asRelay);
+  return { runId, target: agentId ?? null, paused: r.paused, pausing: r.pausing };
+}
+
+/**
+ * `capcomd cancel <runId> [agt]`. A recipe run (the planner flow over the primitives) keeps the run-level cancel
+ * ({state, changed}) and its scope agents are cancelled alongside; a primitives run cancels agents (cancelAgents); a run
+ * with no scope cancels the run actor.
+ */
+export async function cancelAny(runId: string, agentId?: string, reason?: string): Promise<
+  | { kind: "run"; run: { runId: string; state: string; changed: boolean }; agents: { cancelled: string[] } | null }
+  | { kind: "agents"; agents: Awaited<ReturnType<typeof cancelAgents>> }> {
+  const S = await import("./state");
+  const scoped = await listScope(runId).then(() => true, () => false);
+  const recipeRun = !agentId && scoped && await S.kvGet(runId, "recipe/plan").then((e: any) => e.version > 0, () => false);
+  if (recipeRun) {
+    const run = await cancelRun(runId);
+    const agents = run.changed ? await cancelAgents(runId, undefined, reason ?? "run cancelled").catch(() => null) : null;
+    return { kind: "run", run, agents };
+  }
+  if (agentId || scoped) return { kind: "agents", agents: await cancelAgents(runId, agentId, reason) };
+  return { kind: "run", run: await cancelRun(runId), agents: null };
 }
 
 /** Cancel an agent (or the whole run) and every descendant; destroy their VMs. Idempotent. */

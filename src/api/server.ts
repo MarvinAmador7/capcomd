@@ -1,10 +1,11 @@
 // harness.v1 server (docs/harness-architecture.md §6-7): Hono app on the 0600 Unix socket. JSON routes are the oRPC
-// contract (src/api/contract.ts) served by OpenAPIHandler; the SSE stream, the decision endpoint and runs.create are
-// native Hono routes because they need SSE framing, Last-Event-ID and Idempotency-Key. Every non-2xx body is ApiError {code, message}.
+// contract (src/api/contract.ts) served by OpenAPIHandler; the SSE stream and the write routes (decision, runs.create,
+// run controls, messages) are native Hono routes because they need SSE framing, Last-Event-ID and Idempotency-Key.
+// Every non-2xx body is ApiError {code, message}.
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { contract, CreateRunBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
@@ -225,6 +226,72 @@ export function harnessApp(o: ServerOptions) {
 		return raw(f.bytes, mediaOfPath(path)?.mime ?? null);
 	});
 
+	// Run controls and steer messages (steer scope). Same Idempotency-Key rules as decisions: the key is scoped to the
+	// client; the same key + same request replays the first 200; the same key on another request is idempotency_conflict.
+	// Only a 200 is stored: an error changed nothing, so a retry looks again. Concurrent duplicates share one apply.
+	const writing = new Map<string, { hash: string; done: Promise<Outcome> }>();
+	const idempotent = async (c: Context, request: unknown[], apply: (client: AuthedClient, key: string) => Promise<Outcome>) => {
+		const key = c.req.header("idempotency-key");
+		if (!key || key.length < 8 || key.length > 200) return err(c, 422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+		const client = c.get("client");
+		const kid = `${client.clientId}\u0000${key}`;
+		const hash = JSON.stringify(request);
+		const reused = () => err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different request");
+		const prior = state.key(kid);
+		if (prior) return prior.bodyHash === hash ? c.json(prior.result as object, prior.status as 200) : reused();
+		const pend = writing.get(kid);
+		if (pend) {
+			if (pend.hash !== hash) return reused();
+			const r = await pend.done;
+			return c.json(r.body, r.status as 200);
+		}
+		let settle!: (o: Outcome) => void, fail!: (e: unknown) => void;
+		const done = new Promise<Outcome>((ok, no) => { settle = ok; fail = no; });
+		done.catch(() => {});
+		writing.set(kid, { hash, done });
+		try {
+			const out = await apply(client, key);
+			if (out.status === 200) state.recordKey(kid, { bodyHash: hash, status: 200, result: out.body });
+			settle(out);
+			return c.json(out.body, out.status as 200);
+		} catch (e) {
+			fail(e);
+			throw e;
+		} finally { writing.delete(kid); }
+	};
+	const gone = (what: string): Outcome => ({ status: 404, body: { code: "not_found", message: `${what} not found` } });
+	const ENDED = new Set(["done", "failed", "cancelled", "handed-off"]);
+
+	for (const action of ["pause", "resume", "cancel"] as const) {
+		app.post(`/v1/runs/:runId/${action}`, (c) => {
+			const runId = c.req.param("runId");
+			return idempotent(c, [`runs.${action}`, runId], async (client) => {
+				if ((await src.agents(runId)) === null) return gone(`run ${runId}`);
+				const r = await src.control(runId, action, `client:${client.clientId}`);
+				if (r.noop) return { status: 409, body: { code: "conflict", message: r.noop } };
+				return { status: 200, body: { runId, action, changed: r.changed, pending: r.pending } };
+			});
+		});
+	}
+
+	app.post("/v1/runs/:runId/agents/:agentId/messages", async (c) => {
+		const runId = c.req.param("runId"), agentId = c.req.param("agentId");
+		const raw = await c.req.json().catch(() => null) as { body?: unknown } | null;
+		if (!raw || typeof raw.body !== "string" || !raw.body.length) return err(c, 422, "invalid", "body must be {body: non-empty string}");
+		if (Buffer.byteLength(raw.body) > MESSAGE_BODY_MAX_BYTES) return err(c, 422, "invalid", `body is over ${MESSAGE_BODY_MAX_BYTES} bytes`);
+		const body = raw.body;
+		return idempotent(c, ["agents.send", runId, agentId, body], async (client, key) => {
+			const agents = await src.agents(runId);
+			if (agents === null) return gone(`run ${runId}`);
+			const a = agents.find((x) => x.id === agentId);
+			if (!a) return gone(`agent ${agentId}`);
+			if (ENDED.has(a.status)) return { status: 409, body: { code: "conflict", message: `${agentId} is ${a.status}: nothing will read this message` } };
+			// The scope's own message key: a retry after a daemon restart (or after the 24h key window) still sends once.
+			const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`);
+			return { status: 200, body: { runId, to: agentId, from: "operator", seq: r.seq, note: r.note } };
+		});
+	});
+
 	app.get("/v1/streams/:scope/events", (c) => {
 		const scope = c.req.param("scope");
 		if (!/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$/.test(scope)) return err(c, 422, "invalid", "scope is daemon, prj-<id> or run-<id>");
@@ -401,6 +468,14 @@ export function harnessApp(o: ServerOptions) {
 		});
 		c.req.raw.signal?.addEventListener?.("abort", () => { closed = true; clearInterval(timer); clearInterval(hb); clearInterval(threadTimer); });
 		return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
+	});
+
+	// A thrown error (engine down, an actor's not_found/conflict) is still an ApiError body.
+	app.onError((e, c) => {
+		const code = (e as { code?: unknown }).code;
+		if (code === "not_found") return err(c, 404, "not_found", e.message);
+		if (code === "conflict") return err(c, 409, "conflict", e.message);
+		return c.json({ code: "internal", message: e.message || "internal error" }, 500);
 	});
 
 	app.all("*", async (c) => {

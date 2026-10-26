@@ -504,6 +504,8 @@ export const workerActor = actor({
             const a = await (c as any).client().scope.getOrCreate([runId]).getAgent({ agentId: workerId }).catch(() => null);
             return a?.status === "cancelled";
           },
+          // The operator's pause (scope requestPause): the runner stops the agent and keeps its work; the driver pauses it.
+          ...(scope ? { isPaused: async () => !!(await scope.getAgent({ agentId: workerId }).catch(() => null))?.pauseRequested } : {}),
         }).finally(async () => { activity?.stop(); await items?.flush(); });
         sha = res.sha;
         costUsd = res.costUsd;

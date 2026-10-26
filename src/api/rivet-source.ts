@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { client, generateRunId } from "../core/relay";
 import { redactShapes } from "../agents/redact";
-import { recentRuns, decideMerge, runTarget } from "../primitives/ops";
+import { cancelAny, decideMerge, pauseAgents, recentRuns, resumeAgents, runTarget, sendToAgent } from "../primitives/ops";
 import { mergeConfigFor } from "../merge/run-config";
 import { tracePath } from "../utils/tracing-simple";
 import { VERSION } from "../utils/self";
@@ -171,6 +171,24 @@ export function rivetSource(): HarnessSource {
 			const cfg = await mergeConfigFor(runId).catch(() => null);
 			if (!cfg) return null;
 			return { remote: cfg.remote, target: (await runTarget(runId).catch(() => undefined)) ?? cfg.target, workdir: cfg.workdir };
+		},
+		// The CLI's own paths (capcomd pause / resume / cancel / send), so the API changes state exactly as they do.
+		control: async (runId, action, by) => {
+			if (action === "pause") {
+				const r = await pauseAgents(runId, undefined, by);
+				return { changed: r.paused, pending: r.pausing, noop: r.paused.length || r.pausing.length ? null : `${runId} has no pending or running agent to pause` };
+			}
+			if (action === "resume") {
+				const r = await resumeAgents(runId, undefined, by);
+				return { changed: r.resumed, pending: [], noop: r.resumed.length ? null : `${runId} has no paused agent to resume` };
+			}
+			const r = await cancelAny(runId, undefined, `cancelled by ${by}`);
+			if (r.kind === "agents") return { changed: r.agents.cancelled, pending: [], noop: r.agents.cancelled.length ? null : `nothing to cancel in ${runId}: every agent has ended` };
+			return { changed: r.agents?.cancelled ?? [], pending: [], noop: r.run.changed ? null : `${runId} is ${r.run.state}; nothing to cancel` };
+		},
+		send: async (runId, to, body, key) => {
+			const r = await sendToAgent(runId, { to, from: "operator", body, key });
+			return { seq: r.seq, note: r.note };
 		},
 	};
 }

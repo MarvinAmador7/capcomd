@@ -2,7 +2,7 @@
 // scope actors (src/primitives/ops.ts); tests use memorySource so tests/api stays fast and engine-free.
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, Attachment, Decision, Message, Project, Run, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Agent, AgentStatus, Attachment, Decision, Message, Project, Run, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
@@ -49,7 +49,13 @@ export interface HarnessSource {
 	createRun(input: CreateRunInput): Promise<O<typeof Run>>;
 	/** The run's repository and target branch (GET /v1/runs/{runId}/files); null when the run has none. */
 	repo(runId: string): Promise<RunRepo | null>;
+	/** Pause, resume or cancel the run's agents (`by`: client:<id>). `noop` explains why nothing changed (→ 409 conflict). */
+	control(runId: string, action: RunAction, by: string): Promise<ControlResult>;
+	/** Send `to` a message from the operator; idempotent by `key`. */
+	send(runId: string, to: string, body: string, key: string): Promise<{ seq: number; note: string | null }>;
 }
+export type RunAction = "pause" | "resume" | "cancel";
+export type ControlResult = { changed: string[]; pending: string[]; noop: string | null };
 
 /** Legacy scope event → harness.v1 envelope. entitySeq counts per entity in seq order within what the caller saw. */
 export function toEnvelope(runId: string, e: RawEvent, entitySeq: number, projectId: string | null = null): HarnessEvent {
@@ -93,11 +99,39 @@ export function memorySource(seed: Partial<{
 	const runs = seed.runs ?? [];
 	const decided: Array<{ approvalId: string; approve: boolean; by: string }> = [];
 	const created: CreateRunInput[] = [];
+	const sent = new Map<string, number>(); // message idempotency key → seq
+	const push = (runId: string, e: Omit<RawEvent, "seq">) => { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); return r; };
+	// Agent state changes as the scope actor writes them (a running agent pauses at once here: there is no runner).
+	const STEP: Record<RunAction, { from: string[]; to: O<typeof AgentStatus>; type: string; data: (by: string) => Record<string, unknown>; noop: string }> = {
+		pause: { from: ["pending", "running"], to: "paused", type: "AGENT_PAUSED", data: (by) => ({ result: { limit: "paused", by }, until: null }), noop: "no pending or running agent to pause" },
+		resume: { from: ["paused"], to: "running", type: "AGENT_RESUMED", data: (by) => ({ epoch: 2, by }), noop: "no paused agent to resume" },
+		cancel: { from: ["pending", "running", "paused"], to: "cancelled", type: "AGENT_CANCELLED", data: (by) => ({ reason: `cancelled by ${by}`, by: "run" }), noop: "nothing to cancel: every agent has ended" },
+	};
 	return {
 		version: "test",
 		decided,
 		created,
-		push(runId, e) { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); return r; },
+		push,
+		control: async (runId, action, by) => {
+			const s = STEP[action];
+			const out: ControlResult = { changed: [], pending: [], noop: null };
+			for (const a of seed.agents?.[runId] ?? []) {
+				if (!s.from.includes(a.status)) continue;
+				(action === "pause" && a.status === "running" ? out.pending : out.changed).push(a.id);
+				a.status = s.to;
+				push(runId, { at: Date.now(), type: s.type, agentId: a.id, data: s.data(by) });
+			}
+			if (!out.changed.length && !out.pending.length) out.noop = `${runId}: ${s.noop}`;
+			return out;
+		},
+		send: async (runId, to, body, key) => {
+			const prior = sent.get(key);
+			if (prior !== undefined) return { seq: prior, note: null };
+			const seq = messagesOf(events[runId] ?? []).reduce((m, x) => Math.max(m, x.seq), 0) + 1;
+			push(runId, { at: Date.now(), type: "MESSAGE_SENT", agentId: "operator", data: { to, seq, bytes: Buffer.byteLength(body), text: body, attachment: null } });
+			sent.set(key, seq);
+			return { seq, note: null };
+		},
 		runs: async () => runs,
 		projects: async () => [],
 		agents: async (r) => seed.agents?.[r] ?? (seed.runs?.some((x) => x.id === r) ? [] : null),

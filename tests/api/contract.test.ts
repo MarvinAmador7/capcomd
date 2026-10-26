@@ -19,7 +19,8 @@ describe("harness.v1 contract", () => {
 		for (const t of [...Object.keys(EventData), ...Object.keys(StreamFrames)]) expect(t).toMatch(/^[a-z]+(\.[a-z_]+)+$/);
 	});
 	test("committed OpenAPI covers every route, with a scoped stream and no global one", () => {
-		for (const p of ["/v1/health", "/v1/runs", "/v1/runs/{runId}", "/v1/runs/{runId}/agents", "/v1/runs/{runId}/files", "/v1/events", "/v1/streams/{scope}/events", "/v1/approvals/{approvalId}/decision"])
+		for (const p of ["/v1/health", "/v1/runs", "/v1/runs/{runId}", "/v1/runs/{runId}/agents", "/v1/runs/{runId}/files", "/v1/events", "/v1/streams/{scope}/events", "/v1/approvals/{approvalId}/decision",
+			"/v1/runs/{runId}/pause", "/v1/runs/{runId}/resume", "/v1/runs/{runId}/cancel", "/v1/runs/{runId}/agents/{agentId}/messages"])
 			expect(Object.keys(paths)).toContain(p);
 		expect(Object.keys(paths)).not.toContain("/v1/events/stream");
 		expect(paths["/v1/streams/{scope}/events"].get.responses["200"].content).toHaveProperty("text/event-stream");

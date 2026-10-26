@@ -3,7 +3,8 @@
 // Persistence: a deterministic projection of the run's durable scope_events log (written in the same transaction as each
 // state change), so every lifecycle event has a stable `seq` (the source event's seq) and survives daemon restarts. Run-level
 // states are folded from the agent states in seq order: run.started on the first agent start, run.paused when every live agent
-// is paused, run.resumed when one resumes, and run.completed / run.failed / run.cancelled when the last live agent ends.
+// is paused, run.resumed when one resumes, and run.completed / run.failed / run.cancelled when the last live agent ends
+// (always run.cancelled when a run-wide cancel ended it).
 import { z } from "zod";
 import { approvalIdFor, toEnvelope, type RawEvent } from "./source";
 import { dottedType, type HarnessEvent } from "./envelope";
@@ -49,7 +50,8 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 	const next = (k: string) => { const s = (n.get(k) ?? 0) + 1; n.set(k, s); return s; };
 	const status = new Map<string, "pending" | "running" | "paused" | "done" | "failed" | "cancelled">();
 	let run: "new" | "running" | "paused" | "ended" = "new";
-	let anyFailed = false, anyDone = false;
+	// runCancel: a run-wide cancel (agent.cancelled with by "run", the operator's Stop) ended the run, whatever ended before.
+	let anyFailed = false, anyDone = false, runCancel = false;
 	const runEvt = (e: RawEvent, type: keyof typeof RunLifecycleData, cause: LifecycleCause) => {
 		const env = toEnvelope(runId, { ...e, type, agentId: null, data: { cause, agentId: e.agentId } }, next(runId), projectId);
 		env.agentId = e.agentId; env.entity = runId; env.id = `evt_${runId}_${e.seq}_${type}`; env.text = RUN_TEXT[type]!;
@@ -83,7 +85,7 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 		}
 		const isPause = t === "AGENT_PAUSED";
 		if (!isPause && !(t in AGENT_CAUSE) || !e.agentId) continue;
-		const cause: LifecycleCause = isPause ? ((e.data as any)?.result?.limit ? "usage_limit" : "paused") : AGENT_CAUSE[t]!;
+		const cause: LifecycleCause = isPause ? ((e.data as any)?.result?.limit === "quota" ? "usage_limit" : "paused") : AGENT_CAUSE[t]!;
 		const env = toEnvelope(runId, { ...e, data: { ...e.data, cause } }, next(k), projectId);
 		if (AGENT_TEXT_CAUSE[cause]) env.text = env.text.replace(/\.$/, `${AGENT_TEXT_CAUSE[cause]}.`);
 		out.push(env);
@@ -94,16 +96,17 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 		else if (isPause) status.set(a, "paused");
 		else if (t === "AGENT_DONE") { status.set(a, "done"); anyDone = true; }
 		else if (t === "AGENT_FAILED") { status.set(a, "failed"); anyFailed = true; }
-		else if (TERMINAL.has(t)) status.set(a, "cancelled");
+		else if (TERMINAL.has(t)) { status.set(a, "cancelled"); if (t === "AGENT_CANCELLED" && (e.data as any)?.by === "run") runCancel = true; }
 		const live = [...status.values()].filter((s) => s === "pending" || s === "running" || s === "paused");
 		if ((t === "AGENT_STARTED" || t === "AGENT_RESUMED") && (run === "new" || run === "ended")) { runEvt(e, "run.started", "started"); run = "running"; }
 		else if (t === "AGENT_RESUMED" && run === "paused") { runEvt(e, "run.resumed", "resumed"); run = "running"; }
 		else if (isPause && run === "running" && live.length && live.every((s) => s === "paused")) { runEvt(e, "run.paused", "all_agents_paused"); run = "paused"; }
 		else if (TERMINAL.has(t) && run !== "new" && run !== "ended" && live.length === 0) {
-			if (anyFailed) runEvt(e, "run.failed", "agent_failed");
+			if (runCancel && (anyFailed || anyDone)) runEvt(e, "run.cancelled", "cancelled");
+			else if (anyFailed) runEvt(e, "run.failed", "agent_failed");
 			else if (anyDone) runEvt(e, "run.completed", "all_agents_done");
 			else runEvt(e, "run.cancelled", "all_agents_cancelled");
-			run = "ended"; anyFailed = false; anyDone = false;
+			run = "ended"; anyFailed = false; anyDone = false; runCancel = false;
 		}
 	}
 	return out;
