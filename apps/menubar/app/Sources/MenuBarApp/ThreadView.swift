@@ -24,9 +24,9 @@ struct ThreadView: View {
               .lineSpacing(Theme.Content.thoughtSpacing).lineLimit(4).textSelection(.enabled)
               .padding(.bottom, Theme.Content.proseBottom)
           }
-          ForEach(entries) { e in
+          ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
             switch e {
-            case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next)
+            case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]))
             case .event(let ev): ThreadItemView(runId: runId, agentId: agentId, item: ev).padding(.bottom, Theme.Content.proseBottom)
             }
           }
@@ -67,6 +67,10 @@ struct ThreadView: View {
       }
     }
     .onDisappear { model.closeThread(agentId: agentId) }
+  }
+
+  static func bottomMargin(_ e: ThreadEntry) -> CGFloat {
+    switch e { case .item(let i, _): ThreadItemRow.bottomMargin(i); case .event: Theme.Content.proseBottom }
   }
 
   /// The thread's natural height: everything around the scroll (header, composer) plus the scroll's content.

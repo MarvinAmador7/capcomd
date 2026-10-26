@@ -74,20 +74,34 @@ struct BlocksView: View {
   var spacing: CGFloat = Theme.Content.proseSpacing
   /// Space under a paragraph: list items sit tight (`li` margins are 1 pt).
   var paragraphBottom: CGFloat = Theme.Content.proseBottom
+  /// Margin already above the first block (the previous item's bottom margin). Vertical margins collapse as in the
+  /// mockups' CSS: a heading sits max(that, 14) below what precedes it, not their sum.
+  var leadingMargin: CGFloat = 0
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { n, b in block(b, first: n == 0) }
+      ForEach(Array(blocks.enumerated()), id: \.offset) { n, b in block(b, above: n == 0 ? leadingMargin : Self.bottomMargin(blocks[n - 1])) }
     }
   }
 
-  @ViewBuilder func block(_ b: Block, first: Bool) -> some View {
+  /// The bottom margin each block leaves (what a following heading collapses with).
+  static func bottomMargin(_ b: Block) -> CGFloat {
+    switch b {
+    case .code: Theme.Content.codeBottom
+    case .table: Theme.Content.tableBottom
+    case .rule: Theme.Content.ruleMargin
+    case .heading: Theme.Content.headingBottom
+    default: Theme.Content.proseBottom
+    }
+  }
+
+  @ViewBuilder func block(_ b: Block, above: CGFloat) -> some View {
     switch b {
     case .paragraph(let k):
       prose(k).padding(.bottom, paragraphBottom)
     case .heading(_, let k):
       Text(InlineText.make(k, font: Theme.Content.headingFont)).foregroundStyle(Theme.Content.headingText).textSelection(.enabled)
-        .padding(.top, Theme.Content.headingTop).padding(.bottom, Theme.Content.headingBottom)
+        .padding(.top, max(0, Theme.Content.headingTop - above)).padding(.bottom, Theme.Content.headingBottom)
     case .list(let ordered, let start, let items):
       VStack(alignment: .leading, spacing: Theme.Content.listItemGap) {
         ForEach(Array(items.enumerated()), id: \.offset) { n, item in
@@ -308,6 +322,8 @@ struct ThreadItemRow: View {
   let agentId: String
   let item: CapcomdThread.Item
   let next: CapcomdThread.Item?
+  /// Bottom margin of the entry above (0 under a tool or thinking row): headings collapse with it.
+  var above: CGFloat = 0
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -316,7 +332,8 @@ struct ThreadItemRow: View {
       case "thinking": ThinkingRow(runId: runId, agentId: agentId, item: item, seconds: item.thinkingSeconds(next: next))
       case "tool": ToolCallRow(item: item)
       case "plan":
-        Text("Plan").font(Theme.Content.headingFont).foregroundStyle(Theme.Content.headingText).padding(.bottom, Theme.Content.headingBottom)
+        Text("Plan").font(Theme.Content.headingFont).foregroundStyle(Theme.Content.headingText)
+          .padding(.top, max(0, Theme.Content.headingTop - above)).padding(.bottom, Theme.Content.headingBottom)
         blocks
       case "error":
         HStack(alignment: .firstTextBaseline, spacing: Theme.Content.toolGap) {
@@ -341,7 +358,16 @@ struct ThreadItemRow: View {
       Text(verbatim: item.text).font(Theme.Content.proseFont).foregroundStyle(Theme.Content.proseText).lineSpacing(Theme.Content.proseSpacing)
         .textSelection(.enabled).padding(.bottom, Theme.Content.proseBottom)
     } else {
-      BlocksView(runId: runId, agentId: agentId, blocks: item.blocks)
+      BlocksView(runId: runId, agentId: agentId, blocks: item.blocks, leadingMargin: above)
+    }
+  }
+
+  /// What this item leaves under itself: tool and thinking rows have no margin; prose ends with its last block's.
+  static func bottomMargin(_ i: CapcomdThread.Item) -> CGFloat {
+    switch i.kind {
+    case "tool", "thinking": 0
+    case "handoff": Theme.Content.handoffBottom
+    default: i.blocks.last.map(BlocksView.bottomMargin) ?? Theme.Content.proseBottom
     }
   }
 }
