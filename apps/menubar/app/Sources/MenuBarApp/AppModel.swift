@@ -48,7 +48,7 @@ final class AppModel {
   static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) {
     let t = UnixSocketTransport(socketPath: socketPath, token: token)
     return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), detail: LiveDetail(transport: t),
-                         controls: LiveControls(transport: t), prefs: DefaultsPreferences()), t)
+                         controls: LiveControls(transport: t), starter: LiveStarter(transport: t), prefs: DefaultsPreferences()), t)
   }
 
   static func live() -> AppModel {
@@ -110,6 +110,19 @@ final class AppModel {
     if files { await store.refreshFiles(runId) }
     if let a = logAgent { await store.refreshLog(runId: runId, agentId: a) }
   }
+
+  var startState: StartState { _ = revision; return store.startState }
+  /// Starts a run; when the daemon has no default repository, asks for the project folder once and remembers it.
+  func startRun(_ goal: String) async -> Bool {
+    var state = await store.startRun(goal: goal, repo: store.prefs.startRepo)
+    if case .needsRepo = state, let folder = ProjectFolderPicker.choose() {
+      store.prefs.startRepo = folder
+      state = await store.startRun(goal: goal, repo: folder)
+    }
+    if case .started = state { return true }
+    return false
+  }
+  func clearStart() { store.clearStart() }
 
   func open(run id: String) { store.openRun(id); path = [.run(id)] }
   func back() { if !path.isEmpty { path.removeLast() }; if path.isEmpty { store.closeRun() } }

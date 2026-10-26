@@ -19,6 +19,7 @@ struct PanelView: View {
           let projects = model.projects
           let active = projects.filter(\.isActive)
           let finished = Array(projects.filter { !$0.isActive }.prefix(Theme.Finished.maxRows))
+          StartProjectField().padding(.top, Theme.Composer.sectionTop)
           Text("Active").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
             .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
           ForEach(active) { p in

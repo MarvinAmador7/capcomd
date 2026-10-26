@@ -35,6 +35,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   says so instead.
 - Menu bar app: the footer ("Open capcomd", "Summon ⌥Space") now sits on its own bar with a thin line above it, so
   projects scrolling underneath blur out instead of showing through the text.
+- Menu bar app: start a run from the panel. Type a goal in "Start a project…" at the top (⌘K focuses it) and press
+  Return; the new run shows up in the list. If capcomd has no default repository, the app asks once for the project's
+  folder and remembers it. Needs a daemon with `POST /v1/runs` and a token with the steer scope.
 - Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
   once, and clicks could land on the hidden cards).
 - harness.v1 now says what each agent is doing right now, in plain language: "Reading 4 files", "Running the tests",

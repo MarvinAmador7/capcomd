@@ -100,3 +100,30 @@ extension CapcomdStore {
     set(error as? DetailUnavailable ?? .failed("Couldn't reach capcomd"))
   }
 }
+
+/// Where a "Start a project…" submission stands.
+public enum StartState: Sendable, Hashable { case idle, starting, started(runId: String), needsRepo(String), failed(String) }
+
+extension CapcomdStore {
+  /// Start a run on `goal`. One Idempotency-Key per submission, reused if the same goal is retried after a transport
+  /// failure, so a lost response doesn't start it twice.
+  @discardableResult
+  public func startRun(goal raw: String, repo: String? = nil) async -> StartState {
+    let goal = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let starter, !goal.isEmpty else { return .idle }
+    let key = pendingStartKey.flatMap { $0.goal == goal && $0.repo == repo ? $0.key : nil } ?? makeKey()
+    pendingStartKey = (goal, repo, key)
+    startState = .starting; changed()
+    do {
+      let id = try await starter.start(goal: goal, repo: repo, idempotencyKey: key)
+      pendingStartKey = nil; startState = .started(runId: id)
+    } catch let e as StartRefused {
+      pendingStartKey = nil; startState = e.needsRepo ? .needsRepo(e.message) : .failed(e.message)
+    } catch is Unauthorized { unauthorized = true; startState = .failed("capcomd rejected the token") }
+    catch DetailUnavailable.unsupported { pendingStartKey = nil; startState = .failed("This capcomd can't start runs from here yet") }
+    catch { startState = .failed("Couldn't reach capcomd") }   // key kept: a retry replays instead of starting twice
+    changed()
+    return startState
+  }
+  public func clearStart() { startState = .idle; changed() }
+}

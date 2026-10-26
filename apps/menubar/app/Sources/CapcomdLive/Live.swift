@@ -117,3 +117,24 @@ public struct LiveControls: RunControlling {
     }
   }
 }
+
+/// `POST /v1/runs` (harness #49): 201 with the run; 422 `invalid` carries the daemon's sentence, and "repo is required"
+/// means it has no default repository, so the app asks for a project folder.
+public struct LiveStarter: RunStarting {
+  let transport: UnixSocketTransport
+  public init(transport: UnixSocketTransport) { self.transport = transport }
+  public func start(goal: String, repo: String?, idempotencyKey: String) async throws -> String {
+    var body: [String: String] = ["goal": goal]; if let repo { body["repo"] = repo }
+    let (status, data) = try await transport.post("/v1/runs", headers: [("Idempotency-Key", idempotencyKey)], json: try JSONEncoder().encode(body))
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let message = obj?["message"] as? String ?? "capcomd refused"
+    switch status {
+    case 200, 201: if let id = obj?["id"] as? String { return id }; throw DetailUnavailable.failed("unexpected response")
+    case 401: throw Unauthorized()
+    case 403: throw StartRefused("This app's capcomd token can't start runs (needs the steer scope)")
+    case 404: throw DetailUnavailable.unsupported
+    case 409, 422: throw StartRefused(message, needsRepo: message.hasPrefix("repo is required"))
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
