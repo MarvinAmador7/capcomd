@@ -5,6 +5,7 @@ export { sanitize, oneLine, capBytes } from "./sanitize";
 export { toBlocks, blockText, plainBlocks, ITEM_MAX_BYTES, PARSE_MAX_BYTES, CODE_MAX_LINES, TABLE_MAX_ROWS, TABLE_MAX_COLS, MAX_DEPTH, type Parsed } from "./markdown";
 export { classifyLink, resolveMedia, workspacePath, webUrl, hostInText, mediaOfPath, type LinkContext } from "./links";
 export { checkImage, sniffImage, imageSize, IMAGE_MAX_BYTES, IMAGE_TYPES, type StoredImage } from "./images";
+export { claudeInputDiff, claudeResultDiff, lineDiff } from "./diff";
 export { threadBuilder, ARGS_MAX_BYTES, OUTPUT_MAX_BYTES, type ThreadOptions, type ThreadBuilder, type Cli } from "./thread";
 export { ACTIVITY_KINDS, commandKind, opKind, claudeToolKind, codexItemKind, type ActivityKind } from "./kinds";
 export { claudeSummary, codexSummary, shellCommand } from "./summary";

@@ -83,6 +83,25 @@ export type BlockNode =
 export const ITEM_KINDS = ["say", "thinking", "tool", "error", "result", "plan", "handoff", "other"] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
+export const DIFF_OPS = [" ", "+", "-", "@"] as const;
+/** Lines kept per tool diff (hunk separators included); `added` / `removed` still count the whole change. */
+export const DIFF_MAX_LINES = 40;
+/** Characters kept per diff line (an ellipsis when cut). */
+export const DIFF_LINE_MAX_CHARS = 240;
+export const DiffLine = z.object({
+	op: z.enum(DIFF_OPS).describe("\" \": context, \"+\": added, \"-\": removed, \"@\": a gap between two hunks (lines in between not shown; `text` is the next hunk's `@@ -a,b +c,d @@` header when the CLI reported line numbers, else empty). Render an unknown op as context"),
+	text: agentText(`the line, without its newline, at most ${DIFF_LINE_MAX_CHARS} characters (an ellipsis when cut); indentation kept`),
+});
+export type DiffLine = z.infer<typeof DiffLine>;
+export const ToolDiff = z.object({
+	path: agentText("the file, relative to the workspace root, '/'-separated, normalized like file links (never ..); null when it is outside the workspace").nullable(),
+	added: z.number().int().nonnegative().describe("Lines added by the whole change (not only the lines shown)"),
+	removed: z.number().int().nonnegative().describe("Lines removed by the whole change (not only the lines shown)"),
+	lines: z.array(DiffLine).describe(`The change's first lines, at most ${DIFF_MAX_LINES} (separators included). Context lines are only lines the CLI's event contained: no file is read`),
+	truncatedLines: z.number().int().positive().nullable().describe("Context, added and removed lines not shown"),
+}).describe("A file-editing call's change (Claude Code Edit, MultiEdit, Write, NotebookEdit insert): from the call's input while it runs, replaced by the result's own patch (with context) when it returns. isError: the change was proposed but not applied");
+export type ToolDiffT = z.infer<typeof ToolDiff>;
+
 export const ToolInfo = z.object({
 	callId: z.string().describe("The CLI's call id (Claude tool_use id, Codex item id)"),
 	name: agentText("the tool's name as the CLI reported it (Read, Bash, command_execution, capcomd.capcomd_spawn)"),
@@ -92,6 +111,7 @@ export const ToolInfo = z.object({
 	args: agentText("the call's input as JSON, at most 4 KB").nullable(),
 	output: agentText("the result's text, at most 16 KB (the end kept); null while open").nullable(),
 	files: z.array(Link).describe("Files the call wrote or changed, as file links"),
+	diff: ToolDiff.nullable().describe("The call's change to one file, as a short line diff; null for calls that don't edit a file, and when the CLI's events don't carry the change's lines (Codex file_change reports paths only: see files)"),
 });
 export type ToolInfoT = z.infer<typeof ToolInfo>;
 
