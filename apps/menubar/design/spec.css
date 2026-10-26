@@ -1,0 +1,7 @@
+body{font-family:Inter,sans-serif;font-size:10.5pt;line-height:1.5;color:#1d1d1f;max-width:720px;margin:32px auto;padding:0 24px}
+h1{font-size:15pt;margin:22px 0 6px;border-bottom:.5px solid #ddd;padding-bottom:4px}h2{font-size:12pt;margin:16px 0 4px}
+header h1.title{font-size:22pt;border:0}.subtitle{color:#6e6e73;margin-top:-8px}.date{color:#6e6e73}
+code{font-family:'JetBrains Mono',monospace;font-size:9pt;background:#f2f2f5;padding:1px 4px;border-radius:4px}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:9.5pt}th,td{text-align:left;padding:4px 8px;border-bottom:.5px solid #e2e2e6;vertical-align:top}th{color:#6e6e73;font-weight:600}
+li{margin:2px 0}strong{font-weight:600}
+@page{size:A4;margin:16mm}h1,h2{break-after:avoid}tr{break-inside:avoid}
