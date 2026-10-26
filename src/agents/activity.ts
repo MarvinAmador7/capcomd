@@ -4,13 +4,10 @@
 // counted, never shown. Consecutive events of one kind coalesce ("Reading 4 files") and each agent's line is written
 // at most once per `minMs` (default 1s), so a busy agent costs one small row update a second, not one per event.
 import type { AgentEvent } from "./types";
+import { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind } from "../../packages/agent-thread/src/kinds";
 
-/** Icon hint for the line. Clients must treat a kind they don't know as "tool" (more may be added). */
-export const ACTIVITY_KINDS = [
-	"read", "edit", "write", "search", "run", "test", "build", "install", "check", "git", "web",
-	"spawn", "wait", "message", "verify", "merge", "report", "delegate", "plan", "think", "tool",
-] as const;
-export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+// The vocabulary and the command/op classifiers live in packages/agent-thread (the thread's tool items use them too).
+export { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind };
 
 /** One observed step: its kind, and what it acted on (a path, a command), used only to count distinct targets. */
 export type ActivityStep = { kind: ActivityKind; target: string };
@@ -18,42 +15,6 @@ export type ActivityStep = { kind: ActivityKind; target: string };
 export type StoredActivity = { kind: ActivityKind; n: number; at: number };
 
 const step = (kind: ActivityKind, target: unknown = ""): ActivityStep => ({ kind, target: typeof target === "string" ? target : JSON.stringify(target ?? "") });
-
-/** A shell command's kind, from what it runs. The command itself is never shown. */
-export function commandKind(cmd: string): ActivityKind {
-	// Look at the command after `cd dir &&`, env assignments and `timeout N`.
-	const c = cmd.replace(/^\s*(cd\s+\S+\s*(&&|;)\s*)+/, "").replace(/^\s*(\w+=\S*\s+)+/, "").replace(/^\s*timeout\s+\S+\s+/, "").trim();
-	const m = (re: RegExp) => re.test(c);
-	if (m(/^capcomd\s+(spawn|handoff)\b/)) return "spawn";
-	if (m(/^capcomd\s+(wait|await|wait-any)\b/)) return "wait";
-	if (m(/^capcomd\s+send\b/)) return "message";
-	if (m(/^capcomd\s+verify\b/)) return "verify";
-	if (m(/^capcomd\s+merge\b/)) return "merge";
-	if (m(/^capcomd\s+result\b/)) return "report";
-	if (m(/\b(bun|npm|pnpm|yarn|deno)\s+(run\s+)?test\b|\b(pytest|vitest|jest|mocha|rspec|phpunit|tox)\b|\b(go|cargo|swift|dotnet|mix)\s+test\b|\bmake\s+(test|check)\b|\bgradle\w*\s+test\b|\bmvn\s+test\b/)) return "test";
-	if (m(/\b(npm|pnpm|yarn|bun)\s+(install|i|add|ci)\b|\bpip3?\s+install\b|\b(poetry|bundle|composer)\s+install\b|\bgo\s+mod\s+(download|tidy)\b|\bcargo\s+fetch\b|\b(apt|apt-get|brew)\s+install\b/)) return "install";
-	if (m(/\b(bun|npm|pnpm|yarn)\s+run\s+(typecheck|lint|check|format)\b|\b(tsc|eslint|biome|ruff|flake8|mypy|pyright|prettier|clippy|golangci-lint|swiftlint)\b|\bcargo\s+(check|clippy)\b|\bgo\s+vet\b/)) return "check";
-	if (m(/\b(bun|npm|pnpm|yarn)\s+run\s+build\b|^make\b|\b(cargo|go|swift|dotnet)\s+build\b|\b(gradle\w*|mvn)\b/)) return "build";
-	if (m(/^git\b|^gh\b/)) return "git";
-	if (m(/^(curl|wget|http)\b/)) return "web";
-	if (m(/^(cat|head|tail|less|more|nl|wc|sed\s+-n|awk)\b/)) return "read";
-	if (m(/^(ls|find|tree|rg|grep|ag|fd|ack|locate)\b/)) return "search";
-	return "run";
-}
-
-/** capcomd's own tools, as an MCP tool name (capcomd_spawn) or an in-VM RPC op (spawn). */
-export function opKind(op: string): ActivityKind | null {
-	switch (op.replace(/^capcomd_/, "")) {
-		case "spawn": case "handoff": return "spawn";
-		case "await": case "wait": case "wait-any": case "wait_any": return "wait";
-		case "send": return "message";
-		case "verify": return "verify";
-		case "merge": return "merge";
-		case "result": return "report";
-		case "task": return "plan";
-		default: return null;
-	}
-}
 
 function claudeTool(name: string, input: Record<string, any>): ActivityStep {
 	const file = input.file_path ?? input.notebook_path ?? input.path ?? "";

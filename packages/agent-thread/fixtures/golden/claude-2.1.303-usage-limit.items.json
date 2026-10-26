@@ -1,0 +1,52 @@
+{
+  "session": "claude-2.1.303-usage-limit.jsonl",
+  "cli": "claude",
+  "updates": [
+    {
+      "id": "itm-agt-golden-1",
+      "rev": 1,
+      "kind": "other",
+      "status": "done",
+      "at": "2026-10-26T12:00:02.000Z",
+      "durationMs": null,
+      "text": "Usage limit reached",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-2",
+      "rev": 1,
+      "kind": "error",
+      "status": "done",
+      "at": "2026-10-26T12:00:03.000Z",
+      "durationMs": null,
+      "text": "You've hit your limit · resets 4pm (UTC)",
+      "blocks": [
+        {
+          "t": "paragraph",
+          "children": [
+            {
+              "t": "text",
+              "text": "You've hit your limit · resets 4pm (UTC)"
+            }
+          ]
+        }
+      ],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": {
+        "message": "You've hit your limit · resets 4pm (UTC)",
+        "code": "rate_limit"
+      },
+      "truncated": null,
+      "child": null
+    }
+  ],
+  "attachments": []
+}

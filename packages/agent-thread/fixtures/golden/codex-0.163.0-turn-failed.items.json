@@ -1,0 +1,89 @@
+{
+  "session": "codex-0.163.0-turn-failed.jsonl",
+  "cli": "codex",
+  "updates": [
+    {
+      "id": "itm-agt-golden-1",
+      "rev": 1,
+      "kind": "tool",
+      "status": "open",
+      "at": "2026-10-26T12:00:03.000Z",
+      "durationMs": null,
+      "text": "Run sleep 600",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "item_0",
+        "name": "command_execution",
+        "kind": "run",
+        "summary": "Run sleep 600",
+        "isError": false,
+        "args": "bash -lc 'sleep 600'",
+        "output": null,
+        "files": []
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-1",
+      "rev": 2,
+      "kind": "tool",
+      "status": "done",
+      "at": "2026-10-26T12:00:03.000Z",
+      "durationMs": null,
+      "text": "Run sleep 600",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "item_0",
+        "name": "command_execution",
+        "kind": "run",
+        "summary": "Run sleep 600",
+        "isError": true,
+        "args": "bash -lc 'sleep 600'",
+        "output": null,
+        "files": []
+      },
+      "error": {
+        "message": "The turn failed before this call returned",
+        "code": "unfinished"
+      },
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-2",
+      "rev": 1,
+      "kind": "error",
+      "status": "done",
+      "at": "2026-10-26T12:00:04.000Z",
+      "durationMs": null,
+      "text": "You've hit your usage limit. Try again at 3:05 PM.",
+      "blocks": [
+        {
+          "t": "paragraph",
+          "children": [
+            {
+              "t": "text",
+              "text": "You've hit your usage limit. Try again at 3:05 PM."
+            }
+          ]
+        }
+      ],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": {
+        "message": "You've hit your usage limit. Try again at 3:05 PM.",
+        "code": "turn_failed"
+      },
+      "truncated": null,
+      "child": null
+    }
+  ],
+  "attachments": []
+}

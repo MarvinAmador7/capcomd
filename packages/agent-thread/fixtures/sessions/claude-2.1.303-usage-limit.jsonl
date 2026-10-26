@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"s2","model":"claude-opus-4-5","claude_code_version":"2.1.303"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1761494400,"rateLimitType":"five_hour"},"session_id":"s2"}
+{"type":"assistant","message":{"id":"msg_x","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You've hit your limit · resets 4pm (UTC)"}]},"parent_tool_use_id":null,"session_id":"s2","uuid":"u1","error":"rate_limit"}
+{"type":"result","subtype":"success","is_error":true,"api_error":"usage_limit_reached","duration_ms":1200,"num_turns":1,"result":"You've hit your limit · resets 4pm (UTC)","session_id":"s2","total_cost_usd":0}
