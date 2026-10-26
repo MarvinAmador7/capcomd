@@ -15,15 +15,26 @@ public final class CapcomdStore {
   /// Frames dropped because their envelope id was already applied (a resumed group re-sends earlier members).
   public private(set) var duplicatesDropped = 0
   /// The daemon rejected the token (401 on a stream or a decision). The app reopens the token prompt.
-  public private(set) var unauthorized = false
+  public internal(set) var unauthorized = false
   /// Live lifecycle events worth a notification (approval requested, run completed/failed). Never fired for snapshots.
   public var onNotify: (@MainActor (Notice) -> Void)?
   public internal(set) var threads: [String: [ThreadItem]] = [:]
   public let prefs: UIPreferences
   public var onChange: (@MainActor () -> Void)?
 
+  // Run detail (drill-down): fetched over REST while a run is open; see StoreDetail.swift.
+  public internal(set) var traces: [String: Fetched<[TraceSpan]>] = [:]
+  public internal(set) var files: [String: Fetched<RunFiles>] = [:]
+  /// Log tail per agent (newest last, at most `logTail` lines), the transcript cursor, and whether the route works.
+  public internal(set) var logs: [String: [LogLine]] = [:]
+  public internal(set) var logUnavailable: [String: DetailUnavailable] = [:]
+  var logCursor: [String: Int] = [:]
+  public internal(set) var controlState: [String: ControlState] = [:]
+
   let subscriber: StreamSubscribing?
   let decider: ApprovalDeciding?
+  let detail: RunDetailFetching?
+  let controls: RunControlling?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -45,9 +56,9 @@ public final class CapcomdStore {
   /// At most this many runs keep a lifecycle feed open (most recent, not finished).
   public static let maxLifecycleFeeds = 16
 
-  public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, prefs: PreferenceStoring = InMemoryPreferences(),
-              clientId: String = "menubar", makeKey: (() -> String)? = nil) {
-    self.subscriber = subscriber; self.decider = decider; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
+  public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
+              prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
+    self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 
@@ -67,7 +78,18 @@ public final class CapcomdStore {
   /// The one allowed number: the menu bar badge.
   public var badgeCount: Int { approvals.values.filter { if case .decided = $0.decision { return false }; return true }.count }
   public func approvals(forRun id: String) -> [PendingApproval] { pendingApprovals.filter { $0.runId == id } }
-  public func steps(forRun id: String) -> [Step] { runs[id]?.steps ?? [] }
+  /// Activity rows. An agent's row reads as its activity line ("Read 4 files", "Writing parquet shards to R2") with the
+  /// activity's icon when the daemon reports one; otherwise its task's first line, else its profile.
+  public func steps(forRun id: String) -> [Step] {
+    guard let run = runs[id] else { return [] }
+    return run.steps.map { s in
+      guard s.kind == .agent, let aid = s.agentId, let a = run.agents[aid] else { return s }
+      var s = s
+      if let act = a.activity { s.text = act; s.kind = StepKind(activityKind: a.activityKind) }
+      else if let t = a.task?.firstLine, !t.isEmpty { s.text = t }
+      return s
+    }
+  }
 
   /// Outline tree for a run, orchestrator first. Approvals bubble to ancestors.
   public func agentTree(runId: String) -> [AgentNode] {
@@ -206,6 +228,7 @@ public final class CapcomdStore {
       var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
                      task: a.task.map(UntrustedText.init), key: old?.key, repo: old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.activity?.text)
       ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
+      ag.activityKind = a.activity?.kind
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
@@ -242,6 +265,7 @@ public final class CapcomdStore {
       guard let runId else { return }
       let t = RunTransition(type: e.type, cause: d["cause"]?.string, agentId: d["agentId"]?.string ?? e.agentId, seq: e.seq, epochMs: e.epochMs)
       runs[runId]?.state = t.state; runs[runId]?.lifecycle.append(t)
+      settleControl(runId: runId)
       if e.type == "run.deleted" {
         runs[runId]?.agents.keys.forEach { threads.removeValue(forKey: $0) }
         runs.removeValue(forKey: runId)
@@ -274,6 +298,7 @@ public final class CapcomdStore {
     case "agent.activity_changed":
       guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
       runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string
+      runs[runId]?.agents[agentId]?.activityKind = d["activity"]?["kind"]?.string
       if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
     case "verify.started", "verify.passed", "verify.failed":
       guard let runId else { return }
@@ -343,7 +368,7 @@ public final class CapcomdStore {
     }
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {
       if var old = runs[a.runId]?.agents[a.id] {
-        old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text
+        old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text; old.activityKind = a.activity?.kind
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
         old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs
         runs[a.runId]?.agents[a.id] = old
@@ -351,7 +376,7 @@ public final class CapcomdStore {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
                        task: a.task.map(UntrustedText.init), key: nil, repo: nil, spawnedAtMs: i, activity: a.activity?.text)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
-        ag.updatedAtMs = epochMs(iso: a.updatedAt)
+        ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
         runs[a.runId]?.agents[a.id] = ag
       }
     }

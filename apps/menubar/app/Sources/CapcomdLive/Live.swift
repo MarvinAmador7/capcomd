@@ -77,3 +77,43 @@ public struct LiveDecider: ApprovalDeciding {
     }
   }
 }
+
+/// The drill-down's REST reads. A 404 from a route the daemon doesn't have yet (files before harness #47) is
+/// `.unsupported`, so the view can say so instead of showing an error.
+public struct LiveDetail: RunDetailFetching {
+  let transport: UnixSocketTransport
+  public init(transport: UnixSocketTransport) { self.transport = transport }
+  func get<T: Decodable>(_ path: String, as: T.Type) async throws -> T {
+    do { return try await transport.getJSON(path, as: T.self) }
+    catch let e as HTTPStatusError {
+      switch e.status { case 401: throw Unauthorized(); case 404: throw DetailUnavailable.unsupported; default: throw DetailUnavailable.failed("HTTP \(e.status)") }
+    }
+    catch is DecodingError { throw DetailUnavailable.failed("unexpected response") }
+  }
+  static func seg(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? s }
+  public func trace(runId: String) async throws -> [TraceSpan] { try await get("/v1/runs/\(Self.seg(runId))/trace", as: [TraceSpan].self) }
+  public func transcript(runId: String, agentId: String, after: Int?, limit: Int) async throws -> TranscriptPage {
+    try await get("/v1/runs/\(Self.seg(runId))/agents/\(Self.seg(agentId))/transcript?limit=\(limit)" + (after.map { "&after=\($0)" } ?? ""), as: TranscriptPage.self)
+  }
+  public func files(runId: String) async throws -> RunFiles { try await get("/v1/runs/\(Self.seg(runId))/files", as: RunFiles.self) }
+}
+
+/// `POST /v1/runs/{runId}/{pause|resume|cancel}` (harness #50): Idempotency-Key, steer scope. 409 `conflict` carries
+/// the daemon's sentence ("nothing is running to pause"); 404 on the route means this daemon predates it.
+public struct LiveControls: RunControlling {
+  let transport: UnixSocketTransport
+  public init(transport: UnixSocketTransport) { self.transport = transport }
+  public func control(runId: String, _ action: RunControl, idempotencyKey: String) async throws {
+    let (status, body) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/\(action.rawValue)", headers: [("Idempotency-Key", idempotencyKey)])
+    let err = try? JSONDecoder().decode([String: String].self, from: body)
+    switch status {
+    case 200: return
+    case 401: throw Unauthorized()
+    case 403: throw ControlRefused("This app's capcomd token can't control runs (needs the steer scope)")
+    case 404 where err?["code"] == "not_found" && (err?["message"] ?? "").contains("run "): throw ControlRefused(err?["message"] ?? "run not found")
+    case 404: throw DetailUnavailable.unsupported
+    case 409: throw ControlRefused(err?["message"] ?? "capcomd refused")
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}

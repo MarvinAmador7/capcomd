@@ -87,6 +87,117 @@ enum Theme {
     /// The most recent few: the panel is for what's happening, not history.
     static let maxRows = 3
   }
+  /// Run drill-down (view-activity.html / view-trace.html / drill-collapsed.html / drill-a2-files-iconsA.html).
+  enum Drill {
+    static let padding: CGFloat = 10                                   // .panel padding
+    // Header (.hdr padding 2 4 10, gap 8)
+    static let headerPadding = EdgeInsets(top: 2, leading: 4, bottom: 10, trailing: 4)
+    static let headerGap: CGFloat = 8
+    static let backSize: CGFloat = 24, backRadius: CGFloat = 6
+    static let backFill = Color.white.opacity(0.07)
+    static let backIcon = Font.system(size: 11, weight: .semibold)
+    static let crumbFont = Font.system(size: 11.5)
+    static let crumbText = Color.white.opacity(0.45)
+    static let titleFont = Font.system(size: 15, weight: .semibold)
+    static let titleTracking: CGFloat = -0.15, titleTop: CGFloat = 1
+    static let switchFont = Font.system(size: 11.5, weight: .medium)
+    static let switchGap: CGFloat = 5, switchTrailing: CGFloat = 10
+    static let switchOn = Color.white
+    static let switchOff = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.3)
+    static let timerFont = Font.system(size: 13, design: .monospaced)
+    static let timerText = Color.white.opacity(0.85)
+    // Step bar (.bar margin 0 4 4, gap 3, 3 tall)
+    static let barGap: CGFloat = 3, barHeight: CGFloat = 3, barRadius: CGFloat = 1.5
+    static let barPadding = EdgeInsets(top: 0, leading: 4, bottom: 4, trailing: 4)
+    static let barDone = Theme.accent
+    static let barCurrent = Theme.accent.opacity(0.45)
+    static let barQueued = Color.white.opacity(0.12)
+    // Activity (.reg 172, .ph, .ar)
+    static let regionTop: CGFloat = 14, regionHeight: CGFloat = 172
+    static let phaseFont = Font.system(size: 10.5, weight: .semibold)
+    static let phaseText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.3)
+    static let phaseHeight: CGFloat = 14
+    static let rowHeight: CGFloat = 18, rowGap: CGFloat = 8, rowPadding: CGFloat = 4, iconColumn: CGFloat = 16
+    static let rowFont = Font.system(size: 12)
+    static let rowNowFont = Font.system(size: 12, weight: .medium)
+    static let rowText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.78)
+    static let rowQueued = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.32)
+    static let rowFailed = Color(red: 1, green: 0x69 / 255, blue: 0x61 / 255).opacity(0.8)
+    static let iconFont = Font.system(size: 12)                       // 14 pt outline glyph
+    static let iconText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.45)
+    static let timeFont = Font.system(size: 10.5, design: .monospaced)
+    static let timeText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.38)
+    static let timeGap: CGFloat = 6
+    static let statusFont = Font.system(size: 11)
+    // Collapsed strip (.strip, .si2, .pdv, .cvx)
+    static let stripTop: CGFloat = 12, stripHeight: CGFloat = 30, stripRadius: CGFloat = 8
+    static let stripFill = Color.white.opacity(0.04)
+    static let stripPadding: CGFloat = 6, cellGap: CGFloat = 2
+    static let cell: CGFloat = 24, cellRadius: CGFloat = 6
+    static let cellNow = Theme.accent.opacity(0.16)
+    static let cellHover = Color.white.opacity(0.10)
+    static let dividerWidth: CGFloat = 1, dividerHeight: CGFloat = 12, dividerMargin: CGFloat = 6
+    static let divider = Color.white.opacity(0.14)
+    static let chevronColumn: CGFloat = 30
+    static let chevronDivider = Color.white.opacity(0.08)
+    static let edgeFade: CGFloat = 24
+    // Trace (.sp, .trk, .pill)
+    static let traceTop: CGFloat = 10, traceFade: CGFloat = 30
+    static let spanHeight: CGFloat = 22, spanGap: CGFloat = 7, nameColumn: CGFloat = 132, durationColumn: CGFloat = 58
+    static let spanText = Color.white.opacity(0.75)
+    static let spanIndent: CGFloat = 14
+    static let foldFont = Font.system(size: 9)
+    static let foldOpacity: Double = 0.45, foldOpenOpacity: Double = 0.6, foldTrailing: CGFloat = 5
+    static let laneHeight: CGFloat = 6
+    static let laneFill = Color.white.opacity(0.28)
+    static let laneRing = Theme.accent.opacity(0.22), laneRingWidth: CGFloat = 3
+    static let laneMin: CGFloat = 4
+    static let durationFont = Font.system(size: 11, design: .monospaced)
+    static let durationText = Color.white.opacity(0.45)
+    static let durationNow = Color.white.opacity(0.85)
+    static let pillFont = Font.system(size: 11.5, weight: .medium)
+    static let pillHeight: CGFloat = 22, pillBottom: CGFloat = 6
+    static let pillPadding = EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 10)
+    // Log | Files (.seg, .pane, .tail, .f)
+    static let segWidth: CGFloat = 150, segRadius: CGFloat = 7, segInset: CGFloat = 2
+    static let segPadding = EdgeInsets(top: 12, leading: 4, bottom: 8, trailing: 0)
+    static let segFill = Color.white.opacity(0.08)
+    static let segFont = Font.system(size: 11.5, weight: .medium)
+    static let segItemHeight: CGFloat = 20, segItemRadius: CGFloat = 5
+    static let segOff = Color.white.opacity(0.6)
+    static let segOnFill = Color.white.opacity(0.2)
+    static let paneHeight: CGFloat = 94
+    static let tailFont = Font.system(size: 11, design: .monospaced)
+    static let tailLine: CGFloat = 17
+    static let tailPadding = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+    static let tailRadius: CGFloat = 8
+    static let tailFill = Color.black.opacity(0.18)
+    static let tailText = Color.white.opacity(0.55)
+    static let tailTime = Color.white.opacity(0.30), tailTimeGap: CGFloat = 8
+    static let tailLast = Color.white.opacity(0.85)
+    static let tailFade: CGFloat = 14
+    static let fileHeight: CGFloat = 22, fileGap: CGFloat = 7, fileIcon: CGFloat = 14
+    static let fileFont = Font.system(size: 12, design: .monospaced)
+    static let fileText = Color.white.opacity(0.75)
+    static let fileCountFont = Font.system(size: 11, design: .monospaced)
+    static let emptyFont = Font.system(size: 11.5)
+    static let emptyText = Color.white.opacity(0.4)
+    // Footer (.acts, .ab)
+    static let footerPadding = EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
+    static let footerTop: CGFloat = 10, footerGap: CGFloat = 8
+    static let actionHeight: CGFloat = 26, actionPadding: CGFloat = 12, actionRadius: CGFloat = 7
+    static let actionFont = Font.system(size: 12.5, weight: .medium)
+    static let actionFill = Color.white.opacity(0.10)
+    static let actionText = Color.white
+    static let terminalText = Color.white.opacity(0.75), terminalPadding: CGFloat = 4
+    static let footerMaterial: Material = .bar
+    static let footerDivider = Color.white.opacity(0.10), footerDividerHeight: CGFloat = 0.5   // .acts border-top
+    static let stopConfirmFill = Theme.red.opacity(0.22)
+    static let stopConfirmSeconds: Double = 4
+    static let errorFont = Font.system(size: 11.5)
+    /// While the drill-down is open, its REST parts refresh this often.
+    static let refreshSeconds: Double = 2
+  }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {
     static let pressScale: CGFloat = 0.97
@@ -95,6 +206,9 @@ enum Theme {
     static let standard = Animation.easeOut(duration: 0.2)
     static let reduced = Animation.easeOut(duration: 0.15)   // crossfade
     static func ease(_ reduceMotion: Bool) -> Animation { reduceMotion ? reduced : standard }
+    /// Drill-down / thread push and back (SPEC §7: 0.25 s).
+    static let pushDuration: Double = 0.25
+    static func push(_ reduceMotion: Bool) -> Animation { reduceMotion ? reduced : .easeOut(duration: pushDuration) }
   }
 
   static let panelTitle = Font.system(size: 15, weight: .semibold)
@@ -117,12 +231,6 @@ enum Theme {
   }
 }
 
-/// SPEC §7 motion with Reduce Motion paths (150 ms crossfade, no translation).
-extension Animation {
-  static func capcomd(_ reduceMotion: Bool, spring duration: Double = 0.35) -> Animation {
-    reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: duration, bounce: 0)
-  }
-}
 extension AnyTransition {
   static func push(_ reduceMotion: Bool) -> AnyTransition {
     reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading))

@@ -43,6 +43,8 @@ public struct Agent: Sendable, Hashable, Identifiable {
   public var updatedAtMs: Int? = nil
   /// What it is doing now (`Agent.activity.text`, daemon-written, trusted): shown under a running agent's row.
   public var activity: String? = nil
+  /// `Agent.activity.kind`: icon hint for the activity line (read, edit, test, …).
+  public var activityKind: String? = nil
   /// `taskAttachment`: the full task is stored by the daemon; only its metadata is shown.
   public var taskAttachment: AttachmentRef? = nil
   /// `result.summary` once the agent finished (agent-written, untrusted).

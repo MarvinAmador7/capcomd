@@ -54,6 +54,8 @@ public final class InMemoryPreferences: PreferenceStoring {
 }
 
 public enum DrillView: String, Sendable { case activity, trace }
+/// The drill-down's lower pane: one of Log or Files at a time (remembered).
+public enum DetailTab: String, Sendable { case log, files }
 
 /// Remembered UI choices (SPEC §4.3: Activity · Trace remembered globally; strip collapse remembered per user).
 public final class UIPreferences {
@@ -63,8 +65,28 @@ public final class UIPreferences {
     get { store.string(forKey: "drillView").flatMap(DrillView.init(rawValue:)) ?? .activity }
     set { store.set(newValue.rawValue, forKey: "drillView") }
   }
+  public var detailTab: DetailTab {
+    get { store.string(forKey: "detailTab").flatMap(DetailTab.init(rawValue:)) ?? .log }
+    set { store.set(newValue.rawValue, forKey: "detailTab") }
+  }
   public var activityCollapsed: Bool {
     get { store.string(forKey: "activityCollapsed") == "1" }
     set { store.set(newValue ? "1" : "0", forKey: "activityCollapsed") }
   }
+}
+
+/// REST reads behind the drill-down (`GET /v1/runs/{runId}/trace`, `…/agents/{agentId}/transcript`, `…/files`). Throws
+/// `DetailUnavailable` (`.unsupported` when the daemon predates the route) or `Unauthorized`.
+public protocol RunDetailFetching: Sendable {
+  func trace(runId: String) async throws -> [TraceSpan]
+  func transcript(runId: String, agentId: String, after: Int?, limit: Int) async throws -> TranscriptPage
+  func files(runId: String) async throws -> RunFiles
+}
+
+/// `POST /v1/runs/{runId}/{pause|resume|cancel}` with `Idempotency-Key` (steer scope).
+public enum RunControl: String, Sendable, Hashable { case pause, resume, cancel }
+/// The daemon said no (409 `conflict`: nothing to pause, nothing left to cancel); `message` is its plain sentence.
+public struct ControlRefused: Error, Sendable, Hashable { public var message: String; public init(_ m: String) { message = m } }
+public protocol RunControlling: Sendable {
+  func control(runId: String, _ action: RunControl, idempotencyKey: String) async throws
 }

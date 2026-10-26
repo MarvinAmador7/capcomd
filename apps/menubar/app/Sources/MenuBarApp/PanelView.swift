@@ -49,7 +49,7 @@ struct PanelView: View {
     }
     .frame(width: Theme.panelWidth, height: 520)
     .background(.ultraThinMaterial)   // HUD-style vibrancy; MenuBarExtra(.window) supplies the 16 pt rounded window
-    .animation(.capcomd(reduceMotion), value: model.path)
+    .animation(Theme.Motion.push(reduceMotion), value: model.path)   // keyboard back (⌘[) runs in a no-animation transaction
     }
   }
 

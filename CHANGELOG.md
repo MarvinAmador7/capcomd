@@ -18,6 +18,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   project's card, and a project with nothing left running drops below the cards as one line saying how its latest run
   ended, how long it took and how many folders it touched ("Done in 4m · 3 repos", "Failed after 12m"); the newest
   three are kept, and clicking one opens its run. A paused run stays in the Active list.
+- Menu bar app: the run view is rebuilt to the approved design. **Activity** lists each agent's work in plain words
+  ("Read 4 files", "Editing 3 files") by phase, with "now" / "6m ago"; finished steps carry no status icon, and the
+  list collapses to one row of step icons (⌘\). **Trace** shows the run's model calls, sandbox and git steps with
+  timing lanes, follows live, and offers "Jump to now" when you scroll back. Activity or Trace (⌘1/⌘2) is remembered.
+  Below, **Log** tails the working agent's output and **Files** lists what the run changed with `+n −n`, one at a
+  time. The footer can **Pause**/**Resume** and **Stop** the run (Stop asks once) and **Open in terminal** runs
+  `capcomd tui` for it. Pause, Stop and Files need a daemon with the new run controls and files routes; an older one
+  says so instead.
 - Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
   once, and clicks could land on the hidden cards).
 - harness.v1 now says what each agent is doing right now, in plain language: "Reading 4 files", "Running the tests",

@@ -38,6 +38,16 @@ public final class UnixSocketTransport: @unchecked Sendable {
     return try JSONDecoder().decode(T.self, from: d)
   }
 
+  /// POST with an optional JSON body; returns the status and body (errors are ApiError `{code, message}` JSON).
+  public func post(_ path: String, headers extra: [(String, String)] = [], json: Data? = nil) async throws -> (Int, Data) {
+    var r = try request(path, headers: extra + (json == nil ? [] : [("Content-Type", "application/json")]))
+    r.method = .POST
+    if let json { r.body = .bytes(ByteBuffer(data: json)) }
+    let resp = try await client.execute(r, timeout: .seconds(30))
+    let body = try await resp.body.collect(upTo: 1 << 20)
+    return (Int(resp.status.code), Data(body.readableBytesView))
+  }
+
   /// Opens an SSE stream and yields raw byte chunks.
   public func stream(_ path: String, lastEventID: String?) async throws -> HTTPClientResponse.Body {
     var h = [("Accept", "text/event-stream")]
