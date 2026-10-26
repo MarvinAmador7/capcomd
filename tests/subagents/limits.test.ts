@@ -175,6 +175,11 @@ test("grant (ADR-019 §4): the operator gives an agent more from the run, and th
 
 // ADR-019 §6. These run last: a usage limit is remembered for the login (claude:apikey here) that every profile shares.
 const statusOf = async (run: string, id: string) => (await cj(["inspect", run, id])).j;
+/** The agent's CLI has made its edit (its log shows the Edit call): a pause from here keeps work. Not heartbeatAt, which is set when it starts. */
+const edited = async (run: string, id: string) => {
+  for (let i = 0; i < 120; i++) { if (((await cj(["logs", run, id])).j?.lines ?? []).some((l: any) => /^tool .*Edit/.test(String(l.line)))) return; await sleep(250); }
+  throw new Error(`${id} never edited`);
+};
 const until = async (run: string, id: string, status: string) => {
   for (let i = 0; i < 120; i++) { const a = await statusOf(run, id); if (a?.status === status) return a; await sleep(500); }
   throw new Error(`${id} never reached ${status}`);
@@ -184,8 +189,7 @@ test("pause: a running agent stops with its work pushed and is paused, a pending
   const run = (await cj(["run", "new"])).j?.runId;
   const busy = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "p1"])).j?.agentId;
   const waiting = (await cj(["spawn", run, "--profile", "open", "--task", "plain job", "--key", "p2", "--no-start"])).j?.agentId;
-  // working: its CLI has reported a heartbeat (it edited, then hangs)
-  for (let i = 0; i < 120 && !(await statusOf(run, busy))?.heartbeatAt; i++) await sleep(250);
+  await edited(run, busy); // it edited, then hangs
   const p = await cj(["pause", run]);
   expect(p.code).toBe(0);
   expect(p.j).toMatchObject({ runId: run, paused: [waiting], pausing: [busy] });
@@ -222,16 +226,11 @@ test("harness API (menu bar): steer message, pause, resume and cancel go through
   };
   const get = async (p: string) => (await app.request(p, { headers: { authorization: `Bearer ${token}` } })).json() as Promise<any>;
   const lifecycle = async (run: string) => ((await get(`/v1/runs/${run}/lifecycle`)) as any[]).map((e) => e.type);
-  const working = async (run: string, id: string) => { for (let i = 0; i < 120 && !(await statusOf(run, id))?.heartbeatAt; i++) await sleep(250); };
+  const working = edited;
 
   const run = (await cj(["run", "new"])).j?.runId;
   const a = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "h1"])).j?.agentId;
   await working(run, a);
-
-  const sent = await post(`/v1/runs/${run}/agents/${a}/messages`, { body: "use the v2 API" });
-  expect(sent).toMatchObject({ status: 200, j: { runId: run, to: a, from: "operator", seq: 1 } });
-  const msg = ((await get(`/v1/events?scope=${run}`)) as any[]).find((e) => e.type === "message.sent");
-  expect(msg.data).toMatchObject({ seq: sent.j.seq, to: a, text: "use the v2 API" });
 
   const p = await post(`/v1/runs/${run}/pause`);
   expect(p).toMatchObject({ status: 200, j: { action: "pause", changed: [], pending: [a] } });
@@ -241,11 +240,16 @@ test("harness API (menu bar): steer message, pause, resume and cancel go through
 
   const r = await post(`/v1/runs/${run}/resume`);
   expect(r).toMatchObject({ status: 200, j: { action: "resume", changed: [a], pending: [] } });
-  await until(run, a, "done");
+  // Waited for the way every caller waits (await takes over a driver that didn't start), as in the CLI pause test.
+  expect((await cj(["await", run, a, "--timeout-ms", "90000"])).j?.agents?.[0]?.status).toBe("done");
   expect((await lifecycle(run)).filter((t) => t.startsWith("run."))).toEqual(["run.created", "run.started", "run.paused", "run.resumed", "run.completed"]);
 
   const b = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "h2"])).j?.agentId;
   await working(run, b);
+  const sent = await post(`/v1/runs/${run}/agents/${b}/messages`, { body: "use the v2 API" });
+  expect(sent).toMatchObject({ status: 200, j: { runId: run, to: b, from: "operator", seq: 1 } });
+  const msg = ((await get(`/v1/events?scope=${run}`)) as any[]).find((e) => e.type === "message.sent");
+  expect(msg.data).toMatchObject({ seq: sent.j.seq, to: b, text: "use the v2 API" });
   const c = await post(`/v1/runs/${run}/cancel`);
   expect(c).toMatchObject({ status: 200, j: { action: "cancel", changed: [b], pending: [] } });
   expect((await statusOf(run, b)).status).toBe("cancelled");
