@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RunFiles } from "../../src/api/contract";
 import { addClient, loadClients } from "../../src/api/clients";
-import { FilesMirror, parseDiff, runFiles, workTips } from "../../src/api/run-files";
+import { FilesMirror, parseDiff, runFiles, useMirror, workTips } from "../../src/api/run-files";
 import { harnessApp } from "../../src/api/server";
 import { memorySource, type RawEvent } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
@@ -162,6 +162,55 @@ describe("runFiles", () => {
 		try {
 			expect(await m.diff(tips, "main")).toEqual(first);
 		} finally { renameSync(moved, remote); }
+	});
+});
+
+describe("a remote that never answers", () => {
+	// ssh "connects" to a command that sleeps: no network needed, and git waits on it forever.
+	const sleep = `47.${String(process.pid).padStart(7, "0")}`;
+	const hang = { GIT_SSH_COMMAND: `sleep ${sleep} #` };
+	const slow = { remote: "ssh://capcomd.invalid/repo.git", target: "main", workdir: join(root, "mirror-slow") };
+	// Still running? (the dot escaped: pgrep takes a regex)
+	const stuck = (pattern: string) => Bun.spawnSync(["pgrep", "-f", pattern.replace(/\./g, "\\.")]).stdout.toString().trim();
+	test("Git.run kills git and its children at the deadline", async () => {
+		const { Git } = await import("../../src/merge/git");
+		const dir = join(root, "timeout-repo");
+		git(root, "init", "-q", "--bare", dir);
+		const t0 = Date.now();
+		const p = new Git(dir, hang).run(["fetch", "-q", slow.remote, "main"], { timeoutMs: 1000 });
+		await Bun.sleep(400);
+		expect(stuck(`sleep ${sleep}`)).not.toBe(""); // the stub "ssh" is hanging
+		const r = await p;
+		expect(Date.now() - t0).toBeLessThan(3000);
+		expect(r).toMatchObject({ code: 124, timedOut: true });
+		await Bun.sleep(200);
+		expect(stuck(`sleep ${sleep}`)).toBe("");
+	});
+	test("the route answers within the timeout, a concurrent request isn't held up, and the next comes from memory", async () => {
+		useMirror(slow, new FilesMirror(slow.remote, slow.workdir, { fetchTimeoutMs: 1000, env: hang }));
+		const path = join(root, "clients-slow.json");
+		const token = addClient("reader", ["read"], path).token;
+		const run = { id: "run-2", projectId: null, label: null, state: "running", goal: null, repo: slow.remote, createdAt: "2026-10-25T07:00:00.000Z" };
+		const agents = ["s1", "s2"].map((id) => ({ id, runId: "run-2", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null }));
+		const evs: RawEvent[] = [
+			{ seq: 1, at: 1, type: "AGENT_DONE", agentId: "s1", data: { result: { branch: "capcomd/run-2/s1", commit: "a".repeat(40) } } },
+			{ seq: 2, at: 2, type: "AGENT_CHECKPOINT", agentId: "s2", data: { ref: "refs/capcomd/checkpoints/s2", sha: "b".repeat(40), at: 2, reason: "x", files: 1 } },
+		];
+		const app = harnessApp({ source: memorySource({ runs: [run], agents: { "run-2": agents }, events: { "run-2": evs }, repos: { "run-2": slow } }), clients: () => loadClients(path), state: harnessState(null) });
+		const get = async () => { const t0 = Date.now(); const res = await app.request("/v1/runs/run-2/files", { headers: { authorization: `Bearer ${token}` } }); return { ms: Date.now() - t0, status: res.status, body: RunFiles.parse(await res.json()) }; };
+		// Four bounded fetches would be ~4 s; one timeout ends the request's use of the remote.
+		const [a, b] = await Promise.all([get(), get()]);
+		for (const r of [a, b]) {
+			expect(r.status).toBe(200);
+			expect(r.ms).toBeLessThan(2500);
+			expect(r.body.files).toEqual([]);
+			expect(r.body.sources.map((s) => s.error)).toEqual(["fetching from the remote timed out", "fetching from the remote timed out"]);
+		}
+		const c = await get();
+		expect(c.ms).toBeLessThan(300);
+		expect(c.body.sources[0]!.error).toBe("fetching from the remote timed out");
+		await Bun.sleep(200);
+		expect(stuck(`sleep ${sleep}`)).toBe("");
 	});
 });
 

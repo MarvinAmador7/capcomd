@@ -87,8 +87,16 @@ export class FilesMirror {
 	private diffs = new Map<string, { at: number; d: Diff }>();
 	static readonly CACHE_MAX = 2000;
 	static readonly ERROR_TTL_MS = 60_000;
-	constructor(readonly remote: string, workdir: string, private now: () => number = Date.now) {
+	/** Each fetch from the remote is killed after this; after one times out, the rest of that request skips the remote. */
+	static readonly FETCH_TIMEOUT_MS = 20_000;
+	private now: () => number;
+	private fetchTimeoutMs: number;
+	private env: Record<string, string>;
+	constructor(readonly remote: string, workdir: string, o: { now?: () => number; fetchTimeoutMs?: number; env?: Record<string, string> } = {}) {
 		this.dir = join(workdir, createHash("sha1").update(remote).digest("hex").slice(0, 12), "_files.git");
+		this.now = o.now ?? Date.now;
+		this.fetchTimeoutMs = o.fetchTimeoutMs ?? FilesMirror.FETCH_TIMEOUT_MS;
+		this.env = o.env ?? {};
 	}
 
 	private serial<T>(f: () => Promise<T>): Promise<T> {
@@ -98,7 +106,7 @@ export class FilesMirror {
 	}
 
 	private async git(): Promise<Git> {
-		const git = new Git(this.dir);
+		const git = new Git(this.dir, this.env);
 		if (!existsSync(join(this.dir, "HEAD"))) {
 			mkdirSync(this.dir, { recursive: true });
 			await git.ok(["init", "-q", "--bare"]);
@@ -111,44 +119,52 @@ export class FilesMirror {
 	diff(tips: WorkTip[], target: string): Promise<Map<string, Diff>> {
 		const key = (w: WorkTip) => `${target}\0${w.sha}\0${w.targetBefore ?? ""}`;
 		const out = new Map<string, Diff>();
-		const todo: WorkTip[] = [];
-		for (const w of tips) {
+		const known = (w: WorkTip) => {
 			const c = this.diffs.get(key(w));
-			if (c && ("files" in c.d || this.now() - c.at < FilesMirror.ERROR_TTL_MS)) out.set(w.agentId, c.d);
-			else todo.push(w);
-		}
-		if (!todo.length) return Promise.resolve(out);
+			return c && ("files" in c.d || this.now() - c.at < FilesMirror.ERROR_TTL_MS) ? c.d : null;
+		};
+		const pending = () => tips.filter((w) => { const d = known(w); if (d) out.set(w.agentId, d); return !d; });
+		if (!pending().length) return Promise.resolve(out);
 		return this.serial(async () => {
-			// A request queued behind another may find its tips diffed meanwhile.
-			for (let i = todo.length - 1; i >= 0; i--) { const c = this.diffs.get(key(todo[i]!)); if (c && "files" in c.d) { out.set(todo[i]!.agentId, c.d); todo.splice(i, 1); } }
+			// A request queued behind another may find its tips answered meanwhile (a diff, or a fresh error such as a timeout).
+			const todo = pending();
 			if (!todo.length) return out;
 			let git: Git;
 			try { git = await this.git(); } catch { for (const w of todo) out.set(w.agentId, { error: "could not open a local mirror of the run's repository" }); return out; }
+			// Network calls are bounded; once one times out the remote is treated as unreachable for the rest of this request.
+			let stuck = false;
+			const fetch = async (...args: string[]) => {
+				if (stuck) return false;
+				const r = await git.run(["fetch", "-q", "--no-tags", "origin", ...args], { timeoutMs: this.fetchTimeoutMs });
+				if (r.timedOut) stuck = true;
+				return r.code === 0;
+			};
+			const TIMED_OUT = "fetching from the remote timed out";
 			const targetRef = `refs/remotes/origin/${target}`;
-			const targetOk = SAFE_NAME.test(target) && (await git.run(["fetch", "-q", "--no-tags", "origin", `+refs/heads/${target}:${targetRef}`])).code === 0;
+			const targetOk = SAFE_NAME.test(target) && (await fetch(`+refs/heads/${target}:${targetRef}`));
 			const has = async (sha: string) => (await git.run(["cat-file", "-e", `${sha}^{commit}`])).code === 0;
 			const missing: WorkTip[] = [];
 			for (const w of todo) if (!(await has(w.sha))) missing.push(w);
 			const keep = (sha: string) => `refs/keep/${sha}`;
 			if (missing.length) {
 				const specs = missing.filter((w) => w.ref).map((w) => `+${w.ref}:${keep(w.sha)}-fetched`);
-				if (!specs.length || (await git.run(["fetch", "-q", "--no-tags", "origin", ...specs])).code !== 0)
+				if (!specs.length || !(await fetch(...specs)))
 					for (const w of missing) {
 						// One at a time: a deleted branch or checkpoint ref must not fail the others. Last resort: the commit itself.
-						if (w.ref && (await git.run(["fetch", "-q", "--no-tags", "origin", `+${w.ref}:${keep(w.sha)}-fetched`])).code === 0) continue;
-						await git.run(["fetch", "-q", "--no-tags", "origin", w.sha]);
+						if (w.ref && (await fetch(`+${w.ref}:${keep(w.sha)}-fetched`))) continue;
+						await fetch(w.sha);
 					}
 			}
 			const mergeBase = async (a: string, b: string) => { const r = await git.run(["merge-base", a, b]); return r.code === 0 ? r.stdout.trim() || null : null; };
 			for (const w of todo) {
 				const d = await (async (): Promise<Diff> => {
-					if (!(await has(w.sha))) return { error: "its commit is not on the remote any more (branch or checkpoint deleted)" };
+					if (!(await has(w.sha))) return { error: stuck ? TIMED_OUT : "its commit is not on the remote any more (branch or checkpoint deleted)" };
 					// Keep it reachable: the branch or checkpoint ref may be deleted after a merge.
 					await git.run(["update-ref", keep(w.sha), w.sha]);
 					let base: string | null = null;
 					if (w.targetBefore && (await has(w.targetBefore))) base = await mergeBase(w.sha, w.targetBefore);
 					if (!base) {
-						if (!targetOk) return { error: `target branch ${target} not found on the remote` };
+						if (!targetOk) return { error: stuck ? TIMED_OUT : `target branch ${target} not found on the remote` };
 						const mb = await mergeBase(w.sha, targetRef);
 						if (!mb) return { error: `no common history with ${target}` };
 						base = mb;
@@ -178,12 +194,14 @@ export class FilesMirror {
 }
 
 const mirrors = new Map<string, FilesMirror>();
+const mirrorKey = (repo: RunRepo) => `${repo.workdir}\0${repo.remote}`;
 export const mirrorFor = (repo: RunRepo) => {
-	const k = `${repo.workdir}\0${repo.remote}`;
-	let m = mirrors.get(k);
-	if (!m) mirrors.set(k, (m = new FilesMirror(repo.remote, repo.workdir)));
+	let m = mirrors.get(mirrorKey(repo));
+	if (!m) mirrors.set(mirrorKey(repo), (m = new FilesMirror(repo.remote, repo.workdir)));
 	return m;
 };
+/** Tests: serve a repository from this mirror (e.g. one with a short fetch timeout). */
+export const useMirror = (repo: RunRepo, m: FilesMirror) => { mirrors.set(mirrorKey(repo), m); };
 
 /** The response of GET /v1/runs/{runId}/files. */
 export async function runFiles(o: { runId: string; events: RawEvent[]; repo: RunRepo | null; agentId?: string; limit?: number; now?: () => number }): Promise<RunFiles> {
