@@ -180,11 +180,36 @@ final class StoreTests: XCTestCase {
     ]
     for (e, d) in frames { s.receive(StreamFrame.parse(event: e, data: d), scope: "run-z") }
     let node = try XCTUnwrap(s.agentTree(runId: "run-z").first)
-    XCTAssertEqual(node.name, "lead"); XCTAssertEqual(node.status, .running); XCTAssertEqual(node.activity, "Waiting to start")
+    XCTAssertEqual(node.name, "lead"); XCTAssertEqual(node.status, .running)
+    XCTAssertNil(node.activity)   // the status sentence (`text`) is not an activity line
     let step = try XCTUnwrap(s.steps(forRun: "run-z").first)
     XCTAssertEqual(step.status, .running)   // step comes from snapshot.steps replay, status from the live event
     XCTAssertEqual(step.detail?.plain, "**Do** [it](http://evil)")   // untrusted task kept literal
     XCTAssertEqual(s.lastSeq["run-z"], 6)
+  }
+
+  /// Agent.activity (snapshot.agents) and live, ephemeral agent.activity_changed (lifecycle feed with ?activity=1).
+  func testActivityFromSnapshotAndEphemeralUpdates() async throws {
+    let s = CapcomdStore(), scope = "lifecycle:run-l"
+    let agent = #"{"id":"agt-1","runId":"run-l","parent":null,"depth":0,"profile":"lead","status":"running","text":"Agent agt-1 is now running.","task":null,"taskAttachment":null,"result":null,"updatedAt":null,"activity":{"text":"Reading 4 files","kind":"read","at":"2026-10-26T10:00:00.000Z"}}"#
+    let frames: [(String, String)] = [
+      ("snapshot.run", #"{"run":{"id":"run-l","projectId":"prj-l","label":null,"state":"running","goal":"Ship it"}}"#),
+      ("snapshot.agents", #"{"agents":[\#(agent)]}"#),
+      ("snapshot.approvals", #"{"approvals":[]}"#),
+      ("snapshot.end", #"{"snapshotSeq":7}"#),
+    ]
+    for (e, d) in frames { s.receive(StreamFrame.parse(event: e, data: d), scope: scope) }
+    XCTAssertEqual(s.agentTree(runId: "run-l").first?.activity, "Reading 4 files")
+
+    // Ephemeral: seq is the last durable seq (7, already the floor) and the frame has no id; it must still apply.
+    let live = { (id: String, text: String?) in
+      #"{"v":1,"id":"\#(id)","scope":"run-l","seq":7,"entity":"agt-1","entitySeq":0,"type":"agent.activity_changed","typeVersion":1,"durability":"ephemeral","ts":"2026-10-26T10:00:01.000Z","epochMs":8,"projectId":"prj-l","runId":"run-l","agentId":"agt-1","text":"x","data":{"agentId":"agt-1","status":"running","activity":\#(text.map { #"{"text":"\#($0)","kind":"write","at":"2026-10-26T10:00:01.000Z"}"# } ?? "null")}}"# }
+    s.receive(StreamFrame.parse(event: "agent.activity_changed", data: live("eph-1", "Writing parquet shards to R2")), scope: scope)
+    XCTAssertEqual(s.agentTree(runId: "run-l").first?.activity, "Writing parquet shards to R2")
+    s.receive(StreamFrame.parse(event: "agent.activity_changed", data: live("eph-2", nil)), scope: scope)
+    XCTAssertNil(s.agentTree(runId: "run-l").first?.activity)
+    XCTAssertEqual(s.lastSeq[scope], 7)   // ephemeral frames never move the cursor
+    XCTAssertEqual(s.duplicatesDropped, 0)
   }
 
   // MARK: lifecycle (PR #40)

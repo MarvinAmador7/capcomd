@@ -30,7 +30,8 @@ public protocol SubscriptionHandle: Sendable { func cancel() }
 /// Opens `GET /v1/streams/{scope}/events` resuming after `after`, delivering parsed frames in order.
 public protocol StreamSubscribing: Sendable {
   func subscribe(scope: String, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle
-  /// `feed: "lifecycle"` opens `?feed=lifecycle` (run scopes only): snapshot, then run/agent/approval lifecycle events.
+  /// `feed: "lifecycle"` opens `?feed=lifecycle&activity=1` (run scopes only): snapshot, then run/agent/approval lifecycle
+  /// events plus live, ephemeral `agent.activity_changed` frames.
   func subscribe(scope: String, feed: String?, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle
 }
 public extension StreamSubscribing {

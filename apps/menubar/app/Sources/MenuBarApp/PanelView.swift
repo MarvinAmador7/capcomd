@@ -80,7 +80,11 @@ struct ProjectCard: View {
       VStack(alignment: .leading, spacing: 0) {
         ForEach(project.runs) { run in
           AgentTreeView(runId: run.id, compact: true)
-          ForEach(model.approvals(run.id)) { ApprovalCard(approval: $0).padding(.leading, 20) }   // indented to the name column
+          // Approvals sit under their waiting agent; one with no agent in the tree goes under the run's tree.
+          let inTree = Set(model.tree(run.id).flatMap(\.subtreeIds))
+          ForEach(model.approvals(run.id).filter { !inTree.contains($0.agentId ?? "") }) {
+            ApprovalCard(approval: $0).padding(.leading, Theme.Tree.nameInset(0) + Theme.Approval.leadingExtra)
+          }
         }
       }
       .padding(.top, Theme.Card.treeInnerTop)

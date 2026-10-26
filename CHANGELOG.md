@@ -10,6 +10,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   Run ids no longer appear on cards (they stay in the run view), and a card waiting for your approval gets a faint
   amber tint instead of a coloured border. Click a card's title to open its run. Running status marks are blue even
   when another app is in front.
+- Menu bar app: each running agent on a project card shows what it is doing right now under its name ("Reading 4
+  files"), updated live. An agent waiting for your approval shows the question there instead, with the branch line
+  beneath it and Deny / Approve; Approve stays blue even when another app is in front. Needs a capcomd daemon that
+  reports agent activity; with an older one the line is simply absent.
 - Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
   once, and clicks could land on the hidden cards).
 - harness.v1 now says what each agent is doing right now, in plain language: "Reading 4 files", "Running the tests",

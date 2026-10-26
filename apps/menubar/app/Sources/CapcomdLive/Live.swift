@@ -21,7 +21,7 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   /// Resume cursor = last SSE `id:` seen, never an envelope seq: in a shared-seq group only the last frame has an id, so a
   /// cut mid-group resumes before the group and the store drops the re-sent members by envelope id.
   public func subscribe(scope: String, feed: String?, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
-    let path = "/v1/streams/\(scope)/events" + (feed.map { "?feed=\($0)" } ?? "")
+    let path = "/v1/streams/\(scope)/events" + (feed.map { "?feed=\($0)&activity=1" } ?? "")
     let h = Handle(); let t = transport, maxR = maxReconnects, bo = backoff, idle = idleTimeout
     h.task = Task {
       var last = after, attempts = 0
