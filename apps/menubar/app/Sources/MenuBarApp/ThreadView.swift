@@ -8,6 +8,7 @@ struct ThreadView: View {
   @Environment(AppModel.self) private var model
   let runId: String
   let agentId: String
+  @State private var size = (total: CGFloat(0), scroll: CGFloat(0), content: CGFloat(0))
 
   var body: some View {
     let agent = model.run(runId)?.agents[agentId]
@@ -38,11 +39,21 @@ struct ThreadView: View {
         VStack(alignment: .leading, spacing: 8) {
           ForEach(model.thread(agentId)) { ThreadItemView(runId: runId, agentId: agentId, item: $0) }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.content = $0; report() }
       }
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.scroll = $0; report() }
       .mask(VStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16) })
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)   // an empty thread stays left-aligned
     .padding(Theme.inset)
+    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.total = $0; report() }
     .navigationBarBackButtonHidden(true)
+  }
+
+  /// The thread's natural height: everything around the scroll (header, task, input) plus the scroll's content.
+  private func report() {
+    guard size.total > 0 else { return }
+    model.routeHeight = size.total - size.scroll + size.content
   }
 
   private func findNode(_ ns: [AgentNode]) -> AgentNode? {

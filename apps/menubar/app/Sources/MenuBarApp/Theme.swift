@@ -167,6 +167,7 @@ enum Theme {
     static let segOff = Color.white.opacity(0.6)
     static let segOnFill = Color.white.opacity(0.2)
     static let paneHeight: CGFloat = 94
+    static let tailHeight: CGFloat = 84                                // .tail: 4 lines × 17 + 8/8 padding
     static let tailFont = Font.system(size: 11, design: .monospaced)
     static let tailLine: CGFloat = 17
     static let tailPadding = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
@@ -238,6 +239,13 @@ enum Theme {
     static let hintPadding = EdgeInsets(top: 5, leading: 30, bottom: 0, trailing: 4), hintGap: CGFloat = 10
     static let errorFont = Font.system(size: 11.5)
     static let sectionTop: CGFloat = 0                       // .in sits at the list padding; .sec adds 14 below it
+  }
+  /// Panel height follows its content (measured mockups: list 525.5–566, run view 285–429.5, thread 614.5 pt).
+  enum Panel {
+    static let maxHeight: CGFloat = 640          // the tallest approved panel (thread-panel-v2, 614.5) fits
+    static let minHeight: CGFloat = 200          // an empty or loading screen doesn't collapse
+    static let screenMargin: CGFloat = 48        // never taller than the screen's visible frame minus this
+    static let initialHeight: CGFloat = 520      // until the first measurement lands
   }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {

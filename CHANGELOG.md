@@ -40,6 +40,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   folder and remembers it. Needs a daemon with `POST /v1/runs` and a token with the steer scope.
 - Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
   once, and clicks could land on the hidden cards).
+- Menu bar app: the panel is now as tall as what it shows instead of a fixed 520 pt. A short project list or a run
+  view no longer leaves empty space at the bottom, and a long list grows up to 640 pt (or the height of your screen)
+  before it scrolls. The Log box in the run view is now the designed four lines tall.
 - harness.v1 now says what each agent is doing right now, in plain language: "Reading 4 files", "Running the tests",
   "Waiting for sub-agents", and in past tense once it stopped ("Read 4 files"). It is the new `activity`
   (`{text, kind, at}`, or null) on each agent in `GET /v1/runs/{runId}/agents` and `snapshot.agents`. For live updates,
