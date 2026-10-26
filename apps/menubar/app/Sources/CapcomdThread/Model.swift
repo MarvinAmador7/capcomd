@@ -40,7 +40,9 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
     public var args: String?
     public var output: String?
     public var files: [Link]
-    enum CodingKeys: String, CodingKey { case callId, name, kind, summary, isError, args, output, files }
+    /// The call's change to one file (harness #64); nil when it edits nothing or the CLI didn't report the lines.
+    public var diff: Diff?
+    enum CodingKeys: String, CodingKey { case callId, name, kind, summary, isError, args, output, files, diff }
     public init(from d: Decoder) throws {
       let c = try d.container(keyedBy: CodingKeys.self)
       callId = try c.decode(String.self, forKey: .callId); name = clean(try c.decode(String.self, forKey: .name))
@@ -48,6 +50,39 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
       isError = try c.decode(Bool.self, forKey: .isError)
       args = try c.decodeIfPresent(String.self, forKey: .args).map(clean); output = try c.decodeIfPresent(String.self, forKey: .output).map(clean)
       files = try c.decodeIfPresent([Link].self, forKey: .files) ?? []
+      diff = try? c.decodeIfPresent(Diff.self, forKey: .diff)   // a diff this client can't read is just not drawn
+    }
+  }
+  /// A short line diff of one file: its first lines (at most 40, hunk gaps included); `added` / `removed` count all.
+  public struct Diff: Sendable, Hashable, Decodable {
+    public enum Op: Sendable, Hashable { case context, added, removed, gap }
+    public struct Line: Sendable, Hashable, Decodable {
+      public var op: Op
+      public var text: String
+      enum CodingKeys: String, CodingKey { case op, text }
+      public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .op) {
+        case "+": op = .added
+        case "-": op = .removed
+        case "@": op = .gap
+        default: op = .context   // an op we don't know reads as context
+        }
+        text = clean(try c.decode(String.self, forKey: .text))
+      }
+    }
+    /// Relative to the workspace root; nil when the file is outside it.
+    public var path: String?
+    public var added: Int
+    public var removed: Int
+    public var lines: [Line]
+    public var truncatedLines: Int?
+    enum CodingKeys: String, CodingKey { case path, added, removed, lines, truncatedLines }
+    public init(from d: Decoder) throws {
+      let c = try d.container(keyedBy: CodingKeys.self)
+      path = try c.decodeIfPresent(String.self, forKey: .path).map(clean)
+      added = try c.decode(Int.self, forKey: .added); removed = try c.decode(Int.self, forKey: .removed)
+      lines = try c.decode([Line].self, forKey: .lines); truncatedLines = try c.decodeIfPresent(Int.self, forKey: .truncatedLines)
     }
   }
   public struct ItemError: Sendable, Hashable, Decodable {

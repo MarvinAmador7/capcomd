@@ -383,6 +383,16 @@ enum Theme {
     static let handoffSummaryMargin = EdgeInsets(top: 5, leading: 0, bottom: 7, trailing: 0)
     static let artFont = Font.system(size: 10.5, design: .monospaced), artText = label.opacity(0.6), artFill = Color.white.opacity(0.07)
     static let artRadius: CGFloat = 5, artPadding = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6), artGap: CGFloat = 4
+    // Diff card (.df, .fh, .ln2)
+    static let diffFill = Color.black.opacity(0.25), diffStroke = Color.white.opacity(0.08), diffRadius: CGFloat = 8, diffBottom: CGFloat = 10
+    static let diffHeaderFont = Font.system(size: 11, design: .monospaced), diffHeaderText = Color.white.opacity(0.8)
+    static let diffHeaderPadding = EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10), diffHeaderGap: CGFloat = 7, diffHeaderRule = Color.white.opacity(0.07)
+    static let diffAdded = Color(red: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255), diffRemoved = Color(red: 1, green: 0x69 / 255, blue: 0x61 / 255)
+    static let diffFont = Font.system(size: 11, design: .monospaced), diffLine: CGFloat = 16, diffPadding: CGFloat = 10, diffMarker: CGFloat = 12
+    static let diffContext = label.opacity(0.6), diffMarkerText = label.opacity(0.4)
+    static let diffAddedFill = diffAdded.opacity(0.10), diffAddedText = Color.white.opacity(0.9)
+    static let diffRemovedFill = diffRemoved.opacity(0.10), diffRemovedText = Color.white.opacity(0.75)
+    static let diffGapText = label.opacity(0.35), diffFailedOpacity: Double = 0.6
     // Error, other, quote, rule, media
     static let errorText = Color(red: 1, green: 105 / 255, blue: 97 / 255).opacity(0.85), errorFont = Font.system(size: 12.5)
     static let otherFont = Font.system(size: 12), otherText = label.opacity(0.45)

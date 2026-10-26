@@ -77,6 +77,20 @@ final class ThreadTests: XCTestCase {
     XCTAssertEqual(media, ["attachment", "workspace", "remote"])
   }
 
+  func testClaudeEditsCarryADiff() throws {
+    var book = Book(); book.apply(try goldenItems("claude-2.1.303"))
+    let diffs = book.items.compactMap { $0.tool?.diff }
+    XCTAssertFalse(diffs.isEmpty)
+    for d in diffs {
+      XCTAssertLessThanOrEqual(d.lines.count, 40)
+      XCTAssertGreaterThan(d.added + d.removed, 0)
+      XCTAssertFalse(d.path?.contains("..") ?? false)
+    }
+    XCTAssertTrue(diffs.contains { $0.lines.contains { $0.op == .added } && $0.lines.contains { $0.op == .removed } })
+    // Codex reports paths only: no diff.
+    XCTAssertTrue(try goldenItems("codex-0.163.0").allSatisfy { $0.tool?.diff == nil })
+  }
+
   func testFailedSessionsCarryErrors() throws {
     for n in ["claude-2.1.303-usage-limit", "codex-0.163.0-turn-failed"] {
       XCTAssertTrue(try goldenItems(n).contains { $0.kind == "error" && $0.error?.message.isEmpty == false }, n)

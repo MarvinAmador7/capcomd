@@ -417,8 +417,14 @@ struct ToolCallRow: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
+    if let tool = item.tool, let diff = tool.diff {
+      DiffCard(diff: diff, failed: tool.isError, open: $open) { detail(tool) }
+    } else { row }
+  }
+
+  var row: some View {
     let tool = item.tool
-    VStack(alignment: .leading, spacing: 0) {
+    return VStack(alignment: .leading, spacing: 0) {
       Button { withAnimation(Theme.Motion.ease(reduceMotion)) { open.toggle() } } label: {
         HStack(spacing: Theme.Content.toolGap) {
           Image(systemName: StepKind(activityKind: tool?.kind).symbol).font(.system(size: 11))
@@ -474,6 +480,72 @@ struct ToolCallRow: View {
     let lines = s.split(separator: "\n", omittingEmptySubsequences: false)
     guard lines.count > Theme.Content.detailMaxLines else { return s }
     return "… \(lines.count - Theme.Content.detailMaxLines) earlier lines\n" + lines.suffix(Theme.Content.detailMaxLines).joined(separator: "\n")
+  }
+}
+
+/// `.df`: an edit as a diff card: pencil · path · `+n −n`, then its first lines (context, removed red, added green; `@`
+/// gaps as a faint hunk header). A click on the header shows the call's arguments and result. A failed edit is dimmed.
+struct DiffCard<Detail: View>: View {
+  let diff: CapcomdThread.Item.Diff
+  let failed: Bool
+  @Binding var open: Bool
+  @ViewBuilder let detail: () -> Detail
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      VStack(alignment: .leading, spacing: 0) {
+        Button { withAnimation(Theme.Motion.ease(reduceMotion)) { open.toggle() } } label: {
+          HStack(spacing: Theme.Content.diffHeaderGap) {
+            Image(systemName: "square.and.pencil").font(.system(size: 10)).foregroundStyle(Theme.Content.label.opacity(0.6))
+            Text(verbatim: diff.path ?? "a file outside the workspace").lineLimit(1).truncationMode(.middle)
+            if failed { Text("didn't apply").foregroundStyle(Theme.Content.errorText) }
+            Spacer(minLength: 0)
+            HStack(spacing: 4) {
+              Text(verbatim: "+\(diff.added)").foregroundStyle(Theme.Content.diffAdded)
+              Text(verbatim: "−\(diff.removed)").foregroundStyle(Theme.Content.diffRemoved)
+            }
+          }
+          .font(Theme.Content.diffHeaderFont).foregroundStyle(Theme.Content.diffHeaderText)
+          .padding(Theme.Content.diffHeaderPadding).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Edit \(diff.path ?? "file"), \(diff.added) added, \(diff.removed) removed")
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Content.diffHeaderRule).frame(height: 0.5) }
+        ForEach(Array(diff.lines.enumerated()), id: \.offset) { _, l in line(l) }
+        if let n = diff.truncatedLines {
+          Text("\(n) more \(n == 1 ? "line" : "lines")").font(Theme.Content.truncatedFont).foregroundStyle(Theme.Content.truncatedText)
+            .padding(.horizontal, Theme.Content.diffPadding).padding(.vertical, 4)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(RoundedRectangle(cornerRadius: Theme.Content.diffRadius).fill(Theme.Content.diffFill))
+      .overlay(RoundedRectangle(cornerRadius: Theme.Content.diffRadius).strokeBorder(Theme.Content.diffStroke, lineWidth: 0.5))
+      .clipShape(RoundedRectangle(cornerRadius: Theme.Content.diffRadius))
+      .opacity(failed ? Theme.Content.diffFailedOpacity : 1)
+      .padding(.bottom, open ? 6 : Theme.Content.diffBottom)
+      if open { detail().transition(.opacity) }
+    }
+  }
+
+  @ViewBuilder func line(_ l: CapcomdThread.Item.Diff.Line) -> some View {
+    switch l.op {
+    case .gap:
+      Text(verbatim: l.text.isEmpty ? "⋯" : l.text).font(Theme.Content.diffFont).foregroundStyle(Theme.Content.diffGapText)
+        .lineLimit(1).frame(height: Theme.Content.diffLine).padding(.horizontal, Theme.Content.diffPadding)
+    default:
+      let (mark, text, fill): (String, Color, Color) = switch l.op {
+        case .added: ("+", Theme.Content.diffAddedText, Theme.Content.diffAddedFill)
+        case .removed: ("−", Theme.Content.diffRemovedText, Theme.Content.diffRemovedFill)
+        default: (" ", Theme.Content.diffContext, .clear)
+      }
+      HStack(spacing: 0) {
+        Text(verbatim: mark).foregroundStyle(Theme.Content.diffMarkerText).frame(width: Theme.Content.diffMarker, alignment: .leading)
+        Text(verbatim: l.text).foregroundStyle(text).lineLimit(1).truncationMode(.tail)
+      }
+      .font(Theme.Content.diffFont).frame(maxWidth: .infinity, minHeight: Theme.Content.diffLine, alignment: .leading)
+      .padding(.horizontal, Theme.Content.diffPadding).background(fill)
+    }
   }
 }
 

@@ -12,7 +12,7 @@
 // The lead (agt-ld01) has a structured thread (threads.ts; THREAD=golden swaps in the daemon's golden session), and a
 // steer to it gets a live reply on connections that asked for ?thread=1.
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
-import { ThreadStore, goldenThread, leadThread } from "./threads";
+import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
@@ -136,7 +136,7 @@ const decided = new Map<string, any>();
 
 // Agent threads: the lead's, plus the steer that opens it (snapshot.threads).
 const threads = new ThreadStore(), leadRun = runs.find(r => r.agents.some(a => a.id === "agt-ld01")), T0 = NOW - 5 * min;
-if (leadRun) for (const d of process.env.THREAD === "golden" ? goldenThread() : leadThread(T0)) threads.write("agt-ld01", d);
+if (leadRun) for (const d of process.env.THREAD === "golden" ? goldenThread() : withDiff(leadThread(T0))) threads.write("agt-ld01", d);
 const steers = leadRun ? [{ seq: 1, from: "operator", to: "agt-ld01", at: iso(T0), text: "Skip shards above 200 and keep it on the staging bucket.", attachment: null }] : [];
 // A 1×1 png for attachment media.
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));

@@ -38,11 +38,23 @@ export function leadThread(t0: number) {
       [p(t("Wrote shards 1–118 to R2. Two shards needed a retry after a model timeout; both validated clean.")),
        list([none("r2://matchkey/v3.2/")], [file("report.md")])],
       { child: { agentId: "agt-wk03", status: "done" } }),
-    draft("itm-ld-8", "say", t0 + 205 * s, "The join was matching on raw email. Fixed: …", [p(t("The join was matching on raw email. Fixed:")),
+    draft("itm-ld-8", "say", t0 + 205 * s, "The join was matching on raw email. Fixed:", [p(t("The join was matching on raw email. Fixed:"))]),
+    { ...tool("itm-ld-9", t0 + 206 * s, "edit", "Edit ids/v1/join_addriva_id.sql", 120, { file_path: "ids/v1/join_addriva_id.sql" }, "The file has been updated."),
+    },
+    draft("itm-ld-10", "say", t0 + 210 * s, "SELECT … ", [
       { t: "code", lang: "sql", truncatedLines: null, text: "SELECT shard, count(*) AS rows\nFROM read_parquet('r2://matchkey/v3.2/*.parquet')\nWHERE addriva_id IS NULL   -- must be 0\nGROUP BY shard LIMIT 5;" },
       { t: "table", align: [null, "right", null], header: [[t("Shard")], [t("Rows")], [t("Status")]], truncatedRows: null, truncatedCols: null,
         rows: [["116", "412k"], ["117", "409k"], ["118", "415k"]].map(([a, b]) => [[t(a)], [t(b)], [t("Written")]]) }]),
   ];
+}
+
+/** The mockup's diff card (thread-states "Diff"): the edit's first lines, all of its counts. */
+export function withDiff(items: any[]) {
+  const it = items.find((i) => i.id === "itm-ld-9");
+  if (it) it.tool.diff = { path: "ids/v1/join_addriva_id.sql", added: 18, removed: 3, truncatedLines: 17, lines: [
+    { op: " ", text: "  LEFT JOIN matchkey m" }, { op: "-", text: "    ON m.email = i.email" },
+    { op: "+", text: "    ON m.email_norm = lower(i.email)" }, { op: "+", text: "   AND m.version = 'v3.2'" }] };
+  return items;
 }
 
 /** Every revision of the golden Claude session, as the daemon's store would number them. */
