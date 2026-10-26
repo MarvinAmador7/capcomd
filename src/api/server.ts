@@ -16,13 +16,16 @@ export const HEARTBEAT_MS = 15_000;
 const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "already_decided", 422: "invalid" };
 const err = (c: Context, status: 401 | 403 | 404 | 409 | 422, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
 
-export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; heartbeatMs?: number; pollMs?: number; snapshotSteps?: number; state?: HarnessState };
+/** agent.activity_changed: at most one frame per agent per this many ms (ACTIVITY_DOC). */
+export const ACTIVITY_MS = 1000;
+export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; heartbeatMs?: number; pollMs?: number; activityMs?: number; snapshotSteps?: number; state?: HarnessState };
 
 export function harnessApp(o: ServerOptions) {
 	const src = o.source;
 	const clients = o.clients ?? (() => loadClients());
 	const heartbeatMs = o.heartbeatMs ?? HEARTBEAT_MS;
 	const pollMs = o.pollMs ?? 500;
+	const activityMs = o.activityMs ?? ACTIVITY_MS;
 	// (clientId, key) → stored outcome and approvalId → decision, persisted so a retry after restart replays.
 	const state = o.state ?? harnessState();
 	// approvalId → in-flight decision; claimed synchronously before any await so concurrent requests cannot both decide.
@@ -170,6 +173,29 @@ export function harnessApp(o: ServerOptions) {
 				}
 				const runId = scope;
 				const all = await src.events(runId, 0);
+				// ?activity=1: ephemeral agent.activity_changed frames (ACTIVITY_DOC). The agents are read at most once per
+				// activityMs and a frame goes out only when an agent's line changed, so each agent gets at most one a second.
+				// No SSE id (never a resume cursor); seq is the last durable seq seen; never replayed.
+				const wantActivity = c.req.query("activity") === "1";
+				const sentActivity = new Map<string, string>();
+				let activityAt = 0, activityN = 0;
+				const activitySig = (a: { activity: { kind: string; text: string } | null }) => (a.activity ? `${a.activity.kind}\u0000${a.activity.text}` : "");
+				const seedActivity = (agents: Array<{ id: string; activity: { kind: string; text: string } | null }>) => { for (const a of agents) sentActivity.set(a.id, activitySig(a)); activityAt = Date.now(); };
+				const sendActivity = async (seq: number) => {
+					if (!wantActivity || closed || Date.now() - activityAt < activityMs) return;
+					activityAt = Date.now();
+					for (const a of (await src.agents(runId)) ?? []) {
+						const sig = activitySig(a);
+						if ((sentActivity.get(a.id) ?? "") === sig) continue;
+						sentActivity.set(a.id, sig);
+						const now = Date.now();
+						send("agent.activity_changed", {
+							v: 1, id: `evt_${runId}_activity_${a.id}_${now}_${++activityN}`, scope: runId, seq, entity: a.id, entitySeq: 0, type: "agent.activity_changed", typeVersion: 1,
+							durability: "ephemeral", ts: isoTs(now), epochMs: now, projectId: null, runId, agentId: a.id, text: a.activity?.text ?? a.text,
+							data: { agentId: a.id, status: a.status, activity: a.activity },
+						});
+					}
+				};
 				if (c.req.query("feed") === "lifecycle") {
 					// Lifecycle feed: snapshot of state (run, agents, approvals), then only lifecycle events. Folded from the full log each tick.
 					const head = all.at(-1)?.seq ?? 0;
@@ -179,7 +205,9 @@ export function harnessApp(o: ServerOptions) {
 						if (last !== null) frame("stream.reset", { snapshotSeq: head, reason: "compacted" });
 						const run = (await src.runs()).find((r) => r.id === runId) ?? null;
 						if (run) frame("snapshot.run", { run });
-						frame("snapshot.agents", { agents: (await src.agents(runId)) ?? [] });
+						const agents = (await src.agents(runId)) ?? [];
+						frame("snapshot.agents", { agents });
+						seedActivity(agents);
 						frame("snapshot.approvals", { approvals: await src.approvals(runId) });
 						frame("snapshot.end", { snapshotSeq: head }, head);
 						cursor = head;
@@ -192,6 +220,7 @@ export function harnessApp(o: ServerOptions) {
 							const evs = await src.events(runId, 0);
 							sendGroups(lifecycleEvents(runId, evs).filter((e) => e.seq > cursor).map((e) => ({ event: e.type, data: e, seq: e.seq })));
 							cursor = Math.max(cursor, evs.at(-1)?.seq ?? 0);
+							await sendActivity(cursor);
 						} finally { busy = false; }
 					};
 					await tick();
@@ -207,7 +236,9 @@ export function harnessApp(o: ServerOptions) {
 					if (last !== null) frame("stream.reset", { snapshotSeq: head, reason: "compacted" });
 					const run = (await src.runs()).find((r) => r.id === runId) ?? null;
 					if (run) frame("snapshot.run", { run });
-					frame("snapshot.agents", { agents: (await src.agents(runId)) ?? [] });
+					const agents = (await src.agents(runId)) ?? [];
+					frame("snapshot.agents", { agents });
+					seedActivity(agents);
 					frame("snapshot.approvals", { approvals: await src.approvals(runId) });
 					frame("snapshot.steps", { steps: envelopes(runId, all).slice(-(o.snapshotSteps ?? 200)) });
 					frame("snapshot.threads", { messages: messagesOf(all).slice(-200) });
@@ -229,6 +260,7 @@ export function harnessApp(o: ServerOptions) {
 							cursor = e.seq;
 						}
 						sendGroups(out);
+						await sendActivity(cursor);
 					} finally { busy = false; }
 				};
 				await tick();

@@ -9,7 +9,7 @@ import { recentRuns, decideMerge } from "../primitives/ops";
 import { tracePath } from "../utils/tracing-simple";
 import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
-import { describeEvent } from "./describe";
+import { agentActivity, describeEvent } from "./describe";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { approvalIdFor, parseApprovalId, type HarnessSource, type PendingApproval } from "./source";
 
@@ -54,7 +54,7 @@ export function rivetSource(): HarnessSource {
 				const inl = inlineOrAttach(redactShapes(String(a.task ?? "")));
 				return {
 					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile), status: a.status,
-					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId),
+					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: agentActivity(a.activity, a.status),
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
 				};
 			});

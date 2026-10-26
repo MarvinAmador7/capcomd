@@ -6,6 +6,7 @@ import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
 import { AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
+import { ACTIVITY_KINDS } from "../agents/activity";
 
 export const ApprovalId = z.string().regex(/^apr-[A-Za-z0-9]+$/).describe("Stable approval id, carried on approval events; decide with it directly");
 export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom"]);
@@ -43,6 +44,13 @@ export const Project = z.object({
 	goal: UntrustedText.nullable(),
 	runIds: z.array(z.string()).describe("Newest first"),
 });
+/** What a working agent is doing now. Written by the daemon from the agent's structured events (tool names, commands and
+ * paths only pick the kind and are counted, never shown), so `text` is trusted. */
+export const AgentActivity = z.object({
+	text: z.string().describe("Plain-language line, sentence case, no period, written by the daemon (trusted): progressive while the agent works (\"Reading 4 files\"), past tense once it stopped (\"Read 4 files\")"),
+	kind: z.string().describe(`Icon hint: ${ACTIVITY_KINDS.join(", ")}. More may be added: treat an unknown kind as tool`),
+	at: Timestamp.describe("When the activity last changed"),
+});
 export const Agent = z.object({
 	id: z.string(),
 	runId: z.string(),
@@ -51,6 +59,7 @@ export const Agent = z.object({
 	profile: ProfileName.nullable(),
 	status: AgentStatus,
 	text: z.string().describe("Plain-language status line written by the daemon (trusted)"),
+	activity: AgentActivity.nullable().describe("What it is doing now (or, once it stopped, the last thing it did); null until it reports a step. Live updates: agent.activity_changed with ?activity=1 on a run stream"),
 	task: UntrustedText.nullable().describe("Task text, inline when ≤ 64 KB; null when over (see taskAttachment)"),
 	taskAttachment: AttachmentRef.nullable(),
 	result: AgentResult.nullable(),
@@ -117,20 +126,28 @@ export const StreamFrames = {
 } as const;
 
 export const LIFECYCLE_DOC = `Lifecycle feed: only run and agent state changes (${LIFECYCLE_TYPES.join(", ")}). Tool calls and messages are not here; they stay in step and thread events.
-Each event carries a trusted \`data.cause\` code and the envelope's trusted \`text\`; \`seq\` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.`;
+Each event carries a trusted \`data.cause\` code and the envelope's trusted \`text\`; \`seq\` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
+Activity is not a state change, so it is not in this feed by default: a stream client opts in with \`?activity=1\` (Agent activity, below).`;
+
+export const ACTIVITY_DOC = `Agent activity: \`?activity=1\` on a run stream (with or without \`feed=lifecycle\`) adds \`agent.activity_changed\` frames: what each agent is doing now, the line in Agent.activity.
+They are ephemeral (\`durability: "ephemeral"\`): sent only live, never replayed, not in GET /v1/runs/{runId}/lifecycle or /v1/events, and their SSE frames carry no \`id:\`, so they never move the Last-Event-ID cursor.
+Their envelope \`seq\` is the last durable seq at the time (not a cursor), \`entitySeq\` is 0 and \`id\` is unique per frame; the latest frame per agent wins.
+Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
+Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.`;
 
 export const STREAM_DOC = `SSE. Each event frame: \`id: <seq>\`, \`event: <type>\`, \`data: <envelope JSON>\`. Resume by sending \`Last-Event-ID: <seq>\`.
 If that seq was compacted away, or this client's buffer overflowed (slow reader), the server sends \`event: stream.reset\` with {snapshotSeq, reason},
 then \`snapshot.*\` frames ending with \`snapshot.end\`, then live events from snapshotSeq+1. Handle both reasons the same way: drop local state, apply the snapshot.
 A \`: heartbeat\` comment every 15s; treat ~45s of silence as a dead socket. There is no global stream: subscribe to \`daemon\` and open a run stream on drill-in.
 The SSE \`event:\` field is the frame type: the envelope's dotted \`type\` for events, else \`stream.reset\` or \`snapshot.*\`.
-Run scopes accept \`?feed=lifecycle\`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot.
+Run scopes accept \`?feed=lifecycle\`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot, and \`?activity=1\`: live, ephemeral agent.activity_changed frames (at most one per agent per second).
 Timestamps (ts, decidedAt, expiresAt): ${TIMESTAMP_DOC}.`;
 
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
 	...LegacyEventData,
 	"agent.status_changed": z.looseObject({ agentId: z.string(), status: AgentStatus }),
+	"agent.activity_changed": z.looseObject({ agentId: z.string(), status: AgentStatus, activity: AgentActivity.nullable() }).describe("Ephemeral, only on run streams with ?activity=1: the agent's new Agent.activity. The envelope text is the same line"),
 	"approval.requested": z.looseObject({
 		approvalId: ApprovalId,
 		kind: ApprovalKind,
@@ -183,7 +200,7 @@ export const contract = {
 			.output(z.array(HarnessEvent)),
 		stream: oc
 			.route({ method: "GET", path: "/v1/streams/{scope}/events", inputStructure: "detailed", description: STREAM_DOC })
-			.input(z.object({ params: z.object({ scope: Scope }), query: z.object({ feed: z.enum(["lifecycle"]).optional().describe("Run scopes: lifecycle events only") }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
+			.input(z.object({ params: z.object({ scope: Scope }), query: z.object({ feed: z.enum(["lifecycle"]).optional().describe("Run scopes: lifecycle events only"), activity: z.enum(["0", "1"]).optional().describe("Run scopes: 1 adds live, ephemeral agent.activity_changed frames (at most one per agent per second)") }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
 			.output(eventIterator(HarnessEvent)),
 	},
 	approvals: {

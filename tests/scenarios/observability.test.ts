@@ -1,7 +1,12 @@
 // ADR-017 scenarios: observability from inside and outside the VM: stuck detection via heartbeats,
 // explicit truncation of oversized results, and in-VM `events --follow` resume by seq.
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { join } from "path";
 import { world, newRun, spawnRoot, waitAll, type World } from "./harness";
+import { addClient, loadClients } from "../../src/api/clients";
+import { rivetSource } from "../../src/api/rivet-source";
+import { harnessApp } from "../../src/api/server";
+import { harnessState } from "../../src/api/state";
 
 let w: World;
 beforeAll(async () => { w = await world("observe", { CAPCOMD_STUCK_AFTER_MS: "1500" }); }, 120_000);
@@ -79,4 +84,42 @@ capcomd result --summary "child=$id last=$last"
   const last = Number(String(aw.agents[0].result.summary).match(/last=(\d+)/)?.[1]);
   for (const e of resumed) expect(e.seq).toBeGreaterThan(last);
   expect(resumed.some((e) => e.type === "AGENT_DONE")).toBe(true);
+}, 120_000);
+
+test("activity line: the daemon records what an agent does from the capcomd ops it calls; harness.v1 shows it live, then in past tense", async () => {
+  const run = await newRun(w);
+  const child = w.script("slowchild", `sleep 4; capcomd result --summary "c" >/dev/null`);
+  const planner = w.script("spawner", `
+set -e
+id=$(capcomd spawn --profile worker --task slow --key slow --children.maxChildren=0 --contract "$($S/json script='${child}')" | $S/jget agentId)
+capcomd await "$id" --timeout-ms 60000 >/dev/null
+capcomd result --summary "ok"
+`);
+  const root = await spawnRoot(w, run, "planner", planner);
+  const clients = join(w.dir, "harness-clients.json");
+  const { token } = addClient("activity", ["read"], clients);
+  const app = harnessApp({ source: rivetSource(), clients: () => loadClients(clients), pollMs: 100, state: harnessState(null) });
+  const res = await app.request(`/v1/streams/${run}/events?feed=lifecycle&activity=1`, { headers: { authorization: `Bearer ${token}` } });
+  expect(res.status).toBe(200);
+  const r = res.body!.getReader(); const dec = new TextDecoder(); let t = ""; const end = Date.now() + 20_000;
+  let pending: ReturnType<typeof r.read> | null = null;
+  while (Date.now() < end && !/"text":"Waiting for sub-agents"/.test(t)) {
+    pending ??= r.read();
+    const x = await Promise.race([pending, Bun.sleep(500).then(() => null)]);
+    if (!x) continue;
+    pending = null;
+    if (x.value) t += dec.decode(x.value);
+    if (x.done) break;
+  }
+  r.cancel().catch(() => {});
+  if (!t.includes("Waiting for sub-agents")) console.log(t);
+  const frame = t.split("\n\n").find((f) => f.includes("event: agent.activity_changed") && f.includes("Waiting for sub-agents"));
+  expect(frame).toBeDefined();
+  expect(frame).not.toMatch(/^id: /m);
+  expect(JSON.parse(frame!.slice(frame!.indexOf("data: ") + 6))).toMatchObject({ durability: "ephemeral", agentId: root, data: { status: "running", activity: { kind: "wait" } } });
+  const aw = await waitAll(w, run, [root]);
+  expect(aw.agents[0].status).toBe("done");
+  const agents = (await rivetSource().agents(run))!;
+  // Its last step was `capcomd result`; once done, the line is in past tense.
+  expect(agents.find((a) => a.id === root)!.activity).toMatchObject({ kind: "report", text: "Reported back" });
 }, 120_000);

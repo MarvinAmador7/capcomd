@@ -14,6 +14,7 @@ import { killpoint } from "../utils/killpoint";
 import { startDriver } from "../primitives/drivers";
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
+import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
@@ -86,6 +87,8 @@ function rowToAgent(r: any) {
     notice: r.notice ? (JSON.parse(r.notice as string) as AgentNotice) : null,
     /** ADR-019 §4: when it was last given more budget (0: never). */
     grantedAt: Number(r.granted_at ?? 0),
+    /** What it is doing now, as the daemon classified its events (src/agents/activity.ts); not an event, kept on the row. */
+    activity: r.activity ? (JSON.parse(r.activity as string) as StoredActivity) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -170,7 +173,7 @@ async function resumeAgent(c: { db: RawAccess }, agentId: string, by?: string) {
   const a = rowToAgent(r[0]);
   if (a.status !== "paused") return { changed: false, agent: a };
   await c.db.transaction(async (tx: RawAccess) => {
-    await tx.execute("UPDATE agents_v2 SET status = 'running', epoch = ?, paused_until = NULL, result = NULL, heartbeat_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'paused'",
+    await tx.execute("UPDATE agents_v2 SET status = 'running', epoch = ?, paused_until = NULL, result = NULL, activity = NULL, heartbeat_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'paused'",
       a.epoch + 1, Date.now(), Date.now(), agentId);
     await addEvent(tx, "AGENT_RESUMED", agentId, { epoch: a.epoch + 1, by: by ?? null }, `resume-${agentId}-e${a.epoch + 1}`);
   }, { name: "scopeResume" });
@@ -211,6 +214,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "checkpoint", "TEXT");
       await addColumn(database, "agents_v2", "notice", "TEXT");
       await addColumn(database, "agents_v2", "granted_at", "INTEGER");
+      await addColumn(database, "agents_v2", "activity", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -225,7 +229,8 @@ export const scopeActor = actor({
     },
   }),
 
-  actions: traceActions("scope", {
+  actions: {
+  ...traceActions("scope", {
     async init(c, params: { runId: string; budget: Budget; label?: string; goal?: string; paramsHash: string }) {
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (have.length) {
@@ -883,4 +888,17 @@ export const scopeActor = actor({
       return rows.map((r: any) => ({ seq: Number(r.seq), at: Number(r.at), type: r.type as string, agentId: (r.agent_id as string | null) ?? null, data: JSON.parse(r.data) }));
     },
   }),
+
+  /**
+   * What a working agent is doing now (harness.v1 Agent.activity), written by its runner at most once a second. Kept on
+   * the agent row, not in the event log (it is not a state change), and only while the agent runs. Not traced: it would
+   * add a span a second per agent to the run's trace.
+   */
+  async setActivity(c, params: { agentId: string; activity: StoredActivity | null }) {
+    const a = params.activity;
+    const v = a && (ACTIVITY_KINDS as readonly string[]).includes(a.kind) ? JSON.stringify({ kind: a.kind, n: Math.max(1, Math.min(9999, Math.floor(Number(a.n) || 1))), at: Number(a.at) || Date.now() }) : null;
+    await c.db.execute("UPDATE agents_v2 SET activity = ? WHERE agent_id = ? AND status IN ('pending','running')", v, params.agentId);
+    return { ok: true };
+  },
+  },
 });

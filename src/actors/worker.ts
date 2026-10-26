@@ -20,6 +20,7 @@ import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { AGENT_VM_TTL_SECONDS, runAgent, stoppedAt } from "../agents/runner";
+import { activityReporter } from "../agents/activity";
 import { heartbeatEveryMs } from "../subagents/results";
 import { adapterFor } from "../agents/adapters";
 import { resolveEnvSnapshot } from "../env/resolve";
@@ -468,6 +469,8 @@ export const workerActor = actor({
         const scope = workerId.startsWith("agt-") ? (c as any).client().scope.getOrCreate([runId]) : null;
         const beatEvery = heartbeatEveryMs();
         let beatAt = 0;
+        // What it is doing now (harness.v1 Agent.activity): classified from its events, written at most once a second.
+        const activity = scope ? activityReporter((a) => scope.setActivity({ agentId: workerId, activity: a })) : null;
         const res = await runAgent(adapter, provider, vmId, {
           runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
           goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
@@ -483,6 +486,7 @@ export const workerActor = actor({
             scope.heartbeat({ agentId: workerId }).catch(() => {});
           },
           onNotice: (n) => { scope?.notice({ agentId: workerId, notice: n }).catch(() => {}); },
+          ...(activity ? { onEvent: activity.event } : {}),
           ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string }[] } } : {}),
           // Agents that may spawn already have their raw stream tailed into the log by the spool pump (driver.ts).
           ...(scope && !params.subagents ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
@@ -495,7 +499,7 @@ export const workerActor = actor({
             const a = await (c as any).client().scope.getOrCreate([runId]).getAgent({ agentId: workerId }).catch(() => null);
             return a?.status === "cancelled";
           },
-        });
+        }).finally(() => activity?.stop());
         sha = res.sha;
         costUsd = res.costUsd;
         turns = res.turns;
