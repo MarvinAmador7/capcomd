@@ -7,6 +7,7 @@ import { AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 import { ACTIVITY_KINDS } from "../agents/activity";
+import { AgentWorkspace } from "./workspace";
 
 export const ApprovalId = z.string().regex(/^apr-[A-Za-z0-9]+$/).describe("Stable approval id, carried on approval events; decide with it directly");
 export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom"]);
@@ -63,6 +64,7 @@ export const Agent = z.object({
 	task: UntrustedText.nullable().describe("Task text, inline when ≤ 64 KB; null when over (see taskAttachment)"),
 	taskAttachment: AttachmentRef.nullable(),
 	result: AgentResult.nullable(),
+	workspace: AgentWorkspace.nullable(),
 	updatedAt: Timestamp.nullable(),
 });
 /** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */

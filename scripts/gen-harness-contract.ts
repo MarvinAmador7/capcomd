@@ -5,6 +5,7 @@ import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { z } from "zod";
 import { ACTIVITY_DOC, ApiError, contract, ERROR_STATUSES, EventData, LIFECYCLE_DOC, StreamFrames, STREAM_DOC } from "../src/api/contract";
 import { HarnessEvent, TIMESTAMP_DOC, TIMESTAMP_PATTERN } from "../src/api/envelope";
+import { AgentWorkspace, WORKSPACE_DOC } from "../src/api/workspace";
 
 const spec = await new OpenAPIGenerator({ schemaConverters: [new ZodToJsonSchemaConverter()] }).generate(contract, {
 	info: { title: "capcomd harness API", version: "harness.v1" },
@@ -107,6 +108,7 @@ hc += "Today's upper-case types map to dotted names (`AGENT_SPAWNED` → `agent.
 hc += `\`\`\`json\n${JSON.stringify(nullFold(z.toJSONSchema(HarnessEvent)), null, 2)}\n\`\`\`\n`;
 hc += `\n## Agent activity\n\n${ACTIVITY_DOC}\n`;
 hc += `\n## Event types\n\n${Object.keys(EventData).map((t) => `- [\`${t}\`](events.md#${t.replace(/\./g, "")})`).join("\n")}\n`;
+hc += `\n## Agent workspace\n\n${WORKSPACE_DOC}\n\n\`\`\`json\n${JSON.stringify(nullFold(z.toJSONSchema(AgentWorkspace)), null, 2)}\n\`\`\`\n`;
 
 const out: [string, string][] = [["openapi/capcomd.json", openapi], ["docs/events.md", md], ["docs/harness-contract.md", hc]];
 if (process.argv.includes("--check")) {

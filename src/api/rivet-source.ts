@@ -12,6 +12,9 @@ import { agentActivity, describeEvent } from "./describe";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { approvalIdFor, parseApprovalId, projectIdOf, type HarnessSource, type PendingApproval } from "./source";
 import { startDetachedRun } from "./create-run";
+import { workspaceOf } from "./workspace";
+import { RUN_REPO_KV } from "../merge/run-config";
+
 const lower = (p: string | null) => (p ? p.toLowerCase() : null);
 const cap = (t: string) => (Buffer.byteLength(t) <= INLINE_TEXT_MAX_BYTES ? t : Buffer.from(t).subarray(0, INLINE_TEXT_MAX_BYTES).toString("utf8").replace(/\uFFFD+$/, ""));
 const scope = (runId: string) => client().scope.getOrCreate([runId]);
@@ -48,12 +51,17 @@ export function rivetSource(): HarnessSource {
 		agents: async (runId) => {
 			if (!runsIndex().some((r) => r.runId === runId) && !(await scope(runId).getScope({}).catch(() => null))) return null;
 			const all = (await scope(runId).listAgents({})) as any[];
+			// Agents spawned before the workspace was recorded: the run's repository, where every agent works today.
+			const runRepo = all.some((a) => !a.workspace)
+				? ((await scope(runId).kvGet({ k: RUN_REPO_KV }).catch(() => null))?.value as Record<string, string> | undefined)?.CAPCOMD_REPO ?? runsIndex().find((r) => r.runId === runId)?.repo ?? null
+				: null;
 			return all.map((a) => {
 				const inl = inlineOrAttach(redactShapes(String(a.task ?? "")));
 				return {
 					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile), status: a.status,
 					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: agentActivity(a.activity, a.status),
-					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
+					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
+					updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
 				};
 			});
 		},

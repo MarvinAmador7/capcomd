@@ -32,6 +32,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   scope: `capcomd clients add <name> --scopes read,steer,approve`.
 - `capcomd run --detach -- "<goal>"` with a goal that starts with `-` now runs; the background run used to read the
   goal as a flag and fail.
+- harness API: each agent now says where it works. `GET /v1/runs/{runId}/agents`, the `snapshot.agents` stream frame
+  and `agent.spawned` events carry `workspace: {repo, path, label}` (null when the run has no repository), so a client
+  can show a folder chip per agent and a run's distinct folders. Show `label` as is: the repository's name (e.g.
+  `matchkey`), or the sub-folder when an agent is scoped to one. Today every agent works in its run's repository, so
+  `path` is null; credentials in a repository URL are left out.
 
 ## 0.6.0 (2026-10-25)
 
