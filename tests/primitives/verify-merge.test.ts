@@ -88,6 +88,8 @@ test("verify + merge --require: gate, exact-commit check, idempotency, events", 
   const m = await cj(["merge", runId, "--ref", a, "--require", va.j.id, "--key", "m-a"]);
   expect(m.code).toBe(0);
   expect(m.j).toMatchObject({ kind: "merge", state: "merged", target: "trunk", expectSha: tipA, result: { merged: true } });
+  // The target's commit before the merge (GET /v1/runs/{runId}/files diffs fast-forwarded work from it).
+  expect(m.j.result.targetBefore).toMatch(/^[0-9a-f]{40}$/);
   const again = await cj(["merge", runId, "--ref", a, "--require", va.j.id, "--key", "m-a"]);
   expect(again.j).toMatchObject({ id: m.j.id, state: "merged" });
   const ls = Bun.spawnSync(["git", "-C", r.bare, "ls-tree", "-r", "--name-only", "trunk"]).stdout.toString();

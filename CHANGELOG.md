@@ -37,6 +37,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   can show a folder chip per agent and a run's distinct folders. Show `label` as is: the repository's name (e.g.
   `matchkey`), or the sub-folder when an agent is scoped to one. Today every agent works in its run's repository, so
   `path` is null; credentials in a repository URL are left out.
+- The harness API has a new read route, `GET /v1/runs/{runId}/files`: the files a run's agents changed, each with
+  lines added and removed (null for binary files), its status (added, modified, deleted, renamed…) and the agent
+  whose work changed it. Each agent's work is its pushed commit, or its latest checkpoint while it still works,
+  compared with where its branch left the run's target branch. Pass `agentId` for one agent and `limit` (at most
+  500) to cap the rows; `truncated` says rows were left out. Refetch when the run stream shows a checkpoint, an
+  agent finishing or pausing, or a merge with a seq above the answer's `asOf`. Merges now also record the target's
+  commit before the merge (`targetBefore` on `merge.succeeded`).
 
 ## 0.6.0 (2026-10-25)
 

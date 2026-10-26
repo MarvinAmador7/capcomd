@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { client, generateRunId } from "../core/relay";
 import { redactShapes } from "../agents/redact";
-import { recentRuns, decideMerge } from "../primitives/ops";
+import { recentRuns, decideMerge, runTarget } from "../primitives/ops";
+import { mergeConfigFor } from "../merge/run-config";
 import { tracePath } from "../utils/tracing-simple";
 import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
@@ -126,6 +127,12 @@ export function rivetSource(): HarnessSource {
 			const { repo } = await startDetachedRun({ ...input, runId });
 			// What GET /v1/runs/{runId} shows once the run's process has registered it, but for the state.
 			return { id: runId, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, repo, createdAt: isoTs(Date.now()) };
+		},
+		// The repository verify and merge use for this run (its recorded settings, else the daemon's), and its target.
+		repo: async (runId) => {
+			const cfg = await mergeConfigFor(runId).catch(() => null);
+			if (!cfg) return null;
+			return { remote: cfg.remote, target: (await runTarget(runId).catch(() => undefined)) ?? cfg.target, workdir: cfg.workdir };
 		},
 	};
 }

@@ -99,6 +99,39 @@ export const Span = z.looseObject({
 	status: z.number().int(),
 	attributes: z.record(z.string(), z.unknown()),
 });
+/** GET /v1/runs/{runId}/files: one row per (agent, file) the run's work changes. */
+export const FILES_MAX = 500;
+export const FILES_AGENTS_MAX = 100;
+export const FileStatus = z.enum(["added", "modified", "deleted", "renamed", "copied", "typechange", "unknown"]);
+export const FileChange = z.object({
+	path: UntrustedText,
+	oldPath: UntrustedText.nullable(),
+	status: FileStatus,
+	added: z.number().int().nonnegative().nullable().describe("Lines added; null for a binary file"),
+	removed: z.number().int().nonnegative().nullable().describe("Lines removed; null for a binary file"),
+	agentId: z.string().describe("The agent whose work changes the file"),
+});
+export const FileSource = z.object({
+	agentId: z.string(),
+	from: z.enum(["commit", "checkpoint"]).describe("commit: the commit it pushed (done, failed or paused); checkpoint: its latest checkpoint while it works"),
+	sha: z.string().describe("The commit compared"),
+	base: z.string().nullable().describe("Where its branch left the target (the diff's base); null when unknown"),
+	files: z.number().int().nonnegative().nullable().describe("Files it changes; null when they could not be read (see error)"),
+	error: z.string().nullable().describe("Why its files are missing (daemon-written, trusted)"),
+});
+export const RunFiles = z.object({
+	runId: z.string(),
+	asOf: z.number().int().nonnegative().describe("Seq of the run's last event this answer reflects (same seq as the run stream)"),
+	computedAt: Timestamp,
+	target: z.string().nullable().describe("Target branch the work is compared with; null when the run has no repository"),
+	files: z.array(FileChange).describe("Sorted by path, then agentId"),
+	total: z.number().int().nonnegative().describe("Rows before the cut to `limit`"),
+	truncated: z.boolean().describe("Rows were left out: more than `limit`, or more agents with work than the server diffs"),
+	sources: z.array(FileSource).describe("Each agent with work: what was compared, or why it could not be"),
+});
+export const FILES_DOC = `Files the run's agents changed, with lines added and removed: \`git diff --numstat\` of each agent's latest work (the commit it pushed, else its latest checkpoint) against where its branch left the run's target branch. One row per (agent, file), sorted by path; \`added\`/\`removed\` are null for binary files. Paths are agent-written (x-untrusted).
+\`agentId\` limits it to one agent; \`limit\` (default and max ${FILES_MAX}) caps the rows, and only the ${FILES_AGENTS_MAX} agents with the newest work are diffed: \`truncated\` says rows were left out, \`total\` counts the rows before the cut.
+Refetch when the run stream shows agent.checkpointed, agent.done, agent.failed, agent.paused or merge.succeeded with a seq above \`asOf\`. Work the daemon cannot read (no repository, a deleted branch) is a \`sources[].error\`, not an HTTP error.`;
 export const Skill = z.object({
 	name: ProfileName,
 	description: z.string(),
@@ -203,6 +236,8 @@ export const contract = {
 			.input(z.object({ runId: z.string(), after: z.coerce.number().int().nonnegative().optional() })).output(z.array(Message)),
 		lifecycle: oc.route({ method: "GET", path: "/v1/runs/{runId}/lifecycle", description: LIFECYCLE_DOC })
 			.input(z.object({ runId: z.string(), after: z.coerce.number().int().nonnegative().optional() })).output(z.array(HarnessEvent)),
+		files: oc.route({ method: "GET", path: "/v1/runs/{runId}/files", description: FILES_DOC })
+			.input(z.object({ runId: z.string(), agentId: z.string().optional(), limit: z.coerce.number().int().positive().max(FILES_MAX).optional() })).output(RunFiles),
 	},
 	agents: {
 		tree: oc.route({ method: "GET", path: "/v1/runs/{runId}/agents" }).input(z.object({ runId: z.string() })).output(z.array(Agent)),

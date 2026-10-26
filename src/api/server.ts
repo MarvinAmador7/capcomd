@@ -11,6 +11,7 @@ import { CreateRunError, envelopes, messagesOf, type CreateRunInput, type Harnes
 import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
 import { harnessState, type HarnessState } from "./state";
+import { runFiles } from "./run-files";
 
 export const HEARTBEAT_MS = 15_000;
 const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "already_decided", 422: "invalid" };
@@ -47,6 +48,13 @@ export function harnessApp(o: ServerOptions) {
 			lifecycle: os.runs.lifecycle.handler(async ({ input }) => {
 				if ((await src.agents(input.runId)) === null) throw nf(input.runId);
 				return lifecycleEvents(input.runId, await src.events(input.runId, 0)).filter((e) => e.seq > (input.after ?? 0));
+			}),
+			files: os.runs.files.handler(async ({ input }) => {
+				const agents = await src.agents(input.runId);
+				if (agents === null) throw nf(input.runId);
+				if (input.agentId && !agents.some((a) => a.id === input.agentId)) throw nf(input.agentId);
+				const [events, repo] = await Promise.all([src.events(input.runId, 0), src.repo(input.runId)]);
+				return runFiles({ runId: input.runId, events, repo, ...(input.agentId ? { agentId: input.agentId } : {}), ...(input.limit ? { limit: input.limit } : {}) });
 			}),
 		},
 		agents: {
