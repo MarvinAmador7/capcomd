@@ -84,6 +84,8 @@ apps/
 packages/
   agent-thread/ - agent CLI streams (Claude stream-json, Codex --json) → harness.v1 thread items with a sanitized
                   blocks/1 tree; pure functions (no imports from src/), own tsconfig, tests and golden fixtures
+  bot-avatar/   - (proposal) deterministic pixel bot avatars: agent id + role + size → SVG, from a parts catalog;
+                  pure, no dependencies; catalog.json and golden bots for the Swift renderer
 tests/          - unit, scenario, chaos, agent and merge suites
 scripts/        - live e2e scripts (boxd + GitHub) and helpers
 docs/           - design documents and ADRs
@@ -104,6 +106,8 @@ and the package), and `bun run typecheck` / `test:fast` cover it. Its golden fil
 (`packages/agent-thread/fixtures/golden/*.items.json`, decoded by the Swift renderer too) are generated from the fixture
 sessions next to them; after an intended change to the thread output, refresh them with
 `bun packages/agent-thread/scripts/golden.ts` (the tests fail while they are stale). Keep new fixtures small.
+`packages/bot-avatar` works the same way: its `fixtures/catalog.json` and `fixtures/golden/bots.json` refresh with
+`bun packages/bot-avatar/scripts/golden.ts`; a change to any golden bot means existing agents get a new face.
 
 The engine-backed tests run on macOS and Linux (Linux reads `/proc`; macOS uses `ps`/`lsof`). On a Mac, run long
 suites under `caffeinate -i`: a sleeping machine times tests out and can leave an orphaned `rivet-engine`. Run

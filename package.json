@@ -44,12 +44,12 @@
   },
   "scripts": {
     "setup": "bun install && cd apps/canvas && bun install && cd ../tui && bun install",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p apps/canvas && tsc --noEmit -p apps/tui && tsc --noEmit -p packages/agent-thread",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p apps/canvas && tsc --noEmit -p apps/tui && tsc --noEmit -p packages/agent-thread && tsc --noEmit -p packages/bot-avatar",
     "test": "bun test",
     "test:chaos": "bun test tests/chaos/*.test.ts",
     "chaos:fast": "bun tests/chaos/fast.ts",
     "chaos:slow": "bun test tests/chaos/subprocess.test.ts",
-    "test:fast": "bun test packages/agent-thread tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers",
+    "test:fast": "bun test packages/agent-thread packages/bot-avatar tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers",
     "test:scenarios": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts"
   },
   "devDependencies": {
