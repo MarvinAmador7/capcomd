@@ -113,7 +113,8 @@
         "isError": false,
         "args": "bash -lc 'rg email src'",
         "output": null,
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": null,
       "truncated": null,
@@ -138,7 +139,8 @@
         "isError": false,
         "args": "bash -lc 'rg email src'",
         "output": "src/join.ts:12: email\n",
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": null,
       "truncated": null,
@@ -184,7 +186,8 @@
             "path": "src/norm.ts",
             "mismatch": false
           }
-        ]
+        ],
+        "diff": null
       },
       "error": null,
       "truncated": null,
@@ -277,7 +280,8 @@
         "isError": false,
         "args": "bash -lc 'bun test'",
         "output": null,
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": null,
       "truncated": null,
@@ -302,7 +306,8 @@
         "isError": true,
         "args": "bash -lc 'bun test'",
         "output": "1 fail\njoin.test.ts: expected 3, received 2\n",
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": {
         "message": "1 fail\njoin.test.ts: expected 3, received 2\n",
@@ -330,7 +335,8 @@
         "isError": false,
         "args": "{\"profile\":\"worker\",\"task\":\"Backfill\"}",
         "output": null,
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": null,
       "truncated": null,
@@ -355,7 +361,8 @@
         "isError": false,
         "args": "{\"profile\":\"worker\",\"task\":\"Backfill\"}",
         "output": "{\"agentId\":\"agt-77\"}",
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": null,
       "truncated": null,
@@ -380,7 +387,8 @@
         "isError": false,
         "args": "sqlite lower() collation",
         "output": null,
-        "files": []
+        "files": [],
+        "diff": null
       },
       "error": null,
       "truncated": null,

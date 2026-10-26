@@ -169,7 +169,7 @@ An agent's thread: typed items with stable ids, each message parsed once by the 
 `after` is a run-wide write cursor (`seq`): items created *or changed* since come back, in write order, so a tool item is seen `open` at the call and again `done` (isError, durationMs when the CLI reports one) at its result. Sort by `order`; the highest `rev` of an id wins.
 Kinds: say, thinking (`redacted` when the CLI withheld it), tool (`tool.summary` is one daemon-built line), error, result (omitted when it only repeats the last say), plan (the agent's todo list as a task list), handoff (a child that finished: its summary, artifacts as links and media), other (an event the daemon doesn't know, as one plain line). Render an unknown kind as a plain line of `text`.
 Every string in an item is agent-written plain text (x-untrusted): never HTML, never a link followed or media loaded without the user's click. Links carry the daemon's `target` (web: show `host`, and the full URL when `mismatch`; file, artifact, agent, run; none: plain text). Media: `remote` never loads by itself; `attachment` and `inline` come from GET /v1/runs/{runId}/attachments/{id}/content, `workspace` from GET /v1/runs/{runId}/agents/{agentId}/workspace?path=.
-Caps (block boundaries only): 65536 bytes of blocks and of `text` per item (whole trailing blocks dropped, `truncated` says how many); code blocks keep their first 400 lines (`truncatedLines`); tables 50 rows × 8 columns (`truncatedRows`/`truncatedCols`).
+Caps (block boundaries only): 65536 bytes of blocks and of `text` per item (whole trailing blocks dropped, `truncated` says how many); code blocks keep their first 400 lines (`truncatedLines`); tables 50 rows × 8 columns (`truncatedRows`/`truncatedCols`); a tool's `diff` its first 40 lines of 240 characters at most (`truncatedLines`; `added`/`removed` count the whole change).
 Reserved for token streaming (not emitted yet): a say or thinking item may be `open` with its last block `{t:"open", text}` (the unfinished block as plain text) and `rev` rising as it grows. Live updates: `?thread=1` on a run stream (agent.thread_item_changed frames).
 
 ### Live items
@@ -384,6 +384,79 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
             ]
           },
           "description": "Files the call wrote or changed, as file links"
+        },
+        "diff": {
+          "description": "A file-editing call's change (Claude Code Edit, MultiEdit, Write, NotebookEdit insert): from the call's input while it runs, replaced by the result's own patch (with context) when it returns. isError: the change was proposed but not applied",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-untrusted": true,
+              "description": "Agent-written text: the file, relative to the workspace root, '/'-separated, normalized like file links (never ..); null when it is outside the workspace. Plain text: never markdown, HTML, or a link to follow"
+            },
+            "added": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Lines added by the whole change (not only the lines shown)"
+            },
+            "removed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Lines removed by the whole change (not only the lines shown)"
+            },
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "enum": [
+                      " ",
+                      "+",
+                      "-",
+                      "@"
+                    ],
+                    "description": "\" \": context, \"+\": added, \"-\": removed, \"@\": a gap between two hunks (lines in between not shown; `text` is the next hunk's `@@ -a,b +c,d @@` header when the CLI reported line numbers, else empty). Render an unknown op as context"
+                  },
+                  "text": {
+                    "type": "string",
+                    "x-untrusted": true,
+                    "description": "Agent-written text: the line, without its newline, at most 240 characters (an ellipsis when cut); indentation kept. Plain text: never markdown, HTML, or a link to follow"
+                  }
+                },
+                "required": [
+                  "op",
+                  "text"
+                ]
+              },
+              "description": "The change's first lines, at most 40 (separators included). Context lines are only lines the CLI's event contained: no file is read"
+            },
+            "truncatedLines": {
+              "description": "Context, added and removed lines not shown",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "path",
+            "added",
+            "removed",
+            "lines",
+            "truncatedLines"
+          ]
         }
       },
       "required": [
@@ -394,7 +467,8 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
         "isError",
         "args",
         "output",
-        "files"
+        "files",
+        "diff"
       ]
     },
     "error": {

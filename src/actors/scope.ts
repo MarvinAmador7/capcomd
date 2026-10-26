@@ -671,7 +671,12 @@ export const scopeActor = actor({
       const rows = (params.agentId
         ? await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?", params.agentId, params.after ?? 0, params.limit ?? 200)
         : await c.db.execute("SELECT * FROM agent_items WHERE seq > ? ORDER BY seq LIMIT ?", params.after ?? 0, params.limit ?? 200)) as any[];
-      return rows.map((r) => ({ ...JSON.parse(r.body as string), seq: Number(r.seq), order: Number(r.ord), agentId: r.agent_id as string }));
+      return rows.map((r) => {
+        const it = JSON.parse(r.body as string);
+        // tool.diff came later: a row written before it reads as no diff.
+        if (it.tool && !("diff" in it.tool)) it.tool.diff = null;
+        return { ...it, seq: Number(r.seq), order: Number(r.ord), agentId: r.agent_id as string };
+      });
     },
     /** The run's newest thread write (a live-frame cursor). */
     async itemsHead(c) {
