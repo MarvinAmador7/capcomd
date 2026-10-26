@@ -6,6 +6,16 @@ import CapcomdStore
 struct PanelView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var listContent: CGFloat = 0
+  @State private var footerHeight: CGFloat = 0
+
+  /// The visible screen's content height, clamped to Theme.Panel and the screen.
+  private var panelHeight: CGFloat {
+    let ideal = model.path.isEmpty ? model.listHeight : model.routeHeight
+    let screen = (NSScreen.main?.visibleFrame.height ?? 900) - Theme.Panel.screenMargin
+    guard ideal > 0 else { return min(Theme.Panel.initialHeight, screen) }
+    return min(max(ideal, Theme.Panel.minHeight), Theme.Panel.maxHeight, screen)
+  }
 
   var body: some View {
     @Bindable var model = model
@@ -33,9 +43,12 @@ struct PanelView: View {
           ForEach(finished) { p in FinishedRow(project: p).transition(.opacity) }
         }
         .padding(Theme.Card.listPadding)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listContent = $0; model.listHeight = listContent + footerHeight }
         .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map { "\($0.id)\($0.isActive)" })
       }
-      .safeAreaInset(edge: .bottom) { footer }
+      .safeAreaInset(edge: .bottom) {
+        footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0; model.listHeight = listContent + footerHeight }
+      }
       // macOS keeps the root under a pushed view, and pushed views are clear (a material would only blur the list
       // behind it), so the list steps out entirely while anything is pushed.
       .opacity(model.path.isEmpty ? 1 : 0)
@@ -48,7 +61,10 @@ struct PanelView: View {
         }
       }
     }
-    .frame(width: Theme.panelWidth, height: 520)
+    .frame(width: Theme.panelWidth, height: panelHeight)
+    .transaction(value: panelHeight) { $0.animation = nil }   // layout changes snap (SPEC §7); only content fades
+    // MenuBarExtra(.window) sizes its window once; resize it ourselves, top edge pinned under the menu bar.
+    .background(PanelWindowSizer(height: panelHeight))
     .background(.ultraThinMaterial)   // HUD-style vibrancy; MenuBarExtra(.window) supplies the 16 pt rounded window
     .animation(Theme.Motion.push(reduceMotion), value: model.path)   // keyboard back (⌘[) runs in a no-animation transaction
     }
@@ -171,6 +187,26 @@ struct FinishedRow: View {
       if let full = f.string(from: Double(ms) / 1000) { s = s.replacingOccurrences(of: shortDuration(ms: ms), with: full) }
     }
     return s
+  }
+}
+#endif
+
+#if canImport(SwiftUI) && os(macOS)
+/// Keeps the MenuBarExtra window as tall as the panel's content: the window keeps its top edge (under the status
+/// item) and grows or shrinks downward, without animation (SPEC §7: layout changes snap).
+struct PanelWindowSizer: NSViewRepresentable {
+  let height: CGFloat
+  func makeNSView(context: Context) -> NSView { NSView() }
+  func updateNSView(_ view: NSView, context: Context) {
+    let h = height
+    DispatchQueue.main.async {
+      guard let window = view.window else { return }
+      let content = window.contentRect(forFrameRect: window.frame)
+      guard abs(content.height - h) > 0.5 else { return }
+      var frame = window.frameRect(forContentRect: NSRect(x: content.minX, y: content.maxY - h, width: content.width, height: h))
+      frame.origin.y = window.frame.maxY - frame.height   // pin the top
+      window.setFrame(frame, display: true, animate: false)
+    }
   }
 }
 #endif

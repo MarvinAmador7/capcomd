@@ -124,6 +124,10 @@ final class AppModel {
   }
   func clearStart() { store.clearStart() }
 
+  // Panel height: each screen reports what its content needs; PanelView clamps it (Theme.Panel).
+  var listHeight: CGFloat = 0
+  var routeHeight: CGFloat = 0
+
   func open(run id: String) { store.openRun(id); path = [.run(id)] }
   func back() { if !path.isEmpty { path.removeLast() }; if path.isEmpty { store.closeRun() } }
   func decide(_ id: String, _ d: ApprovalDecision) { Task { _ = await store.decide(id, d) } }

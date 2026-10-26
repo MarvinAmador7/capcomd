@@ -10,6 +10,8 @@ struct RunDrillDownView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let runId: String
+  @State private var content: CGFloat = 0
+  @State private var footer: CGFloat = 0
 
   var body: some View {
     let steps = model.steps(runId)
@@ -25,10 +27,14 @@ struct RunDrillDownView: View {
       .transition(.opacity)
       ForEach(model.approvals(runId)) { ApprovalCard(approval: $0) }
       DetailPane(runId: runId)
-      Spacer(minLength: 0)
     }
     .padding([.top, .horizontal], Theme.Drill.padding)
-    .safeAreaInset(edge: .bottom, spacing: 0) { DrillFooter(runId: runId) }
+    // Natural height (every region has a fixed height) plus the footer: the panel sizes to it.
+    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { content = $0; model.routeHeight = content + footer }
+    .frame(maxHeight: .infinity, alignment: .top)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      DrillFooter(runId: runId).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footer = $0; model.routeHeight = content + footer }
+    }
     .navigationBarBackButtonHidden(true)
     // Refresh the REST parts on screen; a change of view or tab refreshes at once.
     .task(id: "\(runId)|\(model.drillView.rawValue)|\(model.detailTab.rawValue)") {
@@ -505,8 +511,9 @@ struct DetailPane: View {
       }
     }
     .padding(Theme.Drill.tailPadding)
-    .frame(height: Theme.Drill.paneHeight, alignment: .top)
+    .frame(height: Theme.Drill.tailHeight, alignment: .top)
     .background(RoundedRectangle(cornerRadius: Theme.Drill.tailRadius).fill(Theme.Drill.tailFill))
+    .padding(.bottom, Theme.Drill.paneHeight - Theme.Drill.tailHeight)   // .pane is 94; its .tail box is 84
   }
 
   @ViewBuilder private var files: some View {

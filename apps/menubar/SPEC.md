@@ -8,7 +8,7 @@ date: 2026-10-24
 
 A macOS menu bar app that shows capcomd runs ("projects") and lets you approve, steer, drill into runs and read agent threads. It renders data from `capcomd inspect <runId> --json --follow` and only acts through existing CLI verbs. All mockups are static 2x PNGs in `/workspace/capcomd-menubar/`; the HTML generators (`gen*.py`) are the source of truth for exact values.
 
-**Shell.** `MenuBarExtra` (`.window` style) hosts the 380 pt panel. Thread "Open in window" and long readers use a detached `NSPanel` (620 pt wide, resizable, non-activating until focused).
+**Shell.** `MenuBarExtra` (`.window` style) hosts the 380 pt panel. The panel is as tall as the screen it shows: the list, a run view or a thread sizes the window to its content (top edge pinned under the menu bar), between 200 pt and 640 pt and never taller than the screen's visible frame minus 48 pt; past that, the content scrolls. The approved panels measure 525.5–566 pt (list), 285–429.5 pt (run view) and 614.5 pt (thread). Thread "Open in window" and long readers use a detached `NSPanel` (620 pt wide, resizable, non-activating until focused).
 
 # 2. Principles
 
@@ -178,7 +178,7 @@ Skill: `book.closed`. Add: `plus`. Send: `arrow.up`. Stop: `stop.fill`. Collapse
 | card fill | `rgba(255,255,255,.06)`; field `.07`, focused `.10` |
 | hairline | `rgba(255,255,255,.08–.14)`, 0.5 pt |
 
-**Sizes & spacing.** Panel 380 pt wide, radius 16; content inset 16 (project list 10); cards radius 11, padding 12 (bottom 6), gap 8, no border unless tinted; card hairline above the tree bleeds 4 past the content; tree row 26; activity row 18; Activity region 172 (collapsed strip 30, cells 24, dividers 1×12); input radius 10, send 22–24; thread window 620; code radius 8; chips radius 5–6. 4 pt grid throughout.
+**Sizes & spacing.** Panel 380 pt wide, 200–640 pt tall (follows content), radius 16; content inset 16 (project list 10); cards radius 11, padding 12 (bottom 6), gap 8, no border unless tinted; card hairline above the tree bleeds 4 past the content; tree row 26; activity row 18; Activity region 172 (collapsed strip 30, cells 24, dividers 1×12); input radius 10, send 22–24; thread window 620; code radius 8; chips radius 5–6. 4 pt grid throughout.
 
 # 7. Motion
 
