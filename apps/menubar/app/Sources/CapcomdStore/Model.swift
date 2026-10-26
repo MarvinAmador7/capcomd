@@ -36,7 +36,8 @@ public struct Agent: Sendable, Hashable, Identifiable {
   public var task: UntrustedText?
   /// Task key from `agent.spawned.key` (short task id candidate).
   public var key: String?
-  /// Repo, if capcomd ever sends one (not in contract 7b4cb74; read from `repo` or `agent.repo` when present).
+  /// Where it works: `Agent.workspace.label` (harness #46), shown verbatim as its folder chip. Older daemons: `repo` or
+  /// `agent.repo` on agent.spawned when present.
   public var repo: String?
   public var spawnedAtMs: Int
   /// When its status last changed (snapshot `updatedAt`, or the event that changed it): a finished run's end.
@@ -218,6 +219,8 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   public var suffix: String?
   public var kind: ProfileKind
   public var status: AgentStatus
+  /// Its folder (`Agent.repo`): the row's folder chip.
+  public var repo: String? = nil
   /// Daemon-written activity line (trusted plain text), if known.
   public var activity: String? = nil
   /// `taskAttachment`: the full task is stored by the daemon; only its metadata is shown.
@@ -239,8 +242,46 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   /// VoiceOver label per SPEC §8.
   public var accessibilityLabel: String {
     let state = waiting ? "waiting for approval" : status.rawValue.replacingOccurrences(of: "-", with: " ")
-    return [name + (suffix.map { " \($0)" } ?? ""), state, "level \(depth + 1)"].joined(separator: ", ")
+    return ([name + (suffix.map { " \($0)" } ?? ""), repo, state, "level \(depth + 1)"] as [String?]).compactMap { $0 }.joined(separator: ", ")
   }
+}
+
+/// One column of the outline's hairline guides (tree-card-v3 `.gd`): nothing, a line through, a tee into this row,
+/// or an elbow for a last child.
+public enum TreeGuide: Sendable, Hashable { case blank, line, tee, elbow }
+
+/// A visible row of the agent outline: its guide columns (one per level above it) and the columns for whatever sits
+/// under the row (its approval or activity line), where ancestors' lines carry on.
+public struct TreeLine: Sendable, Hashable, Identifiable {
+  public var id: String { node.id }
+  public var node: AgentNode
+  public var guides: [TreeGuide]
+  public var below: [TreeGuide]
+  public var collapsed: Bool
+}
+
+extension Array where Element == AgentNode {
+  /// The visible outline, depth first. `collapsed` hides a node's children (its row stays, with a closed chevron).
+  public func outline(collapsed: Set<String>) -> [TreeLine] {
+    var out: [TreeLine] = []
+    func walk(_ nodes: [AgentNode], _ prefix: [TreeGuide], root: Bool) {
+      for (i, n) in nodes.enumerated() {
+        let last = i == nodes.count - 1
+        let shut = collapsed.contains(n.id)
+        let own: [TreeGuide] = root ? [] : prefix + [last ? .elbow : .tee]
+        let through: [TreeGuide] = root ? [] : prefix + [last ? .blank : .line]
+        // Under an open parent, its children's column already runs down to them.
+        let below = through + (shut || n.children.isEmpty ? [] : [.line])
+        out.append(TreeLine(node: n, guides: own, below: below, collapsed: shut))
+        if !shut { walk(n.children, through, root: false) }
+      }
+    }
+    walk(self, [], root: true)
+    return out
+  }
+
+  /// Distinct folders across the outline: row chips are only worth showing when there is more than one.
+  public var folders: Set<String> { Set(flatMap { [$0.repo].compactMap { $0 } + $0.children.folders }) }
 }
 
 /// One `run.*` lifecycle event (run.started/paused/resumed/completed/failed/cancelled/deleted).

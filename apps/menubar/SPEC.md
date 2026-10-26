@@ -20,7 +20,7 @@ A macOS menu bar app that shows capcomd runs ("projects") and lets you approve, 
 - **Finished steps show no status icon.** Status icons exist only for running, failed, queued and waiting.
 - **Plain-language step text**, sentence case, past tense for done ("Read the ids/v1 schema"), progressive for now ("Writing parquet shards to R2").
 - **No gradient text, no rainbow colors.** Icon tint is secondary grey unless state demands otherwise.
-- **Profile, not role.** Agents are named by their capcomd profile.
+- **Profile, not role.** Agents are named by their capcomd profile, lowercase as capcomd sends it (`planner`, `lead`, `worker`, `critic`); the mockups' sentence case is superseded.
 
 # 3. Information model
 
@@ -49,7 +49,8 @@ Resume after reconnect with `--since-seq <last seq>`.
 | Thread text | adapter `AgentEvent {type, subtype?, tool?, text?}`; `text` truncated to 500 chars | see gap G3 |
 | Steer | `capcomd send <agt\|parent> <text>` (op `send {to, body}`) | sent bubble appears optimistically, confirmed by event |
 | Approve / deny | existing merge-approval CLI verb | button actions only |
-| Agent display name | `profile`, sentence-cased (`lead` → Lead) | duplicates get a tertiary mono suffix: last 4 chars of `agentId` |
+| Agent display name | `profile`, lowercase as sent (`lead`); none → `agent` | siblings sharing a profile get a tertiary mono suffix: their folder when each has a distinct one, else the short task id (last 4 of `key`), else the last 4 of `agentId` |
+| Agent folder | `Agent.workspace.label` (snapshot.agents, agent.spawned `data.workspace`) | the row's folder chip and the card's scope chips; shown verbatim |
 
 **Gaps — proposals, not capcomd features:**
 
@@ -85,9 +86,10 @@ Resume after reconnect with `--since-seq <last seq>`.
 
 ## 4.4 Agent tree — `tree-card-v3.png`, `tree-detail-v2.png`, `tree-alt.png`
 
-- Outline tree with hairline guides, 26 pt rows: chevron · profile icon · name · repo chip · status icon. Geometry: 16 pt per level, 12 pt chevron column, 16 pt icon with 2/6 margins.
+- Outline tree with hairline guides, 26 pt rows: chevron · profile icon · name · suffix · folder chip · status icon. Geometry: 16 pt per level, 12 pt chevron column, 16 pt icon with 2/6 margins. Guides (`.gd`, 0.5 pt white 18 %) are a line through each ancestor that has more children below, a tee into a row with later siblings and an elbow into a last child (arm 7 pt at y 13); they carry on beside a row's approval or activity line.
+- Row text 12.5 pt: white 78 %; running white medium; pending `rgba(235,235,245,.42)`. Suffix mono 10.5 at `.32`, 6 pt after the name. Folder chip (`.rc`: folder glyph + 11 pt at `.5`) right-aligned before the status column, shown only when the run's agents work in more than one folder (otherwise the card's scope chip says it) and when it isn't already the suffix. Profile glyphs are sized per symbol so each lands on the 14 pt grid (planner 12, lead 11.5, worker 9, critic 10.5, other 11 pt).
 - **Live activity:** a running agent shows one line under its row at the name column (`Agent.activity.text`, 11.5 pt, `rgba(235,235,245,.5)`, one line, tail-truncated), e.g. "Reading 4 files". A waiting agent shows its approval there instead; other states show nothing. The daemon's status sentence (`Agent.text`) is never shown.
-- Names = profile (Planner, Lead, Worker, Critic); duplicate siblings add a mono tertiary ID suffix (`d3ce`).
+- Names = profile, lowercase (`planner`, `lead`, `worker`, `critic`); duplicate siblings add a mono tertiary suffix (`d3ce`). VoiceOver: "worker d3ce, ids/v1, running, level 3".
 - Approvals bubble up: a collapsed ancestor shows the amber hand when any descendant waits.
 - Selecting a node opens the agent thread (§4.5). Lanes view (`tree-alt.png`) is not used in cards; timing lives in Trace.
 

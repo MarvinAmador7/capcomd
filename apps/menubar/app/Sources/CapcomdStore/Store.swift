@@ -107,8 +107,10 @@ public final class CapcomdStore {
       return kids.map { a in
         let children = build(a.id, depth: depth + 1)
         let w = waiting.contains(a.id)
-        return AgentNode(id: a.id, name: a.displayName, suffix: suffixes[a.id], kind: a.kind, status: a.status, activity: a.activity, depth: depth,
-                         waiting: w, descendantWaiting: children.contains { $0.waiting || $0.descendantWaiting }, children: children)
+        var node = AgentNode(id: a.id, name: a.displayName, suffix: suffixes[a.id], kind: a.kind, status: a.status, activity: a.activity, depth: depth,
+                             waiting: w, descendantWaiting: children.contains { $0.waiting || $0.descendantWaiting }, children: children)
+        node.repo = a.repo
+        return node
       }
     }
     return build("", depth: 0)
@@ -229,7 +231,7 @@ public final class CapcomdStore {
     for (i, a) in b.agents.enumerated() {
       let old = runs[a.runId]?.agents[a.id]
       var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                     task: a.task.map(UntrustedText.init), key: old?.key, repo: old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.activity?.text)
+                     task: a.task.map(UntrustedText.init), key: old?.key, repo: a.workspace?.label ?? old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.activity?.text)
       ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
       ag.activityKind = a.activity?.kind
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
@@ -285,7 +287,7 @@ public final class CapcomdStore {
       let depth = d["depth"]?.int ?? parent.flatMap { runs[runId]?.agents[$0].map { $0.depth + 1 } } ?? 0
       var a = Agent(id: id, runId: runId, parent: parent, depth: depth, profile: profile, status: .pending,
                     task: d["task"]?.string.map(UntrustedText.init), key: d["key"]?.string,
-                    repo: d["repo"]?.string ?? d["agent"]?["repo"]?.string, spawnedAtMs: e.epochMs)
+                    repo: d["workspace"]?["label"]?.string ?? d["repo"]?.string ?? d["agent"]?["repo"]?.string, spawnedAtMs: e.epochMs)
       a.taskAttachment = AttachmentRef(d["taskAttachment"])
       runs[runId]?.agents[id] = a
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
@@ -373,11 +375,11 @@ public final class CapcomdStore {
       if var old = runs[a.runId]?.agents[a.id] {
         old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text; old.activityKind = a.activity?.kind
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
-        old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs
+        old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs; old.repo = a.workspace?.label ?? old.repo
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                       task: a.task.map(UntrustedText.init), key: nil, repo: nil, spawnedAtMs: i, activity: a.activity?.text)
+                       task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: i, activity: a.activity?.text)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
         ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
         runs[a.runId]?.agents[a.id] = ag
