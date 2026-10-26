@@ -209,6 +209,36 @@ enum Theme {
     static let dividerHeight: CGFloat = 0.5
     static let material: Material = .bar
   }
+  /// Inputs (v5-a-final `.in`; input-*.html / thread-input.html `.box`, `.box.f`, `.ta`, `.snd`, `.hint`).
+  enum Composer {
+    // The panel's "Start a project…" field (.in, .kbd)
+    static let panelHeight: CGFloat = 36, panelRadius: CGFloat = 9, panelPadding: CGFloat = 10, panelGap: CGFloat = 8
+    static let panelFont = Font.system(size: 13.5)
+    static let fill = Color.white.opacity(0.07)
+    static let focusedFill = Color.white.opacity(0.10)
+    static let focusedStroke = Color.white.opacity(0.18), focusedStrokeWidth: CGFloat = 0.5
+    static let ring = Theme.accent.opacity(0.28), ringWidth: CGFloat = 3.5
+    static let placeholder = Color.white.opacity(0.40)
+    static let text = Color.white
+    static let plusIcon = Font.system(size: 12, weight: .medium)
+    static let plusText = Color.white.opacity(0.45)
+    static let kbdFont = Font.system(size: 11.5)
+    static let kbdText = Color.white.opacity(0.40)
+    static let kbdStroke = Color.white.opacity(0.20), kbdRadius: CGFloat = 5
+    static let kbdPadding = EdgeInsets(top: 1, leading: 5, bottom: 1, trailing: 5)
+    // The thread input box (.box)
+    static let boxRadius: CGFloat = 10
+    static let boxPadding = EdgeInsets(top: 9, leading: 10, bottom: 8, trailing: 10)
+    static let boxFont = Font.system(size: 13.5), boxLine: CGFloat = 19, boxMaxLines = 4   // .ta max-height 76
+    static let mention = Theme.accent
+    static let send: CGFloat = 24, sendIdle = Color.white.opacity(0.10), sendIcon = Font.system(size: 11, weight: .bold)
+    static let sendGap: CGFloat = 6
+    static let hintFont = Font.system(size: 10.5)
+    static let hintText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.34)
+    static let hintPadding = EdgeInsets(top: 5, leading: 30, bottom: 0, trailing: 4), hintGap: CGFloat = 10
+    static let errorFont = Font.system(size: 11.5)
+    static let sectionTop: CGFloat = 0                       // .in sits at the list padding; .sec adds 14 below it
+  }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {
     static let pressScale: CGFloat = 0.97

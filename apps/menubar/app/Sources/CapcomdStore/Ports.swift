@@ -69,6 +69,11 @@ public final class UIPreferences {
     get { store.string(forKey: "detailTab").flatMap(DetailTab.init(rawValue:)) ?? .log }
     set { store.set(newValue.rawValue, forKey: "detailTab") }
   }
+  /// The project folder last used to start a run when the daemon had no default repository.
+  public var startRepo: String? {
+    get { store.string(forKey: "startRepo") }
+    set { store.set(newValue, forKey: "startRepo") }
+  }
   public var activityCollapsed: Bool {
     get { store.string(forKey: "activityCollapsed") == "1" }
     set { store.set(newValue ? "1" : "0", forKey: "activityCollapsed") }
@@ -89,4 +94,14 @@ public enum RunControl: String, Sendable, Hashable { case pause, resume, cancel 
 public struct ControlRefused: Error, Sendable, Hashable { public var message: String; public init(_ m: String) { message = m } }
 public protocol RunControlling: Sendable {
   func control(runId: String, _ action: RunControl, idempotencyKey: String) async throws
+}
+
+/// `POST /v1/runs` (harness #49): start a run on a goal, detached, with an Idempotency-Key (steer scope). Returns the
+/// new run's id. A 422 is `StartRefused` with the daemon's sentence (`needsRepo` when it has no default repository).
+public struct StartRefused: Error, Sendable, Hashable {
+  public var message: String; public var needsRepo: Bool
+  public init(_ m: String, needsRepo: Bool = false) { message = m; self.needsRepo = needsRepo }
+}
+public protocol RunStarting: Sendable {
+  func start(goal: String, repo: String?, idempotencyKey: String) async throws -> String
 }

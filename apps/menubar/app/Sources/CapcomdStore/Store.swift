@@ -30,11 +30,14 @@ public final class CapcomdStore {
   public internal(set) var logUnavailable: [String: DetailUnavailable] = [:]
   var logCursor: [String: Int] = [:]
   public internal(set) var controlState: [String: ControlState] = [:]
+  public internal(set) var startState: StartState = .idle
+  var pendingStartKey: (goal: String, repo: String?, key: String)?
 
   let subscriber: StreamSubscribing?
   let decider: ApprovalDeciding?
   let detail: RunDetailFetching?
   let controls: RunControlling?
+  let starter: RunStarting?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -57,8 +60,8 @@ public final class CapcomdStore {
   public static let maxLifecycleFeeds = 16
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
-              prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
-    self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
+              starter: RunStarting? = nil, prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
+    self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 
