@@ -32,13 +32,18 @@ struct PanelView: View {
         .padding(Theme.Card.listPadding)
         .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map(\.id))
       }
+      .safeAreaInset(edge: .bottom) { footer }
+      // macOS keeps the root under a pushed view, and pushed views are clear (a material would only blur the list
+      // behind it), so the list steps out entirely while anything is pushed.
+      .opacity(model.path.isEmpty ? 1 : 0)
+      .allowsHitTesting(model.path.isEmpty)
+      .accessibilityHidden(!model.path.isEmpty)
       .navigationDestination(for: AppModel.Route.self) { r in
         switch r {
         case .run(let id): RunDrillDownView(runId: id)
         case .thread(let runId, let agentId): ThreadView(runId: runId, agentId: agentId)
         }
       }
-      .safeAreaInset(edge: .bottom) { footer }
     }
     .frame(width: Theme.panelWidth, height: 520)
     .background(.ultraThinMaterial)   // HUD-style vibrancy; MenuBarExtra(.window) supplies the 16 pt rounded window

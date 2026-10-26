@@ -10,6 +10,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   Run ids no longer appear on cards (they stay in the run view), and a card waiting for your approval gets a faint
   amber tint instead of a coloured border. Click a card's title to open its run. Running status marks are blue even
   when another app is in front.
+- Menu bar app: opening a run or an agent's thread no longer draws it on top of the project list (both showed at
+  once, and clicks could land on the hidden cards).
 
 ## 0.6.0 (2026-10-25)
 
