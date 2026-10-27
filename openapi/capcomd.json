@@ -4705,6 +4705,12 @@
           },
           "target": {},
           "ref": {},
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "reason": {
             "type": [
               "string",
