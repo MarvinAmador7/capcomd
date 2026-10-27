@@ -565,6 +565,47 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `agent.step`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "description": "What the agent did (icon hint): read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, tool. More may be added: treat an unknown kind as tool. Never think"
+    },
+    "n": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "How many distinct things it acted on (files, commands, sub-agents); 1 or more"
+    },
+    "startedAt": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991,
+      "description": "When the step began (epoch ms): its first tool call"
+    },
+    "endedAt": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991,
+      "description": "When it ended (epoch ms, ≥ startedAt): when the agent's next step began, or when it ended"
+    }
+  },
+  "required": [
+    "kind",
+    "n",
+    "startedAt",
+    "endedAt"
+  ],
+  "additionalProperties": {},
+  "description": "Capability agent.steps. One finished step of an agent's history, in the order it took them: a streak of one kind of tool call (reading files, editing, running the tests), reported once the agent moved on to another kind or ended. Durable: replayed by GET /v1/events and on run streams like any event (not on the lifecycle feed). The envelope text is the step in past tense (\"Read 4 files\", \"Ran the tests\"); `agentId`/`entity` is the agent. At most 500 per agent; a cancelled agent's unfinished last step is not recorded"
+}
+```
+
 ## `agent.paused`
 
 ```json

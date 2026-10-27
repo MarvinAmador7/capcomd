@@ -217,6 +217,7 @@ Timestamps (ts, decidedAt, expiresAt): ${TIMESTAMP_DOC}.`;
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
 	...LegacyEventData,
+	"agent.step": LegacyEventData["agent.step"].describe("Capability agent.steps. One finished step of an agent's history, in the order it took them: a streak of one kind of tool call (reading files, editing, running the tests), reported once the agent moved on to another kind or ended. Durable: replayed by GET /v1/events and on run streams like any event (not on the lifecycle feed). The envelope text is the step in past tense (\"Read 4 files\", \"Ran the tests\"); `agentId`/`entity` is the agent. At most 500 per agent; a cancelled agent's unfinished last step is not recorded"),
 	"agent.status_changed": z.looseObject({ agentId: z.string(), status: AgentStatus }),
 	"agent.activity_changed": z.looseObject({ agentId: z.string(), status: AgentStatus, activity: AgentActivity.nullable() }).describe("Ephemeral, only on run streams with ?activity=1: the agent's new Agent.activity. The envelope text is the same line"),
 	"agent.thread_item_changed": z.looseObject({ agentId: z.string(), item: ThreadItem }).describe("Ephemeral, only on run streams with ?thread=1: an item created or changed, as GET …/thread serves it (latest rev wins). The envelope text is daemon-written"),
@@ -284,6 +285,7 @@ export const CAPABILITIES = {
 	"runs.options": "POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available",
 	"runs.options.repo": "GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles",
 	"runs.options.sandbox": "GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422)",
+	"agent.steps": "agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +

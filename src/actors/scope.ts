@@ -138,6 +138,9 @@ export type ScopeOp = ReturnType<typeof opRow>;
 /** How a run ended by itself (scope.endRun), not by its agents ending. */
 export type RunEnd = { state: "failed" | "cancelled"; reason: string | null; by: string | null; at: number };
 
+/** recordStep: an agent's step history (agent.step) keeps at most this many; later steps are dropped. */
+export const STEPS_MAX = 500;
+
 async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, data: Record<string, unknown>, idemKey: string) {
   // harness.v1 §6.2: the published payload schemas are open, but the daemon emits only declared fields.
   const chk = strictEventData(dottedType(type), data);
@@ -287,6 +290,8 @@ export const scopeActor = actor({
           seq INTEGER PRIMARY KEY, at INTEGER NOT NULL, type TEXT NOT NULL, agent_id TEXT,
           data TEXT NOT NULL, idem_key TEXT NOT NULL UNIQUE
         )`);
+      // recordStep counts an agent's steps on every write (the STEPS_MAX cap).
+      await database.execute(`CREATE INDEX IF NOT EXISTS scope_events_agent_type ON scope_events (agent_id, type)`);
     },
   }),
 
@@ -674,7 +679,7 @@ export const scopeActor = actor({
       await c.db.transaction(async (tx: RawAccess) => {
         const evs = await tx.execute("SELECT type, data FROM scope_events WHERE agent_id = ? ORDER BY seq DESC LIMIT 50", params.agentId);
         for (const e of evs as any[]) {
-          if (e.type === "TOKEN_REVOKED" || e.type === "MESSAGE_SENT") continue;
+          if (e.type === "TOKEN_REVOKED" || e.type === "MESSAGE_SENT" || e.type === "AGENT_STEP") continue;
           if (e.type !== "DRIVE_FAILED") break;
           const d = JSON.parse(String(e.data));
           if (d.kind === params.kind && d.message === message) consecutive++; else break;
@@ -1048,6 +1053,33 @@ export const scopeActor = actor({
     const v = a && (ACTIVITY_KINDS as readonly string[]).includes(a.kind) ? JSON.stringify({ kind: a.kind, n: Math.max(1, Math.min(9999, Math.floor(Number(a.n) || 1))), at: Number(a.at) || Date.now() }) : null;
     await c.db.execute("UPDATE agents_v2 SET activity = ? WHERE agent_id = ? AND status IN ('pending','running')", v, params.agentId);
     return { ok: true };
+  },
+
+  /**
+   * One finished step of a working agent's history (harness.v1 `agent.step`, src/agents/activity.ts onStep), appended to
+   * the event log. Only while the agent is pending or running (a step reported after it ended, or after a cancel, is
+   * dropped). "think" is never a step; an unknown kind is "tool". A re-report of a step (same agent, kind and start: a
+   * retried call, a re-attached driver) is recorded once. At most STEPS_MAX per agent: later ones are dropped. Not traced,
+   * like setActivity.
+   */
+  async recordStep(c, params: { agentId: string; kind: string; n: number; startedAt: number; endedAt: number }) {
+    if (params.kind === "think") return { recorded: false };
+    const kind = (ACTIVITY_KINDS as readonly string[]).includes(params.kind) ? params.kind : "tool";
+    const startedAt = Math.floor(Number(params.startedAt)), end = Math.floor(Number(params.endedAt));
+    if (!Number.isFinite(startedAt) || startedAt <= 0) return { recorded: false };
+    const data = { kind, n: Math.max(1, Math.min(9999, Math.floor(Number(params.n) || 1))), startedAt, endedAt: Number.isFinite(end) ? Math.max(startedAt, end) : startedAt };
+    let recorded = false;
+    await c.db.transaction(async (tx: RawAccess) => {
+      const a = await tx.execute("SELECT status FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      if (!a.length || !["pending", "running"].includes(String(a[0]!.status))) return;
+      const key = `step-${params.agentId}-${kind}-${startedAt}`;
+      if ((await tx.execute("SELECT 1 FROM scope_events WHERE idem_key = ?", key)).length) return;
+      const have = await tx.execute("SELECT COUNT(*) AS n FROM scope_events WHERE agent_id = ? AND type = 'AGENT_STEP'", params.agentId);
+      if (Number(have[0]?.n ?? 0) >= STEPS_MAX) return;
+      await addEvent(tx, "AGENT_STEP", params.agentId, data, key);
+      recorded = true;
+    }, { name: "scopeStep" });
+    return { recorded };
   },
   },
 });
