@@ -105,7 +105,7 @@ states for `env`.
 **How values reach the engine.** `applyConfig` copies config into the environment once, when the process starts
 (`src/cli/apply-config.ts:7`), so a daemon would need a restart to see a change. Instead, `run new` reads the
 provider's settings from the file and records them with the run's sandbox: the `_sandbox` value goes from `{name}`
-(`ops.ts:142`) to `{name, settings: {idleLifetime, egressDefault}}`. Old readers only look at `.name`
+(`ops.ts:142`) to `{name, settings: {idleLifetime}}`. Old readers only look at `.name`
 (`run-sandbox.ts:34`). The worker reads them through `runSandbox()`. A setting applies to new runs (`appliesTo:
 "new_runs"`), a run keeps the policy it started with, and nothing needs a restart. Runs without a recorded
 sandbox read the daemon's current settings when the worker starts.
@@ -225,7 +225,7 @@ New capabilities: `sandboxes` (the two GETs), `sandboxes.settings` (PATCH), `san
 
 - **`SandboxDetailsView(name)`**: one generic view, pushed from each place section ("Details…") in Runs. Its header is
   the mark, `title`, and Default / Make Default (as now). Then Status (the existing availability and key rows),
-  Agent environment (`/v1/environments`), Machines (resources plus `idleLifetime`), and Safety (`egressDefault`,
+  Agent environment (`/v1/environments`), Machines (resources plus `idleLifetime`), and Safety (
   Logins, Checkpoints) as `Form` sections in `.grouped` style. The section order and copy shells are fixed in Swift,
   matching the approved canvas. Which rows appear, their values, choices, help and footers come from the daemon.
 - **Controls by type:** `choice` → `Picker(.menu)`; `toggle` → `Toggle`; `info` / `status` → `LabeledContent` with
