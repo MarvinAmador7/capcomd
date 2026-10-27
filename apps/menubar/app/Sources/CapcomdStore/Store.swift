@@ -66,6 +66,9 @@ public final class CapcomdStore {
   /// A settings change answered 403: this app's token lacks the `configure` scope, so settings stay read-only for as
   /// long as this store (and so this token) lives.
   public internal(set) var configureDenied = false
+  /// Machines being deleted, or whose last Delete didn't go through (`POST …/actions/delete`), by
+  /// `MachineDeletion.key(place, id)`.
+  public internal(set) var machineDeletions: [String: MachineDeletion] = [:]
   var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
 
   let subscriber: StreamSubscribing?

@@ -57,6 +57,8 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "task.released": return "A task was released.";
 		case "kv.put": case "kv.deleted": case "kv.swapped": return "A shared value changed.";
 		case "sandbox.settings_changed": return "A place's setting was changed.";
+		case "sandbox.resource_action": return "A machine was acted on from capcomd.";
+		case "sandbox.resource_deleted": return "A machine was deleted.";
 		default: return type.replace(/[._]/g, " ") + ".";
 	}
 }

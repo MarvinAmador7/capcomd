@@ -51,3 +51,32 @@ test("each container keeps its own idle lifetime: the sweep deletes the 15-minut
 	expect(await p.sweep(renewed + 1)).toEqual([long]);
 	expect(JSON.parse(readFileSync(s.ledger, "utf8"))).toEqual({});
 });
+
+test("the engine's sweep audits each container it removes: sandbox.resource_deleted with cause idle_lifetime", async () => {
+	const { resetMachineAudit, setMachineAuditSink } = await import("../../src/providers/machine-audit");
+	const { sweepIdle } = await import("../../src/providers/docker");
+	const s = stubDocker();
+	const p = new DockerProvider({ bin: s.bin, ledgerPath: s.ledger });
+	const spec = (idemKey: string, ttlSeconds: number) => ({ idemKey, ttlSeconds, egressAllow: ["*"], isolated: true as const, labels: {} });
+	const t0 = Date.now();
+	const short = (await p.ensure(spec("run-c-agt-1-e1", 900))).id;
+	await p.ensure(spec("run-d-agt-2-e1", 14_400));
+	const seen: Array<{ type: string; text: string; data: Record<string, unknown> }> = [];
+	setMachineAuditSink((e) => { seen.push(e); });
+	try {
+		expect(await sweepIdle(p, t0 + 16 * 60_000)).toEqual([short]);
+		expect(seen).toEqual([{ type: "sandbox.resource_deleted", entity: "sandbox:docker", text: `Local: machine ${short} was deleted after its idle lifetime ran out.`, data: { sandbox: "docker", resourceId: short, cause: "idle_lifetime" } } as any]);
+		// Nothing more to remove: nothing more to report.
+		expect(await sweepIdle(p, t0 + 17 * 60_000)).toEqual([]);
+		expect(seen).toHaveLength(1);
+	} finally { resetMachineAudit(); }
+});
+
+test("a container the sweep couldn't remove isn't reported as removed (it is tried again next time)", async () => {
+	const s = stubDocker();
+	const p = new DockerProvider({ bin: s.bin, ledgerPath: s.ledger });
+	const id = (await p.ensure({ idemKey: "run-e-agt-1-e1", ttlSeconds: 900, egressAllow: ["*"], isolated: true, labels: {} })).id;
+	(p as any).destroy = async () => { throw new Error("docker rm failed"); };
+	expect(await p.sweep(Date.now() + 16 * 60_000)).toEqual([]);
+	expect((await p.list(MACHINE_PREFIX)).map((v) => v.name)).toEqual([id]);
+});

@@ -19,6 +19,9 @@ import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies, providerForRun, providerNamed } from "../dependencies";
 import { runIdleLifetime, withSandbox } from "../providers/run-sandbox";
+import { reportMachineDeleted } from "../providers/machine-audit";
+import { machineNameFor } from "../providers/machines";
+import { sandboxName } from "../providers/registry";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { runAgent, stoppedAt } from "../agents/runner";
 import { activityReporter } from "../agents/activity";
@@ -101,8 +104,9 @@ export function configError(e: unknown): UserError {
 }
 
 
-// Shared by drainWorker, reap and the TTL alarm. Idempotent and resumable.
-async function drainWorkerImpl(c: any, workerId: string) {
+// Shared by drainWorker, reap and the TTL alarm. Idempotent and resumable. `cause`: why the machine goes, for the
+// daemon's audit (sandbox.resource_deleted): its agent ended (run_ended), or its idle lifetime ran out.
+async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "idle_lifetime" = "run_ended") {
       const workerLife = await getLifecycle(c.db, workerId);
       if (!workerLife) return;
 
@@ -139,6 +143,11 @@ async function drainWorkerImpl(c: any, workerId: string) {
 
       if (workerContext.vmId) {
         await provider.destroy(workerContext.vmId);
+        // Audit (ADR-021 §5): the machine by its name, as the resources route lists it.
+        const idemKey = (workerContext as { idemKey?: unknown }).idemKey;
+        let place: string | undefined = workerContext.sandbox;
+        if (!place) try { place = sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX */ }
+        if (typeof idemKey === "string" && idemKey) reportMachineDeleted(place, machineNameFor(idemKey), cause);
 
         const destroyEvent = { type: "VM_DESTROYED" as const };
         const [destroySnapshot] = transition(
@@ -679,7 +688,7 @@ export const workerActor = actor({
       const ctx = JSON.parse(life.context as string);
       const expired = (params.now ?? Date.now()) >= await workerDeadline(c.db, params.workerId, ctx);
       if (!params.terminal && !expired) return { reaped: false, state: life.state };
-      await drainWorkerImpl(c, params.workerId);
+      await drainWorkerImpl(c, params.workerId, params.terminal ? "run_ended" : "idle_lifetime");
       return { reaped: true, reason: params.terminal ? "terminal" : "ttl" };
     },
 
@@ -690,7 +699,7 @@ export const workerActor = actor({
       const deadline = await workerDeadline(c.db, params.workerId, ctx);
       // Renewed while its agent ran: look again at the new deadline.
       if (Date.now() < deadline) { await c.schedule.at(deadline, "reapIfExpired", { workerId: params.workerId }); return { reaped: false }; }
-      await drainWorkerImpl(c, params.workerId);
+      await drainWorkerImpl(c, params.workerId, "idle_lifetime");
       return { reaped: true, reason: "ttl" };
     },
 

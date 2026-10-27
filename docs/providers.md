@@ -91,6 +91,17 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
    deadline (Docker's ledger), so a machine can outlive it by up to one sweep (5 minutes). Every change is audited as a
    durable `sandbox.settings_changed` event on the `daemon` stream.
 
+   **Delete** (`POST /v1/sandboxes/{name}/resources/{id}/actions/delete`, capability `sandboxes.actions`, the steer
+   scope; `src/api/sandboxes.ts`). A provider that declares `delete` needs nothing more than an idempotent `destroy`
+   (a machine already gone is not an error) and a `list` that names machines by their `MACHINE_PREFIX` names: an
+   agent's machine is deleted by cancelling the agent (its worker destroys the machine as it drains), and only a
+   machine left behind reaches `destroy` directly, with the provider id its `list` gave. The daemon checks the id
+   against its own list, lists again right before acting, and gives the provider 10 seconds to list and 30 to delete
+   (then 503 `unavailable`). Deletes are audited on the `daemon` stream (`sandbox.resource_action`,
+   `sandbox.resource_deleted` with cause `action`, `idle_lifetime` or `run_ended`): a provider whose `idleLifetime` is
+   `sweep` reports its sweep's deletes through `reportMachineDeleted` (`src/providers/machine-audit.ts`), as Docker's
+   `sweepIdle` does; deletes a platform makes by itself aren't reported.
+
    **Machines capcomd's own jobs make.** Every capcomd process that makes a machine outside an agent's worker (the
    checks VM in `verify`, `auth login` / `auth status`, `env build`, `env doctor`) records it in capcomd's machines
    ledger (`<state>/machines/<name>.json`, or `CAPCOMD_MACHINES_LEDGER`; `src/providers/machines.ts`) before `ensure`

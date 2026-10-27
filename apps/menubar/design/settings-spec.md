@@ -129,7 +129,7 @@ lifetime). Owner's removals from the board: no "Sites agents can reach" row and 
 |---|---|---|
 | Header | mark, `title`, Default / Make Default (as in Runs) | `GET /v1/sandboxes` descriptor |
 | (status) | the availability row (as in Runs); then any `status` rows the daemon sends (a provider's key); then Agent environment (as in Runs, with Build… / Rebuild…) | `/v1/sandboxes`, `/v1/sandboxes/{name}` `info`, `/v1/environments` |
-| Machines | one row per machine: a dot (green running, orange left behind, ring starting / stopping), "worker · Add an abs(a) function…" (role · the task's first line), "checks · run-8kq2" / "login · Logging in to Claude Code" / "environment · Building the agent environment" for capcomd's own short-lived machines (`owner.kind` other than `agent`: role · its run, else role · the daemon's `label`), or "Left behind · no agent owns it" (no owner at all, or `state: "orphaned"`), its age ("4 min", "2 h"), **Open in Terminal** (never on capcomd's own machines); owned machines first, newest first; the tooltip adds the machine's id and when it is deleted if left idle. "No machines running." when there are none. Then "Delete idle machines after" (`idleLifetime`): a popup of its choices ("1 hour") and help, disabled unless it can be changed (below) | `GET /v1/sandboxes/{name}/resources`, every 5 s while the screen shows; `idleLifetime` from `settings` |
+| Machines | one row per machine: a dot (green running, orange left behind, ring starting / stopping), "worker · Add an abs(a) function…" (role · the task's first line), "checks · run-8kq2" / "login · Logging in to Claude Code" / "environment · Building the agent environment" for capcomd's own short-lived machines (`owner.kind` other than `agent`: role · its run, else role · the daemon's `label`), or "Left behind · no agent owns it" (no owner at all, or `state: "orphaned"`), its age ("4 min", "2 h"), **Open in Terminal** (never on capcomd's own machines), **Delete…** (phase 3, below); owned machines first, newest first; the tooltip adds the machine's id and when it is deleted if left idle. "No machines running." when there are none. Then "Delete idle machines after" (`idleLifetime`): a popup of its choices ("1 hour") and help, disabled unless it can be changed (below) | `GET /v1/sandboxes/{name}/resources`, every 5 s while the screen shows; `idleLifetime` from `settings` |
 | Safety | **Logins**: "Bound" (green) when every login here is bound to its AI's API, "Codex isn't bound" (orange) when some aren't, "Not bound" when none are, "No logins"; the sub names the hosts. **Checkpoints**: the daemon's `display` ("After each commit and every 10 minutes"). Footer: "Local (Docker) can't bind logins to a host; Cloud does." from the descriptors' `caps.hostBoundSecrets` | `/v1/logins` `hostBound` / `boundTo`; `info` rows |
 | Options | settings this app doesn't place (only when there are any) | `settings` |
 
@@ -155,6 +155,15 @@ Marks are bundled by id (`PlaceMarks`): `docker` the official mark, `boxd` the c
   (under the 15-minute minimum, set by an environment variable, …). 403 (the token lacks the `configure` scope): the
   settings go read-only with "Reset your token to change these" under them until the token changes; Accounts › Reset…
   mints a token with `configure`. A setting applies to new runs.
+- **Delete…** (phase 3, with `sandboxes.actions`): on a row whose `actions` include `delete` (an agent's machine, and
+  one left behind), after Open in Terminal. It asks first with a native confirmation dialog built from the daemon's
+  `confirm`: the question up to its first "?" is the title ("Delete worker's machine?"), the rest the message ("This
+  stops the worker on “Add an abs(a) function…”. Work since its last checkpoint is lost."; for one left behind "No agent
+  is using it."), with a destructive **Delete** and **Cancel**. Delete sends `POST …/resources/{id}/actions/delete`
+  with a fresh Idempotency-Key, shows a small spinner on the row (Delete… disabled) until the daemon answers, then
+  reads the place again. A refusal (409: the machine changed since it was listed, or it's capcomd's own; 503: the
+  provider didn't answer; 404: it's gone) puts the daemon's sentence under the row. Without `sandboxes.actions` there
+  is no Delete…, whatever `actions` says.
 - **capcomd's own machines** (`owner.kind` `check`, `login`, `env_build`, `doctor`, or any kind but `agent`) are never
   "left behind" and never offer Open in Terminal or Delete; an owner without `kind` (an older daemon) is an agent's.
 - **Older daemons**: without `sandboxes`, no Details… and Runs is as above; without `sandboxes.resources`, no machine
@@ -180,6 +189,7 @@ buttons, github.com/MarvinAmador7/capcomd), "MIT License".
 | `GET /v1/sandboxes`, `/v1/sandboxes/{name}` (`sandboxes`) | Place headers and status rows, Details… (§4.1) | places shown by name as before; no Details… |
 | `GET /v1/sandboxes/{name}/resources[/{id}]` (`sandboxes.resources`) | Machines, Open in Terminal | no machine list: "Update capcomd to see machines here." |
 | `PATCH /v1/sandboxes/{name}/settings` (`sandboxes.settings`; scope `configure`) | Changing "Delete idle machines after" (§4.1) | the settings read-only |
+| `POST /v1/sandboxes/{name}/resources/{id}/actions/delete` (`sandboxes.actions`; scope `steer`) | Delete… on a machine (§4.1) | no Delete… |
 
 While capcomd can't be reached, daemon rows keep their last values, disabled, with "Shown when capcomd is running."
 Commands from the daemon reach Terminal only when they are plain capcomd invocations (`SettingsRows.isSafeCommand`).
@@ -189,9 +199,11 @@ not answering; none; a `terminalCommand` the app must refuse; `sandboxes` withou
 and, for phase 2, `readonly|envlocked|noconfigure|conflict|owners` (no `sandboxes.settings`; the idle lifetime set by
 `CAPCOMD_SANDBOX_IDLE_SECONDS`; a token without `configure`; one stale-rev 409 before the change goes through, or
 `CONFLICTS=n`; capcomd's own check, login, environment-build and doctor machines next to an agent's and one left
-behind). Every scene but `readonly`, `nores` and `off` takes `PATCH …/settings`.
+behind). Every scene but `readonly`, `nores` and `off` takes `PATCH …/settings`. Phase 3: every one of those but
+`noactions` (a phase 2 daemon) also takes `POST …/actions/delete` (a delete lasts for the server's life), and
+`changed|unavailable` answer every delete 409 (the machine changed) or 503 (the provider didn't answer).
 
 ## 7. Later
 
 Log out (a route that doesn't exist yet), building an environment in the app with real progress (today Terminal does
-it; the bar is indeterminate), Delete… on a machine (ADR-021 phase 3), Permissions (who am I), naming the default project, updates.
+it; the bar is indeterminate), Permissions (who am I), naming the default project, updates.

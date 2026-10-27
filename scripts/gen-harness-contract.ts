@@ -62,6 +62,11 @@ for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.
 	for (const s of ERROR_STATUSES) op.responses[String(s)] ??= { description: `Error (${s})`, content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// Routes that need a scope a token may lack (configure is new in sandboxes.settings): 403 forbidden.
 	if (op.operationId === "sandboxes.settings") op.responses["403"] ??= { description: "Error (403): the token lacks the configure scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+	// Actions (sandboxes.actions): the steer scope, and 503 unavailable when a provider doesn't answer.
+	if (op.operationId === "sandboxes.action") {
+		op.responses["403"] ??= { description: "Error (403): the token lacks the steer scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+		op.responses["503"] ??= { description: "Error (503 unavailable): the provider (or capcomd's records) didn't answer in time", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+	}
 }
 // Raw-bytes routes (served natively): their 200 is the file itself, not JSON.
 for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) {

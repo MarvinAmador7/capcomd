@@ -268,6 +268,22 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }
+  /// `POST /v1/sandboxes/{name}/resources/{id}/actions/{action}` (capability `sandboxes.actions`, scope `steer`), no body,
+  /// with `idempotencyKey`. 200 is `{resource, changed}`; every refusal carries the daemon's sentence (404 gone or not
+  /// capcomd's, 409 it changed or is capcomd's own, 503 the provider didn't answer, 403 the token lacks steer).
+  public func resourceAction(sandbox: String, id: String, action: String, idempotencyKey: String) async throws -> ResourceActionResult {
+    let path = "/v1/sandboxes/\(LiveDetail.seg(sandbox))/resources/\(LiveDetail.seg(id))/actions/\(LiveDetail.seg(action))"
+    let (status, data) = try await transport.post(path, headers: [("Idempotency-Key", idempotencyKey)])
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let message = (obj?["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    switch status {
+    case 200: return try decoded(SandboxWire.actionResult(data))
+    case 401: throw Unauthorized()
+    case 403: throw ActionRefused("This app's capcomd token can't delete machines (it needs the steer scope).", status: 403)
+    case 404, 409, 422, 503: throw ActionRefused(message ?? "capcomd couldn't delete it.", status: status)
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
   private func decoded<T>(_ f: @autoclosure () throws -> T) throws -> T {
     do { return try f() } catch let e as DetailUnavailable { throw e } catch is Unauthorized { throw Unauthorized() } catch { throw DetailUnavailable.failed("unexpected response") }
   }

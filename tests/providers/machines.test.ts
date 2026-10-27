@@ -78,7 +78,8 @@ describe("the machines ledger", () => {
 		expect(by("doctor-1").owner).toMatchObject({ kind: "doctor", label: "Checking the agent environment" });
 		// Another place's job doesn't claim this place's machine; nothing records this one: left behind.
 		expect(by("docker-check")).toMatchObject({ state: "orphaned", owner: null });
-		expect(by("left-behind")).toMatchObject({ state: "orphaned", owner: null, actions: ["open_terminal"] });
+		expect(by("left-behind")).toMatchObject({ state: "orphaned", owner: null, actions: ["open_terminal", "delete"], destructive: true, confirm: "Delete this machine? No agent is using it." });
+		for (const r of res.filter((x) => x.owner)) expect(r).toMatchObject({ actions: [], destructive: false, confirm: null });
 		for (const r of res.filter((x) => x.owner)) expect(terminalCommandFor("boxd", r)).toBeNull();
 		for (const release of jobs) release();
 		expect(joinResources("boxd", rows, jobOwners(env)).every((r) => r.state === "orphaned")).toBe(true);

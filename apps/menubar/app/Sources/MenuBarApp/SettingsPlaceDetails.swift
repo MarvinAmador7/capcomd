@@ -4,7 +4,8 @@ import AppKit
 import CapcomdStore
 
 /// Settings › Runs › a place's Details… (CloudExplore.dc.html; ADR-021 §6: phase 1 read-only plus Open in Terminal;
-/// phase 2 a setting the daemon marks `editable` can be changed, with `sandboxes.settings` and the `configure` scope).
+/// phase 2 a setting the daemon marks `editable` can be changed, with `sandboxes.settings` and the `configure` scope;
+/// phase 3 Delete… on a machine whose actions include delete, with `sandboxes.actions`, after the daemon's question).
 /// One generic screen for every place: the sections and their order are fixed here, as on the board; which rows appear
 /// and what they say come from the daemon (`/v1/sandboxes/{name}`, `…/resources`, `/v1/logins`, `/v1/environments`).
 /// It opens as a sheet on the Settings window (Details… on the place's status row, as Wi-Fi's Details…), Done or Esc
@@ -17,6 +18,8 @@ struct PlaceDetailsView: View {
   @State private var opening: String?
   /// Why the last Open in Terminal didn't open.
   @State private var openProblem: String?
+  /// The machine whose Delete… asks for confirmation.
+  @State private var confirming: MachineRow?
 
   var body: some View {
     let live = model.connection.live
@@ -63,6 +66,13 @@ struct PlaceDetailsView: View {
       .frame(height: Theme.Settings.Details.actionsHeight)
     }
     .frame(width: Theme.Settings.Details.sheetWidth)
+    // Delete…: the daemon's question (`confirm`), a destructive Delete and Cancel.
+    .confirmationDialog(question.title, isPresented: confirmShown, titleVisibility: .visible, presenting: confirming) { row in
+      Button(question.button, role: .destructive) { model.deleteMachine(name, row.id) }
+      Button("Cancel", role: .cancel) {}
+    } message: { _ in
+      if let m = question.message { Text(verbatim: m) }
+    }
     // The daemon caches provider calls, so the machines are cheap to read every few seconds while this shows.
     .task(id: name) {
       while !Task.isCancelled {
@@ -86,10 +96,13 @@ struct PlaceDetailsView: View {
       let page = fetched?.value
       Section {
         switch fetched {
-        case .loaded(let page):
-          let rows = SandboxRows.machines(page, descriptor: d)
+        case .loaded:
+          let rows = model.machineRows(name)
           if rows.isEmpty { Text("No machines running.").foregroundStyle(.secondary) }
-          ForEach(rows) { row in MachineRowView(row: row, opening: opening == row.id) { open(row) } }
+          ForEach(rows) { row in
+            MachineRowView(row: row, opening: opening == row.id, deletion: model.machineDeletion(name, row.id),
+                           open: { open(row) }, delete: { confirming = row })
+          }
         case .unavailable:
           LabeledContent("Machines") { StatusValue(.empty, "Couldn't list them just now") }
         case .loading, nil:
@@ -112,6 +125,10 @@ struct PlaceDetailsView: View {
       Section("Machines") { ForEach(idle) { setting($0) } }
     }
   }
+
+  /// The daemon's question for the machine being confirmed (its `confirm`), split into a title and a message.
+  private var question: DeleteQuestion { DeleteQuestion.from(confirming?.confirm) }
+  private var confirmShown: Binding<Bool> { Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }) }
 
   /// "Couldn't reach boxd just now. These are the machines it listed at 10:22."
   static func staleNote(_ provider: String, asOf: String?) -> String {
@@ -301,13 +318,26 @@ extension AppModel {
   }
 }
 
-/// A machine (`.mrow`): its state's dot, who uses it, its age, and Open in Terminal when it can be opened.
+/// A machine (`.mrow`): its state's dot, who uses it, its age, Open in Terminal when it can be opened, and Delete… when
+/// the daemon offers it (phase 3). A Delete that didn't go through shows the daemon's sentence under the row.
 struct MachineRowView: View {
   let row: MachineRow
   let opening: Bool
+  var deletion: MachineDeletion? = nil
   let open: () -> Void
+  var delete: () -> Void = {}
 
   var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      line
+      if let why = deletion?.error {
+        Text(verbatim: why).font(Theme.Settings.footFont).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  private var line: some View {
     HStack(spacing: Theme.Settings.Details.machineGap) {
       if let dot = row.tone.dot { StatusDot(kind: dot) }
       Text(verbatim: row.title).lineLimit(1).truncationMode(.tail)
@@ -319,6 +349,14 @@ struct MachineRowView: View {
           .controlSize(.small)
           .disabled(opening)
           .accessibilityHint("Opens a shell in this machine in Terminal.")
+      }
+      if row.canDelete {
+        let busy = deletion?.deleting == true
+        if busy { ProgressView().controlSize(.mini).accessibilityHidden(true) }
+        Button("Delete…", action: delete)
+          .controlSize(.small)
+          .disabled(busy)
+          .accessibilityHint("Asks first, then deletes this machine.")
       }
     }
     .font(Theme.Settings.Details.machineFont)

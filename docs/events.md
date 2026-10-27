@@ -2081,6 +2081,110 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `sandbox.resource_action`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sandbox": {
+      "type": "string",
+      "description": "The place (a listed provider's name)"
+    },
+    "resourceId": {
+      "type": "string",
+      "description": "The machine's id (as GET …/resources lists it)"
+    },
+    "action": {
+      "type": "string",
+      "description": "The action: delete"
+    },
+    "owner": {
+      "description": "Who used the machine when the action ran: the agent that was cancelled (ids and role only, never its task); null for a machine left behind",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "agent (more may come)"
+        },
+        "runId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "runId",
+        "agentId",
+        "role"
+      ],
+      "additionalProperties": {}
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that acted (cli-…)"
+    }
+  },
+  "required": [
+    "sandbox",
+    "resourceId",
+    "action",
+    "owner",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client's action on a machine (POST /v1/sandboxes/{name}/resources/{id}/actions/{action}) changed something. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Cloud: Delete on machine relay-…: cancelled worker agt-41 of run-8kq2.\"). A Delete is followed by sandbox.resource_deleted with cause action"
+}
+```
+
+## `sandbox.resource_deleted`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sandbox": {
+      "type": "string",
+      "description": "The place (a listed provider's name)"
+    },
+    "resourceId": {
+      "type": "string",
+      "description": "The machine's id"
+    },
+    "cause": {
+      "type": "string",
+      "description": "Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"
+    }
+  },
+  "required": [
+    "sandbox",
+    "resourceId",
+    "cause"
+  ],
+  "additionalProperties": {},
+  "description": "Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")"
+}
+```
+
 # Lifecycle feed
 
 Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.

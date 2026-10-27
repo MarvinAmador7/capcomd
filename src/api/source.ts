@@ -10,7 +10,7 @@ import type { RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
 import type { ListedProvider } from "../providers/registry";
 import { LISTED_PROVIDERS } from "../providers/registry";
-import { sandboxSurface, type MachineOwner, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
+import { sandboxSurface, type ActionOutcome, type MachineOwner, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
 import type { VmInfo } from "../providers/sandbox";
 import { memorySettingsStore, type SettingsStore } from "../providers/settings";
 
@@ -68,6 +68,8 @@ export interface HarnessSource {
 	sandboxResources(name: string, page: { limit?: number; cursor?: string }): Promise<ResourcePage | null>;
 	/** GET /v1/sandboxes/{name}/resources/{id}: null when capcomd doesn't list it there. */
 	sandboxResource(name: string, id: string): Promise<ResourceDetail | null>;
+	/** POST /v1/sandboxes/{name}/resources/{id}/actions/{action} (delete): `by` is client:<id>. */
+	sandboxAction(name: string, id: string, action: string, by: string): Promise<ActionOutcome>;
 	approvals(runId: string): Promise<PendingApproval[]>;
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
@@ -153,10 +155,14 @@ export function memorySource(seed: Partial<{
 	surface: Partial<SurfaceDeps>;
 	/** Provider settings (PATCH /v1/sandboxes/{name}/settings writes here). Default: empty, in memory. */
 	settings: SettingsStore;
+	/** An orphan's Delete (`provider.destroy`). Default: records it in `destroyed` and drops the machine from `machines`. */
+	destroy: (name: ListedProvider, vmId: string) => Promise<void>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
 	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }>;
+	/** Machines deleted at a provider (an orphan's Delete), in order. */
+	destroyed: Array<{ sandbox: string; vmId: string }>;
 } {
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
@@ -173,8 +179,18 @@ export function memorySource(seed: Partial<{
 		],
 		sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
 	};
+	const destroyed: Array<{ sandbox: string; vmId: string }> = [];
+	// Set below: Delete on an agent's machine cancels it through this source's own control (agent.cancelled).
+	let controlOf: HarnessSource["control"] | null = null;
 	const surface = sandboxSurface({
 		env: { CAPCOMD_NO_CONFIG: "1" },
+		destroy: async (name, vmId) => {
+			if (seed.destroy) await seed.destroy(name, vmId);
+			destroyed.push({ sandbox: name, vmId });
+			const m = seed.machines?.[name];
+			if (Array.isArray(m)) m.splice(0, m.length, ...m.filter((v) => v.id !== vmId));
+		},
+		cancelAgent: async (runId, agentId, by) => ({ changed: (await controlOf!(runId, "cancel", by, agentId)).changed.includes(agentId) }),
 		settings: seed.settings ?? memorySettingsStore(),
 		logins: loginsOf,
 		availability: async (name) => {
@@ -192,28 +208,31 @@ export function memorySource(seed: Partial<{
 		resume: { from: ["paused"], to: "running", type: "AGENT_RESUMED", data: (by) => ({ epoch: 2, by }), noop: "no paused agent to resume" },
 		cancel: { from: ["pending", "running", "paused"], to: "cancelled", type: "AGENT_CANCELLED", data: (by) => ({ reason: `cancelled by ${by}`, by: "run" }), noop: "nothing to cancel: every agent has ended" },
 	};
+	const control: HarnessSource["control"] = async (runId, action, by, agentId) => {
+		const s = STEP[action];
+		const out: ControlResult = { changed: [], pending: [], noop: null };
+		const all = seed.agents?.[runId] ?? [];
+		// With agentId: that agent and its descendants (the scope's preorder: the target first).
+		const within = (a: O<typeof Agent> | undefined): boolean => !!a && (a.id === agentId || within(all.find((p) => p.id === a.parent)));
+		const order = agentId ? [...all.filter((a) => a.id === agentId), ...all.filter((a) => a.id !== agentId && within(a))] : all;
+		for (const a of order) {
+			if (!s.from.includes(a.status)) continue;
+			(action === "pause" && a.status === "running" ? out.pending : out.changed).push(a.id);
+			a.status = s.to;
+			push(runId, { at: Date.now(), type: s.type, agentId: a.id, data: s.data(by) });
+		}
+		if (!out.changed.length && !out.pending.length) out.noop = `${agentId ?? runId}: ${s.noop}`;
+		return out;
+	};
+	controlOf = control;
 	return {
 		version: "test",
 		decided,
 		created,
 		push,
 		delivered,
-		control: async (runId, action, by, agentId) => {
-			const s = STEP[action];
-			const out: ControlResult = { changed: [], pending: [], noop: null };
-			const all = seed.agents?.[runId] ?? [];
-			// With agentId: that agent and its descendants (the scope's preorder: the target first).
-			const within = (a: O<typeof Agent> | undefined): boolean => !!a && (a.id === agentId || within(all.find((p) => p.id === a.parent)));
-			const order = agentId ? [...all.filter((a) => a.id === agentId), ...all.filter((a) => a.id !== agentId && within(a))] : all;
-			for (const a of order) {
-				if (!s.from.includes(a.status)) continue;
-				(action === "pause" && a.status === "running" ? out.pending : out.changed).push(a.id);
-				a.status = s.to;
-				push(runId, { at: Date.now(), type: s.type, agentId: a.id, data: s.data(by) });
-			}
-			if (!out.changed.length && !out.pending.length) out.noop = `${agentId ?? runId}: ${s.noop}`;
-			return out;
-		},
+		destroyed,
+		control,
 		send: async (runId, to, body, key, skills = []) => {
 			const prior = sent.get(key);
 			if (prior !== undefined) return { seq: prior, note: null };

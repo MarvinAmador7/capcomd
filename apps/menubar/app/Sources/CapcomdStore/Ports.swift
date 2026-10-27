@@ -267,6 +267,16 @@ public protocol DaemonInfoFetching: Sendable {
   /// choice values by setting id, `rev` the one the last `GET /v1/sandboxes/{name}` gave. Returns the place as that GET
   /// would now. Throws `SettingsRefused` when the daemon says no.
   func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail
+  /// `POST /v1/sandboxes/{name}/resources/{id}/actions/{action}` (capability `sandboxes.actions`, scope `steer`): today
+  /// `delete`. Throws `ActionRefused` with the daemon's sentence when it says no (404, 409, 422, 503, 403).
+  func resourceAction(sandbox: String, id: String, action: String, idempotencyKey: String) async throws -> ResourceActionResult
+}
+/// A machine action the daemon refused or couldn't do: its sentence, and the HTTP status (409 it changed or is
+/// capcomd's own, 503 the provider didn't answer, 404 it's gone, 403 the token can't).
+public struct ActionRefused: Error, Sendable, Hashable {
+  public var message: String
+  public var status: Int
+  public init(_ message: String, status: Int) { self.message = message; self.status = status }
 }
 /// `PATCH /v1/sandboxes/{name}/settings` said no.
 public enum SettingsRefused: Error, Sendable, Hashable {
@@ -289,4 +299,5 @@ extension DaemonInfoFetching {
   public func resources(sandbox: String) async throws -> ResourcePage { throw DetailUnavailable.unsupported }
   public func resource(sandbox: String, id: String) async throws -> ResourceDetail { throw DetailUnavailable.unsupported }
   public func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail { throw DetailUnavailable.unsupported }
+  public func resourceAction(sandbox: String, id: String, action: String, idempotencyKey: String) async throws -> ResourceActionResult { throw DetailUnavailable.unsupported }
 }
