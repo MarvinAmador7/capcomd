@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: Activity shows each agent's steps in order ("[bot] Read 2 files", "[bot] Edited a file", "[bot] Ran
+  the tests") instead of only its latest line; a working agent's live line follows its history. Needs a capcomd with
+  `agent.step` events; older ones show one row per agent as before.
 - Menu bar app: shell commands and other tool calls show a terminal icon (`>_`) instead of a wrench, in threads and in
   Activity; in a thread, every shell command does, since its row shows the command itself.
 - Menu bar app: every Activity row leads with the bot of the agent that did it ("[bot] Ran the tests"), with its name
