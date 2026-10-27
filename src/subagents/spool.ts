@@ -118,10 +118,19 @@ export function startPump(o: PumpOpts): { stop: () => Promise<void>; handled: ()
     }
     if (o.spool.logs) { const l = await o.spool.logs(); if (l.length) o.onLog?.(l); }
   };
+  // A failing tick (the sandbox went away under a paused or stopping agent) is logged once, not every interval, and
+  // polled less often until it recovers: the agent's log used to fill with the same "VM … not found" line.
+  const maxBackoff = Math.max(interval, 5000);
   const loop = (async () => {
+    let lastErr: string | null = null, wait = interval;
     while (!stopped) {
-      try { await tick(); } catch (e) { o.onLog?.([`[capcomd] pump error: ${String((e as Error)?.message ?? e).slice(0, 200)}`]); }
-      await new Promise((r) => setTimeout(r, interval));
+      try { await tick(); lastErr = null; wait = interval; }
+      catch (e) {
+        const msg = String((e as Error)?.message ?? e).slice(0, 200);
+        if (msg !== lastErr) o.onLog?.([`[capcomd] pump error: ${msg}`]);
+        lastErr = msg; wait = Math.min(wait * 2, maxBackoff);
+      }
+      await new Promise((r) => setTimeout(r, wait));
     }
     try { await tick(); } catch {} // answer anything that raced the stop
   })();

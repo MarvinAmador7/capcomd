@@ -190,3 +190,14 @@ test("capability tokens are redacted from agent-authored logs/args", async () =>
   expect(JSON.stringify(out)).not.toContain(token);
   expect(out.summary).toContain("[REDACTED]");
 });
+
+test("pump: a failing spool is logged once and polled less often, not every interval", async () => {
+  let takes = 0;
+  const lines: string[] = [];
+  const gone = { take: async () => { takes++; throw new Error("VM vm-5 not found"); }, answer: async () => {}, writeToken: async () => {} } as unknown as LocalSpool;
+  const pump = startPump({ spool: gone, intervalMs: 10, handle: async (req) => ({ id: req.id, ok: true, result: {} }), onLog: (l) => lines.push(...l) });
+  await Bun.sleep(400);
+  await pump.stop();
+  expect(lines.filter((l) => l.includes("pump error"))).toEqual(["[capcomd] pump error: VM vm-5 not found"]);
+  expect(takes).toBeLessThan(10);   // 10 ms doubling: 20, 40, 80, 160 … (40 polls without backoff)
+});
