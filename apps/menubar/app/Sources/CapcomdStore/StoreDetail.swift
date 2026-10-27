@@ -95,6 +95,33 @@ extension CapcomdStore {
     if done { controlState[runId] = .idle }
   }
 
+  /// Pause or resume one agent and its subtree (capability `agent.pause`). The same key discipline as run controls: a
+  /// fresh Idempotency-Key per tap; `requested` holds until the agent's lifecycle confirms it.
+  @discardableResult
+  public func controlAgent(runId: String, agentId: String, _ action: RunControl) async -> ControlState {
+    guard let controls else { return .failed("unavailable") }
+    if case .submitting = agentControlState[agentId] { return agentControlState[agentId]! }
+    agentControlState[agentId] = .submitting(action); changed()
+    let result: ControlState
+    do { try await controls.control(runId: runId, agentId: agentId, action, idempotencyKey: makeKey()); result = .requested(action) }
+    catch let e as ControlRefused { result = .failed(e.message) }
+    catch is Unauthorized { unauthorized = true; result = .failed("capcomd rejected the token") }
+    catch DetailUnavailable.unsupported { result = .failed("This capcomd can't \(action.rawValue) one agent yet") }
+    catch { result = .failed("Couldn't reach capcomd") }
+    agentControlState[agentId] = result; changed()
+    return result
+  }
+
+  func settleAgentControl(agentId: String, status: AgentStatus) {
+    guard case .requested(let a) = agentControlState[agentId] else { return }
+    let done = switch a {
+      case .pause: status == .paused || status.isTerminal
+      case .resume: status == .running || status.isTerminal
+      case .cancel: status.isTerminal
+    }
+    if done { agentControlState[agentId] = .idle }
+  }
+
   private func record(_ error: Error, _ set: (DetailUnavailable) -> Void) {
     if error is Unauthorized { unauthorized = true; return }
     set(error as? DetailUnavailable ?? .failed("Couldn't reach capcomd"))

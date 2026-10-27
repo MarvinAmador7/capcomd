@@ -21,6 +21,10 @@ final class FakeControls: RunControlling, @unchecked Sendable {
   func control(runId: String, _ action: RunControl, idempotencyKey: String) async throws {
     calls.append((action, idempotencyKey)); if let e = outcome { throw e }
   }
+  var agentCalls: [(String, RunControl, String)] = []
+  func control(runId: String, agentId: String, _ action: RunControl, idempotencyKey: String) async throws {
+    agentCalls.append((agentId, action, idempotencyKey)); if let e = outcome { throw e }
+  }
 }
 
 @MainActor

@@ -141,13 +141,20 @@ public struct LiveControls: RunControlling {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
   public func control(runId: String, _ action: RunControl, idempotencyKey: String) async throws {
-    let (status, body) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/\(action.rawValue)", headers: [("Idempotency-Key", idempotencyKey)])
+    try await post("/v1/runs/\(LiveDetail.seg(runId))/\(action.rawValue)", action, idempotencyKey)
+  }
+  public func control(runId: String, agentId: String, _ action: RunControl, idempotencyKey: String) async throws {
+    guard action != .cancel else { throw ControlRefused("An agent can be paused or resumed, not stopped on its own") }
+    try await post("/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/\(action.rawValue)", action, idempotencyKey)
+  }
+  func post(_ path: String, _ action: RunControl, _ idempotencyKey: String) async throws {
+    let (status, body) = try await transport.post(path, headers: [("Idempotency-Key", idempotencyKey)])
     let err = try? JSONDecoder().decode([String: String].self, from: body)
     switch status {
     case 200: return
     case 401: throw Unauthorized()
     case 403: throw ControlRefused("This app's capcomd token can't control runs (needs the steer scope)")
-    case 404 where err?["code"] == "not_found" && (err?["message"] ?? "").contains("run "): throw ControlRefused(err?["message"] ?? "run not found")
+    case 404 where err?["code"] == "not_found" && ["run ", "agent "].contains(where: { (err?["message"] ?? "").contains($0) }): throw ControlRefused(err?["message"] ?? "not found")
     case 404: throw DetailUnavailable.unsupported
     case 409: throw ControlRefused(err?["message"] ?? "capcomd refused")
     default: throw DetailUnavailable.failed("HTTP \(status)")

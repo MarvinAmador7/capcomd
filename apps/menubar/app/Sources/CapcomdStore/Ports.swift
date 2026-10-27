@@ -112,6 +112,9 @@ public enum RunControl: String, Sendable, Hashable { case pause, resume, cancel 
 public struct ControlRefused: Error, Sendable, Hashable { public var message: String; public init(_ m: String) { message = m } }
 public protocol RunControlling: Sendable {
   func control(runId: String, _ action: RunControl, idempotencyKey: String) async throws
+  /// `POST /v1/runs/{runId}/agents/{agentId}/{pause|resume}` (harness #68, capability `agent.pause`): the agent and its
+  /// subtree. `.cancel` is not an agent action.
+  func control(runId: String, agentId: String, _ action: RunControl, idempotencyKey: String) async throws
 }
 
 /// `POST /v1/runs` (harness #49): start a run on a goal, detached, with an Idempotency-Key (steer scope). Returns the

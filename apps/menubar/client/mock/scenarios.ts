@@ -226,6 +226,22 @@ Bun.serve({
     if (th) return Response.json(threads.page(th[2], Number(url.searchParams.get("after") ?? 0), Math.min(500, Number(url.searchParams.get("limit") ?? 100))));
     if (/^\/v1\/runs\/[^/]+\/attachments\/[^/]+\/content$/.test(p)) return new Response(PNG, { headers: { "content-type": "image/png", "x-content-type-options": "nosniff" } });
     if (/^\/v1\/runs\/[^/]+\/agents\/[^/]+\/workspace$/.test(p)) return err(404, "not_found", "not in the agent's latest work");
+    const actl = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/(pause|resume)$/);
+    if (actl && req.method === "POST") {   // harness #68: one agent and its subtree; the lifecycle confirms it a moment later
+      if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+      const run = runs.find(r => r.id === actl[1]), agent = run?.agents.find(a => a.id === actl[2]);
+      if (!run) return err(404, "not_found", `run ${actl[1]} not found`);
+      if (!agent) return err(404, "not_found", `agent ${actl[2]} not found`);
+      const want = actl[3] === "pause" ? "running" : "paused";
+      if (agent.status !== want) return err(409, "conflict", actl[3] === "pause" ? `nothing in ${agent.id}'s subtree is running to pause` : `nothing in ${agent.id}'s subtree is paused`);
+      const type = actl[3] === "pause" ? "agent.paused" : "agent.resumed", ms = Date.now() + 1500;
+      setTimeout(() => {
+        agent.status = actl[3] === "pause" ? "paused" : "running";
+        broadcast(run.id, { v: 1, id: `evt_${type}_${ms}`, scope: run.id, seq: HEAD + 500 + (++msgSeq), entity: agent.id, entitySeq: 1, type, typeVersion: 1,
+          durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: agent.id, data: { agentId: agent.id, by: "client:menubar" } });
+      }, 1500);
+      return Response.json({ runId: run.id, agentId: agent.id, action: actl[3], changed: [], pending: [agent.id] });
+    }
     const ctl = p.match(/^\/v1\/runs\/([^/]+)\/(pause|resume|cancel)$/);
     if (ctl && req.method === "POST") {
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
