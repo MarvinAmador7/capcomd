@@ -142,6 +142,8 @@ else (`tools.include` on its `mcp_servers.capcomd`). In Bot Mode's group chat th
 - Evaluate honestly: capcomd agents live for one run; bots are per role, so a bot speaks for whichever agents of its
   role are running. Each bot is a Hermes agent with its own model bill. Bot Mode is in the desktop app; on Telegram
   it's one bot account per profile.
+- **Decided (owner, 2026-10-27):** the target is Hermes's desktop Bot Mode only, for now; Telegram/Slack bots are out of
+  scope.
 - capcomd: `capcomd hermes bots` to create profiles (Hermes's `hermes profile create` does the dirs; we write
   `SOUL.md`, the MCP entry with a tool filter, the avatar). Hermes: profiles, desktop app for the roster.
 - Security: read + steer only; never approve tools.
@@ -197,7 +199,7 @@ into something safe to recommend, and P2 then only has to deliver the nudge.
    chat), or must protected merges stay terminal-only (`capcomd approve`)?
 2. ~~P2: is a daemon-side outbound notifier~~ Yes, where it's the best approach (2026-10-27). (HTTP POSTs from capcomd, loopback by default) in scope, or should
    notifications stay pull-only (MCP, SSE)?
-3. P5: is the desktop-app Bot Mode a target, or is Telegram/Slack the surface that matters?
+3. ~~P5: is the desktop-app Bot Mode a target, or is Telegram/Slack the surface that matters?~~ Bot Mode only, for now (2026-10-27).
 4. P7: is a third provider (and the model bills it brings) wanted at all, or is capcomd Claude Code + Codex only?
 5. Should capcomd publish a Hermes portable plugin (P4) from this repo, or keep `capcomd setup agent` as the only path?
 
