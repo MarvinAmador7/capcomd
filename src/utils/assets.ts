@@ -10,6 +10,8 @@ import vmCli from "../subagents/vm-cli.mjs" with { type: "text" };
 import engineWrapper from "../engine/engine-wrapper.sh" with { type: "file" };
 // @ts-ignore: a text import (Bun) of a Markdown file gives its contents
 import orchestrationSkill from "../../plugins/capcomd/skills/capcomd-orchestration/SKILL.md" with { type: "text" };
+// @ts-ignore: likewise
+import setupSkill from "../../plugins/capcomd/skills/capcomd-setup/SKILL.md" with { type: "text" };
 import { capcomdHome, COMPILED } from "./home";
 import { VERSION } from "./self";
 
@@ -19,6 +21,8 @@ export const SUPERVISOR_SOURCE: string = supervisor;
 export const VM_CLI_SOURCE: string = vmCli;
 /** The orchestration skill, installed for Claude Code when there's no plugin host. */
 export const ORCHESTRATION_SKILL: string = orchestrationSkill;
+/** The setup skill, installed for Hermes (Claude Code and Codex get it with the plugin). */
+export const SETUP_SKILL: string = setupSkill;
 const ENGINE_WRAPPER: string = engineWrapper;
 
 /** Set by the single executable's entry (scripts/build-binary.ts): the platform's rivet-engine, bundled as a file. */

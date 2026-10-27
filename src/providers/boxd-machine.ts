@@ -3,9 +3,14 @@
 // Only machines that aren't isolated get them: every agent VM capcomd starts is isolated, and the service answers
 // those "VM is isolated" (403), checked live on 2026-10-24. The env vars are only a hint (isolated machines have them
 // too): a token coming back is the test. The token itself is never kept here; the SDK mints its own.
+// Processes that don't inherit the login shell's environment (an MCP server Hermes starts, which only passes PATH,
+// HOME and a few more; a systemd service) lose the BOXD_VM_* hints, so `capcomd setup` also records the machine in
+// ~/.capcomd/config.json as CAPCOMD_BOXD_MACHINE, which every capcomd process applies at start.
 import { readFileSync } from "fs";
 
-const HINTS = ["BOXD_VM_ID", "BOXD_VM_NAME", "BOXD_PROXY_ENDPOINT"];
+/** Env vars that say "maybe inside a boxd machine": boxd's own, and the one `capcomd setup` persists. */
+export const BOXD_MACHINE_HINTS = ["BOXD_VM_ID", "BOXD_VM_NAME", "BOXD_PROXY_ENDPOINT", "CAPCOMD_BOXD_MACHINE"];
+const HINTS = BOXD_MACHINE_HINTS;
 const METADATA_PORT = 9002;
 
 export interface BoxdMachine {
@@ -36,7 +41,8 @@ export function boxdMachine(source: Record<string, string | undefined> = process
   const fresh = deps.fetch !== undefined || deps.read !== undefined || source !== process.env;
   if (cached && !fresh) return cached;
   const p = (async (): Promise<BoxdMachine> => {
-    const name = source.BOXD_VM_NAME || source.BOXD_VM_ID || undefined;
+    const persisted = source.CAPCOMD_BOXD_MACHINE && source.CAPCOMD_BOXD_MACHINE !== "1" ? source.CAPCOMD_BOXD_MACHINE : undefined;
+    const name = source.BOXD_VM_NAME || source.BOXD_VM_ID || persisted || undefined;
     if (!HINTS.some((h) => source[h])) return { inside: false, credentials: false, detail: "not in a boxd machine" };
     const gw = gateway(deps.read ?? ((f) => readFileSync(f, "utf8")));
     if (!gw) return { inside: true, credentials: false, ...(name ? { name } : {}), detail: "in a boxd machine, but its metadata service can't be found (no default route)" };
