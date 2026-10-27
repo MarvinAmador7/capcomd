@@ -59,7 +59,7 @@ the same type, if out-of-tree providers become real.
   "title": "Cloud · boxd", "mark": "boxd", "listed": true,
   "caps": { "isolation": "vm", "snapshots": true, "hostBoundSecrets": true, "egressAllowlist": true,
             "interactive": true, "idleLifetime": "platform", "shell": true, "costs": false },
-  "settings": ["idleLifetime", "egressDefault"], "info": ["logins", "checkpoints"],
+  "settings": ["idleLifetime"], "info": ["logins", "checkpoints"],
   "resourceKinds": ["machine"], "actions": ["open_terminal", "delete"] }
 ```
 
@@ -118,12 +118,11 @@ sandbox read the daemon's current settings when the worker starts.
   daemon refuses anything under 15 min, which would delete live machines between renewals. boxd enforces it on the
   platform; Docker enforces it with the sweep, so a machine can outlive the setting by up to 5 min, and the help text
   says so. The environment variable is a new `CAPCOMD_SANDBOX_IDLE_SECONDS`.
-- **Default egress** (`egressDefault`, `choice`: `open` "Any site" | `needed` "Only what they need"). `needed` means
-  `egressFor(kind, auth)` (`config.ts:48`): GitHub, the AI's API and its login hosts, npm and nodejs.org. Precedence
-  stays `CAPCOMD_AGENT_EGRESS` → the profile's `egress` → this setting. **The default stays `open`** (ADR-019 §7),
-  so the row says "Any site" unless the owner changes it (question 1). Providers without `egressAllowlist`
-  (Docker) get an `info` row instead: "Any site · Containers can't limit which sites agents reach." The canvas
-  wording "Only what they need" appears only when it is the actual value.
+- **Egress: not a setting (decided by the owner, 2026-10-27).** No restriction by default (ADR-019 §7), and site
+  access is an internal policy best handled by the provider, not something capcomd's Settings exposes. So there is
+  no `egressDefault` field and no "Sites agents can reach" row; the "Containers can't limit which sites agents reach"
+  footer goes too. What stays: a profile's `egress` and `CAPCOMD_AGENT_EGRESS` for those who narrow it on purpose,
+  and the `egressAllowlist` cap for the engine's own check (`ops.ts:199`).
 - **Checkpoints** (`info`, the same on every provider). These are git checkpoints (ADR-019 §3) and have nothing to do
   with the provider, so the descriptor doesn't own the row; the daemon builds it from `CAPCOMD_AGENT_CHECKPOINT_MS`:
   "After each commit and every 10 minutes". Provider `checkpoint/restore` stays out of the UI.
@@ -248,11 +247,10 @@ New capabilities: `sandboxes` (the two GETs), `sandboxes.settings` (PATCH), `san
 1. **Read-only details (the slice the owner sees first).** Descriptors for docker and boxd; `RUN_SANDBOXES`,
    `SETTINGS_SANDBOXES`, `SANDBOX_LABEL` and the API enums are derived from the registry; `GET /v1/sandboxes`,
    `GET /v1/sandboxes/{name}` and `…/resources` with `terminalCommand`; `capcomd sandbox shell`; Logins `hostBound`.
-   The settings rows are shown with their real current values (1 hour, Any site) but can't be changed yet. App:
+   The idle lifetime row shows its real current value (1 hour) but can't be changed yet. App:
    Details… → `SandboxDetailsView`, with Open in Terminal working.
 2. **Settings.** `PATCH …/settings`, the `configure` scope, `sandboxes.*` in the user config, per-run recording in
-   `_sandbox`, and `AGENT_VM_TTL_SECONDS` and the worker `ttlMs` replaced by the run's value. `egressDefault: needed`
-   becomes selectable on boxd.
+   `_sandbox`, and `AGENT_VM_TTL_SECONDS` and the worker `ttlMs` replaced by the run's value.
 3. **Actions.** `delete` (owned and orphaned machines) and the audit events. `extend` follows; `stop` waits for
    resume support in the engine.
 
@@ -265,21 +263,20 @@ Deferred: cost, free-text fields (egress host lists), out-of-tree manifests, and
 | Engine | `LimaProvider implements SandboxProvider`; passes `tests/providers/conformance.ts` (ADR-020 §3) | – |
 | Descriptor | `{name:"lima", kind:"local", label:"Local VM", vendor:"Lima", mark:"lima", caps:{isolation:"vm", snapshots:true, hostBoundSecrets:false, egressAllowlist:false, interactive:true, idleLifetime:"sweep", shell:true, costs:false}, settings:["idleLifetime"], actions:["open_terminal","delete"]}` | – |
 | Availability | `available()` hook: is `limactl` on PATH and does it answer, cached like Docker | – |
-| Settings | `idleLifetime` comes for free (sweep), and `egressDefault` becomes the "can't limit" info row because `egressAllowlist` is false | – |
+| Settings | `idleLifetime` comes for free (sweep) | – |
 | Resources | `list` by prefix; ownership from the worker actors as for the others | – |
 | Shell | `shell(id)` hook: `limactl shell <vm>` | – |
 | App | appears in Runs on, gets a place section and a Details… screen; the mark falls back to `desktopcomputer` | optional: a bundled `lima` mark |
 
-A cloud ("Cloud · Acme") with host-bound secrets and egress control looks like boxd: `egressDefault` becomes a
-`choice`, and the Logins row reports bound logins once `auth login` learns to store into Acme's secrets. That piece of
+A cloud ("Cloud · Acme") with host-bound secrets looks like boxd: the Logins row reports bound logins once `auth login` learns to store into Acme's secrets. That piece of
 work is in `login.ts`, not in the surface.
 
 ## Consequences
 
 - One declaration per provider drives the engine's capability checks, the API and the app. Adding a provider no
   longer means editing five lists and an enum.
-- Two current defaults become visible and changeable: the 1 hour idle lifetime and open egress. The screen states
-  the true values, so the "Only what they need" copy is corrected unless the owner changes the default.
+- The 1 hour idle lifetime becomes visible and changeable. Egress stays open by default and out of Settings (the
+  canvas's "Sites agents can reach" row is removed).
 - A new token scope means existing app tokens see settings read-only until the token is reset.
 - `capcomd sandbox shell` gives a human an interactive shell in an agent's sandbox. That is new power. It is
   deliberately local-CLI-only, and the shell opens with a warning.
@@ -299,9 +296,8 @@ work is in `login.ts`, not in the surface.
 
 ## Open questions for the owner
 
-1. **Default egress.** Keep open (ADR-019 §7) and show "Any site", or make "Only what they need" the default on Cloud?
-   *Recommend: keep open, show it honestly, and offer "Only what they need" as the opt-in in phase 2. Narrowing by
-   default breaks agents that install from pip, crates and similar registries.*
+1. ~~**Default egress.**~~ **Decided (2026-10-27):** no restriction by default; site access is left to the provider
+   and isn't a capcomd setting.
 2. **Idle lifetime presets.** *Recommend 15 min, 1 h (default), 4 h and 12 h, the same on every provider. Docker's
    value is approximate, within 5 minutes.*
 3. **A new `configure` scope, or reuse `steer` for settings?** *Recommend `configure`. Settings are policy, not run
