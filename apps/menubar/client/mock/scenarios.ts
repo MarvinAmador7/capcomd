@@ -193,7 +193,7 @@ Bun.serve({
     // those unavailable, as a daemon would when codex isn't logged in or Docker isn't running.
     if (p === "/v1/run-options") return Response.json({
       drivers: [
-        { provider: "claude", label: "Claude Code", model: "claude-opus-5-5", available: true, reason: null, default: true, efforts: ["low", "medium", "high"], effort: "high" },
+        { provider: "claude", label: "Claude Code", model: "claude-opus-5-5", available: true, reason: null, default: true, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null },
         { provider: "codex", label: "Codex", model: "gpt-5-codex", available: !process.env.NO_CODEX, reason: process.env.NO_CODEX ? "codex isn't logged in" : null, default: false,
           efforts: ["minimal", "low", "medium", "high"], effort: "medium" },
       ],
@@ -233,7 +233,7 @@ Bun.serve({
       if (body.driver === "codex" && process.env.NO_CODEX) return err(422, "invalid", "codex can't drive this run: codex isn't logged in");
       if (body.sandbox !== undefined && !["docker", "boxd"].includes(body.sandbox)) return err(422, "invalid", `unknown sandbox ${JSON.stringify(body.sandbox)}`);
       if (body.sandbox === "docker" && process.env.NO_DOCKER) return err(422, "invalid", "can't run locally: Docker isn't running");
-      const levels: Record<string, string[]> = { claude: ["low", "medium", "high"], codex: ["minimal", "low", "medium", "high"] };
+      const levels: Record<string, string[]> = { claude: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high"] };
       if (body.effort !== undefined && !levels[body.driver ?? "claude"].includes(body.effort)) return err(422, "invalid", `effort must be one of ${levels[body.driver ?? "claude"].join(", ")}`);
       console.log(`runs.create goal=${JSON.stringify(body.goal)} driver=${body.driver ?? "(default)"} sandbox=${body.sandbox ?? "(default)"} effort=${body.effort ?? "(default)"}`);
       if (process.env.NO_REPO && !body.repo) return err(422, "invalid", "repo is required: this daemon has no default repository (CAPCOMD_REPO).");

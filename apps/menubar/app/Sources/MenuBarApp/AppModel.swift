@@ -180,14 +180,16 @@ final class AppModel {
   }
   func pickSandbox(_ name: String) { store.prefs.startSandbox = name; revision &+= 1 }
   /// The driver's reasoning effort for new runs: the one last picked for it while it still offers it, else its default.
+  /// nil is "Auto": nothing is sent and the CLI picks (Claude Code has no fixed default; it chooses per model).
   var startEffort: String? {
     guard let d = startDriver, let levels = d.efforts, !levels.isEmpty else { return nil }
     _ = revision
-    return store.prefs.startEffort(d.provider).flatMap { levels.contains($0) ? $0 : nil } ?? d.effort.flatMap { levels.contains($0) ? $0 : nil }
+    if let p = store.prefs.startEffort(d.provider) { return p == EffortBars.auto ? nil : (levels.contains(p) ? p : d.effort) }
+    return d.effort.flatMap { levels.contains($0) ? $0 : nil }
   }
-  func pickEffort(_ effort: String) {
+  func pickEffort(_ effort: String?) {
     guard let d = startDriver else { return }
-    store.prefs.setStartEffort(effort, for: d.provider); revision &+= 1
+    store.prefs.setStartEffort(effort ?? EffortBars.auto, for: d.provider); revision &+= 1
   }
   /// The driver new runs go to: the one last picked while the daemon still offers it, else the project's default.
   var startDriver: DriverInfo? {

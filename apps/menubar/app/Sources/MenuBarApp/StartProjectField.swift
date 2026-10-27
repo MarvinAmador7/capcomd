@@ -132,9 +132,11 @@ struct StartProjectField: View {
           Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true)
         }
         // Reasoning effort for the picked driver, lowest first; the bars show it on the chip.
-        if let levels = current.efforts, !levels.isEmpty, let effort = model.startEffort {
+        if let levels = current.efforts, !levels.isEmpty {
           Divider()
-          Picker("Effort", selection: Binding(get: { effort }, set: { model.pickEffort($0) })) {
+          Picker("Effort", selection: Binding(get: { model.startEffort ?? EffortBars.auto }, set: { model.pickEffort($0 == EffortBars.auto ? nil : $0) })) {
+            // Auto: send nothing; the CLI picks (offered when the driver has no fixed default).
+            if current.effort == nil { Text("Auto").tag(EffortBars.auto) }
             ForEach(Array(levels.enumerated()), id: \.element) { i, l in
               Label { Text(verbatim: EffortBars.title(l)) } icon: { Image(systemName: "cellularbars", variableValue: EffortBars.value(i, of: levels.count)) }.tag(l)
             }
@@ -276,12 +278,15 @@ struct EffortBars: View {
       .font(Theme.Composer2.effortFont).foregroundStyle(Theme.Composer2.effortText)
       .accessibilityHidden(true)
   }
-  /// The bar fill for level `i` of `n` (lowest first): the top level fills all four bars.
-  static func value(_ i: Int, of n: Int) -> Double { n <= 1 ? 1 : (Double(4 - (n - 1 - i)) / 4).clamped(0.25, 1) }
-  static func title(_ level: String) -> String { level.prefix(1).uppercased() + level.dropFirst() }
+  /// The bar fill for level `i` of `n` (lowest first), spread over four bars: the top level fills all four; with more
+  /// than four levels the top two share four bars (Claude's xhigh and max).
+  static func value(_ i: Int, of n: Int) -> Double { n <= 1 ? 1 : Double(max(1, Int((Double(i + 1) * 4 / Double(n)).rounded(.up)))) / 4 }
+  static func title(_ level: String) -> String {
+    switch level { case "xhigh": "Extra high"; case "max": "Max"; default: level.prefix(1).uppercased() + level.dropFirst() }
+  }
+  /// The stored pick for "let the CLI choose".
+  static let auto = "auto"
 }
-
-extension Double { func clamped(_ lo: Double, _ hi: Double) -> Double { Swift.min(Swift.max(self, lo), hi) } }
 
 /// A keycap (⌘K, ⌥, Space).
 struct KeyCap: View {
