@@ -49,10 +49,11 @@ export function agentRuntime(spec: unknown): { provider: "claude" | "codex" | nu
 export function rivetSource(): HarnessSource {
 	const runsIndex = () => recentRuns(500);
 	const runs = async () => Promise.all(runsIndex().map(async (r) => {
-		const meta = (await scope(r.runId).getScope({}).catch(() => null)) as { goal?: string | null } | null;
+		const meta = (await scope(r.runId).getScope({}).catch(() => null)) as { goal?: string | null; ended?: { state: string } | null } | null;
 		const agents = meta ? await scope(r.runId).listAgents({}).catch(() => []) : [];
 		const live = (agents as Array<{ status: string }>).some((a) => a.status === "running" || a.status === "pending" || a.status === "paused");
-		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : agents.length ? "idle" : "new", goal: meta?.goal ?? null, repo: r.repo, createdAt: isoTs(r.createdAt) };
+		// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
+		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal: meta?.goal ?? null, repo: r.repo, createdAt: isoTs(r.createdAt) };
 	}));
 	return {
 		version: VERSION,
@@ -179,8 +180,9 @@ export function rivetSource(): HarnessSource {
 				const r = await resumeAgents(runId, agentId, by).catch((e) => { if ((e as { code?: string }).code === "conflict") return { resumed: [] as string[] }; throw e; });
 				return { changed: r.resumed, pending: [], noop: r.resumed.length ? null : `${who} no paused agent to resume` };
 			}
-			const r = await cancelAny(runId, agentId, `cancelled by ${by}`);
-			if (r.kind === "agents") return { changed: r.agents.cancelled, pending: [], noop: r.agents.cancelled.length ? null : `nothing to cancel in ${runId}: every agent has ended` };
+			const r = await cancelAny(runId, agentId, `cancelled by ${by}`, by);
+			// A run that hadn't ended is cancelled even with no agent left to stop (runEnded): only an ended run is the noop.
+			if (r.kind === "agents") return { changed: r.agents.cancelled, pending: [], noop: r.agents.cancelled.length || r.agents.runEnded ? null : agentId ? `nothing to cancel in ${runId}: every agent has ended` : `nothing to cancel: ${runId} has ended` };
 			return { changed: r.agents?.cancelled ?? [], pending: [], noop: r.run.changed ? null : `${runId} is ${r.run.state}; nothing to cancel` };
 		},
 		send: async (runId, to, body, key, skills) => {

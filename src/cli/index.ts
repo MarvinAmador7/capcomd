@@ -373,6 +373,10 @@ async function main(argv: string[]): Promise<number> {
           plannerRef = d.ref;
         }
         if (planner && (values.profile || values.agent || (values.set as string[] | undefined)?.length || values.overrides)) usage("--profile/--set pick the worker of the built-in recipe; a planner agent picks its own workers (from its profile's children.allowedChildProfiles)");
+        // The checks the planner's spawn makes (its profile, the env snapshot its CLI needs on this run's sandbox, egress),
+        // made before the run is created or detached: a run whose planner can't start is refused with the reason here,
+        // instead of starting and then sitting with no agent.
+        if (plannerRef) (await import("../primitives/ops")).spawnChecks(plannerRef);
         // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
         if (!planner && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
         // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
@@ -680,11 +684,11 @@ async function main(argv: string[]): Promise<number> {
         const runId = positionals[1] ?? usage("runId required: capcomd cancel <runId> [agentId]");
         // A recipe run (planner flow over the primitives) keeps the run-level cancel contract
         // ({runId, state, changed}); its scope agents are cancelled alongside.
-        const c = await (await import("../primitives/ops")).cancelAny(runId, positionals[2], values.reason as string | undefined);
+        const c = await (await import("../primitives/ops")).cancelAny(runId, positionals[2], values.reason as string | undefined, "operator");
         if (c.kind === "agents") {
           const r = c.agents;
           if (json) out(r);
-          else console.log(r.cancelled.length ? `✓ cancelled ${r.cancelled.join(", ")}` : `nothing to cancel (${r.affected.map((a: { agentId: string; status: string }) => `${a.agentId}=${a.status}`).join(", ") || "no agents"})`);
+          else console.log(r.cancelled.length ? `✓ cancelled ${r.cancelled.join(", ")}` : r.runEnded ? `✓ Run ${runId} cancelled` : `nothing to cancel (${r.affected.map((a: { agentId: string; status: string }) => `${a.agentId}=${a.status}`).join(", ") || "no agents"})`);
           return EXIT.ok;
         }
         const r = c.run;

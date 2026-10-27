@@ -330,7 +330,10 @@ describe("capcomd run --planner-provider / --sandbox (checked before the engine 
 		expect(noCodex.error).toMatchObject({ code: "config", message: "codex can't drive this run: Not logged in to Codex (run capcomd auth login codex)" });
 		const noPlanner = await run(["--planner-provider", "claude"], world({ profiles: { schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey" } } } }));
 		expect(noPlanner.error).toMatchObject({ code: "config", message: expect.stringContaining("no planner profile") });
-		const ok = await run(["--planner-provider", "codex", "--sandbox", "docker"], world({ logins: ["codex"] }));
+		// Docker without an env snapshot: the planner's CLI would be missing, so the run is refused before it starts.
+		const noSnapshot = await run(["--planner-provider", "codex", "--sandbox", "docker"], world({ logins: ["codex"] }));
+		expect(noSnapshot.error).toMatchObject({ code: "config", message: expect.stringContaining("no capcomd env snapshot") });
+		const ok = await run(["--planner-provider", "codex", "--sandbox", "docker"], world({ logins: ["codex"], env: { CAPCOMD_ENV_SNAPSHOT: "capcomd-env-test" } }));
 		expect(ok.error).toMatchObject({ code: "engine_unreachable" });
 	}, 30_000);
 });

@@ -37,7 +37,7 @@ export const Run = z.object({
 	id: z.string(),
 	projectId: z.string().nullable(),
 	label: z.string().nullable(),
-	state: z.string().describe("new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"),
+	state: z.string().describe("new, idle, running or unknown; failed or cancelled when the run ended without its agents ending it (a failed start, Stop on a run with no agent running: `run.ended`); starting in the runs.create response, before the run's process has registered it"),
 	goal: UntrustedText.nullable(),
 	repo: z.string().nullable().describe("Repository the run works in (absolute path or remote URL)"),
 	createdAt: Timestamp.nullable(),
@@ -382,7 +382,7 @@ export const contract = {
 			method: "POST", path: "/v1/runs/{runId}/cancel", inputStructure: "detailed",
 			description: "Stop the run (no body): every agent that hasn't ended is cancelled and its VM destroyed (`capcomd cancel <runId>`). " +
 				"Confirmed by agent.cancelled per agent and run.cancelled. " +
-				`409 \`conflict\` when nothing is left to cancel. ${WRITE_DOC}`,
+				`409 \`conflict\` when the run has already ended (a run with no agent running is cancelled, not refused). ${WRITE_DOC}`,
 		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunControl),
 	},
 	agents: {

@@ -180,6 +180,27 @@ export interface SpawnOpts {
   /** Start from this finished agent's work (contract.from): its branch, else its last checkpoint. */
   continueFrom?: string;
 }
+/**
+ * What spawning `ref` (a profile, or an encoded ref with overrides) checks before anything is recorded: the profile
+ * resolves, its CLI has an env snapshot on `source`'s sandbox, and the sandbox can enforce its egress. `capcomd run`
+ * asks the same of its planner before it starts the run, so a run that can't start is refused, not left started.
+ */
+export function spawnChecks(ref: string | null, source: Record<string, string | undefined> = process.env) {
+  let resolved;
+  try { resolved = resolveAgent(ref); } catch (e) {
+    if (e instanceof AgentConfigError) throw new RelayError("config", e.message, "Check the profile with `capcomd agents show <name>`; overrides may only narrow unless --operator.");
+    throw e;
+  }
+  const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
+  const envProblem = envSnapshotProblem(spec?.provider, source);
+  if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
+  // A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist).
+  const egress = spec?.egress as string[] | undefined;
+  if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox(source) && !sandboxCaps(source).egressAllowlist)
+    throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
+  return { resolved, spec };
+}
+
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
   if (o.report) o = { ...o, contract: { ...(o.contract ?? {}), report: true } };
@@ -192,23 +213,11 @@ export async function spawnAgent(o: SpawnOpts) {
     await namedCheck(o.runId, pin); // unknown names are refused here, not at verify time
     o = { ...o, contract: { ...(o.contract ?? {}), check: pin } };
   }
-  let resolved;
   const ref = o.profile ? encodeAgentRef(o.profile, o.overrides) : null;
-  try { resolved = resolveAgent(ref); } catch (e) {
-    if (e instanceof AgentConfigError) throw new RelayError("config", e.message, "Check the profile with `capcomd agents show <name>`; overrides may only narrow unless --operator.");
-    throw e;
-  }
   const scope = o.parent ?? "operator";
   const agentId = stableId("agt", `${o.runId}\0${scope}`, o.key);
-  const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
   // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
-  const runSource = await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId);
-  const envProblem = envSnapshotProblem(spec?.provider, runSource);
-  if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
-  // A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist).
-  const egress = spec?.egress as string[] | undefined;
-  if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox(runSource) && !sandboxCaps(runSource).egressAllowlist)
-    throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(runSource)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
+  const { resolved, spec } = spawnChecks(ref, await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId));
   // Requested budget: the contract's `budget` ({usd, turns, wallSeconds}), then --budget per unit.
   let requested: Budget;
   try { requested = { ...parseBudget(o.contract?.budget), ...(o.budget ?? {}) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Budget units: usd, turns, wallSeconds (e.g. --budget usd=2,turns=40)."); }
@@ -743,7 +752,7 @@ export async function pauseAgents(runId: string, agentId?: string, by = "operato
  * ({state, changed}) and its scope agents are cancelled alongside; a primitives run cancels agents (cancelAgents); a run
  * with no scope cancels the run actor.
  */
-export async function cancelAny(runId: string, agentId?: string, reason?: string): Promise<
+export async function cancelAny(runId: string, agentId?: string, reason?: string, by?: string): Promise<
   | { kind: "run"; run: { runId: string; state: string; changed: boolean }; agents: { cancelled: string[] } | null }
   | { kind: "agents"; agents: Awaited<ReturnType<typeof cancelAgents>> }> {
   const S = await import("./state");
@@ -754,12 +763,12 @@ export async function cancelAny(runId: string, agentId?: string, reason?: string
     const agents = run.changed ? await cancelAgents(runId, undefined, reason ?? "run cancelled").catch(() => null) : null;
     return { kind: "run", run, agents };
   }
-  if (agentId || scoped) return { kind: "agents", agents: await cancelAgents(runId, agentId, reason) };
+  if (agentId || scoped) return { kind: "agents", agents: await cancelAgents(runId, agentId, reason, by) };
   return { kind: "run", run: await cancelRun(runId), agents: null };
 }
 
 /** Cancel an agent (or the whole run) and every descendant; destroy their VMs. Idempotent. */
-export async function cancelAgents(runId: string, agentId?: string, reason?: string) {
+export async function cancelAgents(runId: string, agentId?: string, reason?: string, by?: string) {
   await assertEngine();
   const c = client();
   const s = c.scope.getOrCreate([runId]);
@@ -772,8 +781,29 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
     const wk = await w.getWorker({ workerId: a.agentId });
     if (wk && wk.state !== "destroyed") await w.drainWorker({ workerId: a.agentId });
   }
-  if (!agentId) await c.run.getOrCreate([runId]).cancel({ runId });
-  return { runId, target: agentId ?? null, cancelled: res.cancelled, affected: affected.map((a: { agentId: string; status: string }) => ({ agentId: a.agentId, status: a.status })) };
+  let runEnded = false;
+  if (!agentId) {
+    await c.run.getOrCreate([runId]).cancel({ runId });
+    // A run its agents didn't end (none ever ran: it never started, or its planner couldn't be spawned) ends here.
+    runEnded = await endRun(runId, "cancelled", reason ?? "run cancelled", by).then((r) => r.changed, () => false);
+  }
+  return { runId, target: agentId ?? null, cancelled: res.cancelled, affected: affected.map((a: { agentId: string; status: string }) => ({ agentId: a.agentId, status: a.status })), ...(runEnded ? { runEnded } : {}) };
+}
+
+/**
+ * Record that the run itself ended (scope RUN_ENDED → lifecycle run.failed / run.cancelled), unless it already has:
+ * by its agents (the lifecycle feed's own fold) or an earlier end. `changed`: this call ended it.
+ */
+export async function endRun(runId: string, state: "failed" | "cancelled", reason: string, by?: string | null): Promise<{ changed: boolean; state: string }> {
+  await assertEngine();
+  const s = client().scope.getOrCreate([runId]);
+  const had = (await s.getScope({}))?.ended;
+  if (had) return { changed: false, state: had.state };
+  const { runPhase } = await import("../api/lifecycle");
+  if (runPhase(runId, await s.getEvents({})) === "ended") return { changed: false, state: "ended" };
+  const r = await s.endRun({ state, reason, by: by ?? null });
+  if (r.changed && state === "failed") await client().run.getOrCreate([runId]).configFail({ runId, reason }).catch(() => {});
+  return { changed: r.changed, state: r.ended.state };
 }
 
 export async function listScope(runId: string) {
