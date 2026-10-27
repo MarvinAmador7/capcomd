@@ -11,11 +11,10 @@ import CapcomdBot
 struct TaskRow: View {
   let task: UntrustedText
   @State private var open = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Button { withAnimation(Theme.Motion.ease(reduceMotion)) { open.toggle() } } label: {
+      Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
         HStack(spacing: Theme.Content.thinkGap) {
           Chevron(open: open)
           Text("Task")

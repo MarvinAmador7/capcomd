@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: the panel no longer jumps when it changes height. Folding a thread's task (or a thought, a command or a
+  diff) used to show the panel half the difference lower for a frame, so the header flashed down and back up; folds
+  now snap without animating, and the window follows the panel in the same frame.
 - Menu bar app: an agent's task at the top of its thread is folded by default ("› Task" and its first line, like a
   thought); a click shows all of it, no longer cut at four lines.
 - Menu bar app: a reviewer's verdict in its thread shows as a card (a green or red seal, "Passed review" or "Didn't
