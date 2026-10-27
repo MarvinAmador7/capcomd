@@ -20,7 +20,9 @@ struct ThreadComposer: View {
 
   private var agent: AgentNode? { model.tree(runId).flatMap { [$0] + flat($0.children) }.first { $0.id == agentId } }
   private func flat(_ ns: [AgentNode]) -> [AgentNode] { ns.flatMap { [$0] + flat($0.children) } }
-  private var name: String { agent?.name ?? "agent" }
+  private var role: String { agent?.name ?? "agent" }
+  /// The bot's name leads ("Tell Bolt…", "Bolt is writing…"); the role is the fallback.
+  private var name: String { model.botName(runId: runId, agentId: agentId) ?? role }
   private var ended: Bool { agent.map { [.done, .failed, .cancelled, .handedOff].contains($0.status) } ?? false }
   private var canPause: Bool { model.capabilities.contains(Capability.agentPause) }
   /// Esc or the stop button: pause this agent (and its subtree) while it works and the field is empty.
@@ -42,7 +44,9 @@ struct ThreadComposer: View {
   private func handle(_ n: AgentNode) -> String { "@" + n.name + (n.suffix.map { "-\($0)" } ?? "") }
   private var mentionRows: [AgentNode] {
     guard case .mention(let q) = trigger else { return [] }
-    return Array(model.descendants(runId: runId, of: agentId).filter { q.isEmpty || handle($0).lowercased().contains(q) }.prefix(Theme.Thread.popMaxRows))
+    return Array(model.descendants(runId: runId, of: agentId).filter { n in
+      q.isEmpty || handle(n).lowercased().contains(q) || (model.botName(runId: runId, agentId: n.id)?.lowercased().contains(q) ?? false)
+    }.prefix(Theme.Thread.popMaxRows))
   }
   private var skillRows: [SkillInfo] {
     guard case .skill(let q) = trigger else { return [] }
@@ -73,7 +77,7 @@ struct ThreadComposer: View {
     return VStack(alignment: .leading, spacing: Theme.Composer2.gap) {
       HStack(spacing: Theme.Composer2.chipGap) {
         Chip2(leading: BotAvatar(traits: model.bot(runId: runId, agentId: agentId), size: .xs), text: name, onRemove: nil)
-          .help(model.botName(runId: runId, agentId: agentId) ?? "")
+          .help(name == role ? "" : role)
         chips
       }
       editor.padding(.horizontal, Theme.Composer2.textInset)
@@ -84,8 +88,14 @@ struct ThreadComposer: View {
           if canAttachSkills { pill("/ Skill") { insertTrigger("/") } }
         }
         .padding(3).background(Capsule().fill(Theme.Composer2.pillGroupFill))
+        .fixedSize()   // the pills never truncate; the hint gives way first
         Spacer(minLength: 0)
-        if focused { Text("↩ send · ⇧↩ newline").font(Theme.Composer2.hintFont).foregroundStyle(Theme.Composer2.hintText).lineLimit(1).transition(.opacity) }
+        if focused {
+          ViewThatFits(in: .horizontal) {
+            Text("↩ send · ⇧↩ newline"); Text("↩ send"); Color.clear.frame(width: 0)
+          }
+          .font(Theme.Composer2.hintFont).foregroundStyle(Theme.Composer2.hintText).lineLimit(1).transition(.opacity)
+        }
         sendButton(ready: ready)
       }
     }
@@ -114,7 +124,7 @@ struct ThreadComposer: View {
           .onKeyPress(.downArrow) { move(1) }
           .onKeyPress(.tab) { pickHighlighted() ? .handled : .ignored }
           .onKeyPress(.escape) { escape() }
-          .accessibilityLabel("Message \(name)" + (model.botName(runId: runId, agentId: agentId).map { " \($0)" } ?? ""))
+          .accessibilityLabel(name == role ? "Message \(name)" : "Message \(name), \(role)")
       }
       .overlay(alignment: .topLeading) {
         if text.isEmpty {
@@ -284,7 +294,7 @@ struct ThreadComposer: View {
   }
 }
 
-/// `.mi`: profile icon · name · suffix · status, highlighted blue.
+/// `.mi`: the bot · its name · role and suffix · status, highlighted blue. The inserted handle stays role-based.
 struct MentionRow: View {
   let node: AgentNode
   let on: Bool
@@ -292,8 +302,8 @@ struct MentionRow: View {
   var body: some View {
     HStack(spacing: Theme.Thread.skillGap) {
       BotAvatar(traits: bot, size: .xs)
-      Text(verbatim: node.name).font(Theme.Thread.mentionFont).foregroundStyle(on ? Color.white : Theme.Thread.mentionText)
-      if let n = bot?.name { Text(verbatim: n).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
+      Text(verbatim: bot?.name ?? node.name).font(Theme.Thread.mentionFont).foregroundStyle(on ? Color.white : Theme.Thread.mentionText)
+      if bot != nil { Text(verbatim: node.name).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
       if let s = node.suffix { Text(verbatim: s).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
       Spacer(minLength: 0)
       Text(status).font(Theme.Thread.mentionStatus).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionStatusText)

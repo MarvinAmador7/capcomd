@@ -340,8 +340,9 @@ enum Theme {
   /// minus the font's own (SF 13 ≈ 15.5, SF 12 ≈ 14.3, SF 12.5 ≈ 15, SF Mono 11.5 ≈ 13.7, SF Mono 10.5 ≈ 12.5).
   enum Content {
     static let label = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255)
-    static let padding = EdgeInsets(top: 2, leading: 14, bottom: 0, trailing: 14)   // .th: 16 inside the panel's 10, less its 12 bleed
+    static let padding = EdgeInsets(top: 10, leading: 14, bottom: 0, trailing: 14)   // .th: 16 inside the panel's 10, less its 12 bleed
     static let fade: CGFloat = 24
+    static let topFade: CGFloat = 14  // the thread softens under the header instead of cutting off (the top padding at rest)
     // Prose (.p, .h, ul.l, .icd)
     static let proseFont = Font.system(size: 13), proseText = Color.white.opacity(0.86), proseSpacing: CGFloat = 3.5, proseBottom: CGFloat = 9
     static let headingFont = Font.system(size: 13, weight: .semibold), headingText = Color.white
