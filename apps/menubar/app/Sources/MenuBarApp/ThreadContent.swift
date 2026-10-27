@@ -328,7 +328,12 @@ struct ThreadItemRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       switch item.kind {
-      case "say", "result": blocks
+      case "say", "result":
+        // A reviewer's message that ends in its verdict JSON: the prose, then the verdict as a card.
+        if let tail = item.verdictTail {
+          if !tail.prose.isEmpty { BlocksView(runId: runId, agentId: agentId, blocks: tail.prose, leadingMargin: above) }
+          VerdictCard(verdict: tail.verdict)
+        } else { blocks }
       case "thinking": ThinkingRow(runId: runId, agentId: agentId, item: item, seconds: item.thinkingSeconds(next: next))
       case "tool": ToolCallRow(item: item)
       case "plan":
@@ -559,6 +564,39 @@ struct DiffCard<Detail: View>: View {
 }
 
 /// `.ho`: a child that finished: profile icon, name + suffix, "handed back", its summary and artifacts; › opens its thread.
+/// A reviewer's verdict (its message was `{"passed", "reasons"}`) as a card instead of raw JSON: a green or red seal
+/// with "Passed review" / "Didn't pass review", then each reason. The reasons are agent text, shown as plain text.
+struct VerdictCard: View {
+  let verdict: Verdict
+  var body: some View {
+    VStack(alignment: .leading, spacing: Theme.Content.verdictGap) {
+      HStack(spacing: Theme.Content.handoffGap) {
+        Image(systemName: verdict.passed ? "checkmark.seal.fill" : "xmark.seal.fill").font(Theme.Content.verdictIcon)
+          .foregroundStyle(verdict.passed ? Theme.green : Theme.red)
+        Text(verdict.passed ? "Passed review" : "Didn't pass review").font(Theme.Content.handoffName).foregroundStyle(.white)
+      }
+      if !verdict.reasons.isEmpty {
+        VStack(alignment: .leading, spacing: Theme.Content.verdictReasonGap) {
+          ForEach(Array(verdict.reasons.enumerated()), id: \.offset) { _, r in
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Content.handoffGap) {
+              Text(verbatim: "•").foregroundStyle(Theme.Content.verdictBullet).accessibilityHidden(true)
+              Text(verbatim: r).foregroundStyle(Theme.Content.handoffSummaryText).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(Theme.Content.handoffSummary)
+          }
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(Theme.Content.handoffPadding)
+    .background(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).fill(Theme.Content.handoffFill))
+    .overlay(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).strokeBorder(Theme.Content.handoffStroke, lineWidth: 0.5))
+    .padding(.bottom, Theme.Content.handoffBottom)
+    .accessibilityElement(children: .combine)
+  }
+}
+
 struct HandoffCard: View {
   @Environment(AppModel.self) private var model
   let runId: String
