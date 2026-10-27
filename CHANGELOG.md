@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: when capcomd comes back after being unreachable, the app reads again what it offers, so the composer's
+  Local / VM switch and driver chip return. Opened while capcomd was down, the app used to lose them until restarted.
 - Menu bar app: the panel no longer jumps when it changes height. Folding a thread's task (or a thought, a command or a
   diff) used to show the panel half the difference lower for a frame, so the header flashed down and back up; folds
   now snap without animating, and the window follows the panel in the same frame.
