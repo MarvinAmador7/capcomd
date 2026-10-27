@@ -54,7 +54,7 @@ extension CapcomdStore {
   public func traceRows(runId: String, nowMs: Int, collapsed: Set<String> = []) -> [TraceRow] {
     let spans = traces[runId]?.value ?? []
     let steps = steps(forRun: runId)
-    let pending = steps.filter { $0.status == .running || $0.status == .queued || $0.status == .waiting }.map { s in
+    let pending = steps.filter { [.running, .queued, .waiting, .paused].contains($0.status) }.map { s in
       (id: s.id, label: s.text, kind: s.kind, status: s.status, startMs: s.epochMs)
     }
     return TraceShape.rows(spans: spans, pending: pending, nowMs: nowMs, collapsed: collapsed)

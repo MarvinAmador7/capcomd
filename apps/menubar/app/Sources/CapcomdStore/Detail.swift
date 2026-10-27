@@ -129,7 +129,7 @@ public enum TraceShape {
     return out.map { r in
       var r = r
       let s = Double(r.startMs - t0) / span
-      let e = r.status == .queued ? s : Double((r.endMs ?? (r.status == .running ? t1 : r.startMs)) - t0) / span
+      let e = r.status == .queued || r.status == .paused ? s : Double((r.endMs ?? (r.status == .running ? t1 : r.startMs)) - t0) / span
       r.laneStart = min(max(s, 0), 1); r.laneWidth = min(max(e - s, 0), 1 - r.laneStart)
       return r
     }

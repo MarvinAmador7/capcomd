@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Trace: git steps are named after their command (push, clone, checkout) even when git gets options first; they read
+  "-c" before, and a push could show the remote instead of the branch. In the menu bar's Trace view, paused agents
+  show a pause mark instead of looking queued.
 - Menu bar app: each goal you start is now its own card. Before, every run in the same repository was folded into one
   card, titled after whichever goal came first; reruns of the same goal still share a card. A paused agent now shows
   a pause mark in the tree and its thread.

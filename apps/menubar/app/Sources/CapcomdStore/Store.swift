@@ -450,7 +450,7 @@ public final class CapcomdStore {
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == s.id }) { runs[runId]?.steps[i] = s } else { runs[runId]?.steps.append(s) }
   }
   nonisolated static func stepStatus(_ s: AgentStatus) -> StepStatus {
-    switch s { case .running: .running; case .done, .handedOff: .done; case .failed, .cancelled: .failed; case .pending, .paused, .unknown: .queued }
+    switch s { case .running: .running; case .done, .handedOff: .done; case .failed, .cancelled: .failed; case .paused: .paused; case .pending, .unknown: .queued }
   }
   nonisolated static func phase(_ k: ProfileKind) -> Phase { switch k { case .planner: .plan; case .critic: .ship; default: .build } }
   /// "fix/backfill → main" for merges; host/name for other kinds. Built only from structured subject fields.
