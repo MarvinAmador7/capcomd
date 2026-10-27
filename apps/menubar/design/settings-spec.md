@@ -2,7 +2,7 @@
 
 Status: **approved on the design canvas; built.** The boards are `settings/*.dc.html` (HTML with inline CSS) and
 they win wherever this text and they differ. `settings/CloudExplore.dc.html` is a place's Details screen (§4.1), built
-read-only for ADR-021 phase 1, minus what the owner removed (below). Swift: `app/Sources/MenuBarApp/Settings*.swift`;
+read-only for ADR-021 phase 1 and with its settings changeable in phase 2, minus what the owner removed (below). Swift: `app/Sources/MenuBarApp/Settings*.swift`;
 the data and its mapping: `app/Sources/CapcomdStore/Settings.swift` and `Sandboxes.swift`.
 
 ## 1. Window
@@ -81,7 +81,7 @@ accounts`); from run-options' `boxd` place. Footer "Agents on Cloud run on boxd 
 bar app talks to capcomd with its own token. Reset it if it may have been copied: the old one stops working at once."
 Reset… asks first (`States.dc.html`: the smiling bot, "Reset the app token?", "This app gets a new token, and the old
 one stops working at once. Anything else using it needs the new one.", Cancel / **Reset** destructive), then Terminal
-revokes the active clients named `menubar` and runs `capcomd clients add menubar --scopes read,steer,approve`, and a
+revokes the active clients named `menubar` and runs `capcomd clients add menubar --scopes read,steer,approve,configure`, and a
 sheet takes the new token. (`capcomd clients list` has no token hashes, so the app's client is found by that name.)
 
 ## 4. Runs (`Runs.dc.html`)
@@ -112,25 +112,27 @@ Footers: Local "Agents work in containers on this Mac."
 The last place: "An agent environment holds the agents' tools, built once for each place they run. It never holds
 logins or keys."
 
-### 4.1 A place's details (`CloudExplore.dc.html`; ADR-021 phase 1)
+### 4.1 A place's details (`CloudExplore.dc.html`; ADR-021 phases 1 and 2)
 
 **Details…** pushes one generic screen in place of the Runs pane (not a sheet: the pane's content swaps, the window
 fits it like any pane and is titled "Runs › Cloud"); "‹ Runs" at the top, ⌘[ or Esc goes back. The sections and their
-order are fixed here, as on the board; which rows appear and what they say come from the daemon. Everything is
-read-only in phase 1 except Open in Terminal. Owner's removals from the board: no "Sites agents can reach" row and no
+order are fixed here, as on the board; which rows appear and what they say come from the daemon. Phase 1 is
+read-only except Open in Terminal; phase 2 lets the app change a setting the daemon marks `editable` (the idle
+lifetime). Owner's removals from the board: no "Sites agents can reach" row and no
 "can't limit sites" copy (site access isn't a capcomd setting), no cost, no "asleep" machines.
 
 | Section | Rows | From |
 |---|---|---|
 | Header | mark, `title`, Default / Make Default (as in Runs) | `GET /v1/sandboxes` descriptor |
 | (status) | the availability row (as in Runs); then any `status` rows the daemon sends (a provider's key); then Agent environment (as in Runs, with Build… / Rebuild…) | `/v1/sandboxes`, `/v1/sandboxes/{name}` `info`, `/v1/environments` |
-| Machines | one row per machine: a dot (green running, orange left behind, ring starting / stopping), "worker · Add an abs(a) function…" (role · the task's first line) or "Left behind · no agent owns it", its age ("4 min", "2 h"), **Open in Terminal**; owned machines first, newest first; the tooltip adds the machine's id and when it is deleted if left idle. "No machines running." when there are none. Then "Delete idle machines after" (`idleLifetime`): a disabled popup showing its value ("1 hour") and help | `GET /v1/sandboxes/{name}/resources`, every 5 s while the screen shows; `idleLifetime` from `settings` |
+| Machines | one row per machine: a dot (green running, orange left behind, ring starting / stopping), "worker · Add an abs(a) function…" (role · the task's first line), "checks · run-8kq2" / "login · Logging in to Claude Code" / "environment · Building the agent environment" for capcomd's own short-lived machines (`owner.kind` other than `agent`: role · its run, else role · the daemon's `label`), or "Left behind · no agent owns it" (no owner at all, or `state: "orphaned"`), its age ("4 min", "2 h"), **Open in Terminal** (never on capcomd's own machines); owned machines first, newest first; the tooltip adds the machine's id and when it is deleted if left idle. "No machines running." when there are none. Then "Delete idle machines after" (`idleLifetime`): a popup of its choices ("1 hour") and help, disabled unless it can be changed (below) | `GET /v1/sandboxes/{name}/resources`, every 5 s while the screen shows; `idleLifetime` from `settings` |
 | Safety | **Logins**: "Bound" (green) when every login here is bound to its AI's API, "Codex isn't bound" (orange) when some aren't, "Not bound" when none are, "No logins"; the sub names the hosts. **Checkpoints**: the daemon's `display` ("After each commit and every 10 minutes"). Footer: "Local (Docker) can't bind logins to a host; Cloud does." from the descriptors' `caps.hostBoundSecrets` | `/v1/logins` `hostBound` / `boundTo`; `info` rows |
 | Options | settings this app doesn't place (only when there are any) | `settings` |
 
-Rows render by field type: `choice` → popup (disabled in phase 1), `toggle` → switch (disabled), `info` / `status` →
+Rows render by field type: `choice` → popup (enabled only as below), `toggle` → switch (disabled), `info` / `status` →
 a value (a `status` row's `state` picks its dot); a type the app doesn't know shows its `label` and `display`
-read-only. A value set in capcomd's environment (`source: "env"`) shows the daemon's `display` instead of a control.
+read-only. A value set in capcomd's environment (`source: "env"`, `editable: false`) shows the daemon's `display` instead of a
+control ("Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment").
 Marks are bundled by id (`PlaceMarks`): `docker` the official mark, `boxd` the cloud glyph for now; an unknown id gets
 `desktopcomputer` (local) or `cloud`.
 
@@ -141,8 +143,19 @@ Marks are bundled by id (`PlaceMarks`): `docker` the official mark, `boxd` the c
   (`capcomd sandbox shell run-8kq2 agt-41`, or `--sandbox boxd --machine …` for one left behind) in Terminal. The app
   never builds the command, and runs it only when it is a plain capcomd command (`SettingsRows.isSafeCommand`); anything
   else beeps and the footer says nothing was opened. A machine that's gone says "This machine is gone."
+- **Changing a setting** (phase 2): a `choice` the daemon marks `editable: true` is an enabled popup when the daemon has
+  `sandboxes.settings`. Picking a choice sends `PATCH /v1/sandboxes/{name}/settings` `{values: {id: value}, rev}` with
+  the rev of the last read; the popup shows the pick (disabled) until the daemon answers, and its 200 body replaces the
+  details. 409 (changed elsewhere): the app reads the place again and tries once more with the new rev; a second 409
+  says "These settings changed somewhere else. Try again." under the row. 422: the daemon's sentence under the row
+  (under the 15-minute minimum, set by an environment variable, …). 403 (the token lacks the `configure` scope): the
+  settings go read-only with "Reset your token to change these" under them until the token changes; Accounts › Reset…
+  mints a token with `configure`. A setting applies to new runs.
+- **capcomd's own machines** (`owner.kind` `check`, `login`, `env_build`, `doctor`, or any kind but `agent`) are never
+  "left behind" and never offer Open in Terminal or Delete; an owner without `kind` (an older daemon) is an agent's.
 - **Older daemons**: without `sandboxes`, no Details… and Runs is as above; without `sandboxes.resources`, no machine
-  list and the first section's footer says "Update capcomd to see machines here."
+  list and the first section's footer says "Update capcomd to see machines here."; without `sandboxes.settings`, the
+  settings are read-only, showing their values.
 
 ## 5. About (`About.dc.html`)
 
@@ -162,15 +175,19 @@ buttons, github.com/MarvinAmador7/capcomd), "MIT License".
 | `GET /v1/run-options` (`runs.options`) | New runs, places, boxd key | Driven by, Effort, Runs on and the place sections hidden: "This version of capcomd can't list drivers or places to run. Update capcomd to choose them here." |
 | `GET /v1/sandboxes`, `/v1/sandboxes/{name}` (`sandboxes`) | Place headers and status rows, Details… (§4.1) | places shown by name as before; no Details… |
 | `GET /v1/sandboxes/{name}/resources[/{id}]` (`sandboxes.resources`) | Machines, Open in Terminal | no machine list: "Update capcomd to see machines here." |
+| `PATCH /v1/sandboxes/{name}/settings` (`sandboxes.settings`; scope `configure`) | Changing "Delete idle machines after" (§4.1) | the settings read-only |
 
 While capcomd can't be reached, daemon rows keep their last values, disabled, with "Shown when capcomd is running."
 Commands from the daemon reach Terminal only when they are plain capcomd invocations (`SettingsRows.isSafeCommand`).
 The mock daemon serves all of this: `SETTINGS=mixed|fresh|building|failed|ready|old` (`client/mock/settings.ts`), and
 the place routes with `SANDBOXES=machines|stale|empty|unsafe|nores|off` (machines running and one left behind; boxd
-not answering; none; a `terminalCommand` the app must refuse; `sandboxes` without `sandboxes.resources`; none of it).
+not answering; none; a `terminalCommand` the app must refuse; `sandboxes` without `sandboxes.resources`; none of it)
+and, for phase 2, `readonly|envlocked|noconfigure|conflict|owners` (no `sandboxes.settings`; the idle lifetime set by
+`CAPCOMD_SANDBOX_IDLE_SECONDS`; a token without `configure`; one stale-rev 409 before the change goes through, or
+`CONFLICTS=n`; capcomd's own check, login, environment-build and doctor machines next to an agent's and one left
+behind). Every scene but `readonly`, `nores` and `off` takes `PATCH …/settings`.
 
 ## 7. Later
 
 Log out (a route that doesn't exist yet), building an environment in the app with real progress (today Terminal does
-it; the bar is indeterminate), changing a place's settings ("Delete idle machines after"; ADR-021 phase 2, the
-`configure` scope) and Delete… on a machine (phase 3), Permissions (who am I), naming the default project, updates.
+it; the bar is indeterminate), Delete… on a machine (ADR-021 phase 3), Permissions (who am I), naming the default project, updates.

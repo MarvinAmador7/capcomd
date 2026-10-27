@@ -18,9 +18,9 @@ import {
 import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies, providerForRun, providerNamed } from "../dependencies";
-import { withSandbox } from "../providers/run-sandbox";
+import { runIdleLifetime, withSandbox } from "../providers/run-sandbox";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
-import { AGENT_VM_TTL_SECONDS, runAgent, stoppedAt } from "../agents/runner";
+import { runAgent, stoppedAt } from "../agents/runner";
 import { activityReporter } from "../agents/activity";
 import { itemWriter } from "../agents/thread-store";
 import { heartbeatEveryMs } from "../subagents/results";
@@ -42,6 +42,24 @@ const PUSH_LOCK_MS = () => Number(process.env.CAPCOMD_PUSH_LOCK_MS ?? 30_000);
 const PUSH_LOCKS_SQL = `CREATE TABLE IF NOT EXISTS push_locks (
   idem_key TEXT PRIMARY KEY, holder TEXT NOT NULL, instance TEXT NOT NULL, until INTEGER NOT NULL,
   attempts INTEGER NOT NULL, state TEXT NOT NULL, adopted INTEGER NOT NULL DEFAULT 0, sha TEXT, updated_at INTEGER NOT NULL)`;
+
+// ADR-021 §2: a worker's VM lives for the run's idle machine lifetime (ttlMs), as a lease: while its agent runs, the
+// runner renews the VM's delete deadline every 10 minutes and the worker records the new deadline here, so the reap
+// alarm (createdAt + ttlMs) doesn't take a machine whose agent is still working.
+const WORKER_LEASE_SQL = "CREATE TABLE IF NOT EXISTS worker_lease (worker_id TEXT PRIMARY KEY, until INTEGER NOT NULL)";
+async function renewWorkerLease(db: RawAccess, workerId: string, until: number): Promise<void> {
+  await db.execute(WORKER_LEASE_SQL);
+  await db.execute("INSERT INTO worker_lease (worker_id, until) VALUES (?, ?) ON CONFLICT(worker_id) DO UPDATE SET until = MAX(worker_lease.until, excluded.until)", workerId, until);
+}
+/** When the worker's VM is due to be reaped: its lifetime after creation, or after its last renewal if later. */
+async function workerDeadline(db: RawAccess, workerId: string, ctx: Record<string, unknown>): Promise<number> {
+  const made = Number(ctx.createdAt ?? 0) + Number(ctx.ttlMs ?? 3_600_000);
+  try {
+    await db.execute(WORKER_LEASE_SQL);
+    const rows = await db.execute("SELECT until FROM worker_lease WHERE worker_id = ?", workerId);
+    return Math.max(made, Number(rows[0]?.until ?? 0));
+  } catch { return made; }
+}
 
 async function remoteBranchSha(remote: string, branch: string): Promise<string | null> {
   const p = Bun.spawn(["git", "ls-remote", remote, `refs/heads/${branch}`], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -179,6 +197,8 @@ export const workerActor = actor({
       const { workerId, runId, epoch } = params;
       const { provider, sandbox } = await providerForRun(runId);
       const runSource = withSandbox(process.env, sandbox);
+      // The run's idle machine lifetime (recorded at `run new`), else its place's current setting.
+      const lifeSeconds = await runIdleLifetime(runId, sandbox);
 
       const existing = await getLifecycle(c.db, workerId);
       if (existing && existing.state !== "provisioning" && existing.state !== "failed") {
@@ -196,7 +216,7 @@ export const workerActor = actor({
         const [snapshot] = initialTransition(workerMachine, {
           workerId,
           createdAt: Date.now(),
-          ttlMs: 3_600_000,
+          ttlMs: lifeSeconds * 1000,
           idemKey,
           ...(sandbox ? { sandbox } : {}),
         } as any);
@@ -230,7 +250,7 @@ export const workerActor = actor({
         const { id: vmId } = await provider.ensure({
           idemKey,
           isolated: true,
-          ttlSeconds: AGENT_VM_TTL_SECONDS,
+          ttlSeconds: lifeSeconds,
           egressAllow: setup.egressAllow,
           ...setup.snapshot,
           labels: {
@@ -408,6 +428,8 @@ export const workerActor = actor({
       const { provider, sandbox } = await providerForRun(params.runId);
       const runSource = withSandbox(process.env, sandbox);
       const vmKey = workerContext.idemKey ?? `relay-worker-${workerId}`;
+      // The run's idle machine lifetime: the VM's delete deadline, renewed while the agent runs.
+      const lifeSeconds = await runIdleLifetime(params.runId, sandbox);
 
       // Acquire the push lock (or wait out a live push by another call).
       await c.db.execute(PUSH_LOCKS_SQL);
@@ -450,7 +472,7 @@ export const workerActor = actor({
       const { id: vmId } = await provider.ensure({
         idemKey: vmKey,
         isolated: true,
-        ttlSeconds: AGENT_VM_TTL_SECONDS,
+        ttlSeconds: lifeSeconds,
         egressAllow: setup.egressAllow,
         ...setup.snapshot,
         labels: { workerId, taskId, epoch: String(epoch) },
@@ -509,6 +531,8 @@ export const workerActor = actor({
         }, setup.config!, {
           apiKey,
           heartbeatMs: beatEvery,
+          vmTtlSeconds: lifeSeconds,
+          onRenew: (secs) => { renewWorkerLease(c.db, workerId, Date.now() + secs * 1000).catch(() => {}); },
           onReport: (rep) => {
             if (!scope) return;
             if (rep.type === "checkpoint") { scope.checkpoint({ agentId: workerId, ref: rep.ref, sha: rep.sha, reason: rep.reason, files: rep.files }).catch(() => {}); return; }
@@ -653,7 +677,7 @@ export const workerActor = actor({
       const life = await getLifecycle(c.db, params.workerId);
       if (!life || life.state === "destroyed") return { reaped: false, state: life?.state ?? null };
       const ctx = JSON.parse(life.context as string);
-      const expired = (params.now ?? Date.now()) >= Number(ctx.createdAt ?? 0) + Number(ctx.ttlMs ?? 3_600_000);
+      const expired = (params.now ?? Date.now()) >= await workerDeadline(c.db, params.workerId, ctx);
       if (!params.terminal && !expired) return { reaped: false, state: life.state };
       await drainWorkerImpl(c, params.workerId);
       return { reaped: true, reason: params.terminal ? "terminal" : "ttl" };
@@ -663,7 +687,9 @@ export const workerActor = actor({
       const life = await getLifecycle(c.db, params.workerId);
       if (!life || life.state === "destroyed") return { reaped: false };
       const ctx = JSON.parse(life.context as string);
-      if (Date.now() < Number(ctx.createdAt ?? 0) + Number(ctx.ttlMs ?? 3_600_000)) return { reaped: false };
+      const deadline = await workerDeadline(c.db, params.workerId, ctx);
+      // Renewed while its agent ran: look again at the new deadline.
+      if (Date.now() < deadline) { await c.schedule.at(deadline, "reapIfExpired", { workerId: params.workerId }); return { reaped: false }; }
       await drainWorkerImpl(c, params.workerId);
       return { reaped: true, reason: "ttl" };
     },

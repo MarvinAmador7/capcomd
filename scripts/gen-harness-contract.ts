@@ -60,6 +60,8 @@ payloads.AgentThreadItemChangedData = { type: "object", properties: { agentId: {
 for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) {
 	if (op.operationId === "health") continue;
 	for (const s of ERROR_STATUSES) op.responses[String(s)] ??= { description: `Error (${s})`, content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+	// Routes that need a scope a token may lack (configure is new in sandboxes.settings): 403 forbidden.
+	if (op.operationId === "sandboxes.settings") op.responses["403"] ??= { description: "Error (403): the token lacks the configure scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 }
 // Raw-bytes routes (served natively): their 200 is the file itself, not JSON.
 for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) {

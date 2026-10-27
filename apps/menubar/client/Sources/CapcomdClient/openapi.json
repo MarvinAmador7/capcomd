@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -3830,11 +3830,11 @@
                           },
                           "source": {
                             "type": "string",
-                            "description": "Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which), config (capcomd's user config), daemon (an info row the daemon works out)"
+                            "description": "Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which, e.g. \"Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment\"), config (capcomd's user config: the user chose it), daemon (an info row the daemon works out)"
                           },
                           "editable": {
                             "type": "boolean",
-                            "description": "The user can change it here. Always false until settings can be changed (a later capability, sandboxes.settings)"
+                            "description": "Capability sandboxes.settings: the user can change it here with PATCH /v1/sandboxes/{name}/settings (needs the configure scope). false for info rows, a setting an environment variable sets, and every row of a daemon without sandboxes.settings"
                           },
                           "appliesTo": {
                             "description": "new_runs: a change applies to runs started after it; null for info rows",
@@ -3871,7 +3871,7 @@
                           "state"
                         ]
                       },
-                      "description": "Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives; read-only for now)"
+                      "description": "Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900)"
                     },
                     "info": {
                       "type": "array",
@@ -3937,11 +3937,11 @@
                           },
                           "source": {
                             "type": "string",
-                            "description": "Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which), config (capcomd's user config), daemon (an info row the daemon works out)"
+                            "description": "Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which, e.g. \"Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment\"), config (capcomd's user config: the user chose it), daemon (an info row the daemon works out)"
                           },
                           "editable": {
                             "type": "boolean",
-                            "description": "The user can change it here. Always false until settings can be changed (a later capability, sandboxes.settings)"
+                            "description": "Capability sandboxes.settings: the user can change it here with PATCH /v1/sandboxes/{name}/settings (needs the configure scope). false for info rows, a setting an environment variable sets, and every row of a daemon without sandboxes.settings"
                           },
                           "appliesTo": {
                             "description": "new_runs: a change applies to runs started after it; null for info rows",
@@ -3982,7 +3982,7 @@
                     },
                     "rev": {
                       "type": "string",
-                      "description": "Changes whenever a setting's value does; a later write sends it back to detect a stale screen"
+                      "description": "Changes whenever a setting's value, source or editability does; PATCH …/settings sends it back (a stale one is 409 conflict)"
                     }
                   },
                   "required": [
@@ -4098,23 +4098,35 @@
                           },
                           "state": {
                             "type": "string",
-                            "description": "starting, running, orphaned (capcomd made it and no live agent holds it: a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"
+                            "description": "starting, running, orphaned (capcomd made it and nothing in capcomd uses it now: no live agent and none of capcomd's own jobs; a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"
                           },
                           "owner": {
-                            "description": "The agent whose machine it is, from capcomd's own records (never from provider labels); null when orphaned or unknown",
+                            "description": "Who uses it, from capcomd's own records (never from provider labels): an agent (its worker), or one of capcomd's own jobs (a ledger capcomd writes when it makes the machine); null when orphaned or unknown",
                             "type": [
                               "object",
                               "null"
                             ],
                             "properties": {
+                              "kind": {
+                                "type": "string",
+                                "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd env doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                              },
                               "runId": {
-                                "type": "string"
+                                "description": "The run (agent, check); null for a job that belongs to no run",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               },
                               "agentId": {
-                                "type": "string"
+                                "description": "The agent (kind agent); null otherwise",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               },
                               "role": {
-                                "description": "The agent's profile (planner, worker, reviewer…); null when it has none",
+                                "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment",
                                 "type": [
                                   "string",
                                   "null"
@@ -4127,13 +4139,22 @@
                                   "string",
                                   "null"
                                 ]
+                              },
+                              "label": {
+                                "description": "Capability sandboxes.settings. For capcomd's own jobs, a daemon-written line (\"Checks for run-8kq2\", \"Logging in to Claude Code\", \"Building the agent environment\"); null for agents",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
+                              "kind",
                               "runId",
                               "agentId",
                               "role",
-                              "task"
+                              "task",
+                              "label"
                             ]
                           },
                           "createdAt": {
@@ -4159,7 +4180,7 @@
                             "items": {
                               "type": "string"
                             },
-                            "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Ignore actions you don't know"
+                            "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Machines of capcomd's own jobs have none. Ignore actions you don't know"
                           }
                         },
                         "required": [
@@ -4296,23 +4317,35 @@
                     },
                     "state": {
                       "type": "string",
-                      "description": "starting, running, orphaned (capcomd made it and no live agent holds it: a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"
+                      "description": "starting, running, orphaned (capcomd made it and nothing in capcomd uses it now: no live agent and none of capcomd's own jobs; a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"
                     },
                     "owner": {
-                      "description": "The agent whose machine it is, from capcomd's own records (never from provider labels); null when orphaned or unknown",
+                      "description": "Who uses it, from capcomd's own records (never from provider labels): an agent (its worker), or one of capcomd's own jobs (a ledger capcomd writes when it makes the machine); null when orphaned or unknown",
                       "type": [
                         "object",
                         "null"
                       ],
                       "properties": {
+                        "kind": {
+                          "type": "string",
+                          "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd env doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                        },
                         "runId": {
-                          "type": "string"
+                          "description": "The run (agent, check); null for a job that belongs to no run",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         },
                         "agentId": {
-                          "type": "string"
+                          "description": "The agent (kind agent); null otherwise",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         },
                         "role": {
-                          "description": "The agent's profile (planner, worker, reviewer…); null when it has none",
+                          "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment",
                           "type": [
                             "string",
                             "null"
@@ -4325,13 +4358,22 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "label": {
+                          "description": "Capability sandboxes.settings. For capcomd's own jobs, a daemon-written line (\"Checks for run-8kq2\", \"Logging in to Claude Code\", \"Building the agent environment\"); null for agents",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         }
                       },
                       "required": [
+                        "kind",
                         "runId",
                         "agentId",
                         "role",
-                        "task"
+                        "task",
+                        "label"
                       ]
                     },
                     "createdAt": {
@@ -4357,7 +4399,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Ignore actions you don't know"
+                      "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Machines of capcomd's own jobs have none. Ignore actions you don't know"
                     },
                     "terminalCommand": {
                       "description": "The command that opens a shell in this machine (run it in Terminal): `capcomd sandbox shell <runId> <agentId>` for an agent's machine, `capcomd sandbox shell --sandbox <name> --machine <id>` for an orphan. Built from trusted ids only: a plain capcomd invocation of letters, digits and `._-` words. null without open_terminal",
@@ -4383,6 +4425,468 @@
           },
           "401": {
             "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sandboxes/{name}/settings": {
+      "patch": {
+        "operationId": "sandboxes.settings",
+        "description": "Capability sandboxes.settings. Change a place's settings: the body names each setting by id with a value from its `choices`, and the `rev` it was read with. Needs the `configure` scope (403 `forbidden` without it: settings change what future runs do, like how long their machines and billing live). Stored in capcomd's user config (`~/.capcomd/config.json` `sandboxes.<name>.<id>`), never in a project's; it applies to runs started after it (`appliesTo: new_runs`: each run records the settings it started with), and needs no restart. Answers like GET /v1/sandboxes/{name}, with the new values and `rev`. Every change is audited: a durable sandbox.settings_changed event on the `daemon` stream ({sandbox, id, from, to, clientId}). 409 `conflict` when `rev` isn't the current one (the body carries the current `rev`: read the place again, then retry). 422 `invalid` for a setting the place doesn't have, a value not in its `choices`, an idle lifetime under 15 minutes, or a setting that isn't editable (an environment variable such as CAPCOMD_SANDBOX_IDLE_SECONDS sets it); `message` says which. 404 `not_found` for a name that isn't a listed place.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "values": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Setting id → the new value, one of the field's `choices` values (idleLifetime: \"900\", \"3600\", \"14400\" or \"43200\", seconds)"
+                  },
+                  "rev": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "The `rev` of the GET /v1/sandboxes/{name} the change was made from"
+                  }
+                },
+                "required": [
+                  "values",
+                  "rev"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "descriptor": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "What the API and CAPCOMD_SANDBOX call it"
+                        },
+                        "descriptorVersion": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "exclusiveMinimum": 0,
+                          "description": "1. Bumped only by a breaking change to this shape; additions never bump it"
+                        },
+                        "label": {
+                          "type": "string",
+                          "description": "What to call the place: \"Local\", \"Cloud\""
+                        },
+                        "kind": {
+                          "type": "string",
+                          "description": "local or cloud: how to group it and which glyph to fall back to. Render an unknown kind as cloud"
+                        },
+                        "vendor": {
+                          "type": "string",
+                          "description": "Who provides it: what the title says after the dot (\"Docker\", \"boxd\")"
+                        },
+                        "title": {
+                          "type": "string",
+                          "description": "\"Cloud · boxd\""
+                        },
+                        "mark": {
+                          "type": "string",
+                          "description": "Id of a mark the app bundles (docker, boxd); fall back to the kind's glyph for an id you don't have. Never an image"
+                        },
+                        "listed": {
+                          "type": "boolean",
+                          "description": "Always true here (unlisted test providers are never served)"
+                        },
+                        "caps": {
+                          "type": "object",
+                          "properties": {
+                            "isolation": {
+                              "type": "string",
+                              "description": "Where an agent's commands run: vm, container (or host, for test fakes). More may be added"
+                            },
+                            "snapshots": {
+                              "type": "boolean",
+                              "description": "Saved images to boot from: agent environments (`capcomd env build`) and plan logins"
+                            },
+                            "hostBoundSecrets": {
+                              "type": "boolean",
+                              "description": "Logins can be bound to their AI's API host, so agents only see a placeholder"
+                            },
+                            "egressAllowlist": {
+                              "type": "boolean",
+                              "description": "A profile's `egress` can limit which hosts agents reach"
+                            },
+                            "interactive": {
+                              "type": "boolean",
+                              "description": "A command with a terminal (interactive logins)"
+                            },
+                            "idleLifetime": {
+                              "type": "string",
+                              "description": "Who deletes a machine left behind: platform (the provider itself), sweep (capcomd, every 5 minutes), none. More may be added"
+                            },
+                            "shell": {
+                              "type": "boolean",
+                              "description": "A shell into a live machine (`capcomd sandbox shell`)"
+                            }
+                          },
+                          "required": [
+                            "isolation",
+                            "snapshots",
+                            "hostBoundSecrets",
+                            "egressAllowlist",
+                            "interactive",
+                            "idleLifetime",
+                            "shell"
+                          ],
+                          "description": "What it can do. Ignore caps you don't know"
+                        },
+                        "settings": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Setting ids its details show (idleLifetime). Ignore ids you don't know"
+                        },
+                        "info": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Info row ids its details show (logins, checkpoints). Ignore ids you don't know"
+                        },
+                        "resourceKinds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Kinds of resource it lists (machine)"
+                        },
+                        "actions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Resource actions this daemon serves for it, from a closed list: open_terminal (more come with later capabilities, e.g. delete). Ignore actions you don't know"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "descriptorVersion",
+                        "label",
+                        "kind",
+                        "vendor",
+                        "title",
+                        "mark",
+                        "listed",
+                        "caps",
+                        "settings",
+                        "info",
+                        "resourceKinds",
+                        "actions"
+                      ]
+                    },
+                    "settings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "Row title (daemon-written)"
+                          },
+                          "help": {
+                            "description": "A footnote under the row (daemon-written, trusted); null when none",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "value": {
+                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "display": {
+                            "type": "string",
+                            "description": "The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"
+                          },
+                          "default": {
+                            "description": "A setting's default value; null for info rows",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "choices": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "description": "Daemon-written, e.g. \"1 hour\""
+                                }
+                              },
+                              "required": [
+                                "value",
+                                "label"
+                              ]
+                            },
+                            "description": "A choice's options, in order (idleLifetime: 900 \"15 minutes\", 3600 \"1 hour\", 14400 \"4 hours\", 43200 \"12 hours\"); empty for other types"
+                          },
+                          "source": {
+                            "type": "string",
+                            "description": "Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which, e.g. \"Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment\"), config (capcomd's user config: the user chose it), daemon (an info row the daemon works out)"
+                          },
+                          "editable": {
+                            "type": "boolean",
+                            "description": "Capability sandboxes.settings: the user can change it here with PATCH /v1/sandboxes/{name}/settings (needs the configure scope). false for info rows, a setting an environment variable sets, and every row of a daemon without sandboxes.settings"
+                          },
+                          "appliesTo": {
+                            "description": "new_runs: a change applies to runs started after it; null for info rows",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "needsRestart": {
+                            "type": "boolean",
+                            "description": "A change needs the daemon restarted"
+                          },
+                          "state": {
+                            "description": "A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "label",
+                          "help",
+                          "value",
+                          "display",
+                          "default",
+                          "choices",
+                          "source",
+                          "editable",
+                          "appliesTo",
+                          "needsRestart",
+                          "state"
+                        ]
+                      },
+                      "description": "Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900)"
+                    },
+                    "info": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "Row title (daemon-written)"
+                          },
+                          "help": {
+                            "description": "A footnote under the row (daemon-written, trusted); null when none",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "value": {
+                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "display": {
+                            "type": "string",
+                            "description": "The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"
+                          },
+                          "default": {
+                            "description": "A setting's default value; null for info rows",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "choices": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "description": "Daemon-written, e.g. \"1 hour\""
+                                }
+                              },
+                              "required": [
+                                "value",
+                                "label"
+                              ]
+                            },
+                            "description": "A choice's options, in order (idleLifetime: 900 \"15 minutes\", 3600 \"1 hour\", 14400 \"4 hours\", 43200 \"12 hours\"); empty for other types"
+                          },
+                          "source": {
+                            "type": "string",
+                            "description": "Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which, e.g. \"Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment\"), config (capcomd's user config: the user chose it), daemon (an info row the daemon works out)"
+                          },
+                          "editable": {
+                            "type": "boolean",
+                            "description": "Capability sandboxes.settings: the user can change it here with PATCH /v1/sandboxes/{name}/settings (needs the configure scope). false for info rows, a setting an environment variable sets, and every row of a daemon without sandboxes.settings"
+                          },
+                          "appliesTo": {
+                            "description": "new_runs: a change applies to runs started after it; null for info rows",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "needsRestart": {
+                            "type": "boolean",
+                            "description": "A change needs the daemon restarted"
+                          },
+                          "state": {
+                            "description": "A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "label",
+                          "help",
+                          "value",
+                          "display",
+                          "default",
+                          "choices",
+                          "source",
+                          "editable",
+                          "appliesTo",
+                          "needsRestart",
+                          "state"
+                        ]
+                      },
+                      "description": "Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work)"
+                    },
+                    "rev": {
+                      "type": "string",
+                      "description": "Changes whenever a setting's value, source or editability does; PATCH …/settings sends it back (a stale one is 409 conflict)"
+                    }
+                  },
+                  "required": [
+                    "descriptor",
+                    "settings",
+                    "info",
+                    "rev"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): the token lacks the configure scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -7091,6 +7595,44 @@
         ],
         "additionalProperties": {},
         "x-event-type": "run.deleted"
+      },
+      "SandboxSettingsChangedData": {
+        "type": "object",
+        "properties": {
+          "sandbox": {
+            "type": "string",
+            "description": "The place (a listed provider's name)"
+          },
+          "id": {
+            "type": "string",
+            "description": "The setting's id (idleLifetime)"
+          },
+          "from": {
+            "description": "The value before (as the field's `value` showed it)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": "string",
+            "description": "The value now"
+          },
+          "clientId": {
+            "type": "string",
+            "description": "The API client that changed it (cli-…)"
+          }
+        },
+        "required": [
+          "sandbox",
+          "id",
+          "from",
+          "to",
+          "clientId"
+        ],
+        "additionalProperties": {},
+        "description": "Capability sandboxes.settings. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a place's setting was changed with PATCH /v1/sandboxes/{name}/settings. `entity` is sandbox:<name>; the envelope text says what changed, from daemon-written labels",
+        "x-event-type": "sandbox.settings_changed"
       },
       "StreamResetFrame": {
         "type": "object",

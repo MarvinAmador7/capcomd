@@ -16,7 +16,7 @@ test("an agent of a run started on another sandbox gets its VM there; a run with
   expect(await runSandbox(own)).toBe("fake-host");
   expect(await runSandbox(plain)).toBeNull();
   // Reserved for the orchestrator: an agent can't change where its run's VMs are made.
-  expect((await w.cj(["kv", "get", own, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host" });
+  expect((await w.cj(["kv", "get", own, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host", settings: { idleLifetime: 3600 } });
 
   const done = w.script("rs-done", `capcomd result --summary ok >/dev/null`);
   const spawn = async (run: string) => (await w.cj(["spawn", run, "--profile", "worker", "--task", "t", "--key", "w", "--contract", JSON.stringify({ script: done })])).j.agentId as string;

@@ -192,7 +192,7 @@ extension TerminalLauncher {
       echo "Resetting the menu bar app's capcomd token."
       old=$(capcomd clients list | /usr/bin/osascript -l JavaScript -e 'ObjC.import("Foundation"); const d = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile; JSON.parse($.NSString.alloc.initWithDataEncoding(d, $.NSUTF8StringEncoding).js).filter(c => c.name === "menubar" && !c.revokedAt).map(c => c.id).join(" ")')
       for id in ${=old}; do capcomd clients revoke "$id" > /dev/null && echo "Revoked the old token ($id)."; done
-      capcomd clients add menubar --scopes read,steer,approve || exit 1
+      capcomd clients add menubar --scopes read,steer,approve,configure || exit 1
       echo
       echo "Copy the token above (between the quotes) and paste it into capcomd Settings."
       """)

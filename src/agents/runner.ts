@@ -105,6 +105,13 @@ export interface AgentRunOptions {
   now?: () => number;
   /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
   subagents?: { skill: string; cliSource: string; rpcDir: string };
+  /**
+   * ADR-021 §2: the run's idle machine lifetime (seconds; default AGENT_VM_TTL_SECONDS). The VM's delete deadline is
+   * renewed to this from now every 10 minutes while the agent runs.
+   */
+  vmTtlSeconds?: number;
+  /** Called after each renewal with the lifetime it renewed (the worker keeps its own reap alarm in step). */
+  onRenew?: (seconds: number) => void;
 }
 
 export class AgentError extends Error {
@@ -114,7 +121,8 @@ export class AgentError extends Error {
   }
 }
 
-/** A worker VM is deleted this long after its last lease renewal, so a VM whose engine died is cleaned up. */
+/** A worker VM is deleted this long after its last lease renewal, so a VM whose engine died is cleaned up: the default
+ *  idle machine lifetime. A run's own (ADR-021 §2, recorded at `run new`) replaces it: AgentRunOptions.vmTtlSeconds. */
 export const AGENT_VM_TTL_SECONDS = 3600;
 const TTL_RENEW_MS = 10 * 60_000;
 const SPEND_REPORT_MS = 5_000;
@@ -522,7 +530,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     };
     while (exitCode === null) {
       // The VM's delete deadline is a lease: renewed while the agent runs, so no fixed lifetime cuts long work short.
-      if (provider.extendTtl && now() - renewedAt > TTL_RENEW_MS) { renewedAt = now(); await provider.extendTtl(vmId, AGENT_VM_TTL_SECONDS).catch(() => {}); }
+      if (provider.extendTtl && now() - renewedAt > TTL_RENEW_MS) {
+        renewedAt = now();
+        const ttl = opts.vmTtlSeconds ?? AGENT_VM_TTL_SECONDS;
+        await provider.extendTtl(vmId, ttl).then(() => opts.onRenew?.(ttl), () => {});
+      }
       await new Promise((res) => setTimeout(res, cfg.pollMs));
       await drain(false);
       if (exitCode !== null) break;

@@ -205,10 +205,30 @@ public struct SandboxDetail: Decodable, Sendable, Hashable {
 
 /// Something live capcomd made at a provider (ADR-021 §3); v1 has one kind, `machine`.
 public struct SandboxResource: Decodable, Sendable, Hashable, Identifiable {
-  /// Who uses it, from capcomd's own records (never the provider's labels).
+  /// Who uses it, from capcomd's own records (never the provider's labels): an agent, or capcomd itself for a short job
+  /// (phase 2: `kind` `check`, `login`, `env_build`, `doctor`, more to come). Older daemons send no `kind`: an agent.
   public struct Owner: Decodable, Sendable, Hashable {
+    /// "agent", "check", "login", "env_build", "doctor"; nil from a daemon before phase 2 (an agent).
+    public var kind: String?
     public var runId: String?; public var agentId: String?; public var role: String?; public var task: String?
-    public init(runId: String? = nil, agentId: String? = nil, role: String? = nil, task: String? = nil) { self.runId = runId; self.agentId = agentId; self.role = role; self.task = task }
+    /// The daemon's line for capcomd's own machines ("Checks for run-8kq2", "Logging in to Claude Code"); null for agents.
+    public var label: String?
+    public init(kind: String? = nil, runId: String? = nil, agentId: String? = nil, role: String? = nil, task: String? = nil, label: String? = nil) {
+      self.kind = kind; self.runId = runId; self.agentId = agentId; self.role = role; self.task = task; self.label = label
+    }
+    enum CodingKeys: String, CodingKey { case kind, runId, agentId, role, task, label }
+    public init(from decoder: Decoder) throws {
+      let c = try decoder.container(keyedBy: CodingKeys.self)
+      kind = try? c.decodeIfPresent(String.self, forKey: .kind)
+      runId = try? c.decodeIfPresent(String.self, forKey: .runId)
+      agentId = try? c.decodeIfPresent(String.self, forKey: .agentId)
+      role = try? c.decodeIfPresent(String.self, forKey: .role)
+      task = try? c.decodeIfPresent(String.self, forKey: .task)
+      label = try? c.decodeIfPresent(String.self, forKey: .label)
+    }
+    /// An agent's machine (or a daemon that doesn't say). Anything else is capcomd's own short-lived machine, whatever
+    /// its kind: it is never left behind, and the app never opens or deletes it.
+    public var isAgent: Bool { kind == nil || kind == "agent" }
   }
   public var id: String
   public var kind: String
@@ -232,8 +252,12 @@ public struct SandboxResource: Decodable, Sendable, Hashable, Identifiable {
     deleteAfter = try? c.decodeIfPresent(String.self, forKey: .deleteAfter)
     actions = (try? c.decodeIfPresent([String].self, forKey: .actions)) ?? []
   }
-  /// No live agent owns it: a machine left behind (a crash, a stopped run), which the idle lifetime cleans up.
-  public var orphaned: Bool { state == "orphaned" || owner?.agentId == nil }
+  /// Nothing of capcomd's owns it: a machine left behind (a crash, a stopped run), which the idle lifetime cleans up.
+  /// A machine capcomd uses for its own short job (checks, a login, building the environment) has an owner without an
+  /// agent, and is not left behind.
+  public var orphaned: Bool { state == "orphaned" || owner == nil }
+  /// capcomd's own short-lived machine (checks, a login, an environment build): never opened or deleted from the app.
+  public var capcomdJob: Bool { owner.map { !$0.isAgent } ?? false }
 }
 
 /// `GET /v1/sandboxes/{name}/resources`: the last list capcomd got from the provider. `stale`: the provider didn't answer
@@ -354,6 +378,94 @@ extension CapcomdStore {
   }
 }
 
+// MARK: changing settings (phase 2)
+
+/// A place setting being changed, or the reason the last change didn't take.
+public struct SettingEdit: Sendable, Hashable {
+  /// The choice value on its way to the daemon (the picker shows it until the daemon answers).
+  public var pending: String?
+  /// The daemon's sentence (422), or why the change couldn't be made.
+  public var error: String?
+  public init(pending: String? = nil, error: String? = nil) { self.pending = pending; self.error = error }
+  public static func key(_ sandbox: String, _ id: String) -> String { "\(sandbox)/\(id)" }
+}
+
+/// How the Details screen shows one setting: a control or its value read-only, and a sentence under it.
+public struct FieldControl: Sendable, Hashable {
+  /// The picker can be used.
+  public var editable: Bool
+  /// The choice the picker shows: the one being saved while it is on its way, else the daemon's value.
+  public var selection: String
+  public var saving: Bool
+  /// Under the row: the daemon's refusal, a failed change, or "Reset your token to change these".
+  public var note: String?
+  public init(editable: Bool, selection: String, saving: Bool = false, note: String? = nil) {
+    self.editable = editable; self.selection = selection; self.saving = saving; self.note = note
+  }
+}
+
+extension CapcomdStore {
+  /// The note on a setting the daemon would let change but this app's token can't (no `configure` scope).
+  public static let needsConfigureScope = "Reset your token to change these"
+
+  /// Whether `field` of `sandbox` can be changed from here, and what its row shows. A setting is a control only when the
+  /// daemon has `sandboxes.settings`, says the field is `editable` (an environment variable doesn't set it), it is a
+  /// `choice`, and the token hasn't been refused the `configure` scope; otherwise it shows the daemon's text read-only.
+  public func fieldControl(sandbox: String, _ field: SandboxField) -> FieldControl {
+    let edit = settingEdits[SettingEdit.key(sandbox, field.id)]
+    let selection = edit?.pending ?? field.value.text ?? ""
+    guard changeable(field) else { return FieldControl(editable: false, selection: field.value.text ?? "") }
+    if configureDenied { return FieldControl(editable: false, selection: field.value.text ?? "", note: Self.needsConfigureScope) }
+    return FieldControl(editable: edit?.pending == nil, selection: selection, saving: edit?.pending != nil, note: edit?.error)
+  }
+
+  /// The daemon would take a new value for `field` from a client (whatever this token's scopes).
+  func changeable(_ field: SandboxField) -> Bool {
+    capabilities.contains(Capability.sandboxesSettings) && field.kind == .choice && field.editable && !field.fromEnvironment && !field.choices.isEmpty
+  }
+
+  /// Sets one of a place's settings to a choice's `value` (`PATCH /v1/sandboxes/{name}/settings` with the details' `rev`).
+  /// On 200 the details become the daemon's answer. On 409 (changed elsewhere since it was read) it reads the place
+  /// again and tries once more with the new rev. On 403 the token lacks `configure`: settings go read-only with
+  /// `needsConfigureScope`. On 422 the row shows the daemon's sentence.
+  public func changeSetting(sandbox: String, id: String, to value: String) async {
+    guard let daemonInfo, capabilities.contains(Capability.sandboxesSettings), !configureDenied,
+          let detail = sandboxDetails[sandbox]?.value, let field = detail.settings.first(where: { $0.id == id }), changeable(field) else { return }
+    let key = SettingEdit.key(sandbox, id)
+    guard settingEdits[key]?.pending == nil else { return }
+    if field.value.text == value { settingEdits[key] = nil; changed(); return }
+    settingEdits[key] = SettingEdit(pending: value); changed()
+    var problem: String?
+    var rev = detail.rev
+    attempts: for attempt in 0..<2 {
+      do {
+        if rev == nil { let fresh = try await daemonInfo.sandbox(sandbox); sandboxDetails[sandbox] = .loaded(fresh); rev = fresh.rev }
+        guard let r = rev else { problem = Self.couldNotChange; break attempts }
+        sandboxDetails[sandbox] = .loaded(try await daemonInfo.updateSandboxSettings(sandbox, values: [id: value], rev: r))
+        break attempts
+      } catch SettingsRefused.conflict(let current) {
+        // Changed somewhere else since it was read: read it again, then try once more with the rev it has now.
+        let fresh = try? await daemonInfo.sandbox(sandbox)
+        if let fresh { sandboxDetails[sandbox] = .loaded(fresh) }
+        rev = fresh?.rev ?? current
+        if attempt == 1 || rev == nil { problem = "These settings changed somewhere else. Try again."; break attempts }
+      } catch SettingsRefused.forbidden {
+        configureDenied = true; break attempts
+      } catch SettingsRefused.invalid(let message) {
+        problem = message; break attempts
+      } catch is Unauthorized {
+        unauthorized = true; break attempts
+      } catch {
+        problem = Self.couldNotChange; break attempts
+      }
+    }
+    settingEdits[key] = problem.map { SettingEdit(error: $0) }
+    changed()
+  }
+
+  static let couldNotChange = "Couldn't change it just now. Try again."
+}
+
 // MARK: rows
 
 /// A row's dot (Settings' StatusDot): green, orange, red, the empty ring, or none.
@@ -362,13 +474,17 @@ public enum Tone: Sendable, Hashable { case ok, warn, bad, empty, none }
 /// One machine in a place's Machines section.
 public struct MachineRow: Sendable, Hashable, Identifiable {
   public var id: String
-  /// "worker · Add an abs(a) function", or "Left behind · no agent owns it".
+  /// "worker · Add an abs(a) function", "checks · run-8kq2", or "Left behind · no agent owns it".
   public var title: String
   /// "4 min", "2 h".
   public var age: String
   public var tone: Tone
   public var orphaned: Bool
+  /// capcomd's own short-lived machine (checks, a login, an environment build), not an agent's.
+  public var capcomdJob: Bool
   public var canOpenTerminal: Bool
+  /// The daemon offers Delete (phase 3); never for capcomd's own machines.
+  public var canDelete: Bool
   public var createdAt: Date?
   public var deleteAfter: Date?
 }
@@ -403,6 +519,7 @@ public enum SandboxRows {
   public static let logins = "logins"
   public static let checkpoints = "checkpoints"
   public static let openTerminal = "open_terminal"
+  public static let delete = "delete"
   /// `DetailUnavailable.failed` reason for a resource the daemon no longer has.
   public static let gone = "gone"
 
@@ -429,6 +546,7 @@ public enum SandboxRows {
       let created = r.createdAt.flatMap(SettingsRows.parseISO)
       let title: String
       if r.orphaned { title = "Left behind · no agent owns it" }
+      else if let o = r.owner, !o.isAgent { title = jobTitle(o) }
       else {
         let who = r.owner?.role ?? r.owner?.agentId ?? "agent"
         let task = firstLine(r.owner?.task)
@@ -441,8 +559,10 @@ public enum SandboxRows {
       case "starting", "stopping": tone = .empty
       default: tone = r.orphaned ? .warn : .empty
       }
-      return MachineRow(id: r.id, title: title, age: created.map { age(from: $0, now: now) } ?? "", tone: tone, orphaned: r.orphaned,
-                        canOpenTerminal: shell && r.actions.contains(openTerminal) && r.state != "stopping",
+      let job = r.capcomdJob
+      return MachineRow(id: r.id, title: title, age: created.map { age(from: $0, now: now) } ?? "", tone: tone, orphaned: r.orphaned, capcomdJob: job,
+                        canOpenTerminal: !job && shell && r.actions.contains(openTerminal) && r.state != "stopping",
+                        canDelete: !job && r.actions.contains(delete),
                         createdAt: created, deleteAfter: r.deleteAfter.flatMap(SettingsRows.parseISO))
     }
     return rows.enumerated().sorted { a, b in
@@ -450,6 +570,19 @@ public enum SandboxRows {
       let ta = a.element.createdAt ?? .distantPast, tb = b.element.createdAt ?? .distantPast
       return ta != tb ? ta > tb : a.offset < b.offset
     }.map(\.element)
+  }
+
+  /// capcomd's own machine: "checks · run-8kq2" (who · its run), else "environment · Building the agent environment"
+  /// (who · the daemon's line), else whichever of them there is, else its kind.
+  static func jobTitle(_ o: SandboxResource.Owner) -> String {
+    let who = (o.role?.isEmpty == false ? o.role : nil) ?? o.kind.map { $0.replacingOccurrences(of: "_", with: " ") }
+    let what = (o.runId?.isEmpty == false ? o.runId : nil) ?? (o.label.map { firstLine($0) }.flatMap { $0.isEmpty ? nil : $0 })
+    switch (who, what) {
+    case let (w?, x?): return "\(w) · \(x)"
+    case let (w?, nil): return w
+    case let (nil, x?): return x
+    default: return "capcomd"
+    }
   }
 
   /// "now", "4 min", "2 h", "3 d".

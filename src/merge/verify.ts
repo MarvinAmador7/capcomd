@@ -90,11 +90,20 @@ async function runInVm(git: Git, command: string, env: Record<string, string>, s
   const tree = (await git.ok(["rev-parse", "HEAD^{tree}"])).trim();
   const W = `${cfg.workdir}/checks-${tree.slice(0, 12)}`;
   const snap = resolveEnvSnapshot(source);
-  const { id } = await provider.ensure({
-    idemKey: `capcomd-checks-${env.CAPCOMD_RUN_ID ?? "run"}-${env.CAPCOMD_TASK_ID ?? "task"}-${tree.slice(0, 12)}-${Date.now().toString(36)}`,
-    isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "checks", ...(env.CAPCOMD_RUN_ID ? { run: env.CAPCOMD_RUN_ID } : {}) },
-    ...(snap ? { fromSnapshot: snap } : {}),
-  });
+  const idemKey = `capcomd-checks-${env.CAPCOMD_RUN_ID ?? "run"}-${env.CAPCOMD_TASK_ID ?? "task"}-${tree.slice(0, 12)}-${Date.now().toString(36)}`;
+  // capcomd's own job: recorded so the place's Machines list shows it as the run's checks, not as left behind.
+  const { recordJobMachine } = await import("../providers/machines");
+  const { sandboxName } = await import("../providers/registry");
+  let place: string | null = source.CAPCOMD_SANDBOX ?? null;
+  if (!place) { try { place = sandboxName(source); } catch { /* unknown: recorded as such */ } }
+  const release = recordJobMachine({ idemKey, sandbox: place, kind: "check", purpose: "checks", runId: env.CAPCOMD_RUN_ID ?? null, taskId: env.CAPCOMD_TASK_ID ?? null, ttlSeconds: 3600 });
+  let id: string;
+  try {
+    ({ id } = await provider.ensure({
+      idemKey, isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "checks", ...(env.CAPCOMD_RUN_ID ? { run: env.CAPCOMD_RUN_ID } : {}) },
+      ...(snap ? { fromSnapshot: snap } : {}),
+    }));
+  } catch (e) { release(); throw e; }
   const sh = (script: string, timeoutMs = 300_000) => provider.exec(id, ["sh", "-c", script], { env: { PATH: agentPath(home), HOME: home }, timeoutMs });
   try {
     await provider.waitReady(id, 120_000);
@@ -117,5 +126,6 @@ case "$F" in bun.lock*) bun install --frozen-lockfile;; package-lock.json) npm c
     return { passed: run.code === 0, output: (run.stdout + run.stderr).slice(-4000) };
   } finally {
     await provider.destroy(id).catch(() => {});
+    release();
   }
 }

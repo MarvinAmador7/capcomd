@@ -263,6 +263,20 @@ public protocol DaemonInfoFetching: Sendable {
   func sandbox(_ name: String) async throws -> SandboxDetail
   func resources(sandbox: String) async throws -> ResourcePage
   func resource(sandbox: String, id: String) async throws -> ResourceDetail
+  /// `PATCH /v1/sandboxes/{name}/settings` (capability `sandboxes.settings`, token scope `configure`): `values` are
+  /// choice values by setting id, `rev` the one the last `GET /v1/sandboxes/{name}` gave. Returns the place as that GET
+  /// would now. Throws `SettingsRefused` when the daemon says no.
+  func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail
+}
+/// `PATCH /v1/sandboxes/{name}/settings` said no.
+public enum SettingsRefused: Error, Sendable, Hashable {
+  /// 403 `forbidden`: this app's token lacks the `configure` scope.
+  case forbidden
+  /// 409 `conflict`: the settings changed since `rev` was read; the daemon's current rev when it says.
+  case conflict(rev: String?)
+  /// 422 `invalid` (a value it won't take, a setting an environment variable sets) or 404 (no such place): the
+  /// daemon's sentence.
+  case invalid(String)
 }
 extension DaemonInfoFetching {
   public func runOptions(repo: String?) async throws -> RunOptions { RunOptions() }
@@ -274,4 +288,5 @@ extension DaemonInfoFetching {
   public func sandbox(_ name: String) async throws -> SandboxDetail { throw DetailUnavailable.unsupported }
   public func resources(sandbox: String) async throws -> ResourcePage { throw DetailUnavailable.unsupported }
   public func resource(sandbox: String, id: String) async throws -> ResourceDetail { throw DetailUnavailable.unsupported }
+  public func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail { throw DetailUnavailable.unsupported }
 }

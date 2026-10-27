@@ -251,6 +251,23 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
     catch DetailUnavailable.unsupported { throw DetailUnavailable.failed(SandboxRows.gone) }
     return try decoded(SandboxWire.resource(d))
   }
+  /// `PATCH /v1/sandboxes/{name}/settings` (capability `sandboxes.settings`, scope `configure`): 200 is the place as
+  /// `GET /v1/sandboxes/{name}` now answers; 403 the token lacks `configure`; 409 `conflict` carries the current `rev`;
+  /// 422 `invalid` and 404 (no such place: the caller checked the capability, so the route exists) the daemon's sentence.
+  public func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail {
+    let body = try JSONSerialization.data(withJSONObject: ["values": values, "rev": rev] as [String: Any])
+    let (status, data) = try await transport.patch("/v1/sandboxes/\(LiveDetail.seg(name))/settings", json: body)
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let message = (obj?["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    switch status {
+    case 200: return try decoded(SandboxWire.detail(data))
+    case 401: throw Unauthorized()
+    case 403: throw SettingsRefused.forbidden
+    case 404, 422: throw SettingsRefused.invalid(message ?? "capcomd won't take that value")
+    case 409: throw SettingsRefused.conflict(rev: (obj?["rev"] as? String) ?? (obj?["rev"] as? NSNumber)?.stringValue)
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
   private func decoded<T>(_ f: @autoclosure () throws -> T) throws -> T {
     do { return try f() } catch let e as DetailUnavailable { throw e } catch is Unauthorized { throw Unauthorized() } catch { throw DetailUnavailable.failed("unexpected response") }
   }

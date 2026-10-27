@@ -10,8 +10,9 @@ import type { RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
 import type { ListedProvider } from "../providers/registry";
 import { LISTED_PROVIDERS } from "../providers/registry";
-import { sandboxSurface, type MachineOwner, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SurfaceDeps } from "./sandboxes";
+import { sandboxSurface, type MachineOwner, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
 import type { VmInfo } from "../providers/sandbox";
+import { memorySettingsStore, type SettingsStore } from "../providers/settings";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
@@ -61,6 +62,8 @@ export interface HarnessSource {
 	sandboxes(): Promise<SandboxSummary[]>;
 	/** GET /v1/sandboxes/{name}: null when it isn't a listed place. Local only. */
 	sandbox(name: string): Promise<SandboxDetail | null>;
+	/** PATCH /v1/sandboxes/{name}/settings: checks and stores a change (the user config); never a provider call. */
+	updateSandboxSettings(name: string, patch: SettingsPatch): Promise<SettingsOutcome>;
 	/** GET /v1/sandboxes/{name}/resources: one page; null when it isn't a listed place. */
 	sandboxResources(name: string, page: { limit?: number; cursor?: string }): Promise<ResourcePage | null>;
 	/** GET /v1/sandboxes/{name}/resources/{id}: null when capcomd doesn't list it there. */
@@ -148,6 +151,8 @@ export function memorySource(seed: Partial<{
 	machines: Partial<Record<ListedProvider, VmInfo[] | (() => Promise<VmInfo[]>)>>;
 	owners: MachineOwner[] | (() => Promise<MachineOwner[]>);
 	surface: Partial<SurfaceDeps>;
+	/** Provider settings (PATCH /v1/sandboxes/{name}/settings writes here). Default: empty, in memory. */
+	settings: SettingsStore;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
@@ -170,7 +175,7 @@ export function memorySource(seed: Partial<{
 	};
 	const surface = sandboxSurface({
 		env: { CAPCOMD_NO_CONFIG: "1" },
-		idleLifetimeSeconds: 3600,
+		settings: seed.settings ?? memorySettingsStore(),
 		logins: loginsOf,
 		availability: async (name) => {
 			const o = (await optionsOf()).sandboxes.find((x) => x.name === name);

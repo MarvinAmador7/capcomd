@@ -234,6 +234,13 @@ export const EventData = {
 	}),
 	"approval.decided": Decision.extend({ cause: LifecycleCause.optional() }).loose(),
 	...RunLifecycleData,
+	"sandbox.settings_changed": z.looseObject({
+		sandbox: z.string().describe("The place (a listed provider's name)"),
+		id: z.string().describe("The setting's id (idleLifetime)"),
+		from: z.string().nullable().describe("The value before (as the field's `value` showed it)"),
+		to: z.string().describe("The value now"),
+		clientId: z.string().describe("The API client that changed it (cli-…)"),
+	}).describe("Capability sandboxes.settings. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a place's setting was changed with PATCH /v1/sandboxes/{name}/settings. `entity` is sandbox:<name>; the envelope text says what changed, from daemon-written labels"),
 } as const;
 export type EventType = keyof typeof EventData;
 
@@ -293,6 +300,7 @@ export const CAPABILITIES = {
 	service: "GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it",
 	sandboxes: "GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`",
 	"sandboxes.resources": "GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one",
+	"sandboxes.settings": "PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -437,35 +445,45 @@ export const SandboxField = z.object({
 	display: z.string().describe("The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"),
 	default: z.string().nullable().describe("A setting's default value; null for info rows"),
 	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
-	source: z.string().describe("Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which), config (capcomd's user config), daemon (an info row the daemon works out)"),
-	editable: z.boolean().describe("The user can change it here. Always false until settings can be changed (a later capability, sandboxes.settings)"),
+	source: z.string().describe("Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which, e.g. \"Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment\"), config (capcomd's user config: the user chose it), daemon (an info row the daemon works out)"),
+	editable: z.boolean().describe("Capability sandboxes.settings: the user can change it here with PATCH /v1/sandboxes/{name}/settings (needs the configure scope). false for info rows, a setting an environment variable sets, and every row of a daemon without sandboxes.settings"),
 	appliesTo: z.string().nullable().describe("new_runs: a change applies to runs started after it; null for info rows"),
 	needsRestart: z.boolean().describe("A change needs the daemon restarted"),
 	state: z.string().nullable().describe("A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type"),
 });
 export const SandboxDetail = z.object({
 	descriptor: SandboxDescriptor,
-	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives; read-only for now)"),
+	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900)"),
 	info: z.array(SandboxField).describe("Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work)"),
-	rev: z.string().describe("Changes whenever a setting's value does; a later write sends it back to detect a stale screen"),
+	rev: z.string().describe("Changes whenever a setting's value, source or editability does; PATCH …/settings sends it back (a stale one is 409 conflict)"),
 });
+export const SettingsBody = z.object({
+	values: z.record(z.string(), z.string()).describe("Setting id → the new value, one of the field's `choices` values (idleLifetime: \"900\", \"3600\", \"14400\" or \"43200\", seconds)"),
+	rev: z.string().min(1).max(200).describe("The `rev` of the GET /v1/sandboxes/{name} the change was made from"),
+});
+export const SETTINGS_DOC = "Capability sandboxes.settings. Change a place's settings: the body names each setting by id with a value from its `choices`, and the `rev` it was read with. Needs the `configure` scope (403 `forbidden` without it: settings change what future runs do, like how long their machines and billing live). " +
+	"Stored in capcomd's user config (`~/.capcomd/config.json` `sandboxes.<name>.<id>`), never in a project's; it applies to runs started after it (`appliesTo: new_runs`: each run records the settings it started with), and needs no restart. Answers like GET /v1/sandboxes/{name}, with the new values and `rev`. " +
+	"Every change is audited: a durable sandbox.settings_changed event on the `daemon` stream ({sandbox, id, from, to, clientId}). " +
+	"409 `conflict` when `rev` isn't the current one (the body carries the current `rev`: read the place again, then retry). 422 `invalid` for a setting the place doesn't have, a value not in its `choices`, an idle lifetime under 15 minutes, or a setting that isn't editable (an environment variable such as CAPCOMD_SANDBOX_IDLE_SECONDS sets it); `message` says which. 404 `not_found` for a name that isn't a listed place.";
 export const SANDBOX_DOC = "Capability sandboxes. One place agents run: its descriptor, its settings and its info rows as typed fields the app renders generically (an unknown field type renders as a read-only `label` and `display`). " +
 	"Needs the `read` scope. Local reads only (no provider call), so poll it freely. Never contains a credential: every `display`, `help` and `reason` is written by the daemon. 404 `not_found` for a name that isn't a listed place. " +
 	"`v`: the descriptor version the client understands (only 1 exists).";
 export const ResourceOwner = z.object({
-	runId: z.string(),
-	agentId: z.string(),
-	role: z.string().nullable().describe("The agent's profile (planner, worker, reviewer…); null when it has none"),
-	task: UntrustedText.nullable().describe("Agent-written text: render as plain text, never markdown, links or actions. The first line of the agent's task, at most 200 characters"),
+	kind: z.string().describe("Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd env doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"),
+	runId: z.string().nullable().describe("The run (agent, check); null for a job that belongs to no run"),
+	agentId: z.string().nullable().describe("The agent (kind agent); null otherwise"),
+	role: z.string().nullable().describe("An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment"),
+	task: UntrustedText.nullable().describe("Agent-written text: render as plain text, never markdown, links or actions. The first line of the agent's task, at most 200 characters; null for capcomd's own jobs"),
+	label: z.string().nullable().describe("Capability sandboxes.settings. For capcomd's own jobs, a daemon-written line (\"Checks for run-8kq2\", \"Logging in to Claude Code\", \"Building the agent environment\"); null for agents"),
 });
 export const SandboxResource = z.object({
 	id: z.string().describe("The machine's name at the provider: capcomd's prefix (relay-) and letters, digits, `.`, `_`, `-` (at most 128). Stable for the machine's life"),
 	kind: z.string().describe("machine. More may be added"),
-	state: z.string().describe("starting, running, orphaned (capcomd made it and no live agent holds it: a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"),
-	owner: ResourceOwner.nullable().describe("The agent whose machine it is, from capcomd's own records (never from provider labels); null when orphaned or unknown"),
+	state: z.string().describe("starting, running, orphaned (capcomd made it and nothing in capcomd uses it now: no live agent and none of capcomd's own jobs; a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"),
+	owner: ResourceOwner.nullable().describe("Who uses it, from capcomd's own records (never from provider labels): an agent (its worker), or one of capcomd's own jobs (a ledger capcomd writes when it makes the machine); null when orphaned or unknown"),
 	createdAt: Timestamp.nullable().describe("When it was created; null when unknown"),
 	deleteAfter: Timestamp.nullable().describe("When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes"),
-	actions: z.array(z.string()).describe("Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Ignore actions you don't know"),
+	actions: z.array(z.string()).describe("Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Machines of capcomd's own jobs have none. Ignore actions you don't know"),
 });
 export const ResourcePage = z.object({
 	resources: z.array(SandboxResource).describe("Sorted by id"),
@@ -577,6 +595,8 @@ export const contract = {
 			.input(z.object({ name: z.string(), limit: z.coerce.number().int().positive().max(RESOURCES_PAGE_MAX).optional(), cursor: z.string().max(200).optional().describe("The previous page's `next`") })).output(ResourcePage),
 		resource: oc.route({ method: "GET", path: "/v1/sandboxes/{name}/resources/{id}", description: RESOURCE_DOC })
 			.input(z.object({ name: z.string(), id: z.string() })).output(ResourceDetail),
+		settings: oc.route({ method: "PATCH", path: "/v1/sandboxes/{name}/settings", inputStructure: "detailed", description: SETTINGS_DOC })
+			.input(z.object({ params: z.object({ name: z.string() }), body: SettingsBody })).output(SandboxDetail),
 	},
 	service: {
 		get: oc.route({ method: "GET", path: "/v1/service", description: SERVICE_DOC }).output(ServiceStatus),

@@ -2038,6 +2038,49 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `sandbox.settings_changed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sandbox": {
+      "type": "string",
+      "description": "The place (a listed provider's name)"
+    },
+    "id": {
+      "type": "string",
+      "description": "The setting's id (idleLifetime)"
+    },
+    "from": {
+      "description": "The value before (as the field's `value` showed it)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "to": {
+      "type": "string",
+      "description": "The value now"
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that changed it (cli-…)"
+    }
+  },
+  "required": [
+    "sandbox",
+    "id",
+    "from",
+    "to",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability sandboxes.settings. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a place's setting was changed with PATCH /v1/sandboxes/{name}/settings. `entity` is sandbox:<name>; the envelope text says what changed, from daemon-written labels"
+}
+```
+
 # Lifecycle feed
 
 Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
