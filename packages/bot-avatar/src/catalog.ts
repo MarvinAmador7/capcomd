@@ -226,26 +226,31 @@ const accessories: Part[] = [
 
 // Torsos, chest plates, poses, legs -------------------------------------------------------------------------------
 
+// Hands float: no shoulders or arms join them to the body. Between a body and a hand there are three cells, the
+// body's ink outline, one clear cell and the hand's outline, so the gap reads at small and full. On small the hands
+// are part of the bust drawing (22 wide, centred under the head; the left one floats a cell higher); on full they
+// come from the pose. torso.armL / armR are the body's side edges the pose's hands keep their distance from.
 const torsos: Part[] = [
 	{
 		id: "round", label: "Round", weight: 5,
 		art: {
-			small: art(["...BBBBBBBBBBBB...", ".AABBBBBBBBBBBBAA.", "AAABBBBBBBBBBBBAAA", "AAABBBBBBBBBBBBAAA"], [9, 0], { neck: [9, 0], plate: [5, 1] }),
+			small: art(["......BBBBBBBBBB......", "AA...BBBBBBBBBBBB.....", "AA...BBBBBBBBBBBB...AA", "AA...BBBBBBBBBBBB...AA"], [11, 0], { neck: [11, 0], plate: [7, 1] }),
 			full: art(sym(["..BBBBB", ".BBBBBB", "BBBBBBB", "BBBBBBB", "BBBBBBB", ".BBBBBB", "..BBBBB"]), [7, 0], { neck: [7, 0], plate: [3, 1], armL: [0, 1], armR: [14, 1], hip: [7, 7] }),
 		},
 	},
 	{
 		id: "box", label: "Box", weight: 4,
 		art: {
-			small: art(["..BBBBBBBBBBBBBB..", "AABBBBBBBBBBBBBBAA", "AABBBBBBBBBBBBBBAA", "AABBBBBBBBBBBBBBAA"], [9, 0], { neck: [9, 0], plate: [5, 1] }),
+			small: art([".....BBBBBBBBBBBB.....", "AA...BBBBBBBBBBBB.....", "AA...BBBBBBBBBBBB...AA", "AA...BBBBBBBBBBBB...AA"], [11, 0], { neck: [11, 0], plate: [7, 1] }),
 			full: art(sym([".BBBBBB", "BBBBBBB", "BBBBBBB", "BBBBBBB", "BBBBBBB", "bbbbbbb", ".BBBBBB"]), [7, 0], { neck: [7, 0], plate: [3, 1], armL: [0, 1], armR: [14, 1], hip: [7, 7] }),
 		},
 	},
 	{
 		id: "slim", label: "Slim", weight: 3,
 		art: {
-			small: art([".....BBBBBBBB.....", "..AA.BBBBBBBB.AA..", ".AAA.BBBBBBBB.AAA.", ".AAA.BBBBBBBB.AAA."], [9, 0], { neck: [9, 0], plate: [5, 1] }),
-			full: art(sym([".BBBBB", "BBBBBB", "BBBBBB", "BBBBBB", "BBBBBB", "BBBBBB", ".BBBBB"]), [6, 0], { neck: [6, 0], plate: [2, 1], armL: [0, 1], armR: [12, 1], hip: [6, 7] }),
+			small: art([".......BBBBBBBB.......", "AA.....BBBBBBBB.......", "AA.....BBBBBBBB.....AA", "AA.....BBBBBBBB.....AA"], [11, 0], { neck: [11, 0], plate: [7, 1] }),
+			// Slim's edges sit a cell out so its floating hands land where the wider torsos' do (clear of every head).
+			full: art(sym([".BBBBB", "BBBBBB", "BBBBBB", "BBBBBB", "BBBBBB", "BBBBBB", ".BBBBB"]), [6, 0], { neck: [6, 0], plate: [2, 1], armL: [-1, 1], armR: [13, 1], hip: [6, 7] }),
 		},
 	},
 ];
@@ -260,16 +265,21 @@ const plates: Part[] = [
 	{ id: "none", label: "None", weight: 2, art: {} },
 ];
 
-// Arm sprites are drawn as the viewer's right arm, anchored at the shoulder; the left arm is the same sprite mirrored.
-const ARM_DOWN = art(["BB.", "BBB", ".BB", ".BB", "AAA", "AA."], [0, 0]);
-const ARM_UP = art(["....AA.", "...AAAA", "...AAAA", "...BB..", "..BB...", ".BB....", "BB....."], [0, 6]);
-const ARM_THUMB = art(["BB...", "BBB..", ".BB.A", ".AAAA", ".AAAA", "..AA."], [0, 0]);
-/** Poses (full body only): [left arm, right arm]. "cheer" is for celebrations (a pose override), never picked. */
+// Floating hands (full body). Each is drawn as the viewer's right hand; its anchor is the torso side edge it floats
+// off (torso.armR, canvas x 23 on a 14-wide torso), so anchors sit outside the sprite: [-3, …] leaves the three-cell
+// gap. The left hand is the same sprite mirrored about torso.armL. Mechanical forms only: a round mitt, a tilted mitt
+// held up, a mitt with a cyan spark above it. No shoulders, elbows, fingers or thumbs.
+const MITT = [".AA.", "AAAA", "AAAA", ".AA."];
+const HAND_SIDE = art(MITT, [-3, -1]); // beside the torso, one row down
+const HAND_SIDE_HI = art(MITT, [-3, 0]); // the other side floats a row higher (a static bob)
+const HAND_UP = art(["AA.", "AAA", "AAA", ".AA"], [-5, 15]); // raised beside the head, above the ear
+const HAND_SPARK = art([".F.", "FWF", ".F.", "...", "AAA", "AAA", ".A."], [-5, 18]); // holding a ✦ spark up
+/** Poses (full body only): [left hand, right hand]. "cheer" is for celebrations (a pose override), never picked. */
 const poses: Part[] = [
-	{ id: "idle", label: "Idle", weight: 8, arms: [ARM_DOWN, ARM_DOWN] },
-	{ id: "wave", label: "Wave", weight: 3, arms: [ARM_DOWN, ARM_UP] },
-	{ id: "thumbs", label: "Thumbs up", weight: 2, roles: { critic: 4 }, arms: [ARM_DOWN, ARM_THUMB] },
-	{ id: "cheer", label: "Cheer", weight: 0, arms: [ARM_UP, ARM_UP] },
+	{ id: "float", label: "Float", weight: 8, arms: [HAND_SIDE_HI, HAND_SIDE] },
+	{ id: "wave", label: "Wave", weight: 3, arms: [HAND_SIDE_HI, HAND_UP] },
+	{ id: "spark", label: "Spark", weight: 2, roles: { critic: 4 }, arms: [HAND_SIDE_HI, HAND_SPARK] },
+	{ id: "cheer", label: "Cheer", weight: 0, arms: [HAND_UP, HAND_UP] },
 ];
 
 const legs: Part[] = [

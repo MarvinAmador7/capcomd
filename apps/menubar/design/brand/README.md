@@ -18,6 +18,7 @@ and they are drawn by a small deterministic engine from a catalog of body parts.
 | `menubar.png` | The menu bar mark, on dark and light bars, idle / approvals / open |
 | `catalog.png`, `catalog-body.png` | Every part in the catalog, the grids and anchors, palettes, dither styles, glyphs, names |
 | `contact-sheet.png` | 48 seeds at every size at 1x and 2x, and what the role changes for the same seed |
+| `hands-before-after.png` | One bot in every pose: the first jointed arms, then the floating hands (review record, not generated) |
 
 ## Direction
 
@@ -122,7 +123,7 @@ points; every head puts its visor at the same rect, so every face fits every hea
 | accessory | 8: none, cap, hard hat, headlamp, party hat, bow, monocle, headphones |
 | torso | 3: round, box, slim |
 | chest plate | 6: heart, capcomd mark, letter block (name initial), pulse screen, vent, none |
-| pose | 4: idle, wave, thumbs up, cheer (moments only) |
+| pose | 4: float, wave, spark, cheer (moments only); hands float free of the body |
 | legs | 3: boots, hover jet, treads |
 | palette | 7 |
 | dither | 4: checker, Bayer 4×4, scanline, flat |
@@ -131,10 +132,16 @@ points; every head puts its visor at the same rect, so every face fits every hea
 74 parts in 14 slots: 3.5 billion raw combinations; after the exclusion rules and role weights, 23.5 million for
 planners, 70.5 million for leads and about 530 million for each specialist role.
 
+Hands float. No shoulders, elbows, fingers or thumbs: each hand is a round mitt that floats beside the body, with a
+clear cell between its outline and the body's (tested at small and full for every head and torso). Poses: **float**
+(both mitts at the sides, the left a cell higher, a static bob), **wave** (one mitt raised beside the head), **spark**
+(one mitt holds up a cyan ✦), **cheer** (both raised; only for a run's finish). xs has no hands. The PO review of the
+first jointed arms is in `hands-before-after.png`.
+
 Rules: a part can `occupy` zones (top, side, ears, eyeR; two parts never share one), `require` or `exclude` parts of
 another slot (the cap needs a rounded head; the monocle needs open eyes; the lilac screen is never on a purple body;
 the helm's crest takes no tall antenna). Role weights: planners always get the crown and leads the flag, and nobody
-else does; planners lean orange (the brand's parent bot), critics lean purple, square heads, dishes and monocles,
+else does; planners lean orange (the brand's parent bot), critics lean purple, square heads, dishes, monocles and the spark pose,
 workers lean hats, headlamps and treads.
 
 ## The engine

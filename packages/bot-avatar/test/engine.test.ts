@@ -6,7 +6,7 @@ import {
 	type BotTraits, type Catalog, type Part, type Size, type Slot,
 } from "../src/index";
 
-const BASE: BotTraits = { format: "bot/1", seed: "t", role: "worker", name: "Pixel", palette: "orange-purple", antenna: "ball", accessory: "none", head: "dome", ears: "disc", screen: "night", eyes: "ovals", mouth: "smile", blush: "on", torso: "round", plate: "letter", pose: "idle", legs: "boots", dither: "checker" };
+const BASE: BotTraits = { format: "bot/1", seed: "t", role: "worker", name: "Pixel", palette: "orange-purple", antenna: "ball", accessory: "none", head: "dome", ears: "disc", screen: "night", eyes: "ovals", mouth: "smile", blush: "on", torso: "round", plate: "letter", pose: "float", legs: "boots", dither: "checker" };
 const seeds = (n: number, p = "agt-") => Array.from({ length: n }, (_, i) => `${p}${(Math.imul(i + 1, 0x9e3779b1) >>> 0).toString(36)}${i}`);
 const CAPS: Record<Size, number> = { xs: 2048, small: 4096, full: 6144 };
 const clean = (t: BotTraits, z: Size) => { const g = botGrid(t, z); return [g.clipped, g.offVisor]; };
@@ -55,6 +55,39 @@ describe("composition", () => {
 	test("every torso with every pose, legs and plate composes cleanly", () => {
 		for (const to of CATALOG.slots.torso) for (const s of ["pose", "legs", "plate"] as const) for (const p of CATALOG.slots[s]) for (const z of SIZES) {
 			expect([to.id, s, p.id, z, ...clean(withPart(withPart(BASE, "torso", to.id), s, p.id), z)]).toEqual([to.id, s, p.id, z, 0, 0]);
+		}
+	});
+
+	test("hands float: at small and full, every hand is its own piece, with a clear cell between its outline and the body's", () => {
+		// Flood-fill the drawn cells (anything but empty) with 4-connectivity: ink outlines touch, so a hand that is
+		// joined to the body, or whose outline runs into the body's, is one component with it.
+		const pieces = (t: BotTraits, z: Size) => {
+			const g = botGrid(t, z), seen = new Uint8Array(g.w * g.h);
+			const shadow = g.palette.indexOf(CATALOG.constants.shadow!);
+			let n = 0;
+			for (let i = 0; i < g.px.length; i++) {
+				if (seen[i] || g.px[i]! < 0 || g.px[i] === shadow) continue;
+				n++;
+				const st = [i];
+				seen[i] = 1;
+				while (st.length) {
+					const j = st.pop()!, x = j % g.w, y = (j / g.w) | 0;
+					for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+						const nx = x + dx, ny = y + dy, k = ny * g.w + nx;
+						if (nx < 0 || ny < 0 || nx >= g.w || ny >= g.h || seen[k] || g.px[k]! < 0 || g.px[k] === shadow) continue;
+						seen[k] = 1; st.push(k);
+					}
+				}
+			}
+			return n;
+		};
+		const heads = CATALOG.slots.head.map((h) => h.id);
+		for (const head of heads) for (const torso of CATALOG.slots.torso) {
+			const t = { ...BASE, head, torso: torso.id, ears: "none", antenna: "none", accessory: "none" };
+			// small: the body plus two hands.
+			expect([head, torso.id, "small", pieces(t, "small")]).toEqual([head, torso.id, "small", 3]);
+			// full: body + two hands, in every pose (the spark is held, so it is part of its hand).
+			for (const p of CATALOG.slots.pose) expect([head, torso.id, p.id, pieces({ ...t, pose: p.id }, "full")]).toEqual([head, torso.id, p.id, 3]);
 		}
 	});
 

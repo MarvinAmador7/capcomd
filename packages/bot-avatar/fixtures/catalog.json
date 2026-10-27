@@ -2141,22 +2141,22 @@
     "art": {
      "small": {
       "rows": [
-       "...BBBBBBBBBBBB...",
-       ".AABBBBBBBBBBBBAA.",
-       "AAABBBBBBBBBBBBAAA",
-       "AAABBBBBBBBBBBBAAA"
+       "......BBBBBBBBBB......",
+       "AA...BBBBBBBBBBBB.....",
+       "AA...BBBBBBBBBBBB...AA",
+       "AA...BBBBBBBBBBBB...AA"
       ],
       "anchor": [
-       9,
+       11,
        0
       ],
       "anchors": {
        "neck": [
-        9,
+        11,
         0
        ],
        "plate": [
-        5,
+        7,
         1
        ]
       }
@@ -2207,22 +2207,22 @@
     "art": {
      "small": {
       "rows": [
-       "..BBBBBBBBBBBBBB..",
-       "AABBBBBBBBBBBBBBAA",
-       "AABBBBBBBBBBBBBBAA",
-       "AABBBBBBBBBBBBBBAA"
+       ".....BBBBBBBBBBBB.....",
+       "AA...BBBBBBBBBBBB.....",
+       "AA...BBBBBBBBBBBB...AA",
+       "AA...BBBBBBBBBBBB...AA"
       ],
       "anchor": [
-       9,
+       11,
        0
       ],
       "anchors": {
        "neck": [
-        9,
+        11,
         0
        ],
        "plate": [
-        5,
+        7,
         1
        ]
       }
@@ -2273,22 +2273,22 @@
     "art": {
      "small": {
       "rows": [
-       ".....BBBBBBBB.....",
-       "..AA.BBBBBBBB.AA..",
-       ".AAA.BBBBBBBB.AAA.",
-       ".AAA.BBBBBBBB.AAA."
+       ".......BBBBBBBB.......",
+       "AA.....BBBBBBBB.......",
+       "AA.....BBBBBBBB.....AA",
+       "AA.....BBBBBBBB.....AA"
       ],
       "anchor": [
-       9,
+       11,
        0
       ],
       "anchors": {
        "neck": [
-        9,
+        11,
         0
        ],
        "plate": [
-        5,
+        7,
         1
        ]
       }
@@ -2317,11 +2317,11 @@
         1
        ],
        "armL": [
-        0,
+        -1,
         1
        ],
        "armR": [
-        12,
+        13,
         1
        ],
        "hip": [
@@ -2502,36 +2502,32 @@
   ],
   "pose": [
    {
-    "id": "idle",
-    "label": "Idle",
+    "id": "float",
+    "label": "Float",
     "weight": 8,
     "arms": [
      {
       "rows": [
-       "BB.",
-       "BBB",
-       ".BB",
-       ".BB",
-       "AAA",
-       "AA."
+       ".AA.",
+       "AAAA",
+       "AAAA",
+       ".AA."
       ],
       "anchor": [
-       0,
+       -3,
        0
       ]
      },
      {
       "rows": [
-       "BB.",
-       "BBB",
-       ".BB",
-       ".BB",
-       "AAA",
-       "AA."
+       ".AA.",
+       "AAAA",
+       "AAAA",
+       ".AA."
       ],
       "anchor": [
-       0,
-       0
+       -3,
+       -1
       ]
      }
     ]
@@ -2543,38 +2539,33 @@
     "arms": [
      {
       "rows": [
-       "BB.",
-       "BBB",
-       ".BB",
-       ".BB",
-       "AAA",
-       "AA."
+       ".AA.",
+       "AAAA",
+       "AAAA",
+       ".AA."
       ],
       "anchor": [
-       0,
+       -3,
        0
       ]
      },
      {
       "rows": [
-       "....AA.",
-       "...AAAA",
-       "...AAAA",
-       "...BB..",
-       "..BB...",
-       ".BB....",
-       "BB....."
+       "AA.",
+       "AAA",
+       "AAA",
+       ".AA"
       ],
       "anchor": [
-       0,
-       6
+       -5,
+       15
       ]
      }
     ]
    },
    {
-    "id": "thumbs",
-    "label": "Thumbs up",
+    "id": "spark",
+    "label": "Spark",
     "weight": 2,
     "roles": {
      "critic": 4
@@ -2582,30 +2573,29 @@
     "arms": [
      {
       "rows": [
-       "BB.",
-       "BBB",
-       ".BB",
-       ".BB",
-       "AAA",
-       "AA."
+       ".AA.",
+       "AAAA",
+       "AAAA",
+       ".AA."
       ],
       "anchor": [
-       0,
+       -3,
        0
       ]
      },
      {
       "rows": [
-       "BB...",
-       "BBB..",
-       ".BB.A",
-       ".AAAA",
-       ".AAAA",
-       "..AA."
+       ".F.",
+       "FWF",
+       ".F.",
+       "...",
+       "AAA",
+       "AAA",
+       ".A."
       ],
       "anchor": [
-       0,
-       0
+       -5,
+       18
       ]
      }
     ]
@@ -2617,32 +2607,26 @@
     "arms": [
      {
       "rows": [
-       "....AA.",
-       "...AAAA",
-       "...AAAA",
-       "...BB..",
-       "..BB...",
-       ".BB....",
-       "BB....."
+       "AA.",
+       "AAA",
+       "AAA",
+       ".AA"
       ],
       "anchor": [
-       0,
-       6
+       -5,
+       15
       ]
      },
      {
       "rows": [
-       "....AA.",
-       "...AAAA",
-       "...AAAA",
-       "...BB..",
-       "..BB...",
-       ".BB....",
-       "BB....."
+       "AA.",
+       "AAA",
+       "AAA",
+       ".AA"
       ],
       "anchor": [
-       0,
-       6
+       -5,
+       15
       ]
      }
     ]

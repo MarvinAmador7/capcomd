@@ -24,8 +24,10 @@ describe("catalog", () => {
 			if (!a.rows.length) continue;
 			const w = a.rows[0]!.length;
 			for (const r of a.rows) { expect([name, r.length]).toEqual([name, w]); for (const c of r) if (c !== ".") expect([name, KEYS.has(c)]).toEqual([name, true]); }
+			// Floating hands anchor off the body (outside the sprite), and torsos' side edges may sit a cell out.
+			const slack = name.startsWith("pose/") || name.startsWith("torso/") ? 20 : 0;
 			for (const [x, y] of [a.anchor ?? [0, 0], ...Object.values(a.anchors ?? {})]) {
-				expect([name, x >= 0 && x <= w && y >= 0 && y <= a.rows.length]).toEqual([name, true]);
+				expect([name, x >= -slack && x <= w + slack && y >= -slack && y <= a.rows.length + slack]).toEqual([name, true]);
 			}
 		}
 		for (const [c, g] of Object.entries(CATALOG.glyphs)) { expect(g.length).toBe(5); for (const r of g) expect([c, r.length, /^[#.]+$/.test(r)]).toEqual([c, 4, true]); }

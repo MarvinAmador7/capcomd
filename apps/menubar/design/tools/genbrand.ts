@@ -126,7 +126,7 @@ const page = (w: number, h: number, body: string, css = "") => `<!doctype html><
 
 // 4. Catalog sheet ---------------------------------------------------------------------------------------------------
 
-const BASE: BotTraits = { format: "bot/1", seed: "catalog", role: "worker", name: "Pixel", palette: "orange-purple", antenna: "ball", accessory: "none", head: "dome", ears: "disc", screen: "night", eyes: "ovals", mouth: "smile", blush: "on", torso: "round", plate: "heart", pose: "idle", legs: "boots", dither: "checker" };
+const BASE: BotTraits = { format: "bot/1", seed: "catalog", role: "worker", name: "Pixel", palette: "orange-purple", antenna: "ball", accessory: "none", head: "dome", ears: "disc", screen: "night", eyes: "ovals", mouth: "smile", blush: "on", torso: "round", plate: "heart", pose: "float", legs: "boots", dither: "checker" };
 const PARTS = SLOTS.filter((s): s is Exclude<Slot, "name"> => s !== "name");
 
 /** The base bot with one part swapped in (other parts give way if they clash). */
@@ -199,9 +199,9 @@ ${sec("Ears", "ears", head, "Drawn for the left; the right is mirrored.")}
 ${sec("Antennas", "antenna", head, "The crown and the flag are orchestrator traits: only planners and leads get them, and they always do.")}
 ${sec("Accessories", "accessory", head)}</div>`;
 	const body2 = () => `<div class=h1 style="margin:2px 2px 4px">Bot parts catalog · body, palettes, shading</div><div class=sub style="margin:0 2px 14px">Same base bot, one part swapped in; small and full at 3×. Head parts are on the first sheet.</div><div class=secs>
-${sec("Torsos", "torso", body, "small has its own shoulders-and-stub-arms drawing; full adds arms by pose and legs.")}
+${sec("Torsos", "torso", body, "Hands float free of the body (Rayman-style): a clear cell between outlines, no shoulders or elbows. small draws the bust with its two hands; full takes its hands from the pose.")}
 ${sec("Chest plates", "plate", body)}
-${sec("Poses (full only)", "pose", [["full", 3]], "cheer is never picked: it is for a run's finish.")}
+${sec("Poses (full only)", "pose", [["full", 3]], "Floating mitts, the left a cell higher (a static bob). spark holds up a cyan ✦; cheer is never picked: it is for a run's finish.")}
 ${sec("Legs (full only)", "legs", [["full", 3]])}
 <div class=sec><div class=st>Palettes<span class=cnt>${CATALOG.slots.palette.length}</span></div><div class=sn>Swatches: body highlight, base, shade · accent · trim · plate · plate ink.</div><div class=tiles>${CATALOG.slots.palette.map(swatch).join("")}${consts}</div></div>
 <div class=sec><div class=st>Dither (shading)<span class=cnt>${CATALOG.slots.dither.length}</span></div><div class=sn>Light from the top left; xs is always flat.</div><div class=tiles>${dith()}</div></div>
@@ -263,7 +263,7 @@ const FIELD = `<div class=in><span>＋</span>Start a project…<span class=kbd>�
 const RING = `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#0a84ff;flex:none"><circle cx="7" cy="7" r="5.6"/><circle cx="7" cy="7" r="2.4" fill="currentColor" stroke="none"/></svg>`;
 
 /** The brand's primary bot (the board's "orange primary"): the mascot for moments that belong to no agent. */
-const MASCOT: BotTraits = { format: "bot/1", seed: "capcomd", role: "other", name: "Capcomd", palette: "orange", antenna: "ball", accessory: "none", head: "dome", ears: "disc", screen: "night", eyes: "ovals", mouth: "smile", blush: "on", torso: "round", plate: "logo", pose: "idle", legs: "boots", dither: "checker" };
+const MASCOT: BotTraits = { format: "bot/1", seed: "capcomd", role: "other", name: "Capcomd", palette: "orange", antenna: "ball", accessory: "none", head: "dome", ears: "disc", screen: "night", eyes: "ovals", mouth: "smile", blush: "on", torso: "round", plate: "logo", pose: "float", legs: "boots", dither: "checker" };
 
 /** Pixel "z" glyphs and confetti: small identity marks drawn on the same cell grid as the bots. */
 const glyph = (c: string, scale: number, color: string) => markSvg(CATALOG.glyphs[c]!, { scale, color });
@@ -323,7 +323,7 @@ ${col("Run finished · celebration", done, "<b>Once, for about 2 s</b>, then the
 .kids{display:grid;grid-template-columns:repeat(4,82px);justify-items:center;width:332px}
 .kid{display:flex;flex-direction:column;align-items:center;gap:1px}
 .ml{display:flex;align-items:center;gap:7px;font-size:11.5px;color:rgba(235,235,245,.55);margin:10px 0 4px}
-.party{position:relative;display:flex;justify-content:center;gap:2px;margin:6px -6px 0;padding-top:4px;overflow:hidden}
+.party{position:relative;display:flex;justify-content:center;gap:6px;margin:6px -6px 0;padding-top:4px;overflow:hidden}
 .conf{position:absolute;inset:0}.conf i{position:absolute;opacity:.85}
 .party .bot{position:relative}`));
 }
