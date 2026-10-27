@@ -139,6 +139,14 @@ export async function executeRun(opts: RunOptions): Promise<RunResult> {
   return result;
 }
 
+/** The goal's `[agent:NAME]` profile as resolved here, for the planner actor (null: none, or it doesn't resolve here). */
+function pinnedDirective(goal: string): { agentSpec?: Record<string, unknown> } {
+  const { parseAgentDirective, pinSpec, resolveAgent } = require("../agents/profiles") as typeof import("../agents/profiles");
+  const d = parseAgentDirective(goal);
+  if (!d.agent) return {};
+  try { return { agentSpec: pinSpec(resolveAgent(d.agent)) }; } catch { return {}; } // the planner reports it
+}
+
 async function executeRunInner(opts: RunOptions): Promise<RunResult> {
   const runId = opts.runId ?? generateRunId();
   const emit = opts.emit;
@@ -177,7 +185,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
         emit("plan.restored", { tasks }, `✓ Plan restored: ${tasks.length} tasks`);
       } else {
         emit("plan.started", {}, "\n→ Planning...");
-        const planResult = await plannerHandle.createPlan({ plannerId, runId, goal: opts.goal });
+        const planResult = await plannerHandle.createPlan({ plannerId, runId, goal: opts.goal, ...pinnedDirective(opts.goal) });
         tasks = planResult.tasks;
         emit("plan.ready", { tasks, cost: planResult.cost }, `✓ Plan created: ${tasks!.length} tasks`);
         await runHandle.chargeBudget({ runId, chargeId: `${runId}-plan`, amount: planResult.cost });
@@ -204,10 +212,11 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
       const t = (plannerCtx?.tasks ?? []).find((x: any) => typeof x === "object" && x.id === taskId) as { goal?: string } | undefined;
       return t?.goal ?? `Task ${taskId}`;
     };
-    // Agent profile per task (planner, from a `[agent:NAME]` goal directive / `capcomd run --agent`).
-    const agentOf = (taskId: string): string | undefined => {
-      const t = (plannerCtx?.tasks ?? []).find((x: any) => typeof x === "object" && x.id === taskId) as { agent?: string } | undefined;
-      return t?.agent;
+    // Agent profile per task (planner, from a `[agent:NAME]` goal directive / `capcomd run --agent`), with the spec it
+    // resolved to here (the engine resolves the worker from it, not from its own agents file).
+    const agentOf = (taskId: string): { agent: string; agentSpec?: Record<string, unknown> } | undefined => {
+      const t = (plannerCtx?.tasks ?? []).find((x: any) => typeof x === "object" && x.id === taskId) as { agent?: string; spec?: Record<string, unknown> } | undefined;
+      return t?.agent ? { agent: t.agent, ...(t.spec ? { agentSpec: t.spec } : {}) } : undefined;
     };
     for (const t of (plannerCtx?.tasks ?? []) as any[]) {
       if (t && typeof t === "object" && t.agentSpec) emit("agent.resolved", { taskId: t.id, agent: t.agentSpec }, `  agent for ${t.id}: ${t.agentSpec.name ?? t.agentSpec.kind}${t.agentSpec.overridden ? " (overridden)" : ""}`);
@@ -239,7 +248,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
     let worker = await workerHandle.getWorker({ workerId });
     if (!worker || worker.state === "provisioning" || worker.state === "failed") {
       const firstAgent = agentOf(tasks[0]!);
-      await workerHandle.provisionWorker({ workerId, runId, epoch: 1, ...(firstAgent ? { agent: firstAgent } : {}) });
+      await workerHandle.provisionWorker({ workerId, runId, epoch: 1, ...(firstAgent ?? {}) });
       worker = await workerHandle.getWorker({ workerId });
     }
     emit("worker.ready", { workerId, state: worker?.state ?? "unknown" }, `✓ Worker ${workerId} ready (${worker?.state ?? "unknown"})`);
@@ -287,7 +296,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
           const pushed = await workerHandle.pushBranch({
             workerId, taskId, epoch, branch, runId, target, rework: !!task.context.conflict,
             goal: String(task.context.goal ?? goalOf(taskId)), conflictFiles: task.context.conflict?.files,
-            ...(agentOf(taskId) ? { agent: agentOf(taskId) } : {}),
+            ...(agentOf(taskId) ?? {}),
           });
           const agentCost = Number((pushed as any).costUsd ?? 0);
           if (agentCost > 0) await runHandle.chargeBudget({ runId, chargeId: `${runId}-${taskId}-e${epoch}-agent`, amount: agentCost });

@@ -51,7 +51,7 @@ const kv = { k: S, version: N, writer: S.optional() };
 
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
 export const SCOPE_EVENT_TYPES = [
-	"RUN_NEW", "RUN_GRANTED",
+	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED",
 	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED",
 	"AGENT_PAUSED", "AGENT_RESUMED", "AGENT_GRANTED", "AGENT_ADOPTED", "AGENT_REAPED", "AGENT_CANCELLED",
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
@@ -68,6 +68,7 @@ const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verif
 export const LegacyEventShapes = {
 	"run.created": { budget: U, label: nS, goal: nT.optional(), ...cause },
 	"run.granted": budget,
+	"run.ended": { state: z.enum(["failed", "cancelled"]).describe("How the run itself ended, when its agents didn't end it: failed (it couldn't start its first agent) or cancelled (stopped before any agent of it had run, or with none left to stop)"), reason: nT.describe("Why: the error that stopped it, or the cancel's reason"), by: nS.describe("Who ended it: operator, client:<id>, or null for capcomd itself"), ...cause },
 	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(), ...cause },
 	"agent.started": { ...cause },
 	"agent.done": { ...finish, ...cause },

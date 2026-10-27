@@ -4,7 +4,7 @@
 // it changes and ends with the planner's summary. The fake-model recipe (hierarchical.ts) stays for offline runs.
 import { assertEngine, type RunOptions, type RunResult } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { awaitAgents, runNew, spawnAgent, treeOf } from "../primitives/ops";
+import { awaitAgents, endRun, runNew, spawnAgent, treeOf } from "../primitives/ops";
 import { TERMINAL_AGENT } from "../primitives/policy";
 
 // The planner choice lives with the run's driver choice (src/agents/run-driver.ts), which GET /v1/run-options reads too.
@@ -38,7 +38,21 @@ export async function runWithPlanner(opts: RunOptions & { profile: string; drive
   const planner = opts.profile.split(";")[0]!, driver = opts.driver ? ` (${opts.driver})` : "";
   emit("run.started", { goal: opts.goal, planner, ...(opts.driver ? { driver: opts.driver } : {}), gates, recipe: "planner" }, `Starting run: ${runId}\nGoal: ${opts.goal}\nPlanner: ${planner}${driver}${gates.checks.length ? `  checks: ${gates.checks.join(", ")}` : ""}${gates.reviewer ? `  reviewer: ${gates.reviewer}` : ""}${gates.target ? `  target: ${gates.target}` : ""}\n`);
   if (!run.created) emit("run.resumed", { runId }, "✓ Run resumed");
-  const root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates), key: "planner" });
+  let root: Awaited<ReturnType<typeof spawnAgent>>;
+  try {
+    root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates), key: "planner" });
+  } catch (e) {
+    // The run started, but its planner can't: the run ends failed with the reason (not left "started" with no agent).
+    const reason = (e as Error)?.message ?? String(e);
+    const kind = e instanceof RelayError ? e.code : "internal";
+    const end = await endRun(runId, "failed", reason).catch(() => ({ changed: false, state: "failed" }));
+    if (end.state === "cancelled") {
+      emit("run.cancelled", { state: "cancelled", reason }, `\n✗ Run ${runId} was cancelled before its planner started`);
+      return { runId, state: "cancelled", ok: false, feedback: reason };
+    }
+    emit("run.failed", { state: "failed", reason, kind, ...(e instanceof RelayError && e.hint ? { hint: e.hint } : {}), retryable: false }, `\n✗ Run failed: the planner couldn't start: ${reason}${e instanceof RelayError && e.hint ? `\n  ${e.hint}` : ""}`);
+    return { runId, state: "failed", ok: false, feedback: reason };
+  }
   emit("planner.spawned", { agentId: root.agentId }, `→ Planner ${root.agentId} is working (follow it: capcomd tree ${runId}, capcomd logs ${runId} ${root.agentId} --follow)`);
 
   // Show each agent's status as it changes until the planner is finished (a paused planner is waited for).

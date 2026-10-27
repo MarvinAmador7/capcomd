@@ -27,6 +27,15 @@ const emit = (json: boolean, obj: Record<string, unknown>, text: string) => cons
 
 export async function envCommand(command: string, pos: string[], values: Record<string, any>): Promise<number> {
   const json = !!values.json;
+  // --sandbox NAME: the sandbox these commands work on (env snapshots and plan logins are per sandbox), instead of
+  // CAPCOMD_SANDBOX; as `capcomd run --sandbox`.
+  if (values.sandbox !== undefined) {
+    const { isProviderName } = await import("../../providers/run-sandbox");
+    const n = String(values.sandbox).toLowerCase();
+    if (!isProviderName(n) || n.startsWith("fake")) throw new RelayError("usage", `--sandbox names the sandbox to work on: docker or boxd (got ${values.sandbox})`, "");
+    process.env.CAPCOMD_SANDBOX = n;
+    delete process.env.RELAY_SANDBOX;
+  }
   const log = (l: string) => { if (!json) console.error(`[env] ${l}`); };
   if (command === "secrets") {
     if (pos[1] !== "sync") throw new RelayError("usage", "usage: capcomd secrets sync", "");

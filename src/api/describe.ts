@@ -15,6 +15,7 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "run.cancelled": return "The run was cancelled.";
 		case "run.deleted": return "The run was deleted.";
 		case "run.granted": return "The run's budget was raised.";
+		case "run.ended": return d.state === "failed" ? "The run could not start." : "The run was cancelled.";
 		case "agent.spawned": return `${a} was started${d.parent ? ` by ${d.parent}` : ""}${d.profile ? ` as ${String(d.profile).toLowerCase()}` : ""}.`;
 		case "agent.started": return `${a} began working.`;
 		case "agent.done": return `${a} finished.`;

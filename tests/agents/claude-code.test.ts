@@ -39,6 +39,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(res.costUsd).toBeCloseTo(0.123);
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBe(res.sha);
     const msg = await new Git(s.r.bare).ok(["log", "-1", "--format=%B", s.task.branch]);
+    expect(msg).toStartWith("make the failing test pass\n");                 // what it does; the task is in the trailer
     expect(msg).toContain("Capcomd-Task: r1/task-1");
     expect(msg).toContain("Capcomd-Epoch: 1");
     expect(msg).toContain(`Capcomd-Agent: claude-code@${CLAUDE_CODE_VERSION}`);
@@ -299,7 +300,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(res.sha).toBeTruthy();
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBe(res.sha);
     const msg = (await new Git(s.r.bare).run(["log", "-1", "--format=%B", s.task.branch])).stdout;
-    expect(msg).toStartWith("WIP (stopped: timeout) task-1:");
+    expect(msg).toStartWith("WIP (stopped: timeout) [wip] long job\n");
     expect(msg).toContain("Capcomd-Stop: timeout");
     expect(await s.r.show(s.task.branch, "src/sum.ts")).toContain("a + b");
     // A driver that crashed after this push runs the task again: it reuses the commit and still reports the stop.

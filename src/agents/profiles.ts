@@ -275,7 +275,9 @@ export interface ResolvedAgent { name: string | null; kind: "fake" | "claude-cod
  * Which agent runs: explicit profile name (task/run) → CAPCOMD_AGENT (profile name or provider
  * kind; env override) → the file's default → fake.
  */
-export function resolveAgent(name?: string | null, source: Record<string, string | undefined> = process.env): ResolvedAgent {
+export function resolveAgent(name?: string | null, source: Record<string, string | undefined> = process.env, pinned?: unknown): ResolvedAgent {
+  const p = pinnedAgent(name, pinned);
+  if (p) return p;
   const file = readAgentsFile(agentsFilePath(source));
   const pick = (n: string): ResolvedAgent | null => {
     const spec = file.agents[n];
@@ -301,6 +303,29 @@ export function resolveAgent(name?: string | null, source: Record<string, string
   }
   if (file.default) return pick(file.default)!;
   return { name: null, kind: "fake" };
+}
+
+/**
+ * The spec an agent was spawned with, as recorded with it (the scope's agent record, or a task of the legacy plan):
+ * its profile with the ref's overrides applied, plus `kind`. The engine side resolves an agent from it: the process
+ * that runs the worker (the daemon) need not see the project's agents file, and its own may define the name otherwise
+ * or not at all; a provider swap (`--planner-provider`) is in it too. Null when there is none usable (older records):
+ * the caller resolves by name.
+ */
+export function pinnedAgent(ref: string | null | undefined, pinned: unknown): ResolvedAgent | null {
+  if (!pinned || typeof pinned !== "object" || Array.isArray(pinned)) return null;
+  const { kind, ...rest } = pinned as Record<string, unknown>;
+  const decoded = ref ? decodeAgentRef(ref) : null;
+  const name = decoded?.name ?? null;
+  if (kind === "fake" && rest.provider === undefined) return { name, kind: "fake" };
+  const spec = rest as unknown as AgentSpec;
+  if (spec.provider !== "claude" && spec.provider !== "codex") return null;
+  if (spec.auth !== "apikey" && spec.auth !== "subscription") return null;
+  return { name, kind: PROVIDER_KIND[spec.provider], spec, ...(decoded?.overrides ? { overridden: true } : {}) };
+}
+/** What to record with an agent so the engine can resolve it without the agents file (see pinnedAgent). */
+export function pinSpec(r: ResolvedAgent): Record<string, unknown> {
+  return { ...((r.spec ?? {}) as unknown as Record<string, unknown>), kind: r.kind };
 }
 
 /** Goal directive `[agent:NAME] …` selects a profile for that run/task. */
@@ -366,12 +391,12 @@ export function decodeAgentRef(ref: string): { name: string; overrides?: Overrid
 }
 
 /** Effective, fully resolved agent spec for the event log (no credentials, only modes). */
-export function effectiveAgentRecord(ref?: string | null, source: Record<string, string | undefined> = process.env): Record<string, unknown> {
+export function effectiveAgentRecord(ref?: string | null, source: Record<string, string | undefined> = process.env, pinned?: unknown): Record<string, unknown> {
   try {
-    const ra = resolveAgent(ref, source);
+    const ra = resolveAgent(ref, source, pinned);
     if (ra.kind === "fake") return { kind: "fake" };
     const { loadAgentConfig } = require("./config") as typeof import("./config");
-    const c = loadAgentConfig(source, ref);
+    const c = loadAgentConfig(source, ref, pinned);
     return {
       name: ra.name, kind: ra.kind, overridden: !!ra.overridden, operator: ref ? !!decodeAgentRef(ref).overrides?.operator : false,
       auth: c.credentialMode === "subscription" ? "subscription" : "apikey", credentialMode: c.credentialMode,

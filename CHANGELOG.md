@@ -5,6 +5,39 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agents' commits, and the pull requests capcomd opens for them, are titled with what the change does, cut at a word
+  ("In src/math.ts add and export function multiply(a: number, b: number)…"), instead of the agent's id followed by
+  the task cut mid-word ("agt-k825d4…: In src/math.ts add and export function multiply(a: number, b"). The task and
+  agent are still in the commit's `Capcomd-Task` trailer.
+- Fix: runs started from the menu bar app or `POST /v1/runs` for a project (`repo`) now use that project's agent
+  profiles (`.capcomd/agents.json` from `capcomd setup project`). Their planner used to fail about 5 seconds in with
+  "An internal error occurred", because the daemon looked the profile up in its own agents file. Every agent now runs
+  with the profile it was spawned with, including a planner whose provider `driver` swapped.
+- When an agent can't start because of its configuration (an unknown or invalid profile, missing credentials), its
+  result and its driver log now say what's wrong (e.g. `unknown agent profile "planner" …`) instead of "An internal
+  error occurred", and it fails at once instead of retrying three times.
+- `GET /v1/run-options?repo=<project checkout>` answers for a run of that project, with its own profiles (capability
+  `runs.options.repo`); a directory that isn't a capcomd project is 422 with the same message `POST /v1/runs` gives.
+  `POST /v1/runs` checks `effort` against the body's `repo` too.
+- `GET /v1/run-options` says, for each driver, whether it can run in each sandbox: `drivers[].sandboxes.docker` and
+  `.boxd`, with a reason naming the command that fixes it (capability `runs.options.sandbox`). Logins and agent
+  environments are per sandbox, so Claude logged in for boxd only shows as unavailable for Local. `POST /v1/runs` with
+  a `sandbox` the driver can't run in is now refused at once (422, with that reason) instead of failing later.
+- `capcomd env build`, `env status`, `auth login|status|logout` and `doctor` take `--sandbox docker|boxd` to work on
+  that sandbox instead of `CAPCOMD_SANDBOX`. The "no capcomd env snapshot" error names the sandbox and the exact
+  command (`capcomd env build --sandbox docker`), and no longer says "in the VM" for Docker.
+- A run that can't start is now refused with the reason, instead of showing as running forever with no agents. For
+  example, starting a run on Local (Docker) before its agent environment is built (`capcomd env build --sandbox docker`) now fails
+  right away: `capcomd run` exits with the error, and the menu bar app (`POST /v1/runs`) shows it. If the run's
+  planner still can't be started once the run is under way, the run ends as failed with that error as its reason
+  (in `capcomd status`, `GET /v1/runs` and the run's events) instead of staying "started".
+- Stop (`capcomd cancel <runId>`, the menu bar app's Stop) now ends a run that never got an agent running, such as one
+  whose start failed or whose agents were all stopped before they began. Before, it answered "nothing to cancel" and
+  the run stayed open. Only a run that has already ended answers "nothing to cancel" now.
+- Harness API: a run that ended without its agents ending it has a new `run.ended` event (`state` failed or
+  cancelled, with a `reason`); the lifecycle feed shows it as `run.failed` or `run.cancelled` with that `reason`. `GET /v1/runs` shows
+  such a run as `failed` or `cancelled`.
+
 - Agents no longer fail when the daemon restarts. Before, agents that were running when `capcomd serve` stopped or
   restarted (a Ctrl-C, a service restart, an upgrade) ended as failed a few seconds later, with "An internal error
   occurred" or a connection error as their result. Now each agent waits for the daemon to come back (up to 5 minutes,

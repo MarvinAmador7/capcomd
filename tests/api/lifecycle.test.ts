@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { addClient, loadClients } from "../../src/api/clients";
 import { EventData } from "../../src/api/contract";
 import { HarnessEvent } from "../../src/api/envelope";
-import { LIFECYCLE_TYPES, lifecycleEvents } from "../../src/api/lifecycle";
+import { LIFECYCLE_TYPES, lifecycleEvents, runPhase } from "../../src/api/lifecycle";
+import { strictEventData } from "../../src/api/legacy-events";
 import { harnessApp } from "../../src/api/server";
 import { harnessState } from "../../src/api/state";
 import { approvalIdFor, memorySource, type RawEvent } from "../../src/api/source";
@@ -162,4 +163,20 @@ describe("spawn task redaction", () => {
 test("RUN_DELETED in the scope log projects to run.deleted with cause deleted", () => {
 	const out = lifecycleEvents("run-x", [{ seq: 1, type: "RUN_DELETED", at: "2026-10-25T00:00:00.000Z" } as any]);
 	expect(out.map((e: any) => [e.type, e.data?.cause])).toContainEqual(["run.deleted", "deleted"]);
+});
+
+test("RUN_ENDED (a run its agents didn't end) projects to run.failed / run.cancelled with its reason, once", () => {
+	const failed = lifecycleEvents("run-x", [ev(1, "RUN_NEW", null, { budget: {}, label: "l" }), ev(2, "RUN_ENDED", null, { state: "failed", reason: "no capcomd env snapshot", by: null })]);
+	expect(failed.map((e) => e.type)).toEqual(["run.created", "run.failed"]);
+	expect(failed[1]!.data).toMatchObject({ cause: "error", reason: "no capcomd env snapshot", agentId: null });
+	expect(failed[1]!.text).toBe("The run could not start.");
+	expect(EventData["run.failed"].safeParse(failed[1]!.data).success).toBe(true);
+	expect(runPhase("run-x", [ev(1, "RUN_NEW", null, {})])).toBe("new");
+	const cancelled = [ev(1, "AGENT_SPAWNED", "a", {}), ev(2, "AGENT_CANCELLED", "a", { reason: "stop", by: "run" }), ev(3, "RUN_ENDED", null, { state: "cancelled", reason: "stop", by: "client:x" })];
+	expect(lifecycleEvents("run-x", cancelled).filter((e) => e.type.startsWith("run.")).map((e) => [e.type, e.data.cause, e.data.by])).toEqual([["run.cancelled", "cancelled", "client:x"]]);
+	expect(runPhase("run-x", cancelled)).toBe("ended");
+	// A run its agents already ended gets no second end.
+	const done = [ev(1, "AGENT_SPAWNED", "a", {}), ev(2, "AGENT_STARTED", "a"), ev(3, "AGENT_DONE", "a", { result: {} }), ev(4, "RUN_ENDED", null, { state: "cancelled", reason: null, by: null })];
+	expect(lifecycleEvents("run-x", done).filter((e) => e.type.startsWith("run.")).map((e) => e.type)).toEqual(["run.started", "run.completed"]);
+	expect(strictEventData("run.ended", { state: "failed", reason: "r", by: null })).toEqual({ ok: true });
 });

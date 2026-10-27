@@ -135,6 +135,8 @@ function opRow(r: any) {
   };
 }
 export type ScopeOp = ReturnType<typeof opRow>;
+/** How a run ended by itself (scope.endRun), not by its agents ending. */
+export type RunEnd = { state: "failed" | "cancelled"; reason: string | null; by: string | null; at: number };
 
 async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, data: Record<string, unknown>, idemKey: string) {
   // harness.v1 §6.2: the published payload schemas are open, but the daemon emits only declared fields.
@@ -316,7 +318,27 @@ export const scopeActor = actor({
         if (sp) spent[u] = Math.round(sp * 1e6) / 1e6;
       }
       const unallocated = available(meta.budget, {}, all.filter((a) => !a.parent).map((a) => ({ ...a, tree: tree.get(a.agentId) })));
-      return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated };
+      const ended = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'ended'");
+      return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated,
+        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null };
+    },
+
+    /**
+     * The run itself ended without its agents ending it: its first agent couldn't be spawned (failed), or it was stopped
+     * before any agent of it ran (cancelled). Recorded once (RUN_ENDED); a later call returns the first end unchanged.
+     */
+    async endRun(c, params: { state: RunEnd["state"]; reason?: string | null; by?: string | null }) {
+      const meta = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
+      if (!meta.length) fail("not_found", "run not found (create it with capcomd run new)");
+      const read = async () => { const r = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'ended'"); return r.length ? (JSON.parse(r[0]!.v as string) as RunEnd) : null; };
+      const had = await read();
+      if (had) return { changed: false, ended: had };
+      const end: RunEnd = { state: params.state, reason: params.reason ? redactShapes(String(params.reason)).slice(0, 2000) : null, by: params.by ?? null, at: Date.now() };
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('ended', ?)", JSON.stringify(end));
+        await addEvent(tx, "RUN_ENDED", null, { state: end.state, reason: end.reason, by: end.by }, "run-ended");
+      }, { name: "scopeEndRun" });
+      return { changed: true, ended: (await read())! };
     },
 
     async spawn(
@@ -336,6 +358,9 @@ export const scopeActor = actor({
       const meta = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (!meta.length) fail("not_found", `run ${params.runId} not found (create it with capcomd run new)`);
       const runBudget = JSON.parse(meta[0]!.v as string).budget as Budget;
+      // A run that ended by itself (endRun: stopped before it started, or it couldn't start) takes no new agents.
+      const ended = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'ended'");
+      if (ended.length) fail("conflict", `run ${params.runId} has ended (${JSON.parse(ended[0]!.v as string).state}); start a new run`);
 
       let out: ScopeAgent | null = null;
       let created = false;

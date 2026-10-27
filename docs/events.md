@@ -60,6 +60,50 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `run.ended`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": [
+        "failed",
+        "cancelled"
+      ],
+      "description": "How the run itself ended, when its agents didn't end it: failed (it couldn't start its first agent) or cancelled (stopped before any agent of it had run, or with none left to stop)"
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "by": {
+      "description": "Who ended it: operator, client:<id>, or null for capcomd itself",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "state",
+    "reason",
+    "by"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `agent.spawned`
 
 ```json
@@ -1605,6 +1649,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1652,6 +1704,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1699,6 +1759,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1746,6 +1814,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1793,6 +1869,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1840,6 +1924,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1887,6 +1979,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1976,7 +2076,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
         },
         "state": {
           "type": "string",
-          "description": "new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"
+          "description": "new, idle, running or unknown; failed or cancelled when the run ended without its agents ending it (a failed start, Stop on a run with no agent running: `run.ended`); starting in the runs.create response, before the run's process has registered it"
         },
         "goal": {
           "type": [

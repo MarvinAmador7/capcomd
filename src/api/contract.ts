@@ -37,7 +37,7 @@ export const Run = z.object({
 	id: z.string(),
 	projectId: z.string().nullable(),
 	label: z.string().nullable(),
-	state: z.string().describe("new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"),
+	state: z.string().describe("new, idle, running or unknown; failed or cancelled when the run ended without its agents ending it (a failed start, Stop on a run with no agent running: `run.ended`); starting in the runs.create response, before the run's process has registered it"),
 	goal: UntrustedText.nullable(),
 	repo: z.string().nullable().describe("Repository the run works in (absolute path or remote URL)"),
 	createdAt: Timestamp.nullable(),
@@ -282,6 +282,8 @@ export const CAPABILITIES = {
 	"steer.skills": "POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message",
 	"agent.pause": "POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants",
 	"runs.options": "POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available",
+	"runs.options.repo": "GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles",
+	"runs.options.sandbox": "GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422)",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -312,6 +314,10 @@ export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd 
 	"422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, `profile` with `driver`, a `driver` or `sandbox` that isn't available, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.";
 
 /** GET /v1/run-options: the choices POST /v1/runs takes for `driver` and `sandbox`, and whether each can be used now. */
+export const DriverFit = z.object({
+	available: z.boolean(),
+	reason: z.string().nullable().describe("Why not, one short sentence naming the command that fixes it (trusted), e.g. \"Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)\", \"No agent environment for Local yet (run `capcomd env build --sandbox docker`)\"; null when available"),
+});
 export const DriverOption = z.object({
 	provider: AgentProvider,
 	label: z.string().describe("What to call it: \"Claude Code\" or \"Codex\""),
@@ -321,6 +327,7 @@ export const DriverOption = z.object({
 	available: z.boolean(),
 	reason: z.string().nullable().describe("Why it isn't available, one short sentence written by the daemon (trusted), e.g. \"Not logged in to Codex (run capcomd auth login codex)\"; null when available"),
 	default: z.boolean().describe("The provider of the daemon's planner profile: what a run without `driver` uses"),
+	sandboxes: z.object({ docker: DriverFit, boxd: DriverFit }).describe("Capability runs.options.sandbox. Whether this provider can drive a run in each sandbox: `available` and `reason` above are for the daemon's own sandbox, these for a run's `sandbox` (logins and agent environments are per sandbox). Whether the sandbox itself is up is `sandboxes[]`. POST /v1/runs with `driver` (or the default driver) and `sandbox` is 422 with this `reason` when it isn't available"),
 });
 export const SandboxOption = z.object({
 	name: z.enum(["docker", "boxd"]),
@@ -333,7 +340,12 @@ export const RunOptions = z.object({
 	drivers: z.array(DriverOption).describe("Always claude, then codex"),
 	sandboxes: z.array(SandboxOption).describe("Always docker, then boxd"),
 });
-export const RUN_OPTIONS_DOC = "Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, whether Docker answers, cached a few seconds), so poll it freely.";
+export const RUN_OPTIONS_DOC = "Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not, and (capability runs.options.sandbox) whether each driver can run in each sandbox. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, agent environments, whether Docker answers, cached a few seconds), so poll it freely. " +
+	"`repo` (capability runs.options.repo): the answer for a run of that project, as POST /v1/runs with the same `repo` starts it: its settings and agent profiles (.capcomd/agents.json from `capcomd setup project`), not the daemon's. 422 `invalid` when it isn't a project checkout, with the message POST /v1/runs gives.";
+export const RunOptionsQuery = z.object({
+	repo: z.string().refine((p) => p.startsWith("/"), "repo must be an absolute path").optional()
+		.describe("Capability runs.options.repo. Absolute path of a project checkout on the daemon's machine, as POST /v1/runs `repo`. Omitted: the daemon's own settings and profiles."),
+});
 
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
@@ -370,7 +382,7 @@ export const contract = {
 			method: "POST", path: "/v1/runs/{runId}/cancel", inputStructure: "detailed",
 			description: "Stop the run (no body): every agent that hasn't ended is cancelled and its VM destroyed (`capcomd cancel <runId>`). " +
 				"Confirmed by agent.cancelled per agent and run.cancelled. " +
-				`409 \`conflict\` when nothing is left to cancel. ${WRITE_DOC}`,
+				`409 \`conflict\` when the run has already ended (a run with no agent running is cancelled, not refused). ${WRITE_DOC}`,
 		}).input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(RunControl),
 	},
 	agents: {
@@ -412,7 +424,7 @@ export const contract = {
 			.input(z.object({ runId: z.string(), attachmentId: z.string().regex(/^att-[0-9a-f]+$/) })).output(z.string().describe("The attachment's bytes")),
 	},
 	runOptions: {
-		get: oc.route({ method: "GET", path: "/v1/run-options", description: RUN_OPTIONS_DOC }).output(RunOptions),
+		get: oc.route({ method: "GET", path: "/v1/run-options", description: RUN_OPTIONS_DOC }).input(RunOptionsQuery).output(RunOptions),
 	},
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),

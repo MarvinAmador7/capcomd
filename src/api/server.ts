@@ -109,7 +109,12 @@ export function harnessApp(o: ServerOptions) {
 			get: os.attachments.get.handler(async ({ input }) => (await src.attachment(input.runId, input.attachmentId)) ?? (() => { throw nf(input.attachmentId); })()),
 			content: os.attachments.content.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
-		runOptions: { get: os.runOptions.get.handler(() => src.runOptions()) },
+		runOptions: { get: os.runOptions.get.handler(async ({ input }) => {
+			try { return await src.runOptions(input.repo); } catch (e) {
+				if (e instanceof CreateRunError) throw new ORPCError("UNPROCESSABLE_CONTENT", { message: e.message });
+				throw e;
+			}
+		}) },
 		skills: { list: os.skills.list.handler(() => src.skills()) },
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
@@ -187,12 +192,22 @@ export function harnessApp(o: ServerOptions) {
 		const p = parsed.data;
 		if (p.profile !== undefined && p.driver !== undefined) return err(c, 422, "invalid", "profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
 		if (p.profile !== undefined && p.effort !== undefined) return err(c, 422, "invalid", "profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
-		if (p.effort !== undefined) {
-			// The chosen driver's levels (GET /v1/run-options), or the default driver's when none is chosen.
-			const drivers = (await src.runOptions()).drivers;
+		if (p.effort !== undefined || p.sandbox !== undefined) {
+			// GET /v1/run-options for this run (the body's project, when it names one): the chosen driver, else the default.
+			let drivers;
+			try { drivers = (await src.runOptions(p.repo)).drivers; } catch (e) {
+				if (e instanceof CreateRunError) return err(c, 422, "invalid", e.message);
+				throw e;
+			}
 			const d = p.driver !== undefined ? drivers.find((x) => x.provider === p.driver) : drivers.find((x) => x.default);
-			if (!d) return err(c, 422, "invalid", "effort needs a driver: this daemon has no default planner profile (run capcomd setup), so send driver too");
-			if (!d.efforts.includes(p.effort)) return err(c, 422, "invalid", d.efforts.length ? `effort ${JSON.stringify(p.effort)} isn't a ${d.label} level: use one of ${d.efforts.join(", ")}` : `${d.label}'s effort can't be set`);
+			if (p.effort !== undefined) {
+				if (!d) return err(c, 422, "invalid", `effort needs a driver: ${p.repo !== undefined ? "this project" : "this daemon"} has no default planner profile (run capcomd setup), so send driver too`);
+				if (!d.efforts.includes(p.effort)) return err(c, 422, "invalid", d.efforts.length ? `effort ${JSON.stringify(p.effort)} isn't a ${d.label} level: use one of ${d.efforts.join(", ")}` : `${d.label}'s effort can't be set`);
+			}
+			// Logins and agent environments are per sandbox: a driver that can't run in the chosen one is refused now, not
+			// minutes later (capability runs.options.sandbox).
+			const fit = p.sandbox !== undefined ? d?.sandboxes?.[p.sandbox] : undefined;
+			if (fit && !fit.available) return err(c, 422, "invalid", `${d!.label} can't drive a run in ${p.sandbox === "docker" ? "Local" : "VM"}: ${fit.reason ?? "unavailable"}`);
 		}
 		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox } : {}) };
 		const kid = `${c.get("client").clientId}\u0000runs.create\u0000${key}`;
