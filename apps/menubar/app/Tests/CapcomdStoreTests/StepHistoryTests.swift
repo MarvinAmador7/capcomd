@@ -40,6 +40,17 @@ final class StepHistoryTests: XCTestCase {
     XCTAssertEqual(rows.last?.status, .running)
   }
 
+  func testAPlannersSpawnAndWaitStepsStay() {
+    let s = CapcomdStore()
+    send(s, ev(1, "agent.spawned", agent: "agt-p", data: ["profile": .string("planner")]))
+    send(s, ev(2, "agent.started", agent: "agt-p"))
+    send(s, step(3, agent: "agt-p", kind: "spawn", text: "Started a sub-agent"))
+    send(s, step(4, agent: "agt-p", kind: "wait", text: "Waited for sub-agents"))
+    send(s, step(5, agent: "agt-p", kind: "report", text: "Reported back"))
+    send(s, ev(6, "agent.done", agent: "agt-p"))
+    XCTAssertEqual(s.steps(forRun: "run-x").map(\.text), ["Started a sub-agent", "Waited for sub-agents", "Reported back"])
+  }
+
   func testAReplayedStepIsOneRow() {
     let s = CapcomdStore()
     send(s, ev(1, "agent.spawned", agent: "agt-w", data: ["profile": .string("worker")]))
