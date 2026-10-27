@@ -143,7 +143,7 @@ struct PlaceSection: View {
         if env?.state == .building {
           Foot(verbatim: "Runs on \(title) start once it's built.")
         } else if place.name == "docker" {
-          Foot(verbatim: "Agents work in containers on this Mac. Containers can't limit which sites agents reach; Cloud can.")
+          Foot(verbatim: "Agents work in containers on this Mac.")
         }
         if last {
           if env != nil { Foot(verbatim: "An agent environment holds the agents' tools, built once for each place they run. It never holds logins or keys.") }
