@@ -1145,6 +1145,7 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
 
 - [`run.created`](events.md#runcreated)
 - [`run.granted`](events.md#rungranted)
+- [`run.ended`](events.md#runended)
 - [`agent.spawned`](events.md#agentspawned)
 - [`agent.started`](events.md#agentstarted)
 - [`agent.done`](events.md#agentdone)

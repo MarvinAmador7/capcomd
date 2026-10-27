@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- A run that can't start is now refused with the reason, instead of showing as running forever with no agents. For
+  example, starting a run on Local (Docker) before its agent environment is built (`capcomd env build`) now fails
+  right away: `capcomd run` exits with the error, and the menu bar app (`POST /v1/runs`) shows it. If the run's
+  planner still can't be started once the run is under way, the run ends as failed with that error as its reason
+  (in `capcomd status`, `GET /v1/runs` and the run's events) instead of staying "started".
+- Stop (`capcomd cancel <runId>`, the menu bar app's Stop) now ends a run that never got an agent running, such as one
+  whose start failed or whose agents were all stopped before they began. Before, it answered "nothing to cancel" and
+  the run stayed open. Only a run that has already ended answers "nothing to cancel" now.
+- Harness API: a run that ended without its agents ending it has a new `run.ended` event (`state` failed or
+  cancelled, with a `reason`); the lifecycle feed shows it as `run.failed` or `run.cancelled` with that `reason`. `GET /v1/runs` shows
+  such a run as `failed` or `cancelled`.
+
 - Agents no longer fail when the daemon restarts. Before, agents that were running when `capcomd serve` stopped or
   restarted (a Ctrl-C, a service restart, an upgrade) ended as failed a few seconds later, with "An internal error
   occurred" or a connection error as their result. Now each agent waits for the daemon to come back (up to 5 minutes,
