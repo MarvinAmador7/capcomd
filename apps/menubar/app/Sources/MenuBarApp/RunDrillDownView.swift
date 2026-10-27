@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import CapcomdStore
+import CapcomdBot
 
 /// SPEC §4.3 run drill-down (view-activity / view-trace / drill-collapsed / drill-a2-*): header, step bar, Activity or
 /// Trace (remembered), Log | Files (remembered), then Pause · Stop · Open in terminal. Clicks animate; the same changes
@@ -125,7 +126,7 @@ struct StepBar: View {
     .accessibilityHidden(true)
   }
   func color(_ s: StepStatus) -> Color {
-    switch s { case .done: Theme.Drill.barDone; case .running: Theme.Drill.barCurrent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued: Theme.Drill.barQueued }
+    switch s { case .done: Theme.Drill.barDone; case .running: Theme.Drill.barCurrent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued, .paused, .stopped: Theme.Drill.barQueued }
   }
 }
 
@@ -138,11 +139,13 @@ struct StepIcon: View {
   let step: Step
   var body: some View {
     let tint: Color = switch step.status {
-      case .running: Theme.accent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued: Theme.Drill.rowQueued; case .done: Theme.Drill.iconText
+      case .running: Theme.accent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued, .paused, .stopped: Theme.Drill.rowQueued; case .done: Theme.Drill.iconText
     }
     let profile = step.agentId.flatMap { model.run(runId)?.agents[$0]?.kind }
     Group {
       if step.status == .waiting { Image(systemName: "hand.raised") }
+      // An agent with no activity line yet is named by its bot, as in Trace rows (SPEC: bots replace the profile icons).
+      else if step.kind == .agent, let id = step.agentId, let bot = model.bot(runId: runId, agentId: id) { BotAvatar(traits: bot, size: .xs) }
       else if step.kind == .agent, let k = profile { ZStack { Image(systemName: k.symbol); if k.hasCentreDot { Circle().frame(width: 3, height: 3) } } }
       else { Image(systemName: step.kind.symbol) }
     }
@@ -522,7 +525,12 @@ struct DetailPane: View {
       case .loaded(let f) where !f.files.isEmpty:
         ScrollView(showsIndicators: false) {
           VStack(spacing: 0) {
-            ForEach(f.files, id: \.self) { FileRow(file: $0) }
+            // Which agent changed it: two agents can change one path on their own branches (two rows, two bots).
+            let several = Set(f.files.map(\.agentId)).count > 1
+            ForEach(f.files, id: \.self) { file in
+              FileRow(file: file, bot: several ? model.bot(runId: runId, agentId: file.agentId) : nil,
+                      who: model.botName(runId: runId, agentId: file.agentId))
+            }
             if f.truncated { empty("\(f.total - f.files.count) more not shown") }
           }
         }
@@ -546,15 +554,18 @@ struct DetailPane: View {
   }
 }
 
-/// `.f`: status glyph · path (mono, middle-truncated) · +n · −n.
+/// `.f`: status glyph · path (mono, middle-truncated) · the agent's bot when several agents changed files · +n · −n.
 struct FileRow: View {
   let file: RunFiles.File
+  var bot: BotTraits? = nil
+  var who: String? = nil
   var body: some View {
     HStack(spacing: Theme.Drill.fileGap) {
       Image(systemName: symbol).font(Theme.Drill.iconFont).foregroundStyle(Theme.Drill.iconText).frame(width: Theme.Drill.fileIcon)
       Text(verbatim: UntrustedText(file.path).plain).font(Theme.Drill.fileFont).foregroundStyle(Theme.Drill.fileText)
         .lineLimit(1).truncationMode(.middle)
       Spacer(minLength: 0)
+      if let bot { BotAvatar(traits: bot, size: .xs).help(who ?? "") }
       if let a = file.added { Text(verbatim: "+\(a)").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.green) }
       if let r = file.removed { Text(verbatim: "−\(r)").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.red) }
       if file.added == nil && file.removed == nil { Text("binary").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.Drill.emptyText) }
@@ -562,6 +573,7 @@ struct FileRow: View {
     .frame(height: Theme.Drill.fileHeight)
     .padding(.horizontal, Theme.Drill.rowPadding)
     .accessibilityElement(children: .combine)
+    .accessibilityHint(who.map { "Changed by \($0)" } ?? "")
   }
   private var symbol: String {
     switch file.status { case "added": "doc.badge.plus"; case "deleted": "trash"; case "renamed", "copied": "arrow.right.doc.on.clipboard"; default: "square.and.pencil" }
@@ -593,8 +605,7 @@ struct DrillFooter: View {
 
   private var bar: some View {
     HStack(spacing: Theme.Drill.footerGap) {
-      pauseButton
-      stopButton
+      if active { pauseButton; stopButton }   // an ended run has nothing to pause or stop
       Spacer(minLength: 0)
       terminalButton
     }

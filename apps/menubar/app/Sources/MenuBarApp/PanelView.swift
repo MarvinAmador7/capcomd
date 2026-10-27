@@ -27,7 +27,16 @@ struct PanelView: View {
 
   var body: some View {
     @Bindable var model = model
-    if model.needsToken {
+    if model.tokenPending {
+      // macOS may be asking whether this build can read capcomd's token from the Keychain.
+      VStack(spacing: 8) {
+        ProgressView().controlSize(.small)
+        Text("Waiting for Keychain access…").font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)
+        Text("If macOS asks whether capcomd can use its token, choose Always Allow.").font(Theme.Composer.errorFont)
+          .foregroundStyle(Theme.Composer.kbdText).multilineTextAlignment(.center)
+      }
+      .padding(24).frame(width: Theme.panelWidth).background(.ultraThinMaterial)
+    } else if model.needsToken {
       TokenPrompt(rejected: model.store.unauthorized)
         .frame(width: Theme.panelWidth).background(.ultraThinMaterial)
     } else {
@@ -39,6 +48,17 @@ struct PanelView: View {
           let active = projects.filter { $0.isActive || model.celebrating($0) != nil }
           let finished = Array(projects.filter { !$0.isActive && model.celebrating($0) == nil }.prefix(Theme.Finished.maxRows))
           StartProjectField().padding(.top, Theme.Composer.sectionTop)
+          if model.daemonUnreachable {
+            // Quiet, not red: usually a restart. What's below is the last state the daemon sent.
+            HStack(spacing: 6) {
+              ProgressView().controlSize(.mini)
+              Text("Can't reach capcomd. Reconnecting…")
+            }
+            .font(Theme.Composer.errorFont).foregroundStyle(Theme.Composer.kbdText)
+            .padding(.horizontal, Theme.Composer.panelPadding).padding(.top, 6)
+            .accessibilityElement(children: .combine)
+            .transition(.opacity)
+          }
           Text("Active").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
             .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
           ForEach(active) { p in

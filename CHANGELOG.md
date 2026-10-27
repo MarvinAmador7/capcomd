@@ -5,6 +5,22 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: the panel stays live. It used to stop updating after a while (a quiet connection was dropped, or the
+  daemon restarted) and kept showing old state; it now reconnects within a few seconds, and says "Can't reach capcomd. Reconnecting…" while the daemon is down. Runs started elsewhere (the
+  CLI, another agent) appear as they start, with their agents, even with many runs around; before, past about seven
+  runs, new ones showed no agents. An ended run's view no longer offers Pause and Stop. Agents you
+  stopped show a grey stop mark instead of a red failure, and agents in the Activity list show their bots. When several agents
+  changed files, each row in Files shows the bot of the agent that changed it.
+- Daemon: event streams are no longer cut after 10 seconds of quiet (the heartbeat comes every 15).
+- Trace: git steps are named after their command (push, clone, checkout) even when git gets options first; they read
+  "-c" before, and a push could show the remote instead of the branch. In the menu bar's Trace view, paused agents
+  show a pause mark instead of looking queued.
+- Menu bar app: each goal you start is now its own card. Before, every run in the same repository was folded into one
+  card, titled after whichever goal came first; reruns of the same goal still share a card. A paused agent now shows
+  a pause mark in the tree and its thread.
+- Menu bar app: the menu bar icon appears right away even while macOS is asking whether the app may read its token
+  from the Keychain (the panel says it's waiting); before, nothing showed until that prompt was answered. When no AI
+  can drive a run yet, its menu stays visible, dimmed, with the reason (for example "No planner profile").
 - Menu bar app: the send button is always white (its arrow dims while there's nothing to send), and the panel grows
   wider when the controls under the goal need the room, instead of spilling past its edge.
 - Menu bar app: choose how a new project runs. Under the goal, a two-icon switch (laptop or cloud) picks where its

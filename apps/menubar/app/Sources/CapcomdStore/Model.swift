@@ -71,12 +71,15 @@ public struct Agent: Sendable, Hashable, Identifiable {
   }
 }
 
-public enum StepStatus: Sendable, Hashable { case done, running, failed, queued, waiting
+public enum StepStatus: Sendable, Hashable { case done, running, failed, queued, waiting, paused, stopped
   /// SPEC §5 status symbols. Done has none.
   public var symbol: String? {
-    switch self { case .done: nil; case .running: "smallcircle.filled.circle"; case .failed: "xmark.circle"; case .queued: "clock"; case .waiting: "hand.raised" }
+    switch self {
+    case .done: nil; case .running: "smallcircle.filled.circle"; case .failed: "xmark.circle"; case .queued: "clock"; case .waiting: "hand.raised"
+    case .paused: "pause.circle"; case .stopped: "stop.circle"
+    }
   }
-  public var tint: Tint { switch self { case .done: .grey; case .running: .blue; case .failed: .red; case .queued: .tertiary; case .waiting: .amber } }
+  public var tint: Tint { switch self { case .done: .grey; case .running: .blue; case .failed: .red; case .queued, .paused, .stopped: .tertiary; case .waiting: .amber } }
 }
 
 public enum StepKind: String, Sendable, Hashable { case plan, fileRead, fileWrite, tool, shell, sandbox, model, network, git, retry, approval, agent, verify
@@ -191,7 +194,7 @@ public struct Project: Sendable, Hashable, Identifiable {
   /// Title = goal of its most recent run (contract has no project goal; gap G1).
   public var goal: UntrustedText?
   public var runs: [Run]
-  public var title: String { goal?.firstLine ?? runs.first?.title ?? id }
+  public var title: String { goal.map { $0.firstLine.trimmingCharacters(in: .whitespaces) } ?? runs.first?.title ?? id }
   public var isRunning: Bool { runs.contains(where: \.isRunning) }
   public var lastEventMs: Int { runs.map(\.lastEventMs).max() ?? 0 }
   public var recencyMs: Int { runs.map(\.recencyMs).max() ?? 0 }
@@ -250,7 +253,7 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
   public var iconTint: Tint { waiting ? .amber : status == .running ? .blue : status == .failed ? .red : .grey }
   public var statusSymbol: StepStatus? {
     if waiting { return .waiting }
-    switch status { case .running: return .running; case .failed: return .failed; case .pending: return .queued; default: return nil }
+    switch status { case .running: return .running; case .failed: return .failed; case .pending: return .queued; case .paused: return .paused; case .cancelled: return .stopped; default: return nil }
   }
   /// VoiceOver label per SPEC §8.
   public var accessibilityLabel: String {

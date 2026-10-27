@@ -418,6 +418,7 @@ enum Theme {
     static let chipHeight: CGFloat = 26, chipPadding: CGFloat = 9, chipGap: CGFloat = 8, chipInnerGap: CGFloat = 6
     // Local | VM switch (the reference's segmented group): the picked segment is a raised capsule.
     static let segmentOn = Color.white.opacity(0.12), segmentOnStroke = Color.white.opacity(0.18)
+    static let unavailableOpacity: CGFloat = 0.55
     static let segmentWidth: CGFloat = 36, segmentIcon = Font.system(size: 13, weight: .medium)
     static let chipFont = Font.system(size: 12.5), chipMono = Font.system(size: 12, design: .monospaced)
     static let chipFill = Color.white.opacity(0.08), chipStroke = Color.white.opacity(0.14), chipX = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55)

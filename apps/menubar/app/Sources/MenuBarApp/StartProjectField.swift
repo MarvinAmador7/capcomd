@@ -152,6 +152,18 @@ struct StartProjectField: View {
       .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
       .help(([current.label, current.model, model.startEffort.map { "\(EffortBars.title($0)) effort" }] as [String?]).compactMap { $0 }.joined(separator: " · "))
       .accessibilityLabel("Driver: \(current.label)" + (model.startEffort.map { ", \(EffortBars.title($0)) effort" } ?? ""))
+    } else if let shown = model.drivers.first(where: { $0.isDefault == true }) ?? model.drivers.first, let provider = Provider(wire: shown.provider) {
+      // No driver can run (no planner profile, no login): the chip stays, dimmed, and says why, instead of vanishing.
+      Menu {
+        ForEach(model.drivers) { d in Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true) }
+      } label: {
+        Chip2(leading: ProviderMark(provider: provider, size: Theme.Provider.chipMark).foregroundStyle(Theme.Composer2.chipX),
+              text: shown.label, chevron: true, onRemove: nil)
+          .opacity(Theme.Composer2.unavailableOpacity)
+      }
+      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+      .help(shown.reason ?? "No AI can drive a run yet")
+      .accessibilityLabel("Driver unavailable: \(shown.reason ?? "no AI can drive a run yet")")
     }
   }
 
@@ -171,7 +183,7 @@ struct StartProjectField: View {
   @ViewBuilder private func line(_ state: StartState) -> some View {
     switch state {
     case .failed(let m), .needsRepo(let m):
-      Text(verbatim: m).font(Theme.Composer.errorFont).foregroundStyle(Theme.red).lineLimit(2)
+      Text(verbatim: m).font(Theme.Composer.errorFont).foregroundStyle(Theme.red).lineLimit(3).help(m)   // the daemon's whole sentence on hover
         .padding(.horizontal, Theme.Composer.panelPadding).padding(.top, 6)
         .transition(.opacity)
     case .started:

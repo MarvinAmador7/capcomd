@@ -46,6 +46,8 @@ public final class CapcomdStore {
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
   public internal(set) var capabilities: Set<String> = []
   public internal(set) var skills: Fetched<[SkillInfo]>?
+  /// The daemon feed can't connect (the daemon is down or restarting); it keeps retrying.
+  public internal(set) var daemonUnreachable = false
   /// Who can drive a new run and where it can run (`runs.options`); empty when the daemon can't be asked.
   public internal(set) var runOptions = RunOptions()
   var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
@@ -88,13 +90,29 @@ public final class CapcomdStore {
   }
 
   // MARK: derived views
-  /// Project cards: running first, then most recent event (SPEC §4.1).
+  /// Project cards: running first, then most recent event (SPEC §4.1). The daemon's `projectId` is the repository
+  /// (a hash of it), but a card is one goal: runs group by repository and goal, so each goal started from the composer
+  /// is its own card and reruns of a goal stay together. A run whose goal hasn't arrived yet joins its repository's
+  /// newest card.
   public var projects: [Project] {
-    let grouped = Dictionary(grouping: runs.values) { $0.projectId ?? $0.id }
+    func goalKey(_ r: Run) -> String? { r.goal.map { $0.plain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() } }
+    var newestGoal: [String: (key: String, at: Int)] = [:]
+    for r in runs.values { if let g = goalKey(r), let p = r.projectId, r.recencyMs >= (newestGoal[p]?.at ?? .min) { newestGoal[p] = (g, r.recencyMs) } }
+    let grouped = Dictionary(grouping: runs.values) { r -> String in
+      guard let p = r.projectId else { return r.id }
+      guard let g = goalKey(r) ?? newestGoal[p]?.key else { return r.id }
+      return "\(p)|\(Self.fnv1a(g))"
+    }
     return grouped.map { id, rs in
       let sorted = rs.sorted { ($0.recencyMs, $0.id) > ($1.recencyMs, $1.id) }
       return Project(id: id, goal: sorted.first(where: { $0.goal != nil })?.goal, runs: sorted)
     }.sorted { ($0.isActive ? 1 : 0, $0.recencyMs, $0.id) > ($1.isActive ? 1 : 0, $1.recencyMs, $1.id) }
+  }
+  /// A short, stable hash for card ids (the goal can be 16 KB).
+  static func fnv1a(_ s: String) -> String {
+    var h: UInt64 = 0xcbf2_9ce4_8422_2325
+    for b in s.utf8 { h ^= UInt64(b); h &*= 0x0000_0100_0000_01b3 }
+    return String(h, radix: 36)
   }
   /// Undecided approvals in request order.
   public var pendingApprovals: [PendingApproval] {
@@ -172,8 +190,9 @@ public final class CapcomdStore {
   /// Badge and notifications come from each run's lifecycle feed (`?feed=lifecycle`): one per known, unfinished run.
   func syncLifecycleFeeds() {
     guard subscriber != nil, subs["daemon"] != nil else { return }
+    // Active runs first: the daemon reports a finished run as `idle`, not a terminal state, so old ones mustn't crowd out new.
     let want = runs.values.filter { !Run.terminalStates.contains($0.state) }
-      .sorted { ($0.lastEventMs, $0.id) > ($1.lastEventMs, $1.id) }.prefix(Self.maxLifecycleFeeds).map(\.id)
+      .sorted { ($0.isActive ? 1 : 0, $0.lastEventMs, $0.id) > ($1.isActive ? 1 : 0, $1.lastEventMs, $1.id) }.prefix(Self.maxLifecycleFeeds).map(\.id)
     for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }   // live activity rides along (Live adds ?activity=1)
   }
   public var activeScopes: [String] { subs.keys.sorted() }
@@ -208,6 +227,9 @@ public final class CapcomdStore {
       cursor[scope] = n; return
     case .unauthorized:
       unauthorized = true
+    case .link(let up):
+      guard scope == "daemon", daemonUnreachable == up else { return }   // the panel follows the daemon feed only
+      daemonUnreachable = !up
     case .snapshotSteps(let st): pendingReset[scope, default: ResetBuffer()].steps += st; return
     case .snapshotThreads(let m): pendingReset[scope, default: ResetBuffer()].messages += m; return
     case .reset(let s, _):
@@ -434,7 +456,7 @@ public final class CapcomdStore {
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == s.id }) { runs[runId]?.steps[i] = s } else { runs[runId]?.steps.append(s) }
   }
   nonisolated static func stepStatus(_ s: AgentStatus) -> StepStatus {
-    switch s { case .running: .running; case .done, .handedOff: .done; case .failed, .cancelled: .failed; case .pending, .paused, .unknown: .queued }
+    switch s { case .running: .running; case .done, .handedOff: .done; case .failed: .failed; case .cancelled: .stopped; case .paused: .paused; case .pending, .unknown: .queued }
   }
   nonisolated static func phase(_ k: ProfileKind) -> Phase { switch k { case .planner: .plan; case .critic: .ship; default: .build } }
   /// "fix/backfill → main" for merges; host/name for other kinds. Built only from structured subject fields.

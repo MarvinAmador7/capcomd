@@ -6,12 +6,15 @@ import Foundation
 /// SSE subscription per scope on `GET /v1/streams/{scope}/events` over the CapcomdClient Unix-socket transport.
 /// Contract handling: Last-Event-ID resume; `stream.reset` → `snapshot.*` → `snapshot.end` arrive in-band on the same
 /// connection (the store drops local state and applies the snapshot; the cursor jumps to snapshotSeq); `: heartbeat`
-/// every 15s, so `idleTimeout` (default 45s) of silence is a dead socket and we reconnect. No retry on HTTP errors.
+/// every 15s, so `idleTimeout` (default 45s) of silence is a dead socket and we reconnect. A feed must outlive the
+/// daemon: a clean close (daemon restart, a cut connection), a 5xx or a transport error reconnects from the cursor,
+/// backing off up to `maxBackoff`, for as long as the subscription lives. Only 401 (bad token) and 404 (no such
+/// scope) end it.
 public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   let transport: UnixSocketTransport
-  let maxReconnects: Int; let backoff: Duration; let idleTimeout: Duration
-  public init(transport: UnixSocketTransport, maxReconnects: Int = 10, backoff: Duration = .milliseconds(50), idleTimeout: Duration = .seconds(45)) {
-    self.transport = transport; self.maxReconnects = maxReconnects; self.backoff = backoff; self.idleTimeout = idleTimeout
+  let backoff: Duration; let maxBackoff: Duration; let idleTimeout: Duration
+  public init(transport: UnixSocketTransport, backoff: Duration = .milliseconds(50), maxBackoff: Duration = .seconds(5), idleTimeout: Duration = .seconds(45)) {
+    self.transport = transport; self.backoff = backoff; self.maxBackoff = maxBackoff; self.idleTimeout = idleTimeout
   }
   final class Handle: SubscriptionHandle, @unchecked Sendable { var task: Task<Void, Never>?; func cancel() { task?.cancel() } }
 
@@ -28,26 +31,29 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   public func subscribe(scope: String, feed: String?, thread: Bool, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
     let query = (feed.map { ["feed=\($0)", "activity=1"] } ?? []) + (thread ? ["thread=1"] : [])
     let path = "/v1/streams/\(scope)/events" + (query.isEmpty ? "" : "?" + query.joined(separator: "&"))
-    let h = Handle(); let t = transport, maxR = maxReconnects, bo = backoff, idle = idleTimeout
+    let h = Handle(); let t = transport, bo = backoff, cap = maxBackoff, idle = idleTimeout
     h.task = Task {
-      var last = after, attempts = 0
+      var last = after, attempts = 0, down = false
       while !Task.isCancelled {
         do {
           for try await item in t.sseItems(path, lastEventID: last > 0 ? String(last) : nil, idleTimeout: idle) {
+            attempts = 0   // anything from the daemon, heartbeats included, means it's up
+            if down { down = false; await onFrame(.link(up: true)) }
             guard case .frame(let f) = item else { continue } // heartbeat: activity only
             let frame = StreamFrame.parse(event: f.event, data: f.data)
-            if case .snapshotEnd(let s) = frame, f.id == nil { last = s; attempts = 0 }
+            if case .snapshotEnd(let s) = frame, f.id == nil { last = s }
             await onFrame(frame)
-            if let id = f.id, let n = Int(id) { last = n; attempts = 0; await onFrame(.cursor(n)) }
+            if let id = f.id, let n = Int(id) { last = n; await onFrame(.cursor(n)) }
           }
-          return // clean close: stream finished
-        } catch let e as HTTPStatusError { if e.status == 401 { await onFrame(.unauthorized) }; return }
-        catch is CancellationError { return }
-        catch {
-          if Task.isCancelled { return }
-          attempts += 1; if attempts > maxR { return }
-          try? await Task.sleep(for: bo * attempts)
-        }
+          // Clean close (daemon restart or a cut connection): reconnect from the cursor below.
+        } catch let e as HTTPStatusError {
+          if e.status == 401 { await onFrame(.unauthorized); return }
+          if e.status == 404 { return }   // no such scope (a deleted run): nothing to follow
+        } catch is CancellationError { return }
+        catch { if Task.isCancelled { return } }
+        attempts += 1
+        if attempts >= 2, !down { down = true; await onFrame(.link(up: false)) }   // not on one quick reconnect
+        try? await Task.sleep(for: min(bo * attempts * attempts, cap))
       }
     }
     return h

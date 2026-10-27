@@ -23,6 +23,37 @@ final class LiveMockTests: XCTestCase {
     try await Task.sleep(for: .milliseconds(100))
     transport = UnixSocketTransport(socketPath: Self.sock, token: "test-token")
   }
+  func startServer() throws {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["BUN_BIN"] ?? "/usr/local/lib/pnpm/5/.pnpm/bun@1.4.2/node_modules/bun/bin/bun.exe")
+    p.arguments = [URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../client/mock/server.ts").standardized.path, Self.sock]
+    p.environment = ProcessInfo.processInfo.environment.merging(["SOCK": Self.sock, "TOKEN": "test-token"]) { $1 }
+    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+    try p.run(); server = p
+  }
+
+  /// A feed outlives the daemon: the daemon going away for longer than a few quick retries (a restart) and coming back
+  /// must not end the subscription (it used to give up after 10 tries in ~3 s, and for good on a clean close).
+  func testSubscriptionReconnectsAfterTheDaemonRestarts() async throws {
+    final class Count: @unchecked Sendable { var resets = 0; let lock = NSLock(); func add() { lock.lock(); resets += 1; lock.unlock() }; var n: Int { lock.lock(); defer { lock.unlock() }; return resets } }
+    let c = Count()
+    let h = LiveSubscriber(transport: transport, maxBackoff: .milliseconds(500)).subscribe(scope: "daemon", after: 0) { f in
+      if case .reset = f { c.add() }
+    }
+    defer { h.cancel() }
+    var deadline = Date().addingTimeInterval(10)
+    while c.n < 1, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+    XCTAssertEqual(c.n, 1)
+    server.terminate(); server.waitUntilExit()
+    let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill"); k.arguments = ["-f", Self.sock]; try? k.run(); k.waitUntilExit()
+    try? FileManager.default.removeItem(atPath: Self.sock)
+    try await Task.sleep(for: .seconds(4))   // longer than the old retry budget
+    try startServer()
+    deadline = Date().addingTimeInterval(15)
+    while c.n < 2, Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
+    XCTAssertGreaterThanOrEqual(c.n, 2, "the feed reconnected after the restart")
+  }
+
   override func tearDown() async throws {
     try? await transport.shutdown(); server.terminate(); server.waitUntilExit()
     let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill"); k.arguments = ["-f", Self.sock]; try? k.run(); k.waitUntilExit()
