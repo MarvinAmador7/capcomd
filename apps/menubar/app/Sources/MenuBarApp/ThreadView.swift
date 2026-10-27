@@ -123,6 +123,9 @@ struct ThreadHeader: View {
           let bot = model.bot(runId: runId, agentId: agentId)
           BotAvatar(traits: waiting ? bot.flatMap { try? withOverrides($0, pose: "wave") } ?? bot : bot, size: .small)
           Text(verbatim: agent?.displayName ?? "Agent").font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn)
+          if let n = model.botName(runId: runId, agentId: agentId) {
+            Text(verbatim: n).font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Moments.nameText)
+          }
           if let s = node?.suffix { Text(verbatim: s).font(Theme.monoTime).foregroundStyle(.tertiary) }
           StatusMark(status: node?.statusSymbol)
         }

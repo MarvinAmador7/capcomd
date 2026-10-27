@@ -73,6 +73,7 @@ struct ThreadComposer: View {
     return VStack(alignment: .leading, spacing: Theme.Composer2.gap) {
       HStack(spacing: Theme.Composer2.chipGap) {
         Chip2(leading: BotAvatar(traits: model.bot(runId: runId, agentId: agentId), size: .xs), text: name, onRemove: nil)
+          .help(model.botName(runId: runId, agentId: agentId) ?? "")
         chips
       }
       editor.padding(.horizontal, Theme.Composer2.textInset)
@@ -113,7 +114,7 @@ struct ThreadComposer: View {
           .onKeyPress(.downArrow) { move(1) }
           .onKeyPress(.tab) { pickHighlighted() ? .handled : .ignored }
           .onKeyPress(.escape) { escape() }
-          .accessibilityLabel("Message \(name)")
+          .accessibilityLabel("Message \(name)" + (model.botName(runId: runId, agentId: agentId).map { " \($0)" } ?? ""))
       }
       .overlay(alignment: .topLeading) {
         if text.isEmpty {
@@ -292,6 +293,7 @@ struct MentionRow: View {
     HStack(spacing: Theme.Thread.skillGap) {
       BotAvatar(traits: bot, size: .xs)
       Text(verbatim: node.name).font(Theme.Thread.mentionFont).foregroundStyle(on ? Color.white : Theme.Thread.mentionText)
+      if let n = bot?.name { Text(verbatim: n).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
       if let s = node.suffix { Text(verbatim: s).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
       Spacer(minLength: 0)
       Text(status).font(Theme.Thread.mentionStatus).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionStatusText)

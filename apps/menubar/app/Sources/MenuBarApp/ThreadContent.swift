@@ -563,6 +563,9 @@ struct HandoffCard: View {
         HStack(spacing: Theme.Content.handoffGap) {
           BotAvatar(traits: childId.flatMap { model.bot(runId: runId, agentId: $0) }, size: .small)
           Text(verbatim: child?.displayName ?? "Agent").font(Theme.Content.handoffName).foregroundStyle(.white)
+          if let n = childId.flatMap({ model.botName(runId: runId, agentId: $0) }) {
+            Text(verbatim: n).font(Theme.Content.handoffName).foregroundStyle(Theme.Moments.nameText)
+          }
           if let s = childId.flatMap(node)?.suffix { Text(verbatim: s).font(Theme.Content.handoffSuffix).foregroundStyle(Theme.Content.handoffSuffixText) }
           Text(item.child?.status == "failed" ? "failed" : "handed back").font(Theme.Content.handoffNote).foregroundStyle(Theme.Content.handoffNoteText)
           Spacer(minLength: 0)
