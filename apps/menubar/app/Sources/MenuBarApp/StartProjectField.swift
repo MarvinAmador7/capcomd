@@ -37,14 +37,12 @@ struct StartProjectField: View {
             focused = false; return .handled
           }
           .accessibilityLabel("Start a project")
-        HStack(spacing: Theme.Composer2.chipGap) {
-          addMenu
-          sandboxSwitch
-          Spacer(minLength: 0)
-          driverChip   // who drives it sits by the send, like the reference's model menu
-          if starting { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
-          SendCircle(ready: ready, stop: false, label: "Start project", action: submit)
-        }
+        toolRow(ready: ready, starting: starting)
+          // Its natural width, measured on a hidden copy: the panel widens to fit rather than squeezing it.
+          .background(alignment: .leading) {
+            toolRow(ready: ready, starting: starting).fixedSize().hidden().allowsHitTesting(false).accessibilityHidden(true)
+              .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { model.composerRowWidth = $0 }
+          }
       }
       .padding(Theme.Composer2.padding)
       .background { ComposerCard(focused: focused) }
@@ -76,6 +74,17 @@ struct StartProjectField: View {
     }
   }
 
+  private func toolRow(ready: Bool, starting: Bool) -> some View {
+    HStack(spacing: Theme.Composer2.chipGap) {
+      addMenu
+      sandboxSwitch
+      Spacer(minLength: 0)
+      driverChip   // who drives it sits by the send, like the reference's model menu
+      if starting { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
+      SendCircle(ready: ready, stop: false, label: "Start project", action: submit)
+    }
+  }
+
   /// Where the run's agents work (owner's reference: the Web · Computer · Files group): Local (Docker on this Mac) or
   /// VM (boxd), as the daemon offers them. The pick is remembered; one it can't use now is dimmed, with its reason.
   @ViewBuilder private var sandboxSwitch: some View {
@@ -84,12 +93,10 @@ struct StartProjectField: View {
         ForEach(model.sandboxes) { s in
           let on = s.name == current.name
           Button { model.pickSandbox(s.name) } label: {
-            HStack(spacing: Theme.Composer2.segmentIconGap) {
-              Image(systemName: s.name == "boxd" ? "cloud" : "laptopcomputer").font(Theme.Composer2.segmentIcon)
-              Text(verbatim: s.label).font(Theme.Composer2.pillFont)
-            }
-            .foregroundStyle(on ? Color.white : Theme.Composer2.pillText)
-            .padding(.horizontal, Theme.Composer2.segmentPadding).frame(height: Theme.Composer2.pillHeight)
+            // Icons only (owner's call); the name is the tooltip and what VoiceOver reads.
+            Image(systemName: s.name == "boxd" ? "cloud" : "laptopcomputer").font(Theme.Composer2.segmentIcon)
+              .foregroundStyle(on ? Color.white : Theme.Composer2.pillText)
+              .frame(width: Theme.Composer2.segmentWidth, height: Theme.Composer2.pillHeight)
             .background {
               if on {
                 Capsule().fill(Theme.Composer2.segmentOn)
@@ -100,7 +107,8 @@ struct StartProjectField: View {
             .contentShape(Capsule())
           }
           .buttonStyle(PressableStyle()).disabled(!s.available).opacity(s.available ? 1 : 0.4)
-          .help(s.available ? (s.name == "boxd" ? "Agents run on boxd VMs" : "Agents run in Docker on this Mac") : (s.reason ?? "Unavailable"))
+          .help(s.available ? (s.name == "boxd" ? "\(s.label): agents run on boxd VMs" : "\(s.label): agents run in Docker on this Mac")
+                            : "\(s.label): \(s.reason ?? "unavailable")")
           .accessibilityLabel(s.label).accessibilityAddTraits(on ? .isSelected : [])
         }
       }
@@ -229,12 +237,13 @@ struct SendCircle: View {
   var body: some View {
     Button(action: action) {
       ZStack {
-        Circle().fill(ready || stop ? Color.white : Theme.Composer2.roundFill)
+        // Always a white surface (owner's call); with nothing to send only the arrow dims.
+        Circle().fill(Color.white)
         if stop { RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(Color.black).frame(width: 9, height: 9) }
-        else { Image(systemName: "arrow.up").font(Theme.Composer2.sendIcon).foregroundStyle(ready ? Color.black : Color.white.opacity(0.5)) }
+        else { Image(systemName: "arrow.up").font(Theme.Composer2.sendIcon).foregroundStyle(Color.black.opacity(ready ? 1 : Theme.Composer2.sendArrowIdle)) }
       }
       .frame(width: Theme.Composer2.send, height: Theme.Composer2.send)
-      .shadow(color: .black.opacity(ready || stop ? 0.35 : 0), radius: 6, y: 3)
+      .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
     }
     .buttonStyle(PressableStyle())
     .disabled(!(ready || stop))

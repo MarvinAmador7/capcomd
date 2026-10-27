@@ -232,6 +232,9 @@ final class AppModel {
 
   // Panel height: each screen reports what its content needs; PanelView clamps it (Theme.Panel).
   var listHeight: CGFloat = 0
+  /// The width the project composer's tool row needs (its pills and chips never truncate); the panel widens past
+  /// Theme.panelWidth to fit it.
+  var composerRowWidth: CGFloat = 0
   var routeHeight: CGFloat = 0
 
   // Agent thread input (7c)

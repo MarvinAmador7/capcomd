@@ -10,6 +10,13 @@ struct PanelView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var listContent: CGFloat = 0
 
+  /// 380 pt, or wider when the composer's tool row needs it (a long driver name), never past the screen.
+  private var panelWidth: CGFloat {
+    let need = model.composerRowWidth + 2 * (Theme.Card.listPadding + Theme.Composer2.padding.leading)
+    let screen = (NSScreen.main?.visibleFrame.width ?? 1440) - Theme.Panel.screenMargin
+    return min(max(Theme.panelWidth, need.rounded(.up)), screen)
+  }
+
   /// The visible screen's content height, clamped to Theme.Panel and the screen.
   private var panelHeight: CGFloat {
     let ideal = model.path.isEmpty ? model.listHeight : model.routeHeight
@@ -71,10 +78,11 @@ struct PanelView: View {
         }
       }
     }
-    .frame(width: Theme.panelWidth, height: panelHeight)
+    .frame(width: panelWidth, height: panelHeight)
     .transaction(value: panelHeight) { $0.animation = nil }   // layout changes snap (SPEC §7); only content fades
+    .transaction(value: panelWidth) { $0.animation = nil }
     // MenuBarExtra(.window) sizes its window once; resize it ourselves, top edge pinned under the menu bar.
-    .background(PanelWindowSizer(height: panelHeight))
+    .background(PanelWindowSizer(height: panelHeight, width: panelWidth))
     // The container (Composer board): 26 pt continuous corners, our own material and hairline, clipped to the shape.
     .background {
       let shape = RoundedRectangle(cornerRadius: Theme.Panel.radius, style: .continuous)
@@ -244,16 +252,19 @@ struct FinishedRow: View {
 /// item) and grows or shrinks downward, without animation (SPEC §7: layout changes snap).
 struct PanelWindowSizer: NSViewRepresentable {
   let height: CGFloat
+  var width: CGFloat = Theme.panelWidth
   func makeNSView(context: Context) -> NSView { NSView() }
   func updateNSView(_ view: NSView, context: Context) {
-    let h = height
+    let h = height, w = width
     DispatchQueue.main.async {
       guard let window = view.window else { return }
       PanelWindowSizer.makeClear(window)
       let content = window.contentRect(forFrameRect: window.frame)
-      guard abs(content.height - h) > 0.5 else { return }
-      var frame = window.frameRect(forContentRect: NSRect(x: content.minX, y: content.maxY - h, width: content.width, height: h))
+      guard abs(content.height - h) > 0.5 || abs(content.width - w) > 0.5 else { return }
+      var frame = window.frameRect(forContentRect: NSRect(x: content.minX, y: content.maxY - h, width: w, height: h))
       frame.origin.y = window.frame.maxY - frame.height   // pin the top
+      // Wider: keep the left edge on the menu bar item, as MenuBarExtra places it, unless that runs off the screen.
+      if let vis = window.screen?.visibleFrame { frame.origin.x = min(max(frame.origin.x, vis.minX + 8), vis.maxX - frame.width - 8) }
       window.setFrame(frame, display: true, animate: false)
       window.invalidateShadow()   // the shadow follows our rounded container, not the window's rectangle
     }

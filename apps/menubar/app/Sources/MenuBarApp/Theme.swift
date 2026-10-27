@@ -418,12 +418,12 @@ enum Theme {
     static let chipHeight: CGFloat = 26, chipPadding: CGFloat = 9, chipGap: CGFloat = 8, chipInnerGap: CGFloat = 6
     // Local | VM switch (the reference's segmented group): the picked segment is a raised capsule.
     static let segmentOn = Color.white.opacity(0.12), segmentOnStroke = Color.white.opacity(0.18)
-    static let segmentPadding: CGFloat = 9, segmentIconGap: CGFloat = 5, segmentIcon = Font.system(size: 11, weight: .medium)
+    static let segmentWidth: CGFloat = 36, segmentIcon = Font.system(size: 13, weight: .medium)
     static let chipFont = Font.system(size: 12.5), chipMono = Font.system(size: 12, design: .monospaced)
     static let chipFill = Color.white.opacity(0.08), chipStroke = Color.white.opacity(0.14), chipX = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55)
     static let round: CGFloat = 30, roundFill = Color.white.opacity(0.08), roundStroke = Color.white.opacity(0.16), plusFont = Font.system(size: 14, weight: .regular)
     static let pillHeight: CGFloat = 26, pillGroupFill = Color.black.opacity(0.22), pillText = Color.white.opacity(0.7), pillFont = Font.system(size: 12.5)
-    static let send: CGFloat = 32, sendIcon = Font.system(size: 13, weight: .bold)
+    static let send: CGFloat = 32, sendIcon = Font.system(size: 13, weight: .bold), sendArrowIdle: CGFloat = 0.3
     static let keyFont = Font.system(size: 11.5, weight: .medium), keyText = Color.white.opacity(0.7), keyStroke = Color.white.opacity(0.25)
     static let hintFont = Font.system(size: 11), hintText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.4)
     // Recent rows (.continue)
