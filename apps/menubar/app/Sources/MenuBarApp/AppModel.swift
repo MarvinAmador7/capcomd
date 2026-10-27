@@ -196,6 +196,9 @@ final class AppModel {
     return bots[agentId]
   }
 
+  /// The agent's bot name ("Ziggy"), shown beside its role in headers and handoffs and read in tooltips and VoiceOver.
+  func botName(runId: String, agentId: String) -> String? { bot(runId: runId, agentId: agentId)?.name }
+
   /// The menu bar mark's face: a raised mitt when an approval waits, open eyes while anything runs, else sleepy.
   var menuBarFace: MenuBarFace {
     _ = revision

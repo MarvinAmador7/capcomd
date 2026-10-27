@@ -406,7 +406,7 @@ struct SpanRow: View {
     let tint: Color = row.status == .failed ? Theme.red : row.status == .running ? Theme.accent : Theme.Drill.iconText
     let agentId = row.id.hasPrefix("pending:agent:") ? String(row.id.dropFirst("pending:agent:".count)) : nil
     if row.kind == .agent, let id = agentId, model.run(runId)?.agents[id] != nil {
-      BotAvatar(traits: model.bot(runId: runId, agentId: id), size: .xs)
+      BotAvatar(traits: model.bot(runId: runId, agentId: id), size: .xs).help(model.botName(runId: runId, agentId: id) ?? "")
     } else {
       Image(systemName: row.kind.symbol).font(Theme.Drill.iconFont).foregroundStyle(tint).accessibilityHidden(true)
     }

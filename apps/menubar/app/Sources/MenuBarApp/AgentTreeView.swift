@@ -124,6 +124,7 @@ struct AgentTreeRow: View {
       .buttonStyle(.plain).disabled(node.children.isEmpty)
       .accessibilityLabel(line.collapsed ? "Expand \(node.name)" : "Collapse \(node.name)")
       avatar(node)   // the waiting state stays the amber mark
+        .help(model.botName(runId: runId, agentId: node.id) ?? "")
         .frame(width: Theme.Tree.icon).padding(.leading, Theme.Tree.iconLeading).padding(.trailing, Theme.Tree.iconTrailing)
       Button { model.path.append(.thread(runId: runId, agentId: node.id)) } label: {
         HStack(spacing: 0) {
@@ -155,7 +156,7 @@ struct AgentTreeRow: View {
     .padding(.leading, CGFloat(line.guides.count) * Theme.Tree.indent)
     .overlay(alignment: .topLeading) { TreeGuides(guides: line.guides, row: true) }
     .accessibilityElement(children: .combine)
-    .accessibilityLabel(node.accessibilityLabel)
+    .accessibilityLabel(node.accessibilityLabel + (model.botName(runId: runId, agentId: node.id).map { ", \($0)" } ?? ""))
     .accessibilityHint("Opens its thread")
   }
 }
