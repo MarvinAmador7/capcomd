@@ -11,7 +11,7 @@ import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
 import { agentActivity, describeEvent } from "./describe";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
-import { approvalIdFor, parseApprovalId, projectIdOf, type HarnessSource, type PendingApproval } from "./source";
+import { approvalIdFor, mergeApprovalText, parseApprovalId, projectIdOf, type HarnessSource, type PendingApproval } from "./source";
 import { startDetachedRun } from "./create-run";
 import { workspaceOf } from "./workspace";
 import { mirrorFor, workTips } from "./run-files";
@@ -136,10 +136,11 @@ export function rivetSource(): HarnessSource {
 		skill: (name) => readSkill(name),
 		approvals: async (runId) => {
 			const ops = (await scope(runId).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as any[];
-			return ops.map((op): PendingApproval => ({
-				approvalId: approvalIdFor(runId, op.id), kind: "merge", status: "pending", question: `Merge ${op.data.ref ?? "this work"} into ${op.data.target ?? "the target"}?`,
-				requestedBy: { agentId: (op.data.agentId as string) ?? null, runId }, subject: { target: op.data.target ?? null, ref: op.data.ref ?? null }, expiresAt: null,
-			}));
+			return ops.map((op): PendingApproval => {
+				const text = mergeApprovalText(op.data);
+				return { approvalId: approvalIdFor(runId, op.id), kind: "merge", status: "pending", question: text.question,
+					requestedBy: { agentId: (op.data.agentId as string) ?? null, runId }, subject: text.subject, expiresAt: null };
+			});
 		},
 		approval: async (approvalId) => {
 			const id = parseApprovalId(approvalId);

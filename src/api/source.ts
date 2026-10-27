@@ -86,6 +86,18 @@ export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
 	}));
 }
 
+/**
+ * A parked merge's question and subject. The merge's `ref` is often just the agent's id (`capcomd_merge ref: agt-…`),
+ * which made "Merge agt-mvqa… into main?": name the work as the agent's, and give the branch it pushed as the subject's ref.
+ */
+export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown }): { question: string; subject: { target: string | null; ref: string | null } } {
+	const ref = typeof d.ref === "string" ? d.ref : null, branch = typeof d.branch === "string" ? d.branch : null;
+	const target = typeof d.target === "string" ? d.target : null;
+	const byAgent = ref !== null && /^agt-/.test(ref);
+	const what = byAgent ? "this agent's work" : (ref ?? branch ?? "this work");
+	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref } };
+}
+
 export const approvalIdFor = (runId: string, opId: string) => `apr-${Buffer.from(`${runId}\u0000${opId}`).toString("hex")}`;
 export function parseApprovalId(id: string): { runId: string; opId: string } | null {
 	const m = /^apr-([0-9a-f]+)$/.exec(id);
