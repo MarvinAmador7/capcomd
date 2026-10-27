@@ -292,18 +292,24 @@ struct PanelWindowSizer: NSViewRepresentable {
   func makeNSView(context: Context) -> NSView { NSView() }
   func updateNSView(_ view: NSView, context: Context) {
     let h = height, w = width
-    DispatchQueue.main.async {
-      guard let window = view.window else { return }
-      PanelWindowSizer.makeClear(window)
-      let content = window.contentRect(forFrameRect: window.frame)
-      guard abs(content.height - h) > 0.5 || abs(content.width - w) > 0.5 else { return }
-      var frame = window.frameRect(forContentRect: NSRect(x: content.minX, y: content.maxY - h, width: w, height: h))
-      frame.origin.y = window.frame.maxY - frame.height   // pin the top
-      // Wider: keep the left edge on the menu bar item, as MenuBarExtra places it, unless that runs off the screen.
-      if let vis = window.screen?.visibleFrame { frame.origin.x = min(max(frame.origin.x, vis.minX + 8), vis.maxX - frame.width - 8) }
-      window.setFrame(frame, display: true, animate: false)
-      window.invalidateShadow()   // the shadow follows our rounded container, not the window's rectangle
-    }
+    // Now, in the same update as the content: SwiftUI centres the panel in the window's old size until the window
+    // matches, so resizing only a run-loop turn later showed one frame of a shrinking panel half the difference lower
+    // (folding a task flashed the header down and back up). Again a turn later: MenuBarExtra applies its own size
+    // after this update (on open, its first size), and ours must win.
+    if let window = view.window { Self.fit(window, height: h, width: w) }
+    DispatchQueue.main.async { if let window = view.window { Self.fit(window, height: h, width: w) } }
+  }
+
+  static func fit(_ window: NSWindow, height h: CGFloat, width w: CGFloat) {
+    PanelWindowSizer.makeClear(window)
+    let content = window.contentRect(forFrameRect: window.frame)
+    guard abs(content.height - h) > 0.5 || abs(content.width - w) > 0.5 else { return }
+    var frame = window.frameRect(forContentRect: NSRect(x: content.minX, y: content.maxY - h, width: w, height: h))
+    frame.origin.y = window.frame.maxY - frame.height   // pin the top
+    // Wider: keep the left edge on the menu bar item, as MenuBarExtra places it, unless that runs off the screen.
+    if let vis = window.screen?.visibleFrame { frame.origin.x = min(max(frame.origin.x, vis.minX + 8), vis.maxX - frame.width - 8) }
+    window.setFrame(frame, display: true, animate: false)
+    window.invalidateShadow()   // the shadow follows our rounded container, not the window's rectangle
   }
 
   /// The container is ours (Composer board: 26 pt continuous corners): MenuBarExtra's window goes clear and its own

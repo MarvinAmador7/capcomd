@@ -385,11 +385,10 @@ struct ThinkingRow: View {
   let item: CapcomdThread.Item
   let seconds: Int?
   @State private var open = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Button { withAnimation(Theme.Motion.ease(reduceMotion)) { open.toggle() } } label: {
+      Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
         HStack(spacing: Theme.Content.thinkGap) {
           Chevron(open: open)
           Text(verbatim: label)
@@ -420,7 +419,6 @@ struct ToolCallRow: View {
   let item: CapcomdThread.Item
   @State private var open = false
   @State private var hover = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     if let tool = item.tool, let diff = tool.diff {
@@ -440,7 +438,7 @@ struct ToolCallRow: View {
   var row: some View {
     let tool = item.tool
     return VStack(alignment: .leading, spacing: 0) {
-      Button { withAnimation(Theme.Motion.ease(reduceMotion)) { open.toggle() } } label: {
+      Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
         HStack(spacing: Theme.Content.toolGap) {
           Image(systemName: toolSymbol(tool)).font(.system(size: 11))
             .foregroundStyle(tool?.isError == true ? Theme.red : item.open ? Theme.accent : Theme.Content.label.opacity(0.6))
@@ -505,12 +503,11 @@ struct DiffCard<Detail: View>: View {
   let failed: Bool
   @Binding var open: Bool
   @ViewBuilder let detail: () -> Detail
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       VStack(alignment: .leading, spacing: 0) {
-        Button { withAnimation(Theme.Motion.ease(reduceMotion)) { open.toggle() } } label: {
+        Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
           HStack(spacing: Theme.Content.diffHeaderGap) {
             Image(systemName: "square.and.pencil").font(.system(size: 10)).foregroundStyle(Theme.Content.label.opacity(0.6))
             Text(verbatim: diff.path ?? "a file outside the workspace").lineLimit(1).truncationMode(.middle)
