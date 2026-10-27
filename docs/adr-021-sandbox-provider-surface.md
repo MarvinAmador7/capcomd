@@ -298,10 +298,9 @@ work is in `login.ts`, not in the surface.
 
 1. ~~**Default egress.**~~ **Decided (2026-10-27):** no restriction by default; site access is left to the provider
    and isn't a capcomd setting.
-2. **Idle lifetime presets.** *Recommend 15 min, 1 h (default), 4 h and 12 h, the same on every provider. Docker's
-   value is approximate, within 5 minutes.*
-3. **A new `configure` scope, or reuse `steer` for settings?** *Recommend `configure`. Settings are policy, not run
-   control, and the app's Reset… flow already re-mints the token.*
+2. ~~**Idle lifetime presets.**~~ **Decided (2026-10-27):** 15 min, 1 h (default), 4 h and 12 h, the same on every
+   provider. Docker's value is approximate, within 5 minutes.
+3. ~~**A new `configure` scope, or reuse `steer` for settings?**~~ **Decided (2026-10-27):** a new `configure` scope.
 4. **What does Open in Terminal open:** a shell in the machine, or the run's `capcomd tui`? *Recommend the shell
    (`capcomd sandbox shell`), since that is what "a machine" means. The TUI stays on the run drill-down.*
 5. **Cost per machine.** *Recommend leaving it out of v1. boxd's SDK use here reports no price; show age and
