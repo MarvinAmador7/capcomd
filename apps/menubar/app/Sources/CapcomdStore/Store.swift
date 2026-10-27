@@ -125,15 +125,24 @@ public final class CapcomdStore {
   public func approvals(forRun id: String) -> [PendingApproval] { pendingApprovals.filter { $0.runId == id } }
   /// Activity rows. An agent's row reads as its activity line ("Read 4 files", "Writing parquet shards to R2") with the
   /// activity's icon when the daemon reports one; otherwise its task's first line, else its profile.
+  /// With step history (`agent.step`), an agent shows each finished step in order; its own row stays only while it
+  /// works, as the live line after its history, and goes once it has ended (its last step says what it did).
   public func steps(forRun id: String) -> [Step] {
     guard let run = runs[id] else { return [] }
-    return run.steps.map { s in
-      guard s.kind == .agent, let aid = s.agentId, let a = run.agents[aid] else { return s }
+    let withHistory = Set(run.steps.filter { $0.id.hasPrefix("step:") }.compactMap(\.agentId))
+    var out: [Step] = [], live: [String: Step] = [:]
+    for s in run.steps {
+      guard s.kind == .agent, let aid = s.agentId, let a = run.agents[aid] else { out.append(s); continue }
       var s = s
       if let act = a.activity { s.text = act; s.kind = StepKind(activityKind: a.activityKind) }
       else if let t = a.task?.firstLine, !t.isEmpty { s.text = t }
-      return s
+      if withHistory.contains(aid) { if s.status == .running || s.status == .paused { live[aid] = s } } else { out.append(s) }
     }
+    // Each working agent's live line goes right after its last finished step.
+    for (aid, s) in live {
+      if let i = out.lastIndex(where: { $0.agentId == aid && $0.id.hasPrefix("step:") }) { out.insert(s, at: i + 1) } else { out.append(s) }
+    }
+    return out
   }
 
   /// Outline tree for a run, orchestrator first. Approvals bubble to ancestors.
@@ -351,6 +360,15 @@ public final class CapcomdStore {
     case "agent.cancelled", "agent.reaped": setStatus(runId, agentId, .cancelled, e)
     case "agent.paused": setStatus(runId, agentId, .paused, e)
     case "agent.thread_item_changed": applyThreadFrame(runId: runId, agentId: agentId, d)
+    case "agent.step":
+      // One finished step of an agent (capability agent.steps): "Read 4 files", then "Edited a file", in order. Keyed
+      // like the daemon dedupes it (agent, kind, start), so a replay or a re-driven agent doesn't add a row twice.
+      guard let runId, let agentId, let a = runs[runId]?.agents[agentId] else { return }
+      let kind = d["kind"]?.string ?? "tool"
+      let started = d["startedAt"]?.int ?? e.epochMs
+      upsertStep(runId: runId, Step(id: "step:\(agentId):\(kind):\(started)", seq: e.seq, epochMs: d["endedAt"]?.int ?? e.epochMs, agentId: agentId,
+                                    kind: StepKind(activityKind: kind), phase: Self.phase(a.kind), text: e.text ?? kind.prefix(1).uppercased() + kind.dropFirst(),
+                                    detail: nil, status: .done))
     case "agent.activity_changed":
       guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
       runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string

@@ -20,6 +20,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   by `GET /v1/events?scope=<runId>` and delivered on the run stream, so a client can show what a finished agent did,
   not only its last activity line. At most 500 per agent; a cancelled agent's unfinished last step is not recorded.
   Clients detect it with the capability `agent.steps` in `GET /v1/health`.
+- Menu bar app: Activity shows each agent's steps in order ("[bot] Read 2 files", "[bot] Edited a file", "[bot] Ran
+  the tests") instead of only its latest line; a working agent's live line follows its history. Needs a capcomd with
+  `agent.step` events; older ones show one row per agent as before.
 - Menu bar app: shell commands and other tool calls show a terminal icon (`>_`) instead of a wrench, in threads and in
   Activity; in a thread, every shell command does, since its row shows the command itself.
 - Menu bar app: every Activity row leads with the bot of the agent that did it ("[bot] Ran the tests"), with its name
