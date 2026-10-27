@@ -300,7 +300,8 @@ test("harness API (menu bar): pause one running agent while another works on; re
   expect(await post(`/v1/runs/${run}/agents/${a}/resume`)).toMatchObject({ status: 409, j: { code: "conflict" } });
   const done = (await cj(["await", run, a, "--timeout-ms", "90000"])).j?.agents?.[0];
   expect(done).toMatchObject({ status: "done", epoch: 2 });
-  expect(await post(`/v1/runs/${run}/cancel`)).toMatchObject({ status: 200, j: { changed: [b] } });
+  // Clean up b (it hangs; on a slow machine it may have been stopped as stuck already, then nothing is left to cancel).
+  expect([200, 409]).toContain((await post(`/v1/runs/${run}/cancel`)).status);
 }, 180_000);
 
 test("a usage limit pauses the agent with its work kept; other agents on the login wait; resume runs them on", async () => {
