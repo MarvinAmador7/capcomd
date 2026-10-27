@@ -51,7 +51,9 @@ struct ThreadView: View {
       .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.scroll = $0; report() }
       .defaultScrollAnchor(.bottom)
       .padding(.horizontal, -Theme.Content.padding.leading + Theme.Drill.headerPadding.leading)   // .th bleeds to 16 inside the panel
-      .mask(VStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Theme.Content.fade) })
+      .mask(VStack(spacing: 0) {
+        LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Theme.Content.topFade)
+        Color.black; LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Theme.Content.fade) })
       .environment(\.openURL, OpenURLAction { url in open(url) })
       ThreadComposer(runId: runId, agentId: agentId)
     }
@@ -97,7 +99,8 @@ struct ThreadView: View {
   }
 }
 
-/// `.hdr` at agent level: back, "Project / Agent", profile icon · name · suffix · status.
+/// `.hdr` at agent level: back, the bot, its name over one quiet line (role · project), and the status mark. The bot's
+/// name leads; the role and project are context.
 struct ThreadHeader: View {
   @Environment(AppModel.self) private var model
   let runId: String
@@ -106,6 +109,9 @@ struct ThreadHeader: View {
   var body: some View {
     let agent = model.run(runId)?.agents[agentId]
     let node = findNode(model.tree(runId))
+    let role = agent?.displayName ?? "Agent"
+    let name = model.botName(runId: runId, agentId: agentId)
+    let context = [name == nil ? nil : role, model.run(runId)?.title].compactMap { $0 }.joined(separator: " · ")
     HStack(spacing: Theme.Drill.headerGap) {
       Button { model.back() } label: {
         Image(systemName: "chevron.left").font(Theme.Drill.backIcon).foregroundStyle(Theme.Drill.switchOn)
@@ -114,24 +120,20 @@ struct ThreadHeader: View {
       }
       .buttonStyle(PressableStyle()).accessibilityLabel("Back")
       .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }
-      VStack(alignment: .leading, spacing: Theme.Drill.titleTop) {
-        Text(verbatim: "\(model.run(runId)?.title ?? runId) / \(agent?.displayName ?? "Agent")")
-          .font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).lineLimit(1)
-        HStack(spacing: Theme.Content.handoffGap) {
-          // The waiting agent raises a floating mitt (Polish board, item 6); the amber mark still carries the state.
-          let waiting = model.approvals(runId).contains { $0.agentId == agentId }
-          let bot = model.bot(runId: runId, agentId: agentId)
-          BotAvatar(traits: waiting ? bot.flatMap { try? withOverrides($0, pose: "wave") } ?? bot : bot, size: .small)
-          Text(verbatim: agent?.displayName ?? "Agent").font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn)
-          if let n = model.botName(runId: runId, agentId: agentId) {
-            Text(verbatim: n).font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Moments.nameText)
-          }
-          if let s = node?.suffix { Text(verbatim: s).font(Theme.monoTime).foregroundStyle(.tertiary) }
-          StatusMark(status: node?.statusSymbol)
+      HStack(spacing: Theme.Drill.headerGap) {
+        // The waiting agent raises a floating mitt (Polish board, item 6); the amber mark still carries the state.
+        let waiting = model.approvals(runId).contains { $0.agentId == agentId }
+        let bot = model.bot(runId: runId, agentId: agentId)
+        BotAvatar(traits: waiting ? bot.flatMap { try? withOverrides($0, pose: "wave") } ?? bot : bot, size: .small)
+        VStack(alignment: .leading, spacing: Theme.Drill.titleTop) {
+          Text(verbatim: name ?? role).font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn)
+          if !context.isEmpty { Text(verbatim: context).font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).truncationMode(.tail) }
         }
         .lineLimit(1)
+        Spacer(minLength: 0)
+        StatusMark(status: node?.statusSymbol)
       }
-      Spacer(minLength: 0)
+      .accessibilityElement(children: .combine)
     }
     .padding(Theme.Drill.headerPadding)
   }

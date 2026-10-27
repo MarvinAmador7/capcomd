@@ -5,9 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
-- Menu bar app: every agent's bot now has a name you can see. It follows the agent's role in the thread header,
-  in handoff cards and in the @ mention list ("worker Bolt"); hovering a bot in the agent tree shows it, and
-  VoiceOver reads it.
+- Menu bar app: every agent's bot now has a name, and inside a thread you talk to it by name. The header shows the
+  bot's name ("Bolt") with its role and project on one quiet line under it, the message box says "Tell Bolt…",
+  handoff cards lead with the bot's name, and you can @ mention an agent by its bot's name. The agent tree
+  keeps roles; hover a bot to see its name. VoiceOver reads both.
 - Menu bar app: a new look for the panel and for writing to agents. The panel has large rounded corners. Starting a
   project is now a roomy box at the top: which project folder it goes to is a chip you can change or clear, you type
   the goal in large text, and a round white button starts it. Writing to an agent works the same way, with the agent

@@ -562,12 +562,12 @@ struct HandoffCard: View {
       VStack(alignment: .leading, spacing: 0) {
         HStack(spacing: Theme.Content.handoffGap) {
           BotAvatar(traits: childId.flatMap { model.bot(runId: runId, agentId: $0) }, size: .small)
-          Text(verbatim: child?.displayName ?? "Agent").font(Theme.Content.handoffName).foregroundStyle(.white)
-          if let n = childId.flatMap({ model.botName(runId: runId, agentId: $0) }) {
-            Text(verbatim: n).font(Theme.Content.handoffName).foregroundStyle(Theme.Moments.nameText)
-          }
-          if let s = childId.flatMap(node)?.suffix { Text(verbatim: s).font(Theme.Content.handoffSuffix).foregroundStyle(Theme.Content.handoffSuffixText) }
-          Text(item.child?.status == "failed" ? "failed" : "handed back").font(Theme.Content.handoffNote).foregroundStyle(Theme.Content.handoffNoteText)
+          // The bot's name leads; the role joins the note ("worker · handed back").
+          let role = child?.displayName ?? "Agent", name = childId.flatMap { model.botName(runId: runId, agentId: $0) }
+          Text(verbatim: name ?? role).font(Theme.Content.handoffName).foregroundStyle(.white)
+          let note = item.child?.status == "failed" ? "failed" : "handed back"
+          Text(verbatim: name == nil ? note : "\(role) · \(note)")
+            .font(Theme.Content.handoffNote).foregroundStyle(Theme.Content.handoffNoteText)
           Spacer(minLength: 0)
           Chevron(open: false)
         }
@@ -598,11 +598,6 @@ struct HandoffCard: View {
       links.append(l)
     }
     return (Array(blocks.dropLast()), links)
-  }
-
-  func node(_ id: String) -> AgentNode? {
-    func find(_ ns: [AgentNode]) -> AgentNode? { for n in ns { if n.id == id { return n }; if let f = find(n.children) { return f } }; return nil }
-    return find(model.tree(runId))
   }
 }
 
