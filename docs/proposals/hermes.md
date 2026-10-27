@@ -60,6 +60,22 @@ declare the `elicitation` capability gets today's `forbidden` answer.
 - Security: strictly stronger than `client-confirmed`. Residual risk: a compromised Hermes process could auto-accept,
   the same trust we give any client UI. Unattended sessions (cron, `chat -q`) decline.
 - Effort **S–M**. Depends on nothing beyond the base integration.
+- **Decided (owner, 2026-10-27):** `elicit` is the recommended Hermes setting.
+- **Lessons from Claude Code's elicitation** (supported since 2.1.76, form and URL modes;
+  [MCP docs](https://code.claude.com/docs/en/mcp), [hooks](https://code.claude.com/docs/en/hooks#elicitation),
+  [headless](https://code.claude.com/docs/en/headless.md)), so the same gate can serve Claude Code as a driver:
+  - Its `Elicitation` hooks can accept with content and no dialog; the server can't tell a hook from a person, and in
+    `claude -p` a repo's `.claude/settings.json` hooks run without a trust prompt. Hermes has no such hooks. For Claude
+    Code, also mark `capcomd_approve` with `_meta["anthropic/requiresUserInteraction"]: true` (a person answers on
+    every call, even in bypass/auto modes) and keep the elicitation on top. Open: whether PreToolUse hooks can clear
+    `requiresUserInteraction`; until checked, recommend `elicit` to Claude Code users only with managed hooks
+    (`allowManagedHooksOnly`).
+  - Fail closed: no `form` elicitation capability at `initialize` means no approval through MCP; decline, cancel and
+    no answer leave the merge parked; the tool result says "no decision; do not retry".
+  - Bind and check: the prompt names repo, target and exact commit; require an explicit accept of that commit (not
+    just non-empty content); the merge re-checks the branch hasn't moved. Never mark the approve tool `idempotentHint`
+    (Claude Code may replay idempotent calls).
+  - Never ask for secrets in form mode (URL mode or the terminal only).
 
 ### P2. Run updates pushed into the user's chat (Hermes webhooks)
 
@@ -76,6 +92,8 @@ that chat continues in a session that has the context, and the approval goes thr
 - Hermes: the webhook platform enabled (`hermes gateway` running); route config.
 - Security: loopback by default; the HMAC secret is shared with Hermes's config only; payload carries ids and
   capcomd-authored text, never raw agent output unless fenced. No `approve` scope involved.
+- **Decided (owner, 2026-10-27):** outbound is fine where it's the best approach: push, off until `setup agent`
+  writes the Hermes route, loopback by default, signed.
 - Effort **M**. Later variant: implement MCP events (`events/*`) in `capcomd mcp` once the spec settles; it needs a
   public HTTPS URL, so loopback webhooks first.
 
@@ -165,9 +183,9 @@ into something safe to recommend, and P2 then only has to deliver the nudge.
 
 ## 4. Open questions for the owner
 
-1. Is `elicit` acceptable as the *recommended* Hermes setting (the human answers a capcomd-authored prompt in their
+1. ~~Is `elicit` acceptable as the *recommended* Hermes setting~~ Yes (2026-10-27). (the human answers a capcomd-authored prompt in their
    chat), or must protected merges stay terminal-only (`capcomd approve`)?
-2. P2: is a daemon-side outbound notifier (HTTP POSTs from capcomd, loopback by default) in scope, or should
+2. ~~P2: is a daemon-side outbound notifier~~ Yes, where it's the best approach (2026-10-27). (HTTP POSTs from capcomd, loopback by default) in scope, or should
    notifications stay pull-only (MCP, SSE)?
 3. P5: is the desktop-app Bot Mode a target, or is Telegram/Slack the surface that matters?
 4. P7: is a third provider (and the model bills it brings) wanted at all, or is capcomd Claude Code + Codex only?
