@@ -24,10 +24,10 @@ let foreign6420: Server | null = null;
 beforeAll(async () => { foreign6420 = await blackhole(6420).catch(() => null); }); // if 6420 is already taken, that's a foreign holder too
 afterAll(() => { foreign6420?.close(); });
 
-function runServe(port: number, timeoutMs: number, sock = privateHarnessSocket()) {
+function runServe(port: number, timeoutMs: number, sock = privateHarnessSocket(), env: Record<string, string> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "capcomd-serve-port-"));
   const pidFile = join(dataDir, "engine.pid");
-  const child = spawn(process.execPath, [CLI, "serve", "--port", String(port)], { cwd: REPO, env: { ...process.env, CAPCOMD_CHAOS_ENGINE_DATA: dataDir, CAPCOMD_ENGINE_PIDFILE: pidFile, CAPCOMD_HARNESS_SOCKET: sock }, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  const child = spawn(process.execPath, [CLI, "serve", "--port", String(port)], { cwd: REPO, env: { ...process.env, CAPCOMD_CHAOS_ENGINE_DATA: dataDir, CAPCOMD_ENGINE_PIDFILE: pidFile, CAPCOMD_HARNESS_SOCKET: sock, ...env }, stdio: ["ignore", "pipe", "pipe"], detached: true });
   let out = "";
   child.stdout!.on("data", (d) => (out += d)); child.stderr!.on("data", (d) => (out += d));
   const exited = new Promise<number | null>((r) => child.on("exit", (c) => r(c)));
@@ -120,6 +120,60 @@ test("serve replaces a dead daemon's socket, and on stop leaves a socket that is
     expect(await (await fetch("http://localhost/", { unix: sock } as RequestInit)).text()).toBe("theirs");
   } finally { await s.stop(); foreign?.stop(true); }
 }, 120_000);
+
+const alive = (pid: number) => { try { process.kill(pid, 0); } catch { return false; } return !/^Z/.test(Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)]).stdout.toString().trim()); };
+/** The rivet-services process under serve `root` (serve runs the engine host in a child), once it answers on `port`. */
+async function servicesUnder(root: number, port: number): Promise<number | null> {
+  for (let i = 0; i < 120; i++) {
+    const rows = Bun.spawnSync(["ps", "-ax", "-o", "pid=,ppid=,command="]).stdout.toString().split("\n").flatMap((l) => {
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l);
+      return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3]! }] : [];
+    });
+    const tree = new Set([root]);
+    for (let grew = true; grew;) { grew = false; for (const r of rows) if (tree.has(r.ppid) && !tree.has(r.pid)) { tree.add(r.pid); grew = true; } }
+    const svc = rows.find((r) => tree.has(r.pid) && /rivet-services/.test(r.cmd));
+    const up = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1000) }).then(() => true, () => false);
+    if (svc && up) return svc.pid;
+    await Bun.sleep(500);
+  }
+  return null;
+}
+
+// rivet-services (what RivetKit starts next to the engine on the default port) used to outlive serve: after the
+// watchdog's exit it kept :8642 and reconnected its envoy to the next engine on the port, another daemon's, whose own
+// services then failed to bind (live Mac, 2026-10-27). Here on a private port (RIVET_PORT) so it never meets :8642.
+test("serve stops the rivet-services it started, on the watchdog's exit and on SIGTERM; the next serve gets its own", async () => {
+  const port = await testPort();
+  const svcPort = port + 5;
+  const env = { RIVET_RUN_SERVICES: "1", RIVET_PORT: String(svcPort) };
+  const s1 = runServe(port, 110_000, privateHarnessSocket(), env);
+  let s2: ReturnType<typeof runServe> | null = null, svc1: number | null = null, svc2: number | null = null;
+  try {
+    expect((await probe(port, { CAPCOMD_READY_DEADLINE_MS: "90000" })).code).toBe(0);
+    svc1 = await servicesUnder(s1.child.pid!, svcPort);
+    expect(svc1).toBeGreaterThan(1);
+    // The engine dies: the watchdog exits serve after ~20s without an answer; its services must go with it.
+    for (let i = 0; i < 40 && !s1.out().includes("Rivet engine running"); i++) await Bun.sleep(250); // watchdog saw it up
+    process.kill(s1.enginePid()!, "SIGKILL");
+    expect(await s1.exited).toBe(1);
+    expect(s1.out()).toContain("stopped answering");
+    for (let i = 0; i < 20 && alive(svc1!); i++) await Bun.sleep(250);
+    expect(alive(svc1!)).toBe(false);
+
+    s2 = runServe(port, 110_000, privateHarnessSocket(), env);
+    expect((await probe(port, { CAPCOMD_READY_DEADLINE_MS: "90000" })).code).toBe(0);
+    svc2 = await servicesUnder(s2.child.pid!, svcPort);
+    expect(svc2).toBeGreaterThan(1);
+    expect(svc2).not.toBe(svc1);
+    expect(s2.out()).not.toContain("Address already in use");
+    await s2.stop();
+    for (let i = 0; i < 20 && alive(svc2!); i++) await Bun.sleep(250);
+    expect(alive(svc2!)).toBe(false);
+  } finally {
+    await s1.stop(); await s2?.stop();
+    for (const p of [svc1, svc2]) if (p && alive(p)) try { process.kill(p, "SIGKILL"); } catch {}
+  }
+}, 240_000);
 
 test("serve exits nonzero when its port is busy, and says so", async () => {
   const port = await testPort();

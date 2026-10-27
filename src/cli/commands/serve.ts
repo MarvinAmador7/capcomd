@@ -88,16 +88,32 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     for (let i = 0; i < 50 && isAlive(stale); i++) await new Promise((r) => setTimeout(r, 100));
   }
   rmSync(pidFile, { force: true });
+  // rivet-services (RivetKit starts it on the default port) is a child of this process that only RivetKit's own shutdown
+  // stops: after the watchdog's exit or a signal it was left running, kept :8642, and reconnected its envoy to the next
+  // engine on this port, another daemon's (live Mac, 2026-10-27); that daemon's own services then failed to bind.
+  const servicesPids = () => (spawnSync("ps", ["-ax", "-o", "pid=,ppid=,command="], { encoding: "utf8" }).stdout ?? "").split("\n").flatMap((l) => {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l);
+    return m && Number(m[2]) === process.pid && /rivet-services/.test(m[3]!) ? [Number(m[1])] : [];
+  });
+  const gone = (pid: number) => { try { process.kill(pid, 0); } catch { return true; } return /^Z/.test((spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout ?? "").trim()); };
   // rivet-engine runs in its own process group: kill it whenever serve exits. On a signal, wait for it to go (its
   // graceful shutdown can take seconds on a slow host), then SIGKILL; `exit` can only ask, as a last resort.
-  const reap = () => { const pid = enginePid(); if (pid && isAlive(pid)) { try { process.kill(pid, "SIGTERM"); } catch {} } rmSync(pidFile, { force: true }); };
+  const reap = () => {
+    for (const pid of servicesPids()) try { process.kill(pid, "SIGTERM"); } catch {}
+    const pid = enginePid(); if (pid && isAlive(pid)) { try { process.kill(pid, "SIGTERM"); } catch {} }
+    rmSync(pidFile, { force: true });
+  };
   const stopEngine = async () => {
+    const services = servicesPids();
+    for (const pid of services) try { process.kill(pid, "SIGTERM"); } catch {}
     const pid = enginePid();
     if (pid && isAlive(pid)) {
       try { process.kill(pid, "SIGTERM"); } catch {}
       for (let i = 0; i < 50 && isAlive(pid); i++) await new Promise((r) => setTimeout(r, 100));
       if (isAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch {}
     }
+    for (let i = 0; i < 30 && services.some((p) => !gone(p)); i++) await new Promise((r) => setTimeout(r, 100));
+    for (const p of services) if (!gone(p)) try { process.kill(p, "SIGKILL"); } catch {}
     rmSync(pidFile, { force: true });
   };
   process.on("exit", reap);

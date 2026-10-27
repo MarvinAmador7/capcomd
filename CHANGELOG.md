@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a client on the daemon or project event stream (the menu bar app) could overload the engine until `capcomd
+  serve` gave up on it ("engine on :6420 stopped answering") when the daemon's state remembered runs its run list no
+  longer shows. Each such run is now checked once instead of twice a second, the stream never starts a new check
+  before the last one finished, and reading a run's events no longer creates an empty run on the engine.
+- Fix: `capcomd serve` now stops the Durable Streams services process (port 8642) when it exits, including when its
+  watchdog stops it. It used to keep running, hold the port so the next `capcomd serve` couldn't start its own, and
+  attach itself to that daemon's engine.
 - Menu bar app: in a run's view, click an agent's row in Activity to read its thread; that's how you get back to
   what each agent said once the run has ended.
 - An agent's log no longer fills with the same "pump error: VM … not found" line after it's paused or stopped;
