@@ -61,6 +61,8 @@ struct ThreadView: View {
     .padding(Theme.Drill.padding)
     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.total = $0; report() }
     .navigationBarBackButtonHidden(true)
+    .hiddenUnlessTop(.thread(runId: runId, agentId: agentId))
+    .onChange(of: model.path.last == .thread(runId: runId, agentId: agentId)) { _, top in if top { report() } }
     // Follow live (thread=1 on the run's feed) and read from the cursor; a slow re-read covers a dropped stream.
     .task(id: agentId) {
       model.openThread(runId: runId, agentId: agentId)
@@ -79,6 +81,7 @@ struct ThreadView: View {
   /// The thread's natural height: everything around the scroll (header, composer) plus the scroll's content.
   private func report() {
     guard size.total > 0 else { return }
+    guard model.path.last == .thread(runId: runId, agentId: agentId) else { return }   // a covered thread doesn't size the panel
     model.routeHeight = size.total - size.scroll + size.content
   }
 

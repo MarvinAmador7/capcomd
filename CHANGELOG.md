@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: in a run's view, click an agent's row in Activity to read its thread; that's how you get back to
+  what each agent said once the run has ended.
+- An agent's log no longer fills with the same "pump error: VM … not found" line after it's paused or stopped;
+  the error shows once.
 - Menu bar app: the panel stays live. It used to stop updating after a while (a quiet connection was dropped, or the
   daemon restarted) and kept showing old state; it now reconnects within a few seconds, and says "Can't reach capcomd. Reconnecting…" while the daemon is down. Runs started elsewhere (the
   CLI, another agent) appear as they start, with their agents, even with many runs around; before, past about seven
