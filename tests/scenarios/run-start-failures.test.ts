@@ -22,11 +22,14 @@ const home = mkdtempSync(join(tmpdir(), "capcomd-runfail-home-"));
 
 beforeAll(async () => {
 	// A Docker that answers `docker version` (nothing here starts a container), no env snapshot ledger, and agents that
-	// would run their real CLI (not scripts): a claude planner on Docker can't start without `capcomd env build`.
+	// would run their real CLI (not scripts): a claude planner on Docker can't start without `capcomd env build`. A login
+	// record (no credential in it) passes the per-sandbox login check, so the missing environment is what refuses the run.
+	const ledger = join(home, "auths.json");
+	writeFileSync(ledger, JSON.stringify({ "claude-code": { agent: "claude-code", store: "secret", method: "setup-token", env: "test", createdAt: new Date(0).toISOString() } }));
 	const bin = join(home, "docker-stub");
 	writeFileSync(bin, "#!/bin/sh\necho 27.0.0\n");
 	chmodSync(bin, 0o755);
-	w = await world("runfail", { CAPCOMD_HOME: home, CAPCOMD_DOCKER_BIN: bin, CAPCOMD_ENV_LEDGER: join(home, "no-such-envs.json"), CAPCOMD_SPAWN_EXEC: "" });
+	w = await world("runfail", { CAPCOMD_HOME: home, CAPCOMD_DOCKER_BIN: bin, CAPCOMD_ENV_LEDGER: join(home, "no-such-envs.json"), CAPCOMD_SPAWN_EXEC: "", CAPCOMD_AUTH_LEDGER: ledger });
 	const clients = join(home, "harness-clients.json");
 	token = addClient("menubar", ["read", "steer"], clients).token;
 	app = harnessApp({ source: rivetSource(), clients: () => loadClients(clients), state: harnessState(null), pollMs: 100 });
@@ -50,8 +53,10 @@ test("POST /v1/runs on Docker with no env snapshot is refused with the reason, a
 	const body = (await r.json()) as any;
 	expect(r.status).toBe(422);
 	expect(body.code).toBe("invalid");
-	expect(body.message).toContain("no capcomd env snapshot");
-	expect(body.message).toContain("capcomd env build");
+	// The daemon's driver × sandbox check answers first (GET /v1/run-options' reason); `capcomd run`'s own pre-flight
+	// refusal is the next test.
+	expect(body.message).toContain("No agent environment for Local");
+	expect(body.message).toContain("capcomd env build --sandbox docker");
 	// Nothing was started: no run in the index the daemon lists (none left "started" there).
 	expect(recentRuns(500).length).toBe(before);
 }, 60_000);
