@@ -117,6 +117,20 @@ struct PanelView: View {
   }
 }
 
+/// Pushed views are clear (the panel's material shows through), so one under another would show through it: a run view
+/// under the thread opened from its Activity, or a thread under a child's opened from a handoff. Only the top one shows.
+private struct HiddenUnlessTop: ViewModifier {
+  @Environment(AppModel.self) private var model
+  let route: AppModel.Route
+  func body(content: Content) -> some View {
+    let top = model.path.last == route
+    content.opacity(top ? 1 : 0).allowsHitTesting(top).accessibilityHidden(!top)
+  }
+}
+extension View {
+  func hiddenUnlessTop(_ route: AppModel.Route) -> some View { modifier(HiddenUnlessTop(route: route)) }
+}
+
 /// Project card (tree-card-v3): the goal as title, scope chips, then each run's agent tree, grouped by project id.
 /// No counts or progress text: state shows as the amber tint (an approval is waiting) and the tree's status marks.
 /// Run ids stay in the drill-down.

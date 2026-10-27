@@ -31,12 +31,14 @@ struct RunDrillDownView: View {
     }
     .padding([.top, .horizontal], Theme.Drill.padding)
     // Natural height (every region has a fixed height) plus the footer: the panel sizes to it.
-    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { content = $0; model.routeHeight = content + footer }
+    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { content = $0; if model.path.last == .run(runId) { model.routeHeight = content + footer } }
     .frame(maxHeight: .infinity, alignment: .top)
     .safeAreaInset(edge: .bottom, spacing: 0) {
-      DrillFooter(runId: runId).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footer = $0; model.routeHeight = content + footer }
+      DrillFooter(runId: runId).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footer = $0; if model.path.last == .run(runId) { model.routeHeight = content + footer } }
     }
     .navigationBarBackButtonHidden(true)
+    .hiddenUnlessTop(.run(runId))
+    .onChange(of: model.path.last == .run(runId)) { _, top in if top { model.routeHeight = content + footer } }   // back on top: its height again
     // Refresh the REST parts on screen; a change of view or tab refreshes at once.
     .task(id: "\(runId)|\(model.drillView.rawValue)|\(model.detailTab.rawValue)") {
       while !Task.isCancelled {
@@ -244,11 +246,23 @@ struct ActivityView: View {
   }
 }
 
-/// `.ar`: icon · text · relative time (+ status). Finished steps show no status mark.
+/// `.ar`: icon · text · relative time (+ status). Finished steps show no status mark. A row of an agent opens its
+/// thread: once a run has ended its card is gone, and this is the way back to what each agent said.
 struct ActivityRow: View {
+  @Environment(AppModel.self) private var model
   let runId: String
   let step: Step
   var body: some View {
+    if let id = step.agentId, model.run(runId)?.agents[id] != nil {
+      Button { model.path.append(.thread(runId: runId, agentId: id)) } label: { row.contentShape(Rectangle()) }
+        .buttonStyle(PressableStyle())
+        .accessibilityHint("Opens its thread")
+    } else {
+      row
+    }
+  }
+
+  @ViewBuilder private var row: some View {
     let color: Color = switch step.status {
       case .running: Theme.Drill.switchOn; case .queued: Theme.Drill.rowQueued; case .failed: Theme.Drill.rowFailed; default: Theme.Drill.rowText
     }
