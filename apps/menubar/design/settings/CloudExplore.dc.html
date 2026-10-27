@@ -67,10 +67,6 @@ a{color:#4ea1ff}a:hover{color:#7cb9ff}
     <div class="sec">
       <div class="sh">Machines</div>
       <div class="grp">
-        <div class="row">
-          <div class="lbl">Running now<span class="sub">Each agent works on its own machine; it goes when the agent is done.</span></div>
-          <div class="val">2 working · 1 asleep</div>
-        </div>
         <div class="mrow">
           <span class="dot" style="background: #30d158"></span>
           <span style="flex: 1">worker · Add an abs(a) function…</span>
@@ -84,9 +80,9 @@ a{color:#4ea1ff}a:hover{color:#7cb9ff}
           <button class="btn" style="height: 20px; font-size: 12px">Open in Terminal</button>
         </div>
         <div class="mrow">
-          <span class="dot" style="background: #8e8e93"></span>
-          <span style="flex: 1">worker · Backfill shard ids · paused</span>
-          <span class="mono">asleep</span>
+          <span class="dot" style="background: #ff9f0a"></span>
+          <span style="flex: 1">Left behind · no agent owns it</span>
+          <span class="mono">2 h</span>
           <button class="btn" style="height: 20px; font-size: 12px">Delete…</button>
         </div>
         <div class="row">
@@ -102,12 +98,6 @@ a{color:#4ea1ff}a:hover{color:#7cb9ff}
       <div class="sh">Safety</div>
       <div class="grp">
         <div class="row">
-          <div class="lbl">Sites agents can reach<span class="sub">Enforced by the machine: GitHub, the AI&#39;s API and package registries, plus any your agent profiles add.</span></div>
-          <button class="pop" aria-label="Sites agents can reach: Only what they need">Only what they need
-            <svg width="9" height="12" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg>
-          </button>
-        </div>
-        <div class="row">
           <div class="lbl">Logins<span class="sub">Kept as boxd secrets bound to each AI&#39;s API: agents can use them, and they can&#39;t be sent anywhere else.</span></div>
           <div class="val"><span class="dot" style="background: #30d158"></span>Bound</div>
         </div>
@@ -116,7 +106,7 @@ a{color:#4ea1ff}a:hover{color:#7cb9ff}
           <div class="val">After every commit</div>
         </div>
       </div>
-      <div class="foot">Local (Docker) can&#39;t limit sites or bind logins to a host; Cloud does both.</div>
+      <div class="foot">Local (Docker) can&#39;t bind logins to a host; Cloud does.</div>
     </div>
   </div>
 </div>

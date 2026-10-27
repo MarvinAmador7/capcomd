@@ -101,7 +101,7 @@ own), "Local · Docker on this Mac" / "Cloud · boxd", then **Default** (accent 
 | Docker / boxd | "Running" / "Ready" (green); Docker's reason in red ("Docker isn't running"); "No boxd API key" + **Set Up…** |
 | Agent environment | Ready: sub "Claude Code 2.1.303 · Codex 0.163.0 · built Oct 24", **Rebuild…** (`command --force`). Not built: orange "Not built", sub "Not built yet: runs on Local can't start until it is.", **Build…**. Building: a linear progress bar, sub "Installing Claude Code and Codex. This takes a few minutes; you can close Settings.", Show Log (Terminal) while Terminal runs, footer "Runs on Local start once it's built.". Failed: red "Failed", sub "The last build didn't finish. Terminal shows why when you try again.", **Try Again…** |
 
-Footers: Local "Agents work in containers on this Mac. Containers can't limit which sites agents reach; Cloud can."
+Footers: Local "Agents work in containers on this Mac."
 The last place: "An agent environment holds the agents' tools, built once for each place they run. It never holds
 logins or keys."
 
