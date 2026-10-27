@@ -145,7 +145,7 @@ struct TokenSheet: View {
     VStack(alignment: .leading, spacing: Theme.Settings.sheetGap) {
       Text(afterReset ? "Paste the new token" : "Paste a token").font(.headline)
       Text(afterReset ? "Copy the token Terminal shows and paste it here."
-                      : "Make one with `capcomd clients add menubar --scopes read,steer,approve` and paste it here. capcomd shows it only once.")
+                      : "Make one with `capcomd clients add menubar --scopes read,steer,approve,configure` and paste it here. capcomd shows it only once.")
         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
       SecureField("Token", text: $token).textFieldStyle(.roundedBorder).onSubmit(save)
       if failed { Text("Couldn’t save the token to the Keychain.").foregroundStyle(.secondary) }

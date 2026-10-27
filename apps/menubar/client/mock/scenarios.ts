@@ -6,6 +6,7 @@
 //   swift run CapcomdMenuBar -capcomd.socketPath /tmp/capcomd-ui.sock     (argument domain: nothing is persisted)
 //   SETTINGS=mixed …                                                       Settings window routes (settings.ts)
 //   SETTINGS=mixed SANDBOXES=machines|stale|empty|unsafe|nores|off …     place details and machines (settings.ts)
+//   SETTINGS=mixed SANDBOXES=readonly|envlocked|noconfigure|conflict|owners …   changing settings, capcomd's own machines
 //
 // Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
@@ -199,7 +200,7 @@ Bun.serve({
     // runs.options: who can drive a new run (its planner) and where its agents run. NO_CODEX=1 / NO_DOCKER=1 report
     // those unavailable, as a daemon would when codex isn't logged in or Docker isn't running.
     if (SETTINGS) {
-      const r = settingsRoute(p, SETTINGS);
+      const r = settingsRoute(p, SETTINGS, req);
       if (r) return r;
       if (p === "/v1/run-options") return Response.json(settingsRunOptions(SETTINGS));
     }

@@ -50,8 +50,17 @@ public final class UnixSocketTransport: @unchecked Sendable {
 
   /// POST with an optional JSON body; returns the status and body (errors are ApiError `{code, message}` JSON).
   public func post(_ path: String, headers extra: [(String, String)] = [], json: Data? = nil) async throws -> (Int, Data) {
+    try await send(.POST, path, headers: extra, json: json)
+  }
+
+  /// PATCH with a JSON body; returns the status and body, as `post`.
+  public func patch(_ path: String, headers extra: [(String, String)] = [], json: Data) async throws -> (Int, Data) {
+    try await send(.PATCH, path, headers: extra, json: json)
+  }
+
+  func send(_ method: HTTPMethod, _ path: String, headers extra: [(String, String)], json: Data?) async throws -> (Int, Data) {
     var r = try request(path, headers: extra + (json == nil ? [] : [("Content-Type", "application/json")]))
-    r.method = .POST
+    r.method = method
     if let json { r.body = .bytes(ByteBuffer(data: json)) }
     let resp = try await client.execute(r, timeout: .seconds(30))
     let body = try await resp.body.collect(upTo: 1 << 20)

@@ -87,7 +87,7 @@ describe("GET /v1/sandboxes (capability sandboxes)", () => {
 });
 
 describe("GET /v1/sandboxes/{name}", () => {
-	test("boxd: the descriptor, the idle lifetime at its real value (read-only for now), logins and checkpoints", async () => {
+	test("boxd: the descriptor, the idle lifetime at its real value (editable: sandboxes.settings), logins and checkpoints", async () => {
 		const { get } = setup();
 		const r = await get("/v1/sandboxes/boxd");
 		expect(r.status).toBe(200);
@@ -98,7 +98,7 @@ describe("GET /v1/sandboxes/{name}", () => {
 			help: "A machine left behind (a crash, a stopped run) is deleted after this, so it stops billing.",
 			value: "3600", display: "1 hour", default: "3600",
 			choices: [{ value: "900", label: "15 minutes" }, { value: "3600", label: "1 hour" }, { value: "14400", label: "4 hours" }, { value: "43200", label: "12 hours" }],
-			source: "default", editable: false, appliesTo: "new_runs", needsRestart: false, state: null,
+			source: "default", editable: true, appliesTo: "new_runs", needsRestart: false, state: null,
 		}]);
 		expect(r.body.info).toEqual([
 			{ id: "logins", type: "info", label: "Logins", help: "A bound login is swapped in on the way to its AI's API, so agents only ever see a placeholder. Plan logins kept in the agent environment aren't bound.",
@@ -112,7 +112,7 @@ describe("GET /v1/sandboxes/{name}", () => {
 	test("docker: its idle lifetime help says the sweep can run up to 5 minutes over", async () => {
 		const { get } = setup();
 		const r = await get("/v1/sandboxes/docker");
-		expect(r.body.settings[0]).toMatchObject({ id: "idleLifetime", value: "3600", display: "1 hour", editable: false });
+		expect(r.body.settings[0]).toMatchObject({ id: "idleLifetime", value: "3600", display: "1 hour", editable: true });
 		expect(r.body.settings[0].help).toContain("up to 5 minutes over");
 		expect(r.body.info.map((f: any) => f.id)).toEqual(["logins", "checkpoints"]);
 	});
@@ -175,7 +175,7 @@ describe("GET /v1/sandboxes/{name}/resources (capability sandboxes.resources)", 
 		expect(r.body).toEqual({
 			resources: [
 				{ id: "relay-0a0b0c0d0e0f1011", kind: "machine", state: "orphaned", owner: null, createdAt: "2026-10-27T07:00:00.000Z", deleteAfter: "2026-10-27T08:00:00.000Z", actions: ["open_terminal"] },
-				{ id: "relay-3f9c2a1b7e5d4c60", kind: "machine", state: "running", owner: { runId: "run-8kq2", agentId: "agt-41", role: "worker", task: "Add an abs(a) function to math.ts with [REDACTED]" },
+				{ id: "relay-3f9c2a1b7e5d4c60", kind: "machine", state: "running", owner: { kind: "agent", runId: "run-8kq2", agentId: "agt-41", role: "worker", task: "Add an abs(a) function to math.ts with [REDACTED]", label: null },
 					createdAt: "2026-10-27T09:12:03.000Z", deleteAfter: "2026-10-27T10:22:03.000Z", actions: ["open_terminal"] },
 			],
 			asOf: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/), stale: false, error: null, next: null,

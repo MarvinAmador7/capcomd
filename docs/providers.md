@@ -77,6 +77,30 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
    - `settings`, `info`, `actions`: the rows and resource actions its details screen offers, from the closed lists in
      the registry (`SETTING_IDS`, `INFO_IDS`, `RESOURCE_ACTIONS`). The daemon serves only the actions it implements.
 
+   **Settings** (`PATCH /v1/sandboxes/{name}/settings`, the `configure` scope; `src/providers/settings.ts`). Today one,
+   `idleLifetime`: how long a machine left behind lives, in seconds. It is a lease: `ensure` gets it as `ttlSeconds`,
+   and a running agent renews it every 10 minutes (`extendTtl`), so the daemon refuses anything under 15 minutes. The
+   presets are 15 minutes, 1 hour (the default), 4 hours and 12 hours, the same on every provider. Precedence:
+   `CAPCOMD_SANDBOX_IDLE_SECONDS` in capcomd's environment (any whole number of seconds, raised to the 15-minute
+   minimum; the field is then read-only), then the user config (`~/.capcomd/config.json`, or `$CAPCOMD_HOME`'s,
+   `sandboxes.<name>.idleLifetime`), then the default. Settings live only in the user config, never a project's.
+   `run new` records the place's settings with the run (kv `_sandbox`: `{name?, settings: {idleLifetime}}`; old readers
+   only read `.name`), and the run's workers use the recorded value for the VM's `ttlSeconds`, their renewals and
+   their own reap alarm, so a change applies to new runs and needs no restart. A run with nothing recorded uses the
+   place's setting when its worker starts. A provider whose `idleLifetime` cap is `sweep` enforces each machine's own
+   deadline (Docker's ledger), so a machine can outlive it by up to one sweep (5 minutes). Every change is audited as a
+   durable `sandbox.settings_changed` event on the `daemon` stream.
+
+   **Machines capcomd's own jobs make.** Every capcomd process that makes a machine outside an agent's worker (the
+   checks VM in `verify`, `auth login` / `auth status`, `env build`, `env doctor`) records it in capcomd's machines
+   ledger (`<state>/machines/<name>.json`, or `CAPCOMD_MACHINES_LEDGER`; `src/providers/machines.ts`) before `ensure`
+   and removes the record once it destroyed the machine. A record counts while the process that wrote it is alive and
+   the machine's lifetime isn't up. The resources route lists such a machine as `running` with an owner of its `kind`
+   (`check`, `login`, `env_build`, `doctor`) and no actions, and calls a machine `orphaned` only when nothing in capcomd
+   uses it: no live agent's worker and no live job. Provider labels are never trusted for this (a sandbox can forge
+   them). A new place where capcomd makes machines for its own jobs records them the same way
+   (`recordJobMachine`).
+
    A listed provider also needs an availability check in `src/api/run-options.ts` (`AVAILABLE`: cheap and local, like
    "is a key configured" or "does the CLI answer", cached), and its `list(prefix)` should fill `createdAt` and
    `deleteAt` when it knows them: `GET /v1/sandboxes/{name}/resources` shows them. Machines must be named with

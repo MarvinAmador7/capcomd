@@ -33,10 +33,29 @@ export const parseAgentArg = (a: string | undefined): ProfileAgent => {
   throw new Error("usage: capcomd auth login|status|logout claude|codex");
 };
 
+/** Boots a login VM, recorded as capcomd's own (a login) until `destroyVm`, so it never reads as left behind. */
+const releases = new Map<string, () => void>();
 async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: string, t0: number) {
-  const { id } = await p.ensure({ idemKey: `capcomd-${purpose}-${a.kind}-${t0}`, isolated: true, ttlSeconds: 1800, egressAllow: [...BASE_EGRESS, ...a.loginEgress], labels: { purpose }, fromSnapshot: snapshot });
-  await p.waitReady(id, 120_000);
-  return id;
+  const idemKey = `capcomd-${purpose}-${a.kind}-${t0}`;
+  const { recordJobMachine } = await import("../providers/machines");
+  const { sandboxName } = await import("../providers/registry");
+  let place: string | null = null;
+  try { place = sandboxName(); } catch { /* unknown: recorded as such */ }
+  const release = recordJobMachine({ idemKey, sandbox: place, kind: "login", purpose, agent: a.kind, ttlSeconds: 1800 });
+  try {
+    const { id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 1800, egressAllow: [...BASE_EGRESS, ...a.loginEgress], labels: { purpose }, fromSnapshot: snapshot });
+    releases.set(id, release);
+    await p.waitReady(id, 120_000);
+    return id;
+  } catch (e) {
+    release();
+    throw e;
+  }
+}
+async function destroyVm(p: P, id: string) {
+  await p.destroy(id).catch(() => {});
+  releases.get(id)?.();
+  releases.delete(id);
 }
 
 async function findBin(p: P, id: string, a: AgentAdapter, cfg: AgentConfig, env: Record<string, string>) {
@@ -138,7 +157,7 @@ export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Pro
     writeAuthLedger({ ...l, [agent]: profile }, o.ledgerPath);
     return { profile, verified: true, loginMs, totalMs: now() - t0 };
   } finally {
-    await p.destroy(id).catch(() => {});
+    await destroyVm(p, id);
   }
 }
 
@@ -166,7 +185,7 @@ export async function authStatus(p: P, cfg: AgentConfig, o: { ledgerPath?: strin
       const v = await verifyLogin(p, id, a, cfg, bin);
       line.valid = v.ok; line.detail = v.detail;
       writeAuthLedger({ ...readAuthLedger(o.ledgerPath), [agent]: { ...prof, verified: v.ok, verifiedAt: new Date().toISOString() } }, o.ledgerPath);
-    } finally { await p.destroy(id).catch(() => {}); }
+    } finally { await destroyVm(p, id); }
     out.push(line);
   }
   return out;

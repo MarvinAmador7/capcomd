@@ -3,7 +3,8 @@ import SwiftUI
 import AppKit
 import CapcomdStore
 
-/// Settings › Runs › a place's Details… (CloudExplore.dc.html; ADR-021 §6, phase 1: read-only, plus Open in Terminal).
+/// Settings › Runs › a place's Details… (CloudExplore.dc.html; ADR-021 §6: phase 1 read-only plus Open in Terminal;
+/// phase 2 a setting the daemon marks `editable` can be changed, with `sandboxes.settings` and the `configure` scope).
 /// One generic screen for every place: the sections and their order are fixed here, as on the board; which rows appear
 /// and what they say come from the daemon (`/v1/sandboxes/{name}`, `…/resources`, `/v1/logins`, `/v1/environments`).
 /// It is pushed in place of the Runs pane, with a back control (⌘[ or Esc) and the window titled "Runs › Cloud".
@@ -27,7 +28,7 @@ struct PlaceDetailsView: View {
       Form {
         Section {
           if let d { PlaceStatusRow(descriptor: d, place: place) }
-          ForEach(sections.status) { FieldRow(field: $0, editable: model.sandboxSettingsEditable) }
+          ForEach(sections.status) { setting($0) }
           if let env = model.environmentRows?.first(where: { $0.sandbox == name }) { PlaceEnvironmentRow(env: env, title: title) }
         } header: {
           PlaceHeader(name: name, descriptor: d, fallbackTitle: place.map(PlaceNames.header) ?? title, fallbackLabel: place?.label,
@@ -46,7 +47,7 @@ struct PlaceDetailsView: View {
         machines(d, idle: sections.machines)
         safety(d, rows: sections.safety)
         if !sections.more.isEmpty {
-          Section("Options") { ForEach(sections.more) { FieldRow(field: $0, editable: model.sandboxSettingsEditable) } }
+          Section("Options") { ForEach(sections.more) { setting($0) } }
         }
       }
       .formStyle(.grouped)
@@ -66,6 +67,12 @@ struct PlaceDetailsView: View {
   }
 
   static func windowTitle(_ place: String) -> String { "Runs › \(place)" }
+
+  /// A setting as the store says it can be shown here: a picker that changes it, or its value read-only.
+  private func setting(_ field: SandboxField) -> some View {
+    let name = name
+    return FieldRow(field: field, control: model.fieldControl(name, field)) { model.changeSetting(name, id: field.id, to: $0) }
+  }
 
   /// Back to Runs: the system's back chevron, ⌘[ as in every macOS navigation.
   private var backBar: some View {
@@ -100,7 +107,7 @@ struct PlaceDetailsView: View {
             Text("Looking for machines…").foregroundStyle(.secondary)
           }
         }
-        ForEach(idle) { FieldRow(field: $0, editable: model.sandboxSettingsEditable) }
+        ForEach(idle) { setting($0) }
       } header: {
         Text("Machines")
       } footer: {
@@ -111,7 +118,7 @@ struct PlaceDetailsView: View {
         }
       }
     } else if !idle.isEmpty {
-      Section("Machines") { ForEach(idle) { FieldRow(field: $0, editable: model.sandboxSettingsEditable) } }
+      Section("Machines") { ForEach(idle) { setting($0) } }
     }
   }
 
@@ -136,7 +143,7 @@ struct PlaceDetailsView: View {
             Text(verbatim: summary.sub)
           }
         }
-        ForEach(rest) { FieldRow(field: $0, editable: false) }
+        ForEach(rest) { FieldRow(field: $0) }
       } header: {
         Text("Safety")
       } footer: {
@@ -230,26 +237,31 @@ struct PlaceStatusRow: View {
 
 /// One row the daemon describes, by type: `choice` a popup, `toggle` a switch, `info` / `status` a value; any type
 /// this app doesn't know shows its label and the daemon's text, read-only. A value set in capcomd's environment shows
-/// the daemon's text instead of a control.
+/// the daemon's text instead of a control. A popup can be used only when the store says so (`FieldControl`); a choice
+/// sends `pick`, and the row shows the choice on its way until the daemon answers. The store's note (the daemon's
+/// refusal, or "Reset your token to change these") goes under the label.
 struct FieldRow: View {
   let field: SandboxField
-  let editable: Bool
+  var control: FieldControl? = nil
+  var pick: ((String) -> Void)? = nil
 
   var body: some View {
     switch field.kind {
     case .choice where !field.fromEnvironment && !field.choices.isEmpty:
-      let current = field.value.text ?? ""
-      Picker(selection: .constant(current)) {
+      let current = control?.selection ?? field.value.text ?? ""
+      let editable = control?.editable == true && pick != nil
+      Picker(selection: Binding(get: { current }, set: { v in if v != current { pick?(v) } })) {
         ForEach(field.choices, id: \.value) { c in Text(verbatim: c.label).tag(c.value) }
         if !field.choices.contains(where: { $0.value == current }) { Text(verbatim: field.shown).tag(current) }
       } label: {
         label
       }
       .pickerStyle(.menu)
-      .disabled(!(editable && field.editable))
+      .disabled(!editable)
+      .accessibilityHint(control?.saving == true ? "Saving." : "")
     case .toggle where !field.fromEnvironment:
       Toggle(isOn: .constant(field.value.bool ?? false)) { label }
-        .disabled(!(editable && field.editable))
+        .disabled(true)
     case .status:
       LabeledContent { StatusValue(Self.tone(field.state).dot, field.shown) } label: { label }
     default:
@@ -260,10 +272,21 @@ struct FieldRow: View {
   @ViewBuilder private var label: some View {
     Text(verbatim: field.label)
     if let help = field.help, !help.isEmpty { Text(verbatim: help) }
+    if let note = control?.note { Text(verbatim: note) }
   }
 
   static func tone(_ state: String?) -> Tone {
     switch state { case "ok": .ok; case "warn": .warn; case "bad", "error": .bad; case "empty", "none": .empty; default: .none }
+  }
+}
+
+extension AppModel {
+  /// How a place's setting shows here (CapcomdStore.fieldControl): a picker or read-only, and the note under it.
+  func fieldControl(_ sandbox: String, _ field: SandboxField) -> FieldControl { _ = revision; return store.fieldControl(sandbox: sandbox, field) }
+  /// Sends a new value for a place's setting (`PATCH …/settings`); the row follows the store.
+  func changeSetting(_ sandbox: String, id: String, to value: String) {
+    let s = store
+    Task { await s.changeSetting(sandbox: sandbox, id: id, to: value) }
   }
 }
 

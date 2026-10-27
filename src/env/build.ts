@@ -85,7 +85,15 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
       return { name, cached: true, record, snapshot: existing };
     }
   }
-  const { id } = await p.ensure({ idemKey: `capcomd-env-build-${t0}`, isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "env-build" } });
+  const idemKey = `capcomd-env-build-${t0}`;
+  // capcomd's own job: recorded so the place's Machines list shows it as the environment build, not as left behind.
+  const { recordJobMachine } = await import("../providers/machines");
+  const { sandboxName } = await import("../providers/registry");
+  let place: string | null = null;
+  try { place = sandboxName(); } catch { /* unknown: recorded as such */ }
+  const release = recordJobMachine({ idemKey, sandbox: place, kind: "env_build", purpose: "env-build", ttlSeconds: 3600 });
+  let id: string;
+  try { ({ id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "env-build" } })); } catch (e) { release(); throw e; }
   const sh = (s: string, timeoutMs = 120_000) => p.exec(id, ["sh", "-c", s], { env: baseEnv, timeoutMs });
   const must = async (what: string, s: string, timeoutMs?: number) => {
     const res = await sh(s, timeoutMs);
@@ -184,6 +192,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     return { name, cached: false, record, snapshot: snap };
   } finally {
     if (!keep) await p.destroy(id).catch(() => {});
+    release();
   }
 }
 

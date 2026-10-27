@@ -13,7 +13,8 @@ import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
 import { CreateRunError, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
-import { harnessState, type HarnessState } from "./state";
+import { harnessState, type DaemonEvent, type HarnessState } from "./state";
+import { parseSettingsPatch } from "./sandboxes";
 import { runFiles } from "./run-files";
 import { isListedProvider, PROVIDER_LABEL } from "../providers/registry";
 
@@ -58,6 +59,11 @@ export function harnessApp(o: ServerOptions) {
 	// holding hundreds of runs this daemon doesn't list (another ledger's) turned every tick into hundreds of actor calls.
 	const deletionChecked = new Set<string>();
 
+	/** A daemon-scope event (state.recordDaemonEvent) as the stream and GET /v1/events?scope=daemon send it. */
+	const daemonEnvelope = (e: DaemonEvent) => ({
+		v: 1 as const, id: `evt_daemon_${e.seq}`, scope: "daemon", seq: e.seq, entity: e.entity, entitySeq: e.entitySeq, type: e.type, typeVersion: 1,
+		durability: "durable" as const, ts: isoTs(e.at), epochMs: e.at, projectId: null, runId: null, agentId: null, text: e.text, data: e.data,
+	});
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
 	const router = {
@@ -139,6 +145,7 @@ export function harnessApp(o: ServerOptions) {
 		service: { get: os.service.get.handler(() => src.service()) },
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
+				if (input.scope === "daemon") return state.daemonEvents(input.after ?? 0).map(daemonEnvelope);
 				if (!input.scope.startsWith("run-")) return [];
 				return envelopes(input.scope, await src.events(input.scope, 0)).filter((e) => e.seq > (input.after ?? 0));
 			}),
@@ -151,7 +158,8 @@ export function harnessApp(o: ServerOptions) {
 		if (c.req.method === "GET" && c.req.path === "/v1/health") return next();
 		const cl = authenticate(c.req.header("authorization"), clients());
 		if (!cl) return err(c, 401, "unauthorized", "missing or unknown bearer token (create one with `capcomd clients add`)");
-		const need: ClientScope = c.req.method === "GET" ? "read" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
+		// PATCH changes settings (capability sandboxes.settings): the configure scope, which steering a run doesn't give.
+		const need: ClientScope = c.req.method === "GET" ? "read" : c.req.method === "PATCH" ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
 		if (!cl.scopes.includes(need)) return err(c, 403, "forbidden", `token lacks the ${need} scope`);
 		c.set("client", cl);
 		return next();
@@ -367,6 +375,28 @@ export function harnessApp(o: ServerOptions) {
 		});
 	});
 
+	// PATCH /v1/sandboxes/{name}/settings (capability sandboxes.settings; the configure scope, checked above). No
+	// Idempotency-Key: `rev` makes a retry safe (a retry after a change that landed is 409, and the value is already set).
+	app.patch("/v1/sandboxes/:name/settings", async (c) => {
+		const name = c.req.param("name");
+		const patch = parseSettingsPatch(await c.req.json().catch(() => null));
+		if (typeof patch === "string") return err(c, 422, "invalid", patch);
+		const r = await src.updateSandboxSettings(name, patch);
+		if (!r.ok) return err(c, r.status, r.code, r.message, r.rev !== undefined ? { rev: r.rev } : {});
+		const client = c.get("client");
+		const place = PROVIDER_LABEL[name as keyof typeof PROVIDER_LABEL] ?? name;
+		for (const ch of r.changes) {
+			const f = r.detail.settings.find((x) => x.id === ch.id);
+			const say = (v: string | null) => (v === null ? "unset" : f?.choices.find((x) => x.value === v)?.label ?? v);
+			state.recordDaemonEvent({
+				type: "sandbox.settings_changed", entity: `sandbox:${name}`,
+				text: `${place}: ${f?.label ?? ch.id} is now ${say(ch.to)} (was ${say(ch.from)}).`,
+				data: { sandbox: name, id: ch.id, from: ch.from, to: ch.to, clientId: client.clientId },
+			});
+		}
+		return c.json(r.detail, 200);
+	});
+
 	app.get("/v1/streams/:scope/events", (c) => {
 		const scope = c.req.param("scope");
 		if (!/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$/.test(scope)) return err(c, 422, "invalid", "scope is daemon, prj-<id> or run-<id>");
@@ -422,6 +452,9 @@ export function harnessApp(o: ServerOptions) {
 							if (i + 1 <= seen || (scope.startsWith("prj-") && r.projectId !== scope)) return;
 							out.push({ event: "run.created", seq: i + 1, data: { v: 1, id: `evt_${scope}_${i + 1}`, scope, seq: i + 1, entity: r.id, entitySeq: 1, type: "run.created", typeVersion: 1, durability: "durable", ts: r.createdAt ?? isoTs(Date.now()), epochMs: r.createdAt ? Date.parse(r.createdAt) : Date.now(), projectId: r.projectId, runId: r.id, agentId: null, text: "Run created.", data: { label: r.label, goal: r.goal, budget: null } } });
 						});
+						// The daemon's own durable events (settings changes): daemon stream only, from the same seq counter.
+						if (scope === "daemon") for (const e of state.daemonEvents(seen)) { top = Math.max(top, e.seq); out.push({ event: e.type, seq: e.seq, data: daemonEnvelope(e) }); }
+						out.sort((a, b) => a.seq - b.seq);
 						sendGroups(out);
 						seen = top;
 					};

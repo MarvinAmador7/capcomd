@@ -16,10 +16,11 @@ import { startDetachedRun } from "./create-run";
 import { workspaceOf } from "./workspace";
 import { mirrorFor, workTips } from "./run-files";
 import { RUN_REPO_KV } from "../merge/run-config";
-import { AGENT_VM_TTL_SECONDS } from "../agents/runner";
 import { sandboxSurface, taskLine, type MachineOwner } from "./sandboxes";
 import { MACHINE_PREFIX, type SandboxProvider } from "../providers/sandbox";
 import { sandboxName, type ListedProvider } from "../providers/registry";
+import { jobOwnerText, liveJobMachines } from "../providers/machines";
+import { fileSettingsStore, settingsPath } from "../providers/settings";
 
 const lower = (p: string | null) => (p ? p.toLowerCase() : null);
 const cap = (t: string) => (Buffer.byteLength(t) <= INLINE_TEXT_MAX_BYTES ? t : Buffer.from(t).subarray(0, INLINE_TEXT_MAX_BYTES).toString("utf8").replace(/\uFFFD+$/, ""));
@@ -79,7 +80,15 @@ export async function machineOwners(limit = 500): Promise<MachineOwner[]> {
 		}));
 		return rows.filter((x): x is MachineOwner => !!x);
 	}));
-	return perRun.flat();
+	return [...perRun.flat(), ...jobOwners()];
+}
+
+/** Machines capcomd's own jobs hold now (checks, logins, environment builds): the machines ledger, never provider labels. */
+export function jobOwners(env: Record<string, string | undefined> = process.env): MachineOwner[] {
+	return liveJobMachines(env).map((m) => ({
+		sandbox: m.sandbox, vmId: null, name: m.name, kind: m.kind, runId: m.runId, agentId: null, task: null,
+		...jobOwnerText(m), workerState: "busy", createdAt: m.createdAt,
+	}));
 }
 
 // One list-only provider per place: the daemon's own (getDependencies) for its sandbox; for another, a provider made
@@ -105,8 +114,8 @@ export function rivetSource(): HarnessSource {
 		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal: meta?.goal ?? null, repo: r.repo, createdAt: isoTs(r.createdAt) };
 	}));
 	const surface = sandboxSurface({
-		// What agents' machines get today (the worker's lease); a setting from ADR-021 phase 2 on.
-		idleLifetimeSeconds: AGENT_VM_TTL_SECONDS,
+		// The user config (~/.capcomd/config.json `sandboxes`); off with CAPCOMD_NO_CONFIG.
+		settings: fileSettingsStore(settingsPath()),
 		logins: async () => (await import("./settings")).logins(),
 		availability: async (name) => {
 			const { sandboxAvailable } = await import("./run-options");

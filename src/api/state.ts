@@ -8,7 +8,12 @@ import type { StoredKey } from "./idempotency";
 
 export const KEY_TTL_MS = 24 * 60 * 60 * 1000;
 type StampedKey = StoredKey & { at?: number };
-export type HarnessStateData = { keys: Record<string, StampedKey>; decisions: Record<string, Record<string, unknown>>; runSeq: Record<string, number>; nextSeq: number };
+/** A durable event of the `daemon` scope itself (not a run's): today the audit of settings changes (ADR-021 §5). Its seq
+ *  comes from the same counter as the daemon stream's run.created frames, so the stream's cursor orders both. */
+export type DaemonEvent = { seq: number; at: number; type: string; entity: string; entitySeq: number; text: string; data: Record<string, unknown> };
+/** The daemon's own events kept for replay (the oldest go first). */
+export const DAEMON_EVENTS_MAX = 1000;
+export type HarnessStateData = { keys: Record<string, StampedKey>; decisions: Record<string, Record<string, unknown>>; runSeq: Record<string, number>; nextSeq: number; daemonEvents?: DaemonEvent[]; entitySeq?: Record<string, number> };
 export const defaultStatePath = () => join(capcomdHome(), "harness-state.json");
 
 /** Cleanup (Axiom follow-up to #38): idempotency keys expire after 24h; seqs of deleted runs are dropped, but nextSeq is a
@@ -35,7 +40,7 @@ export function harnessState(path: string | null = defaultStatePath(), opts: { n
 		renameSync(tmp, path);
 	};
 	{
-		const maxSeq = Math.max(0, ...Object.values(d.runSeq));
+		const maxSeq = Math.max(0, ...Object.values(d.runSeq), ...(d.daemonEvents ?? []).map((e) => e.seq));
 		const fixSeq = !(d.nextSeq > maxSeq);
 		if (fixSeq) d.nextSeq = maxSeq + 1;
 		if (pruneKeys() || fixSeq) save();
@@ -61,6 +66,16 @@ export function harnessState(path: string | null = defaultStatePath(), opts: { n
 		},
 		/** Run ids that hold a seq. */
 		knownRuns: () => Object.keys(d.runSeq),
+		/** Records a durable daemon-scope event: the next seq, and the next entitySeq of its entity. */
+		recordDaemonEvent(e: { type: string; entity: string; text: string; data: Record<string, unknown> }): DaemonEvent {
+			const seqs = (d.entitySeq ??= {});
+			const ev: DaemonEvent = { seq: d.nextSeq++, at: now(), type: e.type, entity: e.entity, entitySeq: (seqs[e.entity] = (seqs[e.entity] ?? 0) + 1), text: e.text, data: e.data };
+			d.daemonEvents = [...(d.daemonEvents ?? []), ev].slice(-DAEMON_EVENTS_MAX);
+			save();
+			return ev;
+		},
+		/** The daemon's own events after `after` (seq), oldest first. */
+		daemonEvents: (after = 0): DaemonEvent[] => (d.daemonEvents ?? []).filter((e) => e.seq > after),
 		/** Confirmed deletion (a run.deleted lifecycle event was seen): drop the run's seq. The seq is never reused. */
 		runDeleted(runId: string) { if (d.runSeq[runId] !== undefined) { delete d.runSeq[runId]; save(); } },
 	};

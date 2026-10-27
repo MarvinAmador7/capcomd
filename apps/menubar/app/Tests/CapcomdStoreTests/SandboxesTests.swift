@@ -3,7 +3,7 @@ import Foundation
 @testable import CapcomdStore
 
 /// A daemon that describes its places (ADR-021 phase 1), or doesn't.
-final class FakeSandboxDaemon: DaemonInfoFetching, @unchecked Sendable {
+class FakeSandboxDaemon: DaemonInfoFetching, @unchecked Sendable {
   var caps: Set<String> = [Capability.runsOptions, Capability.logins, Capability.environments, Capability.sandboxes, Capability.sandboxesResources]
   var list: [SandboxDescriptor] = [SandboxDescriptor(name: "boxd", label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd",
                                                      caps: SandboxCaps(hostBoundSecrets: true, shell: true), available: true)]
@@ -17,6 +17,7 @@ final class FakeSandboxDaemon: DaemonInfoFetching, @unchecked Sendable {
   func skills() async throws -> [SkillInfo] { [] }
   func sandboxes() async throws -> [SandboxDescriptor] { list }
   func sandbox(_ name: String) async throws -> SandboxDetail {
+    gets += 1
     guard let d = details[name] else { throw DetailUnavailable.failed("not found") }
     return d
   }
@@ -29,6 +30,24 @@ final class FakeSandboxDaemon: DaemonInfoFetching, @unchecked Sendable {
     resourceCalls += 1
     guard let c = commands[id] else { throw DetailUnavailable.failed(SandboxRows.gone) }
     return ResourceDetail(resource: nil, terminalCommand: c)
+  }
+  /// What each PATCH sent: place, values, rev.
+  var patches: [(sandbox: String, values: [String: String], rev: String)] = []
+  /// Answers for the next PATCHes, in order (an error to throw, or nil to apply it); none left: apply it.
+  var patchAnswers: [Error?] = []
+  var gets = 0
+  func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail {
+    patches.append((name, values, rev))
+    if !patchAnswers.isEmpty, let e = patchAnswers.removeFirst() { throw e }
+    guard var d = details[name] else { throw SettingsRefused.invalid("unknown sandbox \(name)") }
+    for (id, v) in values {
+      guard let i = d.settings.firstIndex(where: { $0.id == id }) else { continue }
+      d.settings[i].value = .string(v); d.settings[i].source = "config"
+      d.settings[i].display = d.settings[i].choices.first { $0.value == v }?.label
+    }
+    d.rev = "r\((Int(d.rev?.dropFirst() ?? "0") ?? 0) + 1)"
+    details[name] = d
+    return d
   }
 }
 
@@ -300,5 +319,211 @@ final class SandboxesTests: XCTestCase {
     XCTAssertEqual(empty, .unavailable("capcomd can't open a shell in this machine."))
     let gone = await s.terminalCommand(sandbox: "boxd", resource: "relay-deleted")
     XCTAssertEqual(gone, .unavailable("This machine is gone."))
+  }
+
+  // MARK: changing settings (phase 2)
+
+  nonisolated static let idleChoices = [SandboxField.Choice(value: "900", label: "15 minutes"), SandboxField.Choice(value: "3600", label: "1 hour"),
+                            SandboxField.Choice(value: "14400", label: "4 hours"), SandboxField.Choice(value: "43200", label: "12 hours")]
+  nonisolated static func idle(editable: Bool = true, source: String = "default", value: String = "3600", display: String? = "1 hour") -> SandboxField {
+    SandboxField(id: "idleLifetime", type: "choice", label: "Delete idle machines after", value: .string(value), display: display, defaultValue: .string("3600"),
+                 choices: idleChoices, source: source, editable: editable, appliesTo: "new_runs")
+  }
+  /// A store that has read boxd's details (rev r1) from a daemon with `sandboxes.settings`.
+  func settingsStore(_ field: SandboxField = idle(), caps: Bool = true) async -> (CapcomdStore, FakeSandboxDaemon) {
+    let daemon = FakeSandboxDaemon()
+    if caps { daemon.caps.insert(Capability.sandboxesSettings) }
+    daemon.details["boxd"] = SandboxDetail(descriptor: daemon.list[0], settings: [field], rev: "r1")
+    let s = CapcomdStore(daemonInfo: daemon)
+    await s.refreshSettings()
+    await s.refreshSandbox("boxd")
+    return (s, daemon)
+  }
+  func idleField(_ s: CapcomdStore) -> SandboxField? { s.sandboxDetails["boxd"]?.value?.settings.first { $0.id == "idleLifetime" } }
+
+  func testChangingASettingSendsItsRevAndTakesTheDaemonsAnswer() async throws {
+    let (s, daemon) = await settingsStore()
+    let before = try XCTUnwrap(idleField(s))
+    XCTAssertEqual(s.fieldControl(sandbox: "boxd", before), FieldControl(editable: true, selection: "3600"))
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertEqual(daemon.patches.map(\.values), [["idleLifetime": "14400"]])
+    XCTAssertEqual(daemon.patches.map(\.rev), ["r1"])
+    // The 200 body replaces the details: the new value, its text and the new rev.
+    let after = try XCTUnwrap(idleField(s))
+    XCTAssertEqual(after.value.text, "14400")
+    XCTAssertEqual(after.shown, "4 hours")
+    XCTAssertEqual(after.source, "config")
+    XCTAssertEqual(s.sandboxDetails["boxd"]?.value?.rev, "r2")
+    XCTAssertEqual(s.fieldControl(sandbox: "boxd", after), FieldControl(editable: true, selection: "14400"))
+    XCTAssertTrue(s.settingEdits.isEmpty)
+    // Picking the value it already has sends nothing.
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertEqual(daemon.patches.count, 1)
+  }
+
+  func testWithoutTheCapabilityOrAnEditableFieldTheRowIsReadOnly() async throws {
+    // An older daemon (no `sandboxes.settings`): the field may say editable, but nothing can change it.
+    let (old, oldDaemon) = await settingsStore(caps: false)
+    XCTAssertEqual(old.fieldControl(sandbox: "boxd", try XCTUnwrap(idleField(old))), FieldControl(editable: false, selection: "3600"))
+    await old.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertTrue(oldDaemon.patches.isEmpty)
+    // `editable: false` (phase 1 shape).
+    let (fixed, fixedDaemon) = await settingsStore(Self.idle(editable: false))
+    XCTAssertFalse(fixed.fieldControl(sandbox: "boxd", try XCTUnwrap(idleField(fixed))).editable)
+    await fixed.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertTrue(fixedDaemon.patches.isEmpty)
+    // Toggles and info rows are never controls here.
+    let toggle = SandboxField(id: "keepWarm", type: "toggle", label: "Keep one warm", value: .bool(true), editable: true)
+    XCTAssertFalse(fixed.fieldControl(sandbox: "boxd", toggle).editable)
+  }
+
+  func testAnIdleLifetimeSetInTheEnvironmentIsReadOnlyWithTheDaemonsText() async throws {
+    let env = Self.idle(editable: false, source: "env", value: "7200", display: "Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment")
+    let (s, daemon) = await settingsStore(env)
+    let f = try XCTUnwrap(idleField(s))
+    XCTAssertTrue(f.fromEnvironment)
+    XCTAssertEqual(f.shown, "Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment")
+    XCTAssertEqual(s.fieldControl(sandbox: "boxd", f), FieldControl(editable: false, selection: "7200"))
+    // Even if a daemon said editable, a value from the environment is never a control.
+    var odd = env; odd.editable = true
+    XCTAssertFalse(s.fieldControl(sandbox: "boxd", odd).editable)
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertTrue(daemon.patches.isEmpty)
+  }
+
+  func testWithoutTheConfigureScopeSettingsGoReadOnlyUntilTheTokenChanges() async throws {
+    let (s, daemon) = await settingsStore()
+    daemon.patchAnswers = [SettingsRefused.forbidden]
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertTrue(s.configureDenied)
+    let f = try XCTUnwrap(idleField(s))
+    XCTAssertEqual(f.value.text, "3600")
+    XCTAssertEqual(s.fieldControl(sandbox: "boxd", f), FieldControl(editable: false, selection: "3600", note: "Reset your token to change these"))
+    XCTAssertTrue(s.settingEdits.isEmpty)
+    // Not offered again for this token (this store).
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "43200")
+    XCTAssertEqual(daemon.patches.count, 1)
+    await s.refreshSandbox("boxd")
+    XCTAssertEqual(s.fieldControl(sandbox: "boxd", try XCTUnwrap(idleField(s))).note, CapcomdStore.needsConfigureScope)
+    // A field the daemon wouldn't let change anyway gets no note.
+    XCTAssertNil(s.fieldControl(sandbox: "boxd", Self.idle(editable: false)).note)
+    // A new token is a new store: editable again.
+    let (fresh, _) = await settingsStore()
+    XCTAssertTrue(fresh.fieldControl(sandbox: "boxd", try XCTUnwrap(idleField(fresh))).editable)
+  }
+
+  func testAConflictReadsThePlaceAgainAndTriesOnceMoreWithTheNewRev() async throws {
+    let (s, daemon) = await settingsStore()
+    // Another client changed something since the store read rev r1.
+    daemon.details["boxd"]?.rev = "r2"
+    daemon.patchAnswers = [SettingsRefused.conflict(rev: "r2")]
+    let getsBefore = daemon.gets
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertEqual(daemon.patches.map(\.rev), ["r1", "r2"])
+    XCTAssertEqual(daemon.gets, getsBefore + 1)
+    XCTAssertEqual(idleField(s)?.value.text, "14400")
+    XCTAssertEqual(s.sandboxDetails["boxd"]?.value?.rev, "r3")
+    XCTAssertTrue(s.settingEdits.isEmpty)
+  }
+
+  func testASecondConflictGivesUpWithASentence() async throws {
+    let (s, daemon) = await settingsStore()
+    daemon.patchAnswers = [SettingsRefused.conflict(rev: "r2"), SettingsRefused.conflict(rev: "r3")]
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertEqual(daemon.patches.count, 2)
+    let f = try XCTUnwrap(idleField(s))
+    XCTAssertEqual(f.value.text, "3600")
+    XCTAssertEqual(s.fieldControl(sandbox: "boxd", f), FieldControl(editable: true, selection: "3600", note: "These settings changed somewhere else. Try again."))
+    // Picking again clears it and tries afresh.
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400")
+    XCTAssertEqual(idleField(s)?.value.text, "14400")
+    XCTAssertNil(s.fieldControl(sandbox: "boxd", try XCTUnwrap(idleField(s))).note)
+  }
+
+  func testARefusedValueShowsTheDaemonsSentence() async throws {
+    let (s, daemon) = await settingsStore()
+    let why = "Delete idle machines after: 10 minutes is under the 15-minute minimum (a running agent renews its machine every 10 minutes)"
+    daemon.patchAnswers = [SettingsRefused.invalid(why)]
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "600")
+    let f = try XCTUnwrap(idleField(s))
+    XCTAssertEqual(f.value.text, "3600")
+    XCTAssertEqual(s.fieldControl(sandbox: "boxd", f), FieldControl(editable: true, selection: "3600", note: why))
+    XCTAssertFalse(s.configureDenied)
+  }
+
+  func testAChangeOnItsWayShowsThePickedValueAndCantBeSentTwice() async throws {
+    let gate = GatedSettingsDaemon()
+    gate.details["boxd"] = SandboxDetail(descriptor: gate.list[0], settings: [Self.idle()], rev: "r1")
+    gate.caps.insert(Capability.sandboxesSettings)
+    let s = CapcomdStore(daemonInfo: gate)
+    await s.refreshSettings(); await s.refreshSandbox("boxd")
+    let change = Task { await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "14400") }
+    while gate.waiting == nil { await Task.yield() }
+    let f = try XCTUnwrap(idleField(s))
+    XCTAssertEqual(s.fieldControl(sandbox: "boxd", f), FieldControl(editable: false, selection: "14400", saving: true))
+    await s.changeSetting(sandbox: "boxd", id: "idleLifetime", to: "43200")
+    XCTAssertEqual(gate.calls, 1)
+    gate.waiting?.resume(); await change.value
+    XCTAssertEqual(idleField(s)?.value.text, "14400")
+  }
+
+  // MARK: machine owners (phase 2)
+
+  func testCapcomdsOwnMachinesAreNeverLeftBehindAndOfferNothing() throws {
+    let page = try SandboxWire.resources(Data(#"""
+      {"resources":[
+        {"id":"relay-agent","kind":"machine","state":"running","owner":{"kind":"agent","runId":"run-8kq2","agentId":"agt-41","role":"worker","task":"Add abs","label":null},
+         "createdAt":"2026-10-27T09:56:00.000Z","actions":["open_terminal","delete"]},
+        {"id":"relay-old","kind":"machine","state":"running","owner":{"runId":"run-8kq2","agentId":"agt-42","role":"reviewer","task":"Review it"},
+         "createdAt":"2026-10-27T09:55:00.000Z","actions":["open_terminal","delete"]},
+        {"id":"relay-check","kind":"machine","state":"running","owner":{"kind":"check","runId":"run-abc123","agentId":null,"role":"checks","task":null,"label":"Checks for run-abc123"},
+         "createdAt":"2026-10-27T09:59:00.000Z","actions":["open_terminal","delete"]},
+        {"id":"relay-login","kind":"machine","state":"running","owner":{"kind":"login","runId":null,"agentId":null,"role":"login","task":null,"label":"Logging in to Claude Code"},
+         "createdAt":"2026-10-27T09:58:00.000Z","actions":[]},
+        {"id":"relay-env","kind":"machine","state":"starting","owner":{"kind":"env_build","runId":null,"agentId":null,"role":"environment","task":null,"label":"Building the agent environment"},
+         "createdAt":"2026-10-27T09:57:00.000Z","actions":[]},
+        {"id":"relay-doctor","kind":"machine","state":"unknown","owner":{"kind":"doctor","runId":null,"agentId":null,"role":"environment","task":null,"label":"Checking the agent environment"},
+         "createdAt":"2026-10-27T09:54:00.000Z","actions":[]},
+        {"id":"relay-new","kind":"machine","state":"running","owner":{"kind":"snapshot","runId":null,"agentId":null,"role":null,"task":null,"label":null},
+         "createdAt":"2026-10-27T09:53:00.000Z","actions":["delete"]},
+        {"id":"relay-orphan","kind":"machine","state":"orphaned","owner":null,"createdAt":"2026-10-27T08:00:00.000Z","actions":["open_terminal","delete"]}
+      ],"asOf":"2026-10-27T09:59:20.000Z","stale":false,"error":null,"next":null}
+      """#.utf8))
+    XCTAssertEqual(page.resources.count, 8)
+    // Owners decode with null run and agent ids; one without `kind` (an older daemon) is an agent.
+    let byId = Dictionary(uniqueKeysWithValues: page.resources.map { ($0.id, $0) })
+    XCTAssertEqual(byId["relay-check"]?.owner, .init(kind: "check", runId: "run-abc123", role: "checks", label: "Checks for run-abc123"))
+    XCTAssertEqual(byId["relay-login"]?.owner?.runId, nil)
+    XCTAssertEqual(byId["relay-login"]?.owner?.agentId, nil)
+    XCTAssertNil(byId["relay-old"]?.owner?.kind)
+    XCTAssertEqual(byId["relay-old"]?.owner?.isAgent, true)
+    XCTAssertEqual(page.resources.map(\.orphaned), [false, false, false, false, false, false, false, true])
+    XCTAssertEqual(page.resources.map(\.capcomdJob), [false, false, true, true, true, true, true, false])
+
+    let rows = SandboxRows.machines(page, descriptor: nil, now: now)
+    XCTAssertEqual(rows.map(\.id), ["relay-check", "relay-login", "relay-env", "relay-agent", "relay-old", "relay-doctor", "relay-new", "relay-orphan"])
+    XCTAssertEqual(rows.map(\.title), ["checks · run-abc123", "login · Logging in to Claude Code", "environment · Building the agent environment",
+                                        "worker · Add abs", "reviewer · Review it", "environment · Checking the agent environment", "snapshot",
+                                        "Left behind · no agent owns it"])
+    XCTAssertEqual(rows.map(\.tone), [.ok, .ok, .empty, .ok, .ok, .empty, .ok, .warn])
+    // Never Open in Terminal or Delete on capcomd's own machines, whatever their actions say.
+    XCTAssertEqual(rows.map(\.canOpenTerminal), [false, false, false, true, true, false, false, true])
+    XCTAssertEqual(rows.map(\.canDelete), [false, false, false, true, true, false, false, true])
+    XCTAssertEqual(rows.map(\.orphaned), [false, false, false, false, false, false, false, true])
+    // An agent owner whose agent id is gone is still not "left behind": only no owner (or the orphaned state) is.
+    let ownedNoAgent = SandboxResource(id: "x", state: "running", owner: .init(kind: "agent", runId: "run-1", agentId: nil, role: "worker"))
+    XCTAssertFalse(ownedNoAgent.orphaned)
+    XCTAssertTrue(SandboxResource(id: "y", state: "running", owner: nil).orphaned)
+  }
+}
+
+/// A daemon whose PATCH waits until the test lets it answer.
+final class GatedSettingsDaemon: FakeSandboxDaemon {
+  var waiting: CheckedContinuation<Void, Never>?
+  var calls = 0
+  override func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail {
+    calls += 1
+    await withCheckedContinuation { waiting = $0 }
+    return try await super.updateSandboxSettings(name, values: values, rev: rev)
   }
 }

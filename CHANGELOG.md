@@ -10,6 +10,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   notifications work and About shows the app's version. It's signed ad hoc, which means the Keychain asks again for
   the app's token after every rebuild; set `CAPCOMD_SIGN_IDENTITY` to a code-signing identity of yours and "Always
   Allow" lasts across rebuilds. `--debug` makes a debug build. See `apps/menubar/README.md`.
+- Harness API: change a place's settings (capability `sandboxes.settings`). `PATCH /v1/sandboxes/{name}/settings`
+  with `{values: {idleLifetime: "14400"}, rev}` sets how long an idle machine is kept before it's deleted: 15 minutes,
+  1 hour (the default), 4 hours or 12 hours, per place. It needs a token with the new `configure` scope
+  (`capcomd clients add <name> --scopes read,steer,approve,configure`); a stale `rev` is 409, a value that isn't one of
+  the choices is 422. The choice is kept in your user config (`~/.capcomd/config.json` `sandboxes.<name>.idleLifetime`)
+  and applies to runs started after it, no restart needed: each run keeps the lifetime it started with, and its agents'
+  machines (and their renewals while the agent works) use it. `CAPCOMD_SANDBOX_IDLE_SECONDS` in capcomd's environment
+  overrides it and makes the setting read-only. Each change is recorded as a `sandbox.settings_changed` event on the
+  daemon stream, with who made it.
+- Harness API: machines capcomd makes for its own jobs (a run's checks, `capcomd auth login`/`auth status`,
+  `capcomd env build`, `capcomd env doctor`) are listed under `GET /v1/sandboxes/{name}/resources` as running with an
+  owner of their kind (`check`, `login`, `env_build`, `doctor`) and a line saying what they do ("Checks for run-…",
+  "Logging in to Claude Code", "Building the agent environment"), not as left behind; they offer no actions. Resource
+  owners now carry `kind` and `label`, and `runId`/`agentId` are null when the machine isn't an agent's.
+- Menu bar app: "Delete idle machines after" in a place's Details can be changed (with a capcomd that has
+  `sandboxes.settings`). A token made before this release can't change it: the row says "Reset your token to change
+  these", and Reset… in Settings now makes a token that can. Machines running a run's checks, a login or an
+  environment build read as such ("checks · run-…") and are never shown as left behind.
 - Harness API: a place's details, for a settings screen that works for any provider (capability `sandboxes`).
   `GET /v1/sandboxes` lists each place agents run (today Local · Docker and Cloud · boxd) with what it can do, whether
   it's available and whether it's the default. `GET /v1/sandboxes/{name}` adds its settings and info rows as typed

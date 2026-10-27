@@ -4,7 +4,8 @@
 //         (404 for an unknown run), /v1/events?scope&after, GET /v1/streams/:scope/events[?feed=lifecycle] (SSE),
 //         POST /v1/approvals/:approvalId/decision (Idempotency-Key required). With SETTINGS=<scene> (settings.ts): also
 //         GET /v1/logins, /v1/environments, /v1/service, /v1/run-options and their capabilities in /v1/health; and
-//         (SANDBOXES=<scene>, settings.ts) GET /v1/sandboxes[/{name}[/resources[/{id}]]].
+//         (SANDBOXES=<scene>, settings.ts) GET /v1/sandboxes[/{name}[/resources[/{id}]]] and PATCH
+//         /v1/sandboxes/{name}/settings.
 // SSE frames per contract: `id: <seq>` / `event: <type>` / `data: <envelope>`; `event: stream.reset` {snapshotSeq, reason}
 //   then snapshot.run / agents / approvals / steps / threads / snapshot.end {snapshotSeq}, then live from snapshotSeq+1;
 //   `: heartbeat` comment every HEARTBEAT_MS (default 15000).
@@ -138,7 +139,7 @@ Bun.serve({
     if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-pr40", ...(settings ? { capabilities: settingsCaps(settings) } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
     if (settings) {
-      const r = settingsRoute(p, settings);
+      const r = settingsRoute(p, settings, req);
       if (r) return r;
       if (p === "/v1/run-options") return Response.json(settingsRunOptions(settings));
     }

@@ -172,6 +172,18 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(renewals[0]).toBe(3600); // the VM's delete deadline is renewed while the agent runs
   }, 60_000);
 
+  test("the run's idle machine lifetime (ADR-021 §2) is what each renewal sets, and the worker hears of each", async () => {
+    const s = await setup("make the failing test pass");
+    const renewals: number[] = [], heard: number[] = [];
+    const extend = s.provider.extendTtl.bind(s.provider);
+    s.provider.extendTtl = async (id, seconds) => { renewals.push(seconds); return extend(id, seconds); };
+    const res = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY, vmTtlSeconds: 14_400, onRenew: (secs) => heard.push(secs) });
+    expect(res.stopReason).toBe("success");
+    expect(renewals.length).toBeGreaterThan(0);
+    expect(new Set(renewals)).toEqual(new Set([14_400]));
+    expect(heard).toEqual(renewals);
+  }, 60_000);
+
   test("spinning (ADR-019 §2): the same call again and again is a notice, the work is checkpointed, then a stop that keeps it", async () => {
     const s = await setup("[spin] go round", { CAPCOMD_AGENT_STUCK_REPEATS: "3" });
     const notices: Array<{ kind: string; detail: string } | null> = [];

@@ -63,7 +63,15 @@ async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]):
   // Each agent's provider+auth egress set (subscription codex needs chatgpt.com, auth.openai.com, …).
   const authOf = (k: string): EgressAuth => (o.modes?.[k] === "subscription" ? "subscription" : "apikey");
   const egress = [...new Set(ALL_ADAPTERS.filter((a) => kinds.includes(a.kind)).flatMap((a) => egressFor(a.kind as RealAgent, authOf(a.kind))))];
-  const { id } = await p.ensure({ idemKey: `capcomd-doctor-${t0}`, isolated: true, ttlSeconds: 900, egressAllow: egress, labels: { purpose: "doctor" }, ...(o.snapshot ? { fromSnapshot: o.snapshot } : {}) });
+  const idemKey = `capcomd-doctor-${t0}`;
+  // capcomd's own job: recorded so the place's Machines list doesn't show it as left behind.
+  const { recordJobMachine } = await import("../providers/machines");
+  const { sandboxName } = await import("../providers/registry");
+  let place: string | null = null;
+  try { place = sandboxName(src); } catch { /* unknown: recorded as such */ }
+  const release = recordJobMachine({ idemKey, sandbox: place, kind: "doctor", purpose: "doctor", ttlSeconds: 900 });
+  let id: string;
+  try { ({ id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 900, egressAllow: egress, labels: { purpose: "doctor" }, ...(o.snapshot ? { fromSnapshot: o.snapshot } : {}) })); } catch (e) { release(); throw e; }
   const home = agentHome(o.cfg);
   const baseEnv = { PATH: agentPath(home), HOME: home };
   try {
@@ -104,6 +112,7 @@ async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]):
     return { vm: id, fromSnapshot: o.snapshot, bootMs, agents };
   } finally {
     await p.destroy(id).catch(() => {});
+    release();
   }
 }
 

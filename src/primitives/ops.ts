@@ -139,7 +139,23 @@ export async function runNew(o: RunNewOpts) {
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
   const repoEnv = repoEnvOf(process.env);
   if (Object.keys(repoEnv).length) await (await import("./state")).kvWrite(runId, { k: RUN_REPO_KV, value: repoEnv, writer: "operator" }).catch(() => {});
-  if (o.sandbox) await (await import("./state")).kvWrite(runId, { k: (await import("../providers/run-sandbox")).RUN_SANDBOX_KV, value: { name: o.sandbox }, writer: "operator" });
+  // The run's place (when it has its own) and that provider's settings as they are now (ADR-021 §2): a run keeps the
+  // idle machine lifetime it started with. A retry keeps the settings the first call recorded.
+  {
+    const RS = await import("../providers/run-sandbox");
+    const prior = await c.scope.getOrCreate([runId]).kvGet({ k: RS.RUN_SANDBOX_KV }).catch(() => null) as { value?: unknown; deleted?: boolean } | null;
+    const had = prior && !prior.deleted ? RS.parseRunSandbox(prior.value) : null;
+    let place: string = o.sandbox ?? "fake";
+    if (!o.sandbox) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
+    const settings = had?.settings.idleLifetime !== undefined ? { idleLifetime: had.settings.idleLifetime } : (await import("../providers/settings")).settingsForRun(place);
+    const value = RS.runSandboxValue(o.sandbox, settings);
+    // Unchanged on a retry: not written again. A run on the daemon's own place still starts if this write fails
+    // (its machines then get the place's setting when they start); a run with its own place doesn't.
+    if (!prior || prior.deleted || JSON.stringify(prior.value) !== JSON.stringify(value)) {
+      const put = (await import("./state")).kvWrite(runId, { k: RS.RUN_SANDBOX_KV, value, writer: "operator" });
+      await (o.sandbox ? put : put.catch(() => {}));
+    }
+  }
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
   if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });

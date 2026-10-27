@@ -31,6 +31,11 @@ export interface CapcomdConfig {
   projects?: { default?: string; list?: ProjectEntry[] };
   /** harness.v1 API (docs/harness-architecture.md §6). `socket`: Unix socket path (default ~/.capcomd/harness.sock), e.g. a macOS app-group container. */
   harness?: { socket?: string };
+  /**
+   * Provider settings by place (ADR-021 §2; user config only, written by PATCH /v1/sandboxes/{name}/settings):
+   * `idleLifetime`, seconds a machine left behind lives (at least 900). CAPCOMD_SANDBOX_IDLE_SECONDS wins.
+   */
+  sandboxes?: Record<string, { idleLifetime?: number }>;
 }
 
 export type DriverApprovals = "human" | "elicit" | "client-confirmed";

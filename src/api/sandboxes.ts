@@ -1,5 +1,6 @@
-// ADR-021 phase 1: the provider surface for a place's details screen. GET /v1/sandboxes (each listed provider's
+// ADR-021 phases 1-2: the provider surface for a place's details screen. GET /v1/sandboxes (each listed provider's
 // descriptor and whether it's available), GET /v1/sandboxes/{name} (its settings and info rows as typed fields),
+// PATCH /v1/sandboxes/{name}/settings (change a setting: checked here, stored in the user config, src/providers/settings.ts),
 // GET /v1/sandboxes/{name}/resources[/{id}] (the machines capcomd's agents run on there, with the command that opens
 // a shell in one). Settings and info are local reads (never a provider call); resources join capcomd's own records
 // (which agent holds which machine) with the provider's list, asked at most every 10 s per provider, single-flight,
@@ -12,6 +13,7 @@ import { isoTs } from "./envelope";
 import { SandboxConfigError } from "../providers/boxd-errors";
 import { descriptorOf, isListedProvider, LISTED_PROVIDERS, PROVIDERS, SERVED_ACTIONS, type ListedProvider, type ProviderDescriptor } from "../providers/registry";
 import { MACHINE_PREFIX, type VmInfo } from "../providers/sandbox";
+import { ConfigFileError, currentIdleLifetime, IDLE_LIFETIME_DEFAULT, IDLE_LIFETIME_PRESETS, IDLE_LIFETIME_ENV, IDLE_LIFETIME_MIN, type IdleLifetime, type SettingsStore } from "../providers/settings";
 /** What the Logins row reads of GET /v1/logins. */
 export type LoginLike = { provider: "claude" | "codex"; sandbox: string; loggedIn: boolean; hostBound: boolean };
 
@@ -54,9 +56,7 @@ export function servedDescriptor(d: ProviderDescriptor): Descriptor {
 }
 
 /** The idle lifetime presets, the same on every provider (ADR-021, decided 2026-10-27). */
-export const IDLE_LIFETIME_CHOICES = [
-	{ value: "900", label: "15 minutes" }, { value: "3600", label: "1 hour" }, { value: "14400", label: "4 hours" }, { value: "43200", label: "12 hours" },
-] as const;
+export const IDLE_LIFETIME_CHOICES: ReadonlyArray<{ value: string; label: string }> = IDLE_LIFETIME_PRESETS.map((n) => ({ value: String(n), label: durationLabel(n) }));
 
 /** "15 minutes", "1 hour", "90 seconds". */
 export function durationLabel(seconds: number): string {
@@ -66,17 +66,22 @@ export function durationLabel(seconds: number): string {
 	return unit(seconds, "second");
 }
 
-/** The idle machine lifetime agents' machines get today (src/agents/runner.ts AGENT_VM_TTL_SECONDS): a lease the
- *  running agent renews every 10 minutes. Read-only until settings land (ADR-021 phase 2). */
-export function idleLifetimeField(d: ProviderDescriptor, current: number): Field {
+/**
+ * The idle machine lifetime (ADR-021 §2): a lease a running agent renews every 10 minutes, so a machine left behind is
+ * deleted this long after its last renewal. `life`: what applies now and where it comes from; `writable`: whether the
+ * daemon can store a change (false while settings are off). An environment variable wins and makes it read-only.
+ */
+export function idleLifetimeField(d: ProviderDescriptor, life: IdleLifetime, writable = true): Field {
 	const sweep = d.caps.idleLifetime === "sweep";
+	const env = life.source === "env";
 	return {
 		id: "idleLifetime", type: "choice", label: "Delete idle machines after",
 		help: sweep
 			? "A container left behind (a crash, a stopped run) is deleted after this. capcomd checks every 5 minutes, so one can run up to 5 minutes over."
 			: "A machine left behind (a crash, a stopped run) is deleted after this, so it stops billing.",
-		value: String(current), display: durationLabel(current), default: "3600", choices: IDLE_LIFETIME_CHOICES.map((c) => ({ ...c })),
-		source: "default", editable: false, appliesTo: "new_runs", needsRestart: false, state: null,
+		value: String(life.seconds), display: env ? `Set by ${IDLE_LIFETIME_ENV} in capcomd's environment` : durationLabel(life.seconds),
+		default: String(IDLE_LIFETIME_DEFAULT), choices: IDLE_LIFETIME_CHOICES.map((c) => ({ ...c })),
+		source: life.source, editable: !env && writable, appliesTo: "new_runs", needsRestart: false, state: null,
 	};
 }
 
@@ -116,19 +121,82 @@ export function checkpointsField(source: Env = process.env): Field {
 }
 
 /** GET /v1/sandboxes/{name}: null for a provider clients don't see. */
-export function sandboxDetail(name: string, o: { env?: Env; logins: LoginLike[]; idleLifetimeSeconds: number }): SandboxDetail | null {
+export function sandboxDetail(name: string, o: { env?: Env; logins: LoginLike[]; idleLifetime: IdleLifetime; writable?: boolean }): SandboxDetail | null {
 	if (!isListedProvider(name)) return null;
 	const d: ProviderDescriptor = PROVIDERS[name];
-	const settings = d.settings.map((id) => (id === "idleLifetime" && d.caps.idleLifetime !== "none" ? idleLifetimeField(d, o.idleLifetimeSeconds) : null)).filter((f): f is Field => !!f);
+	const settings = d.settings.map((id) => (id === "idleLifetime" && d.caps.idleLifetime !== "none" ? idleLifetimeField(d, o.idleLifetime, o.writable ?? true) : null)).filter((f): f is Field => !!f);
 	const info = d.info.map((id) => (id === "logins" ? loginsField(name, o.logins) : checkpointsField(o.env))).filter((f): f is Field => !!f);
-	// rev: changes whenever a setting's value or editability does (PATCH …/settings, phase 2, checks it).
+	// rev: changes whenever a setting's value, source or editability does (PATCH …/settings checks it).
 	const rev = createHash("sha256").update(JSON.stringify([d.descriptorVersion, settings.map((f) => [f.id, f.value, f.source, f.editable])])).digest("hex").slice(0, 16);
 	return { descriptor: servedDescriptor(d), settings, info, rev };
 }
 
+// ---- PATCH /v1/sandboxes/{name}/settings (ADR-021 §2, §4; capability sandboxes.settings) ----
+export interface SettingsPatch { values: Record<string, unknown>; rev: string }
+export interface SettingChange { id: string; from: string | null; to: string }
+export type SettingsOutcome =
+	| { ok: true; detail: SandboxDetail; changes: SettingChange[] }
+	| { ok: false; status: 404 | 409 | 422; code: "not_found" | "conflict" | "invalid"; message: string; rev?: string };
+
+/** The body as sent, or why it isn't one: `{values: {id: value}, rev}`. */
+export function parseSettingsPatch(raw: unknown): SettingsPatch | string {
+	const shape = "body must be {values: {id: value}, rev} (rev from GET /v1/sandboxes/{name})";
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return shape;
+	const b = raw as Record<string, unknown>;
+	if (typeof b.rev !== "string" || !b.rev || b.rev.length > 200) return shape;
+	if (!b.values || typeof b.values !== "object" || Array.isArray(b.values)) return shape;
+	const keys = Object.keys(b.values);
+	if (!keys.length) return "values must name at least one setting";
+	if (keys.length > 16) return "values names too many settings";
+	return { values: b.values as Record<string, unknown>, rev: b.rev };
+}
+
+/**
+ * Checks a change against the place's fields as they are now, without writing anything: the rev must be the current
+ * one (409 conflict), and every value must be a setting this place has (422), editable here (422: an environment
+ * variable sets it), one of its choices and, for the idle lifetime, at least 15 minutes (422). The messages are
+ * daemon-written and name only trusted things (setting ids are echoed only once known).
+ */
+export function checkSettingsPatch(detail: SandboxDetail, patch: SettingsPatch): { ok: true; writes: Array<{ field: Field; value: string }> } | Extract<SettingsOutcome, { ok: false }> {
+	const bad = (message: string) => ({ ok: false as const, status: 422 as const, code: "invalid" as const, message });
+	const writes: Array<{ field: Field; value: string }> = [];
+	for (const [id, raw] of Object.entries(patch.values)) {
+		const field = detail.settings.find((f) => f.id === id);
+		if (!field) {
+			const known = detail.settings.map((f) => f.id);
+			return bad(`${/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(id) ? `"${id}" isn't` : "that isn't"} a setting of ${detail.descriptor.name}${known.length ? ` (its settings: ${known.join(", ")})` : " (it has none)"}`);
+		}
+		if (!field.editable) {
+			return bad(field.source === "env" && field.id === "idleLifetime"
+				? `${field.label} is set by ${IDLE_LIFETIME_ENV} in capcomd's environment, so it can't be changed here`
+				: `${field.label} can't be changed here`);
+		}
+		const value = typeof raw === "string" ? raw.trim() : typeof raw === "number" && Number.isFinite(raw) ? String(raw) : null;
+		if (value === null) return bad(`${id}: send one of its choices' values as a string (${field.choices.map((c) => `"${c.value}"`).join(", ")})`);
+		if (field.id === "idleLifetime" && /^\d+$/.test(value) && Number(value) < IDLE_LIFETIME_MIN) {
+			return bad(`${field.label}: ${durationLabel(Number(value) || 0)} is under the ${IDLE_LIFETIME_MIN / 60}-minute minimum (a running agent renews its machine every 10 minutes)`);
+		}
+		const choice = field.choices.find((c) => c.value === value);
+		if (!choice) return bad(`${field.label}: use one of ${field.choices.map((c) => `${c.value} (${c.label})`).join(", ")}`);
+		writes.push({ field, value });
+	}
+	if (patch.rev !== detail.rev) return { ok: false, status: 409, code: "conflict", message: "These settings changed since you read them: read them again (GET /v1/sandboxes/{name}) and send the new rev", rev: detail.rev };
+	return { ok: true, writes };
+}
+
 // ---- Resources (ADR-021 §3) ----
 export type ResourceState = "starting" | "running" | "asleep" | "orphaned" | "stopping" | "unknown";
-export interface ResourceOwner { runId: string; agentId: string; role: string | null; task: string | null }
+/** Who uses a machine (capcomd's own records): an agent, or capcomd itself for a short job (ADR-021 §3). */
+export const OWNER_KINDS = ["agent", "check", "login", "env_build", "doctor"] as const;
+export type OwnerKind = (typeof OWNER_KINDS)[number];
+export interface ResourceOwner {
+	/** agent: an agent's machine (run, agent, role = its profile, task). check: a run's checks (verify). login:
+	 *  `capcomd auth login` or `auth status`. env_build: `capcomd env build`. doctor: `capcomd env doctor`. */
+	kind: OwnerKind;
+	runId: string | null; agentId: string | null; role: string | null; task: string | null;
+	/** A daemon-written line for capcomd's own machines ("Checks for run-8kq2", "Logging in to Claude Code"); null for agents. */
+	label: string | null;
+}
 export interface Resource {
 	id: string; kind: "machine"; state: ResourceState; owner: ResourceOwner | null;
 	createdAt: string | null; deleteAfter: string | null; actions: string[];
@@ -136,16 +204,20 @@ export interface Resource {
 export interface ResourcePage { resources: Resource[]; asOf: string | null; stale: boolean; error: string | null; next: string | null }
 export interface ResourceDetail extends Resource { terminalCommand: string | null }
 
-/** A machine an agent of capcomd's holds right now, from capcomd's own records (its worker actor). */
+/** A machine capcomd's records say is in use right now: an agent's (its worker actor), or one of capcomd's own short
+ *  jobs (checks, logins, environment builds: the machines ledger, src/providers/machines.ts). */
 export interface MachineOwner {
 	/** The provider it was made on (the run's own sandbox, else the daemon's). */
 	sandbox: string;
-	/** The provider's id for it (worker context vmId). */
-	vmId: string;
+	/** The provider's id for it (worker context vmId); null when only its name is known. */
+	vmId: string | null;
 	/** Its name (capcomd's prefix + a hash of its idempotency key); null when unknown. */
 	name: string | null;
-	runId: string; agentId: string; role: string | null; task: string | null;
-	/** The worker's lifecycle state: provisioning, idle, busy, draining. */
+	/** Default agent. */
+	kind?: OwnerKind;
+	runId: string | null; agentId: string | null; role: string | null; task: string | null;
+	label?: string | null;
+	/** The worker's lifecycle state: provisioning, idle, busy, draining (capcomd's own jobs: busy). */
 	workerState: string;
 	createdAt: number | null;
 }
@@ -178,12 +250,14 @@ function providerState(s: string): ResourceState {
  */
 export function joinResources(name: string, rows: VmInfo[] | null, owners: MachineOwner[] | null): Resource[] {
 	const d = descriptorOf(name);
-	const actions = (state: ResourceState) => (d?.caps.shell && d.actions.includes("open_terminal") && SERVED_ACTIONS.includes("open_terminal") && state !== "starting" && state !== "stopping" ? ["open_terminal"] : []);
+	// capcomd's own short jobs (checks, logins, environment builds) get no actions: nothing may stop them from here,
+	// and a login's machine holds a credential while it runs.
+	const actions = (state: ResourceState, o?: MachineOwner) => ((o?.kind ?? "agent") === "agent" && d?.caps.shell && d.actions.includes("open_terminal") && SERVED_ACTIONS.includes("open_terminal") && state !== "starting" && state !== "stopping" ? ["open_terminal"] : []);
 	const mine = (owners ?? []).filter((o) => o.sandbox === name);
-	const byVm = new Map(mine.map((o) => [o.vmId, o]));
+	const byVm = new Map(mine.filter((o) => o.vmId).map((o) => [o.vmId!, o]));
 	const byName = new Map(mine.filter((o) => o.name).map((o) => [o.name!, o]));
 	const ts = (n: number | null | undefined) => (typeof n === "number" && Number.isFinite(n) ? isoTs(n) : null);
-	const ownerOf = (o: MachineOwner): ResourceOwner => ({ runId: o.runId, agentId: o.agentId, role: o.role, task: o.task });
+	const ownerOf = (o: MachineOwner): ResourceOwner => ({ kind: o.kind ?? "agent", runId: o.runId, agentId: o.agentId, role: o.role, task: o.task, label: o.label ?? null });
 	const out = new Map<string, Resource>();
 	const used = new Set<MachineOwner>();
 	for (const r of rows ?? []) {
@@ -194,13 +268,13 @@ export function joinResources(name: string, rows: VmInfo[] | null, owners: Machi
 			used.add(o);
 			state = o.workerState === "draining" ? "stopping" : o.workerState === "provisioning" ? "starting" : providerState(r.state);
 		} else state = owners === null ? "unknown" : providerState(r.state) === "stopping" ? "stopping" : "orphaned";
-		out.set(r.name, { id: r.name, kind: "machine", state, owner: o ? ownerOf(o) : null, createdAt: ts(r.createdAt ?? o?.createdAt), deleteAfter: ts(r.deleteAt), actions: actions(state) });
+		out.set(r.name, { id: r.name, kind: "machine", state, owner: o ? ownerOf(o) : null, createdAt: ts(r.createdAt ?? o?.createdAt), deleteAfter: ts(r.deleteAt), actions: actions(state, o) });
 	}
 	for (const o of mine) {
 		if (used.has(o) || !o.name || !isMachineId(o.name) || out.has(o.name)) continue;
 		const state: ResourceState | null = o.workerState === "provisioning" ? "starting" : rows === null ? "unknown" : null;
 		if (!state) continue; // the provider listed its machines and this one isn't there: gone
-		out.set(o.name, { id: o.name, kind: "machine", state, owner: ownerOf(o), createdAt: ts(o.createdAt), deleteAfter: null, actions: actions(state) });
+		out.set(o.name, { id: o.name, kind: "machine", state, owner: ownerOf(o), createdAt: ts(o.createdAt), deleteAfter: null, actions: actions(state, o) });
 	}
 	return [...out.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
@@ -213,7 +287,8 @@ export function joinResources(name: string, rows: VmInfo[] | null, owners: Machi
  */
 export function terminalCommandFor(name: string, r: Resource): string | null {
 	if (!r.actions.includes("open_terminal") || !isListedProvider(name) || !isMachineId(r.id)) return null;
-	if (r.owner && SAFE_ID.test(r.owner.runId) && SAFE_ID.test(r.owner.agentId)) return `capcomd sandbox shell ${r.owner.runId} ${r.owner.agentId}`;
+	if (r.owner && r.owner.kind !== "agent") return null;
+	if (r.owner?.runId && r.owner.agentId && SAFE_ID.test(r.owner.runId) && SAFE_ID.test(r.owner.agentId)) return `capcomd sandbox shell ${r.owner.runId} ${r.owner.agentId}`;
 	return `capcomd sandbox shell --sandbox ${name} --machine ${r.id}`;
 }
 
@@ -292,19 +367,46 @@ export function resourceCatalog(deps: ResourceDeps) {
 
 // ---- The whole surface, as a HarnessSource implements it ----
 export interface SurfaceDeps extends ResourceDeps {
+	/** capcomd's environment (CAPCOMD_SANDBOX_IDLE_SECONDS, CAPCOMD_AGENT_CHECKPOINT_MS); default process.env. */
 	env?: Env;
 	/** GET /v1/logins (all places): the Logins info row summarizes it. */
 	logins(): Promise<LoginLike[]>;
 	/** Whether a listed place can be used now and is the daemon's default (as GET /v1/run-options says). */
 	availability(name: ListedProvider): Promise<{ available: boolean; reason: string | null; default: boolean }>;
-	/** The idle lifetime agents' machines get (seconds). */
-	idleLifetimeSeconds: number;
+	/** Where provider settings are kept (the user config). */
+	settings: SettingsStore;
 }
 export function sandboxSurface(deps: SurfaceDeps) {
 	const catalog = resourceCatalog(deps);
+	const env = () => deps.env ?? process.env;
+	const detail = async (name: ListedProvider) => sandboxDetail(name, { env: env(), logins: await deps.logins(), idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable() })!;
 	return {
 		sandboxes: async (): Promise<SandboxSummary[]> => Promise.all(LISTED_PROVIDERS.map(async (n) => ({ ...servedDescriptor(PROVIDERS[n]), ...(await deps.availability(n)) }))),
-		sandbox: async (name: string): Promise<SandboxDetail | null> => (isListedProvider(name) ? sandboxDetail(name, { ...(deps.env ? { env: deps.env } : {}), logins: await deps.logins(), idleLifetimeSeconds: deps.idleLifetimeSeconds }) : null),
+		sandbox: async (name: string): Promise<SandboxDetail | null> => (isListedProvider(name) ? detail(name) : null),
+		/**
+		 * PATCH /v1/sandboxes/{name}/settings: checks the change against the fields as they are now and stores it in the
+		 * user config. The check and the write run with no await between them, so two requests with the same rev can't
+		 * both pass. `changes` lists what really changed (a value sent as it already was isn't a change).
+		 */
+		updateSandboxSettings: async (name: string, patch: SettingsPatch): Promise<SettingsOutcome> => {
+			if (!isListedProvider(name)) return { ok: false, status: 404, code: "not_found", message: `sandbox ${name.slice(0, 64)} not found` };
+			const logins = await deps.logins();
+			const build = () => sandboxDetail(name, { env: env(), logins, idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable() })!;
+			const before = build();
+			const checked = checkSettingsPatch(before, patch);
+			if (!checked.ok) return checked;
+			const changes: SettingChange[] = [];
+			for (const w of checked.writes) {
+				// A value stored as the field shows it now (from the default or the config) is still written, so the
+				// choice is the user's from now on; it's a change only when the value differs.
+				try { deps.settings.write(name, w.field.id as "idleLifetime", Number(w.value)); } catch (e) {
+					if (e instanceof ConfigFileError) return { ok: false, status: 422, code: "invalid", message: e.message };
+					throw e;
+				}
+				if (w.field.value !== w.value) changes.push({ id: w.field.id, from: w.field.value, to: w.value });
+			}
+			return { ok: true, detail: build(), changes };
+		},
 		sandboxResources: (name: string, o: { limit?: number; cursor?: string } = {}) => catalog.page(name, o),
 		sandboxResource: (name: string, id: string) => catalog.get(name, id),
 	};

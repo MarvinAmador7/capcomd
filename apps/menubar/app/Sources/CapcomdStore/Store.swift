@@ -61,6 +61,11 @@ public final class CapcomdStore {
   public internal(set) var sandboxList: Fetched<[SandboxDescriptor]>?
   public internal(set) var sandboxDetails: [String: Fetched<SandboxDetail>] = [:]
   public internal(set) var sandboxResources: [String: Fetched<ResourcePage>] = [:]
+  /// Place settings being changed or that failed to change (`PATCH …/settings`), by `SettingEdit.key(place, id)`.
+  public internal(set) var settingEdits: [String: SettingEdit] = [:]
+  /// A settings change answered 403: this app's token lacks the `configure` scope, so settings stay read-only for as
+  /// long as this store (and so this token) lives.
+  public internal(set) var configureDenied = false
   var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
 
   let subscriber: StreamSubscribing?
