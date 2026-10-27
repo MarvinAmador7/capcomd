@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a client on the daemon or project event stream (the menu bar app) could overload the engine until `capcomd
+  serve` gave up on it ("engine on :6420 stopped answering") when the daemon's state remembered runs its run list no
+  longer shows. Each such run is now checked once instead of twice a second, the stream never starts a new check
+  before the last one finished, and reading a run's events no longer creates an empty run on the engine.
+- Fix: `capcomd serve` now stops the Durable Streams services process (port 8642) when it exits, including when its
+  watchdog stops it. It used to keep running, hold the port so the next `capcomd serve` couldn't start its own, and
+  attach itself to that daemon's engine.
+
 - Menu bar app: the send button is always white (its arrow dims while there's nothing to send), and the panel grows
   wider when the controls under the goal need the room, instead of spilling past its edge.
 - Menu bar app: choose how a new project runs. Under the goal, a two-icon switch (laptop or cloud) picks where its

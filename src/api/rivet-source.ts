@@ -20,6 +20,9 @@ import { RUN_REPO_KV } from "../merge/run-config";
 const lower = (p: string | null) => (p ? p.toLowerCase() : null);
 const cap = (t: string) => (Buffer.byteLength(t) <= INLINE_TEXT_MAX_BYTES ? t : Buffer.from(t).subarray(0, INLINE_TEXT_MAX_BYTES).toString("utf8").replace(/\uFFFD+$/, ""));
 const scope = (runId: string) => client().scope.getOrCreate([runId]);
+/** A run's scope only when it already exists: reading a run's log must never create an empty scope actor (a stream
+ * probing hundreds of runs this engine never had created hundreds of actors). A missing scope reads as no events. */
+const existingScope = (runId: string) => (client().scope as any).get([runId]) as ReturnType<typeof scope>;
 /** Thread items in actor calls of at most ITEMS_PER_CALL rows (an item can be ~150 KB; a call answers at most 8 MB). */
 const ITEMS_PER_CALL = 25;
 async function itemsAfter(runId: string, after: number, limit: number, agentId?: string): Promise<any[]> {
@@ -82,7 +85,7 @@ export function rivetSource(): HarnessSource {
 				};
 			});
 		},
-		events: async (runId, after) => (await scope(runId).getEvents({ since: after }).catch(() => [])) as any,
+		events: async (runId, after) => (await existingScope(runId).getEvents({ since: after }).catch(() => [])) as any,
 		transcript: async (runId, agentId, after, limit) => {
 			const a = await scope(runId).getAgent({ agentId }).catch(() => null);
 			if (!a) return null;

@@ -52,6 +52,10 @@ export function harnessApp(o: ServerOptions) {
 	// runs.create: (clientId, key) → in-flight start.
 	type Outcome = { status: number; body: object };
 	const creating = new Map<string, { hash: string; done: Promise<Outcome> }>();
+	// Daemon/project streams: known runs missing from the list whose log was already read for run.deleted. Each is read
+	// once per daemon (again only after it is listed and then missing again), never on every 500ms tick: a state file
+	// holding hundreds of runs this daemon doesn't list (another ledger's) turned every tick into hundreds of actor calls.
+	const deletionChecked = new Set<string>();
 
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
@@ -354,13 +358,25 @@ export function harnessApp(o: ServerOptions) {
 				ctl.enqueue(enc.encode(": connected\n\n"));
 				if (!scope.startsWith("run-")) {
 					// daemon and project scopes: run.created per run; seq is the run's persisted seq (stable across deletes/ties).
-					let seen = last ?? 0;
+					let seen = last ?? 0, busy = false;
 					const tick = async () => {
+						// One tick at a time: a slow engine must not stack a new tick (and its actor calls) every pollMs.
+						if (busy || closed) return;
+						busy = true;
+						try { await daemonTick(); } finally { busy = false; }
+					};
+					const daemonTick = async () => {
 						const all = await src.runs();
 						const seqOf = state.seqs(all);
 						// Drop a seq only on a confirmed deletion (run.deleted in the run's log), never because the list came back short.
 						const listed = new Set(all.map((r) => r.id));
-						for (const id of state.knownRuns()) if (!listed.has(id) && (await src.events(id, 0).catch(() => [])).some((e) => e.type === "run.deleted" || e.type === "RUN_DELETED")) state.runDeleted(id);
+						for (const id of listed) deletionChecked.delete(id);
+						for (const id of state.knownRuns()) {
+							if (closed) return;
+							if (listed.has(id) || deletionChecked.has(id)) continue;
+							deletionChecked.add(id);
+							if ((await src.events(id, 0).catch(() => [])).some((e) => e.type === "run.deleted" || e.type === "RUN_DELETED")) state.runDeleted(id);
+						}
 						const runs = [...all].sort((a, b) => seqOf.get(a.id)! - seqOf.get(b.id)!);
 						let top = seen;
 						const out: Array<{ event: string; data: unknown; seq: number }> = [];
