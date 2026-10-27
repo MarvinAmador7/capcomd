@@ -132,7 +132,8 @@ public final class CapcomdStore {
     let withHistory = Set(run.steps.filter { $0.id.hasPrefix("step:") }.compactMap(\.agentId))
     var out: [Step] = [], live: [String: Step] = [:]
     for s in run.steps {
-      guard s.kind == .agent, let aid = s.agentId, let a = run.agents[aid] else { out.append(s); continue }
+      // The agent's own row, by id: a step of kind .agent (it started or waited for a sub-agent) is history, not it.
+      guard s.id.hasPrefix("agent:"), let aid = s.agentId, let a = run.agents[aid] else { out.append(s); continue }
       var s = s
       if let act = a.activity { s.text = act; s.kind = StepKind(activityKind: a.activityKind) }
       else if let t = a.task?.firstLine, !t.isEmpty { s.text = t }
