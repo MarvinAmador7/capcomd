@@ -208,7 +208,9 @@ struct RecentRow: View {
   var body: some View {
     let run = project.latestRun
     let root = run.flatMap { r in r.agents.values.filter { $0.parent == nil }.min { ($0.spawnedAtMs, $0.id) < ($1.spawnedAtMs, $1.id) } }
+    // A run that never had agents still gets a bot, seeded by the run: a blank tile read as a broken image.
     let bot = run.flatMap { r in root.flatMap { model.bot(runId: r.id, agentId: $0.id) } }
+      ?? run.flatMap { botTeam([(seed: $0.id, role: "planner")]).first }
     Button { if let run { model.open(run: run.id) } } label: {
       HStack(spacing: 12) {
         BotAvatar(traits: bot, size: .small)
