@@ -10,12 +10,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   the goal in large text, and a round white button starts it. Writing to an agent works the same way, with the agent
   shown as a chip with its bot and buttons for @ mentions and / skills. Finished projects show as "Recent" rows with
   their bot, and ⌘1, ⌘2 and ⌘3 open the first three.
+- Menu bar app: the panel no longer has a footer bar; it ends with your projects. A run's Pause, Stop and Open in
+  terminal bar is unchanged.
 - Menu bar app: two small moments with the bots. When a run starts, its card first introduces the team for a few
   seconds: the planner waves over the agents it spawns, each with its bot's name. When a run finishes successfully,
   its card shows the team cheering for a couple of seconds, in party hats and confetti, before it becomes the finished
   line. Failed or stopped runs don't celebrate; with Reduce Motion the team simply fades in.
 - Menu bar app: on macOS 26 and later the panel's controls (the project field, the message box, Back, Approve and
-  Deny, the footer) use Liquid Glass; earlier macOS versions keep today's look. Approval notifications now show the
+  Deny, a run's Pause and Stop bar) use Liquid Glass; earlier macOS versions keep today's look. Approval notifications now show the
   waiting agent's bot and have Approve and Deny buttons, so you can decide without opening the panel. Clicking Approve
   or Deny gives a light trackpad tap. With Increase Contrast, cards get a clear border; with Reduce Transparency, the
   panel is drawn solid.

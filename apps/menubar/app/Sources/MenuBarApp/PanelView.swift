@@ -9,7 +9,6 @@ struct PanelView: View {
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var listContent: CGFloat = 0
-  @State private var footerHeight: CGFloat = 0
 
   /// The visible screen's content height, clamped to Theme.Panel and the screen.
   private var panelHeight: CGFloat {
@@ -57,11 +56,8 @@ struct PanelView: View {
           ForEach(Array(finished.enumerated()), id: \.element.id) { i, p in RecentRow(project: p, index: i + 1).transition(.opacity) }
         }
         .padding(Theme.Card.listPadding)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listContent = $0; model.listHeight = listContent + footerHeight }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listContent = $0; model.listHeight = listContent }
         .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map { "\($0.id)\($0.isActive)\(model.celebrating($0) != nil)" })
-      }
-      .safeAreaInset(edge: .bottom) {
-        footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0; model.listHeight = listContent + footerHeight }
       }
       // macOS keeps the root under a pushed view, and pushed views are clear (a material would only blur the list
       // behind it), so the list steps out entirely while anything is pushed.
@@ -90,24 +86,6 @@ struct PanelView: View {
     .clipShape(RoundedRectangle(cornerRadius: Theme.Panel.radius, style: .continuous))
     .animation(Theme.Motion.push(reduceMotion), value: model.path)   // keyboard back (⌘[) runs in a no-animation transaction
     }
-  }
-
-  /// v5-a-final `.ft`: a `.bar` material under a hairline, so cards scrolling beneath blur instead of showing through.
-  private var footer: some View {
-    // Composer board footer, keycap style. A global summon key needs our own status item (MenuBarExtra can't be opened
-    // programmatically), so the footer shows the shortcuts that work today.
-    HStack(spacing: 6) {
-      KeyCap(text: "⌘"); KeyCap(text: "K")
-      Text("to start a project").font(Theme.Footer.font).foregroundStyle(Theme.Footer.hintText)
-      Spacer(minLength: 0)
-      Text("Open capcomd ↗").font(Theme.Footer.font).foregroundStyle(Theme.Footer.text)
-    }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel("Command K starts a project. Open capcomd")
-    .padding(.horizontal, Theme.Footer.paddingHorizontal).padding(.vertical, Theme.Footer.paddingVertical)
-    .frame(maxWidth: .infinity)
-    .background(ControlSurface(shape: Rectangle(), fallback: Theme.Footer.material))
-    .overlay(alignment: .top) { DitherLine() }   // Polish board, item 5
   }
 }
 
