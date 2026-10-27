@@ -178,6 +178,14 @@ public struct Run: Sendable, Hashable, Identifiable {
   }
   /// For ordering: the latest thing known about it.
   public var recencyMs: Int { max(lastEventMs, endedAtMs ?? 0, startedAtMs ?? 0) }
+  /// How it ended, in words, once it has: "Done in 4m", "Failed after 12m", "Stopped after 30s" (no time when the start
+  /// or end isn't known). Nil while active.
+  public var endedHead: String? {
+    guard !isActive else { return nil }
+    let took = startedAtMs.flatMap { s in endedAtMs.flatMap { e in e >= s ? shortDuration(ms: e - s) : nil } }
+    let verb: (String, String) = switch outcome { case .failed: ("Failed", "after"); case .stopped: ("Stopped", "after"); default: ("Done", "in") }
+    return took.map { "\(verb.0) \(verb.1) \($0)" } ?? verb.0
+  }
 }
 
 /// "45s", "4m", "1h 5m", "3d": the finished row's duration.
@@ -211,10 +219,7 @@ public struct Project: Sendable, Hashable, Identifiable {
   /// The finished row's trailing text (v5-a-final): how its latest run ended and how long it took, then its folders.
   /// "Done in 4m · 3 repos", "Failed after 12m", "Stopped". Nil while active.
   public var endedLine: String? {
-    guard !isActive, let last = latestRun else { return nil }
-    let took = endedDurationMs.map { shortDuration(ms: $0) }
-    let verb: (String, String) = switch last.outcome { case .failed: ("Failed", "after"); case .stopped: ("Stopped", "after"); default: ("Done", "in") }
-    let head = took.map { "\(verb.0) \(verb.1) \($0)" } ?? verb.0
+    guard !isActive, let head = latestRun?.endedHead else { return nil }
     let n = scopes.count
     return n == 0 ? head : "\(head) · \(n) \(n == 1 ? "repo" : "repos")"
   }
