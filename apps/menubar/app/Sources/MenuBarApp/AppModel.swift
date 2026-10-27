@@ -27,7 +27,9 @@ final class AppModel {
   var path: [Route] = []
   /// No Keychain token yet (first launch) or the daemon answered 401: the panel shows the token prompt.
   private(set) var tokenMissing: Bool
-  var needsToken: Bool { _ = revision; return tokenMissing || store.unauthorized }
+  /// The Keychain read is still out (macOS may be asking whether this build can read the token).
+  private(set) var tokenPending = false
+  var needsToken: Bool { _ = revision; return !tokenPending && (tokenMissing || store.unauthorized) }
 
   enum Route: Hashable { case run(String), thread(runId: String, agentId: String) }
 
@@ -93,15 +95,31 @@ final class AppModel {
     return (t, agentId)
   }
 
+  /// The model at once, connecting when the token arrives. The Keychain read runs off the main thread: macOS can hold
+  /// it on an "allow access" prompt (a new build's signature), and the menu bar item must show meanwhile.
+  /// `CAPCOMD_TOKEN` in the environment wins (development and UI tests, so a rebuild doesn't need a Keychain prompt).
   static func live() -> AppModel {
     Notifier.requestAuthorization()
     if Notifier.available { ApprovalNotifications.register() }
-    guard let token = Keychain.token(), !token.isEmpty else {
-      return AppModel(makeStore(token: ""), tokenMissing: true)   // not started: nothing to authenticate with
-    }
-    let m = AppModel(makeStore(token: token)); m.store.start()
+    let m = AppModel(makeStore(token: ""), tokenMissing: false)   // not started until the token is in
+    m.tokenPending = true
     ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
+    if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { m.connect(token: env); return m }
+    Task.detached(priority: .userInitiated) {
+      let token = Keychain.token()
+      await MainActor.run { m.connect(token: token) }
+    }
     return m
+  }
+
+  /// Starts with `token`, or asks for one when there is none.
+  private func connect(token: String?) {
+    tokenPending = false
+    guard let token, !token.isEmpty else { tokenMissing = true; revision &+= 1; return }
+    let old = transport
+    Task { try? await old.shutdown() }   // the placeholder's client must be shut down, not dropped (06db2b8)
+    let (s, t) = Self.makeStore(token: token); store = s; transport = t; attach(s)
+    tokenMissing = false; s.start(); revision &+= 1
   }
 
   /// Saves the pasted token (generic password, service "capcomd", account NSUserName()) and reconnects with it.

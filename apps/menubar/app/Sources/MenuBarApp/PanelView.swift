@@ -27,7 +27,16 @@ struct PanelView: View {
 
   var body: some View {
     @Bindable var model = model
-    if model.needsToken {
+    if model.tokenPending {
+      // macOS may be asking whether this build can read capcomd's token from the Keychain.
+      VStack(spacing: 8) {
+        ProgressView().controlSize(.small)
+        Text("Waiting for Keychain access…").font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)
+        Text("If macOS asks whether capcomd can use its token, choose Always Allow.").font(Theme.Composer.errorFont)
+          .foregroundStyle(Theme.Composer.kbdText).multilineTextAlignment(.center)
+      }
+      .padding(24).frame(width: Theme.panelWidth).background(.ultraThinMaterial)
+    } else if model.needsToken {
       TokenPrompt(rejected: model.store.unauthorized)
         .frame(width: Theme.panelWidth).background(.ultraThinMaterial)
     } else {
