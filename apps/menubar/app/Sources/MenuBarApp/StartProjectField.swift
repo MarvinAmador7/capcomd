@@ -14,16 +14,22 @@ struct StartProjectField: View {
   var body: some View {
     let state = model.startState
     let starting = state == .starting
+    let ready = !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !starting
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: Theme.Composer.panelGap) {
-        Image(systemName: "plus").font(Theme.Composer.plusIcon).foregroundStyle(Theme.Composer.plusText)
-          .accessibilityHidden(true)
-        // macOS draws a TextField prompt in its own tertiary grey; the mockup's placeholder is white 40 %.
-        TextField("", text: $goal)
-          .textFieldStyle(.plain).font(Theme.Composer.panelFont).foregroundStyle(Theme.Composer.text)
-          .background(alignment: .leading) {
-            if goal.isEmpty { Text("Start a project…").font(Theme.Composer.panelFont).foregroundStyle(Theme.Composer.placeholder).allowsHitTesting(false) }
+      // Composer board: the panel's centrepiece. Context chips, large text, a tool row, the white send.
+      VStack(alignment: .leading, spacing: Theme.Composer2.gap) {
+        HStack(spacing: Theme.Composer2.chipGap) {
+          folderChip
+          Spacer(minLength: 0)
+          if !focused && !starting { KeyCap(text: "⌘K").accessibilityHidden(true) }
+        }
+        TextField("", text: $goal, axis: .vertical)
+          .textFieldStyle(.plain).font(Theme.Composer2.projectFont).tracking(Theme.Composer2.projectTracking)
+          .foregroundStyle(Theme.Composer.text).lineLimit(1...4)
+          .background(alignment: .topLeading) {
+            if goal.isEmpty { Text("Describe a project for your agents…").font(Theme.Composer2.projectFont).foregroundStyle(Theme.Composer.placeholder).allowsHitTesting(false) }
           }
+          .padding(.horizontal, Theme.Composer2.textInset)
           .focused($focused).disabled(starting)
           .onSubmit(submit)
           .onKeyPress(.escape) {
@@ -31,23 +37,15 @@ struct StartProjectField: View {
             focused = false; return .handled
           }
           .accessibilityLabel("Start a project")
-        if starting {
-          ProgressView().controlSize(.small).accessibilityLabel("Starting")
-        } else if !focused {
-          Text(verbatim: "⌘K").font(Theme.Composer.kbdFont).foregroundStyle(Theme.Composer.kbdText)
-            .padding(Theme.Composer.kbdPadding)
-            .overlay(RoundedRectangle(cornerRadius: Theme.Composer.kbdRadius, style: .continuous).strokeBorder(Theme.Composer.kbdStroke, lineWidth: 0.5))
-            .accessibilityHidden(true)
+        HStack(spacing: Theme.Composer2.chipGap) {
+          addMenu
+          Spacer(minLength: 0)
+          if starting { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
+          SendCircle(ready: ready, stop: false, label: "Start project", action: submit)
         }
       }
-      .padding(.horizontal, Theme.Composer.panelPadding)
-      .frame(height: Theme.Composer.panelHeight)
-      .background {
-        let shape = RoundedRectangle(cornerRadius: Theme.Composer.panelRadius, style: .continuous)
-        ControlSurface(shape: shape, fallback: focused ? Theme.Composer.focusedFill : Theme.Composer.fill)
-          .overlay(shape.strokeBorder(Theme.Composer.focusedStroke, lineWidth: Theme.Composer.focusedStrokeWidth).opacity(focused ? 1 : 0))
-          .background(shape.stroke(Theme.Composer.ring, lineWidth: Theme.Composer.ringWidth).padding(-Theme.Composer.ringWidth / 2).opacity(focused ? 1 : 0))
-      }
+      .padding(Theme.Composer2.padding)
+      .background { ComposerCard(focused: focused) }
       .contentShape(Rectangle())
       .onTapGesture { focused = true }
       .background { keyboardOnly("k") { focused = true } }
@@ -60,6 +58,32 @@ struct StartProjectField: View {
       }
       line(state)
     }
+  }
+
+  /// Where the run goes: the remembered project checkout (× forgets it), else the daemon's default project.
+  @ViewBuilder private var folderChip: some View {
+    if let repo = model.startRepo {
+      Chip2(icon: "folder", text: (repo as NSString).lastPathComponent, onRemove: { model.startRepo = nil })
+        .help(repo)
+    } else {
+      Button { if let f = ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f } } label: {
+        Chip2(icon: "folder", text: "Default project", onRemove: nil)
+      }
+      .buttonStyle(.plain).help("capcomd's default project; click to choose a checkout")
+    }
+  }
+
+  private var addMenu: some View {
+    Menu {
+      Button("Choose Project Folder…") { if let f = ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f } }
+      if model.startRepo != nil { Button("Use the Default Project") { model.startRepo = nil } }
+    } label: {
+      Image(systemName: "plus").font(Theme.Composer2.plusFont).foregroundStyle(.white)
+        .frame(width: Theme.Composer2.round, height: Theme.Composer2.round)
+        .background(Circle().fill(Theme.Composer2.roundFill)).overlay(Circle().strokeBorder(Theme.Composer2.roundStroke, lineWidth: 0.5))
+    }
+    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+    .accessibilityLabel("Add")
   }
 
   @ViewBuilder private func line(_ state: StartState) -> some View {
@@ -86,12 +110,82 @@ struct StartProjectField: View {
 
 /// Asks for a project checkout (a folder `capcomd setup project` ran in) when the daemon has no default repository.
 enum ProjectFolderPicker {
-  @MainActor static func choose() -> String? {
+  @MainActor static func choose(prompt: String = "capcomd has no default repository. Choose the project's checkout.") -> String? {
     let p = NSOpenPanel()
     p.canChooseDirectories = true; p.canChooseFiles = false; p.allowsMultipleSelection = false
-    p.prompt = "Use This Project"; p.message = "capcomd has no default repository. Choose the project's checkout."
+    p.prompt = "Use This Project"; p.message = prompt
     NSApp.activate(ignoringOtherApps: true)
     return p.runModal() == .OK ? p.url?.path : nil
+  }
+}
+/// Composer board: the 20 pt composer card (glass on macOS 26+), its inner hairline and the soft blue focus ring.
+struct ComposerCard: View {
+  let focused: Bool
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: Theme.Composer2.radius, style: .continuous)
+    ControlSurface(shape: shape, fallback: Theme.Composer2.fill)
+      .overlay(shape.strokeBorder(Theme.Composer2.stroke, lineWidth: 0.5))
+      .background(shape.stroke(Theme.Composer2.ring, lineWidth: Theme.Composer2.ringWidth).padding(-Theme.Composer2.ringWidth / 2).opacity(focused ? 1 : 0))
+  }
+}
+
+/// A context chip: icon or bot, text, an optional ×.
+struct Chip2<Leading: View>: View {
+  let leading: Leading
+  let text: String
+  var mono = false
+  var tint: Color? = nil
+  let onRemove: (() -> Void)?
+  var body: some View {
+    HStack(spacing: Theme.Composer2.chipInnerGap) {
+      leading
+      Text(verbatim: text).font(mono ? Theme.Composer2.chipMono : Theme.Composer2.chipFont).lineLimit(1)
+      if let onRemove {
+        Button(action: onRemove) { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
+          .buttonStyle(.plain).accessibilityLabel("Remove \(text)")
+      }
+    }
+    .foregroundStyle(tint ?? .white)
+    .padding(.horizontal, Theme.Composer2.chipPadding).frame(height: Theme.Composer2.chipHeight)
+    .background(Capsule().fill(tint.map { $0.opacity(0.16) } ?? Theme.Composer2.chipFill))
+    .overlay(Capsule().strokeBorder(tint == nil ? Theme.Composer2.chipStroke : .clear, lineWidth: 0.5))
+  }
+}
+extension Chip2 where Leading == AnyView {
+  init(icon: String, text: String, mono: Bool = false, tint: Color? = nil, onRemove: (() -> Void)?) {
+    self.init(leading: AnyView(Image(systemName: icon).font(.system(size: 11))), text: text, mono: mono, tint: tint, onRemove: onRemove)
+  }
+}
+
+/// The white round send (Composer board); the stop square while the agent works; dim when there's nothing to send.
+struct SendCircle: View {
+  let ready: Bool
+  let stop: Bool
+  let label: String
+  let action: () -> Void
+  var body: some View {
+    Button(action: action) {
+      ZStack {
+        Circle().fill(ready || stop ? Color.white : Theme.Composer2.roundFill)
+        if stop { RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(Color.black).frame(width: 9, height: 9) }
+        else { Image(systemName: "arrow.up").font(Theme.Composer2.sendIcon).foregroundStyle(ready ? Color.black : Color.white.opacity(0.5)) }
+      }
+      .frame(width: Theme.Composer2.send, height: Theme.Composer2.send)
+      .shadow(color: .black.opacity(ready || stop ? 0.35 : 0), radius: 6, y: 3)
+    }
+    .buttonStyle(PressableStyle())
+    .disabled(!(ready || stop))
+    .accessibilityLabel(label)
+  }
+}
+
+/// A keycap (⌘K, ⌥, Space).
+struct KeyCap: View {
+  let text: String
+  var body: some View {
+    Text(verbatim: text).font(Theme.Composer2.keyFont).foregroundStyle(Theme.Composer2.keyText)
+      .padding(.horizontal, 6).padding(.vertical, 2)
+      .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Theme.Composer2.keyStroke, lineWidth: 0.5))
   }
 }
 #endif

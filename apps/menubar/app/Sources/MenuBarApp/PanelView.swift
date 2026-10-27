@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
 import CapcomdStore
+import CapcomdBot
 
 /// MenuBarExtra panel: project cards (SPEC §4.1). 380 pt wide on a HUD material.
 struct PanelView: View {
@@ -49,7 +50,11 @@ struct PanelView: View {
               .padding(.vertical, Theme.Finished.paddingVertical).padding(.horizontal, Theme.Finished.paddingHorizontal)
           }
           // Finished and failed projects leave the Active cards: the latest few stay as one-line rows.
-          ForEach(finished) { p in FinishedRow(project: p).transition(.opacity) }
+          if !finished.isEmpty {
+            Text("Recent").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
+              .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
+          }
+          ForEach(Array(finished.enumerated()), id: \.element.id) { i, p in RecentRow(project: p, index: i + 1).transition(.opacity) }
         }
         .padding(Theme.Card.listPadding)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listContent = $0; model.listHeight = listContent + footerHeight }
@@ -74,20 +79,31 @@ struct PanelView: View {
     .transaction(value: panelHeight) { $0.animation = nil }   // layout changes snap (SPEC §7); only content fades
     // MenuBarExtra(.window) sizes its window once; resize it ourselves, top edge pinned under the menu bar.
     .background(PanelWindowSizer(height: panelHeight))
-    .background { if reduceTransparency { Theme.Craft.solidPanel } else { Rectangle().fill(.ultraThinMaterial) } }   // HUD vibrancy; solid with Reduce Transparency
+    // The container (Composer board): 26 pt continuous corners, our own material and hairline, clipped to the shape.
+    .background {
+      let shape = RoundedRectangle(cornerRadius: Theme.Panel.radius, style: .continuous)
+      ZStack {
+        if reduceTransparency { shape.fill(Theme.Craft.solidPanel) } else { shape.fill(.ultraThinMaterial) }
+        shape.strokeBorder(Theme.Panel.stroke, lineWidth: 0.5)
+      }
+    }
+    .clipShape(RoundedRectangle(cornerRadius: Theme.Panel.radius, style: .continuous))
     .animation(Theme.Motion.push(reduceMotion), value: model.path)   // keyboard back (⌘[) runs in a no-animation transaction
     }
   }
 
   /// v5-a-final `.ft`: a `.bar` material under a hairline, so cards scrolling beneath blur instead of showing through.
   private var footer: some View {
-    HStack(spacing: 0) {
-      Text("Open capcomd").font(Theme.Footer.font).foregroundStyle(Theme.Footer.text)
+    // Composer board footer, keycap style. A global summon key needs our own status item (MenuBarExtra can't be opened
+    // programmatically), so the footer shows the shortcuts that work today.
+    HStack(spacing: 6) {
+      KeyCap(text: "⌘"); KeyCap(text: "K")
+      Text("to start a project").font(Theme.Footer.font).foregroundStyle(Theme.Footer.hintText)
       Spacer(minLength: 0)
-      (Text("Summon ").font(Theme.Footer.font) + Text(verbatim: "⌥Space").font(Theme.Footer.monoFont))
-        .foregroundStyle(Theme.Footer.hintText)
-        .accessibilityLabel("Summon with Option Space")
+      Text("Open capcomd ↗").font(Theme.Footer.font).foregroundStyle(Theme.Footer.text)
     }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("Command K starts a project. Open capcomd")
     .padding(.horizontal, Theme.Footer.paddingHorizontal).padding(.vertical, Theme.Footer.paddingVertical)
     .frame(maxWidth: .infinity)
     .background(ControlSurface(shape: Rectangle(), fallback: Theme.Footer.material))
@@ -162,6 +178,51 @@ struct ProjectCard: View {
   }
 }
 
+/// A recent project (Composer board "Continue" rows): its planner's bot on a tile in the bot's palette, the goal, how it
+/// ended in words, and ⌘1–⌘3 to open it. No counts beyond the approved "· n repos".
+struct RecentRow: View {
+  @Environment(AppModel.self) private var model
+  let project: Project
+  let index: Int
+  @State private var hover = false
+  var body: some View {
+    let run = project.latestRun
+    let root = run.flatMap { r in r.agents.values.filter { $0.parent == nil }.min { ($0.spawnedAtMs, $0.id) < ($1.spawnedAtMs, $1.id) } }
+    let bot = run.flatMap { r in root.flatMap { model.bot(runId: r.id, agentId: $0.id) } }
+    Button { if let run { model.open(run: run.id) } } label: {
+      HStack(spacing: 12) {
+        BotAvatar(traits: bot, size: .small)
+          .frame(width: Theme.Composer2.tile, height: Theme.Composer2.tile)
+          .background(RoundedRectangle(cornerRadius: Theme.Composer2.tileRadius, style: .continuous).fill(Self.tile(bot)))
+          .overlay(RoundedRectangle(cornerRadius: Theme.Composer2.tileRadius, style: .continuous).strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5))
+        VStack(alignment: .leading, spacing: 2) {
+          Text(verbatim: project.title).font(Theme.Composer2.rowTitle).foregroundStyle(.white).lineLimit(1).truncationMode(.tail)
+          Text(verbatim: project.endedLine ?? "Done").font(Theme.Composer2.rowSub).foregroundStyle(Theme.Composer2.rowSubText).lineLimit(1)
+        }
+        Spacer(minLength: 0)
+        FinishSparkle(endedAtMs: run?.lastEventMs)
+        if index <= 3 { KeyCap(text: "⌘\(index)") }
+      }
+      .padding(Theme.Composer2.rowPadding)
+      .background(RoundedRectangle(cornerRadius: Theme.Composer2.rowRadius, style: .continuous).fill(hover ? Theme.Composer2.rowHover : .clear))
+      .contentShape(RoundedRectangle(cornerRadius: Theme.Composer2.rowRadius, style: .continuous))
+    }
+    .buttonStyle(PressableStyle())
+    .onHover { hover = $0 }
+    .keyboardShortcut(index <= 3 ? KeyEquivalent(Character("\(index)")) : KeyEquivalent(Character("0")), modifiers: index <= 3 ? .command : [.command, .option, .control, .shift])
+    .accessibilityLabel("\(project.title), \(project.endedLine ?? "done")")
+    .accessibilityHint("Opens the run")
+  }
+
+  /// The tile takes the bot's own body colours, darkened a touch so the bot reads on it.
+  static func tile(_ t: BotTraits?) -> LinearGradient {
+    let p = t.flatMap { try? BotCatalog.standard.part(.palette, $0.palette) }
+    let a = p?.colors?["body1"].flatMap(Color.init(hex:)) ?? Theme.Polish.brand
+    let b = p?.colors?["body2"].flatMap(Color.init(hex:)) ?? Theme.Polish.brand
+    return LinearGradient(colors: [a.opacity(0.85), b.opacity(0.85)], startPoint: .top, endPoint: .bottom)
+  }
+}
+
 /// Finished project (v5-a-final `.done`): its goal, then how its latest run ended and how long it took, and its folders
 /// ("Done in 4m · 3 repos"). Click opens that run.
 struct FinishedRow: View {
@@ -210,12 +271,29 @@ struct PanelWindowSizer: NSViewRepresentable {
     let h = height
     DispatchQueue.main.async {
       guard let window = view.window else { return }
+      PanelWindowSizer.makeClear(window)
       let content = window.contentRect(forFrameRect: window.frame)
       guard abs(content.height - h) > 0.5 else { return }
       var frame = window.frameRect(forContentRect: NSRect(x: content.minX, y: content.maxY - h, width: content.width, height: h))
       frame.origin.y = window.frame.maxY - frame.height   // pin the top
       window.setFrame(frame, display: true, animate: false)
+      window.invalidateShadow()   // the shadow follows our rounded container, not the window's rectangle
     }
   }
+
+  /// The container is ours (Composer board: 26 pt continuous corners): MenuBarExtra's window goes clear and its own
+  /// background view is hidden, so only the panel's rounded shape (and its shadow) shows.
+  static func makeClear(_ window: NSWindow) {
+    guard let host = window.contentView else { return }
+    window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true
+    // MenuBarExtra draws its own square-cornered backdrop (layers with no corner radius, filling the window) under ours.
+    for v in host.subviews where v.frame.size == host.bounds.size {
+      if let l = v.layer, l.cornerRadius == 0, l.backgroundColor != nil || String(describing: type(of: l)).contains("Backdrop") || String(describing: type(of: l)).contains("Chameleon") {
+        v.isHidden = true
+      }
+    }
+    window.invalidateShadow()
+  }
+
 }
 #endif

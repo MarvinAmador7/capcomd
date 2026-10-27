@@ -270,6 +270,8 @@ enum Theme {
     static let minHeight: CGFloat = 200          // an empty or loading screen doesn't collapse
     static let screenMargin: CGFloat = 48        // never taller than the screen's visible frame minus this
     static let initialHeight: CGFloat = 520      // until the first measurement lands
+    static let radius: CGFloat = 26              // Composer board: our own container, continuous corners
+    static let stroke = Color.white.opacity(0.16)
   }
   /// Agent thread input and steers (thread-panel-v2.html `.ib`, `.strm`, `.me`; skills-picker.html `.skp`, `.sk`;
   /// input-mention.html `.mpop`, `.mi`; input-with-skill.html `.chip`).
@@ -277,8 +279,8 @@ enum Theme {
     static let inputPadding = EdgeInsets(top: 7, leading: 8, bottom: 6, trailing: 6)
     static let inputMargin = EdgeInsets(top: 8, leading: 4, bottom: 0, trailing: 4)
     static let inputRadius: CGFloat = 10, inputGap: CGFloat = 6
-    static let inputFont = Font.system(size: 13), inputLine: CGFloat = 18, inputMaxLines = 6
-    static let lineSpacing: CGFloat = 2.5                  // 13 pt SF lines to the mockup's 18 pt line height
+    static let inputFont = Font.system(size: 15), inputLine: CGFloat = 21, inputMaxLines = 6   // Composer v2: 15 pt
+    static let lineSpacing: CGFloat = 3                    // 15 pt SF lines to 21 pt
     static let inputText = Color.white.opacity(0.92)
     static let inputPlaceholder = Color.white.opacity(0.38)
     static let button: CGFloat = 22, plusRadius: CGFloat = 6
@@ -399,6 +401,26 @@ enum Theme {
     static let ruleColor = Color.white.opacity(0.10), ruleMargin: CGFloat = 8
     static let mediaRadius: CGFloat = 8, mediaMaxHeight: CGFloat = 180, mediaStroke = Color.white.opacity(0.08)
     static let truncatedFont = Font.system(size: 11), truncatedText = label.opacity(0.4)
+  }
+  /// Composer v2 (canvas "Composer and container v2", after the owner's reference).
+  enum Composer2 {
+    static let radius: CGFloat = 20, padding = EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12), gap: CGFloat = 12
+    static let fill = Color.white.opacity(0.06), stroke = Color.white.opacity(0.12)
+    static let ring = Theme.accent.opacity(0.22), ringWidth: CGFloat = 3.5
+    static let projectFont = Font.system(size: 17), projectTracking: CGFloat = -0.17, textInset: CGFloat = 4
+    static let threadFont = Font.system(size: 15), threadLine: CGFloat = 21
+    static let chipHeight: CGFloat = 26, chipPadding: CGFloat = 9, chipGap: CGFloat = 8, chipInnerGap: CGFloat = 6
+    static let chipFont = Font.system(size: 12.5), chipMono = Font.system(size: 12, design: .monospaced)
+    static let chipFill = Color.white.opacity(0.08), chipStroke = Color.white.opacity(0.14), chipX = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55)
+    static let round: CGFloat = 30, roundFill = Color.white.opacity(0.08), roundStroke = Color.white.opacity(0.16), plusFont = Font.system(size: 14, weight: .regular)
+    static let pillHeight: CGFloat = 26, pillGroupFill = Color.black.opacity(0.22), pillText = Color.white.opacity(0.7), pillFont = Font.system(size: 12.5)
+    static let send: CGFloat = 32, sendIcon = Font.system(size: 13, weight: .bold)
+    static let keyFont = Font.system(size: 11.5, weight: .medium), keyText = Color.white.opacity(0.7), keyStroke = Color.white.opacity(0.25)
+    static let hintFont = Font.system(size: 11), hintText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.4)
+    // Recent rows (.continue)
+    static let tile: CGFloat = 34, tileRadius: CGFloat = 10, rowRadius: CGFloat = 14, rowPadding = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+    static let rowTitle = Font.system(size: 13.5, weight: .medium), rowSub = Font.system(size: 12)
+    static let rowSubText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55), rowHover = Color.white.opacity(0.07)
   }
   /// Identity moments (design/brand/moments.png): meet your team, run finished.
   enum Moments {

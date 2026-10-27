@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: a new look for the panel and for writing to agents. The panel has large rounded corners. Starting a
+  project is now a roomy box at the top: which project folder it goes to is a chip you can change or clear, you type
+  the goal in large text, and a round white button starts it. Writing to an agent works the same way, with the agent
+  shown as a chip with its bot and buttons for @ mentions and / skills. Finished projects show as "Recent" rows with
+  their bot, and ⌘1, ⌘2 and ⌘3 open the first three.
 - Menu bar app: two small moments with the bots. When a run starts, its card first introduces the team for a few
   seconds: the planner waves over the agents it spawns, each with its bot's name. When a run finishes successfully,
   its card shows the team cheering for a couple of seconds, in party hats and confetti, before it becomes the finished
