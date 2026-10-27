@@ -48,6 +48,17 @@ struct PanelView: View {
           let active = projects.filter { $0.isActive || model.celebrating($0) != nil }
           let finished = Array(projects.filter { !$0.isActive && model.celebrating($0) == nil }.prefix(Theme.Finished.maxRows))
           StartProjectField().padding(.top, Theme.Composer.sectionTop)
+          if model.daemonUnreachable {
+            // Quiet, not red: usually a restart. What's below is the last state the daemon sent.
+            HStack(spacing: 6) {
+              ProgressView().controlSize(.mini)
+              Text("Can't reach capcomd. Reconnecting…")
+            }
+            .font(Theme.Composer.errorFont).foregroundStyle(Theme.Composer.kbdText)
+            .padding(.horizontal, Theme.Composer.panelPadding).padding(.top, 6)
+            .accessibilityElement(children: .combine)
+            .transition(.opacity)
+          }
           Text("Active").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
             .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
           ForEach(active) { p in

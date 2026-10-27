@@ -182,6 +182,8 @@ final class AppModel {
   }
 
   var startState: StartState { _ = revision; return store.startState }
+  /// The daemon can't be reached right now (the app keeps retrying).
+  var daemonUnreachable: Bool { _ = revision; return store.daemonUnreachable }
   /// The project checkout new runs go to (remembered); nil: the daemon's default project.
   var startRepo: String? {
     get { _ = revision; return store.prefs.startRepo }

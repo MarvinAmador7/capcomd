@@ -46,6 +46,8 @@ public final class CapcomdStore {
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
   public internal(set) var capabilities: Set<String> = []
   public internal(set) var skills: Fetched<[SkillInfo]>?
+  /// The daemon feed can't connect (the daemon is down or restarting); it keeps retrying.
+  public internal(set) var daemonUnreachable = false
   /// Who can drive a new run and where it can run (`runs.options`); empty when the daemon can't be asked.
   public internal(set) var runOptions = RunOptions()
   var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
@@ -225,6 +227,9 @@ public final class CapcomdStore {
       cursor[scope] = n; return
     case .unauthorized:
       unauthorized = true
+    case .link(let up):
+      guard scope == "daemon", daemonUnreachable == up else { return }   // the panel follows the daemon feed only
+      daemonUnreachable = !up
     case .snapshotSteps(let st): pendingReset[scope, default: ResetBuffer()].steps += st; return
     case .snapshotThreads(let m): pendingReset[scope, default: ResetBuffer()].messages += m; return
     case .reset(let s, _):

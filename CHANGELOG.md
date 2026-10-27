@@ -6,7 +6,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 ## Unreleased
 
 - Menu bar app: the panel stays live. It used to stop updating after a while (a quiet connection was dropped, or the
-  daemon restarted) and kept showing old state; it now reconnects within a few seconds. Runs started elsewhere (the
+  daemon restarted) and kept showing old state; it now reconnects within a few seconds, and says "Can't reach capcomd. Reconnecting…" while the daemon is down. Runs started elsewhere (the
   CLI, another agent) appear as they start, with their agents, even with many runs around; before, past about seven
   runs, new ones showed no agents. An ended run's view no longer offers Pause and Stop. Agents you
   stopped show a grey stop mark instead of a red failure, and agents in the Activity list show their bots. When several agents

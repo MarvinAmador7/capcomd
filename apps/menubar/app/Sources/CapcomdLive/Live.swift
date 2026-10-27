@@ -33,11 +33,12 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
     let path = "/v1/streams/\(scope)/events" + (query.isEmpty ? "" : "?" + query.joined(separator: "&"))
     let h = Handle(); let t = transport, bo = backoff, cap = maxBackoff, idle = idleTimeout
     h.task = Task {
-      var last = after, attempts = 0
+      var last = after, attempts = 0, down = false
       while !Task.isCancelled {
         do {
           for try await item in t.sseItems(path, lastEventID: last > 0 ? String(last) : nil, idleTimeout: idle) {
             attempts = 0   // anything from the daemon, heartbeats included, means it's up
+            if down { down = false; await onFrame(.link(up: true)) }
             guard case .frame(let f) = item else { continue } // heartbeat: activity only
             let frame = StreamFrame.parse(event: f.event, data: f.data)
             if case .snapshotEnd(let s) = frame, f.id == nil { last = s }
@@ -51,6 +52,7 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
         } catch is CancellationError { return }
         catch { if Task.isCancelled { return } }
         attempts += 1
+        if attempts >= 2, !down { down = true; await onFrame(.link(up: false)) }   // not on one quick reconnect
         try? await Task.sleep(for: min(bo * attempts * attempts, cap))
       }
     }
