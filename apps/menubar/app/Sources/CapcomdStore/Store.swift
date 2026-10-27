@@ -46,7 +46,9 @@ public final class CapcomdStore {
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
   public internal(set) var capabilities: Set<String> = []
   public internal(set) var skills: Fetched<[SkillInfo]>?
-  var pendingStartKey: (goal: String, repo: String?, key: String)?
+  /// Who can drive a new run and where it can run (`runs.options`); empty when the daemon can't be asked.
+  public internal(set) var runOptions = RunOptions()
+  var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
 
   let subscriber: StreamSubscribing?
   let decider: ApprovalDeciding?
@@ -256,6 +258,7 @@ public final class CapcomdStore {
       ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
       ag.activityKind = a.activity?.kind
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
+      ag.provider = Provider(wire: a.provider) ?? old?.provider; ag.model = a.model ?? old?.model
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
     }
@@ -310,6 +313,8 @@ public final class CapcomdStore {
                     task: d["task"]?.string.map(UntrustedText.init), key: d["key"]?.string,
                     repo: d["workspace"]?["label"]?.string ?? d["repo"]?.string ?? d["agent"]?["repo"]?.string, spawnedAtMs: e.epochMs)
       a.taskAttachment = AttachmentRef(d["taskAttachment"])
+      a.provider = Provider(wire: d["agent"]?["provider"]?.string ?? d["agent"]?["kind"]?.string)
+      a.model = d["agent"]?["model"]?.string
       runs[runId]?.agents[id] = a
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
                                     phase: Self.phase(a.kind), text: a.displayName, detail: a.task, status: .queued))
@@ -398,12 +403,14 @@ public final class CapcomdStore {
         old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text; old.activityKind = a.activity?.kind
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
         old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs; old.repo = a.workspace?.label ?? old.repo
+        old.provider = Provider(wire: a.provider) ?? old.provider; old.model = a.model ?? old.model
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
                        task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: i, activity: a.activity?.text)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
         ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
+        ag.provider = Provider(wire: a.provider); ag.model = a.model
         runs[a.runId]?.agents[a.id] = ag
       }
     }

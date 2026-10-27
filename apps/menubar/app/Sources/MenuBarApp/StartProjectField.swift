@@ -37,12 +37,12 @@ struct StartProjectField: View {
             focused = false; return .handled
           }
           .accessibilityLabel("Start a project")
-        HStack(spacing: Theme.Composer2.chipGap) {
-          addMenu
-          Spacer(minLength: 0)
-          if starting { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
-          SendCircle(ready: ready, stop: false, label: "Start project", action: submit)
-        }
+        toolRow(ready: ready, starting: starting)
+          // Its natural width, measured on a hidden copy: the panel widens to fit rather than squeezing it.
+          .background(alignment: .leading) {
+            toolRow(ready: ready, starting: starting).fixedSize().hidden().allowsHitTesting(false).accessibilityHidden(true)
+              .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { model.composerRowWidth = $0 }
+          }
       }
       .padding(Theme.Composer2.padding)
       .background { ComposerCard(focused: focused) }
@@ -58,6 +58,7 @@ struct StartProjectField: View {
       }
       line(state)
     }
+    .task { await model.refreshDaemonInfo() }   // capabilities and drivers, for the driver chip
   }
 
   /// Where the run goes: the remembered project checkout (× forgets it), else the daemon's default project.
@@ -70,6 +71,87 @@ struct StartProjectField: View {
         Chip2(icon: "folder", text: "Default project", onRemove: nil)
       }
       .buttonStyle(.plain).help("capcomd's default project; click to choose a checkout")
+    }
+  }
+
+  private func toolRow(ready: Bool, starting: Bool) -> some View {
+    HStack(spacing: Theme.Composer2.chipGap) {
+      addMenu
+      sandboxSwitch
+      Spacer(minLength: 0)
+      driverChip   // who drives it sits by the send, like the reference's model menu
+      if starting { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
+      SendCircle(ready: ready, stop: false, label: "Start project", action: submit)
+    }
+  }
+
+  /// Where the run's agents work (owner's reference: the Web · Computer · Files group): Local (Docker on this Mac) or
+  /// VM (boxd), as the daemon offers them. The pick is remembered; one it can't use now is dimmed, with its reason.
+  @ViewBuilder private var sandboxSwitch: some View {
+    if let current = model.startSandbox, model.sandboxes.count > 1 {
+      HStack(spacing: 2) {
+        ForEach(model.sandboxes) { s in
+          let on = s.name == current.name
+          Button { model.pickSandbox(s.name) } label: {
+            // Icons only (owner's call); the name is the tooltip and what VoiceOver reads.
+            Image(systemName: s.name == "boxd" ? "cloud" : "laptopcomputer").font(Theme.Composer2.segmentIcon)
+              .foregroundStyle(on ? Color.white : Theme.Composer2.pillText)
+              .frame(width: Theme.Composer2.segmentWidth, height: Theme.Composer2.pillHeight)
+            .background {
+              if on {
+                Capsule().fill(Theme.Composer2.segmentOn)
+                  .overlay(Capsule().strokeBorder(Theme.Composer2.segmentOnStroke, lineWidth: 0.5))
+                  .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+              }
+            }
+            .contentShape(Capsule())
+          }
+          .buttonStyle(PressableStyle()).disabled(!s.available).opacity(s.available ? 1 : 0.4)
+          .help(s.available ? (s.name == "boxd" ? "\(s.label): agents run on boxd VMs" : "\(s.label): agents run in Docker on this Mac")
+                            : "\(s.label): \(s.reason ?? "unavailable")")
+          .accessibilityLabel(s.label).accessibilityAddTraits(on ? .isSelected : [])
+        }
+      }
+      .padding(3).background(Capsule().fill(Theme.Composer2.pillGroupFill))
+      .fixedSize()
+      .animation(Theme.Motion.fast, value: current.name)
+      .accessibilityElement(children: .contain).accessibilityLabel("Where it runs")
+    }
+  }
+
+  /// Who drives the run (the planner agent): Claude Code or Codex, as the daemon offers them (`runs.driver`). The
+  /// choice is remembered; a driver the daemon reports unavailable is listed, disabled, with its reason.
+  @ViewBuilder private var driverChip: some View {
+    if let current = model.startDriver, let provider = Provider(wire: current.provider) {
+      Menu {
+        Picker("Driver", selection: Binding(get: { current.provider }, set: { model.pickDriver($0) })) {
+          ForEach(model.drivers.filter(\.available)) { d in Text(verbatim: d.label + (d.model.map { " · \($0)" } ?? "")).tag(d.provider) }
+        }
+        .pickerStyle(.inline)
+        ForEach(model.drivers.filter { !$0.available }) { d in
+          Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true)
+        }
+        // Reasoning effort for the picked driver, lowest first; the bars show it on the chip.
+        if let levels = current.efforts, !levels.isEmpty {
+          Divider()
+          Picker("Effort", selection: Binding(get: { model.startEffort ?? EffortBars.auto }, set: { model.pickEffort($0 == EffortBars.auto ? nil : $0) })) {
+            // Auto: send nothing; the CLI picks (offered when the driver has no fixed default).
+            if current.effort == nil { Text("Auto").tag(EffortBars.auto) }
+            ForEach(Array(levels.enumerated()), id: \.element) { i, l in
+              Label { Text(verbatim: EffortBars.title(l)) } icon: { Image(systemName: "cellularbars", variableValue: EffortBars.value(i, of: levels.count)) }.tag(l)
+            }
+          }
+          .pickerStyle(.inline)
+        }
+      } label: {
+        let effort = model.startEffort, levels = current.efforts ?? []
+        Chip2(leading: ProviderMark(provider: provider, size: Theme.Provider.chipMark).foregroundStyle(ProviderMarks.badgeTint(provider)),
+              text: current.label, chevron: true, onRemove: nil,
+              trailing: effort.flatMap { levels.firstIndex(of: $0) }.map { AnyView(EffortBars(level: $0, of: levels.count)) })
+      }
+      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+      .help(([current.label, current.model, model.startEffort.map { "\(EffortBars.title($0)) effort" }] as [String?]).compactMap { $0 }.joined(separator: " · "))
+      .accessibilityLabel("Driver: \(current.label)" + (model.startEffort.map { ", \(EffortBars.title($0)) effort" } ?? ""))
     }
   }
 
@@ -135,11 +217,17 @@ struct Chip2<Leading: View>: View {
   let text: String
   var mono = false
   var tint: Color? = nil
+  /// A dropdown chip: a small chevron after the text.
+  var chevron = false
   let onRemove: (() -> Void)?
+  /// Shown after the text, before the chevron (the driver chip's effort bars).
+  var trailing: AnyView? = nil
   var body: some View {
     HStack(spacing: Theme.Composer2.chipInnerGap) {
       leading
       Text(verbatim: text).font(mono ? Theme.Composer2.chipMono : Theme.Composer2.chipFont).lineLimit(1)
+      if let trailing { trailing }
+      if chevron { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
       if let onRemove {
         Button(action: onRemove) { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
           .buttonStyle(.plain).accessibilityLabel("Remove \(text)")
@@ -153,7 +241,7 @@ struct Chip2<Leading: View>: View {
 }
 extension Chip2 where Leading == AnyView {
   init(icon: String, text: String, mono: Bool = false, tint: Color? = nil, onRemove: (() -> Void)?) {
-    self.init(leading: AnyView(Image(systemName: icon).font(.system(size: 11))), text: text, mono: mono, tint: tint, onRemove: onRemove)
+    self.init(leading: AnyView(Image(systemName: icon).font(.system(size: 11))), text: text, mono: mono, tint: tint, chevron: false, onRemove: onRemove)
   }
 }
 
@@ -166,17 +254,38 @@ struct SendCircle: View {
   var body: some View {
     Button(action: action) {
       ZStack {
-        Circle().fill(ready || stop ? Color.white : Theme.Composer2.roundFill)
+        // Always a white surface (owner's call); with nothing to send only the arrow dims.
+        Circle().fill(Color.white)
         if stop { RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(Color.black).frame(width: 9, height: 9) }
-        else { Image(systemName: "arrow.up").font(Theme.Composer2.sendIcon).foregroundStyle(ready ? Color.black : Color.white.opacity(0.5)) }
+        else { Image(systemName: "arrow.up").font(Theme.Composer2.sendIcon).foregroundStyle(Color.black.opacity(ready ? 1 : Theme.Composer2.sendArrowIdle)) }
       }
       .frame(width: Theme.Composer2.send, height: Theme.Composer2.send)
-      .shadow(color: .black.opacity(ready || stop ? 0.35 : 0), radius: 6, y: 3)
+      .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
     }
     .buttonStyle(PressableStyle())
     .disabled(!(ready || stop))
     .accessibilityLabel(label)
   }
+}
+
+/// Reasoning effort as signal bars (owner's pick, after the reference's "Deep" control): `cellularbars` filled to the
+/// level's place among the driver's levels, so 4 levels fill 1–4 bars and 3 levels 2–4.
+struct EffortBars: View {
+  let level: Int
+  let of: Int
+  var body: some View {
+    Image(systemName: "cellularbars", variableValue: Self.value(level, of: of))
+      .font(Theme.Composer2.effortFont).foregroundStyle(Theme.Composer2.effortText)
+      .accessibilityHidden(true)
+  }
+  /// The bar fill for level `i` of `n` (lowest first), spread over four bars: the top level fills all four; with more
+  /// than four levels the top two share four bars (Claude's xhigh and max).
+  static func value(_ i: Int, of n: Int) -> Double { n <= 1 ? 1 : Double(max(1, Int((Double(i + 1) * 4 / Double(n)).rounded(.up)))) / 4 }
+  static func title(_ level: String) -> String {
+    switch level { case "xhigh": "Extra high"; case "max": "Max"; default: level.prefix(1).uppercased() + level.dropFirst() }
+  }
+  /// The stored pick for "let the CLI choose".
+  static let auto = "auto"
 }
 
 /// A keycap (⌘K, ⌥, Space).

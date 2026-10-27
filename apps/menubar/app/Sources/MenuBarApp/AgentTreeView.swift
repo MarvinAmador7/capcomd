@@ -148,8 +148,14 @@ struct AgentTreeRow: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(PressableStyle())
-      StatusMark(status: bubbled ? .waiting : node.statusSymbol)
-        .frame(width: Theme.Tree.statusColumn, alignment: .trailing)
+      if let p = model.provider(runId: runId, agentId: node.id) {
+        ProviderMark(provider: p.provider, size: Theme.Provider.rowSize).foregroundStyle(Theme.Provider.rowText)
+          .padding(.leading, Theme.Provider.rowLeading)
+          .help([p.provider.displayName, p.model].compactMap { $0 }.joined(separator: " · "))
+      }
+      // The column is kept on every row (an ended agent has no mark), so chips and provider marks line up.
+      Color.clear.frame(width: Theme.Tree.statusColumn, height: 1)
+        .overlay(alignment: .trailing) { StatusMark(status: bubbled ? .waiting : node.statusSymbol) }
         .padding(.leading, Theme.Tree.statusLeading)
     }
     .frame(height: Theme.Tree.rowHeight)

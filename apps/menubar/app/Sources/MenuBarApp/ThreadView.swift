@@ -111,7 +111,8 @@ struct ThreadHeader: View {
     let node = findNode(model.tree(runId))
     let role = agent?.displayName ?? "Agent"
     let name = model.botName(runId: runId, agentId: agentId)
-    let context = [name == nil ? nil : role, model.run(runId)?.title].compactMap { $0 }.joined(separator: " · ")
+    let provided = model.provider(runId: runId, agentId: agentId)
+    let context = [name == nil ? nil : role, provided?.provider.displayName, model.run(runId)?.title].compactMap { $0 }.joined(separator: " · ")
     HStack(spacing: Theme.Drill.headerGap) {
       Button { model.back() } label: {
         Image(systemName: "chevron.left").font(Theme.Drill.backIcon).foregroundStyle(Theme.Drill.switchOn)
@@ -124,7 +125,8 @@ struct ThreadHeader: View {
         // The waiting agent raises a floating mitt (Polish board, item 6); the amber mark still carries the state.
         let waiting = model.approvals(runId).contains { $0.agentId == agentId }
         let bot = model.bot(runId: runId, agentId: agentId)
-        BotAvatar(traits: waiting ? bot.flatMap { try? withOverrides($0, pose: "wave") } ?? bot : bot, size: .small)
+        ProvidedBot(traits: waiting ? bot.flatMap { try? withOverrides($0, pose: "wave") } ?? bot : bot, size: .small, provider: provided?.provider)
+          .help(provided.map { p in [p.provider.displayName, p.model].compactMap { $0 }.joined(separator: " · ") } ?? "")
         VStack(alignment: .leading, spacing: Theme.Drill.titleTop) {
           Text(verbatim: name ?? role).font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn)
           if !context.isEmpty { Text(verbatim: context).font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).truncationMode(.tail) }

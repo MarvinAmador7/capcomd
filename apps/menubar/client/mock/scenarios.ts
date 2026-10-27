@@ -19,7 +19,7 @@ const TOKEN = process.env.TOKEN ?? "test-token";
 const SCENARIO = process.env.SCENARIO ?? "panel";
 const NOW = Date.now(), min = 60_000, iso = (ms: number) => new Date(ms).toISOString();
 
-type AgentSpec = { id: string; parent?: string; profile: string; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number };
+type AgentSpec = { id: string; parent?: string; profile: string; provider?: "claude" | "codex"; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number };
 type ApprovalSpec = { id: string; agentId: string; question: string; ref: string; target: string };
 type SpanSpec = { id: string; parent?: string; name: string; from: number; took: number; error?: boolean; attrs?: Record<string, unknown> };   // from/took: seconds after the run started
 type FileSpec = { path: string; status: string; added: number | null; removed: number | null; agentId: string };
@@ -102,6 +102,12 @@ const runs = scenes[SCENARIO];
 if (!runs) { console.error(`unknown SCENARIO ${SCENARIO}; one of ${Object.keys(scenes).join(", ")}`); process.exit(2); }
 
 // Envelopes in seq order across all runs (run.created, agent.spawned, approval.requested).
+/** Which AI an agent runs on (Agent.provider / agent.spawned agent.provider): workers on Codex, the rest on Claude, a mixed team. */
+const providerOf = (a: { profile: string; provider?: string }) => a.provider ?? (a.profile === "worker" ? "codex" : "claude");
+const specOf = (a: { profile: string; provider?: string }) => {
+  const provider = providerOf(a);
+  return { provider, kind: provider === "claude" ? "claude-code" : "codex", model: provider === "claude" ? "claude-opus-5-5" : "gpt-5-codex" };
+};
 let seq = 0;
 const envelopes: any[] = [];
 const env = (r: RunSpec, type: string, entity: string, agentId: string | null, ms: number, data: any) =>
@@ -110,7 +116,7 @@ const env = (r: RunSpec, type: string, entity: string, agentId: string | null, m
 for (const r of runs) {
   env(r, "run.created", r.id, null, NOW - r.startedAgo, { runId: r.id, budget: {}, label: null, goal: r.goal });
   for (const a of r.agents) env(r, "agent.spawned", a.id, a.id, NOW - a.ago, { parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile,
-    budget: {}, limits: {}, agent: {}, task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a) });
+    budget: {}, limits: {}, agent: specOf(a), task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a) });
   for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - r.lastAgo, { approvalId: p.id, kind: "merge", question: p.question,
     requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target }, expiresAt: null });
   env(r, "run.started", r.id, null, NOW - r.lastAgo, { cause: "started" });   // bumps lastEventMs to the run's recency
@@ -129,7 +135,8 @@ const HEAD = seq;
 const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, repo: null, createdAt: iso(NOW - r.startedAgo) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
   text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
-  task: a.task ?? null, taskAttachment: null, result: null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago) });
+  task: a.task ?? null, taskAttachment: null, result: null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago),
+  provider: providerOf(a), model: specOf(a).model });
 const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind: "merge", status: decided.has(p.id) ? decided.get(p.id).status : "pending",
   question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target } });
 const decided = new Map<string, any>();
@@ -182,6 +189,19 @@ Bun.serve({
       { name: "migrate-matchkey", description: "Steps and checks for matchkey schema migrations.", source: "user" },
       { name: "validate-shards", description: "Null and row-count checks for parquet shards.", source: "user" },
     ]);
+    // runs.options: who can drive a new run (its planner) and where its agents run. NO_CODEX=1 / NO_DOCKER=1 report
+    // those unavailable, as a daemon would when codex isn't logged in or Docker isn't running.
+    if (p === "/v1/run-options") return Response.json({
+      drivers: [
+        { provider: "claude", label: "Claude Code", model: "claude-opus-5-5", available: true, reason: null, default: true, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null },
+        { provider: "codex", label: "Codex", model: "gpt-5-codex", available: !process.env.NO_CODEX, reason: process.env.NO_CODEX ? "codex isn't logged in" : null, default: false,
+          efforts: ["minimal", "low", "medium", "high"], effort: "medium" },
+      ],
+      sandboxes: [
+        { name: "docker", label: "Local", available: !process.env.NO_DOCKER, reason: process.env.NO_DOCKER ? "Docker isn't running" : null, default: false },
+        { name: "boxd", label: "VM", available: true, reason: null, default: true },
+      ],
+    });
     const msg = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/messages$/);
     if (msg && req.method === "POST") {   // agents.send (harness #50): answers at once, confirms on the run stream a moment later
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
@@ -209,6 +229,13 @@ Bun.serve({
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
       const body: any = await req.json().catch(() => null);
       if (!body?.goal?.trim()) return err(422, "invalid", "goal is empty");
+      if (body.driver !== undefined && !["claude", "codex"].includes(body.driver)) return err(422, "invalid", `unknown driver ${JSON.stringify(body.driver)}`);
+      if (body.driver === "codex" && process.env.NO_CODEX) return err(422, "invalid", "codex can't drive this run: codex isn't logged in");
+      if (body.sandbox !== undefined && !["docker", "boxd"].includes(body.sandbox)) return err(422, "invalid", `unknown sandbox ${JSON.stringify(body.sandbox)}`);
+      if (body.sandbox === "docker" && process.env.NO_DOCKER) return err(422, "invalid", "can't run locally: Docker isn't running");
+      const levels: Record<string, string[]> = { claude: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high"] };
+      if (body.effort !== undefined && !levels[body.driver ?? "claude"].includes(body.effort)) return err(422, "invalid", `effort must be one of ${levels[body.driver ?? "claude"].join(", ")}`);
+      console.log(`runs.create goal=${JSON.stringify(body.goal)} driver=${body.driver ?? "(default)"} sandbox=${body.sandbox ?? "(default)"} effort=${body.effort ?? "(default)"}`);
       if (process.env.NO_REPO && !body.repo) return err(422, "invalid", "repo is required: this daemon has no default repository (CAPCOMD_REPO).");
       return Response.json({ id: `run-new${Date.now() % 100000}`, projectId: "prj-new", label: body.goal, state: "starting", goal: body.goal, repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
     }
@@ -294,7 +321,7 @@ if (process.env.MOMENTS) {
     ev("run.created", rid, null, { runId: rid, budget: {}, label: null, goal: "Ship the matchkey dashboard" });
     ev("run.started", rid, null, { cause: "started" });
     team.forEach((a, i) => setTimeout(() => {
-      ev("agent.spawned", a.id, a.id, { parent: a.parent, depth: a.parent ? 1 : 0, profile: a.profile, budget: {}, limits: {}, agent: {}, task: null, key: null, operator: false,
+      ev("agent.spawned", a.id, a.id, { parent: a.parent, depth: a.parent ? 1 : 0, profile: a.profile, budget: {}, limits: {}, agent: specOf(a as { profile: string }), task: null, key: null, operator: false,
         workspace: { repo: "/src/matchkey", path: null, label: "matchkey" } });
       ev("agent.started", a.id, a.id, {});
     }, 200 + i * 300));

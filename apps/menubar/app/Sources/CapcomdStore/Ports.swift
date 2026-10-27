@@ -82,6 +82,19 @@ public final class UIPreferences {
     get { store.string(forKey: "startRepo") }
     set { store.set(newValue, forKey: "startRepo") }
   }
+  /// The AI last picked to drive new runs ("claude", "codex"); nil: the project's planner as configured.
+  public var startDriver: String? {
+    get { store.string(forKey: "startDriver") }
+    set { store.set(newValue, forKey: "startDriver") }
+  }
+  /// Where new runs go last picked ("docker", "boxd"); nil: the project's sandbox as configured.
+  public var startSandbox: String? {
+    get { store.string(forKey: "startSandbox") }
+    set { store.set(newValue, forKey: "startSandbox") }
+  }
+  /// The effort last picked for a driver ("high"); nil: the driver's default.
+  public func startEffort(_ driver: String) -> String? { store.string(forKey: "startEffort.\(driver)") }
+  public func setStartEffort(_ effort: String?, for driver: String) { store.set(effort, forKey: "startEffort.\(driver)") }
   public var activityCollapsed: Bool {
     get { store.string(forKey: "activityCollapsed") == "1" }
     set { store.set(newValue ? "1" : "0", forKey: "activityCollapsed") }
@@ -124,7 +137,54 @@ public struct StartRefused: Error, Sendable, Hashable {
   public init(_ m: String, needsRepo: Bool = false) { message = m; self.needsRepo = needsRepo }
 }
 public protocol RunStarting: Sendable {
-  func start(goal: String, repo: String?, idempotencyKey: String) async throws -> String
+  func start(goal: String, choice: RunChoice, idempotencyKey: String) async throws -> String
+}
+
+/// How a new run starts, beside its goal; nil fields keep the project's settings. `repo`: the project checkout;
+/// `driver`: the AI that drives it as its planner ("claude", "codex"); `sandbox`: where its agents run ("docker" on
+/// this machine, "boxd" VMs); `effort`: the driver's reasoning effort, one of its `DriverInfo.efforts`.
+public struct RunChoice: Sendable, Hashable {
+  public var repo: String?, driver: String?, sandbox: String?, effort: String?
+  public init(repo: String? = nil, driver: String? = nil, sandbox: String? = nil, effort: String? = nil) {
+    self.repo = repo; self.driver = driver; self.sandbox = sandbox; self.effort = effort
+  }
+}
+
+/// Where a run's agents can run (`GET /v1/run-options`): "docker" (Local, this machine) or "boxd" (VM).
+public struct SandboxInfo: Codable, Sendable, Hashable, Identifiable {
+  public var name: String; public var label: String
+  /// False when it can't be used now (Docker not running, no boxd key); `reason` says which.
+  public var available: Bool; public var reason: String?
+  public var isDefault: Bool?
+  public var id: String { name }
+  enum CodingKeys: String, CodingKey { case name, label, available, reason, isDefault = "default" }
+  public init(name: String, label: String, available: Bool = true, reason: String? = nil, isDefault: Bool? = nil) {
+    self.name = name; self.label = label; self.available = available; self.reason = reason; self.isDefault = isDefault
+  }
+}
+/// `GET /v1/run-options` (with the `runs.options` capability): who can drive a run and where it can run.
+public struct RunOptions: Codable, Sendable, Hashable {
+  public var drivers: [DriverInfo]; public var sandboxes: [SandboxInfo]
+  public init(drivers: [DriverInfo] = [], sandboxes: [SandboxInfo] = []) { self.drivers = drivers; self.sandboxes = sandboxes }
+}
+
+/// One AI that can drive a run as its planner (`GET /v1/run-options`).
+public struct DriverInfo: Codable, Sendable, Hashable, Identifiable {
+  public var provider: String; public var label: String; public var model: String?
+  /// False when its CLI isn't installed or logged in on the daemon's machine; `reason` says which.
+  public var available: Bool; public var reason: String?
+  /// The project's planner as configured runs on this one.
+  public var isDefault: Bool?
+  /// Reasoning effort levels it takes, lowest first (empty or absent: not settable), and the one a run gets by default.
+  public var efforts: [String]?
+  public var effort: String?
+  public var id: String { provider }
+  enum CodingKeys: String, CodingKey { case provider, label, model, available, reason, isDefault = "default", efforts, effort }
+  public init(provider: String, label: String, model: String? = nil, available: Bool = true, reason: String? = nil, isDefault: Bool? = nil,
+              efforts: [String]? = nil, effort: String? = nil) {
+    self.provider = provider; self.label = label; self.model = model; self.available = available; self.reason = reason; self.isDefault = isDefault
+    self.efforts = efforts; self.effort = effort
+  }
 }
 
 /// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50, steer scope) with `Idempotency-Key`. `skills` rides
@@ -146,4 +206,6 @@ public struct SkillInfo: Codable, Sendable, Hashable, Identifiable {
 public protocol DaemonInfoFetching: Sendable {
   func capabilities() async throws -> Set<String>
   func skills() async throws -> [SkillInfo]
+  func runOptions() async throws -> RunOptions
 }
+extension DaemonInfoFetching { public func runOptions() async throws -> RunOptions { RunOptions() } }

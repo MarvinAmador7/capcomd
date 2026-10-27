@@ -170,11 +170,40 @@ final class AppModel {
     set { store.prefs.startRepo = newValue; revision &+= 1 }
   }
   /// Starts a run; when the daemon has no default repository, asks for the project folder once and remembers it.
+  /// Who can drive a new run as its planner, and where it can run (`runs.options`); empty on daemons that can't say.
+  var drivers: [DriverInfo] { _ = revision; return store.runOptions.drivers }
+  var sandboxes: [SandboxInfo] { _ = revision; return store.runOptions.sandboxes }
+  /// Where new runs go: the one last picked while still available, else the project's default.
+  var startSandbox: SandboxInfo? {
+    let ss = sandboxes
+    return ss.first { $0.name == store.prefs.startSandbox && $0.available } ?? ss.first { $0.isDefault == true && $0.available } ?? ss.first(where: \.available)
+  }
+  func pickSandbox(_ name: String) { store.prefs.startSandbox = name; revision &+= 1 }
+  /// The driver's reasoning effort for new runs: the one last picked for it while it still offers it, else its default.
+  /// nil is "Auto": nothing is sent and the CLI picks (Claude Code has no fixed default; it chooses per model).
+  var startEffort: String? {
+    guard let d = startDriver, let levels = d.efforts, !levels.isEmpty else { return nil }
+    _ = revision
+    if let p = store.prefs.startEffort(d.provider) { return p == EffortBars.auto ? nil : (levels.contains(p) ? p : d.effort) }
+    return d.effort.flatMap { levels.contains($0) ? $0 : nil }
+  }
+  func pickEffort(_ effort: String?) {
+    guard let d = startDriver else { return }
+    store.prefs.setStartEffort(effort ?? EffortBars.auto, for: d.provider); revision &+= 1
+  }
+  /// The driver new runs go to: the one last picked while the daemon still offers it, else the project's default.
+  var startDriver: DriverInfo? {
+    let ds = drivers
+    return ds.first { $0.provider == store.prefs.startDriver && $0.available } ?? ds.first { $0.isDefault == true && $0.available } ?? ds.first(where: \.available)
+  }
+  func pickDriver(_ provider: String) { store.prefs.startDriver = provider; revision &+= 1 }
+
   func startRun(_ goal: String) async -> Bool {
-    var state = await store.startRun(goal: goal, repo: store.prefs.startRepo)
+    var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+    var state = await store.startRun(goal: goal, choice)
     if case .needsRepo = state, let folder = ProjectFolderPicker.choose() {
-      store.prefs.startRepo = folder
-      state = await store.startRun(goal: goal, repo: folder)
+      store.prefs.startRepo = folder; choice.repo = folder
+      state = await store.startRun(goal: goal, choice)
     }
     if case .started = state { return true }
     return false
@@ -196,6 +225,13 @@ final class AppModel {
     return bots[agentId]
   }
 
+  /// Which AI the agent runs on, and its model when the daemon says.
+  func provider(runId: String, agentId: String) -> (provider: Provider, model: String?)? {
+    _ = revision
+    guard let a = store.runs[runId]?.agents[agentId], let p = a.provider else { return nil }
+    return (p, a.model)
+  }
+
   /// The agent's bot name ("Ziggy"), shown beside its role in headers and handoffs and read in tooltips and VoiceOver.
   func botName(runId: String, agentId: String) -> String? { bot(runId: runId, agentId: agentId)?.name }
 
@@ -208,6 +244,9 @@ final class AppModel {
 
   // Panel height: each screen reports what its content needs; PanelView clamps it (Theme.Panel).
   var listHeight: CGFloat = 0
+  /// The width the project composer's tool row needs (its pills and chips never truncate); the panel widens past
+  /// Theme.panelWidth to fit it.
+  var composerRowWidth: CGFloat = 0
   var routeHeight: CGFloat = 0
 
   // Agent thread input (7c)

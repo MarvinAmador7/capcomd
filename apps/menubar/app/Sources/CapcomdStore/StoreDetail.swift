@@ -135,14 +135,18 @@ extension CapcomdStore {
   /// Start a run on `goal`. One Idempotency-Key per submission, reused if the same goal is retried after a transport
   /// failure, so a lost response doesn't start it twice.
   @discardableResult
-  public func startRun(goal raw: String, repo: String? = nil) async -> StartState {
+  public func startRun(goal raw: String, repo: String? = nil, driver: String? = nil, sandbox: String? = nil, effort: String? = nil) async -> StartState {
+    await startRun(goal: raw, RunChoice(repo: repo, driver: driver, sandbox: sandbox, effort: effort))
+  }
+  @discardableResult
+  public func startRun(goal raw: String, _ choice: RunChoice) async -> StartState {
     let goal = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let starter, !goal.isEmpty else { return .idle }
-    let key = pendingStartKey.flatMap { $0.goal == goal && $0.repo == repo ? $0.key : nil } ?? makeKey()
-    pendingStartKey = (goal, repo, key)
+    let key = pendingStartKey.flatMap { $0.goal == goal && $0.choice == choice ? $0.key : nil } ?? makeKey()
+    pendingStartKey = (goal, choice, key)
     startState = .starting; changed()
     do {
-      let id = try await starter.start(goal: goal, repo: repo, idempotencyKey: key)
+      let id = try await starter.start(goal: goal, choice: choice, idempotencyKey: key)
       pendingStartKey = nil; startState = .started(runId: id)
     } catch let e as StartRefused {
       pendingStartKey = nil; startState = e.needsRepo ? .needsRepo(e.message) : .failed(e.message)
