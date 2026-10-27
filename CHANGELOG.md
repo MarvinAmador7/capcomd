@@ -31,6 +31,30 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   ("Delete idle machines after", shown but not yet changeable), whether logins there are bound to their AI's API, and
   when work is checkpointed. **Open in Terminal** opens a shell in a machine. If the provider can't be reached, the
   last list stays with a note. ⌘[ goes back to Runs.
+- capcomd can ask you itself before a merge into a protected branch: set `"driver": {"approvals": "elicit"}` in a
+  project's `.capcomd/config.json` (or `capcomd setup agent --approvals elicit`). Your agent calls `capcomd_approve`
+  and capcomd sends its own prompt through the agent's MCP client (in Hermes: the terminal, or Allow / Deny buttons in
+  Telegram, Slack…) naming the project, repository, run, merge, target, the exact commit, the checks that passed and
+  the reviewer's verdict (fenced as data). Only your accept approves, and only if the branch still points at that
+  commit; decline, cancel or no answer within `driver.elicitTimeoutSeconds` (default 300) leaves the merge waiting,
+  and the tool says "No decision: the merge is still waiting. Don't retry; ask the user." A client that can't show
+  such a prompt is refused, as before. It's the recommended setting for Hermes; for Claude Code, whose hooks can answer
+  prompts, only with managed hooks (add `"claude-code"` to `driver.elicitClients`). `client-confirmed` still works but
+  is no longer recommended.
+- `capcomd_approve` is marked as needing a person (Claude Code asks before every call, even in bypass or auto mode)
+  and is no longer marked idempotent.
+- Hermes: one capcomd for all your projects. `capcomd setup agent` now writes a single `mcp_servers.capcomd` entry with
+  no `cwd` and adds the checkout you run it in to capcomd's project list (`projects` in `~/.capcomd/config.json`; the
+  first is the default, `--default-project` changes it). An entry an earlier version pinned to a folder is migrated:
+  the folder joins the list. MCP tools take an optional `project` (a name or a checkout's path; a run's tools default
+  to the run's project), results and approval prompts name the project, and the new `capcomd_projects` tool lists
+  them. `--hermes-entry-per-project` still writes a separate entry pinned to one checkout. In a terminal, setup now
+  asks who approves merges for Hermes: capcomd asking you in Hermes (`elicit`, recommended) or you with `capcomd
+  approve`; `--yes` alone changes nothing. The entry also gets `timeout: 360` when it has none, so a tool call
+  outlives the approval prompt.
+- Docs: Hermes recipes for a nightly run that stages but never merges into a protected branch, a morning digest with
+  no model, and narration with `/heartbeat` ([integration-agents.md](docs/integration-agents.md#recipes-no-new-code)).
+
 - Harness API: three read-only routes for a settings screen, each with its capability in `GET /v1/health`.
   `GET /v1/logins` (`logins`) says, for Claude and Codex in each sandbox (docker, boxd), whether agents can log in,
   how (a plan login or an API key), where the login is kept, and the `capcomd auth login … --sandbox …` command that

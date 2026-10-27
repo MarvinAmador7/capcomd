@@ -72,8 +72,9 @@ none) and saves it as `driver.maxRunBudget`. Settings land in
 `.capcomd/config.json` (commit it, so the team shares the gates) and `~/.capcomd/config.json`.
 
 Optional, in `.capcomd/config.json`: `"driver": {"maxRunBudget": "usd=20,turns=400"}` caps each run you start;
-`"driver": {"approvals": "client-confirmed"}` lets you approve protected merges after the user confirms each
-call (by default only the user approves, with `capcomd approve`).
+`"driver": {"approvals": "elicit"}` lets `capcomd_approve` ask the user itself (a prompt capcomd writes, through
+your MCP client) and approve only on their accept (by default only the user approves, with `capcomd approve`;
+`capcomd setup agent --approvals elicit` sets it for Hermes). `client-confirmed` still works but isn't recommended.
 
 ## 6. The engine
 

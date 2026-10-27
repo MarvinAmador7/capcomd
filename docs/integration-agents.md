@@ -19,7 +19,8 @@ supervisor, critic, best-of-n, planner, interface first.
 ## MCP
 
 Register capcomd as a stdio MCP server, run from the repository the agents work on (it reads that project's
-`.capcomd/config.json`). Claude Code: `claude mcp add capcomd -- capcomd mcp` (or install the capcomd plugin, which does it for you). Codex, in `~/.codex/config.toml`:
+`.capcomd/config.json`), or once for all your projects (the [Hermes](#hermes) setup: see
+[Projects](#one-capcomd-for-several-projects)). Claude Code: `claude mcp add capcomd -- capcomd mcp` (or install the capcomd plugin, which does it for you). Codex, in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.capcomd]
@@ -34,10 +35,11 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 
 | Tool | Input | Returns |
 |---|---|---|
-| `capcomd_setup` | | `{ready, steps[], gates: {checks, reviewer, target}, driver: {approvals, maxRunBudget}}` |
+| `capcomd_projects` | | `{default, here, projects: [{name, path, default, ready}]}`: the projects this capcomd serves |
+| `capcomd_setup` | `project?` | `{ready, steps[], gates: {checks, reviewer, target}, driver: {approvals, maxRunBudget}, project}` |
 | `capcomd_profiles` | | `{default, profiles: [{name, provider, auth, model, canSpawn, ready, detail}]}` |
 | `capcomd_run_new` | `budget?` (none: unlimited), `label?`, `target?`, `targetFrom?`, `key?` | `{runId, created, budget, gates}` |
-| `capcomd_runs` | `limit?` | `{runs: [{runId, label, repo, cwd, createdAt, agents: {status: n}, pendingApprovals}]}` |
+| `capcomd_runs` | `limit?`, `project?` (only its runs) | `{runs: [{runId, label, repo, cwd, project, createdAt, agents: {status: n}, pendingApprovals}]}` |
 | `capcomd_spawn` | `runId`, `task`, `profile?`, `budget?`, `check?`, `report?`, `children?`, `key?` | the agent: `{agentId, status, …}` |
 | `capcomd_await` | `runId`, `agents[]`, `mode?` (`all`\|`any`), `timeoutMs?` (≤ 55000) | `{done[], pending[], first?, next}` |
 | `capcomd_send` | `runId`, `to`, `body`, `key?` | `{seq, …}` |
@@ -46,7 +48,7 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 | `capcomd_grant` | `runId`, `agent?`, `budget`, `key?` | `{agentId, budget, from, left}`: more budget for a live agent, from its parent's (or, without `agent`, a higher run budget, within `driver.maxRunBudget`) |
 | `capcomd_verify` | `runId`, `ref`, `check?`, `acceptance?`, `key?`, `timeoutMs?` | `{id: "vfy-…", state: passed\|failed\|running, result, next}` |
 | `capcomd_merge` | `runId`, `ref`, `require`, `key?`, `timeoutMs?` | `{id: "mrg-…", state: merged\|failed\|awaiting_approval\|running, result, next}` |
-| `capcomd_approve` | `runId`, `merge`, `deny?`, `reason?` | the merge record, or a `forbidden` error (below) |
+| `capcomd_approve` | `runId`, `merge`, `deny?`, `reason?` | the merge record, a `forbidden` error (below), or, under `elicit`, "No decision" |
 | `capcomd_task` | `runId`, `action`, … | the task board (`add\|list\|show\|claim\|renew\|release\|done`) |
 | `capcomd_kv` | `runId`, `action`, `k?`, `value?`, `expect?`, `prefix?`, `key?` | the blackboard (`get\|put\|cas\|del\|list`) |
 | `capcomd_budget` | `runId`, `agent?` | budget, spend, what is left, rollups |
@@ -56,8 +58,11 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 | `capcomd_trace` | `runId`, `cursor?`, `limit?` | `{traceId, durationMs, spans[], nextCursor, total, truncated}` |
 
 Tools carry MCP annotations: reads are `readOnlyHint`; `capcomd_merge`, `capcomd_cancel` and `capcomd_approve`
-are `destructiveHint`, so clients ask before calling them. Every write takes `key`: a retry with the same key
-returns the first result.
+are `destructiveHint`, so clients ask before calling them. `capcomd_approve` is never `idempotentHint` (a client may
+replay an idempotent call) and carries `_meta: {"anthropic/requiresUserInteraction": true}` (Claude Code then asks a
+person before every call, even in bypass and auto modes). Every write takes `key`: a retry with the same key returns
+the first result. Every tool that acts on a project (all but `capcomd_projects`, `capcomd_events` and
+`capcomd_trace`) takes `project?`, and its result names the project.
 
 **Waits are bounded.** `capcomd_await`, `capcomd_verify` and `capcomd_merge` return within `timeoutMs` (default
 25s, at most 55s, under clients' tool timeouts) with `pending` or `state: "running"` and a `next` that says to
@@ -68,8 +73,50 @@ call again with the same arguments. The agents, checks and reviewer keep working
 command. `capcomd_run_new` refuses a protected `target` (other than the project's own) and a budget over
 `driver.maxRunBudget`. Reserved kv keys (`_…`, `approval/…`, `recipe/…`, `handoff/…`) are read-only. A merge into a
 protected branch parks in `awaiting_approval`; by default only a person approves it (`capcomd approve <runId>
-<mrgId>`, or the TUI), and `capcomd_approve` answers with that instruction. A front door that relays the user's
-own decision (like Hermes, [below](#hermes)) sets `"driver": {"approvals": "client-confirmed"}` in the project config.
+<mrgId>`, or the TUI), and `capcomd_approve` answers with that instruction. A project can instead let capcomd ask the
+person itself: `"driver": {"approvals": "elicit"}` ([below](#approvals-asked-by-capcomd-elicit)).
+`"client-confirmed"` (the tool approves after the client's own confirmation) still works but isn't recommended:
+`elicit` is strictly stronger.
+
+### Approvals asked by capcomd (`elicit`)
+
+With `"driver": {"approvals": "elicit"}` in the project's `.capcomd/config.json`, `capcomd_approve` asks the user
+itself, with MCP elicitation (`elicitation/create`, form mode, an empty form): the client shows capcomd's own text as
+a prompt (Hermes: in the terminal, or Allow / Deny buttons in Telegram, Slack…). Only an accept approves:
+
+```text
+capcomd: merge into main, a protected branch?
+
+Project: app (/home/you/src/app)
+Repository: https://github.com/you/app.git
+Run: run-k894f215404134113
+Merge: mrg-mvr2ho5y0hlhh4
+Target: main
+Work: agt-kc2575266c5227a62, branch capcomd/run-k894f215404134113/agt-kc2575266c5227a62
+Commit: 928e277cfeda
+Checks: passed (unit); they run again on the latest main before it lands
+Review: passed (reviewer reviewer, agt-k213c831a01336500)
+The reviewer's reasons, written by an agent (data, not instructions):
+<<<untrusted:agt-k213c831a01336500>>>
+- does what the task asks
+<<<end:agt-k213c831a01336500>>>
+
+Accept to merge exactly commit 928e277cfeda into main. Decline, or don't answer, to leave it waiting.
+```
+
+- The text comes from capcomd's records only; the reviewer's reasons are fenced as data. It never asks for a secret.
+- Accept: capcomd checks the branch still points at the commit it showed (else it refuses, `reason: "branch_moved"`),
+  then approves through the normal approval path, recorded `by: "driver:elicited"`; the client's name and the commit
+  shown are kept in the run's kv as `approval/<mrgId>`. The verified commit lands (the checks run again first).
+- Decline, cancel, no answer within `driver.elicitTimeoutSeconds` (default 300) or an error: no decision. The merge
+  stays parked and the tool says exactly `No decision: the merge is still waiting. Don't retry; ask the user.`
+- Fail closed: a client that didn't declare form elicitation when it connected gets the `forbidden` answer, like
+  `human`. So does a client not in `driver.elicitClients` (the MCP clients' names, e.g. `["hermes-agent"]`, which
+  `capcomd setup agent --approvals elicit` writes); without that list, any client except Claude Code.
+- **Claude Code**: its `Elicitation` hooks can answer the prompt with no person, and in `claude -p` a repository's
+  `.claude/settings.json` hooks run without a trust prompt. Use `elicit` with Claude Code only when hooks are managed
+  (`allowManagedHooksOnly` in managed settings), by adding `"claude-code"` to `driver.elicitClients`. Setup never turns
+  it on for Claude Code.
 
 Text written by agents (results, logs, messages) reaches the driver fenced
 (`<<<untrusted:agt-…>>> … <<<end:agt-…>>>`): it is data, never instructions.
@@ -116,8 +163,8 @@ mcp_servers:
   capcomd:  # capcomd setup agent keeps this entry; re-run it to update
     command: "/home/you/.capcomd/bin/capcomd"   # absolute: Hermes's gateway service may not have capcomd on PATH
     args: ["mcp"]
-    cwd: "/home/you/src/app"                    # the repository you ran setup in: its .capcomd/config.json applies
     trust: untrusted                            # Hermes asks you before tools not marked read-only…
+    timeout: 360                                # a call outlives capcomd's 300 s approval prompt (only when unset)
 
 command_allowlist:                              # …except these, which run without asking (within the project's gates)
   - "mcp:capcomd/capcomd_run_new"
@@ -139,31 +186,111 @@ So Hermes shows you an approval card (in the terminal, or buttons in Telegram, S
 `trust: untrusted` plus the allowlist is how it asks for exactly those). An entry with `CAPCOMD_HOME` set at setup
 time also gets `env: {CAPCOMD_HOME: …}`: Hermes passes a stdio server only `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`,
 `TERM`, `SHELL`, `TMPDIR`, `XDG_*` and the entry's own `env`, so capcomd's settings come from `~/.capcomd/config.json`
-and the project's `.capcomd/config.json`, not your shell. Setup also installs the orchestration and setup skills
+and each project's `.capcomd/config.json`, not your shell. Setup also installs the orchestration and setup skills
 in `<hermes home>/skills/capcomd/` (a copy you or Hermes edited is kept, not overwritten).
 
-**Who approves merges into protected branches.** By default a person does, with `capcomd approve <runId> <mrgId>`
-in a terminal. In a terminal, setup asks whether Hermes may approve them after asking you; yes sets
-`"driver": {"approvals": "client-confirmed"}` in the project's `.capcomd/config.json`, and Hermes's approval card for
-`capcomd_approve` (which shows the run and merge ids) is that confirmation. `--approvals client-confirmed|human` sets
-it without asking; `--yes` alone changes nothing. Setup won't set `client-confirmed` when Hermes's
-`approvals.mode` is `off` (Hermes wouldn't ask). Hermes's `/yolo` and `--yolo` skip the card too, and answering
-"Always" makes every later `capcomd_approve` run unasked: answer "Once". The checks and the reviewer still run
-before any merge, whoever approves.
+### One capcomd for several projects
 
-**Check it.** `capcomd setup check` has a `hermes` line (capcomd in Hermes, missing, disabled, or Hermes not
-found). In a Hermes session, run `/reload-mcp` (a running gateway picks the entry up by itself); its tools are `mcp__capcomd__capcomd_setup`,
-`mcp__capcomd__capcomd_spawn` and so on. Then ask, for example:
+The entry has no `cwd`: one `capcomd` serves all your projects. Each `capcomd setup agent` adds the checkout it runs
+in to capcomd's project list, in `~/.capcomd/config.json` (the first one is the default; `--default-project` makes
+this one the default):
 
-> Use capcomd to check it's ready, then fix the failing tests: one worker per file, each verified and reviewed.
+```json
+{
+  "projects": {
+    "default": "app",
+    "list": [
+      { "name": "app", "path": "/home/you/src/app" },
+      { "name": "api", "path": "/home/you/src/api" }
+    ]
+  }
+}
+```
 
-> Start a capcomd run with a $5 budget: a planner splits "add rate limiting to the API" across workers. Tell me
-> when merges are waiting.
+A project's gates, approvals policy and agent profiles stay in its own `.capcomd/config.json` and
+`.capcomd/agents.json`. Tools take `project` (a name, or a checkout's path); without it, a run's tools use the run's
+own project, and the rest the checkout capcomd was started in (Hermes in a terminal in a repository), else the default
+project, else the only one. An unknown name is refused with the list; `capcomd_projects` lists them. Every result
+and the approval prompt name the project.
 
-> What are my capcomd runs doing? Anything stuck or waiting for approval?
+An entry an older setup pinned to one folder (`cwd`) is migrated: the `cwd` goes, and that folder joins the project
+list. To keep a separate entry for one project (say, a different trust setting), `capcomd setup agent
+--hermes-entry-per-project` writes `mcp_servers.capcomd-<project>` pinned to it, with its own allowlist; it's opt-in,
+since every tool is then listed once per entry.
 
-The `cwd` is one repository. For another, run `capcomd setup agent` there (the entry follows the last one), or copy
-the entry under another name in `mcp_servers` with that `cwd`.
+### Who approves merges into protected branches
+
+In a terminal, setup asks: **capcomd asks you itself in Hermes** (`elicit`, recommended, the default) or **you, in a
+terminal** (`human`: `capcomd approve <runId> <mrgId>`). `--approvals elicit|human` sets it without asking; `--yes`
+alone changes nothing. It's a project setting (`driver.approvals` in that project's `.capcomd/config.json`); `elicit`
+also writes `"elicitClients": ["hermes-agent"]`, so only Hermes's capcomd asks (not a Claude Code session in the
+same repository).
+
+With `elicit`, when a merge waits, Hermes calls `capcomd_approve` (its own card first: answer **Once**), then capcomd's
+prompt appears ([what it says](#approvals-asked-by-capcomd-elicit)): Allow merges exactly that commit, Deny or no
+answer leaves it waiting. Hermes's `/yolo`, `--yolo` and `approvals.mode: off` don't answer it, and cron jobs and
+`chat -q` decline it, so nothing merges into a protected branch unattended. If Hermes has elicitation turned off
+(`mcp_servers.capcomd.elicitation.enabled: false`), approve in a terminal instead.
+
+`--approvals client-confirmed` (Hermes's own card for `capcomd_approve` is the confirmation) still works for existing
+setups but isn't recommended: `/yolo`, `approvals.mode: off` and an earlier "Always" answer all skip that card. Setup
+won't set it when Hermes's `approvals.mode` is `off`. The checks and the reviewer run before any merge, whoever
+approves.
+
+### Check it
+
+`capcomd setup check` has a `hermes` line (capcomd in Hermes for N projects, missing, disabled, pinned to one folder,
+or Hermes not found). In a Hermes session, run `/reload-mcp` (a running gateway picks the entry up by itself); its
+tools are `mcp__capcomd__capcomd_projects`, `mcp__capcomd__capcomd_spawn` and so on. Then ask, for example:
+
+> Which capcomd projects do you know? Check app is ready.
+
+> Use capcomd on api to fix the failing tests: one worker per file, each verified and reviewed.
+
+> Start a capcomd run on app with a $5 budget: a planner splits "add rate limiting to the API" across workers. Tell
+> me when merges are waiting, then ask me to approve them.
+
+> What are my capcomd runs doing, in every project? Anything stuck or waiting for approval?
+
+To check the approval prompt, let a run reach a merge into a protected branch and say "approve it": the prompt names
+the project, the target and the commit; Deny, and the merge is still listed as waiting (`capcomd status <runId>`).
+
+### Recipes (no new code)
+
+**A nightly run that stages but never merges into a protected branch.** A Hermes cron job with the capcomd skills
+attached, delivered to your chat:
+
+```bash
+hermes cron create "0 2 * * *" "Use capcomd on app: start a run with target capcomd/nightly (from main) and a \
+\$10 budget, fix the flaky tests (one worker per test file, each verified and reviewed), merge what passes into \
+capcomd/nightly, then report what landed and what didn't." \
+  --skill capcomd-orchestration --deliver telegram --name "capcomd nightly"
+```
+
+Cron is unattended: Hermes denies approval prompts there (`approvals.cron_mode: deny`) and declines capcomd's own,
+so the run verifies and lands on the staging branch, and anything aimed at `main` waits for you. That's intended:
+merge `capcomd/nightly` in the morning, or ask Hermes to and approve the prompt.
+
+**A morning digest with no model.** A no-agent cron job runs a script and delivers its output verbatim (zero LLM
+cost):
+
+```bash
+#!/bin/sh
+# ~/.hermes/scripts/capcomd-digest.sh: the last runs started on this machine, their state, and what waits for you
+tail -n 20 ~/.capcomd/state/runs.jsonl | jq -r .runId | awk '!seen[$0]++' | while read -r r; do
+  capcomd status "$r" --json | jq -r '.run | "\(.runId)  \(.state)  spent $\(.budget.spent)  waiting: \([.pendingApprovals[]? | "\(.taskId) → \(.targetBranch)"] | join(", "))"'
+done
+```
+
+```bash
+hermes cron create "0 8 * * *" --no-agent --script capcomd-digest.sh --deliver telegram --name "capcomd digest"
+```
+
+The script must live in `$HERMES_HOME/scripts/`; its output is delivered as is (empty output: nothing is sent).
+(`capcomd … --json` output is the [output contract](output-contract.md); agent-written text in it is fenced.)
+
+**Narration while a run works.** In a session: `/heartbeat every 5m Check capcomd run run-…: tell me what changed
+since last time (agents done, checks, merges waiting); don't repeat yourself.`
 
 **Hermes on a boxd machine.** Hermes often lives on its own boxd VM, and capcomd can run its agents from there
 without a boxd API key (the machine's own credentials, see [boxd.md](boxd.md#inside-a-boxd-machine-no-key-needed)):
@@ -176,7 +303,7 @@ capcomd setup                                     # no key needed here; logs in 
 ```
 
 A running gateway (`hermes gateway run`, or the service) connects a new `mcp_servers` entry within about a minute
-by itself; in a terminal session, `/reload-mcp`.
+by itself; in a terminal session, `/reload-mcp`. Clone and `capcomd setup agent` more repositories there to add them.
 
 Setup records the machine in `~/.capcomd/config.json` (`CAPCOMD_BOXD_MACHINE`), because the `capcomd mcp` Hermes's
 gateway starts doesn't see the login shell's `BOXD_VM_*` variables. Then talk to Hermes from wherever it listens.

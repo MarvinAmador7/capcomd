@@ -241,7 +241,8 @@ descendants' approvals (one SQL query over the scope tree), so a collapsed ances
 2. **An ancestor agent**, only for kinds its profile lists in `children.approve` (new, narrow-only like other
    limits), and **never** for `merge` to a protected target, `secret`, or `egress`. Those stay human (ADR-018 §4). This
    is how a planner approves its worker's budget grant without waking Marvin.
-3. **The driver (MCP)**, only when the project sets `approvals: "client-confirmed"` (exists).
+3. **The driver (MCP)**, only when the project sets `approvals: "elicit"` (capcomd asks the person through the MCP
+   client; only their accept decides, recorded `by: "driver:elicited"`) or `"client-confirmed"` (exists).
 
 ### 5.4 Transcripts: capture, pairing, storage
 

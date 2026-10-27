@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 import { parse as parseYaml } from "yaml";
 import { detectHermes, editHermesConfig, HERMES_ALLOWED_TOOLS, HERMES_DENY, hermesAllowlist, hermesStatus, installHermesSkills, mergedEntry, type HermesEntry } from "../../src/cli/commands/hermes";
 
@@ -15,6 +15,8 @@ const run = (args: string[], o: { cwd: string; env: Record<string, string> }) =>
   return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
 };
 const json = (s: string) => JSON.parse(s.trim().split("\n").pop()!);
+/** capcomd's project list in a test home's user config. */
+const projectsOf = (home: string) => JSON.parse(readFileSync(join(home, ".capcomd", "config.json"), "utf8")).projects;
 const yamlOf = (s: string) => parseYaml(s, { version: "1.1" });
 const WANT: HermesEntry = { command: "/opt/capcomd/bin/capcomd", args: ["mcp"], cwd: "/home/me/app", trust: "untrusted" };
 const NOWHERE = { CAPCOMD_HERMES_CLI: "/nonexistent/hermes" };
@@ -134,8 +136,11 @@ describe("editing config.yaml", () => {
     expect(y.mcp_servers.capcomd).toEqual({ command: WANT.command, args: ["mcp"], cwd: WANT.cwd, env: { CAPCOMD_ENDPOINT: "http://127.0.0.1:7000", CAPCOMD_HOME: "/home/me/.capcomd" }, trust: "untrusted", timeout: 600 });
     expect(y.mcp_servers.other).toEqual({ url: "https://x.example" });
     expect(r.text).toContain("\n    other:\n        url: \"https://x.example\"\n"); // its indentation, untouched
-    // No project this time: the entry keeps the directory it had.
-    expect(mergedEntry(y.mcp_servers.capcomd, { command: "c", args: ["mcp"], trust: "untrusted" }).cwd).toBe(WANT.cwd);
+    // The shared entry (no cwd wanted) drops a directory an older setup pinned; Hermes's timeout is added only when unset.
+    const shared = mergedEntry(y.mcp_servers.capcomd, { command: "c", args: ["mcp"], trust: "untrusted", timeout: 360 });
+    expect(shared.cwd).toBeUndefined();
+    expect(shared.timeout).toBe(600);
+    expect(mergedEntry({ command: "c" }, { command: "c", args: ["mcp"], trust: "untrusted", timeout: 360 }).timeout).toBe(360);
   });
 
   test("flow and empty shapes ({} and [], or no value) become blocks", () => {
@@ -199,7 +204,7 @@ describe("capcomd setup agent / setup check with Hermes", () => {
     expect(hermesOf(c)).toMatchObject({ ok: true, detail: expect.stringContaining("Hermes not found") });
   });
 
-  test("with Hermes: registers capcomd mcp (in this project), installs the skills; again keeps it; check reports it", () => {
+  test("with Hermes: registers one capcomd mcp for all projects, adds this one to the list, installs the skills; again keeps it; check reports it", () => {
     const home = hermesHomeWith(WITH_SERVERS);
     const env = envFor(home);
     const r = run(["setup", "agent", "--yes", "--json"], { cwd: join(repo, ".capcomd"), env });
@@ -211,7 +216,11 @@ describe("capcomd setup agent / setup check with Hermes", () => {
     const cfgPath = join(home, ".hermes", "config.yaml");
     const text = readFileSync(cfgPath, "utf8");
     const y = yamlOf(text);
-    expect(y.mcp_servers.capcomd).toMatchObject({ command: process.execPath, args: [CLI, "mcp"], cwd: Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: repo }).stdout.toString().trim(), env: { CAPCOMD_HOME: join(home, ".capcomd") }, trust: "untrusted" });
+    expect(y.mcp_servers.capcomd).toEqual({ command: process.execPath, args: [CLI, "mcp"], env: { CAPCOMD_HOME: join(home, ".capcomd") }, trust: "untrusted", timeout: 360 });
+    // No folder pinned in Hermes: the checkout is in capcomd's project list (the first one is the default).
+    const top = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: repo }).stdout.toString().trim();
+    expect(projectsOf(home)).toEqual({ default: basename(top), list: [{ name: basename(top), path: top }] });
+    expect(step.detail).toContain(`added ${basename(top)}`);
     expect(y.mcp_servers.github).toEqual(yamlOf(WITH_SERVERS).mcp_servers.github);
     expect(text).toContain("# GitHub, issues only");
     expect(readFileSync(`${cfgPath}.capcomd.bak`, "utf8")).toBe(WITH_SERVERS);
@@ -226,7 +235,7 @@ describe("capcomd setup agent / setup check with Hermes", () => {
 
     const c = run(["setup", "check", "--json"], { cwd: repo, env });
     const steps = json(c.out).steps;
-    expect(steps.find((s: any) => s.step === "hermes")).toMatchObject({ ok: true, detail: expect.stringContaining("capcomd in Hermes") });
+    expect(steps.find((s: any) => s.step === "hermes")).toMatchObject({ ok: true, detail: expect.stringContaining("MCP tools for 1 project and skills") });
     expect(steps.find((s: any) => s.step === "agent plugin")).toMatchObject({ ok: true, detail: "not in Claude Code (Hermes has capcomd)" });
   });
 
@@ -261,6 +270,76 @@ describe("capcomd setup agent / setup check with Hermes", () => {
     expect(JSON.parse(readFileSync(join(proj, ".capcomd", "config.json"), "utf8")).driver.approvals).toBe("human");
   });
 
+  /** A git checkout with a project config (the result of `capcomd setup project`). */
+  const checkout = (prefix: string, cfg: Record<string, unknown> = { run: { checks: { unit: "true" } } }) => {
+    const d = mkdtempSync(join(tmpdir(), `capcomd-hermes-${prefix}-`));
+    Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: d });
+    mkdirSync(join(d, ".capcomd"));
+    writeFileSync(join(d, ".capcomd", "config.json"), JSON.stringify(cfg));
+    return Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: d }).stdout.toString().trim();
+  };
+
+  test("an entry an older setup pinned to a folder: unpinned, that folder joins the projects; a second checkout adds itself, one entry", () => {
+    const old = checkout("old"), next = checkout("next");
+    const home = hermesHomeWith(`mcp_servers:\n  capcomd:\n    command: "/old/capcomd"\n    args: ["mcp"]\n    cwd: ${JSON.stringify(old)}\n    trust: untrusted\n    timeout: 600\n`);
+    const env = envFor(home);
+    const r = run(["setup", "agent", "--yes", "--json"], { cwd: next, env });
+    expect(hermesOf(r).ok).toBe(true);
+    expect(hermesOf(r).detail).toContain(`moved ${old} from Hermes's capcomd entry to capcomd's projects`);
+    const cfgPath = join(home, ".hermes", "config.yaml");
+    const y = yamlOf(readFileSync(cfgPath, "utf8"));
+    expect(y.mcp_servers.capcomd.cwd).toBeUndefined();
+    expect(y.mcp_servers.capcomd.timeout).toBe(600); // the user's own timeout is kept
+    expect(Object.keys(y.mcp_servers)).toEqual(["capcomd"]);
+    expect(projectsOf(home)).toEqual({ default: basename(old), list: [{ name: basename(old), path: old }, { name: basename(next), path: next }] });
+    // Re-run in the old checkout: nothing to add, nothing to change (no duplicates in Hermes or in the list).
+    const text = readFileSync(cfgPath, "utf8");
+    const again = run(["setup", "agent", "--yes", "--json"], { cwd: old, env });
+    expect(hermesOf(again).detail).toContain("already had capcomd");
+    expect(hermesOf(again).detail).toContain("one capcomd for 2 projects");
+    expect(readFileSync(cfgPath, "utf8")).toBe(text);
+    expect(projectsOf(home).list).toHaveLength(2);
+    // --default-project makes this checkout the default.
+    run(["setup", "agent", "--yes", "--default-project", "--json"], { cwd: next, env });
+    expect(projectsOf(home).default).toBe(basename(next));
+    // Two checkouts with the same folder name get distinct names.
+    const twin = join(mkdtempSync(join(tmpdir(), "capcomd-hermes-twin-")), basename(next));
+    mkdirSync(join(twin, ".capcomd"), { recursive: true });
+    Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: twin });
+    writeFileSync(join(twin, ".capcomd", "config.json"), "{}");
+    run(["setup", "agent", "--yes", "--json"], { cwd: twin, env });
+    expect(projectsOf(home).list.map((x: any) => x.name)).toEqual([basename(old), basename(next), `${basename(next)}-2`]);
+  });
+
+  test("--hermes-entry-per-project (opt-in): a separate entry pinned to this checkout, with its own allowlist", () => {
+    const proj = checkout("solo");
+    const home = hermesHomeWith(WITH_SERVERS);
+    const r = run(["setup", "agent", "--yes", "--hermes-entry-per-project", "--json"], { cwd: proj, env: envFor(home) });
+    expect(hermesOf(r).ok).toBe(true);
+    const name = `capcomd-${basename(proj).toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
+    const y = yamlOf(readFileSync(join(home, ".hermes", "config.yaml"), "utf8"));
+    expect(y.mcp_servers.capcomd).toBeUndefined();
+    expect(y.mcp_servers[name]).toMatchObject({ command: process.execPath, cwd: proj, trust: "untrusted", timeout: 360 });
+    expect(y.command_allowlist).toEqual(["mcp:github/create_issue", ...hermesAllowlist(name)]);
+    expect(hermesOf(r).detail).toContain(`mcp_servers.${name} serves only`);
+    // Without a project there's nothing to pin it to.
+    const nowhere = mkdtempSync(join(tmpdir(), "capcomd-hermes-noproj-"));
+    expect(hermesOf(run(["setup", "agent", "--yes", "--hermes-entry-per-project", "--json"], { cwd: nowhere, env: envFor(hermesHomeWith("")) }))).toMatchObject({ ok: false, detail: expect.stringContaining("needs a project") });
+  });
+
+  test("--approvals elicit: capcomd asks you itself in Hermes (for Hermes's client only); works with Hermes's approvals off", () => {
+    const proj = checkout("elicit", { driver: { maxRunBudget: "usd=5" } });
+    const home = hermesHomeWith("approvals:\n  mode: off\n");
+    const r = run(["setup", "agent", "--yes", "--approvals", "elicit", "--json"], { cwd: proj, env: envFor(home) });
+    expect(hermesOf(r).detail).toContain("capcomd asks you itself in Hermes");
+    expect(JSON.parse(readFileSync(join(proj, ".capcomd", "config.json"), "utf8")).driver).toEqual({ maxRunBudget: "usd=5", approvals: "elicit", elicitClients: ["hermes-agent"] });
+    // --yes alone changes nothing; human goes back.
+    run(["setup", "agent", "--yes", "--json"], { cwd: proj, env: envFor(home) });
+    expect(JSON.parse(readFileSync(join(proj, ".capcomd", "config.json"), "utf8")).driver.approvals).toBe("elicit");
+    run(["setup", "agent", "--yes", "--approvals", "human", "--json"], { cwd: proj, env: envFor(home) });
+    expect(JSON.parse(readFileSync(join(proj, ".capcomd", "config.json"), "utf8")).driver.approvals).toBe("human");
+  });
+
   test("a config.yaml Hermes can't read is left alone, with the snippet to add by hand", () => {
     const home = hermesHomeWith("mcp_servers: [oops\n");
     const r = run(["setup", "agent", "--yes", "--json"], { cwd: repo, env: envFor(home) });
@@ -278,7 +357,9 @@ describe("capcomd setup agent / setup check with Hermes", () => {
     const env: Record<string, string> = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USER: process.env.USER ?? "me", LANG: "C", TERM: "dumb", SHELL: "/bin/sh", TMPDIR: tmpdir(),
       ...entry.env, CAPCOMD_NO_ENGINE_AUTOSTART: "1", CAPCOMD_ENDPOINT: "http://127.0.0.1:28799", CAPCOMD_HARNESS_SOCKET: join(home, "h.sock") };
     const client = new Client({ name: "hermes-like", version: "0" });
-    await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, cwd: entry.cwd, env, stderr: "ignore" }));
+    // No cwd in the entry: Hermes starts it in its own directory (here: a folder outside any project).
+    expect(entry.cwd).toBeUndefined();
+    await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, cwd: home, env, stderr: "ignore" }));
     try {
       expect(client.getServerVersion()?.name).toBe("capcomd");
       const tools = (await client.listTools()).tools;
@@ -288,10 +369,12 @@ describe("capcomd setup agent / setup check with Hermes", () => {
       const writes = tools.filter((t) => !t.annotations?.readOnlyHint && !t.annotations?.destructiveHint).map((t) => t.name).sort();
       expect(writes).toEqual([...HERMES_ALLOWED_TOOLS].sort());
       expect(tools.filter((t) => t.annotations?.destructiveHint).map((t) => t.name).sort()).toEqual(["capcomd_approve", "capcomd_cancel", "capcomd_merge"]);
-      // capcomd_setup, from Hermes's capcomd: the project's gates (from cwd) and Hermes reported as set up.
+      // capcomd_setup, from Hermes's capcomd: the default project's gates (answered from its checkout) and Hermes
+      // reported as set up.
       const res: any = await client.callTool({ name: "capcomd_setup", arguments: {} });
       const body = JSON.parse(res.content[0].text);
       expect(body.gates.checks).toEqual({ unit: "true" });
+      expect(body.project).toBe(projectsOf(home).default);
       expect(body.steps.find((s: any) => s.step === "hermes")).toMatchObject({ ok: true });
     } finally { await client.close(); }
   }, 60_000);
@@ -316,5 +399,24 @@ test("on a boxd machine without a key: setup records the machine, so the capcomd
     process.env.CAPCOMD_HOME = home2;
     await hermesStep(prompter({ yes: true }), {}, away, async () => ({ inside: false, credentials: false, detail: "not in a boxd machine" }));
     expect(existsSync(join(home2, "config.json"))).toBe(false);
+  } finally { for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+});
+
+test("interactive setup offers Hermes approvals: elicit (recommended, the default) or human; never client-confirmed", async () => {
+  const { hermesStep } = await import("../../src/cli/commands/setup");
+  const saved = { HERMES_HOME: process.env.HERMES_HOME, CAPCOMD_HOME: process.env.CAPCOMD_HOME, CAPCOMD_HERMES_CLI: process.env.CAPCOMD_HERMES_CLI };
+  const hh = mkdtempSync(join(tmpdir(), "capcomd-hermes-ask-"));
+  writeFileSync(join(hh, "config.yaml"), "");
+  const proj = mkdtempSync(join(tmpdir(), "capcomd-hermes-ask-proj-"));
+  mkdirSync(join(proj, ".capcomd"));
+  writeFileSync(join(proj, ".capcomd", "config.json"), "{}");
+  Object.assign(process.env, { HERMES_HOME: hh, CAPCOMD_HOME: mkdtempSync(join(tmpdir(), "capcomd-hermes-ask-home-")), CAPCOMD_HERMES_CLI: "/nonexistent/hermes" });
+  try {
+    const asked: Array<{ q: string; options: string[]; dflt: string }> = [];
+    const p = { interactive: true, confirm: async () => true, ask: async () => "", secret: async () => "", choose: async (q: string, options: Array<{ value: string }>, dflt: string) => { asked.push({ q, options: options.map((o) => o.value), dflt }); return dflt as any; } };
+    const s = await hermesStep(p as any, {}, proj, async () => ({ inside: false, credentials: false, detail: "" }));
+    expect(s?.ok).toBe(true);
+    expect(asked).toEqual([{ q: expect.stringContaining("Who approves them?"), options: ["elicit", "human"], dflt: "elicit" }]);
+    expect(JSON.parse(readFileSync(join(proj, ".capcomd", "config.json"), "utf8")).driver).toEqual({ approvals: "elicit", elicitClients: ["hermes-agent"] });
   } finally { for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 });

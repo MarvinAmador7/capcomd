@@ -114,7 +114,9 @@ A new principal, **driver**, sits between the operator (the human) and agents in
   widening.
 - **Approvals for protected branches stay human by default** (`approvals: "human"`): `capcomd_approve` answers
   with how to approve (`capcomd approve …` in a terminal, the TUI, or, later, a link). A project can set
-  `approvals: "client-confirmed"` to let the tool approve after the client's own per-call confirmation.
+  `approvals: "elicit"` to let the tool ask the person itself (MCP elicitation, capcomd's own prompt; only an accept
+  approves; docs/integration-agents.md), or the older `approvals: "client-confirmed"` to let the tool approve after
+  the client's own per-call confirmation.
 
 Enforcement lives in the primitives (`ops.ts`, `policy.ts`) keyed on the caller (`operator | driver | agent`), not
 in the MCP layer. On a machine where the driver agent also has a shell, these are guardrails against mistakes,
