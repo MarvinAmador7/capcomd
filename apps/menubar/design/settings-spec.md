@@ -1,8 +1,9 @@
 # Settings window: spec (v1)
 
 Status: **approved on the design canvas; built.** The boards are `settings/*.dc.html` (HTML with inline CSS) and
-they win wherever this text and they differ. `settings/CloudExplore.dc.html` is an exploration, not v1. Swift:
-`app/Sources/MenuBarApp/Settings*.swift`; the data and its mapping: `app/Sources/CapcomdStore/Settings.swift`.
+they win wherever this text and they differ. `settings/CloudExplore.dc.html` is a place's Details screen (§4.1), built
+read-only for ADR-021 phase 1, minus what the owner removed (below). Swift: `app/Sources/MenuBarApp/Settings*.swift`;
+the data and its mapping: `app/Sources/CapcomdStore/Settings.swift` and `Sandboxes.swift`.
 
 ## 1. Window
 
@@ -94,7 +95,13 @@ changes them here too." Runs on, each place's Default badge / **Make Default**, 
 are one setting (`startSandbox`): the place last picked anywhere. The composer uses it while it can be used.
 
 One section per place, header: its mark (Docker's one-colour mark for Local; the cloud glyph for Cloud until boxd's
-own), "Local · Docker on this Mac" / "Cloud · boxd", then **Default** (accent badge) or **Make Default**.
+own), "Local · Docker on this Mac" / "Cloud · boxd", then **Default** (accent badge) or **Make Default**, then
+**Details…** (§4.1) when capcomd describes its places (`sandboxes`). With `sandboxes`, nothing in the section depends on
+a place's name: the header is the descriptor's `title` and `mark`, the status row is labelled with its `vendor` and
+says "Running" (`kind: local`) or "Ready" (cloud), an unavailable place shows the daemon's reason (the empty ring and
+**Set Up…** when the reason names a plain capcomd command to run, as "No boxd API key (run capcomd setup)" does; red
+otherwise), and the footer says "Agents work in containers on this Mac." (or "virtual machines") from `kind` and
+`caps.isolation`. Without it, the rows are as below, by name.
 
 | Row | States |
 |---|---|
@@ -104,6 +111,38 @@ own), "Local · Docker on this Mac" / "Cloud · boxd", then **Default** (accent 
 Footers: Local "Agents work in containers on this Mac."
 The last place: "An agent environment holds the agents' tools, built once for each place they run. It never holds
 logins or keys."
+
+### 4.1 A place's details (`CloudExplore.dc.html`; ADR-021 phase 1)
+
+**Details…** pushes one generic screen in place of the Runs pane (not a sheet: the pane's content swaps, the window
+fits it like any pane and is titled "Runs › Cloud"); "‹ Runs" at the top, ⌘[ or Esc goes back. The sections and their
+order are fixed here, as on the board; which rows appear and what they say come from the daemon. Everything is
+read-only in phase 1 except Open in Terminal. Owner's removals from the board: no "Sites agents can reach" row and no
+"can't limit sites" copy (site access isn't a capcomd setting), no cost, no "asleep" machines.
+
+| Section | Rows | From |
+|---|---|---|
+| Header | mark, `title`, Default / Make Default (as in Runs) | `GET /v1/sandboxes` descriptor |
+| (status) | the availability row (as in Runs); then any `status` rows the daemon sends (a provider's key); then Agent environment (as in Runs, with Build… / Rebuild…) | `/v1/sandboxes`, `/v1/sandboxes/{name}` `info`, `/v1/environments` |
+| Machines | one row per machine: a dot (green running, orange left behind, ring starting / stopping), "worker · Add an abs(a) function…" (role · the task's first line) or "Left behind · no agent owns it", its age ("4 min", "2 h"), **Open in Terminal**; owned machines first, newest first; the tooltip adds the machine's id and when it is deleted if left idle. "No machines running." when there are none. Then "Delete idle machines after" (`idleLifetime`): a disabled popup showing its value ("1 hour") and help | `GET /v1/sandboxes/{name}/resources`, every 5 s while the screen shows; `idleLifetime` from `settings` |
+| Safety | **Logins**: "Bound" (green) when every login here is bound to its AI's API, "Codex isn't bound" (orange) when some aren't, "Not bound" when none are, "No logins"; the sub names the hosts. **Checkpoints**: the daemon's `display` ("After each commit and every 10 minutes"). Footer: "Local (Docker) can't bind logins to a host; Cloud does." from the descriptors' `caps.hostBoundSecrets` | `/v1/logins` `hostBound` / `boundTo`; `info` rows |
+| Options | settings this app doesn't place (only when there are any) | `settings` |
+
+Rows render by field type: `choice` → popup (disabled in phase 1), `toggle` → switch (disabled), `info` / `status` →
+a value (a `status` row's `state` picks its dot); a type the app doesn't know shows its `label` and `display`
+read-only. A value set in capcomd's environment (`source: "env"`) shows the daemon's `display` instead of a control.
+Marks are bundled by id (`PlaceMarks`): `docker` the official mark, `boxd` the cloud glyph for now; an unknown id gets
+`desktopcomputer` (local) or `cloud`.
+
+- **Stale list**: when the provider didn't answer (`stale: true`), the last list stays with a quiet footer
+  "Couldn't reach boxd just now. These are the machines it listed at 10:22." A failed read of the route itself keeps
+  the last list the same way.
+- **Open in Terminal** asks the daemon for the machine (`GET …/resources/{id}`) and runs its `terminalCommand`
+  (`capcomd sandbox shell run-8kq2 agt-41`, or `--sandbox boxd --machine …` for one left behind) in Terminal. The app
+  never builds the command, and runs it only when it is a plain capcomd command (`SettingsRows.isSafeCommand`); anything
+  else beeps and the footer says nothing was opened. A machine that's gone says "This machine is gone."
+- **Older daemons**: without `sandboxes`, no Details… and Runs is as above; without `sandboxes.resources`, no machine
+  list and the first section's footer says "Update capcomd to see machines here."
 
 ## 5. About (`About.dc.html`)
 
@@ -121,13 +160,17 @@ buttons, github.com/MarvinAmador7/capcomd), "MIT License".
 | `GET /v1/environments` (`environments`) | Agent environment rows | rows hidden; footer "Update capcomd to see each place's agent environment here." |
 | `GET /v1/service` (`service`) | Keep capcomd running | row hidden, footer naming `capcomd service install` |
 | `GET /v1/run-options` (`runs.options`) | New runs, places, boxd key | Driven by, Effort, Runs on and the place sections hidden: "This version of capcomd can't list drivers or places to run. Update capcomd to choose them here." |
+| `GET /v1/sandboxes`, `/v1/sandboxes/{name}` (`sandboxes`) | Place headers and status rows, Details… (§4.1) | places shown by name as before; no Details… |
+| `GET /v1/sandboxes/{name}/resources[/{id}]` (`sandboxes.resources`) | Machines, Open in Terminal | no machine list: "Update capcomd to see machines here." |
 
 While capcomd can't be reached, daemon rows keep their last values, disabled, with "Shown when capcomd is running."
 Commands from the daemon reach Terminal only when they are plain capcomd invocations (`SettingsRows.isSafeCommand`).
-The mock daemon serves all of this: `SETTINGS=mixed|fresh|building|failed|ready|old` (`client/mock/settings.ts`).
+The mock daemon serves all of this: `SETTINGS=mixed|fresh|building|failed|ready|old` (`client/mock/settings.ts`), and
+the place routes with `SANDBOXES=machines|stale|empty|unsafe|nores|off` (machines running and one left behind; boxd
+not answering; none; a `terminalCommand` the app must refuse; `sandboxes` without `sandboxes.resources`; none of it).
 
 ## 7. Later
 
 Log out (a route that doesn't exist yet), building an environment in the app with real progress (today Terminal does
-it; the bar is indeterminate), more clouds (`CloudExplore.dc.html`), Permissions (who am I), naming the default
-project, updates.
+it; the bar is indeterminate), changing a place's settings ("Delete idle machines after"; ADR-021 phase 2, the
+`configure` scope) and Delete… on a machine (phase 3), Permissions (who am I), naming the default project, updates.

@@ -5,12 +5,28 @@ import CapcomdStore
 
 /// Settings › Runs (Runs.dc.html; States: building an agent environment): what new runs start with, and each place
 /// agents can run, with its agent environment. "Runs on" and each place's Default / Make Default are one setting,
-/// the composer's starting place, which the composer's Local / Cloud switch changes too.
+/// the composer's starting place, which the composer's Local / Cloud switch changes too. A place's Details… (daemons
+/// with `sandboxes`) pushes its details screen in place of the pane (SettingsPlaceDetails.swift); back returns here.
 struct RunsPane: View {
   @Environment(AppModel.self) private var model
   private static let chooseFolder = "\u{1}choose"
+  /// The place whose details are pushed, if any.
+  @State private var details: String?
 
   var body: some View {
+    Group {
+      if let name = details {
+        PlaceDetailsView(name: name) { details = nil }
+      } else {
+        runs
+      }
+    }
+    // A new identity per screen: the window fits each one afresh (PaneFit), and the pushed screen starts its own polling.
+    .paneFit()
+    .id(details ?? "")
+  }
+
+  @ViewBuilder private var runs: some View {
     let live = model.connection.live
     let places = model.hasRunOptions ? model.sandboxes : []
     let envs = model.environmentRows
@@ -30,8 +46,9 @@ struct RunsPane: View {
       }
 
       ForEach(Array(places.enumerated()), id: \.element.id) { i, place in
-        PlaceSection(place: place, env: envs?.first { $0.sandbox == place.name }, isDefault: model.defaultPlace?.name == place.name,
-                     last: i == places.count - 1, environmentsUnsupported: model.environmentsUnsupported, live: live)
+        PlaceSection(place: place, descriptor: model.descriptor(place.name), env: envs?.first { $0.sandbox == place.name },
+                     isDefault: model.defaultPlace?.name == place.name, last: i == places.count - 1,
+                     environmentsUnsupported: model.environmentsUnsupported, live: live) { details = place.name }
       }
     }
     .formStyle(.grouped)
@@ -97,7 +114,8 @@ struct RunsPane: View {
     Picker(selection: Binding(get: { model.defaultPlace?.name ?? "" }, set: { model.setDefaultPlace($0) })) {
       if model.defaultPlace == nil { Text("None").tag("") }
       ForEach(model.sandboxes) { s in
-        Label { Text(verbatim: PlaceNames.menu(s)) } icon: { MenuMarks.place(s.name) }.tag(s.name)
+        let d = model.descriptor(s.name)
+        Label { Text(verbatim: d.map(\.displayTitle) ?? PlaceNames.menu(s)) } icon: { MenuMarks.place(d?.mark ?? s.name, kind: d?.kind) }.tag(s.name)
       }
     } label: {
       Text("Runs on")
@@ -107,43 +125,36 @@ struct RunsPane: View {
   }
 }
 
-/// One place agents run: whether it can be used now, and its agent environment.
+/// One place agents run: whether it can be used now, and its agent environment. With a descriptor (daemons with
+/// `sandboxes`) everything provider-specific comes from it; without one, the names docker and boxd decide, as before.
 struct PlaceSection: View {
   @Environment(AppModel.self) private var model
   let place: SandboxInfo
+  let descriptor: SandboxDescriptor?
   let env: EnvironmentRow?
   let isDefault: Bool
   let last: Bool
   let environmentsUnsupported: Bool
   let live: Bool
+  /// Details…: pushes the place's details screen.
+  let showDetails: () -> Void
 
   var body: some View {
-    let title = PlaceNames.title(place.name, label: place.label)
+    let title = descriptor?.label ?? PlaceNames.title(place.name, label: place.label)
     Section {
       statusRow
-      if let env { environmentRow(env, title: title) }
+      if let env { PlaceEnvironmentRow(env: env, title: title) }
     } header: {
-      HStack(spacing: Theme.Settings.headerGap) {
-        PlaceMark(name: place.name)
-        Text(verbatim: PlaceNames.header(place))
-        Spacer(minLength: 0)
-        if isDefault {
-          DefaultBadge().accessibilityLabel("\(title) is the default")
-        } else {
-          Button("Make Default") { model.setDefaultPlace(place.name) }
-            .controlSize(.small).font(Theme.Settings.headerButtonFont)
-            .accessibilityLabel("Make \(title) the default")
-        }
-      }
+      PlaceHeader(name: place.name, descriptor: descriptor, fallbackTitle: PlaceNames.header(place), fallbackLabel: place.label, isDefault: isDefault, showDetails: descriptor == nil ? nil : showDetails)
     } footer: {
       VStack(alignment: .leading, spacing: 4) {
-        if let w = model.handOffs.waiting(HandOffKey.environment(place.name)) ?? (place.name == "boxd" ? model.handOffs.waiting(HandOffKey.boxdKey) : nil) {
+        if let w = model.handOffs.waiting(HandOffKey.environment(place.name)) ?? model.handOffs.waiting(setupKey) {
           OpenedFoot(command: w.command)
         }
         if env?.state == .building {
           Foot(verbatim: "Runs on \(title) start once it's built.")
-        } else if place.name == "docker" {
-          Foot(verbatim: "Agents work in containers on this Mac.")
+        } else if let foot = descriptor.map(SandboxRows.placeFootnote) ?? (place.name == "docker" ? "Agents work in containers on this Mac." : nil) {
+          Foot(verbatim: foot)
         }
         if last {
           if env != nil { Foot(verbatim: "An agent environment holds the agents' tools, built once for each place they run. It never holds logins or keys.") }
@@ -155,7 +166,15 @@ struct PlaceSection: View {
     .disabled(!live)
   }
 
+  /// The hand-off a Set Up… on the status row starts.
+  private var setupKey: String { descriptor == nil ? (place.name == "boxd" ? HandOffKey.boxdKey : HandOffKey.placeSetup(place.name)) : HandOffKey.placeSetup(place.name) }
+
   @ViewBuilder private var statusRow: some View {
+    if let descriptor { PlaceStatusRow(descriptor: descriptor, place: place) } else { legacyStatusRow }
+  }
+
+  /// Daemons without `sandboxes`: the row as it was, by name.
+  @ViewBuilder private var legacyStatusRow: some View {
     let reason = PlaceNames.reason(place.reason)
     LabeledContent(PlaceNames.engine(place.name)) {
       HStack(spacing: Theme.Settings.rowGap) {
@@ -175,8 +194,15 @@ struct PlaceSection: View {
       }
     }
   }
+}
 
-  @ViewBuilder private func environmentRow(_ env: EnvironmentRow, title: String) -> some View {
+/// A place's agent environment: ready, not built, building, failed, or waiting on Terminal.
+struct PlaceEnvironmentRow: View {
+  @Environment(AppModel.self) private var model
+  let env: EnvironmentRow
+  let title: String
+
+  var body: some View {
     let key = HandOffKey.environment(env.sandbox)
     let build = { (command: String) in _ = model.handOff(key, command: command, baseline: env.fingerprint) }
     if model.handOffs.waiting(key) != nil {

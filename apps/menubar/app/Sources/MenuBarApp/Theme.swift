@@ -508,6 +508,13 @@ enum Theme {
     static let faceTile: CGFloat = 32, faceTileRadius: CGFloat = 7, faceTileFill = Color.primary.opacity(0.06), faceMark: CGFloat = 16
     static let progressWidth: CGFloat = 150                           // `.track` while an environment builds
     static let sheetWidth: CGFloat = 380, sheetPadding: CGFloat = 20, sheetGap: CGFloat = 10
+    /// A place's details (CloudExplore.dc.html), pushed from Runs.
+    enum Details {
+      static let backPaddingH: CGFloat = 20, backPaddingTop: CGFloat = 12   // the back control, aligned with the Form's groups
+      static let machineGap: CGFloat = 10                              // `.mrow` gap
+      static let machineFont = Font.system(size: 12)                   // `.mrow` 12 px
+      static let ageFont = Font.system(size: 11, design: .monospaced)  // `.mono`
+    }
     /// About (`About.dc.html`): one centred column.
     enum About {
       static let height: CGFloat = 420                                // the board's 500 pt window less its toolbar

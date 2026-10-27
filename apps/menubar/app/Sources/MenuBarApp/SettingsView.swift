@@ -12,10 +12,11 @@ struct SettingsView: View {
   @State private var pane: Pane = .general
 
   var body: some View {
+    // Runs fits itself (RunsPane: its place details screen is pushed in place of it).
     TabView(selection: $pane) {
       GeneralPane().paneFit().tabItem { Label("General", systemImage: "gearshape") }.tag(Pane.general)
       AccountsPane().paneFit().tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag(Pane.accounts)
-      RunsPane().paneFit().tabItem { Label("Runs", systemImage: "square.stack.3d.up") }.tag(Pane.runs)
+      RunsPane().tabItem { Label("Runs", systemImage: "square.stack.3d.up") }.tag(Pane.runs)
       AboutPane().paneFit().tabItem { Label("About", systemImage: "info.circle") }.tag(Pane.about)
     }
     .frame(width: Theme.Settings.width)

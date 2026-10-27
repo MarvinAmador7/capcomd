@@ -57,6 +57,29 @@ extension AppModel {
   }
   var environmentsUnsupported: Bool { _ = revision; return store.environments == .unavailable(.unsupported) }
 
+  // Place details (ADR-021 phase 1; SettingsPlaceDetails.swift)
+  /// The daemon describes its places (`sandboxes`): sections use the descriptors and offer Details….
+  var hasSandboxes: Bool { _ = revision; return store.capabilities.contains(Capability.sandboxes) && store.sandboxList?.value != nil }
+  var sandboxDescriptors: [SandboxDescriptor] { _ = revision; return store.capabilities.contains(Capability.sandboxes) ? store.sandboxList?.value ?? [] : [] }
+  /// nil on daemons without `sandboxes`: the place is shown as before, by name.
+  func descriptor(_ name: String) -> SandboxDescriptor? {
+    _ = revision
+    guard store.capabilities.contains(Capability.sandboxes) else { return nil }
+    return store.sandboxDescriptor(name)
+  }
+  func sandboxDetail(_ name: String) -> SandboxDetail? { _ = revision; return store.sandboxDetails[name]?.value }
+  /// The daemon lists machines (`sandboxes.resources`).
+  var resourcesSupported: Bool { _ = revision; return store.capabilities.contains(Capability.sandboxesResources) }
+  func sandboxResources(_ name: String) -> Fetched<ResourcePage>? { _ = revision; return store.sandboxResources[name] }
+  /// Settings can be changed from the app (`sandboxes.settings`, phase 2). Phase 1 shows them read-only.
+  var sandboxSettingsEditable: Bool { false }
+  var loginList: [LoginInfo] { _ = revision; return store.logins?.value ?? [] }
+  func refreshSandbox(_ name: String) async {
+    guard !tokenPending, !tokenMissing else { return }
+    await store.refreshSandbox(name)
+  }
+  func terminalCommand(sandbox: String, resource: String) async -> TerminalCommand { await store.terminalCommand(sandbox: sandbox, resource: resource) }
+
   /// Reads everything Settings shows once (the window polls this while it is open), then ends the Terminal hand-offs
   /// whose rows changed.
   func refreshSettings() async {
@@ -83,6 +106,7 @@ extension AppModel {
     for e in environmentRows ?? [] { now[HandOffKey.environment(e.sandbox)] = e.fingerprint }
     now[HandOffKey.service] = "\(serviceState)"
     now[HandOffKey.boxdKey] = "\(boxdKey)"
+    for p in store.runOptions.sandboxes { if let d = descriptor(p.name) { now[HandOffKey.placeSetup(p.name)] = SandboxRows.status(d, place: p).fingerprint } }
     now[HandOffKey.start] = "\(connection.live)"
     // Scripts touch a marker when they end (TerminalLauncher.run): a re-login that changes nothing still ends the wait.
     let finished = Set(handOffs.open.keys.filter { FileManager.default.fileExists(atPath: TerminalLauncher.marker($0).path) })
@@ -100,6 +124,8 @@ enum HandOffKey {
   static func environment(_ sandbox: String) -> String { "env-\(sandbox)" }
   static let service = "service"
   static let boxdKey = "boxd-key"
+  /// Set Up… on a place's status row (the command its reason names).
+  static func placeSetup(_ sandbox: String) -> String { "setup-\(sandbox)" }
   static let start = "start"
 }
 
@@ -148,6 +174,14 @@ extension TerminalLauncher {
       echo
       if [ $rc -eq 0 ]; then echo "Done. capcomd Settings updates by itself; you can close this window."; else echo "That didn't work (exit $rc)."; fi
       """)
+  }
+
+  /// Open in Terminal: a shell in a machine, through the daemon's `terminalCommand`. Only a plain capcomd command runs
+  /// (SettingsRows.isSafeCommand); the app never builds one.
+  @discardableResult
+  static func shell(_ command: String, name: String) -> Bool {
+    guard SettingsRows.isSafeCommand(command) else { NSSound.beep(); return false }
+    return script(name: name, command)
   }
 
   /// Reset…: revokes the active clients named "menubar" (the name `capcomd clients add menubar` gives this app's
@@ -222,6 +256,11 @@ enum AppInfo {
 @MainActor enum SettingsWindow {
   private static var window: NSWindow?
   private static var closeObserver: NSObjectProtocol?
+
+  /// A pushed screen's title ("Runs › Cloud"); the pane's own title comes back when it is popped. Best effort: the
+  /// tab view sets the title again whenever the pane changes.
+  static func setTitle(_ title: String) { window?.title = title }
+  static var title: String? { window?.title }
 
   /// Settings… in the panel: close the panel (it would stay on top), become a regular app, open the window.
   static func open(_ openSettings: OpenSettingsAction) {
@@ -348,11 +387,11 @@ extension View {
     case .codex: Image(systemName: "circle.hexagongrid.fill")
     }
   }
-  static func place(_ name: String) -> Image {
-    switch name {
-    case "docker": Image(nsImage: image("docker", path: ProviderMarks.docker, viewBox: 24, size: Theme.Settings.menuMark))
-    case "boxd": Image(systemName: "cloud")
-    default: Image(systemName: "shippingbox")
+  /// A place's mark by its id (PlaceMarks): bundled marks, else a glyph by kind.
+  static func place(_ mark: String, kind: SandboxDescriptor.Kind? = nil) -> Image {
+    switch PlaceMarks.glyph(mark, kind: kind) {
+    case .path(let id, let path): Image(nsImage: image(id, path: path, viewBox: 24, size: Theme.Settings.menuMark))
+    case .symbol(let s): Image(systemName: s)
     }
   }
 }

@@ -18,6 +18,25 @@ enum ProviderMarks {
   static func badgeTint(_ p: Provider) -> Color { p == .claude ? Theme.Provider.claude : .white }
 }
 
+/// Marks of the places agents run, by the descriptor's `mark` id (ADR-021 §6): bundled, never downloaded. Known ids
+/// get their mark (Docker's official one; boxd the cloud glyph until boxd's own arrives); an unknown id gets an SF
+/// Symbol by kind: `desktopcomputer` on this Mac, `cloud` for a cloud. With no kind (an older daemon, no descriptor), a box.
+enum PlaceMarks {
+  enum Glyph { case path(String, Path), symbol(String) }
+  static func glyph(_ mark: String, kind: SandboxDescriptor.Kind?) -> Glyph {
+    switch mark {
+    case "docker": return .path("docker", ProviderMarks.docker)
+    case "boxd": return .symbol("cloud")
+    default:
+      switch kind {
+      case .local: return .symbol("desktopcomputer")
+      case .cloud: return .symbol("cloud")
+      case nil: return .symbol("shippingbox")
+      }
+    }
+  }
+}
+
 /// The mark at `size` points, in the current foreground style.
 struct ProviderMark: View {
   let provider: Provider

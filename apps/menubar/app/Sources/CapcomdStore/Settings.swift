@@ -27,8 +27,13 @@ public struct LoginInfo: Codable, Sendable, Hashable {
   public var detail: String?
   /// What to run in Terminal to log in there.
   public var command: String
-  public init(provider: String, sandbox: String, loggedIn: Bool, how: String? = nil, detail: String? = nil, command: String) {
+  /// The login is kept as a secret that only works on its AI's API host (`boundTo`, "api.anthropic.com"); nil from a
+  /// daemon that doesn't say (before ADR-021).
+  public var hostBound: Bool?
+  public var boundTo: String?
+  public init(provider: String, sandbox: String, loggedIn: Bool, how: String? = nil, detail: String? = nil, command: String, hostBound: Bool? = nil, boundTo: String? = nil) {
     self.provider = provider; self.sandbox = sandbox; self.loggedIn = loggedIn; self.how = how; self.detail = detail; self.command = command
+    self.hostBound = hostBound; self.boundTo = boundTo
   }
 }
 
@@ -90,11 +95,12 @@ extension CapcomdStore {
     if let v = await settingsRead(Capability.logins, { try await daemonInfo.logins() }) { logins = v }
     if let v = await settingsRead(Capability.environments, { try await daemonInfo.environments() }) { environments = v }
     if let v = await settingsRead(Capability.service, { try await daemonInfo.service() }) { service = v }
+    if let v = await settingsRead(Capability.sandboxes, { try await daemonInfo.sandboxes() }) { sandboxList = v }
     changed()
   }
 
   /// nil: keep what was there (the daemon couldn't be reached).
-  private func settingsRead<T: Sendable & Hashable>(_ cap: String, _ read: () async throws -> T) async -> Fetched<T>? {
+  func settingsRead<T: Sendable & Hashable>(_ cap: String, _ read: () async throws -> T) async -> Fetched<T>? {
     guard capabilities.contains(cap) else { return .unavailable(.unsupported) }
     do { return .loaded(try await read()) }
     catch is Unauthorized { unauthorized = true; return nil }

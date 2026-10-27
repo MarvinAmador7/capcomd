@@ -62,20 +62,29 @@ struct DefaultBadge: View {
   }
 }
 
-/// A place's mark in its section header: Docker's (one colour) for Local, the cloud for Cloud (a stand-in until
-/// boxd's own mark), a box for anything else.
+/// A place's mark in its section header, by the descriptor's `mark` id (PlaceMarks): Docker's (one colour), the cloud
+/// for boxd (a stand-in until boxd's own mark), else a glyph by kind. Without a descriptor, the place's name is the id.
 struct PlaceMark: View {
-  let name: String
+  let mark: String
+  var kind: SandboxDescriptor.Kind? = nil
+  init(name: String) { mark = name }
+  init(mark: String, kind: SandboxDescriptor.Kind) { self.mark = mark; self.kind = kind }
   var body: some View {
     let side = Theme.Settings.placeMark
     Group {
-      switch name {
-      case "docker": SVGShape(path: ProviderMarks.docker, viewBox: 24).frame(width: side, height: side)
-      case "boxd": Image(systemName: "cloud").font(.system(size: side * 0.8)).frame(width: side, height: side)
-      default: Image(systemName: "shippingbox").font(.system(size: side * 0.8)).frame(width: side, height: side)
+      switch PlaceMarks.glyph(mark, kind: kind) {
+      case .path(_, let path): SVGShape(path: path, viewBox: 24).frame(width: side, height: side)
+      case .symbol(let s): Image(systemName: s).font(.system(size: side * 0.8)).frame(width: side, height: side)
       }
     }
     .accessibilityHidden(true)
+  }
+}
+
+extension Tone {
+  /// The StatusDot for a tone; `.none` draws no dot.
+  var dot: StatusDot.Kind? {
+    switch self { case .ok: .ok; case .warn: .warn; case .bad: .bad; case .empty: .empty; case .none: nil }
   }
 }
 

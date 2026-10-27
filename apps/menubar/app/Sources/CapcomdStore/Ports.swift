@@ -257,6 +257,12 @@ public protocol DaemonInfoFetching: Sendable {
   func logins() async throws -> [LoginInfo]
   func environments() async throws -> [EnvironmentInfo]
   func service() async throws -> ServiceInfo
+  /// `GET /v1/sandboxes`, `/v1/sandboxes/{name}` (capability `sandboxes`) and `…/resources`, `…/resources/{id}`
+  /// (`sandboxes.resources`). `DetailUnavailable.unsupported` on daemons without them.
+  func sandboxes() async throws -> [SandboxDescriptor]
+  func sandbox(_ name: String) async throws -> SandboxDetail
+  func resources(sandbox: String) async throws -> ResourcePage
+  func resource(sandbox: String, id: String) async throws -> ResourceDetail
 }
 extension DaemonInfoFetching {
   public func runOptions(repo: String?) async throws -> RunOptions { RunOptions() }
@@ -264,4 +270,8 @@ extension DaemonInfoFetching {
   public func logins() async throws -> [LoginInfo] { throw DetailUnavailable.unsupported }
   public func environments() async throws -> [EnvironmentInfo] { throw DetailUnavailable.unsupported }
   public func service() async throws -> ServiceInfo { throw DetailUnavailable.unsupported }
+  public func sandboxes() async throws -> [SandboxDescriptor] { throw DetailUnavailable.unsupported }
+  public func sandbox(_ name: String) async throws -> SandboxDetail { throw DetailUnavailable.unsupported }
+  public func resources(sandbox: String) async throws -> ResourcePage { throw DetailUnavailable.unsupported }
+  public func resource(sandbox: String, id: String) async throws -> ResourceDetail { throw DetailUnavailable.unsupported }
 }

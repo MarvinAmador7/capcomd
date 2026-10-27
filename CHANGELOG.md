@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: each place in Settings › Runs has a **Details…** button (with a capcomd that describes its places). It
+  shows whether the place can be used, its agent environment, the machines agents are running there right now (who
+  uses each one and for how long, and any machine left behind that no agent owns), how long an idle machine is kept
+  ("Delete idle machines after", shown but not yet changeable), whether logins there are bound to their AI's API, and
+  when work is checkpointed. **Open in Terminal** opens a shell in a machine. If the provider can't be reached, the
+  last list stays with a note. ⌘[ goes back to Runs.
 - Harness API: three read-only routes for a settings screen, each with its capability in `GET /v1/health`.
   `GET /v1/logins` (`logins`) says, for Claude and Codex in each sandbox (docker, boxd), whether agents can log in,
   how (a plan login or an API key), where the login is kept, and the `capcomd auth login … --sandbox …` command that
