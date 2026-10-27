@@ -9,7 +9,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   daemon restarted) and kept showing old state; it now reconnects within a few seconds. Runs started elsewhere (the
   CLI, another agent) appear as they start, with their agents, even with many runs around; before, past about seven
   runs, new ones showed no agents. An ended run's view no longer offers Pause and Stop. Agents you
-  stopped show a grey stop mark instead of a red failure, and agents in the Activity list show their bots.
+  stopped show a grey stop mark instead of a red failure, and agents in the Activity list show their bots. When several agents
+  changed files, each row in Files shows the bot of the agent that changed it.
 - Daemon: event streams are no longer cut after 10 seconds of quiet (the heartbeat comes every 15).
 - Trace: git steps are named after their command (push, clone, checkout) even when git gets options first; they read
   "-c" before, and a push could show the remote instead of the branch. In the menu bar's Trace view, paused agents

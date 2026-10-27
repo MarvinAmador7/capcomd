@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import CapcomdStore
+import CapcomdBot
 
 /// SPEC §4.3 run drill-down (view-activity / view-trace / drill-collapsed / drill-a2-*): header, step bar, Activity or
 /// Trace (remembered), Log | Files (remembered), then Pause · Stop · Open in terminal. Clicks animate; the same changes
@@ -524,7 +525,12 @@ struct DetailPane: View {
       case .loaded(let f) where !f.files.isEmpty:
         ScrollView(showsIndicators: false) {
           VStack(spacing: 0) {
-            ForEach(f.files, id: \.self) { FileRow(file: $0) }
+            // Which agent changed it: two agents can change one path on their own branches (two rows, two bots).
+            let several = Set(f.files.map(\.agentId)).count > 1
+            ForEach(f.files, id: \.self) { file in
+              FileRow(file: file, bot: several ? model.bot(runId: runId, agentId: file.agentId) : nil,
+                      who: model.botName(runId: runId, agentId: file.agentId))
+            }
             if f.truncated { empty("\(f.total - f.files.count) more not shown") }
           }
         }
@@ -548,15 +554,18 @@ struct DetailPane: View {
   }
 }
 
-/// `.f`: status glyph · path (mono, middle-truncated) · +n · −n.
+/// `.f`: status glyph · path (mono, middle-truncated) · the agent's bot when several agents changed files · +n · −n.
 struct FileRow: View {
   let file: RunFiles.File
+  var bot: BotTraits? = nil
+  var who: String? = nil
   var body: some View {
     HStack(spacing: Theme.Drill.fileGap) {
       Image(systemName: symbol).font(Theme.Drill.iconFont).foregroundStyle(Theme.Drill.iconText).frame(width: Theme.Drill.fileIcon)
       Text(verbatim: UntrustedText(file.path).plain).font(Theme.Drill.fileFont).foregroundStyle(Theme.Drill.fileText)
         .lineLimit(1).truncationMode(.middle)
       Spacer(minLength: 0)
+      if let bot { BotAvatar(traits: bot, size: .xs).help(who ?? "") }
       if let a = file.added { Text(verbatim: "+\(a)").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.green) }
       if let r = file.removed { Text(verbatim: "−\(r)").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.red) }
       if file.added == nil && file.removed == nil { Text("binary").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.Drill.emptyText) }
@@ -564,6 +573,7 @@ struct FileRow: View {
     .frame(height: Theme.Drill.fileHeight)
     .padding(.horizontal, Theme.Drill.rowPadding)
     .accessibilityElement(children: .combine)
+    .accessibilityHint(who.map { "Changed by \($0)" } ?? "")
   }
   private var symbol: String {
     switch file.status { case "added": "doc.badge.plus"; case "deleted": "trash"; case "renamed", "copied": "arrow.right.doc.on.clipboard"; default: "square.and.pencil" }
