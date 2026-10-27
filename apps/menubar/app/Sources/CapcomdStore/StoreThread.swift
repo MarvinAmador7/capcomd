@@ -21,6 +21,14 @@ public enum Capability {
   public static let runsOptions = "runs.options"
   /// `GET /v1/run-options` takes `repo`: the options of the project a new run goes to, not only the daemon's own.
   public static let runsOptionsRepo = "runs.options.repo"
+  /// `GET /v1/run-options` `drivers[].sandboxes`: whether each driver can run in each place.
+  public static let runsOptionsSandbox = "runs.options.sandbox"
+  /// `GET /v1/logins`: each AI's login in each place agents run (Settings › Accounts).
+  public static let logins = "logins"
+  /// `GET /v1/environments`: each place's agent environment (Settings › Runs).
+  public static let environments = "environments"
+  /// `GET /v1/service`: capcomd as a background service (Settings › General).
+  public static let service = "service"
 }
 
 extension CapcomdStore {
@@ -60,7 +68,7 @@ extension CapcomdStore {
   /// Capabilities and skills, read once per daemon connection (cheap; the view asks when the thread opens).
   public func refreshDaemonInfo() async {
     guard let daemonInfo else { return }
-    if let c = try? await daemonInfo.capabilities() { capabilities = c }
+    if let h = try? await daemonInfo.health() { capabilities = h.capabilities; daemonVersion = h.version }
     do { skills = .loaded(try await daemonInfo.skills()) }
     catch { skills = .unavailable(error as? DetailUnavailable ?? .failed("Couldn't reach capcomd")) }
     await refreshRunOptions()

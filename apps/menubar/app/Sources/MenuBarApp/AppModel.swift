@@ -40,7 +40,11 @@ final class AppModel {
 
   private func attach(_ s: CapcomdStore) {
     s.onChange = { [weak self] in self?.revision &+= 1 }
-    s.onNotify = { [weak self] n in self?.moment(n); Notifier.post(n, bot: self?.notificationBot(n)) }
+    s.onNotify = { [weak self] n in
+      guard let self else { return }
+      self.moment(n)
+      if self.store.prefs.allows(n) { Notifier.post(n, bot: self.notificationBot(n)) }   // Settings › General › Notifications
+    }
   }
 
   static var socketPath: String {
@@ -104,7 +108,7 @@ final class AppModel {
     let m = AppModel(makeStore(token: ""), tokenMissing: false)   // not started until the token is in
     m.tokenPending = true
     ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
-    if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { m.connect(token: env); return m }
+    if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { m.tokenFromEnvironment = true; m.connect(token: env); return m }
     Task.detached(priority: .userInitiated) {
       let token = Keychain.token()
       await MainActor.run { m.connect(token: token) }
@@ -130,10 +134,18 @@ final class AppModel {
     let old = transport
     Task { try? await old.shutdown() }   // keeps `old` alive until its client is shut down
     let (s, t) = Self.makeStore(token: token); store = s; transport = t; attach(s)
-    tokenMissing = false; path = []
+    tokenMissing = false; tokenFromEnvironment = false; path = []
     s.start(); revision &+= 1
+    Task { await s.refreshSettings() }
     return true
   }
+  /// The token came from `CAPCOMD_TOKEN` (development): Settings says so and offers no Reset.
+  private(set) var tokenFromEnvironment = false
+
+  /// Settings: what the user is finishing in Terminal (SettingsModel.swift).
+  var handOffs = HandOffs()
+  /// A pref the store doesn't watch changed: views reading it re-render.
+  func bump() { revision &+= 1 }
 
   var projects: [Project] { _ = revision; return store.projects }
   var badgeCount: Int { _ = revision; return store.badgeCount }
@@ -191,32 +203,18 @@ final class AppModel {
   }
   /// Starts a run; when the daemon has no default repository, asks for the project folder once and remembers it.
   /// Who can drive a new run as its planner, and where it can run (`runs.options`); empty on daemons that can't say.
-  var drivers: [DriverInfo] { _ = revision; return store.runOptions.drivers(in: startSandbox?.name) }
+  var drivers: [DriverInfo] { _ = revision; return store.startDrivers }
   var sandboxes: [SandboxInfo] { _ = revision; return store.runOptions.sandboxes }
-  /// Where new runs go: the one last picked while still available, else the project's default.
-  var startSandbox: SandboxInfo? {
-    let ss = sandboxes
-    return ss.first { $0.name == store.prefs.startSandbox && $0.available } ?? ss.first { $0.isDefault == true && $0.available } ?? ss.first(where: \.available)
-  }
-  func pickSandbox(_ name: String) { store.prefs.startSandbox = name; revision &+= 1 }
-  /// The driver's reasoning effort for new runs: the one last picked for it while it still offers it, else its default.
-  /// nil is "Auto": nothing is sent and the CLI picks (Claude Code has no fixed default; it chooses per model).
-  var startEffort: String? {
-    guard let d = startDriver, let levels = d.efforts, !levels.isEmpty else { return nil }
-    _ = revision
-    if let p = store.prefs.startEffort(d.provider) { return p == EffortBars.auto ? nil : (levels.contains(p) ? p : d.effort) }
-    return d.effort.flatMap { levels.contains($0) ? $0 : nil }
-  }
-  func pickEffort(_ effort: String?) {
-    guard let d = startDriver else { return }
-    store.prefs.setStartEffort(effort ?? EffortBars.auto, for: d.provider); revision &+= 1
-  }
+  /// Where new runs go: the default place (Settings › Runs) while it can be used, else the project's default.
+  var startSandbox: SandboxInfo? { _ = revision; return store.startSandbox }
+  /// The composer's Local / Cloud switch picks the default place too (Settings › Runs shows it as "Default").
+  func pickSandbox(_ name: String) { store.setDefaultPlace(name) }
+  /// The driver's reasoning effort for new runs (nil: Auto). See CapcomdStore.startEffort.
+  var startEffort: String? { _ = revision; return store.startEffort }
+  func pickEffort(_ effort: String?) { store.pickEffort(effort) }
   /// The driver new runs go to: the one last picked while the daemon still offers it, else the project's default.
-  var startDriver: DriverInfo? {
-    let ds = drivers
-    return ds.first { $0.provider == store.prefs.startDriver && $0.available } ?? ds.first { $0.isDefault == true && $0.available } ?? ds.first(where: \.available)
-  }
-  func pickDriver(_ provider: String) { store.prefs.startDriver = provider; revision &+= 1 }
+  var startDriver: DriverInfo? { _ = revision; return store.startDriver }
+  func pickDriver(_ provider: String) { store.pickDriver(provider) }
 
   func startRun(_ goal: String) async -> Bool {
     var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
@@ -259,10 +257,10 @@ final class AppModel {
   func botName(runId: String, agentId: String) -> String? { bot(runId: runId, agentId: agentId)?.name }
 
   /// The menu bar mark's face: a raised mitt when an approval waits, open eyes while anything runs, else sleepy.
+  /// With bot faces off (Settings › General) it stays the plain mark, eyes open.
   var menuBarFace: MenuBarFace {
     _ = revision
-    if store.badgeCount > 0 { return .approval }
-    return store.runs.values.contains { r in r.agents.values.contains { $0.status == .running } } ? .working : .idle
+    switch store.markFace { case .plain, .working: return .working; case .idle: return .idle; case .approval: return .approval }
   }
 
   // Panel height: each screen reports what its content needs; PanelView clamps it (Theme.Panel).
@@ -338,7 +336,7 @@ enum Notifier {
       if let bot, let a = ApprovalNotifications.botAttachment(bot.traits, id: bot.agentId) { c.attachments = [a] }
     case .runFinished(let rid, let type, let title):
       id = "run-\(rid)-\(type)"; c.title = title
-      c.body = type == "run.completed" ? "Run completed" : "Run failed"
+      c.body = type == "run.completed" ? "Run completed" : type == "run.cancelled" ? "Run stopped" : "Run failed"
     }
     UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: c, trigger: nil))
   }

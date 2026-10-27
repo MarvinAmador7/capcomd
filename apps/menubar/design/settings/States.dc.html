@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#4ea1ff}a:hover{color:#7cb9ff}
+.page{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;color:#f5f5f7;-webkit-font-smoothing:antialiased;letter-spacing:-0.08px}
+.cap{font-size:15px;font-weight:600;color:#e5e5e7}
+.capsub{font-size:12px;color:#a1a1a6;margin-top:3px}
+.pane{background:#1e1e1f;border-radius:16px;box-shadow:0 0 0 0.5px rgba(255,255,255,.12);padding:20px 24px;display:flex;flex-direction:column;gap:6px;box-sizing:border-box}
+.sh{font-size:13px;font-weight:600;padding:0 2px}
+.grp{background:rgba(255,255,255,.05);border:0.5px solid rgba(255,255,255,.09);border-radius:10px}
+.row{display:flex;align-items:center;gap:12px;min-height:40px;padding:7px 12px;box-sizing:border-box}
+.row + .row{border-top:0.5px solid rgba(255,255,255,.08)}
+.lbl{flex:1;font-size:13px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.sub{font-size:11px;color:#98989d;line-height:1.35}
+.foot{font-size:11px;color:#98989d;padding:0 2px;line-height:1.4}
+.val{font-size:13px;color:#98989d;display:flex;align-items:center;gap:6px}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px}
+.btn{height:22px;padding:0 10px;border-radius:6px;background:rgba(255,255,255,.13);border:0;color:#f5f5f7;font:inherit;font-size:13px;flex:none}
+.btn.pri{background:#0a84ff;color:#fff}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.spin{width:12px;height:12px;border-radius:50%;border:1.6px solid rgba(255,255,255,.2);border-top-color:#d1d1d6;box-sizing:border-box;flex:none}
+.track{height:5px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden;width:150px}
+.fill{height:5px;width:46px;border-radius:3px;background:#0a84ff;margin-left:38px}
+</style>
+</helmet>
+<div class="page" style="width: 1320px; height: 760px; background: #141415; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 80px; row-gap: 56px; padding: 0; box-sizing: border-box">
+
+  <div style="display: flex; flex-direction: column; gap: 12px">
+    <div><div class="cap">capcomd isn't running</div><div class="capsub">General · the app keeps retrying; Start runs the background service</div></div>
+    <div class="pane">
+      <div class="sh">capcomd</div>
+      <div class="grp">
+        <div class="row">
+          <div class="lbl">Status<span class="sub">Trying again every few seconds.</span></div>
+          <div class="val"><span class="dot" style="background: #ff453a"></span>Can't reach capcomd</div>
+          <button class="btn pri">Start capcomd</button>
+        </div>
+        <div class="row">
+          <div class="lbl">Keep capcomd running<span class="sub">Off: capcomd stops when you close the Terminal it runs in.</span></div>
+          <button class="btn">Turn On…</button>
+        </div>
+      </div>
+      <div class="foot">Rows that need capcomd (logins, environments) say so until it's back.</div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px">
+    <div><div class="cap">Logging in</div><div class="capsub">Accounts · Terminal has the login; the row follows it and updates by itself</div></div>
+    <div class="pane">
+      <div class="sh">Claude</div>
+      <div class="grp">
+        <div class="row">
+          <div class="lbl">Cloud<span class="sub">boxd machines</span></div>
+          <div class="val"><span class="dot" style="background: #30d158"></span>Logged in with your Claude plan</div>
+          <button class="btn">Log In Again…</button>
+        </div>
+        <div class="row">
+          <div class="lbl">Local<span class="sub">Finish logging in in the Terminal window.</span></div>
+          <div class="val"><span class="spin" aria-hidden="true"></span>Waiting for Terminal…</div>
+          <button class="btn">Show Terminal</button>
+        </div>
+      </div>
+      <div class="foot">Opened: <span class="mono">capcomd auth login claude --sandbox docker</span></div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px">
+    <div><div class="cap">Building an agent environment</div><div class="capsub">Runs · indeterminate until capcomd reports steps (daemon gap D3)</div></div>
+    <div class="pane">
+      <div class="sh">Local · Docker on this Mac</div>
+      <div class="grp">
+        <div class="row">
+          <div class="lbl">Docker</div>
+          <div class="val"><span class="dot" style="background: #30d158"></span>Running</div>
+        </div>
+        <div class="row">
+          <div class="lbl">Agent environment<span class="sub">Installing Claude Code and Codex. This takes a few minutes; you can close Settings.</span></div>
+          <div class="track" role="progressbar" aria-label="Building the agent environment"><div class="fill"></div></div>
+          <button class="btn">Show Log</button>
+        </div>
+      </div>
+      <div class="foot">Runs on Local start once it's built. Failed builds keep their log here, with Try Again.</div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px">
+    <div><div class="cap">Reset the app token</div><div class="capsub">Accounts › This app · destructive, so it asks first</div></div>
+    <div class="pane" style="align-items: center; padding: 28px 24px 22px; gap: 0">
+      <div style="width: 300px; background: #2c2c2e; border-radius: 18px; box-shadow: 0 0 0 0.5px rgba(255,255,255,.14), 0 18px 50px rgba(0,0,0,.55); padding: 20px 20px 16px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0" role="alertdialog" aria-label="Reset the app token?">
+        <img src="/_blob/64fb997d9c538012167b473a59549a4c" alt="" style="width: 64px; height: 64px; image-rendering: pixelated">
+        <div style="font-size: 13px; font-weight: 600; margin-top: 12px">Reset the app token?</div>
+        <div style="font-size: 11px; color: #c7c7cc; line-height: 1.4; margin-top: 6px">This app gets a new token, and the old one stops working at once. Anything else using it needs the new one.</div>
+        <div style="display: flex; gap: 8px; width: 100%; margin-top: 16px">
+          <button class="btn" style="flex: 1; height: 28px; border-radius: 14px">Cancel</button>
+          <button class="btn" style="flex: 1; height: 28px; border-radius: 14px; color: #ff6961">Reset</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1320,"height":760}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

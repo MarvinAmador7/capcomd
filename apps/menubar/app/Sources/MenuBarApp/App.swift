@@ -15,6 +15,10 @@ struct CapcomdMenuBarApp: App {
       MenuBarLabel(badge: model.badgeCount, face: model.menuBarFace)
     }
     .menuBarExtraStyle(.window)
+    // ⌘, (the app menu's Settings…) and the composer's + menu open it (design/settings).
+    Settings {
+      SettingsView().environment(model)
+    }
   }
 }
 

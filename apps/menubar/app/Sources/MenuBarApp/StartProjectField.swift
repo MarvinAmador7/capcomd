@@ -8,6 +8,7 @@ import CapcomdStore
 struct StartProjectField: View {
   @Environment(AppModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.openSettings) private var openSettings
   @FocusState private var focused: Bool
   @State private var goal = ""
 
@@ -171,6 +172,8 @@ struct StartProjectField: View {
     Menu {
       Button("Choose Project Folder…") { if let f = ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f } }
       if model.startRepo != nil { Button("Use the Default Project") { model.startRepo = nil } }
+      Divider()
+      Button("Settings…") { SettingsWindow.open(openSettings) }
     } label: {
       Image(systemName: "plus").font(Theme.Composer2.plusFont).foregroundStyle(.white)
         .frame(width: Theme.Composer2.round, height: Theme.Composer2.round)
@@ -297,7 +300,7 @@ struct EffortBars: View {
     switch level { case "xhigh": "Extra high"; case "max": "Max"; default: level.prefix(1).uppercased() + level.dropFirst() }
   }
   /// The stored pick for "let the CLI choose".
-  static let auto = "auto"
+  static let auto = UIPreferences.autoEffort
 }
 
 /// A keycap (⌘K, ⌥, Space).

@@ -479,6 +479,46 @@ enum Theme {
     static let sparkle: CGFloat = 10, sparkleFade: Double = 0.3, sparkleWithin: Double = 10   // s after a run ends
     static let wordmarkCell: CGFloat = 3, wordmarkGap: CGFloat = 1               // glyph cells; gap in cells
   }
+  /// The Settings window (design/settings/*.dc.html). Panes are system grouped Forms, so rows, controls, section headers
+  /// and footers take the system's metrics and colours; these are the few things the boards draw themselves.
+  enum Settings {
+    static let width: CGFloat = 620                                   // .win width
+    static let poll: Double = 5                                       // s between reads while the window is open
+    static let chrome: CGFloat = 80                                   // title and tab bar, until the window says
+    static let minPane: CGFloat = 200                                 // never shorter than this before scrolling
+    // Status dots (`.dot`, `.empty`): system colours, so they adapt to light, dark and Increase Contrast.
+    static let dot: CGFloat = 8, ringWidth: CGFloat = 1.2, valueGap: CGFloat = 6
+    static let ok = Color(nsColor: .systemGreen), warn = Color(nsColor: .systemOrange), bad = Color(nsColor: .systemRed)
+    static let ring = Color(nsColor: .systemGray)
+    static let rowGap: CGFloat = 12                                   // .row gap: value to button
+    static let footFont = Font.system(size: 11), footMono = Font.system(size: 11, design: .monospaced)
+    // Section headers (`.sh`): a mark before the title, a Default badge or Make Default after it.
+    static let headerGap: CGFloat = 6
+    static let providerMark: CGFloat = 14, placeMark: CGFloat = 15
+    static let badgeFont = Font.system(size: 11, weight: .medium)
+    static let badgePaddingH: CGFloat = 7, badgePaddingV: CGFloat = 2, badgeRadius: CGFloat = 5, badgeFill: Double = 0.16
+    /// `.badge` text: #4ea1ff in dark (Runs.dc.html), #0062cc in light (GeneralLight.dc.html's accent text).
+    static let badgeText = Color(nsColor: NSColor(name: nil) { a in
+      a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(srgbRed: 0x4E / 255, green: 0xA1 / 255, blue: 1, alpha: 1)
+                                                          : NSColor(srgbRed: 0, green: 0x62 / 255, blue: 0xCC / 255, alpha: 1)
+    })
+    static let headerButtonFont = Font.system(size: 12)
+    static let menuMark: CGFloat = 13                                 // marks inside popup menus
+    // Bot faces preview: the mark on a 32 pt tile.
+    static let faceTile: CGFloat = 32, faceTileRadius: CGFloat = 7, faceTileFill = Color.primary.opacity(0.06), faceMark: CGFloat = 16
+    static let progressWidth: CGFloat = 150                           // `.track` while an environment builds
+    static let sheetWidth: CGFloat = 380, sheetPadding: CGFloat = 20, sheetGap: CGFloat = 10
+    /// About (`About.dc.html`): one centred column.
+    enum About {
+      static let height: CGFloat = 420                                // the board's 500 pt window less its toolbar
+      static let botCell: CGFloat = 4                                 // 32 cells × 4 = 128 pt
+      static let wordmarkCell: CGFloat = 6                            // 7 glyphs → 204 × 30 pt
+      static let wordmarkTop: CGFloat = 18, taglineTop: CGFloat = 12, versionTop: CGFloat = 6, linksTop: CGFloat = 22
+      static let linksGap: CGFloat = 8, licenseTop: CGFloat = 18
+      static let paddingTop: CGFloat = 8, paddingH: CGFloat = 24, paddingBottom: CGFloat = 28
+      static let taglineFont = Font.system(size: 13), smallFont = Font.system(size: 11)
+    }
+  }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {
     static let pressScale: CGFloat = 0.97

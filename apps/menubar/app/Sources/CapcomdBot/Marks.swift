@@ -50,3 +50,16 @@ public enum MenuBarFace: CaseIterable, Sendable {
 
   public var mask: BotMask { BotMask(rows: rows) }
 }
+
+/// The capcomd bot (About, the reset-token alert): the brand's orange primary bot, the mascot for moments that belong to
+/// no agent (`MASCOT` in design/tools/genbrand.ts, hand-picked parts, not generated from a seed). The About board names
+/// it Axel.
+public enum BrandBot {
+  public static let name = "Axel"
+  public static let mascot = BotTraits(seed: "capcomd", role: .other, name: name, parts: [
+    .palette: "orange", .antenna: "ball", .accessory: "none", .head: "dome", .ears: "disc", .screen: "night", .eyes: "ovals",
+    .mouth: "smile", .blush: "on", .torso: "round", .plate: "logo", .pose: "float", .legs: "boots", .dither: "checker",
+  ])
+  /// Smiling, as on the About board.
+  public static var happy: BotTraits { (try? withOverrides(mascot, mood: .happy)) ?? mascot }
+}

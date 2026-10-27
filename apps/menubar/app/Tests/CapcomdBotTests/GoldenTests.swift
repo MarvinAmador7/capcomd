@@ -104,3 +104,15 @@ final class GoldenTests: XCTestCase {
     XCTAssertEqual(menuBarMark, g.menuBarMark)
   }
 }
+
+final class BrandBotTests: XCTestCase {
+  /// About's bot is the brand mascot (genbrand.ts MASCOT), smiling, and every part of it is in the catalog.
+  func testTheBrandBotIsTheMascotSmiling() throws {
+    XCTAssertEqual(BrandBot.mascot.palette, "orange")
+    XCTAssertEqual(BrandBot.happy.name, "Axel")
+    XCTAssertEqual(BrandBot.happy.mouth, BotMood.happy.mouth)
+    XCTAssertEqual(BrandBot.happy.eyes, BotMood.happy.eyes)
+    for slot in BotSlot.allCases { XCTAssertNoThrow(try BotCatalog.standard.part(slot, BrandBot.happy[slot]), "\(slot)") }
+    XCTAssertNoThrow(try botGrid(BrandBot.happy, size: .full, catalog: .standard))
+  }
+}
