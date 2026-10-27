@@ -43,7 +43,8 @@ function setup(seed: Seed = {}) {
 	const machines = seed?.machines ?? { boxd: rows() };
 	const src = memorySource({
 		runs: [run], agents: { "run-8kq2": [agent("agt-41", "running"), agent("agt-42", "running", "agt-41"), agent("agt-50", "running")] },
-		owners: [WORKER, CHECKS], ...seed, machines,
+		// This capcomd's ledger: every machine of rows() (as though it made them all), unless a test says otherwise.
+		owners: [WORKER, CHECKS], recorded: rows().map((r) => ({ sandbox: "boxd", name: r.name })), ...seed, machines,
 	});
 	const state = harnessState(null);
 	const app = harnessApp({ source: src, clients: () => loadClients(cpath), state, pollMs: 20 });

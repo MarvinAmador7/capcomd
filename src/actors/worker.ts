@@ -20,7 +20,7 @@ import { killpoint } from "../utils/killpoint";
 import { getDependencies, providerForRun, providerNamed } from "../dependencies";
 import { runIdleLifetime, withSandbox } from "../providers/run-sandbox";
 import { reportMachineDeleted } from "../providers/machine-audit";
-import { machineNameFor } from "../providers/machines";
+import { forgetMachine, machineNameFor, recordAgentMachine } from "../providers/machines";
 import { sandboxName } from "../providers/registry";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { runAgent, stoppedAt } from "../agents/runner";
@@ -104,6 +104,22 @@ export function configError(e: unknown): UserError {
 }
 
 
+/**
+ * ADR-021 §3: this capcomd's record of the VM a worker is about to make (the machines ledger), written before
+ * `provider.ensure` so the resources route knows the machine is capcomd's own; removed once the worker destroyed it.
+ * Never throws and never blocks provisioning: a machine whose record couldn't be written is just never listed.
+ */
+function recordWorkerVm(c: any, o: { idemKey: string; sandbox: string | null | undefined; runId: string | undefined; workerId: string; ttlSeconds: number }): void {
+  try {
+    const key: string[] = Array.isArray(c?.key) ? c.key.map(String) : [];
+    const runId = o.runId ?? key[0];
+    if (!runId || !key.length) return;
+    let place: string | undefined = o.sandbox ?? undefined;
+    if (!place) try { place = sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: recorded as such */ }
+    recordAgentMachine({ idemKey: o.idemKey, sandbox: place, runId, agentId: o.workerId, workerKey: key, ttlSeconds: o.ttlSeconds });
+  } catch { /* best effort */ }
+}
+
 // Shared by drainWorker, reap and the TTL alarm. Idempotent and resumable. `cause`: why the machine goes, for the
 // daemon's audit (sandbox.resource_deleted): its agent ended (run_ended), or its idle lifetime ran out.
 async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "idle_lifetime" = "run_ended") {
@@ -147,7 +163,11 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
         const idemKey = (workerContext as { idemKey?: unknown }).idemKey;
         let place: string | undefined = workerContext.sandbox;
         if (!place) try { place = sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX */ }
-        if (typeof idemKey === "string" && idemKey) reportMachineDeleted(place, machineNameFor(idemKey), cause);
+        if (typeof idemKey === "string" && idemKey) {
+          reportMachineDeleted(place, machineNameFor(idemKey), cause);
+          // Destroyed (or already gone: destroy tolerates that): no longer a machine of capcomd's.
+          forgetMachine(machineNameFor(idemKey));
+        }
 
         const destroyEvent = { type: "VM_DESTROYED" as const };
         const [destroySnapshot] = transition(
@@ -254,6 +274,7 @@ export const workerActor = actor({
       }
 
       try {
+        recordWorkerVm(c, { idemKey, sandbox, runId, workerId, ttlSeconds: lifeSeconds });
         killpoint("vm.create.after_request.before_record");
 
         const { id: vmId } = await provider.ensure({
@@ -478,6 +499,7 @@ export const workerActor = actor({
       killpoint("push.mid");
 
       const setup = agentSetup(params.agent, params.agentSpec, runSource);
+      recordWorkerVm(c, { idemKey: vmKey, sandbox: sandbox ?? (workerContext as { sandbox?: string }).sandbox, runId: params.runId, workerId, ttlSeconds: lifeSeconds });
       const { id: vmId } = await provider.ensure({
         idemKey: vmKey,
         isolated: true,

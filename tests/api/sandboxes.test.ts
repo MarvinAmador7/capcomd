@@ -10,7 +10,7 @@ import { CAPABILITY_NAMES, ResourceDetail, ResourcePage, SandboxDetail, Sandboxe
 import { harnessApp } from "../../src/api/server";
 import { memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
-import { checkpointsField, durationLabel, joinResources, loginsField, resourceCatalog, taskLine, terminalCommandFor, type MachineOwner } from "../../src/api/sandboxes";
+import { checkpointsField, durationLabel, joinResources, loginsField, resourceCatalog, taskLine, terminalCommandFor, type MachineOwner, type Ownership, type RecordedMachine } from "../../src/api/sandboxes";
 import { logins } from "../../src/api/settings";
 import { SandboxConfigError } from "../../src/providers/boxd-errors";
 import type { VmInfo } from "../../src/providers/sandbox";
@@ -52,6 +52,9 @@ const BOXD_ROWS: VmInfo[] = [
 	{ id: "m_3", name: "someone-elses-machine", state: "running" },
 	{ id: "m_4", name: "relay-x;rm -rf ~", state: "running" },
 ];
+/** This capcomd's ledger recording every machine of these rows (as though it made them all). */
+const ours = (place: string, rows: VmInfo[]): RecordedMachine[] => rows.map((r) => ({ sandbox: place, name: r.name }));
+const own = (owners: MachineOwner[], place = "boxd", rows: VmInfo[] = BOXD_ROWS): Ownership => ({ owners, recorded: ours(place, rows) });
 const OWNER: MachineOwner = { sandbox: "boxd", vmId: "m_1", name: "relay-3f9c2a1b7e5d4c60", runId: "run-8kq2", agentId: "agt-41", role: "worker", task: taskLine(`Add an abs(a) function to math.ts with ${PLANTED}\nand tests`), workerState: "busy", createdAt: at("2026-10-27T09:12:00.000Z") };
 
 function setup(seed: Parameters<typeof memorySource>[0] = {}) {
@@ -215,7 +218,7 @@ describe("GET /v1/sandboxes/{name}/resources (capability sandboxes.resources)", 
 	test("terminal commands pass the app's safe-command rule, and are built only from trusted ids", () => {
 		const rows: VmInfo[] = [...BOXD_ROWS, { id: "m_5", name: "relay-$(touch pwned)", state: "running" }, { id: "m_6", name: "relay-a b", state: "running" }];
 		const hostileOwner: MachineOwner = { ...OWNER, vmId: "m_2", name: "relay-0a0b0c0d0e0f1011", runId: "run-1; rm -rf /", agentId: "agt-`id`" };
-		const res = joinResources("boxd", rows, [OWNER, hostileOwner]);
+		const res = joinResources("boxd", rows, [OWNER, hostileOwner], ours("boxd", rows));
 		expect(res.map((r) => r.id)).toEqual(["relay-0a0b0c0d0e0f1011", "relay-3f9c2a1b7e5d4c60"]);
 		const cmds = res.map((r) => terminalCommandFor("boxd", r));
 		// An owner whose ids aren't safe falls back to the machine form: its id was checked against capcomd's prefix.
@@ -230,18 +233,19 @@ describe("GET /v1/sandboxes/{name}/resources (capability sandboxes.resources)", 
 	});
 	test("states: starting while the worker provisions, stopping while it drains, unknown when records can't be read", () => {
 		const rows: VmInfo[] = [{ id: "m_1", name: "relay-3f9c2a1b7e5d4c60", state: "running" }, { id: "m_2", name: "relay-0a0b0c0d0e0f1011", state: "removing" }];
-		expect(joinResources("boxd", rows, [{ ...OWNER, workerState: "draining" }]).map((r) => [r.id, r.state, r.actions])).toEqual([["relay-0a0b0c0d0e0f1011", "stopping", []], ["relay-3f9c2a1b7e5d4c60", "stopping", []]]);
+		expect(joinResources("boxd", rows, [{ ...OWNER, workerState: "draining" }], ours("boxd", rows)).map((r) => [r.id, r.state, r.actions])).toEqual([["relay-0a0b0c0d0e0f1011", "stopping", []], ["relay-3f9c2a1b7e5d4c60", "stopping", []]]);
 		// Provisioning and not listed yet: starting, from capcomd's records alone.
-		expect(joinResources("boxd", [], [{ ...OWNER, workerState: "provisioning" }]).map((r) => [r.id, r.state])).toEqual([["relay-3f9c2a1b7e5d4c60", "starting"]]);
+		expect(joinResources("boxd", [], [{ ...OWNER, workerState: "provisioning" }], []).map((r) => [r.id, r.state])).toEqual([["relay-3f9c2a1b7e5d4c60", "starting"]]);
 		// The provider listed and an owned machine isn't there: it's gone.
-		expect(joinResources("boxd", [], [OWNER])).toEqual([]);
+		expect(joinResources("boxd", [], [OWNER], [])).toEqual([]);
 		// No list at all (the provider never answered): owned machines as unknown.
-		expect(joinResources("boxd", null, [OWNER]).map((r) => [r.id, r.state, r.owner?.agentId])).toEqual([["relay-3f9c2a1b7e5d4c60", "unknown", "agt-41"]]);
+		expect(joinResources("boxd", null, [OWNER], []).map((r) => [r.id, r.state, r.owner?.agentId])).toEqual([["relay-3f9c2a1b7e5d4c60", "unknown", "agt-41"]]);
 		// capcomd's records unreadable: nothing is called orphaned.
-		expect(joinResources("boxd", rows.slice(0, 1), null).map((r) => r.state)).toEqual(["unknown"]);
+		expect(joinResources("boxd", rows.slice(0, 1), null, null).map((r) => r.state)).toEqual(["unknown"]);
+		expect(joinResources("boxd", rows.slice(0, 1), [], null).map((r) => [r.state, r.actions])).toEqual([["unknown", ["open_terminal"]]]);
 		// Another place's owner doesn't claim this place's machine.
-		expect(joinResources("docker", [{ id: "m_1", name: "relay-3f9c2a1b7e5d4c60", state: "running" }], [OWNER]).map((r) => r.state)).toEqual(["orphaned"]);
-		expect(joinResources("boxd", [{ id: "x", name: "relay-3f9c2a1b7e5d4c60", state: "running" }], [OWNER])[0]!.owner?.agentId).toBe("agt-41");
+		expect(joinResources("docker", [{ id: "m_1", name: "relay-3f9c2a1b7e5d4c60", state: "running" }], [OWNER], [{ sandbox: "docker", name: "relay-3f9c2a1b7e5d4c60" }]).map((r) => r.state)).toEqual(["orphaned"]);
+		expect(joinResources("boxd", [{ id: "x", name: "relay-3f9c2a1b7e5d4c60", state: "running" }], [OWNER], [])[0]!.owner?.agentId).toBe("agt-41");
 	});
 });
 
@@ -252,7 +256,7 @@ describe("the provider list: cached, single-flight, timed out, stale on error", 
 		let calls = 0, ownerCalls = 0;
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));
-		const cat = resourceCatalog({ now: c.now, list: async () => { calls++; await gate; return BOXD_ROWS; }, owners: async () => { ownerCalls++; return [OWNER]; } });
+		const cat = resourceCatalog({ now: c.now, list: async () => { calls++; await gate; return BOXD_ROWS; }, owners: async () => { ownerCalls++; return own([OWNER]); } });
 		const pending = [cat.page("boxd"), cat.page("boxd"), cat.get("boxd", "relay-3f9c2a1b7e5d4c60")];
 		release();
 		const [a, b, one] = await Promise.all(pending);
@@ -272,7 +276,7 @@ describe("the provider list: cached, single-flight, timed out, stale on error", 
 	test("a provider that doesn't answer in 3 s: the last good list, stale, with a daemon-written error; status 200", async () => {
 		const c = clock();
 		let mode: "ok" | "hang" | "throw" | "config" = "ok";
-		const cat = resourceCatalog({ now: c.now, timeoutMs: 30, owners: async () => [OWNER], list: async () => {
+		const cat = resourceCatalog({ now: c.now, timeoutMs: 30, owners: async () => own([OWNER]), list: async () => {
 			if (mode === "hang") return new Promise<VmInfo[]>(() => {});
 			if (mode === "throw") throw new Error(`boxd said: invalid key ${PLANTED}`);
 			if (mode === "config") throw new SandboxConfigError(`BoxdProvider requires BOXD_API_KEY ${PLANTED}`);
@@ -293,11 +297,11 @@ describe("the provider list: cached, single-flight, timed out, stale on error", 
 		expect(JSON.stringify(cfg)).not.toContain("PLANTED");
 		// A failed attempt is throttled like a good one: no retry storm.
 		let calls = 0;
-		const slow = resourceCatalog({ now: c.now, owners: async () => [], list: async () => { calls++; throw new Error("down"); } });
+		const slow = resourceCatalog({ now: c.now, owners: async () => own([]), list: async () => { calls++; throw new Error("down"); } });
 		await slow.page("docker"); await slow.page("docker");
 		expect(calls).toBe(1);
 		// Never listed: no rows from the provider, owners still shown as unknown.
-		const never = resourceCatalog({ now: c.now, owners: async () => [{ ...OWNER, sandbox: "docker" }], list: async () => { throw new Error("down"); } });
+		const never = resourceCatalog({ now: c.now, owners: async () => own([{ ...OWNER, sandbox: "docker" }], "docker", []), list: async () => { throw new Error("down"); } });
 		expect((await never.page("docker"))!).toMatchObject({ asOf: null, stale: true, error: "Docker couldn't list its machines", resources: [{ id: "relay-3f9c2a1b7e5d4c60", state: "unknown" }] });
 		mode = "ok"; c.tick(10_000);
 		expect((await cat.page("boxd"))!).toMatchObject({ stale: false, error: null, asOf: "2026-10-27T12:00:40.000Z" });
