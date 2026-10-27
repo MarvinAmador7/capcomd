@@ -223,8 +223,10 @@ New capabilities: `sandboxes` (the two GETs), `sandboxes.settings` (PATCH), `san
 
 ### 6. App rendering
 
-- **`SandboxDetailsView(name)`**: one generic view, pushed from each place section ("Details…") in Runs. Its header is
-  the mark, `title`, and Default / Make Default (as now). Then Status (the existing availability and key rows),
+- **`SandboxDetailsView(name)`**: one generic view, opened as a sheet by Details… on each place's status row in Runs
+  (amended 2026-10-27: a sheet, as Wi-Fi's Details…, not a pushed page). Section headers name the kind of place only
+  (the mark and `label`: "Cloud"); the provider's status row carries its name, the Default badge or Make Default, and
+  Details…. Then Status (the existing availability and key rows),
   Agent environment (`/v1/environments`), Machines (resources plus `idleLifetime`), and Safety (
   Logins, Checkpoints) as `Form` sections in `.grouped` style. The section order and copy shells are fixed in Swift,
   matching the approved canvas. Which rows appear, their values, choices, help and footers come from the daemon.

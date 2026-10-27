@@ -95,9 +95,10 @@ changes them here too." Runs on, each place's Default badge / **Make Default**, 
 are one setting (`startSandbox`): the place last picked anywhere. The composer uses it while it can be used.
 
 One section per place, header: its mark (Docker's one-colour mark for Local; the cloud glyph for Cloud until boxd's
-own), "Local · Docker on this Mac" / "Cloud · boxd", then **Default** (accent badge) or **Make Default**, then
+own) and the kind of place only, "Local" / "Cloud" (the descriptor's `label`). The provider's status row says which is
+the default: the **Default** (accent badge) after the provider's name, or **Make Default** at the end of the row, then
 **Details…** (§4.1) when capcomd describes its places (`sandboxes`). With `sandboxes`, nothing in the section depends on
-a place's name: the header is the descriptor's `title` and `mark`, the status row is labelled with its `vendor` and
+a place's name: the header is the descriptor's `label` and `mark`, the status row is labelled with its `vendor` and
 says "Running" (`kind: local`) or "Ready" (cloud), an unavailable place shows the daemon's reason (the empty ring and
 **Set Up…** when the reason names a plain capcomd command to run, as "No boxd API key (run capcomd setup)" does; red
 otherwise), and the footer says "Agents work in containers on this Mac." (or "virtual machines") from `kind` and
@@ -114,8 +115,11 @@ logins or keys."
 
 ### 4.1 A place's details (`CloudExplore.dc.html`; ADR-021 phases 1 and 2)
 
-**Details…** pushes one generic screen in place of the Runs pane (not a sheet: the pane's content swaps, the window
-fits it like any pane and is titled "Runs › Cloud"); "‹ Runs" at the top, ⌘[ or Esc goes back. The sections and their
+**Details…** on the place's status row opens one generic screen as a sheet on the Settings window, as Wi-Fi's
+Details… does (an ellipsis button opens a window or sheet; a pushed page would want a › row and a toolbar back
+button, which a tabbed Settings window doesn't have). The sheet is 560 pt wide, as tall as its content up to the
+screen's visible height (then it scrolls), with **Done** at the bottom right (Return or Esc closes it). The section
+header in Runs holds only the mark, the title and Default / Make Default. The sections and their
 order are fixed here, as on the board; which rows appear and what they say come from the daemon. Phase 1 is
 read-only except Open in Terminal; phase 2 lets the app change a setting the daemon marks `editable` (the idle
 lifetime). Owner's removals from the board: no "Sites agents can reach" row and no

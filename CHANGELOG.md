@@ -48,12 +48,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   plain strings checked against the places the daemon lists, and `drivers[].sandboxes` is a map keyed by place name.
   The same values are sent and accepted; a client generated from `openapi/capcomd.json` sees a string and a map where
   it saw an enum and a fixed object. A refused `driver`/`sandbox` pair now names boxd as "Cloud" (it said "VM").
-- Menu bar app: each place in Settings › Runs has a **Details…** button (with a capcomd that describes its places). It
-  shows whether the place can be used, its agent environment, the machines agents are running there right now (who
+- Menu bar app: Settings › Runs has one section per kind of place, "Local" and "Cloud"; the provider's row in it
+  (Docker, boxd) shows **Default** or **Make Default**, and **Details…** (with a capcomd that describes its places).
+  Details… opens a sheet that shows whether the place can be used, its agent environment, the machines agents are running there right now (who
   uses each one and for how long, and any machine left behind that no agent owns), how long an idle machine is kept
-  ("Delete idle machines after", shown but not yet changeable), whether logins there are bound to their AI's API, and
+  ("Delete idle machines after"), whether logins there are bound to their AI's API, and
   when work is checkpointed. **Open in Terminal** opens a shell in a machine. If the provider can't be reached, the
-  last list stays with a note. ⌘[ goes back to Runs.
+  last list stays with a note. Done or Esc closes it.
 - capcomd can ask you itself before a merge into a protected branch: set `"driver": {"approvals": "elicit"}` in a
   project's `.capcomd/config.json` (or `capcomd setup agent --approvals elicit`). Your agent calls `capcomd_approve`
   and capcomd sends its own prompt through the agent's MCP client (in Hermes: the terminal, or Allow / Deny buttons in
