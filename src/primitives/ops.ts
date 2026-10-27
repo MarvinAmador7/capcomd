@@ -1,4 +1,5 @@
 import { isBoxdAuthError } from "../providers/boxd-errors";
+import { redactShapes } from "../agents/redact";
 import { resolveEnvSnapshot } from "../env/resolve";
 // ADR-016 step 1: run new / spawn / await / wait-any / cancel, on top of the existing worker
 // actor. The CLI is a thin client; durable state lives in the scope actor (agent tree, keys,
@@ -384,6 +385,39 @@ export async function grantBudget(runId: string, o: { agentId?: string; add: Bud
   return { runId, ...r };
 }
 
+/** The engine an attempt ran against: unset until its claim answered; null from an engine that doesn't say. */
+type EngineSeen = { instance?: string | null };
+
+/**
+ * After a failed attempt: did the engine go away under it? Waits (until `until`) for the scope to answer a claim again.
+ * "restarted" when it didn't answer at first, the attempt never reached it, or another engine process answers now (the
+ * daemon restarted: the actor call in flight died with it, and calls during the new engine's start-up fail with
+ * "An internal error occurred"); "same" when the engine that ran the attempt answers (a real failure); "down" when it
+ * never answered again.
+ */
+async function engineOutage(s: any, agentId: string, driver: string, seen: EngineSeen, until: number): Promise<"restarted" | "same" | "down"> {
+  let missed = false;
+  for (;;) {
+    try {
+      // Bounded: a call to an engine that is still starting can hang.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const c: any = await Promise.race([
+        s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }),
+        new Promise((_, no) => { timer = setTimeout(() => no(new Error("engine probe timed out")), 15_000); }),
+      ]).finally(() => clearTimeout(timer));
+      const now = c?.instance ?? null;
+      return missed || seen.instance === undefined || now !== seen.instance ? "restarted" : "same";
+    } catch (e) {
+      // The scope's own refusal (a UserError) is an answer; anything else (connection refused or reset, an internal
+      // error while the engine starts) is the engine not answering.
+      if ((e as any)?.group === "user") return missed ? "restarted" : "same";
+      missed = true;
+      if (Date.now() > until) return "down";
+      await sleep(1000);
+    }
+  }
+}
+
 /**
  * Advance one agent to a terminal state. Every step is idempotent (worker actor), so a new
  * driver resumes where a crashed one stopped. Returns the agent's final record.
@@ -391,8 +425,10 @@ export async function grantBudget(runId: string, o: { agentId?: string; add: Bud
 export async function driveAgent(runId: string, agentId: string): Promise<ScopeAgent> {
   try { const d = join(stateDir(), "drivers"); mkdirSync(d, { recursive: true }); writeFileSync(join(d, `${agentId}.pid`), String(process.pid)); } catch {}
   // Retry the (idempotent) steps; only an error that persists while the engine answers marks the
-  // agent failed. If the engine is down, the last finish() throws too, and the lease expires
-  // so the next await/wait-any resumes the agent.
+  // agent failed. An attempt the daemon went away under (stopped, restarted) isn't counted: the driver
+  // waits for the engine to answer again and runs the attempt again (the agent's VM keeps running).
+  // If the engine stays down, the driver gives up without finishing the agent: its lease expires and
+  // the next await/wait-any resumes it.
   const s = client().scope.getOrCreate([runId]);
   const me = await s.getAgent({ agentId });
   // Trace parenting: agent spans nest under their parent agent's span (root agents under the run).
@@ -402,12 +438,23 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
     // used to find the lease still held, return "running" and exit: an endless silent loop).
     const driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
     const maxSame = Number(env("DRIVE_MAX_FAILURES") ?? 3);
+    // How long one outage is waited out, and how many attempts it may cost without counting (a daemon that keeps
+    // dying under the same attempt is a fault after all).
+    const outageMs = Number(env("DRIVE_OUTAGE_MS") ?? 5 * 60_000);
+    let restarts = 0;
+    const seen: EngineSeen = {};
     for (let attempt = 1; attempt <= 3; attempt++) {
-      try { const a = await driveOnce(runId, agentId, driver); if (!TERMINAL_AGENT.has(a.status)) discardSpan(span); else stampSpent(span, a); return a; } catch (e) {
+      delete seen.instance;
+      try { const a = await driveOnce(runId, agentId, driver, seen); if (!TERMINAL_AGENT.has(a.status)) discardSpan(span); else stampSpent(span, a); return a; } catch (e) {
         last = e;
+        const kind = String((e as any)?.code ?? (e as any)?.kind ?? (e as Error)?.name ?? "error");
+        console.error(`[drive] ${new Date().toISOString()} attempt ${attempt} failed (${kind}): ${redactShapes(String((e as Error)?.message ?? e)).slice(0, 500)}`);
+        // The daemon stopped or restarted under this attempt: not the agent failing. Run it again once the engine answers.
+        const outage = await engineOutage(s, agentId, driver, seen, Date.now() + outageMs);
+        if (outage === "down") { console.error(`[drive] the engine did not answer again; leaving ${agentId} to the next driver`); throw e; }
+        if (outage === "restarted" && ++restarts <= 20) { console.error(`[drive] the engine went away under attempt ${attempt}; running it again`); attempt--; continue; }
         // Every failed attempt is visible (DRIVE_FAILED, redacted) and counted across driver processes;
         // N identical failures in a row fail the agent instead of looping.
-        const kind = String((e as any)?.code ?? (e as any)?.kind ?? (e as Error)?.name ?? "error");
         const df = await s.driveFailed({ agentId, kind, message: String((e as Error)?.message ?? e), attempt, driver }).catch(() => null);
         if (df && df.consecutive >= maxSame) break;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
@@ -439,10 +486,11 @@ async function resultOf(runId: string, agentId: string): Promise<Record<string, 
 /** "paused by the operator", naming the API client when one asked (client:<id>). */
 const pausedBy = (by: string) => `${stoppedAt("paused")}${by === "operator" ? "" : ` (${by})`}`;
 
-async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`): Promise<ScopeAgent> {
+async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`, seen: EngineSeen = {}): Promise<ScopeAgent> {
   const c = client();
   const s = c.scope.getOrCreate([runId]);
   const claim = await s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(asRelay);
+  seen.instance = (claim as { instance?: string }).instance ?? null;
   if (!claim.ok) return claim.agent;
   const a = claim.agent;
   // The operator asked to pause it while no driver ran it: pause it now, before a VM is made.

@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agents no longer fail when the daemon restarts. Before, agents that were running when `capcomd serve` stopped or
+  restarted (a Ctrl-C, a service restart, an upgrade) ended as failed a few seconds later, with "An internal error
+  occurred" or a connection error as their result. Now each agent waits for the daemon to come back (up to 5 minutes,
+  `CAPCOMD_DRIVE_OUTAGE_MS`) and then runs its task again in its VM, without counting the interruption as a failure;
+  the run it had going there is stopped first, so two copies never work in one checkout. If the daemon stays down
+  longer, the agent stays running and the next `capcomd await` picks it up. The work done before the restart is not
+  kept: the task starts over.
 - Menu bar app: the panel stays live. It used to stop updating after a while (a quiet connection was dropped, or the
   daemon restarted) and kept showing old state; it now reconnects within a few seconds, and says "Can't reach capcomd. Reconnecting…" while the daemon is down. Runs started elsewhere (the
   CLI, another agent) appear as they start, with their agents, even with many runs around; before, past about seven

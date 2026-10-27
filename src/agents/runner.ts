@@ -245,6 +245,21 @@ fi
 npm/bin/${a.bin} --version`;
 }
 
+/**
+ * Stops the agent left running in `W` by an earlier runner of the same attempt: its process group (run.sh is a session
+ * leader, its pid in agent.pid), only while it has no exit file and the pid still runs that run.sh (never a reused pid).
+ */
+export function stopStaleRun(W: string): string {
+  const pid = sq(`${W}/agent.pid`), exit = sq(`${W}/agent.exit`), run = sq(`${W}/run.sh`);
+  return `p=$(cat ${pid} 2>/dev/null); case "$p" in ''|*[!0-9]*) exit 0;; esac
+[ -e ${exit} ] && exit 0
+cmd=$(tr '\\0' ' ' 2>/dev/null < /proc/$p/cmdline || ps -o args= -p "$p" 2>/dev/null)
+case "$cmd" in *${run}*) ;; *) exit 0;; esac
+kill -TERM -"$p" 2>/dev/null
+for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 -"$p" 2>/dev/null || exit 0; sleep 0.5; done
+kill -KILL -"$p" 2>/dev/null; true`;
+}
+
 export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider, vmId: VmId, task: AgentTask, cfg: AgentConfig, opts: AgentRunOptions): Promise<AgentResult> {
   const r = new Redactor([opts.apiKey, ...(opts.secrets ?? [])]);
   const now = opts.now ?? Date.now;
@@ -274,6 +289,9 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
   let live: AgentRunState | null = null; // for cost/turns on failed or timed-out spans (TUI contract)
   return withSpan(`agent.${name.replace("-", "_")}`, attrs, async (span) => { try {
     must(await sh(`mkdir -p ${sq(W)} ${sq(home)}`), "mkdir");
+    // A run of this attempt whose runner died (the daemon stopped or restarted, a host crash) may still be going here:
+    // stop it before starting over, so two agent CLIs never work in one checkout or race on its exit file.
+    await sh(stopStaleRun(W)).catch(() => {});
 
     // 1. Clone.
     const existing = await git(["ls-remote", "--heads", task.repoUrl, `refs/heads/${task.branch}`]);

@@ -10,6 +10,8 @@
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
 #           error differing only in numbers, then finish normally (stuck: failing)
 #   [listen] edit, then work for ~8s, writing each message it reads on stdin to messages.txt (send mid-run)
+#   [hold:N] the first run works N seconds (default 30) before editing (a daemon restart mid-run); a run started again
+#           in the same work dir finishes at once. Each run logs start, stopped (on SIGTERM) and finished to ../hold.log
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
 # result it answers further messages until stdin closes, as claude does.
 prompt=""; stream=0; args=("$@")
@@ -30,6 +32,13 @@ case "$prompt" in *"[leak]"*)
   echo "stderr leak $ANTHROPIC_API_KEY" >&2;;
 esac
 case "$prompt" in *"[sleep]"*) sleep 120;; esac
+case "$prompt" in *"[hold:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[hold:\([0-9]*\)\].*/\1/p')
+  again=0; [ -f ../hold.log ] && again=1
+  echo start >> ../hold.log
+  trap 'echo stopped >> ../hold.log; exit 143' TERM
+  [ "$again" = 1 ] || sleep "${n:-30}";;
+esac
 case "$prompt" in *"[slow]"*)
   for i in $(seq 1 20); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
 esac
@@ -95,6 +104,7 @@ emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"
 result="fixed sum"
 [[ "$prompt" == *"[leak]"* ]] && result="done with $ANTHROPIC_API_KEY"
 emit "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":3,\"total_cost_usd\":0.123,\"result\":\"$result\"}"
+case "$prompt" in *"[hold:"*) echo finished >> ../hold.log;; esac
 # Fed on stdin: answer what comes after the result, until the input ends.
 if [ "$stream" = 1 ]; then
   while IFS= read -r line; do
