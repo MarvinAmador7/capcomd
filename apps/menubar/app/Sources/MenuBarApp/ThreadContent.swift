@@ -422,12 +422,21 @@ struct ToolCallRow: View {
     } else { row }
   }
 
+  /// A shell command reads as one (`>_`), whatever it runs, since the row shows the command itself; capcomd's own
+  /// commands (spawn, wait, verify, merge…) and other tools keep their kind's icon.
+  private func toolSymbol(_ tool: CapcomdThread.Item.Tool?) -> String {
+    let shell: Set<String> = ["Bash", "BashOutput", "KillShell", "KillBash", "command_execution"]
+    let capcomd: Set<String> = ["spawn", "wait", "message", "verify", "merge", "report", "delegate"]
+    if let tool, shell.contains(tool.name), !capcomd.contains(tool.kind) { return "terminal" }
+    return StepKind(activityKind: tool?.kind).symbol
+  }
+
   var row: some View {
     let tool = item.tool
     return VStack(alignment: .leading, spacing: 0) {
       Button { withAnimation(Theme.Motion.ease(reduceMotion)) { open.toggle() } } label: {
         HStack(spacing: Theme.Content.toolGap) {
-          Image(systemName: StepKind(activityKind: tool?.kind).symbol).font(.system(size: 11))
+          Image(systemName: toolSymbol(tool)).font(.system(size: 11))
             .foregroundStyle(tool?.isError == true ? Theme.red : item.open ? Theme.accent : Theme.Content.label.opacity(0.6))
             .frame(width: Theme.Content.toolIcon)
           Text(verbatim: tool?.summary ?? item.text).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
