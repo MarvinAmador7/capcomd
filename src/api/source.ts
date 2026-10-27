@@ -2,7 +2,7 @@
 // scope actors (src/primitives/ops.ts); tests use memorySource so tests/api stays fast and engine-free.
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, AgentStatus, Attachment, Decision, Message, Project, Run, RunOptions, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Agent, AgentStatus, Attachment, Decision, Environment, Login, Message, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
@@ -47,6 +47,12 @@ export interface HarnessSource {
 	 * run of that project (throws CreateRunError, a 422, when it isn't one).
 	 */
 	runOptions(repo?: string): Promise<O<typeof RunOptions>>;
+	/** GET /v1/logins: claude then codex, each in docker then boxd. Local state only; never a credential. */
+	logins(): Promise<O<typeof Login>[]>;
+	/** GET /v1/environments: docker then boxd. */
+	environments(): Promise<O<typeof Environment>[]>;
+	/** GET /v1/service. */
+	service(): Promise<O<typeof ServiceStatus>>;
 	approvals(runId: string): Promise<PendingApproval[]>;
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
@@ -121,6 +127,10 @@ export function memorySource(seed: Partial<{
 	skills: Array<O<typeof Skill> & { content: string }>;
 	/** What GET /v1/run-options answers (default: both drivers and sandboxes, unavailable). */
 	runOptions: O<typeof RunOptions>;
+	/** GET /v1/logins, /v1/environments, /v1/service (default: logged out everywhere, no environment, no service). */
+	logins: O<typeof Login>[];
+	environments: O<typeof Environment>[];
+	service: O<typeof ServiceStatus>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
@@ -198,6 +208,9 @@ export function memorySource(seed: Partial<{
 			],
 			sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
 		},
+		logins: async () => seed.logins ?? (["claude", "codex"] as const).flatMap((provider) => (["docker", "boxd"] as const).map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` }))),
+		environments: async () => seed.environments ?? (["docker", "boxd"] as const).map((sandbox) => ({ sandbox, status: "missing" as const, name: null, versions: {}, builtAt: null, command: `capcomd env build --sandbox ${sandbox}` })),
+		service: async () => seed.service ?? { installed: false, loaded: false, installCommand: "capcomd service install", uninstallCommand: "capcomd service uninstall" },
 		skill: async (name) => { const s = seed.skills?.find((x) => x.name === name); return s ? { name: s.name, content: s.content } : null; },
 		approvals: async (r) => (approvals[r] ?? []).filter((a) => !decided.some((d) => d.approvalId === a.approvalId)),
 		approval: async (id) => {

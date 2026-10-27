@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Harness API: three read-only routes for a settings screen, each with its capability in `GET /v1/health`.
+  `GET /v1/logins` (`logins`) says, for Claude and Codex in each sandbox (docker, boxd), whether agents can log in,
+  how (a plan login or an API key), where the login is kept, and the `capcomd auth login … --sandbox …` command that
+  logs in there. `GET /v1/environments` (`environments`) gives each sandbox's agent environment: `ready`, `missing`,
+  `building` (a `capcomd env build` is running) or `failed` (the last build failed), with its tool versions, when it
+  was built and the `capcomd env build --sandbox …` command. `GET /v1/service` (`service`) says whether capcomd is
+  installed and loaded as a background service, with the install and uninstall commands. All three need the `read`
+  scope, only read local state (cheap to poll) and never include a credential.
+- `capcomd env build` now leaves a small status file next to the environment ledger while it runs, and records when a
+  build fails, so `GET /v1/environments` can report a build in progress or a failed one.
+
 - Runs on boxd machines are now called **Cloud** (they were "VM") in the menu bar app and in run options and their
   messages (`GET /v1/run-options` `label`, e.g. "Not logged in to Claude Code for Cloud"). The sandbox's name stays
   `boxd` (`--sandbox boxd`, `"sandbox": "boxd"`).

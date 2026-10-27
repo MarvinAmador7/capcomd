@@ -286,6 +286,9 @@ export const CAPABILITIES = {
 	"runs.options.repo": "GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles",
 	"runs.options.sandbox": "GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422)",
 	"agent.steps": "agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams",
+	logins: "GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in",
+	environments: "GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it",
+	service: "GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -348,6 +351,36 @@ export const RunOptionsQuery = z.object({
 	repo: z.string().refine((p) => p.startsWith("/"), "repo must be an absolute path").optional()
 		.describe("Capability runs.options.repo. Absolute path of a project checkout on the daemon's machine, as POST /v1/runs `repo`. Omitted: the daemon's own settings and profiles."),
 });
+
+/** GET /v1/logins, /v1/environments, /v1/service: what the app's Settings window shows. Local state only. */
+const SettingsSandbox = z.enum(["docker", "boxd"]).describe("Where agents run: docker (\"Local\") or boxd (\"Cloud\")");
+export const Login = z.object({
+	provider: AgentProvider,
+	sandbox: SettingsSandbox,
+	loggedIn: z.boolean().describe("Agents of this provider can log in in this sandbox"),
+	how: z.enum(["plan", "api_key"]).nullable().describe("plan: a plan login (`capcomd auth login`) saved for this sandbox; api_key: ANTHROPIC_API_KEY / OPENAI_API_KEY is set for the daemon, or (boxd) kept as a boxd secret with CAPCOMD_CREDENTIALS=secret. A plan login wins when there are both. null when not logged in"),
+	detail: z.string().nullable().describe("Where the login lives, one short sentence written by the daemon (trusted, never a credential), e.g. \"Kept as a boxd secret bound to api.anthropic.com\", \"Saved in the agent environment\"; null when not logged in"),
+	command: z.string().describe("The CLI that logs in there, e.g. `capcomd auth login claude --sandbox docker` (interactive: run it in a terminal)"),
+});
+export const Logins = z.object({ logins: z.array(Login).describe("Always four: claude in docker, claude in boxd, codex in docker, codex in boxd") });
+export const LOGINS_DOC = "Capability logins. Who agents can log in as, per AI and per sandbox (plan logins are saved per sandbox). Needs the `read` scope. Local files and the daemon's environment only (no VM, container or network call), so poll it freely. Never contains a credential.";
+export const Environment = z.object({
+	sandbox: SettingsSandbox,
+	status: z.enum(["ready", "missing", "building", "failed"]).describe("building: a `capcomd env build` for this sandbox is running now; failed: the last build failed (`name`, `versions` and `builtAt` then still describe the environment agents use, if any); ready: agents boot from `name`; missing: none built yet (agents can't run real CLIs there)"),
+	name: z.string().nullable().describe("The environment agents boot from (an env snapshot); null when none"),
+	versions: z.record(z.string(), z.string()).describe("Tool versions in it by tool (claude, codex, node): what the build found or installed, else its pins; empty when unknown"),
+	builtAt: Timestamp.nullable().describe("When it was built; null when unknown or none"),
+	command: z.string().describe("The CLI that builds (or rebuilds) it, e.g. `capcomd env build --sandbox docker`"),
+});
+export const Environments = z.object({ environments: z.array(Environment).describe("Always two: docker, then boxd") });
+export const ENVIRONMENTS_DOC = "Capability environments. The agent environment (env snapshot) each sandbox's agents boot from. Needs the `read` scope. Local files only (the env ledger and the build's marker), so poll it freely.";
+export const ServiceStatus = z.object({
+	installed: z.boolean().describe("The service definition is installed (`capcomd service install`: a launchd agent on macOS, a systemd user unit on Linux)"),
+	loaded: z.boolean().describe("launchd (systemd) has it loaded: it starts capcomd at login and restarts it when it crashes"),
+	installCommand: z.string().describe("`capcomd service install`"),
+	uninstallCommand: z.string().describe("`capcomd service uninstall`"),
+});
+export const SERVICE_DOC = "Capability service. Whether capcomd runs as a background service. Needs the `read` scope. Reads the service definition, and asks launchd (systemd) whether it is loaded at most every few seconds, for at most a second.";
 
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
@@ -427,6 +460,15 @@ export const contract = {
 	},
 	runOptions: {
 		get: oc.route({ method: "GET", path: "/v1/run-options", description: RUN_OPTIONS_DOC }).input(RunOptionsQuery).output(RunOptions),
+	},
+	logins: {
+		list: oc.route({ method: "GET", path: "/v1/logins", description: LOGINS_DOC }).output(Logins),
+	},
+	environments: {
+		list: oc.route({ method: "GET", path: "/v1/environments", description: ENVIRONMENTS_DOC }).output(Environments),
+	},
+	service: {
+		get: oc.route({ method: "GET", path: "/v1/service", description: SERVICE_DOC }).output(ServiceStatus),
 	},
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),

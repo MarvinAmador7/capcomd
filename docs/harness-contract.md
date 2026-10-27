@@ -32,6 +32,9 @@ Refetch when the run stream shows agent.checkpointed, agent.done, agent.failed, 
 | `attachments.get` | GET | `/v1/runs/{runId}/attachments/{attachmentId}` | Full text of an over-64 KB body, or an image a tool returned (base64, `encoding: "base64"`; prefer …/content for its bytes). |
 | `attachments.content` | GET | `/v1/runs/{runId}/attachments/{attachmentId}/content` | An attachment's bytes with its media type: images a tool returned (`inline` media) and long bodies (text/plain). Served with nosniff and a sandboxing CSP. |
 | `runOptions.get` | GET | `/v1/run-options` | Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not, and (capability runs.options.sandbox) whether each driver can run in each sandbox. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, agent environments, whether Docker answers, cached a few seconds), so poll it freely. `repo` (capability runs.options.repo): the answer for a run of that project, as POST /v1/runs with the same `repo` starts it: its settings and agent profiles (.capcomd/agents.json from `capcomd setup project`), not the daemon's. 422 `invalid` when it isn't a project checkout, with the message POST /v1/runs gives. |
+| `logins.list` | GET | `/v1/logins` | Capability logins. Who agents can log in as, per AI and per sandbox (plan logins are saved per sandbox). Needs the `read` scope. Local files and the daemon's environment only (no VM, container or network call), so poll it freely. Never contains a credential. |
+| `environments.list` | GET | `/v1/environments` | Capability environments. The agent environment (env snapshot) each sandbox's agents boot from. Needs the `read` scope. Local files only (the env ledger and the build's marker), so poll it freely. |
+| `service.get` | GET | `/v1/service` | Capability service. Whether capcomd runs as a background service. Needs the `read` scope. Reads the service definition, and asks launchd (systemd) whether it is loaded at most every few seconds, for at most a second. |
 | `skills.list` | GET | `/v1/skills` | Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills. |
 | `events.replay` | GET | `/v1/events` | Durable events of one scope after `after` (resume cursor = seq), same envelope as the stream. |
 | `events.stream` | GET | `/v1/streams/{scope}/events` | SSE. Each event frame: `id: <seq>`, `event: <type>`, `data: <envelope JSON>`. Resume by sending `Last-Event-ID: <seq>`.
@@ -57,6 +60,9 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 | `runs.options.repo` | GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles |
 | `runs.options.sandbox` | GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422) |
 | `agent.steps` | agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams |
+| `logins` | GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in |
+| `environments` | GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it |
+| `service` | GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it |
 
 ## Event envelope
 

@@ -135,6 +135,9 @@ export function rivetSource(): HarnessSource {
 		skills: () => listSkills(),
 		runOptions: async (repo) => (await import("./run-options")).runOptionsFor(repo),
 		skill: (name) => readSkill(name),
+		logins: async () => (await import("./settings")).logins(),
+		environments: async () => (await import("./settings")).environments(),
+		service: async () => (await import("./settings")).serviceState(),
 		approvals: async (runId) => {
 			const ops = (await scope(runId).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as any[];
 			return ops.map((op): PendingApproval => {

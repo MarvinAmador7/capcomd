@@ -27,11 +27,18 @@ export function serviceSpec(o: { port?: number; platform?: NodeJS.Platform } = {
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/** Where the service definition goes for `home` on `platform` (null: no service support there). */
+export function servicePath(platform: NodeJS.Platform, home: string): string | null {
+  if (platform === "darwin") return join(home, "Library", "LaunchAgents", `${LABEL}.plist`);
+  if (platform === "linux") return join(home, ".config", "systemd", "user", UNIT);
+  return null;
+}
+
 /** The service definition and where it goes. */
 export function serviceFile(s: ServiceSpec): { path: string; body: string } {
   if (s.platform === "darwin") {
     return {
-      path: join(s.home, "Library", "LaunchAgents", `${LABEL}.plist`),
+      path: servicePath("darwin", s.home)!,
       body: `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -53,7 +60,7 @@ export function serviceFile(s: ServiceSpec): { path: string; body: string } {
   }
   if (s.platform === "linux") {
     return {
-      path: join(s.home, ".config", "systemd", "user", UNIT),
+      path: servicePath("linux", s.home)!,
       body: `[Unit]
 Description=capcomd engine (agent orchestration)
 After=network-online.target
