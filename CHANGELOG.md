@@ -12,6 +12,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fix: `capcomd serve` now stops the Durable Streams services process (port 8642) when it exits, including when its
   watchdog stops it. It used to keep running, hold the port so the next `capcomd serve` couldn't start its own, and
   attach itself to that daemon's engine.
+- Menu bar app: an ended run's view is titled by how it ended ("Done in 7s", "Stopped after 32s") instead of its
+  last step.
 - Menu bar app: in a run's view, click an agent's row in Activity to read its thread; that's how you get back to
   what each agent said once the run has ended.
 - An agent's log no longer fills with the same "pump error: VM … not found" line after it's paused or stopped;

@@ -71,7 +71,8 @@ struct DrillHeader: View {
       .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }
       VStack(alignment: .leading, spacing: Theme.Drill.titleTop) {
         Text(verbatim: run?.title ?? runId).font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).lineLimit(1)
-        RedactableText(text: UntrustedText(current?.text ?? run?.title ?? runId))
+        // An ended run is titled by how it ended, not by its last step ("Edited a file" said little).
+        RedactableText(text: UntrustedText(run?.endedHead ?? current?.text ?? run?.title ?? runId))
           .font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn).lineLimit(1)
       }
       Spacer(minLength: 0)
