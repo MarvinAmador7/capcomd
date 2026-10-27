@@ -9,7 +9,10 @@
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
 // store's rebuild picks up repo/key (scope chips, suffixes) without a run stream; lifecycle feeds re-send the same
 // state per run. Folders ride in `Agent.workspace` / `agent.spawned.data.workspace` (harness #46).
+// The lead (agt-ld01) has a structured thread (threads.ts; THREAD=golden swaps in the daemon's golden session), and a
+// steer to it gets a live reply on connections that asked for ?thread=1.
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
+import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
@@ -131,6 +134,13 @@ const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind:
   question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target } });
 const decided = new Map<string, any>();
 
+// Agent threads: the lead's, plus the steer that opens it (snapshot.threads).
+const threads = new ThreadStore(), leadRun = runs.find(r => r.agents.some(a => a.id === "agt-ld01")), T0 = NOW - 5 * min;
+if (leadRun) for (const d of process.env.THREAD === "golden" ? goldenThread() : withDiff(leadThread(T0))) threads.write("agt-ld01", d);
+const steers = leadRun ? [{ seq: 1, from: "operator", to: "agt-ld01", at: iso(T0), text: "Skip shards above 200 and keep it on the staging bucket.", attachment: null }] : [];
+// A 1×1 png for attachment media.
+const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+
 const sse = (id: number | null, event: string, data: unknown) => (id !== null ? `id: ${id}\n` : "") + `event: ${event}\n` + `data: ${JSON.stringify(data)}\n\n`;
 /** A full snapshot of `rs`, ending at HEAD. */
 const snapshot = (rs: RunSpec[]) =>
@@ -139,15 +149,23 @@ const snapshot = (rs: RunSpec[]) =>
   + sse(null, "snapshot.agents", { agents: rs.flatMap(r => r.agents.map(a => agentBody(r, a))) })
   + sse(null, "snapshot.approvals", { approvals: rs.flatMap(r => (r.approvals ?? []).map(p => approvalBody(r, p))) })
   + sse(null, "snapshot.steps", { steps: envelopes.filter(e => rs.some(r => r.id === e.runId)) })
-  + sse(null, "snapshot.threads", { messages: [] })
+  + sse(null, "snapshot.threads", { messages: steers.filter(m => rs.some(r => r.agents.some(a => a.id === m.to))) })
   + sse(HEAD, "snapshot.end", { snapshotSeq: HEAD });
 
 const err = (status: number, code: string, message: string) => Response.json({ code, message }, { status });
 // Open run streams, so a POST can confirm itself with a live event.
 const live = new Map<string, Set<ReadableStreamDefaultController>>();
-let msgSeq = 0;
+let msgSeq = steers.length;   // message seqs continue after the snapshot's
 const broadcast = (scope: string, e: any) => {
   for (const c of live.get(scope) ?? []) { try { c.enqueue(new TextEncoder().encode(sse(e.seq, e.type, e))); } catch { /* closed */ } }
+};
+// Connections that asked for ?thread=1, per scope: agent.thread_item_changed frames (ephemeral: no SSE id).
+const liveThread = new Map<string, Set<ReadableStreamDefaultController>>();
+const threadWrite = (run: RunSpec, agentId: string, d: any) => {
+  const item = threads.write(agentId, d), ms = Date.now();
+  const e = { v: 1, id: `evt_thr_${item.seq}`, scope: run.id, seq: HEAD, entity: agentId, entitySeq: 0, type: "agent.thread_item_changed", typeVersion: 1,
+    durability: "ephemeral", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId, data: { agentId, item } };
+  for (const c of liveThread.get(run.id) ?? []) { try { c.enqueue(new TextEncoder().encode(sse(null, e.type, e))); } catch { /* closed */ } }
 };
 if (existsSync(sock)) unlinkSync(sock);
 Bun.serve({
@@ -177,6 +195,14 @@ Bun.serve({
       setTimeout(() => broadcast(run.id, { v: 1, id: `evt_msg_${mseq}`, scope: run.id, seq: HEAD + mseq, entity: `msg-${mseq}`, entitySeq: 1, type: "message.sent",
         typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: "operator",   // the sender, as scope.ts records it
         data: { from: "operator", to: agent.id, seq: mseq, text: body.body, bytes: body.body.length, ...(body.skills ? { skills: body.skills } : {}) } }), 1200);
+      // The agent answers on its thread: a reply, then a tool call seen open and then done.
+      const at = (dt: number) => new Date(Date.now() + dt).toISOString(), base = { rev: 1, durationMs: null, format: "blocks/1", redacted: false, tool: null, error: null, truncated: null, child: null };
+      const say = { ...base, id: `itm-live-${mseq}-say`, kind: "say", status: "done", at: at(2500), text: "On it.", blocks: [{ t: "paragraph", children: [{ t: "text", text: "On it." }] }] };
+      const call = { ...base, id: `itm-live-${mseq}-tool`, kind: "tool", status: "open", at: at(3500), text: "Run bun test", blocks: [],
+        tool: { callId: `call-live-${mseq}`, name: "Bash", kind: "test", summary: "Run bun test", isError: false, args: "{\"command\": \"bun test\"}", output: null, files: [] } };
+      setTimeout(() => threadWrite(run, agent.id, say), 2500);
+      setTimeout(() => threadWrite(run, agent.id, call), 3500);
+      setTimeout(() => threadWrite(run, agent.id, { ...call, rev: 2, status: "done", durationMs: 2300, tool: { ...call.tool, output: "42 pass\n0 fail" } }), 5800);
       return Response.json({ runId: run.id, to: agent.id, from: "operator", seq: mseq, note: null });
     }
     if (p === "/v1/runs" && req.method === "POST") {   // runs.create (harness #49): accepted, starts nothing here
@@ -196,6 +222,10 @@ Bun.serve({
     const tr = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/transcript$/);
     if (tr) { const lines = runs.find(r => r.id === tr[1])?.transcript?.[tr[2]] ?? []; const after = Number(url.searchParams.get("after") ?? 0);
       return Response.json({ items: lines.map((text, i) => ({ seq: i + 1, at: iso(Date.now() - (lines.length - i) * 2500), stream: "stdout", text })).filter(x => x.seq > after), next: null }); }
+    const th = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/thread$/);
+    if (th) return Response.json(threads.page(th[2], Number(url.searchParams.get("after") ?? 0), Math.min(500, Number(url.searchParams.get("limit") ?? 100))));
+    if (/^\/v1\/runs\/[^/]+\/attachments\/[^/]+\/content$/.test(p)) return new Response(PNG, { headers: { "content-type": "image/png", "x-content-type-options": "nosniff" } });
+    if (/^\/v1\/runs\/[^/]+\/agents\/[^/]+\/workspace$/.test(p)) return err(404, "not_found", "not in the agent's latest work");
     const ctl = p.match(/^\/v1\/runs\/([^/]+)\/(pause|resume|cancel)$/);
     if (ctl && req.method === "POST") {
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
@@ -218,11 +248,12 @@ Bun.serve({
     return new Response(new ReadableStream({
       start(c) {
         if (!live.has(scope)) live.set(scope, new Set()); live.get(scope)!.add(c);
+        if (url.searchParams.get("thread") === "1") { if (!liveThread.has(scope)) liveThread.set(scope, new Set()); liveThread.get(scope)!.add(c); }
         stream = c;
         c.enqueue(new TextEncoder().encode(snapshot(picked)));
         hb = setInterval(() => { try { c.enqueue(new TextEncoder().encode(": heartbeat\n\n")); } catch { clearInterval(hb); } }, 15_000);
       },
-      cancel() { clearInterval(hb); if (stream) live.get(scope)?.delete(stream); },
+      cancel() { clearInterval(hb); if (stream) { live.get(scope)?.delete(stream); liveThread.get(scope)?.delete(stream); } },
     }), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
   },
 });

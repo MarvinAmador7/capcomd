@@ -26,14 +26,15 @@ public final class UnixSocketTransport: @unchecked Sendable {
     return r
   }
 
-  public func get(_ path: String) async throws -> (Int, Data) {
+  /// GET with the body collected up to `maxBytes` (a larger body throws).
+  public func get(_ path: String, maxBytes: Int = 4 << 20) async throws -> (Int, Data) {
     let resp = try await client.execute(try request(path), timeout: .seconds(10))
-    let body = try await resp.body.collect(upTo: 4 << 20)
+    let body = try await resp.body.collect(upTo: maxBytes)
     return (Int(resp.status.code), Data(body.readableBytesView))
   }
 
-  public func getJSON<T: Decodable>(_ path: String, as: T.Type) async throws -> T {
-    let (s, d) = try await get(path)
+  public func getJSON<T: Decodable>(_ path: String, as: T.Type, maxBytes: Int = 4 << 20) async throws -> T {
+    let (s, d) = try await get(path, maxBytes: maxBytes)
     guard s == 200 else { throw HTTPStatusError(status: s) }
     return try JSONDecoder().decode(T.self, from: d)
   }

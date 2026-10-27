@@ -116,6 +116,7 @@ enum Theme {
     // Header (.hdr padding 2 4 10, gap 8)
     static let headerPadding = EdgeInsets(top: 2, leading: 4, bottom: 10, trailing: 4)
     static let headerGap: CGFloat = 8
+    static let threadRefreshSeconds: Double = 15                      // live frames carry the thread; this re-read covers a dropped stream
     static let backSize: CGFloat = 24, backRadius: CGFloat = 6
     static let backFill = Color.white.opacity(0.07)
     static let backIcon = Font.system(size: 11, weight: .semibold)
@@ -332,6 +333,72 @@ enum Theme {
     static let chipText = Color(red: 0x8C / 255, green: 0xC4 / 255, blue: 1)
     static let chipFont = Font.system(size: 11, design: .monospaced)
     static let chipClose: CGFloat = 14, chipCloseFill = Color.white.opacity(0.08)
+  }
+  /// Thread content (thread-panel-v2.html / thread-states.html `.th` and its blocks). Line spacing is the CSS line height
+  /// minus the font's own (SF 13 ≈ 15.5, SF 12 ≈ 14.3, SF 12.5 ≈ 15, SF Mono 11.5 ≈ 13.7, SF Mono 10.5 ≈ 12.5).
+  enum Content {
+    static let label = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255)
+    static let padding = EdgeInsets(top: 2, leading: 14, bottom: 0, trailing: 14)   // .th: 16 inside the panel's 10, less its 12 bleed
+    static let fade: CGFloat = 24
+    // Prose (.p, .h, ul.l, .icd)
+    static let proseFont = Font.system(size: 13), proseText = Color.white.opacity(0.86), proseSpacing: CGFloat = 3.5, proseBottom: CGFloat = 9
+    static let headingFont = Font.system(size: 13, weight: .semibold), headingText = Color.white
+    static let headingTop: CGFloat = 14, headingBottom: CGFloat = 5
+    static let listIndent: CGFloat = 16, listItemGap: CGFloat = 2, listMarker = label.opacity(0.4), markerGap: CGFloat = 2
+    static let codeInlineFont = Font.system(size: 11.5, design: .monospaced), codeInlineFill = Color.white.opacity(0.08), codeInlineText = Color.white.opacity(0.9)
+    static let link = Color(red: 0x40 / 255, green: 0x9C / 255, blue: 1), linkDetail = label.opacity(0.4)
+    static let pathText = Color.white.opacity(0.9)
+    // Code block (.pre, .bar2, pre)
+    static let codeFill = Color.black.opacity(0.28), codeStroke = Color.white.opacity(0.08), codeRadius: CGFloat = 8, codeBottom: CGFloat = 10
+    static let codeBarFont = Font.system(size: 10.5), codeBarText = label.opacity(0.4)
+    static let codeBarPadding = EdgeInsets(top: 5, leading: 10, bottom: 0, trailing: 10)
+    static let codeFont = Font.system(size: 11.5, design: .monospaced), codeText = Color.white.opacity(0.85), codeSpacing: CGFloat = 3.3
+    static let codePadding = EdgeInsets(top: 4, leading: 10, bottom: 9, trailing: 10)
+    static let keyword = Color(red: 0x7C / 255, green: 0xB7 / 255, blue: 1), string = Color(red: 0xA8 / 255, green: 0xD4 / 255, blue: 0xA0 / 255)
+    static let comment = label.opacity(0.36), number = Color(red: 0xE3 / 255, green: 0xB7 / 255, blue: 0x7A / 255)
+    // Table (table.t)
+    static let tableFont = Font.system(size: 12), tableText = Color.white.opacity(0.85), tableBottom: CGFloat = 10
+    static let thFont = Font.system(size: 11, weight: .semibold), thText = label.opacity(0.55), thPadding = EdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6)
+    static let thRule = Color.white.opacity(0.14), tdRule = Color.white.opacity(0.06), tdPadding = EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+    static let tdMono = Font.system(size: 11, design: .monospaced)
+    // Tool call (.tc, .tx)
+    static let toolHeight: CGFloat = 26, toolGap: CGFloat = 8, toolIcon: CGFloat = 16, toolChevron: CGFloat = 10, toolRadius: CGFloat = 6, toolInset: CGFloat = 6
+    static let toolFont = Font.system(size: 12.5), toolText = label.opacity(0.7), toolHover = Color.white.opacity(0.05)
+    static let toolDuration = Font.system(size: 10.5, design: .monospaced), toolDurationText = label.opacity(0.4)
+    static let detailFill = Color.black.opacity(0.22), detailRadius: CGFloat = 7, detailPadding = EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9)
+    static let detailMargin = EdgeInsets(top: 0, leading: 24, bottom: 8, trailing: 0)
+    static let detailFont = Font.system(size: 10.5, design: .monospaced), detailText = label.opacity(0.7), detailSpacing: CGFloat = 2.5
+    static let detailLabel = Font.system(size: 10, weight: .semibold), detailLabelText = label.opacity(0.38), detailLabelGap: CGFloat = 2, detailSectionGap: CGFloat = 6
+    static let detailMaxLines = 40
+    // Thinking (.thk, .thb)
+    static let thinkHeight: CGFloat = 24, thinkGap: CGFloat = 6, thinkFont = Font.system(size: 12), thinkText = label.opacity(0.42)
+    static let thoughtMargin = EdgeInsets(top: 0, leading: 6, bottom: 9, trailing: 0), thoughtIndent: CGFloat = 12, thoughtRule = Color.white.opacity(0.12)
+    static let thoughtFont = Font.system(size: 12), thoughtText = label.opacity(0.55), thoughtSpacing: CGFloat = 2.7
+    // Handoff card (.ho, .art)
+    static let handoffFill = Color.white.opacity(0.05), handoffStroke = Color.white.opacity(0.10), handoffRadius: CGFloat = 10
+    static let handoffPadding = EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 10), handoffBottom: CGFloat = 10, handoffGap: CGFloat = 7
+    static let handoffName = Font.system(size: 12.5, weight: .medium), handoffSuffix = Font.system(size: 10.5, design: .monospaced), handoffSuffixText = label.opacity(0.32)
+    static let handoffNote = Font.system(size: 11), handoffNoteText = label.opacity(0.45)
+    static let handoffSummary = Font.system(size: 12.5), handoffSummaryText = Color.white.opacity(0.8), handoffSummarySpacing: CGFloat = 3
+    static let handoffSummaryMargin = EdgeInsets(top: 5, leading: 0, bottom: 7, trailing: 0)
+    static let artFont = Font.system(size: 10.5, design: .monospaced), artText = label.opacity(0.6), artFill = Color.white.opacity(0.07)
+    static let artRadius: CGFloat = 5, artPadding = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6), artGap: CGFloat = 4
+    // Diff card (.df, .fh, .ln2)
+    static let diffFill = Color.black.opacity(0.25), diffStroke = Color.white.opacity(0.08), diffRadius: CGFloat = 8, diffBottom: CGFloat = 10
+    static let diffHeaderFont = Font.system(size: 11, design: .monospaced), diffHeaderText = Color.white.opacity(0.8)
+    static let diffHeaderPadding = EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10), diffHeaderGap: CGFloat = 7, diffHeaderRule = Color.white.opacity(0.07)
+    static let diffAdded = Color(red: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255), diffRemoved = Color(red: 1, green: 0x69 / 255, blue: 0x61 / 255)
+    static let diffFont = Font.system(size: 11, design: .monospaced), diffLine: CGFloat = 16, diffPadding: CGFloat = 10, diffMarker: CGFloat = 12
+    static let diffContext = label.opacity(0.6), diffMarkerText = label.opacity(0.4)
+    static let diffAddedFill = diffAdded.opacity(0.10), diffAddedText = Color.white.opacity(0.9)
+    static let diffRemovedFill = diffRemoved.opacity(0.10), diffRemovedText = Color.white.opacity(0.75)
+    static let diffGapText = label.opacity(0.35), diffFailedOpacity: Double = 0.6
+    // Error, other, quote, rule, media
+    static let errorText = Color(red: 1, green: 105 / 255, blue: 97 / 255).opacity(0.85), errorFont = Font.system(size: 12.5)
+    static let otherFont = Font.system(size: 12), otherText = label.opacity(0.45)
+    static let ruleColor = Color.white.opacity(0.10), ruleMargin: CGFloat = 8
+    static let mediaRadius: CGFloat = 8, mediaMaxHeight: CGFloat = 180, mediaStroke = Color.white.opacity(0.08)
+    static let truncatedFont = Font.system(size: 11), truncatedText = label.opacity(0.4)
   }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {

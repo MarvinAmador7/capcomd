@@ -1,4 +1,5 @@
 import Foundation
+import CapcomdThread
 
 /// The menu bar app's state, fed by per-scope event streams. Platform-neutral (no SwiftUI/Observation: Observation
 /// doesn't link on the Linux toolchain here). The macOS app mirrors `onChange` into an `@Observable` model.
@@ -19,6 +20,14 @@ public final class CapcomdStore {
   /// Live lifecycle events worth a notification (approval requested, run completed/failed). Never fired for snapshots.
   public var onNotify: (@MainActor (Notice) -> Void)?
   public internal(set) var threads: [String: [ThreadItem]] = [:]
+  /// Structured thread items per agent (harness #59; StoreThreadItems.swift), the route's cursor, and whether it works.
+  public internal(set) var books: [String: Book] = [:]
+  var threadCursor: [String: Int] = [:]
+  public internal(set) var threadUnavailable: [String: DetailUnavailable] = [:]
+  public internal(set) var media: [MediaKey: Fetched<Data>] = [:]
+  /// The run whose lifecycle feed carries `thread=1` (the open thread's run), and the agent shown.
+  public internal(set) var threadStreamRun: String?
+  public internal(set) var openThreadAgent: String?
   public let prefs: UIPreferences
   public var onChange: (@MainActor () -> Void)?
 
@@ -44,6 +53,7 @@ public final class CapcomdStore {
   let starter: RunStarting?
   let messenger: AgentMessaging?
   let daemonInfo: DaemonInfoFetching?
+  let threadSource: ThreadFetching?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -66,10 +76,10 @@ public final class CapcomdStore {
   public static let maxLifecycleFeeds = 16
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
-              starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil,
+              starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil, thread: ThreadFetching? = nil,
               prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
     self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter
-    self.messenger = messenger; self.daemonInfo = daemonInfo; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
+    self.messenger = messenger; self.daemonInfo = daemonInfo; self.threadSource = thread; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 
@@ -169,8 +179,9 @@ public final class CapcomdStore {
     guard subs[key] == nil, let subscriber else { return }
     let after = cursor[key] ?? 0
     let onFrame: @Sendable (StreamFrame) async -> Void = { [weak self] f in await self?.receive(f, scope: key) }
+    let thread = feed != nil && Self.lifecycleRun(key) == threadStreamRun   // the open thread's run: live thread items too
     subs[key] = feed == nil ? subscriber.subscribe(scope: scope, after: after, onFrame: onFrame)
-                            : subscriber.subscribe(scope: scope, feed: feed, after: after, onFrame: onFrame)
+                            : subscriber.subscribe(scope: scope, feed: feed, thread: thread, after: after, onFrame: onFrame)
   }
 
   // MARK: frames
@@ -308,6 +319,7 @@ public final class CapcomdStore {
     case "agent.failed", "drive.failed": setStatus(runId, agentId, .failed, e)
     case "agent.cancelled", "agent.reaped": setStatus(runId, agentId, .cancelled, e)
     case "agent.paused": setStatus(runId, agentId, .paused, e)
+    case "agent.thread_item_changed": applyThreadFrame(runId: runId, agentId: agentId, d)
     case "agent.activity_changed":
       guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
       runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string

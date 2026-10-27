@@ -49,7 +49,7 @@ final class AppModel {
     let t = UnixSocketTransport(socketPath: socketPath, token: token)
     return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), detail: LiveDetail(transport: t),
                          controls: LiveControls(transport: t), starter: LiveStarter(transport: t), messenger: LiveMessenger(transport: t),
-                         daemonInfo: LiveDaemonInfo(transport: t), prefs: DefaultsPreferences()), t)
+                         daemonInfo: LiveDaemonInfo(transport: t), thread: LiveThread(transport: t), prefs: DefaultsPreferences()), t)
   }
 
   static func live() -> AppModel {
@@ -81,6 +81,13 @@ final class AppModel {
   func approval(_ id: String) -> PendingApproval? { _ = revision; return store.approvals[id] }
   func steps(_ runId: String) -> [Step] { _ = revision; return store.steps(forRun: runId) }
   func thread(_ agentId: String) -> [ThreadItem] { _ = revision; return store.thread(agentId: agentId) }
+  func threadEntries(_ agentId: String) -> [ThreadEntry] { _ = revision; return store.threadEntries(agentId: agentId) }
+  func threadUnavailable(_ agentId: String) -> DetailUnavailable? { _ = revision; return store.threadUnavailable[agentId] }
+  func media(_ key: MediaKey) -> Fetched<Data>? { _ = revision; return store.media[key] }
+  func loadMedia(_ key: MediaKey) async { await store.loadMedia(key) }
+  func openThread(runId: String, agentId: String) { store.openThread(runId: runId, agentId: agentId) }
+  func closeThread(agentId: String) { if store.openThreadAgent == agentId { store.closeThread() } }
+  func refreshThread(runId: String, agentId: String) async { await store.refreshThread(runId: runId, agentId: agentId) }
 
   var drillView: DrillView {
     get { _ = revision; return store.prefs.drillView }

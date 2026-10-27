@@ -7,6 +7,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 - Menu bar app: in the run view, the Activity list and the collapsed step strip sit 4 pt closer to the step bar, as
   designed.
+- Menu bar app: an agent's thread now shows what it actually did, as it happens: its messages with headings, lists,
+  inline code, code blocks (lightly highlighted, with Copy) and tables; "Thought for 8s" lines that unfold into the
+  reasoning; one line per tool call with its duration that opens to show the arguments and result; file edits as a small
+  diff with the file's name and `+n −n`; and a card when a
+  child agent hands back, with its summary and artifacts, that opens the child's thread. Your messages sit between
+  them. Web links show where they really go and open in your browser; images the agent produced load from capcomd,
+  and images from the internet load only when you click them. Needs a capcomd daemon with agent threads; with an
+  older one the thread shows the same lines as before.
 - `capcomd serve` no longer takes over a harness socket another daemon is serving. Before, a second `serve` (or a
   test run) replaced `~/.capcomd/harness.sock`, and the running daemon's menu bar app and other harness.v1 clients
   lost it (connection refused) until that daemon was restarted. Now `serve` exits 1 with an error naming the socket and
