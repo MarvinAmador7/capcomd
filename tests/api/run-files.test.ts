@@ -191,7 +191,7 @@ describe("a remote that never answers", () => {
 		const path = join(root, "clients-slow.json");
 		const token = addClient("reader", ["read"], path).token;
 		const run = { id: "run-2", projectId: null, label: null, state: "running", goal: null, repo: slow.remote, createdAt: "2026-10-25T07:00:00.000Z" };
-		const agents = ["s1", "s2"].map((id) => ({ id, runId: "run-2", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null }));
+		const agents = ["s1", "s2"].map((id) => ({ id, runId: "run-2", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null, provider: null, model: null }));
 		const evs: RawEvent[] = [
 			{ seq: 1, at: 1, type: "AGENT_DONE", agentId: "s1", data: { result: { branch: "capcomd/run-2/s1", commit: "a".repeat(40) } } },
 			{ seq: 2, at: 2, type: "AGENT_CHECKPOINT", agentId: "s2", data: { ref: "refs/capcomd/checkpoints/s2", sha: "b".repeat(40), at: 2, reason: "x", files: 1 } },
@@ -218,7 +218,7 @@ describe("GET /v1/runs/{runId}/files", () => {
 	const path = join(root, "clients.json");
 	const token = addClient("reader", ["read"], path).token;
 	const run = { id: "run-1", projectId: null, label: "demo", state: "running", goal: null, repo: remote, createdAt: "2026-10-25T07:00:00.000Z" };
-	const agent = (id: string) => ({ id, runId: "run-1", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null });
+	const agent = (id: string) => ({ id, runId: "run-1", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null, provider: null, model: null });
 	const app = harnessApp({
 		source: memorySource({ runs: [run], agents: { "run-1": ["a1", "a2", "a3", "a4", "rev", "gone"].map(agent) }, events: { "run-1": events }, repos: { "run-1": { ...repo, workdir: join(root, "mirror-http") } } }),
 		clients: () => loadClients(path), state: harnessState(null),

@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- API: agents now report which AI provider (claude or codex) and model they run on, as `provider` and `model` on
+  each agent (GET /v1/runs/{runId}/agents and the stream's `snapshot.agents`). `provider` is null for a fake agent;
+  `model` is null when the provider's default model is used. The `agent` field of `agent.spawned` events now has a
+  documented shape (`kind`, `provider`, `model`, plus the profile's other settings).
 - Menu bar app: opening the @ mention or / skill list in a thread no longer blanks out the top of the conversation;
   the list now floats over the thread.
 - Menu bar app: when you @ mention an agent in a message, it becomes a pill with the agent's bot and name, right

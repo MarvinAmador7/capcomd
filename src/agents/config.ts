@@ -147,6 +147,11 @@ export function claudeCostUsd(u: ClaudeUsage): number {
   return (u.input * p.in + u.cacheWrite * p.in * 1.25 + u.cacheRead * (p.cacheRead ?? p.in * 0.1) + u.output * p.out) / 1e6;
 }
 
+/** The model an agent runs with: CAPCOMD_AGENT_MODEL, else its profile's; undefined means the CLI's own default. */
+export function agentModel(spec: { model?: string } | null | undefined, source: Record<string, string | undefined> = process.env): string | undefined {
+  return envVar("AGENT_MODEL", source) ?? spec?.model;
+}
+
 const list = (v: string | undefined, d: string[]) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : d);
 
 export function loadAgentConfig(source: Record<string, string | undefined> = process.env, profileName?: string | null): AgentConfig {
@@ -182,7 +187,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     pollMs: num("AGENT_POLL_MS", 2000),
     ...(envVar("AGENT_ALLOWED_TOOLS", source) !== undefined || spec?.allowedTools ? { allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? []) } : {}),
     disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), spec?.disallowedTools ?? []),
-    model: envVar("AGENT_MODEL", source) ?? spec?.model,
+    model: agentModel(spec, source),
     profile: ra.name,
     systemPrompt: spec?.systemPrompt,
     appendSystemPrompt: spec?.appendSystemPrompt,

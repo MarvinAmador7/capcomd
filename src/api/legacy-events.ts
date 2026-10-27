@@ -35,6 +35,15 @@ export const AgentResult = z.looseObject({
 	verification: U.optional(),
 }).meta({ "x-untrusted": true, description: "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions" });
 const finish = { result: AgentResult, spent: U, budget: U };
+/** Which AI provider an agent runs on (harness.v1 Agent.provider, agent.spawned agent.provider). */
+export const AgentProvider = z.enum(["claude", "codex"]);
+/** agent.spawned `agent`: the agent's profile as resolved at spawn (provider, auth, limits, …) plus the runner the daemon
+ * chose. Open: other profile fields come along, and may be added. */
+export const SpawnedAgent = z.looseObject({
+	kind: z.enum(["fake", "claude-code", "codex"]).optional().describe("The runner: claude-code, codex, or fake (a local stand-in with no AI provider)"),
+	provider: AgentProvider.optional().describe("The profile's provider; absent when the agent was chosen by CAPCOMD_AGENT without a profile (then see kind)"),
+	model: z.string().nullable().optional().describe("The model it runs with (CAPCOMD_AGENT_MODEL, else the profile's); absent or null: the provider CLI's default"),
+}).describe("The agent's resolved profile and runner; null on events from daemons that recorded none");
 /** Set on lifecycle-feed copies of state-change events (GET /v1/runs/{runId}/lifecycle, ?feed=lifecycle): trusted reason code. */
 const cause = { cause: S.optional().describe("Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)") };
 const kv = { k: S, version: N, writer: S.optional() };
@@ -58,7 +67,7 @@ const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verif
 export const LegacyEventShapes = {
 	"run.created": { budget: U, label: nS, goal: nT.optional(), ...cause },
 	"run.granted": budget,
-	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: U, task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(), ...cause },
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(), ...cause },
 	"agent.started": { ...cause },
 	"agent.done": { ...finish, ...cause },
 	"agent.failed": { ...finish, ...cause },

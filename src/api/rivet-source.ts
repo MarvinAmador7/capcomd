@@ -33,6 +33,15 @@ async function itemsAfter(runId: string, after: number, limit: number, agentId?:
 	return out;
 }
 
+/** harness.v1 Agent.provider/model from the spec recorded at spawn ({...profile, kind, model}): the profile's provider,
+ * else the runner's (an agent chosen by CAPCOMD_AGENT has no profile); a fake agent has neither. */
+export function agentRuntime(spec: unknown): { provider: "claude" | "codex" | null; model: string | null } {
+	const s = (spec && typeof spec === "object" ? spec : {}) as Record<string, unknown>;
+	if (s.kind === "fake") return { provider: null, model: null };
+	const provider = s.provider === "claude" || s.provider === "codex" ? s.provider : s.kind === "claude-code" ? "claude" : s.kind === "codex" ? "codex" : null;
+	return { provider, model: provider && typeof s.model === "string" && s.model ? s.model : null };
+}
+
 export function rivetSource(): HarnessSource {
 	const runsIndex = () => recentRuns(500);
 	const runs = async () => Promise.all(runsIndex().map(async (r) => {
@@ -68,7 +77,7 @@ export function rivetSource(): HarnessSource {
 					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile), status: a.status,
 					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: agentActivity(a.activity, a.status),
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
-					updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
+					...agentRuntime(a.spec), updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
 				};
 			});
 		},

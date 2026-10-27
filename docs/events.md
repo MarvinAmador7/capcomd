@@ -85,7 +85,40 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "budget": {},
     "limits": {},
-    "agent": {},
+    "agent": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "kind": {
+          "description": "The runner: claude-code, codex, or fake (a local stand-in with no AI provider)",
+          "type": "string",
+          "enum": [
+            "fake",
+            "claude-code",
+            "codex"
+          ]
+        },
+        "provider": {
+          "description": "The profile's provider; absent when the agent was chosen by CAPCOMD_AGENT without a profile (then see kind)",
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "model": {
+          "description": "The model it runs with (CAPCOMD_AGENT_MODEL, else the profile's); absent or null: the provider CLI's default",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": {},
+      "description": "The agent's resolved profile and runner; null on events from daemons that recorded none"
+    },
     "task": {
       "description": "Agent-written text: render as plain text, never markdown, links or actions",
       "type": [
@@ -2213,6 +2246,25 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "additionalProperties": {},
             "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
           },
+          "provider": {
+            "description": "The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "claude",
+              "codex",
+              null
+            ]
+          },
+          "model": {
+            "description": "The model the agent runs with, when the daemon knows it (the profile's model or CAPCOMD_AGENT_MODEL); null: the provider CLI's default, or a fake agent",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "updatedAt": {
             "type": [
               "string",
@@ -2241,6 +2293,8 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "taskAttachment",
           "result",
           "workspace",
+          "provider",
+          "model",
           "updatedAt"
         ]
       }

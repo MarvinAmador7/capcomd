@@ -9,6 +9,7 @@ import { join } from "path";
 import { client, assertEngine, cancelRun } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
+import { agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
 import { checkpointRef, stoppedAt } from "../agents/runner";
@@ -208,10 +209,13 @@ export async function spawnAgent(o: SpawnOpts) {
   let grant: Grant;
   try { grant = { ...parseGrant(o.contract?.children), ...parseGrant(o.grant) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Grant fan-out with --children.maxChildren=N, --children.maxDepth=N, --children.maxTotalDescendants=N, --children.allowedChildProfiles=a,b, --children.budgetShare=0.5 (each may only narrow the ceiling)."); }
   const hasGrant = Object.keys(grant).length > 0;
+  // Recorded with the agent (agent.spawned, harness.v1 Agent.model): the model it runs with, as the worker decides it
+  // (loadAgentConfig: CAPCOMD_AGENT_MODEL, else the profile's). A fake agent runs no model.
+  const model = isRealAgent(resolved.kind) ? agentModel(resolved.spec) : undefined;
   const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator, ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}) });
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
-    profile: resolved.name, ref: ref ?? resolved.name, spec: spec ? { ...spec, kind: resolved.kind } : { kind: resolved.kind },
+    profile: resolved.name, ref: ref ?? resolved.name, spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}) },
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
   }).catch(asRelay);

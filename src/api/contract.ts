@@ -3,7 +3,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
+import { AgentProvider, AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 import { ACTIVITY_KINDS } from "../agents/activity";
@@ -70,6 +70,8 @@ export const Agent = z.object({
 	taskAttachment: AttachmentRef.nullable(),
 	result: AgentResult.nullable(),
 	workspace: AgentWorkspace.nullable(),
+	provider: AgentProvider.nullable().describe("The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent"),
+	model: z.string().nullable().describe("The model the agent runs with, when the daemon knows it (the profile's model or CAPCOMD_AGENT_MODEL); null: the provider CLI's default, or a fake agent"),
 	updatedAt: Timestamp.nullable(),
 });
 /** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */
