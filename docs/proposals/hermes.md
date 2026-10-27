@@ -77,6 +77,16 @@ declare the `elicitation` capability gets today's `forbidden` answer.
     (Claude Code may replay idempotent calls).
   - Never ask for secrets in form mode (URL mode or the terminal only).
 
+### P1b. One Hermes entry for all projects (decided, 2026-10-27)
+
+Replace the base integration's one-folder `cwd` with a project argument: a single `mcp_servers.capcomd` entry with no
+pinned `cwd`; `capcomd setup agent` in a repo adds it to capcomd's project list instead of moving the entry; tools take
+an optional `project` (default: the configured default, or the only project); a `capcomd_projects` tool lists them;
+#1's prompt and #2's messages always name the project. Not one entry per project: every tool would be listed once per
+project (tool-list bloat), the allowlist/ask rules would be repeated per entry, and from chat there's no working folder
+to choose a server by. An opt-in `setup agent` flag can still write a separate entry (e.g. different trust per repo).
+Effort **S**; build with P1.
+
 ### P2. Run updates pushed into the user's chat (Hermes webhooks)
 
 capcomd posts selected events to a Hermes webhook route: a merge awaiting approval, a run finished or failed, an
