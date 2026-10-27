@@ -68,6 +68,8 @@ Resume after reconnect with `--since-seq <last seq>`.
 - **Finished projects** (no active run) leave the Active cards and collapse to one line under them, newest first, at most three (`.done`): title (13 pt, white 70 %, indented 8 pt past the cards' text, tail-truncated) and how its latest run ended, right-aligned (12 pt, white 40 %): "Done in 4m · 3 repos", "Failed after 12m", "Stopped after 30s". The duration runs from the run's creation to its terminal transition (else its agents' last change); the folder count is omitted when unknown. Click opens that run. With nothing active, "Nothing running" sits under the section label.
 - No footer: the panel ends with its last card or Recent row.
 - Menu bar icon: capcomd mark; amber dot + number when approvals are pending.
+- **Cards are goals.** The daemon's `projectId` is a hash of the repository, so runs group by repository *and* goal: each goal started from the composer (or by the CLI, or another agent) is its own card, reruns of a goal share one, and a run whose goal hasn't arrived joins its repository's newest card.
+- **Live, always.** Every feed reconnects from its cursor after a clean close, a 5xx or a transport error (backoff to 5 s), ending only on 401/404; up to 16 run feeds are followed, active runs first. While the daemon feed can't connect, a quiet line under the composer says "Can't reach capcomd. Reconnecting…" (a spinner, the hint colour, never red), and what's below is the last state the daemon sent. At launch the token is read off the main thread (macOS may be asking for Keychain access: the panel says "Waiting for Keychain access…"); `CAPCOMD_TOKEN` in the environment wins, for development.
 
 ## 4.2 Approval card — `v5-a-final.png`, `tree-card-v3.png`
 
@@ -82,6 +84,7 @@ Resume after reconnect with `--since-seq <last seq>`.
 - **Collapsible strip:** chevron at the trailing edge of the region (up when expanded, down as the strip's last cell). Collapsed = one 30 pt row of 24 pt icon cells; phases separated by 1×12 pt dividers; current cell blue on a faint blue tile; approval amber hand.raised; finished muted; overflow scrolls horizontally, pinned to the current step, left edge fade. Hover → tooltip (step text + mono time). Click → expand and scroll to that row. State remembered per user.
 - **Trace** (advanced, `GET /v1/runs/{runId}/trace`): span tree with timing lanes, folded phases (▸/▾), retry rows red. Only spans a person reads are kept, re-parented past dropped ones: model calls (`agent.claude_code`, `agent.codex`, `model.generate` → "model call"), `sandbox.ensure` ("sandbox up") / `waitReady`, `git.*` ("push fix/x"), `merge.*`, verify, `agent.run` (profile); actor RPCs and transitions are dropped. Spans are written when they end, so running and queued agents follow as rows of their own (ringed blue lane to now; dashed lane and "–" when queued). Rows 22 pt: icon · name (132) · lane (6 pt, white 28 %) · duration (mono 11). Lanes span the run's first start to now while anything runs. Long runs follow live; scrolling away shows a blue **"↓ Jump to now"** pill (bottom 6, 22 pt).
 - Below: segmented **Log | Files** (150 pt, one at a time, remembered). **Log** tails the transcript of the agent the run is following (the one running now, else the last to change): mono 11 `HH:mm:ss` + first line, last line white 85 %, older lines fade out at the top of the 94 pt pane; refreshed every 2 s from its cursor, keeping 200 lines. **Files** (`GET /v1/runs/{runId}/files`): status glyph · path (mono, middle-truncated) · `+n` green · `−n` red; binary files say so; "No changes yet"; an older daemon gets "This capcomd doesn't report changed files yet".
+- **Activity rows of an agent open its thread** (§4.5): once a run has ended its card is gone, and this is the way back to each agent's words. Pushed views are clear, so only the top one of the navigation stack is drawn (a run view under a thread, a thread under a child's), and only it sizes the panel. When several agents changed files, each **Files** row carries the changing agent's bot (xs; its name on hover).
 - Footer (`.acts`, bar material under a hairline): **Pause** (Resume once paused; holds Resume while running agents are still stopping) · **Stop**, which asks once inline ("Stop run?" on a red tint for 4 s) because it can't be undone · **Open in terminal** (runs `capcomd tui <runId>` in Terminal). Controls call `POST /v1/runs/{runId}/{pause|resume|cancel}`; a refusal or an older daemon shows one red line above the footer.
 
 ## 4.4 Agent tree — `tree-card-v3.png`, `tree-detail-v2.png`, `tree-alt.png`
@@ -155,6 +158,8 @@ Outline, 1.5 pt stroke, round caps, 14 pt grid; secondary grey by default, blue 
 | failed | `xmark.circle` | red |
 | queued | `clock` | tertiary |
 | waiting (approval) | `hand.raised` | amber |
+| paused | `pause.circle` | tertiary |
+| stopped (cancelled: not a failure) | `stop.circle` | tertiary; grey step-bar segment |
 | done | — (none) | — |
 
 | Profile | Pick | Alternate |
