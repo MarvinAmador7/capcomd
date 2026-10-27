@@ -71,8 +71,9 @@ struct DrillHeader: View {
       .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }
       VStack(alignment: .leading, spacing: Theme.Drill.titleTop) {
         Text(verbatim: run?.title ?? runId).font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).lineLimit(1)
-        // An ended run is titled by how it ended, not by its last step ("Edited a file" said little).
-        RedactableText(text: UntrustedText(run?.endedHead ?? current?.text ?? run?.title ?? runId))
+        // An ended run is titled by how it ended, not by its last step ("Edited a file" said little); a run with no step
+        // yet by that, not by its goal again (the line above is the goal).
+        RedactableText(text: UntrustedText(run?.endedHead ?? current?.text ?? (run == nil ? runId : "Starting…")))
           .font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn).lineLimit(1)
       }
       Spacer(minLength: 0)
@@ -183,6 +184,10 @@ struct ActivityView: View {
     ScrollViewReader { proxy in
       ScrollView(showsIndicators: false) {
         VStack(alignment: .leading, spacing: 0) {
+          if steps.isEmpty {
+            Text("Nothing has happened yet.").font(Theme.Drill.emptyFont).foregroundStyle(Theme.Drill.emptyText)
+              .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, Theme.Drill.rowPadding).frame(height: Theme.Drill.spanHeight)
+          }
           ForEach(grouped, id: \.0) { phase, rows in
             Text(phase.rawValue).font(Theme.Drill.phaseFont).foregroundStyle(Theme.Drill.phaseText)
               .frame(height: Theme.Drill.phaseHeight).padding(.horizontal, Theme.Drill.rowPadding)

@@ -206,6 +206,8 @@ public struct SkillInfo: Codable, Sendable, Hashable, Identifiable {
 public protocol DaemonInfoFetching: Sendable {
   func capabilities() async throws -> Set<String>
   func skills() async throws -> [SkillInfo]
-  func runOptions() async throws -> RunOptions
+  /// For the project checkout `repo` (nil: the daemon's own project). A folder that isn't a capcomd project throws
+  /// `MessageRefused` with the daemon's reason.
+  func runOptions(repo: String?) async throws -> RunOptions
 }
-extension DaemonInfoFetching { public func runOptions() async throws -> RunOptions { RunOptions() } }
+extension DaemonInfoFetching { public func runOptions(repo: String?) async throws -> RunOptions { RunOptions() } }

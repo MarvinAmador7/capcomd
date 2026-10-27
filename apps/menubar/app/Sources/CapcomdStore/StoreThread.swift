@@ -19,6 +19,8 @@ public enum Capability {
   /// `POST /v1/runs` takes `driver` and `sandbox`, and `GET /v1/run-options` lists them: who drives a new run and
   /// whether it runs locally (Docker) or on a VM (boxd).
   public static let runsOptions = "runs.options"
+  /// `GET /v1/run-options` takes `repo`: the options of the project a new run goes to, not only the daemon's own.
+  public static let runsOptionsRepo = "runs.options.repo"
 }
 
 extension CapcomdStore {
@@ -61,7 +63,23 @@ extension CapcomdStore {
     if let c = try? await daemonInfo.capabilities() { capabilities = c }
     do { skills = .loaded(try await daemonInfo.skills()) }
     catch { skills = .unavailable(error as? DetailUnavailable ?? .failed("Couldn't reach capcomd")) }
-    runOptions = capabilities.contains(Capability.runsOptions) ? ((try? await daemonInfo.runOptions()) ?? runOptions) : RunOptions()
+    await refreshRunOptions()
+  }
+
+  /// Who can drive a new run and where, for the project it goes to (`prefs.startRepo`; the daemon's own on daemons
+  /// that can only say for that one). A folder that isn't a capcomd project leaves every driver unavailable, saying why.
+  public func refreshRunOptions() async {
+    guard let daemonInfo, capabilities.contains(Capability.runsOptions) else { runOptions = RunOptions(); changed(); return }
+    let repo = capabilities.contains(Capability.runsOptionsRepo) ? prefs.startRepo : nil
+    let options: RunOptions
+    do { options = try await daemonInfo.runOptions(repo: repo) }
+    catch let e as MessageRefused {
+      options = RunOptions(drivers: runOptions.drivers.map { var d = $0; d.available = false; d.reason = e.message; return d }, sandboxes: runOptions.sandboxes)
+    }
+    catch { return }
+    // The project changed while this was asked: its own refresh answers for it.
+    guard repo == (capabilities.contains(Capability.runsOptionsRepo) ? prefs.startRepo : nil) else { return }
+    runOptions = options
     changed()
   }
 }

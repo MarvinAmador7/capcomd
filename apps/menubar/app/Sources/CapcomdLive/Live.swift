@@ -229,9 +229,20 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
     do { return try await transport.getJSON("/v1/skills", as: [SkillInfo].self) }
     catch let e as HTTPStatusError { if e.status == 401 { throw Unauthorized() }; throw e.status == 404 ? DetailUnavailable.unsupported : DetailUnavailable.failed("HTTP \(e.status)") }
   }
-  /// `GET /v1/run-options`: `{drivers: [DriverInfo], sandboxes: [SandboxInfo]}`.
-  public func runOptions() async throws -> RunOptions {
-    do { return try await transport.getJSON("/v1/run-options", as: RunOptions.self) }
-    catch let e as HTTPStatusError { if e.status == 401 { throw Unauthorized() }; throw e.status == 404 ? DetailUnavailable.unsupported : DetailUnavailable.failed("HTTP \(e.status)") }
+  /// `GET /v1/run-options[?repo=]`: `{drivers: [DriverInfo], sandboxes: [SandboxInfo]}`, for the project checkout
+  /// `repo` (nil: the daemon's own). 422 (not a capcomd project): `MessageRefused` with the daemon's message.
+  public func runOptions(repo: String?) async throws -> RunOptions {
+    let path = repo.map { "/v1/run-options?repo=\($0.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~/"))) ?? $0)" } ?? "/v1/run-options"
+    let (status, data) = try await transport.get(path)
+    switch status {
+    case 200:
+      do { return try JSONDecoder().decode(RunOptions.self, from: data) } catch { throw DetailUnavailable.failed("unexpected response") }
+    case 401: throw Unauthorized()
+    case 404: throw DetailUnavailable.unsupported
+    case 422:
+      let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+      throw MessageRefused((o?["message"] as? String) ?? "This folder isn't a capcomd project")
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
   }
 }
