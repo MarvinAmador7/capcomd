@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -313,12 +313,8 @@
                     "description": "Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."
                   },
                   "sandbox": {
-                    "enum": [
-                      "docker",
-                      "boxd"
-                    ],
                     "type": "string",
-                    "description": "Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox. GET /v1/run-options lists both."
+                    "description": "Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): a listed place's name (GET /v1/run-options `sandboxes`), today docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't one, or isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox."
                   }
                 },
                 "required": [
@@ -2975,51 +2971,29 @@
                           },
                           "sandboxes": {
                             "type": "object",
-                            "properties": {
-                              "docker": {
-                                "type": "object",
-                                "properties": {
-                                  "available": {
-                                    "type": "boolean"
-                                  },
-                                  "reason": {
-                                    "description": "Why not, one short sentence naming the command that fixes it (trusted), e.g. \"Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)\", \"No agent environment for Local yet (run `capcomd env build --sandbox docker`)\"; null when available",
-                                    "type": [
-                                      "string",
-                                      "null"
-                                    ]
-                                  }
-                                },
-                                "required": [
-                                  "available",
-                                  "reason"
-                                ]
-                              },
-                              "boxd": {
-                                "type": "object",
-                                "properties": {
-                                  "available": {
-                                    "type": "boolean"
-                                  },
-                                  "reason": {
-                                    "description": "Why not, one short sentence naming the command that fixes it (trusted), e.g. \"Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)\", \"No agent environment for Local yet (run `capcomd env build --sandbox docker`)\"; null when available",
-                                    "type": [
-                                      "string",
-                                      "null"
-                                    ]
-                                  }
-                                },
-                                "required": [
-                                  "available",
-                                  "reason"
-                                ]
-                              }
+                            "propertyNames": {
+                              "type": "string"
                             },
-                            "required": [
-                              "docker",
-                              "boxd"
-                            ],
-                            "description": "Capability runs.options.sandbox. Whether this provider can drive a run in each sandbox: `available` and `reason` above are for the daemon's own sandbox, these for a run's `sandbox` (logins and agent environments are per sandbox). Whether the sandbox itself is up is `sandboxes[]`. POST /v1/runs with `driver` (or the default driver) and `sandbox` is 422 with this `reason` when it isn't available"
+                            "additionalProperties": {
+                              "type": "object",
+                              "properties": {
+                                "available": {
+                                  "type": "boolean"
+                                },
+                                "reason": {
+                                  "description": "Why not, one short sentence naming the command that fixes it (trusted), e.g. \"Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)\", \"No agent environment for Local yet (run `capcomd env build --sandbox docker`)\"; null when available",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "available",
+                                "reason"
+                              ]
+                            },
+                            "description": "Capability runs.options.sandbox. Keyed by place name: one entry per `sandboxes[]` entry (today docker and boxd). Whether this provider can drive a run in each sandbox: `available` and `reason` above are for the daemon's own sandbox, these for a run's `sandbox` (logins and agent environments are per sandbox). Whether the sandbox itself is up is `sandboxes[]`. POST /v1/runs with `driver` (or the default driver) and `sandbox` is 422 with this `reason` when it isn't available"
                           }
                         },
                         "required": [
@@ -3042,11 +3016,8 @@
                         "type": "object",
                         "properties": {
                           "name": {
-                            "enum": [
-                              "docker",
-                              "boxd"
-                            ],
-                            "type": "string"
+                            "type": "string",
+                            "description": "A listed place's name, today docker or boxd"
                           },
                           "label": {
                             "type": "string",
@@ -3075,7 +3046,7 @@
                           "default"
                         ]
                       },
-                      "description": "Always docker, then boxd"
+                      "description": "Every listed place, in order: today docker, then boxd"
                     }
                   },
                   "required": [
@@ -3132,7 +3103,19 @@
     "/v1/logins": {
       "get": {
         "operationId": "logins.list",
-        "description": "Capability logins. Who agents can log in as, per AI and per sandbox (plan logins are saved per sandbox). Needs the `read` scope. Local files and the daemon's environment only (no VM, container or network call), so poll it freely. Never contains a credential.",
+        "description": "Capability logins. Who agents can log in as, per AI and per sandbox (plan logins are saved per sandbox). Needs the `read` scope. Local files and the daemon's environment only (no VM, container or network call), so poll it freely. Never contains a credential. `sandbox` (capability sandboxes): only that place's logins; 404 `not_found` for a name that isn't a listed place.",
+        "parameters": [
+          {
+            "name": "sandbox",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Capability sandboxes. Only this place (a listed place's name, GET /v1/sandboxes); 404 when it isn't one"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -3154,12 +3137,8 @@
                             "type": "string"
                           },
                           "sandbox": {
-                            "enum": [
-                              "docker",
-                              "boxd"
-                            ],
                             "type": "string",
-                            "description": "Where agents run: docker (\"Local\") or boxd (\"Cloud\")"
+                            "description": "Where agents run: a listed place's name, today docker (\"Local\") or boxd (\"Cloud\")"
                           },
                           "loggedIn": {
                             "type": "boolean",
@@ -3184,6 +3163,17 @@
                               "null"
                             ]
                           },
+                          "hostBound": {
+                            "type": "boolean",
+                            "description": "Capability sandboxes. The login is a host-bound secret: the platform swaps it in on the way to `boundTo`, so agents only ever see a placeholder (a plan login stored as a secret, or CAPCOMD_CREDENTIALS=secret). false when not logged in, or when agents can read it (kept in the agent environment, or an API key passed to the agent)"
+                          },
+                          "boundTo": {
+                            "description": "Capability sandboxes. The host the login is bound to (the AI's API host, e.g. api.anthropic.com) when `hostBound`; else null",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "command": {
                             "type": "string",
                             "description": "The CLI that logs in there, e.g. `capcomd auth login claude --sandbox docker` (interactive: run it in a terminal)"
@@ -3195,10 +3185,12 @@
                           "loggedIn",
                           "how",
                           "detail",
+                          "hostBound",
+                          "boundTo",
                           "command"
                         ]
                       },
-                      "description": "Always four: claude in docker, claude in boxd, codex in docker, codex in boxd"
+                      "description": "Claude, then Codex, each in every listed place (today four: claude in docker, claude in boxd, codex in docker, codex in boxd); with `sandbox`, that place's only"
                     }
                   },
                   "required": [
@@ -3254,7 +3246,19 @@
     "/v1/environments": {
       "get": {
         "operationId": "environments.list",
-        "description": "Capability environments. The agent environment (env snapshot) each sandbox's agents boot from. Needs the `read` scope. Local files only (the env ledger and the build's marker), so poll it freely.",
+        "description": "Capability environments. The agent environment (env snapshot) each sandbox's agents boot from. Needs the `read` scope. Local files only (the env ledger and the build's marker), so poll it freely. `sandbox` (capability sandboxes): only that place's environment; 404 `not_found` for a name that isn't a listed place.",
+        "parameters": [
+          {
+            "name": "sandbox",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Capability sandboxes. Only this place (a listed place's name, GET /v1/sandboxes); 404 when it isn't one"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -3269,12 +3273,8 @@
                         "type": "object",
                         "properties": {
                           "sandbox": {
-                            "enum": [
-                              "docker",
-                              "boxd"
-                            ],
                             "type": "string",
-                            "description": "Where agents run: docker (\"Local\") or boxd (\"Cloud\")"
+                            "description": "Where agents run: a listed place's name, today docker (\"Local\") or boxd (\"Cloud\")"
                           },
                           "status": {
                             "enum": [
@@ -3326,11 +3326,1056 @@
                           "command"
                         ]
                       },
-                      "description": "Always two: docker, then boxd"
+                      "description": "One per listed place, in order (today two: docker, then boxd); with `sandbox`, that place's only"
                     }
                   },
                   "required": [
                     "environments"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sandboxes": {
+      "get": {
+        "operationId": "sandboxes.list",
+        "description": "Capability sandboxes. Every listed place agents run, as its provider descriptor, with whether it can be used now (as GET /v1/run-options says) and whether it is the daemon's default. Needs the `read` scope. Local checks only, so poll it freely.",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
+              "exclusiveMinimum": 0,
+              "description": "Descriptor version the client understands (only 1 exists)"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sandboxes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "What the API and CAPCOMD_SANDBOX call it"
+                          },
+                          "descriptorVersion": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991,
+                            "exclusiveMinimum": 0,
+                            "description": "1. Bumped only by a breaking change to this shape; additions never bump it"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "What to call the place: \"Local\", \"Cloud\""
+                          },
+                          "kind": {
+                            "type": "string",
+                            "description": "local or cloud: how to group it and which glyph to fall back to. Render an unknown kind as cloud"
+                          },
+                          "vendor": {
+                            "type": "string",
+                            "description": "Who provides it: what the title says after the dot (\"Docker\", \"boxd\")"
+                          },
+                          "title": {
+                            "type": "string",
+                            "description": "\"Cloud · boxd\""
+                          },
+                          "mark": {
+                            "type": "string",
+                            "description": "Id of a mark the app bundles (docker, boxd); fall back to the kind's glyph for an id you don't have. Never an image"
+                          },
+                          "listed": {
+                            "type": "boolean",
+                            "description": "Always true here (unlisted test providers are never served)"
+                          },
+                          "caps": {
+                            "type": "object",
+                            "properties": {
+                              "isolation": {
+                                "type": "string",
+                                "description": "Where an agent's commands run: vm, container (or host, for test fakes). More may be added"
+                              },
+                              "snapshots": {
+                                "type": "boolean",
+                                "description": "Saved images to boot from: agent environments (`capcomd env build`) and plan logins"
+                              },
+                              "hostBoundSecrets": {
+                                "type": "boolean",
+                                "description": "Logins can be bound to their AI's API host, so agents only see a placeholder"
+                              },
+                              "egressAllowlist": {
+                                "type": "boolean",
+                                "description": "A profile's `egress` can limit which hosts agents reach"
+                              },
+                              "interactive": {
+                                "type": "boolean",
+                                "description": "A command with a terminal (interactive logins)"
+                              },
+                              "idleLifetime": {
+                                "type": "string",
+                                "description": "Who deletes a machine left behind: platform (the provider itself), sweep (capcomd, every 5 minutes), none. More may be added"
+                              },
+                              "shell": {
+                                "type": "boolean",
+                                "description": "A shell into a live machine (`capcomd sandbox shell`)"
+                              }
+                            },
+                            "required": [
+                              "isolation",
+                              "snapshots",
+                              "hostBoundSecrets",
+                              "egressAllowlist",
+                              "interactive",
+                              "idleLifetime",
+                              "shell"
+                            ],
+                            "description": "What it can do. Ignore caps you don't know"
+                          },
+                          "settings": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Setting ids its details show (idleLifetime). Ignore ids you don't know"
+                          },
+                          "info": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Info row ids its details show (logins, checkpoints). Ignore ids you don't know"
+                          },
+                          "resourceKinds": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Kinds of resource it lists (machine)"
+                          },
+                          "actions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Resource actions this daemon serves for it, from a closed list: open_terminal (more come with later capabilities, e.g. delete). Ignore actions you don't know"
+                          },
+                          "available": {
+                            "type": "boolean",
+                            "description": "It can be used now (as GET /v1/run-options `sandboxes[].available`)"
+                          },
+                          "reason": {
+                            "description": "Why not, written by the daemon (trusted), e.g. \"Docker isn't running\"; null when available",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "default": {
+                            "type": "boolean",
+                            "description": "The daemon's own CAPCOMD_SANDBOX: what a run without `sandbox` uses"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "descriptorVersion",
+                          "label",
+                          "kind",
+                          "vendor",
+                          "title",
+                          "mark",
+                          "listed",
+                          "caps",
+                          "settings",
+                          "info",
+                          "resourceKinds",
+                          "actions",
+                          "available",
+                          "reason",
+                          "default"
+                        ]
+                      },
+                      "description": "Every listed place, in order: today docker, then boxd"
+                    }
+                  },
+                  "required": [
+                    "sandboxes"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sandboxes/{name}": {
+      "get": {
+        "operationId": "sandboxes.get",
+        "description": "Capability sandboxes. One place agents run: its descriptor, its settings and its info rows as typed fields the app renders generically (an unknown field type renders as a read-only `label` and `display`). Needs the `read` scope. Local reads only (no provider call), so poll it freely. Never contains a credential: every `display`, `help` and `reason` is written by the daemon. 404 `not_found` for a name that isn't a listed place. `v`: the descriptor version the client understands (only 1 exists).",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
+              "exclusiveMinimum": 0,
+              "description": "Descriptor version the client understands (only 1 exists)"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "descriptor": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "What the API and CAPCOMD_SANDBOX call it"
+                        },
+                        "descriptorVersion": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "exclusiveMinimum": 0,
+                          "description": "1. Bumped only by a breaking change to this shape; additions never bump it"
+                        },
+                        "label": {
+                          "type": "string",
+                          "description": "What to call the place: \"Local\", \"Cloud\""
+                        },
+                        "kind": {
+                          "type": "string",
+                          "description": "local or cloud: how to group it and which glyph to fall back to. Render an unknown kind as cloud"
+                        },
+                        "vendor": {
+                          "type": "string",
+                          "description": "Who provides it: what the title says after the dot (\"Docker\", \"boxd\")"
+                        },
+                        "title": {
+                          "type": "string",
+                          "description": "\"Cloud · boxd\""
+                        },
+                        "mark": {
+                          "type": "string",
+                          "description": "Id of a mark the app bundles (docker, boxd); fall back to the kind's glyph for an id you don't have. Never an image"
+                        },
+                        "listed": {
+                          "type": "boolean",
+                          "description": "Always true here (unlisted test providers are never served)"
+                        },
+                        "caps": {
+                          "type": "object",
+                          "properties": {
+                            "isolation": {
+                              "type": "string",
+                              "description": "Where an agent's commands run: vm, container (or host, for test fakes). More may be added"
+                            },
+                            "snapshots": {
+                              "type": "boolean",
+                              "description": "Saved images to boot from: agent environments (`capcomd env build`) and plan logins"
+                            },
+                            "hostBoundSecrets": {
+                              "type": "boolean",
+                              "description": "Logins can be bound to their AI's API host, so agents only see a placeholder"
+                            },
+                            "egressAllowlist": {
+                              "type": "boolean",
+                              "description": "A profile's `egress` can limit which hosts agents reach"
+                            },
+                            "interactive": {
+                              "type": "boolean",
+                              "description": "A command with a terminal (interactive logins)"
+                            },
+                            "idleLifetime": {
+                              "type": "string",
+                              "description": "Who deletes a machine left behind: platform (the provider itself), sweep (capcomd, every 5 minutes), none. More may be added"
+                            },
+                            "shell": {
+                              "type": "boolean",
+                              "description": "A shell into a live machine (`capcomd sandbox shell`)"
+                            }
+                          },
+                          "required": [
+                            "isolation",
+                            "snapshots",
+                            "hostBoundSecrets",
+                            "egressAllowlist",
+                            "interactive",
+                            "idleLifetime",
+                            "shell"
+                          ],
+                          "description": "What it can do. Ignore caps you don't know"
+                        },
+                        "settings": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Setting ids its details show (idleLifetime). Ignore ids you don't know"
+                        },
+                        "info": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Info row ids its details show (logins, checkpoints). Ignore ids you don't know"
+                        },
+                        "resourceKinds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Kinds of resource it lists (machine)"
+                        },
+                        "actions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Resource actions this daemon serves for it, from a closed list: open_terminal (more come with later capabilities, e.g. delete). Ignore actions you don't know"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "descriptorVersion",
+                        "label",
+                        "kind",
+                        "vendor",
+                        "title",
+                        "mark",
+                        "listed",
+                        "caps",
+                        "settings",
+                        "info",
+                        "resourceKinds",
+                        "actions"
+                      ]
+                    },
+                    "settings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "Row title (daemon-written)"
+                          },
+                          "help": {
+                            "description": "A footnote under the row (daemon-written, trusted); null when none",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "value": {
+                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "display": {
+                            "type": "string",
+                            "description": "The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"
+                          },
+                          "default": {
+                            "description": "A setting's default value; null for info rows",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "choices": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "description": "Daemon-written, e.g. \"1 hour\""
+                                }
+                              },
+                              "required": [
+                                "value",
+                                "label"
+                              ]
+                            },
+                            "description": "A choice's options, in order (idleLifetime: 900 \"15 minutes\", 3600 \"1 hour\", 14400 \"4 hours\", 43200 \"12 hours\"); empty for other types"
+                          },
+                          "source": {
+                            "type": "string",
+                            "description": "Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which), config (capcomd's user config), daemon (an info row the daemon works out)"
+                          },
+                          "editable": {
+                            "type": "boolean",
+                            "description": "The user can change it here. Always false until settings can be changed (a later capability, sandboxes.settings)"
+                          },
+                          "appliesTo": {
+                            "description": "new_runs: a change applies to runs started after it; null for info rows",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "needsRestart": {
+                            "type": "boolean",
+                            "description": "A change needs the daemon restarted"
+                          },
+                          "state": {
+                            "description": "A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "label",
+                          "help",
+                          "value",
+                          "display",
+                          "default",
+                          "choices",
+                          "source",
+                          "editable",
+                          "appliesTo",
+                          "needsRestart",
+                          "state"
+                        ]
+                      },
+                      "description": "Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives; read-only for now)"
+                    },
+                    "info": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "Row title (daemon-written)"
+                          },
+                          "help": {
+                            "description": "A footnote under the row (daemon-written, trusted); null when none",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "value": {
+                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "display": {
+                            "type": "string",
+                            "description": "The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"
+                          },
+                          "default": {
+                            "description": "A setting's default value; null for info rows",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "choices": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "description": "Daemon-written, e.g. \"1 hour\""
+                                }
+                              },
+                              "required": [
+                                "value",
+                                "label"
+                              ]
+                            },
+                            "description": "A choice's options, in order (idleLifetime: 900 \"15 minutes\", 3600 \"1 hour\", 14400 \"4 hours\", 43200 \"12 hours\"); empty for other types"
+                          },
+                          "source": {
+                            "type": "string",
+                            "description": "Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which), config (capcomd's user config), daemon (an info row the daemon works out)"
+                          },
+                          "editable": {
+                            "type": "boolean",
+                            "description": "The user can change it here. Always false until settings can be changed (a later capability, sandboxes.settings)"
+                          },
+                          "appliesTo": {
+                            "description": "new_runs: a change applies to runs started after it; null for info rows",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "needsRestart": {
+                            "type": "boolean",
+                            "description": "A change needs the daemon restarted"
+                          },
+                          "state": {
+                            "description": "A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "label",
+                          "help",
+                          "value",
+                          "display",
+                          "default",
+                          "choices",
+                          "source",
+                          "editable",
+                          "appliesTo",
+                          "needsRestart",
+                          "state"
+                        ]
+                      },
+                      "description": "Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work)"
+                    },
+                    "rev": {
+                      "type": "string",
+                      "description": "Changes whenever a setting's value does; a later write sends it back to detect a stale screen"
+                    }
+                  },
+                  "required": [
+                    "descriptor",
+                    "settings",
+                    "info",
+                    "rev"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sandboxes/{name}/resources": {
+      "get": {
+        "operationId": "sandboxes.resources",
+        "description": "Capability sandboxes.resources. The machines capcomd's agents run on at this place: capcomd's own records (which agent holds which machine) joined with the provider's list of machines with capcomd's prefix; one with no live owner is `orphaned`. Needs the `read` scope. The provider is asked at most every 10 s (one request at a time, 3 s timeout), never once per machine; when it fails, the answer is still 200, from the last list that worked, with `stale: true` and `error`. `limit` (default 100, at most 200) and `cursor` (the previous page's `next`) page through them. 404 `not_found` for a name that isn't a listed place.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 200,
+              "exclusiveMinimum": 0
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "description": "The previous page's `next`"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "resources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "The machine's name at the provider: capcomd's prefix (relay-) and letters, digits, `.`, `_`, `-` (at most 128). Stable for the machine's life"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "description": "machine. More may be added"
+                          },
+                          "state": {
+                            "type": "string",
+                            "description": "starting, running, orphaned (capcomd made it and no live agent holds it: a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"
+                          },
+                          "owner": {
+                            "description": "The agent whose machine it is, from capcomd's own records (never from provider labels); null when orphaned or unknown",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "runId": {
+                                "type": "string"
+                              },
+                              "agentId": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "description": "The agent's profile (planner, worker, reviewer…); null when it has none",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "task": {
+                                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                                "x-untrusted": true,
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "runId",
+                              "agentId",
+                              "role",
+                              "task"
+                            ]
+                          },
+                          "createdAt": {
+                            "description": "When it was created; null when unknown",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time"
+                          },
+                          "deleteAfter": {
+                            "description": "When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time"
+                          },
+                          "actions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Ignore actions you don't know"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "state",
+                          "owner",
+                          "createdAt",
+                          "deleteAfter",
+                          "actions"
+                        ]
+                      },
+                      "description": "Sorted by id"
+                    },
+                    "asOf": {
+                      "description": "When the provider's list this answer reflects was taken; null when it never answered",
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "stale": {
+                      "type": "boolean",
+                      "description": "The last attempt to list failed (`error`): resources come from the last list that worked, and capcomd's records"
+                    },
+                    "error": {
+                      "description": "Why the provider's list failed, written by the daemon (trusted), e.g. \"boxd didn't answer within 3 seconds\"; null when it worked",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "next": {
+                      "description": "More resources: pass as `cursor` for the next page; null at the end",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "resources",
+                    "asOf",
+                    "stale",
+                    "error",
+                    "next"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sandboxes/{name}/resources/{id}": {
+      "get": {
+        "operationId": "sandboxes.resource",
+        "description": "Capability sandboxes.resources. One machine (as in …/resources, from the same cached list) and `terminalCommand`, the command that opens a shell in it. 404 `not_found` when capcomd doesn't list it at this place (only ids with capcomd's prefix are ever looked up).",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "The machine's name at the provider: capcomd's prefix (relay-) and letters, digits, `.`, `_`, `-` (at most 128). Stable for the machine's life"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "description": "machine. More may be added"
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "starting, running, orphaned (capcomd made it and no live agent holds it: a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"
+                    },
+                    "owner": {
+                      "description": "The agent whose machine it is, from capcomd's own records (never from provider labels); null when orphaned or unknown",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "runId": {
+                          "type": "string"
+                        },
+                        "agentId": {
+                          "type": "string"
+                        },
+                        "role": {
+                          "description": "The agent's profile (planner, worker, reviewer…); null when it has none",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "task": {
+                          "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                          "x-untrusted": true,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "runId",
+                        "agentId",
+                        "role",
+                        "task"
+                      ]
+                    },
+                    "createdAt": {
+                      "description": "When it was created; null when unknown",
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "deleteAfter": {
+                      "description": "When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes",
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Ignore actions you don't know"
+                    },
+                    "terminalCommand": {
+                      "description": "The command that opens a shell in this machine (run it in Terminal): `capcomd sandbox shell <runId> <agentId>` for an agent's machine, `capcomd sandbox shell --sandbox <name> --machine <id>` for an orphan. Built from trusted ids only: a plain capcomd invocation of letters, digits and `._-` words. null without open_terminal",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "state",
+                    "owner",
+                    "createdAt",
+                    "deleteAfter",
+                    "actions",
+                    "terminalCommand"
                   ]
                 }
               }

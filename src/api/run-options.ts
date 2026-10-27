@@ -7,15 +7,16 @@ import { join } from "node:path";
 import { DRIVER_LABEL, DRIVERS, plannerDriver, plannerProfile } from "../agents/run-driver";
 import { agentsFilePath, PROVIDER_DEFAULT_EFFORT, PROVIDER_EFFORTS, readAgentsFile } from "../agents/profiles";
 import { readConfig, userConfigPath } from "../config/store";
-import { sandboxName } from "../providers/registry";
+import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } from "../providers/registry";
 import { withSandbox } from "../providers/run-sandbox";
 import { envSnapshotProblem } from "../primitives/ops";
 import { capcomdHome } from "../utils/home";
 
 type Env = Record<string, string | undefined>;
-export const RUN_SANDBOXES = ["docker", "boxd"] as const;
-export type RunSandbox = (typeof RUN_SANDBOXES)[number];
-export const SANDBOX_LABEL: Record<RunSandbox, string> = { docker: "Local", boxd: "Cloud" };
+/** Where a run can go: the listed providers (src/providers/registry.ts), docker then boxd. */
+export const RUN_SANDBOXES = LISTED_PROVIDERS;
+export type RunSandbox = ListedProvider;
+export const SANDBOX_LABEL: Record<RunSandbox, string> = PROVIDER_LABEL;
 
 export interface DriverFit { available: boolean; reason: string | null }
 export interface DriverOption { provider: "claude" | "codex"; label: string; model: string | null; efforts: string[]; effort: string | null; available: boolean; reason: string | null; default: boolean; sandboxes: Record<RunSandbox, DriverFit> }
@@ -55,10 +56,14 @@ export function boxdKeyConfigured(source: Env = process.env): boolean {
 	return where === "keychain";
 }
 
-export async function sandboxAvailable(name: RunSandbox, source: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<{ available: boolean; reason: string | null }> {
-	if (name === "boxd") return boxdKeyConfigured(source) ? { available: true, reason: null } : { available: false, reason: "No boxd API key (run capcomd setup)" };
-	const d = await dockerReachable(source, ask);
-	return { available: d.ok, reason: d.reason };
+type Availability = { available: boolean; reason: string | null };
+/** Each listed provider's availability check: cheap and local (a key is configured; the docker CLI answers, cached). */
+const AVAILABLE: Record<RunSandbox, (source: Env, ask?: Parameters<typeof dockerReachable>[1]) => Promise<Availability>> = {
+	boxd: async (source) => (boxdKeyConfigured(source) ? { available: true, reason: null } : { available: false, reason: "No boxd API key (run capcomd setup)" }),
+	docker: async (source, ask) => { const d = await dockerReachable(source, ask); return { available: d.ok, reason: d.reason }; },
+};
+export async function sandboxAvailable(name: RunSandbox, source: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<Availability> {
+	return AVAILABLE[name](source, ask);
 }
 
 /**

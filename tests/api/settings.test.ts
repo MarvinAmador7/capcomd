@@ -65,17 +65,17 @@ describe("GET /v1/logins", () => {
 		const l = logins(world().env);
 		expect(Logins.parse({ logins: l })).toBeTruthy();
 		expect(l).toEqual([
-			{ provider: "claude", sandbox: "docker", loggedIn: false, how: null, detail: null, command: "capcomd auth login claude --sandbox docker" },
-			{ provider: "claude", sandbox: "boxd", loggedIn: false, how: null, detail: null, command: "capcomd auth login claude --sandbox boxd" },
-			{ provider: "codex", sandbox: "docker", loggedIn: false, how: null, detail: null, command: "capcomd auth login codex --sandbox docker" },
-			{ provider: "codex", sandbox: "boxd", loggedIn: false, how: null, detail: null, command: "capcomd auth login codex --sandbox boxd" },
+			{ provider: "claude", sandbox: "docker", loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: "capcomd auth login claude --sandbox docker" },
+			{ provider: "claude", sandbox: "boxd", loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: "capcomd auth login claude --sandbox boxd" },
+			{ provider: "codex", sandbox: "docker", loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: "capcomd auth login codex --sandbox docker" },
+			{ provider: "codex", sandbox: "boxd", loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: "capcomd auth login codex --sandbox boxd" },
 		]);
 	});
 	test("a plan login in the docker ledger only: logged in for docker, not for boxd", () => {
 		const w = world();
 		planLogin(w, "docker", "claude-code", "snapshot");
 		const l = logins(w.env);
-		expect(pick(l, "claude", "docker")).toEqual({ provider: "claude", sandbox: "docker", loggedIn: true, how: "plan", detail: "Saved in the agent environment", command: "capcomd auth login claude --sandbox docker" });
+		expect(pick(l, "claude", "docker")).toEqual({ provider: "claude", sandbox: "docker", loggedIn: true, how: "plan", detail: "Saved in the agent environment", hostBound: false, boundTo: null, command: "capcomd auth login claude --sandbox docker" });
 		expect(pick(l, "claude", "boxd")).toMatchObject({ loggedIn: false, how: null, detail: null });
 		expect(pick(l, "codex", "docker").loggedIn).toBe(false);
 	});
@@ -84,7 +84,7 @@ describe("GET /v1/logins", () => {
 		planLogin(w, "boxd", "claude-code", "secret");
 		planLogin(w, "boxd", "codex", "snapshot");
 		const l = logins(w.env);
-		expect(pick(l, "claude", "boxd")).toEqual({ provider: "claude", sandbox: "boxd", loggedIn: true, how: "plan", detail: "Kept as a boxd secret bound to api.anthropic.com", command: "capcomd auth login claude --sandbox boxd" });
+		expect(pick(l, "claude", "boxd")).toEqual({ provider: "claude", sandbox: "boxd", loggedIn: true, how: "plan", detail: "Kept as a boxd secret bound to api.anthropic.com", hostBound: true, boundTo: "api.anthropic.com", command: "capcomd auth login claude --sandbox boxd" });
 		expect(pick(l, "codex", "boxd")).toMatchObject({ loggedIn: true, how: "plan", detail: "Saved in the agent environment" });
 		expect(pick(l, "claude", "docker").loggedIn).toBe(false);
 		expect(pick(l, "codex", "docker").loggedIn).toBe(false);
@@ -236,7 +236,7 @@ describe("the routes", () => {
 		expect(CAPABILITY_NAMES).toEqual(expect.arrayContaining(["logins", "environments", "service"]));
 		for (const p of ROUTES) expect((spec as any).paths[p]?.get).toBeTruthy();
 		const login = (spec as any).paths["/v1/logins"].get.responses["200"].content["application/json"].schema.properties.logins.items;
-		expect(login.required).toEqual(["provider", "sandbox", "loggedIn", "how", "detail", "command"]);
+		expect(login.required).toEqual(["provider", "sandbox", "loggedIn", "how", "detail", "hostBound", "boundTo", "command"]);
 		expect(login.properties.how.enum).toEqual(["plan", "api_key", null]);
 		const env = (spec as any).paths["/v1/environments"].get.responses["200"].content["application/json"].schema.properties.environments.items;
 		expect(env.required).toEqual(["sandbox", "status", "name", "versions", "builtAt", "command"]);
@@ -282,10 +282,10 @@ describe("the routes", () => {
 			bodies[p] = JSON.parse(text);
 		}
 		expect(bodies["/v1/logins"]).toEqual({ logins: [
-			{ provider: "claude", sandbox: "docker", loggedIn: true, how: "api_key", detail: "ANTHROPIC_API_KEY is set for capcomd", command: "capcomd auth login claude --sandbox docker" },
-			{ provider: "claude", sandbox: "boxd", loggedIn: true, how: "plan", detail: "Kept as a boxd secret bound to api.anthropic.com", command: "capcomd auth login claude --sandbox boxd" },
-			{ provider: "codex", sandbox: "docker", loggedIn: true, how: "plan", detail: "Saved in the agent environment", command: "capcomd auth login codex --sandbox docker" },
-			{ provider: "codex", sandbox: "boxd", loggedIn: true, how: "api_key", detail: "OPENAI_API_KEY is set for capcomd", command: "capcomd auth login codex --sandbox boxd" },
+			{ provider: "claude", sandbox: "docker", loggedIn: true, how: "api_key", detail: "ANTHROPIC_API_KEY is set for capcomd", hostBound: false, boundTo: null, command: "capcomd auth login claude --sandbox docker" },
+			{ provider: "claude", sandbox: "boxd", loggedIn: true, how: "plan", detail: "Kept as a boxd secret bound to api.anthropic.com", hostBound: true, boundTo: "api.anthropic.com", command: "capcomd auth login claude --sandbox boxd" },
+			{ provider: "codex", sandbox: "docker", loggedIn: true, how: "plan", detail: "Saved in the agent environment", hostBound: false, boundTo: null, command: "capcomd auth login codex --sandbox docker" },
+			{ provider: "codex", sandbox: "boxd", loggedIn: true, how: "api_key", detail: "OPENAI_API_KEY is set for capcomd", hostBound: false, boundTo: null, command: "capcomd auth login codex --sandbox boxd" },
 		] });
 		expect(bodies["/v1/environments"]).toEqual({ environments: [
 			{ sandbox: "docker", status: "failed", name: null, versions: {}, builtAt: null, command: "capcomd env build --sandbox docker" },

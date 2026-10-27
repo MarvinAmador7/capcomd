@@ -2,14 +2,12 @@
 // when it isn't the daemon's CAPCOMD_SANDBOX. `run new` records it (kv _sandbox, reserved for the orchestrator), and
 // the engine side (the worker's VMs, verify's checks VM, env snapshots and plan logins) reads it per run. A run
 // without one uses the daemon's sandbox, as before.
-import { PROVIDERS, type ProviderName } from "./registry";
+import { isProviderName, type ProviderName } from "./registry";
 
 export const RUN_SANDBOX_KV = "_sandbox";
 type Env = Record<string, string | undefined>;
 
-export function isProviderName(name: string): name is ProviderName {
-  return Object.hasOwn(PROVIDERS, name);
-}
+export { isProviderName };
 
 /** `base` with the sandbox set to `name` (null: unchanged). */
 export function withSandbox(base: Env, name: string | null | undefined): Env {

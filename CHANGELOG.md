@@ -5,6 +5,26 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Harness API: a place's details, for a settings screen that works for any provider (capability `sandboxes`).
+  `GET /v1/sandboxes` lists each place agents run (today Local · Docker and Cloud · boxd) with what it can do, whether
+  it's available and whether it's the default. `GET /v1/sandboxes/{name}` adds its settings and info rows as typed
+  fields the app renders as they come: "Delete idle machines after" (1 hour today; it can't be changed yet), Logins
+  (whether every login there is bound to its AI's API host) and Checkpoints ("After each commit and every 10
+  minutes"). Read scope, local reads only, never a credential.
+- Harness API: the machines capcomd's agents run on (capability `sandboxes.resources`).
+  `GET /v1/sandboxes/{name}/resources` lists them with the run, agent and task each belongs to, or `orphaned` for a
+  machine capcomd left behind, with when it was created and when it will be deleted; `…/resources/{id}` adds the
+  command that opens a shell in it. The provider is asked at most every 10 seconds; when it doesn't answer, you get
+  its last list marked `stale` with the reason.
+- `capcomd sandbox shell <runId> <agentId>` opens a shell in the machine an agent runs on (boxd VM or Docker
+  container), and `capcomd sandbox shell --sandbox docker|boxd --machine <id>` in a machine capcomd left behind. It
+  warns that you're inside an agent's sandbox, accepts only capcomd's own machines and uses your local credentials.
+- Harness API: `GET /v1/logins` entries carry `hostBound` and `boundTo` (the host a login is bound to, e.g.
+  api.anthropic.com), and `GET /v1/logins` and `GET /v1/environments` take `?sandbox=` for one place's rows.
+- Harness API: place names in `POST /v1/runs` `sandbox`, `GET /v1/run-options` and the Settings routes are now
+  plain strings checked against the places the daemon lists, and `drivers[].sandboxes` is a map keyed by place name.
+  The same values are sent and accepted; a client generated from `openapi/capcomd.json` sees a string and a map where
+  it saw an enum and a fixed object. A refused `driver`/`sandbox` pair now names boxd as "Cloud" (it said "VM").
 - Harness API: three read-only routes for a settings screen, each with its capability in `GET /v1/health`.
   `GET /v1/logins` (`logins`) says, for Claude and Codex in each sandbox (docker, boxd), whether agents can log in,
   how (a plan login or an API key), where the login is kept, and the `capcomd auth login … --sandbox …` command that

@@ -12,7 +12,7 @@ test("CAPCOMD_SANDBOX names a provider (the fake by default); an unknown one is 
 });
 
 test("what depends on the provider follows its capabilities", () => {
-  expect(sandboxCaps({ CAPCOMD_SANDBOX: "boxd" })).toEqual(PROVIDERS.boxd);
+  expect(sandboxCaps({ CAPCOMD_SANDBOX: "boxd" })).toEqual(PROVIDERS.boxd.caps);
   expect(realSandbox({ CAPCOMD_SANDBOX: "boxd" })).toBe(true);
   expect(realSandbox({ CAPCOMD_SANDBOX: "fake-host" })).toBe(false);
   expect(checksMode({ CAPCOMD_SANDBOX: "boxd" })).toBe("vm");

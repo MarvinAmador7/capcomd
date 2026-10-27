@@ -16,6 +16,10 @@ import { startDetachedRun } from "./create-run";
 import { workspaceOf } from "./workspace";
 import { mirrorFor, workTips } from "./run-files";
 import { RUN_REPO_KV } from "../merge/run-config";
+import { AGENT_VM_TTL_SECONDS } from "../agents/runner";
+import { sandboxSurface, taskLine, type MachineOwner } from "./sandboxes";
+import { MACHINE_PREFIX, type SandboxProvider } from "../providers/sandbox";
+import { sandboxName, type ListedProvider } from "../providers/registry";
 
 const lower = (p: string | null) => (p ? p.toLowerCase() : null);
 const cap = (t: string) => (Buffer.byteLength(t) <= INLINE_TEXT_MAX_BYTES ? t : Buffer.from(t).subarray(0, INLINE_TEXT_MAX_BYTES).toString("utf8").replace(/\uFFFD+$/, ""));
@@ -46,6 +50,51 @@ export function agentRuntime(spec: unknown): { provider: "claude" | "codex" | nu
 	return { provider, model: str(s.model), effort: str(s.effort) };
 }
 
+const LIVE = new Set(["pending", "running", "paused"]);
+/**
+ * The machines capcomd's live agents hold now (ADR-021 §3), from capcomd's own records: each pending, running or
+ * paused agent of the recent runs whose worker actor holds a VM that isn't destroyed. Never from provider labels.
+ * Reads existing actors only (a missing scope or worker is skipped, never created).
+ */
+export async function machineOwners(limit = 500): Promise<MachineOwner[]> {
+	const { vmNameFor } = await import("../providers/boxd");
+	let daemon: string | null = null;
+	try { daemon = sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX */ }
+	const perRun = await Promise.all(recentRuns(limit).map(async (r) => {
+		const agents = (await existingScope(r.runId).listAgents({}).catch(() => [])) as any[];
+		const live = agents.filter((a) => LIVE.has(a.status));
+		const rows = await Promise.all(live.map(async (a): Promise<MachineOwner | null> => {
+			const epoch = Number(a.epoch ?? 1);
+			const w = (client().worker as any).get(epoch > 1 ? [r.runId, a.agentId, `e${epoch}`] : [r.runId, a.agentId]);
+			const wk = await w.getWorker({ workerId: a.agentId }).catch(() => null);
+			const ctx = wk?.context ?? {};
+			if (!wk || wk.state === "destroyed" || wk.state === "failed" || typeof ctx.vmId !== "string" || !ctx.vmId) return null;
+			const sandbox = typeof ctx.sandbox === "string" && ctx.sandbox ? ctx.sandbox : daemon;
+			if (!sandbox) return null;
+			return {
+				sandbox, vmId: ctx.vmId, name: typeof ctx.idemKey === "string" ? vmNameFor(ctx.idemKey, MACHINE_PREFIX) : null,
+				runId: r.runId, agentId: a.agentId, role: lower(a.profile ?? null), task: taskLine(a.task),
+				workerState: String(wk.state), createdAt: Number.isFinite(Number(ctx.createdAt)) ? Number(ctx.createdAt) : null,
+			};
+		}));
+		return rows.filter((x): x is MachineOwner => !!x);
+	}));
+	return perRun.flat();
+}
+
+// One list-only provider per place: the daemon's own (getDependencies) for its sandbox; for another, a provider made
+// once here (a DockerProvider has no side effects; boxd shares the daemon's per-sandbox one).
+const listers = new Map<string, SandboxProvider>();
+async function lister(name: ListedProvider): Promise<SandboxProvider> {
+	let p = listers.get(name);
+	if (p) return p;
+	const deps = await import("../dependencies");
+	if (name === "docker" && sandboxName() !== "docker") p = new (await import("../providers/docker")).DockerProvider();
+	else p = deps.providerNamed(name);
+	listers.set(name, p);
+	return p;
+}
+
 export function rivetSource(): HarnessSource {
 	const runsIndex = () => recentRuns(500);
 	const runs = async () => Promise.all(runsIndex().map(async (r) => {
@@ -55,8 +104,22 @@ export function rivetSource(): HarnessSource {
 		// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
 		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal: meta?.goal ?? null, repo: r.repo, createdAt: isoTs(r.createdAt) };
 	}));
+	const surface = sandboxSurface({
+		// What agents' machines get today (the worker's lease); a setting from ADR-021 phase 2 on.
+		idleLifetimeSeconds: AGENT_VM_TTL_SECONDS,
+		logins: async () => (await import("./settings")).logins(),
+		availability: async (name) => {
+			const { sandboxAvailable } = await import("./run-options");
+			let current: string | null = null;
+			try { current = sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: no default */ }
+			return { ...(await sandboxAvailable(name)), default: current === name };
+		},
+		list: async (name) => (await lister(name)).list(MACHINE_PREFIX),
+		owners: () => machineOwners(),
+	});
 	return {
 		version: VERSION,
+		...surface,
 		runs,
 		projects: async () => {
 			const by = new Map<string, { id: string; name: string; repo: string | null; goal: string | null; runIds: string[] }>();

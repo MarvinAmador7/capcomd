@@ -9,6 +9,8 @@ import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 import { ACTIVITY_KINDS } from "../agents/activity";
 import { AgentWorkspace } from "./workspace";
 import { SKILL_MAX_BYTES, SKILLS_PER_MESSAGE_MAX } from "../agents/skills";
+import { isListedProvider, LISTED_PROVIDERS, PROVIDER_LABEL } from "../providers/registry";
+import { IDLE_LIFETIME_CHOICES } from "./sandboxes";
 import { CODE_MAX_LINES, DIFF_LINE_MAX_CHARS, DIFF_MAX_LINES, ITEM_MAX_BYTES, TABLE_MAX_COLS, TABLE_MAX_ROWS, THREAD_FORMAT, ThreadItem } from "../../packages/agent-thread/src/index";
 
 export { ThreadItem };
@@ -289,11 +291,17 @@ export const CAPABILITIES = {
 	logins: "GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in",
 	environments: "GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it",
 	service: "GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it",
+	sandboxes: "GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`",
+	"sandboxes.resources": "GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
 	CAPABILITY_NAMES.map((k) => `\`${k}\`: ${CAPABILITIES[k]}`).join("; ") + ".";
 
+/** A place clients may name: a listed provider (src/providers/registry.ts). A string on the wire, so a new provider is
+ *  no API change; the daemon refuses names it doesn't list. */
+export const SandboxName = z.string().refine(isListedProvider, { message: `not a place agents run: use one of ${LISTED_PROVIDERS.join(", ")}` })
+	.describe(`A place agents run: a listed provider's name (GET /v1/sandboxes), today ${LISTED_PROVIDERS.map((n) => `${n} ("${PROVIDER_LABEL[n]}")`).join(", ")}. More may be added: treat an unknown name as a place you don't know`);
 /** runs.create: the goal is user-written text, stored as the run's goal (Run.goal); at most this many UTF-8 bytes. */
 export const GOAL_MAX_BYTES = 16 * 1024;
 export const BranchName = z.string().regex(/^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*[./]$)[A-Za-z0-9._/-]{1,200}$/).describe("Branch name, e.g. capcomd/integration");
@@ -310,7 +318,7 @@ export const CreateRunBody = z.object({
 	targetBranch: BranchName.optional().describe("Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target."),
 	driver: AgentProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
 	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
-	sandbox: z.enum(["docker", "boxd"]).optional().describe("Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox. GET /v1/run-options lists both."),
+	sandbox: SandboxName.optional().describe("Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): a listed place's name (GET /v1/run-options `sandboxes`), today docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't one, or isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox."),
 });
 export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; " +
 	"the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. " +
@@ -332,10 +340,10 @@ export const DriverOption = z.object({
 	available: z.boolean(),
 	reason: z.string().nullable().describe("Why it isn't available, one short sentence written by the daemon (trusted), e.g. \"Not logged in to Codex (run capcomd auth login codex)\"; null when available"),
 	default: z.boolean().describe("The provider of the daemon's planner profile: what a run without `driver` uses"),
-	sandboxes: z.object({ docker: DriverFit, boxd: DriverFit }).describe("Capability runs.options.sandbox. Whether this provider can drive a run in each sandbox: `available` and `reason` above are for the daemon's own sandbox, these for a run's `sandbox` (logins and agent environments are per sandbox). Whether the sandbox itself is up is `sandboxes[]`. POST /v1/runs with `driver` (or the default driver) and `sandbox` is 422 with this `reason` when it isn't available"),
+	sandboxes: z.record(z.string(), DriverFit).describe("Capability runs.options.sandbox. Keyed by place name: one entry per `sandboxes[]` entry (today docker and boxd). Whether this provider can drive a run in each sandbox: `available` and `reason` above are for the daemon's own sandbox, these for a run's `sandbox` (logins and agent environments are per sandbox). Whether the sandbox itself is up is `sandboxes[]`. POST /v1/runs with `driver` (or the default driver) and `sandbox` is 422 with this `reason` when it isn't available"),
 });
 export const SandboxOption = z.object({
-	name: z.enum(["docker", "boxd"]),
+	name: z.string().describe(`A listed place's name, today ${LISTED_PROVIDERS.join(" or ")}`),
 	label: z.string().describe("What to call it: \"Local\" (docker) or \"Cloud\" (boxd)"),
 	available: z.boolean(),
 	reason: z.string().nullable().describe("Why it isn't available (trusted), e.g. \"Docker isn't running\", \"No boxd API key (run capcomd setup)\"; null when available"),
@@ -343,7 +351,7 @@ export const SandboxOption = z.object({
 });
 export const RunOptions = z.object({
 	drivers: z.array(DriverOption).describe("Always claude, then codex"),
-	sandboxes: z.array(SandboxOption).describe("Always docker, then boxd"),
+	sandboxes: z.array(SandboxOption).describe("Every listed place, in order: today docker, then boxd"),
 });
 export const RUN_OPTIONS_DOC = "Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not, and (capability runs.options.sandbox) whether each driver can run in each sandbox. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, agent environments, whether Docker answers, cached a few seconds), so poll it freely. " +
 	"`repo` (capability runs.options.repo): the answer for a run of that project, as POST /v1/runs with the same `repo` starts it: its settings and agent profiles (.capcomd/agents.json from `capcomd setup project`), not the daemon's. 422 `invalid` when it isn't a project checkout, with the message POST /v1/runs gives.";
@@ -353,17 +361,21 @@ export const RunOptionsQuery = z.object({
 });
 
 /** GET /v1/logins, /v1/environments, /v1/service: what the app's Settings window shows. Local state only. */
-const SettingsSandbox = z.enum(["docker", "boxd"]).describe("Where agents run: docker (\"Local\") or boxd (\"Cloud\")");
+const SettingsSandbox = z.string().describe(`Where agents run: a listed place's name, today ${LISTED_PROVIDERS.map((n) => `${n} ("${PROVIDER_LABEL[n]}")`).join(" or ")}`);
 export const Login = z.object({
 	provider: AgentProvider,
 	sandbox: SettingsSandbox,
 	loggedIn: z.boolean().describe("Agents of this provider can log in in this sandbox"),
 	how: z.enum(["plan", "api_key"]).nullable().describe("plan: a plan login (`capcomd auth login`) saved for this sandbox; api_key: ANTHROPIC_API_KEY / OPENAI_API_KEY is set for the daemon, or (boxd) kept as a boxd secret with CAPCOMD_CREDENTIALS=secret. A plan login wins when there are both. null when not logged in"),
 	detail: z.string().nullable().describe("Where the login lives, one short sentence written by the daemon (trusted, never a credential), e.g. \"Kept as a boxd secret bound to api.anthropic.com\", \"Saved in the agent environment\"; null when not logged in"),
+	hostBound: z.boolean().describe("Capability sandboxes. The login is a host-bound secret: the platform swaps it in on the way to `boundTo`, so agents only ever see a placeholder (a plan login stored as a secret, or CAPCOMD_CREDENTIALS=secret). false when not logged in, or when agents can read it (kept in the agent environment, or an API key passed to the agent)"),
+	boundTo: z.string().nullable().describe("Capability sandboxes. The host the login is bound to (the AI's API host, e.g. api.anthropic.com) when `hostBound`; else null"),
 	command: z.string().describe("The CLI that logs in there, e.g. `capcomd auth login claude --sandbox docker` (interactive: run it in a terminal)"),
 });
-export const Logins = z.object({ logins: z.array(Login).describe("Always four: claude in docker, claude in boxd, codex in docker, codex in boxd") });
-export const LOGINS_DOC = "Capability logins. Who agents can log in as, per AI and per sandbox (plan logins are saved per sandbox). Needs the `read` scope. Local files and the daemon's environment only (no VM, container or network call), so poll it freely. Never contains a credential.";
+export const Logins = z.object({ logins: z.array(Login).describe("Claude, then Codex, each in every listed place (today four: claude in docker, claude in boxd, codex in docker, codex in boxd); with `sandbox`, that place's only") });
+export const LOGINS_DOC = "Capability logins. Who agents can log in as, per AI and per sandbox (plan logins are saved per sandbox). Needs the `read` scope. Local files and the daemon's environment only (no VM, container or network call), so poll it freely. Never contains a credential. " +
+	"`sandbox` (capability sandboxes): only that place's logins; 404 `not_found` for a name that isn't a listed place.";
+export const SandboxQuery = z.object({ sandbox: z.string().optional().describe("Capability sandboxes. Only this place (a listed place's name, GET /v1/sandboxes); 404 when it isn't one") });
 export const Environment = z.object({
 	sandbox: SettingsSandbox,
 	status: z.enum(["ready", "missing", "building", "failed"]).describe("building: a `capcomd env build` for this sandbox is running now; failed: the last build failed (`name`, `versions` and `builtAt` then still describe the environment agents use, if any); ready: agents boot from `name`; missing: none built yet (agents can't run real CLIs there)"),
@@ -372,8 +384,9 @@ export const Environment = z.object({
 	builtAt: Timestamp.nullable().describe("When it was built; null when unknown or none"),
 	command: z.string().describe("The CLI that builds (or rebuilds) it, e.g. `capcomd env build --sandbox docker`"),
 });
-export const Environments = z.object({ environments: z.array(Environment).describe("Always two: docker, then boxd") });
-export const ENVIRONMENTS_DOC = "Capability environments. The agent environment (env snapshot) each sandbox's agents boot from. Needs the `read` scope. Local files only (the env ledger and the build's marker), so poll it freely.";
+export const Environments = z.object({ environments: z.array(Environment).describe("One per listed place, in order (today two: docker, then boxd); with `sandbox`, that place's only") });
+export const ENVIRONMENTS_DOC = "Capability environments. The agent environment (env snapshot) each sandbox's agents boot from. Needs the `read` scope. Local files only (the env ledger and the build's marker), so poll it freely. " +
+	"`sandbox` (capability sandboxes): only that place's environment; 404 `not_found` for a name that isn't a listed place.";
 export const ServiceStatus = z.object({
 	installed: z.boolean().describe("The service definition is installed (`capcomd service install`: a launchd agent on macOS, a systemd user unit on Linux)"),
 	loaded: z.boolean().describe("launchd (systemd) has it loaded: it starts capcomd at login and restarts it when it crashes"),
@@ -381,6 +394,94 @@ export const ServiceStatus = z.object({
 	uninstallCommand: z.string().describe("`capcomd service uninstall`"),
 });
 export const SERVICE_DOC = "Capability service. Whether capcomd runs as a background service. Needs the `read` scope. Reads the service definition, and asks launchd (systemd) whether it is loaded at most every few seconds, for at most a second.";
+
+
+/** ADR-021: the provider surface for a place's details screen (GET /v1/sandboxes…). */
+export const SandboxCaps = z.object({
+	isolation: z.string().describe("Where an agent's commands run: vm, container (or host, for test fakes). More may be added"),
+	snapshots: z.boolean().describe("Saved images to boot from: agent environments (`capcomd env build`) and plan logins"),
+	hostBoundSecrets: z.boolean().describe("Logins can be bound to their AI's API host, so agents only see a placeholder"),
+	egressAllowlist: z.boolean().describe("A profile's `egress` can limit which hosts agents reach"),
+	interactive: z.boolean().describe("A command with a terminal (interactive logins)"),
+	idleLifetime: z.string().describe("Who deletes a machine left behind: platform (the provider itself), sweep (capcomd, every 5 minutes), none. More may be added"),
+	shell: z.boolean().describe("A shell into a live machine (`capcomd sandbox shell`)"),
+});
+export const SandboxDescriptor = z.object({
+	name: z.string().describe("What the API and CAPCOMD_SANDBOX call it"),
+	descriptorVersion: z.number().int().positive().describe("1. Bumped only by a breaking change to this shape; additions never bump it"),
+	label: z.string().describe("What to call the place: \"Local\", \"Cloud\""),
+	kind: z.string().describe("local or cloud: how to group it and which glyph to fall back to. Render an unknown kind as cloud"),
+	vendor: z.string().describe("Who provides it: what the title says after the dot (\"Docker\", \"boxd\")"),
+	title: z.string().describe("\"Cloud · boxd\""),
+	mark: z.string().describe("Id of a mark the app bundles (docker, boxd); fall back to the kind's glyph for an id you don't have. Never an image"),
+	listed: z.boolean().describe("Always true here (unlisted test providers are never served)"),
+	caps: SandboxCaps.describe("What it can do. Ignore caps you don't know"),
+	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime). Ignore ids you don't know"),
+	info: z.array(z.string()).describe("Info row ids its details show (logins, checkpoints). Ignore ids you don't know"),
+	resourceKinds: z.array(z.string()).describe("Kinds of resource it lists (machine)"),
+	actions: z.array(z.string()).describe("Resource actions this daemon serves for it, from a closed list: open_terminal (more come with later capabilities, e.g. delete). Ignore actions you don't know"),
+});
+export const SandboxSummary = SandboxDescriptor.extend({
+	available: z.boolean().describe("It can be used now (as GET /v1/run-options `sandboxes[].available`)"),
+	reason: z.string().nullable().describe("Why not, written by the daemon (trusted), e.g. \"Docker isn't running\"; null when available"),
+	default: z.boolean().describe("The daemon's own CAPCOMD_SANDBOX: what a run without `sandbox` uses"),
+});
+export const Sandboxes = z.object({ sandboxes: z.array(SandboxSummary).describe("Every listed place, in order: today docker, then boxd") });
+export const FieldChoice = z.object({ value: z.string(), label: z.string().describe("Daemon-written, e.g. \"1 hour\"") });
+export const SandboxField = z.object({
+	id: z.string().describe("Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"),
+	type: z.string().describe("choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"),
+	label: z.string().describe("Row title (daemon-written)"),
+	help: z.string().nullable().describe("A footnote under the row (daemon-written, trusted); null when none"),
+	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)"),
+	display: z.string().describe("The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"),
+	default: z.string().nullable().describe("A setting's default value; null for info rows"),
+	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
+	source: z.string().describe("Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which), config (capcomd's user config), daemon (an info row the daemon works out)"),
+	editable: z.boolean().describe("The user can change it here. Always false until settings can be changed (a later capability, sandboxes.settings)"),
+	appliesTo: z.string().nullable().describe("new_runs: a change applies to runs started after it; null for info rows"),
+	needsRestart: z.boolean().describe("A change needs the daemon restarted"),
+	state: z.string().nullable().describe("A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type"),
+});
+export const SandboxDetail = z.object({
+	descriptor: SandboxDescriptor,
+	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives; read-only for now)"),
+	info: z.array(SandboxField).describe("Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work)"),
+	rev: z.string().describe("Changes whenever a setting's value does; a later write sends it back to detect a stale screen"),
+});
+export const SANDBOX_DOC = "Capability sandboxes. One place agents run: its descriptor, its settings and its info rows as typed fields the app renders generically (an unknown field type renders as a read-only `label` and `display`). " +
+	"Needs the `read` scope. Local reads only (no provider call), so poll it freely. Never contains a credential: every `display`, `help` and `reason` is written by the daemon. 404 `not_found` for a name that isn't a listed place. " +
+	"`v`: the descriptor version the client understands (only 1 exists).";
+export const ResourceOwner = z.object({
+	runId: z.string(),
+	agentId: z.string(),
+	role: z.string().nullable().describe("The agent's profile (planner, worker, reviewer…); null when it has none"),
+	task: UntrustedText.nullable().describe("Agent-written text: render as plain text, never markdown, links or actions. The first line of the agent's task, at most 200 characters"),
+});
+export const SandboxResource = z.object({
+	id: z.string().describe("The machine's name at the provider: capcomd's prefix (relay-) and letters, digits, `.`, `_`, `-` (at most 128). Stable for the machine's life"),
+	kind: z.string().describe("machine. More may be added"),
+	state: z.string().describe("starting, running, orphaned (capcomd made it and no live agent holds it: a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"),
+	owner: ResourceOwner.nullable().describe("The agent whose machine it is, from capcomd's own records (never from provider labels); null when orphaned or unknown"),
+	createdAt: Timestamp.nullable().describe("When it was created; null when unknown"),
+	deleteAfter: Timestamp.nullable().describe("When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes"),
+	actions: z.array(z.string()).describe("Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Ignore actions you don't know"),
+});
+export const ResourcePage = z.object({
+	resources: z.array(SandboxResource).describe("Sorted by id"),
+	asOf: Timestamp.nullable().describe("When the provider's list this answer reflects was taken; null when it never answered"),
+	stale: z.boolean().describe("The last attempt to list failed (`error`): resources come from the last list that worked, and capcomd's records"),
+	error: z.string().nullable().describe("Why the provider's list failed, written by the daemon (trusted), e.g. \"boxd didn't answer within 3 seconds\"; null when it worked"),
+	next: z.string().nullable().describe("More resources: pass as `cursor` for the next page; null at the end"),
+});
+export const ResourceDetail = SandboxResource.extend({
+	terminalCommand: z.string().nullable().describe("The command that opens a shell in this machine (run it in Terminal): `capcomd sandbox shell <runId> <agentId>` for an agent's machine, `capcomd sandbox shell --sandbox <name> --machine <id>` for an orphan. Built from trusted ids only: a plain capcomd invocation of letters, digits and `._-` words. null without open_terminal"),
+});
+export const RESOURCES_PAGE_MAX = 200;
+export const RESOURCES_DOC = "Capability sandboxes.resources. The machines capcomd's agents run on at this place: capcomd's own records (which agent holds which machine) joined with the provider's list of machines with capcomd's prefix; one with no live owner is `orphaned`. " +
+	"Needs the `read` scope. The provider is asked at most every 10 s (one request at a time, 3 s timeout), never once per machine; when it fails, the answer is still 200, from the last list that worked, with `stale: true` and `error`. " +
+	`\`limit\` (default 100, at most ${RESOURCES_PAGE_MAX}) and \`cursor\` (the previous page's \`next\`) page through them. 404 \`not_found\` for a name that isn't a listed place.`;
+export const RESOURCE_DOC = "Capability sandboxes.resources. One machine (as in …/resources, from the same cached list) and `terminalCommand`, the command that opens a shell in it. 404 `not_found` when capcomd doesn't list it at this place (only ids with capcomd's prefix are ever looked up).";
 
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
@@ -462,10 +563,20 @@ export const contract = {
 		get: oc.route({ method: "GET", path: "/v1/run-options", description: RUN_OPTIONS_DOC }).input(RunOptionsQuery).output(RunOptions),
 	},
 	logins: {
-		list: oc.route({ method: "GET", path: "/v1/logins", description: LOGINS_DOC }).output(Logins),
+		list: oc.route({ method: "GET", path: "/v1/logins", description: LOGINS_DOC }).input(SandboxQuery).output(Logins),
 	},
 	environments: {
-		list: oc.route({ method: "GET", path: "/v1/environments", description: ENVIRONMENTS_DOC }).output(Environments),
+		list: oc.route({ method: "GET", path: "/v1/environments", description: ENVIRONMENTS_DOC }).input(SandboxQuery).output(Environments),
+	},
+	sandboxes: {
+		list: oc.route({ method: "GET", path: "/v1/sandboxes", description: "Capability sandboxes. Every listed place agents run, as its provider descriptor, with whether it can be used now (as GET /v1/run-options says) and whether it is the daemon's default. Needs the `read` scope. Local checks only, so poll it freely." })
+			.input(z.object({ v: z.coerce.number().int().positive().optional().describe("Descriptor version the client understands (only 1 exists)") })).output(Sandboxes),
+		get: oc.route({ method: "GET", path: "/v1/sandboxes/{name}", description: SANDBOX_DOC })
+			.input(z.object({ name: z.string(), v: z.coerce.number().int().positive().optional().describe("Descriptor version the client understands (only 1 exists)") })).output(SandboxDetail),
+		resources: oc.route({ method: "GET", path: "/v1/sandboxes/{name}/resources", description: RESOURCES_DOC })
+			.input(z.object({ name: z.string(), limit: z.coerce.number().int().positive().max(RESOURCES_PAGE_MAX).optional(), cursor: z.string().max(200).optional().describe("The previous page's `next`") })).output(ResourcePage),
+		resource: oc.route({ method: "GET", path: "/v1/sandboxes/{name}/resources/{id}", description: RESOURCE_DOC })
+			.input(z.object({ name: z.string(), id: z.string() })).output(ResourceDetail),
 	},
 	service: {
 		get: oc.route({ method: "GET", path: "/v1/service", description: SERVICE_DOC }).output(ServiceStatus),
