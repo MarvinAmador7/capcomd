@@ -49,12 +49,16 @@ struct WaitingValue: View {
   }
 }
 
-/// The "Default" badge in a place's section header (`.badge`), in the system accent.
+/// The "Default" badge in a place's section header (`.badge`): accent text on an accent tint, 5 pt corners, a label and
+/// not a control. The fixed accent, so it stays blue (`Color.accentColor` turns graphite whenever the app isn't active).
 struct DefaultBadge: View {
   var body: some View {
-    Text("Default").font(Theme.Settings.badgeFont).foregroundStyle(Color.accentColor)
+    Text("Default").font(Theme.Settings.badgeFont).foregroundStyle(Theme.Settings.badgeText)
       .padding(.horizontal, Theme.Settings.badgePaddingH).padding(.vertical, Theme.Settings.badgePaddingV)
-      .background(RoundedRectangle(cornerRadius: Theme.Settings.badgeRadius, style: .continuous).fill(Color.accentColor.opacity(Theme.Settings.badgeFill)))
+      .background(RoundedRectangle(cornerRadius: Theme.Settings.badgeRadius, style: .continuous).fill(Theme.accent.opacity(Theme.Settings.badgeFill)))
+      .fixedSize()
+      .allowsHitTesting(false)
+      .accessibilityAddTraits(.isStaticText)
   }
 }
 
@@ -92,7 +96,11 @@ struct Foot: View {
   let text: Text
   init(_ text: Text) { self.text = text }
   init(verbatim s: String) { text = Text(verbatim: s) }
-  var body: some View { text.font(Theme.Settings.footFont).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+  var body: some View {
+    text.font(Theme.Settings.footFont).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)   // flush left under its group (`.foot`), never trailing
+  }
 }
 
 /// "Opened: `capcomd auth login claude --sandbox docker`": the command a waiting row handed to Terminal.

@@ -484,6 +484,8 @@ enum Theme {
   enum Settings {
     static let width: CGFloat = 620                                   // .win width
     static let poll: Double = 5                                       // s between reads while the window is open
+    static let chrome: CGFloat = 80                                   // title and tab bar, until the window says
+    static let minPane: CGFloat = 200                                 // never shorter than this before scrolling
     // Status dots (`.dot`, `.empty`): system colours, so they adapt to light, dark and Increase Contrast.
     static let dot: CGFloat = 8, ringWidth: CGFloat = 1.2, valueGap: CGFloat = 6
     static let ok = Color(nsColor: .systemGreen), warn = Color(nsColor: .systemOrange), bad = Color(nsColor: .systemRed)
@@ -495,6 +497,11 @@ enum Theme {
     static let providerMark: CGFloat = 14, placeMark: CGFloat = 15
     static let badgeFont = Font.system(size: 11, weight: .medium)
     static let badgePaddingH: CGFloat = 7, badgePaddingV: CGFloat = 2, badgeRadius: CGFloat = 5, badgeFill: Double = 0.16
+    /// `.badge` text: #4ea1ff in dark (Runs.dc.html), #0062cc in light (GeneralLight.dc.html's accent text).
+    static let badgeText = Color(nsColor: NSColor(name: nil) { a in
+      a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(srgbRed: 0x4E / 255, green: 0xA1 / 255, blue: 1, alpha: 1)
+                                                          : NSColor(srgbRed: 0, green: 0x62 / 255, blue: 0xCC / 255, alpha: 1)
+    })
     static let headerButtonFont = Font.system(size: 12)
     static let menuMark: CGFloat = 13                                 // marks inside popup menus
     // Bot faces preview: the mark on a 32 pt tile.

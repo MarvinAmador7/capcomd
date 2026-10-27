@@ -216,19 +216,110 @@ enum AppInfo {
   static let newIssue = URL(string: "https://github.com/MarvinAmador7/capcomd/issues/new")!
 }
 
-/// Opening Settings from a menu bar (accessory) app: activate first, or the window opens behind the frontmost app.
-enum SettingsWindow {
-  @MainActor static func open(_ openSettings: OpenSettingsAction) {
-    NSApp.activate(ignoringOtherApps: true)
+/// The Settings window of a menu bar (accessory) app. An accessory app can't become the active app on current macOS,
+/// so its window would open behind the frontmost app and draw every control inactive. While Settings is open the app
+/// is a regular app (a Dock icon, as Apple's own menu bar apps do), and goes back to an accessory when it closes.
+@MainActor enum SettingsWindow {
+  private static var window: NSWindow?
+  private static var closeObserver: NSObjectProtocol?
+
+  /// Settings… in the panel: close the panel (it would stay on top), become a regular app, open the window.
+  static func open(_ openSettings: OpenSettingsAction) {
+    closePanel()
+    becomeRegular()
     openSettings()
-    DispatchQueue.main.async { front() }
+    DispatchQueue.main.async { if let window { bringFront(window) } }
   }
-  @MainActor static func front() {
-    guard let w = NSApp.windows.first(where: { $0.identifier?.rawValue.contains("Settings") == true || $0.title == "Settings" }) else { return }
-    NSApp.activate(ignoringOtherApps: true)
+
+  /// The Settings view found its window (⌘, or Settings…): regular app, window in front, accessory again on close.
+  static func attach(_ w: NSWindow) {
+    closePanel()
+    becomeRegular()
+    if window !== w {
+      if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+      window = w
+      closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
+        MainActor.assumeIsolated {
+          NSApp.setActivationPolicy(.accessory)
+          if let o = closeObserver { NotificationCenter.default.removeObserver(o) }
+          closeObserver = nil; window = nil
+        }
+      }
+    }
+    DispatchQueue.main.async { bringFront(w) }
+  }
+
+  private static func becomeRegular() {
+    if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+  }
+  private static func bringFront(_ w: NSWindow) {
+    NSApp.activate()
     w.makeKeyAndOrderFront(nil)
     w.orderFrontRegardless()
   }
+  /// The MenuBarExtra's panel (its window class is SwiftUI's MenuBarExtraWindow), not the detached thread readers.
+  private static func closePanel() {
+    for w in NSApp.windows where w.isVisible && String(describing: type(of: w)).contains("MenuBarExtra") { w.close() }
+  }
+
+  /// The tallest a pane gets before it scrolls: the screen's visible height less the window's title and tab bar.
+  static var maxPaneHeight: CGFloat {
+    let screen = (window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
+    let chrome = window.map { $0.frame.height - $0.contentLayoutRect.height } ?? Theme.Settings.chrome
+    return max(Theme.Settings.minPane, screen - chrome)
+  }
+
+  /// Fits the window to the pane's height, top edge fixed, without animating (layout snaps, SPEC §7).
+  static func fit(paneHeight h: CGFloat) {
+    guard let w = window else { return }
+    let chrome = w.frame.height - w.contentLayoutRect.height
+    let height = (h + chrome).rounded()
+    guard abs(w.frame.height - height) > 0.5 else { return }
+    var f = w.frame
+    f.origin.y += f.height - height
+    f.size.height = height
+    w.setFrame(f, display: true, animate: false)
+  }
+}
+
+/// Hands the view's window to `found` once it is in one.
+struct WindowReader: NSViewRepresentable {
+  let found: (NSWindow) -> Void
+  func makeNSView(context: Context) -> NSView { Reader(found: found) }
+  func updateNSView(_ v: NSView, context: Context) {}
+  final class Reader: NSView {
+    let found: (NSWindow) -> Void
+    init(found: @escaping (NSWindow) -> Void) { self.found = found; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { nil }
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if let window { let f = found; DispatchQueue.main.async { f(window) } }
+    }
+  }
+}
+
+/// A pane as tall as its content (the window fits it), up to the screen; past that it scrolls.
+struct PaneFit: ViewModifier {
+  @State private var overflow = false
+  func body(content: Content) -> some View {
+    let cap = SettingsWindow.maxPaneHeight
+    Group {
+      if overflow {
+        content.frame(height: cap)
+      } else {
+        content.scrollDisabled(true).fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+      if !overflow && h > cap + 0.5 { overflow = true }
+      SettingsWindow.fit(paneHeight: min(h, cap))
+    }
+    .onAppear { overflow = false }
+  }
+}
+extension View {
+  /// Settings panes: the window fits the pane (PaneFit).
+  func paneFit() -> some View { modifier(PaneFit()) }
 }
 
 /// Marks drawn from SVG paths as images, for popup menus (which take images, not shapes). Template images are tinted

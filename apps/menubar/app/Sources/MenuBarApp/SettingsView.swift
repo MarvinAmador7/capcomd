@@ -13,10 +13,10 @@ struct SettingsView: View {
 
   var body: some View {
     TabView(selection: $pane) {
-      GeneralPane().tabItem { Label("General", systemImage: "gearshape") }.tag(Pane.general)
-      AccountsPane().tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag(Pane.accounts)
-      RunsPane().tabItem { Label("Runs", systemImage: "square.stack.3d.up") }.tag(Pane.runs)
-      AboutPane().tabItem { Label("About", systemImage: "info.circle") }.tag(Pane.about)
+      GeneralPane().paneFit().tabItem { Label("General", systemImage: "gearshape") }.tag(Pane.general)
+      AccountsPane().paneFit().tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag(Pane.accounts)
+      RunsPane().paneFit().tabItem { Label("Runs", systemImage: "square.stack.3d.up") }.tag(Pane.runs)
+      AboutPane().paneFit().tabItem { Label("About", systemImage: "info.circle") }.tag(Pane.about)
     }
     .frame(width: Theme.Settings.width)
     // Every route Settings reads is cheap: read them while the window is open, and at once when the app comes back
@@ -30,8 +30,9 @@ struct SettingsView: View {
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
       Task { await model.refreshSettings() }
     }
-    // A menu bar app is an accessory: bring the window forward when it opens (⌘, or the panel's Settings…).
-    .onAppear { DispatchQueue.main.async { SettingsWindow.front() } }
+    // A menu bar app is an accessory: while Settings is open it is a regular app, so the window comes to the front and
+    // its controls draw active (⌘, or the panel's Settings…).
+    .background(WindowReader { SettingsWindow.attach($0) })
   }
 }
 #endif

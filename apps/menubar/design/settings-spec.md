@@ -15,8 +15,12 @@ they win wherever this text and they differ. `settings/CloudExplore.dc.html` is 
   button). Anything that must run in a terminal opens Terminal with the command ready (`TerminalLauncher`, a throwaway
   `.command` file, no Automation permission); the row then says "Waiting for Terminal…" and updates by itself. Settings
   never shows a token or key.
-- Opening it: **⌘,** (the app menu's Settings…) and **Settings…** in the project composer's `+` menu. The app is an
-  accessory, so it activates itself and brings the window forward. ⌘W closes it. Panes have no ⌘1–4: Settings
+- Opening it: **⌘,** (the app menu's Settings…) and **Settings…** in the project composer's `+` menu. The panel closes.
+  An accessory app can't become active, so while Settings is open the app is a regular app (a Dock icon, as Apple's
+  own menu bar apps do) and its window comes to the front with active controls; closing the window makes it an
+  accessory again.
+- Each pane reports its content height and the window fits it (top edge fixed, no animation), up to the screen's
+  visible height; only past that does a pane scroll. ⌘W closes it. Panes have no ⌘1–4: Settings
   windows don't, and ⌘1–3 stay the panel's.
 - Freshness: while the window is open, `GET /v1/health`, `/v1/run-options`, `/v1/logins`, `/v1/environments` and
   `/v1/service` are read every 5 s (all cheap) and again whenever the app becomes active (back from Terminal).
