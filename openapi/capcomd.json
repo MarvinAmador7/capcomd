@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422). This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -2901,7 +2901,19 @@
     "/v1/run-options": {
       "get": {
         "operationId": "runOptions.get",
-        "description": "Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, whether Docker answers, cached a few seconds), so poll it freely.",
+        "description": "Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not, and (capability runs.options.sandbox) whether each driver can run in each sandbox. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, agent environments, whether Docker answers, cached a few seconds), so poll it freely. `repo` (capability runs.options.repo): the answer for a run of that project, as POST /v1/runs with the same `repo` starts it: its settings and agent profiles (.capcomd/agents.json from `capcomd setup project`), not the daemon's. 422 `invalid` when it isn't a project checkout, with the message POST /v1/runs gives.",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Capability runs.options.repo. Absolute path of a project checkout on the daemon's machine, as POST /v1/runs `repo`. Omitted: the daemon's own settings and profiles."
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -2960,6 +2972,54 @@
                           "default": {
                             "type": "boolean",
                             "description": "The provider of the daemon's planner profile: what a run without `driver` uses"
+                          },
+                          "sandboxes": {
+                            "type": "object",
+                            "properties": {
+                              "docker": {
+                                "type": "object",
+                                "properties": {
+                                  "available": {
+                                    "type": "boolean"
+                                  },
+                                  "reason": {
+                                    "description": "Why not, one short sentence naming the command that fixes it (trusted), e.g. \"Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)\", \"No agent environment for Local yet (run `capcomd env build --sandbox docker`)\"; null when available",
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "available",
+                                  "reason"
+                                ]
+                              },
+                              "boxd": {
+                                "type": "object",
+                                "properties": {
+                                  "available": {
+                                    "type": "boolean"
+                                  },
+                                  "reason": {
+                                    "description": "Why not, one short sentence naming the command that fixes it (trusted), e.g. \"Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)\", \"No agent environment for Local yet (run `capcomd env build --sandbox docker`)\"; null when available",
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "available",
+                                  "reason"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "docker",
+                              "boxd"
+                            ],
+                            "description": "Capability runs.options.sandbox. Whether this provider can drive a run in each sandbox: `available` and `reason` above are for the daemon's own sandbox, these for a run's `sandbox` (logins and agent environments are per sandbox). Whether the sandbox itself is up is `sandboxes[]`. POST /v1/runs with `driver` (or the default driver) and `sandbox` is 422 with this `reason` when it isn't available"
                           }
                         },
                         "required": [
@@ -2970,7 +3030,8 @@
                           "effort",
                           "available",
                           "reason",
-                          "default"
+                          "default",
+                          "sandboxes"
                         ]
                       },
                       "description": "Always claude, then codex"

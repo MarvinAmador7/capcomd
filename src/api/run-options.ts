@@ -8,6 +8,8 @@ import { DRIVER_LABEL, DRIVERS, plannerDriver, plannerProfile } from "../agents/
 import { agentsFilePath, PROVIDER_DEFAULT_EFFORT, PROVIDER_EFFORTS, readAgentsFile } from "../agents/profiles";
 import { readConfig, userConfigPath } from "../config/store";
 import { sandboxName } from "../providers/registry";
+import { withSandbox } from "../providers/run-sandbox";
+import { envSnapshotProblem } from "../primitives/ops";
 import { capcomdHome } from "../utils/home";
 
 type Env = Record<string, string | undefined>;
@@ -15,7 +17,8 @@ export const RUN_SANDBOXES = ["docker", "boxd"] as const;
 export type RunSandbox = (typeof RUN_SANDBOXES)[number];
 export const SANDBOX_LABEL: Record<RunSandbox, string> = { docker: "Local", boxd: "VM" };
 
-export interface DriverOption { provider: "claude" | "codex"; label: string; model: string | null; efforts: string[]; effort: string | null; available: boolean; reason: string | null; default: boolean }
+export interface DriverFit { available: boolean; reason: string | null }
+export interface DriverOption { provider: "claude" | "codex"; label: string; model: string | null; efforts: string[]; effort: string | null; available: boolean; reason: string | null; default: boolean; sandboxes: Record<RunSandbox, DriverFit> }
 export interface SandboxOption { name: RunSandbox; label: string; available: boolean; reason: string | null; default: boolean }
 
 // ---- Docker: is a daemon reachable? (`docker version`, cached) ----
@@ -58,6 +61,28 @@ export async function sandboxAvailable(name: RunSandbox, source: Env = process.e
 	return { available: d.ok, reason: d.reason };
 }
 
+/**
+ * Can `provider` drive a run in sandbox `name` (drivers[].sandboxes)? Logins and agent environments are per sandbox
+ * (src/providers/registry.ts providerStateFile), so the planner's check runs as that sandbox sees it, then the env
+ * snapshot a real agent there boots from. Local files only. Whether the sandbox itself is up is sandboxAvailable.
+ */
+export function driverFit(provider: "claude" | "codex", name: RunSandbox, source: Env = process.env): DriverFit {
+	const s = withSandbox(source, name);
+	const where = { name, label: SANDBOX_LABEL[name] };
+	let d: ReturnType<typeof plannerDriver>;
+	try { d = plannerDriver(provider, undefined, s, undefined, where); } catch (e) { return { available: false, reason: (e as Error).message }; }
+	if (!d.ok) return { available: false, reason: d.reason };
+	if (envSnapshotProblem(provider, s)) return { available: false, reason: `No agent environment for ${where.label} yet (run \`capcomd env build --sandbox ${name}\`)` };
+	return { available: true, reason: null };
+}
+
+/** GET /v1/run-options?repo=: for a run of that project (its settings and agent profiles), as POST /v1/runs starts it. */
+export async function runOptionsFor(repo: string | undefined, base: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<{ drivers: DriverOption[]; sandboxes: SandboxOption[] }> {
+	if (repo === undefined) return runOptions(base, ask);
+	const { projectSource } = await import("./create-run");
+	return runOptions(projectSource(repo, base), ask);
+}
+
 /** GET /v1/run-options. Both drivers and both sandboxes, always, in that order. */
 export async function runOptions(source: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<{ drivers: DriverOption[]; sandboxes: SandboxOption[] }> {
 	let current: string | null = null;
@@ -70,7 +95,8 @@ export async function runOptions(source: Env = process.env, ask?: Parameters<typ
 	const drivers = DRIVERS.map((provider): DriverOption => {
 		let d: ReturnType<typeof plannerDriver>;
 		try { d = plannerDriver(provider, undefined, source); } catch (e) { d = { ok: false, code: "planner", reason: (e as Error).message, model: null, defaultEffort: PROVIDER_DEFAULT_EFFORT[provider] }; }
-		return { provider, label: DRIVER_LABEL[provider], model: d.model, efforts: [...PROVIDER_EFFORTS[provider]], effort: d.defaultEffort, available: d.ok, reason: d.ok ? null : d.reason, default: defaultProvider === provider };
+		const sandboxes = Object.fromEntries(RUN_SANDBOXES.map((n) => [n, driverFit(provider, n, source)])) as Record<RunSandbox, DriverFit>;
+		return { provider, label: DRIVER_LABEL[provider], model: d.model, efforts: [...PROVIDER_EFFORTS[provider]], effort: d.defaultEffort, available: d.ok, reason: d.ok ? null : d.reason, default: defaultProvider === provider, sandboxes };
 	});
 	return { drivers, sandboxes };
 }

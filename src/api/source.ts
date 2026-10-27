@@ -42,8 +42,11 @@ export interface HarnessSource {
 	workspaceFile(runId: string, agentId: string, path: string): Promise<WorkspaceFile | null>;
 	trace(runId: string): Promise<O<typeof Span>[]>;
 	skills(): Promise<O<typeof Skill>[]>;
-	/** GET /v1/run-options: drivers and sandboxes a new run may use, and whether each is available now. */
-	runOptions(): Promise<O<typeof RunOptions>>;
+	/**
+	 * GET /v1/run-options: drivers and sandboxes a new run may use, and whether each is available now; with `repo`, for a
+	 * run of that project (throws CreateRunError, a 422, when it isn't one).
+	 */
+	runOptions(repo?: string): Promise<O<typeof RunOptions>>;
 	approvals(runId: string): Promise<PendingApproval[]>;
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
@@ -107,6 +110,7 @@ export function parseApprovalId(id: string): { runId: string; opId: string } | n
 }
 
 /** In-memory source for tests and fixtures. */
+const noPlanner = { docker: { available: false, reason: "No planner profile (run capcomd setup)" }, boxd: { available: false, reason: "No planner profile (run capcomd setup)" } };
 export function memorySource(seed: Partial<{
 	runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo>;
 	/** Thread items by run (tests push more as the agent "works"). */
@@ -189,8 +193,8 @@ export function memorySource(seed: Partial<{
 		skills: async () => (seed.skills ?? []).map(({ content: _, ...s }) => s),
 		runOptions: async () => seed.runOptions ?? {
 			drivers: [
-				{ provider: "claude", label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false },
-				{ provider: "codex", label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false },
+				{ provider: "claude", label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
+				{ provider: "codex", label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
 			],
 			sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "VM", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
 		},

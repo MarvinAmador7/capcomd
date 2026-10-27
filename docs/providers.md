@@ -17,6 +17,10 @@ capcomd auth login claude      # a plan login, kept in a local image (capcomd-au
 capcomd serve                  # the engine also removes expired sandbox containers every 5 minutes
 ```
 
+Env snapshots and plan logins are kept per sandbox. To prepare Docker while the daemon runs on boxd (for runs started
+with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead of exporting it:
+`capcomd env build --sandbox docker`, `capcomd auth login claude --sandbox docker`.
+
 - **Where it finds Docker:** `CAPCOMD_DOCKER_BIN`, `docker` on PATH, or OrbStack's and Docker Desktop's usual
   places. The base image is `CAPCOMD_DOCKER_IMAGE` (default `node:22-bookworm`: node, git, coreutils, util-linux).
 - **A sandbox is a container** named after the agent's idempotency key, with capcomd's labels; it lives until the
