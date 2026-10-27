@@ -1,9 +1,9 @@
 // HarnessSource over the Rivet scope actors: what `capcomd serve` exposes on the harness socket.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { client, generateRunId } from "../core/relay";
 import { redactShapes } from "../agents/redact";
+import { listSkills, readSkill } from "../agents/skills";
 import { cancelAny, decideMerge, pauseAgents, recentRuns, resumeAgents, runTarget, sendToAgent } from "../primitives/ops";
 import { mergeConfigFor } from "../merge/run-config";
 import { tracePath } from "../utils/tracing-simple";
@@ -30,13 +30,6 @@ async function itemsAfter(runId: string, after: number, limit: number, agentId?:
 		if (rows.length < Math.min(ITEMS_PER_CALL, limit - out.length + rows.length)) break;
 		cur = rows.at(-1)!.seq;
 	}
-	return out;
-}
-
-function frontmatter(md: string): { name?: string; description?: string } {
-	const m = /^---\n([\s\S]*?)\n---/.exec(md);
-	const out: Record<string, string> = {};
-	for (const l of (m?.[1] ?? "").split("\n")) { const k = /^(name|description):\s*(.*)$/.exec(l); if (k) out[k[1]!] = k[2]!.replace(/^["']|["']$/g, ""); }
 	return out;
 }
 
@@ -125,21 +118,8 @@ export function rivetSource(): HarnessSource {
 				} catch { return []; }
 			}).sort((a, b) => a.start.localeCompare(b.start));
 		},
-		skills: async () => {
-			const out: Array<{ name: string; description: string; source: "bundled" | "user" }> = [];
-			const { ORCHESTRATION_SKILL } = await import("../utils/assets");
-			const bundled = [ORCHESTRATION_SKILL];
-			for (const md of bundled) { const f = frontmatter(md); if (f.name) out.push({ name: f.name.toLowerCase(), description: f.description ?? "", source: "bundled" }); }
-			const dir = join(homedir(), ".claude", "skills");
-			if (existsSync(dir)) for (const d of readdirSync(dir)) {
-				const p = join(dir, d, "SKILL.md");
-				if (!existsSync(p)) continue;
-				const f = frontmatter(readFileSync(p, "utf8"));
-				const name = (f.name ?? d).toLowerCase();
-				if (/^[a-z0-9][a-z0-9._-]*$/.test(name) && !out.some((s) => s.name === name)) out.push({ name, description: f.description ?? "", source: "user" });
-			}
-			return out;
-		},
+		skills: () => listSkills(),
+		skill: (name) => readSkill(name),
 		approvals: async (runId) => {
 			const ops = (await scope(runId).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as any[];
 			return ops.map((op): PendingApproval => ({
@@ -173,21 +153,23 @@ export function rivetSource(): HarnessSource {
 			return { remote: cfg.remote, target: (await runTarget(runId).catch(() => undefined)) ?? cfg.target, workdir: cfg.workdir };
 		},
 		// The CLI's own paths (capcomd pause / resume / cancel / send), so the API changes state exactly as they do.
-		control: async (runId, action, by) => {
+		control: async (runId, action, by, agentId) => {
+			const who = agentId ? `${agentId} and its descendants have` : `${runId} has`;
 			if (action === "pause") {
-				const r = await pauseAgents(runId, undefined, by);
-				return { changed: r.paused, pending: r.pausing, noop: r.paused.length || r.pausing.length ? null : `${runId} has no pending or running agent to pause` };
+				const r = await pauseAgents(runId, agentId, by);
+				return { changed: r.paused, pending: r.pausing, noop: r.paused.length || r.pausing.length ? null : `${who} no pending or running agent to pause` };
 			}
 			if (action === "resume") {
-				const r = await resumeAgents(runId, undefined, by);
-				return { changed: r.resumed, pending: [], noop: r.resumed.length ? null : `${runId} has no paused agent to resume` };
+				// With an agent, nothing paused in its subtree is a conflict (the CLI's error), reported as the noop.
+				const r = await resumeAgents(runId, agentId, by).catch((e) => { if ((e as { code?: string }).code === "conflict") return { resumed: [] as string[] }; throw e; });
+				return { changed: r.resumed, pending: [], noop: r.resumed.length ? null : `${who} no paused agent to resume` };
 			}
-			const r = await cancelAny(runId, undefined, `cancelled by ${by}`);
+			const r = await cancelAny(runId, agentId, `cancelled by ${by}`);
 			if (r.kind === "agents") return { changed: r.agents.cancelled, pending: [], noop: r.agents.cancelled.length ? null : `nothing to cancel in ${runId}: every agent has ended` };
 			return { changed: r.agents?.cancelled ?? [], pending: [], noop: r.run.changed ? null : `${runId} is ${r.run.state}; nothing to cancel` };
 		},
-		send: async (runId, to, body, key) => {
-			const r = await sendToAgent(runId, { to, from: "operator", body, key });
+		send: async (runId, to, body, key, skills) => {
+			const r = await sendToAgent(runId, { to, from: "operator", body, key, ...(skills?.length ? { skills } : {}) });
 			return { seq: r.seq, note: r.note };
 		},
 	};

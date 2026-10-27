@@ -107,6 +107,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   agents had already finished (before, it could show as `run.completed` or `run.failed`).
 - An agent that has just started no longer shows as stuck ("no heartbeat for Ns") in `tree`, `inspect` and the
   harness API while its VM is still coming up: its liveness is now counted from when it started, not from its spawn.
+- Send skills with a message: `capcomd send <runId> <agt> <text> --skill NAME` (repeatable, at most 8), or `skills:
+  ["name", …]` on the harness API's `POST /v1/runs/{runId}/agents/{agentId}/messages`. The agent reads each skill's
+  `SKILL.md` along with the message; the thread shows only your text, and `message.sent` lists the skills' names
+  (`data.skills`). `capcomd skills` (or `GET /v1/skills`) lists the names you can use: the bundled capcomd skills and
+  your `~/.claude/skills`. An unknown name is refused and nothing is sent.
+- The harness API can pause and resume one agent: `POST /v1/runs/{runId}/agents/{agentId}/pause` and `/resume` (steer
+  scope, `Idempotency-Key`), the same as `capcomd pause|resume <runId> <agt>`. Pausing covers the agent's descendants;
+  the rest of the run keeps working, and the run shows `run.paused` only once every agent still live is paused.
+- `capcomd resume <runId> <agt>` now also resumes that agent's paused descendants, as `capcomd pause <runId> <agt>`
+  paused them (before, only the agent itself ran again and its children stayed paused).
+- `GET /v1/health` now lists `capabilities` (`run.controls`, `agents.messages`, `steer.skills`, `agent.pause`): a client
+  checks for a name before it offers that feature, and treats a missing list as empty. See docs/harness-contract.md.
 
 ## 0.6.0 (2026-10-25)
 

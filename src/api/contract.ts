@@ -8,6 +8,7 @@ import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 import { ACTIVITY_KINDS } from "../agents/activity";
 import { AgentWorkspace } from "./workspace";
+import { SKILL_MAX_BYTES, SKILLS_PER_MESSAGE_MAX } from "../agents/skills";
 import { CODE_MAX_LINES, DIFF_LINE_MAX_CHARS, DIFF_MAX_LINES, ITEM_MAX_BYTES, TABLE_MAX_COLS, TABLE_MAX_ROWS, THREAD_FORMAT, ThreadItem } from "../../packages/agent-thread/src/index";
 
 export { ThreadItem };
@@ -243,7 +244,19 @@ export const RunControl = z.object({
 	changed: z.array(z.string()).describe("Agents this call changed now. Each is confirmed by agent.paused / agent.resumed / agent.cancelled on the run stream"),
 	pending: z.array(z.string()).describe("pause only (else empty): running agents asked to stop. Each stops at its next check with its work pushed to its branch, confirmed by agent.paused (or agent.done / agent.failed when it finished first)"),
 });
-const SendBody = z.object({ body: z.string().min(1).describe(`Message text (UTF-8, at most ${MESSAGE_BODY_MAX_BYTES} bytes). Delivered to a running Claude agent at its next step; a Codex agent reads it only from its inbox (see note)`) });
+/** Result of POST /v1/runs/{runId}/agents/{agentId}/pause|resume (capability agent.pause). */
+export const AgentControl = z.object({
+	runId: z.string(),
+	agentId: z.string().describe("The agent the call named; changed and pending may also list its descendants"),
+	action: z.enum(["pause", "resume"]),
+	changed: z.array(z.string()).describe("Agents this call changed now (the agent and its descendants, target first). Each is confirmed by agent.paused / agent.resumed on the run stream"),
+	pending: z.array(z.string()).describe("pause only (else empty): running agents asked to stop. Each stops at its next check with its work pushed to its branch, confirmed by agent.paused (or agent.done / agent.failed when it finished first)"),
+});
+const SendBody = z.object({
+	body: z.string().min(1).describe(`Message text (UTF-8, at most ${MESSAGE_BODY_MAX_BYTES} bytes). Delivered to a running Claude agent at its next step; a Codex agent reads it only from its inbox (see note)`),
+	skills: z.array(z.string()).max(SKILLS_PER_MESSAGE_MAX).optional().describe(`Capability steer.skills. Names from GET /v1/skills (at most ${SKILLS_PER_MESSAGE_MAX}; a repeated name is sent once): the agent gets each skill's SKILL.md with the message. ` +
+		`An unknown name, or SKILL.md files over ${SKILL_MAX_BYTES} bytes together, is 422 \`invalid\` and sends nothing. The confirming message.sent echoes them as data.skills`),
+});
 /** Result of POST /v1/runs/{runId}/agents/{agentId}/messages. */
 export const SentMessage = z.object({
 	runId: z.string(),
@@ -255,6 +268,20 @@ export const SentMessage = z.object({
 
 const WRITE_DOC = "Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); " +
 	"same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.";
+
+/**
+ * GET /v1/health `capabilities`: features added to harness.v1 after clients shipped, so a client checks for one
+ * instead of guessing from the version. A name is never reused for something else; a client ignores names it doesn't know.
+ */
+export const CAPABILITIES = {
+	"run.controls": "POST /v1/runs/{runId}/pause, /resume and /cancel",
+	"agents.messages": "POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message",
+	"steer.skills": "POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message",
+	"agent.pause": "POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants",
+} as const;
+export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
+export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
+	CAPABILITY_NAMES.map((k) => `\`${k}\`: ${CAPABILITIES[k]}`).join("; ") + ".";
 
 /** runs.create: the goal is user-written text, stored as the run's goal (Run.goal); at most this many UTF-8 bytes. */
 export const GOAL_MAX_BYTES = 16 * 1024;
@@ -278,7 +305,8 @@ export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd 
 	"422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.";
 
 export const contract = {
-	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed." }).output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string() })),
+	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
+		.output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string(), capabilities: z.array(z.string()).optional().describe(`Features this daemon has: ${CAPABILITIES_DOC} This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty`) })),
 	projects: {
 		list: oc.route({ method: "GET", path: "/v1/projects" }).output(z.array(Project)),
 	},
@@ -330,8 +358,21 @@ export const contract = {
 			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/messages", inputStructure: "detailed",
 			description: "Steer: send the agent a message from the operator (`capcomd send <runId> <agt> <text>`). Returns the thread `seq`; the message.sent event on the run stream " +
 				"with the same `data.seq` (and `data.to` = agentId) confirms it, so a client can match its optimistic bubble. 409 `conflict` when the agent has ended (nothing would read it). " +
-				`422 \`invalid\` when \`body\` is empty or over ${MESSAGE_BODY_MAX_BYTES} bytes. ${WRITE_DOC}`,
+				`422 \`invalid\` when \`body\` is empty or over ${MESSAGE_BODY_MAX_BYTES} bytes, or a skill is unknown or too many. The same key with other \`skills\` is another request (409 \`idempotency_conflict\`). ${WRITE_DOC}`,
 		}).input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders, body: SendBody })).output(SentMessage),
+		pause: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/pause", inputStructure: "detailed",
+			description: "Capability agent.pause. Pause one agent and its descendants (no body), as `capcomd pause <runId> <agt>`; the rest of the run keeps working. " +
+				"One that hasn't started is paused now (`changed`); a running one is asked to stop (`pending`): at its next check (about every 2 s) it stops, its work is committed and pushed to its branch (`Capcomd-Stop: paused`), and it is paused. " +
+				"Confirmed by agent.paused per agent (data.result.limit \"paused\", data.result.by client:<id>). The run's own state follows its agents: run.paused when this leaves every live agent of the run paused, else the run stays running. " +
+				`409 \`conflict\` when neither the agent nor any descendant is pending or running. ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders })).output(AgentControl),
+		resume: oc.route({
+			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/resume", inputStructure: "detailed",
+			description: "Capability agent.pause. Run the agent and its paused descendants again now (no body), as `capcomd resume <runId> <agt>`: paused here, by a run pause, or by a provider usage limit (that login's recorded limit is cleared). " +
+				"Each continues from its work on its branch as its next attempt. Confirmed by agent.resumed per agent, and run.resumed when the run was paused. " +
+				`409 \`conflict\` when neither the agent nor any descendant is paused. ${WRITE_DOC}`,
+		}).input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders })).output(AgentControl),
 	},
 	attachments: {
 		get: oc.route({ method: "GET", path: "/v1/runs/{runId}/attachments/{attachmentId}", description: "Full text of an over-64 KB body, or an image a tool returned (base64, `encoding: \"base64\"`; prefer …/content for its bytes)." })

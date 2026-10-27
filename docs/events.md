@@ -488,8 +488,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "result": {},
-    "until": {},
+    "result": {
+      "description": "Why: limit \"quota\" (a provider usage limit; resetAt, login) or \"paused\" (the operator: `by` is operator or client:<id>); branch/commit: the work it kept"
+    },
+    "until": {
+      "description": "When it resumes by itself (epoch ms); null when it waits for a resume"
+    },
     "cause": {
       "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
       "type": "string"
@@ -770,6 +774,13 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "mediaType"
       ],
       "additionalProperties": {}
+    },
+    "skills": {
+      "description": "Names of the skills sent with the message (POST …/messages `skills`, `capcomd send --skill`); the agent got each one's SKILL.md with it. Empty when none; absent on events from before skill attach",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

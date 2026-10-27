@@ -7,6 +7,7 @@
 // parent's subtree (its siblings), so peers can coordinate and await-cycles can be detected.
 // Agent-authored text in responses (results, messages, logs) is fenced.
 import { redactShapes } from "../agents/redact";
+import { withSkills, type AttachedSkill } from "../agents/skills";
 import { RelayError } from "../core/errors";
 import { client } from "../core/relay";
 import * as O from "../primitives/ops";
@@ -163,7 +164,8 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     }
     case "inbox": {
       const msgs = await s.inbox({ agentId: c.sub, after: Number(args.after ?? 0) });
-      return { messages: msgs.map((m: any) => ({ seq: m.seq, from: m.from, at: m.at, body: fence(m.from, m.body) })) };
+      // Skills the sender attached come with the body, as a running agent gets them (runner messageText).
+      return { messages: msgs.map((m: any) => ({ seq: m.seq, from: m.from, at: m.at, body: fence(m.from, withSkills(m.body, m.skills)), ...(m.skills?.length ? { skills: m.skills.map((x: AttachedSkill) => x.name) } : {}) })) };
     }
     case "handoff": {
       // Hand the rest of my task to a successor child; my result becomes its result.

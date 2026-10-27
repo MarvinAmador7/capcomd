@@ -128,6 +128,29 @@ test("capcomd send reaches a running claude worker: the supervisor hands it to t
   expect(heard).toContain("use tabs please");
 }, 120_000);
 
+test("capcomd send --skill: the running worker reads the skill's SKILL.md with the message; message.sent names it", async () => {
+  const skills = (await cj(["skills"])).j?.skills ?? [];
+  expect(skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: "capcomd-orchestration", source: "bundled" })]));
+  const run = (await cj(["run", "new"])).j?.runId;
+  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen] wait for a skill", "--key", "listen-skill"])).j?.agentId;
+  const bad = await cj(["send", run, id, "x", "--skill", "no-such-skill"]);
+  expect(bad.code).not.toBe(0);
+  expect(bad.j?.error?.message).toBe('There is no skill named "no-such-skill": `capcomd skills` lists the skills you can attach.');
+  for (let i = 0; i < 100 && (await cj(["inspect", run, id])).j?.status !== "running"; i++) await Bun.sleep(100);
+  // Over 32 KB with its skill, so it goes into the VM as an uploaded file rather than a shell argument.
+  const pad = "notes ".repeat(4000);
+  const sent = await cj(["send", run, id, "follow", "this", "skill", pad, "--skill", "capcomd-orchestration"]);
+  expect(sent.code).toBe(0);
+  const agent = (await cj(["await", run, id, "--timeout-ms", "60000"])).j?.agents?.[0];
+  expect(agent?.status).toBe("done");
+  const heard = await repo.show(agent.result.branch, "messages.txt");
+  expect(heard).toContain(`follow this skill ${pad}`);
+  expect(heard).toContain('<skill name="capcomd-orchestration">');
+  expect(heard).toContain("</skill>");
+  const ev = (await cj(["events", run])).j.events.find((e: any) => e.type === "MESSAGE_SENT");
+  expect(ev.event).toMatchObject({ to: id, skills: ["capcomd-orchestration"], text: `follow this skill ${pad}` });
+}, 120_000);
+
 test("capcomd logs shows what a real (CLI) agent does, and --follow streams it until the agent finishes", async () => {
   const run = (await cj(["run", "new"])).j?.runId;
   const id = (await cj(["spawn", run, "--profile", "worker", "--task", "[slow] make the failing test pass", "--key", "logs"])).j?.agentId;

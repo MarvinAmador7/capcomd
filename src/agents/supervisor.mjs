@@ -87,7 +87,8 @@ if (cfg.input) {
     if (size <= from) return [[], from];
     const fd = openSync(file, "r");
     try {
-      const buf = Buffer.alloc(Math.min(size - from, 1 << 20));
+      // Room for one whole message line (a 1 MB body plus its skills, JSON-escaped): a line is only read once complete.
+      const buf = Buffer.alloc(Math.min(size - from, 8 << 20));
       const n = readSync(fd, buf, 0, buf.length, from);
       const text = buf.subarray(0, n).toString("utf8");
       const end = text.lastIndexOf("\n");

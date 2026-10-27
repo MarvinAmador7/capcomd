@@ -55,7 +55,7 @@ Usage:
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd pause <runId> [agt]                   pause agents (and their descendants): each stops with its work kept on its branch
-  capcomd resume <runId> [agt]                  run paused agents again now (paused with \`capcomd pause\` or by a provider usage limit)
+  capcomd resume <runId> [agt]                  run paused agents (and their paused descendants) again now (paused with \`capcomd pause\` or by a provider usage limit)
   capcomd grant <runId> [agt] --budget usd=…,turns=…,wallSeconds=… [--key K]   give a live agent more budget (from its parent's), or raise the run's
   capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--review-profile P] [--target T] [--key K]  → vfy-…
                                        (checks, then the reviewer agent: the run's --reviewer or --review-profile; both must pass)
@@ -66,7 +66,8 @@ Usage:
   capcomd tree <runId> [--root agt]      subtree with cost/turn rollups and stuck flags
   capcomd tui [runId] [--view live|waterfall|timeline|rollups|events]   the terminal debugger (no runId: the latest run)
   capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N] [--follow]  ·  capcomd budget show <runId> [agt]
-  capcomd send <runId> <agt> <text> [--from agt]  ·  capcomd token revoke <runId> <jti> [--reason R]
+  capcomd send <runId> <agt> <text> [--from agt] [--skill NAME]…  ·  capcomd token revoke <runId> <jti> [--reason R]
+  capcomd skills                         skills send --skill attaches (bundled and ~/.claude/skills): the agent reads each with the message
   capcomd task add <runId> --title T [--data JSON] [--after tsk,…] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
   capcomd task renew|release|done <runId> <tsk> --holder H --epoch E [--lease-ms N] [--result JSON] [--key K]   (fenced: a stale epoch is rejected)
@@ -222,6 +223,7 @@ async function main(argv: string[]): Promise<number> {
         legacy: { type: "boolean" },
         planner: { type: "string" },
         after: { type: "string", multiple: true },
+        skill: { type: "string", multiple: true },
         all: { type: "boolean" },
         // ADR-017: fan-out the parent grants a child (narrow-only)
         "children.maxChildren": { type: "string" },
@@ -588,7 +590,11 @@ async function main(argv: string[]): Promise<number> {
         const runId = positionals[1] ?? usage("capcomd send <runId> <agt> <text> [--from agt|operator]");
         const to = positionals[2] ?? usage("capcomd send <runId> <agt> <text>");
         const body = positionals.slice(3).join(" ") || usage("message text required");
-        const { note, ...r } = await (await import("../primitives/ops")).sendToAgent(runId, { to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}) });
+        // --skill NAME (repeatable): the agent gets that skill's SKILL.md with the message (`capcomd skills` lists them).
+        const names = (values.skill as string[] | undefined) ?? [];
+        const sk = names.length ? await (await import("../agents/skills")).resolveSkills(names, { listedBy: "`capcomd skills`" }) : { skills: [] };
+        if ("error" in sk) usage(sk.error);
+        const { note, ...r } = await (await import("../primitives/ops")).sendToAgent(runId, { to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}), ...(sk.skills.length ? { skills: sk.skills } : {}) });
         if (json) out({ runId, to, ...r, ...(note ? { note } : {}) }); else console.log(`sent #${r.seq} to ${to}${note ? ` (${note})` : ""}`);
         return EXIT.ok;
       }
@@ -668,6 +674,14 @@ async function main(argv: string[]): Promise<number> {
         const b = (x: Record<string, number> = {}) => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(",") || "-";
         if (json) out(r);
         else console.log(`✓ ${r.agentId ?? runId} budget ${b(r.budget)}${r.replayed ? " (already granted)" : ""}; ${r.agentId ? r.from : "the run"} has ${b(r.left)} left${r.agentId ? "" : " to give"}`);
+        return EXIT.ok;
+      }
+
+      case "skills": {
+        // The skills `capcomd send --skill` (and the harness API's `skills`) can attach: bundled ones and ~/.claude/skills.
+        const list = await (await import("../agents/skills")).listSkills();
+        if (json) out({ skills: list });
+        else console.log(list.length ? list.map((s) => `${s.name}  (${s.source})${s.description ? `  ${s.description}` : ""}`).join("\n") : "no skills");
         return EXIT.ok;
       }
 

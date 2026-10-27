@@ -7,6 +7,7 @@ import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
 import type { RunRepo } from "./run-files";
+import type { AttachedSkill } from "../agents/skills";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
@@ -49,10 +50,15 @@ export interface HarnessSource {
 	createRun(input: CreateRunInput): Promise<O<typeof Run>>;
 	/** The run's repository and target branch (GET /v1/runs/{runId}/files); null when the run has none. */
 	repo(runId: string): Promise<RunRepo | null>;
-	/** Pause, resume or cancel the run's agents (`by`: client:<id>). `noop` explains why nothing changed (→ 409 conflict). */
-	control(runId: string, action: RunAction, by: string): Promise<ControlResult>;
-	/** Send `to` a message from the operator; idempotent by `key`. */
-	send(runId: string, to: string, body: string, key: string): Promise<{ seq: number; note: string | null }>;
+	/** One skill's SKILL.md by name (what `skills` lists); null when there is none. */
+	skill(name: string): Promise<AttachedSkill | null>;
+	/**
+	 * Pause, resume or cancel the run's agents (`by`: client:<id>), or with `agentId` that agent and its descendants.
+	 * `noop` explains why nothing changed (→ 409 conflict).
+	 */
+	control(runId: string, action: RunAction, by: string, agentId?: string): Promise<ControlResult>;
+	/** Send `to` a message from the operator, with skills to read with it; idempotent by `key`. */
+	send(runId: string, to: string, body: string, key: string, skills?: AttachedSkill[]): Promise<{ seq: number; note: string | null }>;
 }
 export type RunAction = "pause" | "resume" | "cancel";
 export type ControlResult = { changed: string[]; pending: string[]; noop: string | null };
@@ -93,13 +99,20 @@ export function memorySource(seed: Partial<{
 	items: Record<string, O<typeof ThreadItem>[]>;
 	attachments: Record<string, Record<string, { mime: string; bytes: Uint8Array }>>;
 	files: Record<string, Record<string, Record<string, Uint8Array>>>;
-}> = {}): HarnessSource & { push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[] } {
+	/** Skills GET /v1/skills lists, with the SKILL.md each sends. */
+	skills: Array<O<typeof Skill> & { content: string }>;
+}> = {}): HarnessSource & {
+	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
+	/** Messages as the agent would get them (skills with their content). */
+	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }>;
+} {
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
 	const runs = seed.runs ?? [];
 	const decided: Array<{ approvalId: string; approve: boolean; by: string }> = [];
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
+	const delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }> = [];
 	const push = (runId: string, e: Omit<RawEvent, "seq">) => { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); return r; };
 	// Agent state changes as the scope actor writes them (a running agent pauses at once here: there is no runner).
 	const STEP: Record<RunAction, { from: string[]; to: O<typeof AgentStatus>; type: string; data: (by: string) => Record<string, unknown>; noop: string }> = {
@@ -112,23 +125,29 @@ export function memorySource(seed: Partial<{
 		decided,
 		created,
 		push,
-		control: async (runId, action, by) => {
+		delivered,
+		control: async (runId, action, by, agentId) => {
 			const s = STEP[action];
 			const out: ControlResult = { changed: [], pending: [], noop: null };
-			for (const a of seed.agents?.[runId] ?? []) {
+			const all = seed.agents?.[runId] ?? [];
+			// With agentId: that agent and its descendants (the scope's preorder: the target first).
+			const within = (a: O<typeof Agent> | undefined): boolean => !!a && (a.id === agentId || within(all.find((p) => p.id === a.parent)));
+			const order = agentId ? [...all.filter((a) => a.id === agentId), ...all.filter((a) => a.id !== agentId && within(a))] : all;
+			for (const a of order) {
 				if (!s.from.includes(a.status)) continue;
 				(action === "pause" && a.status === "running" ? out.pending : out.changed).push(a.id);
 				a.status = s.to;
 				push(runId, { at: Date.now(), type: s.type, agentId: a.id, data: s.data(by) });
 			}
-			if (!out.changed.length && !out.pending.length) out.noop = `${runId}: ${s.noop}`;
+			if (!out.changed.length && !out.pending.length) out.noop = `${agentId ?? runId}: ${s.noop}`;
 			return out;
 		},
-		send: async (runId, to, body, key) => {
+		send: async (runId, to, body, key, skills = []) => {
 			const prior = sent.get(key);
 			if (prior !== undefined) return { seq: prior, note: null };
 			const seq = messagesOf(events[runId] ?? []).reduce((m, x) => Math.max(m, x.seq), 0) + 1;
-			push(runId, { at: Date.now(), type: "MESSAGE_SENT", agentId: "operator", data: { to, seq, bytes: Buffer.byteLength(body), text: body, attachment: null } });
+			push(runId, { at: Date.now(), type: "MESSAGE_SENT", agentId: "operator", data: { to, seq, bytes: Buffer.byteLength(body), text: body, attachment: null, skills: skills.map((x) => x.name) } });
+			delivered.push({ runId, to, seq, body, skills });
 			sent.set(key, seq);
 			return { seq, note: null };
 		},
@@ -151,7 +170,8 @@ export function memorySource(seed: Partial<{
 			return b ? { bytes: b, path, sha: "0".repeat(40) } : { error: "not_found", message: `${path} is not in the agent's latest work` };
 		},
 		trace: async () => [],
-		skills: async () => [],
+		skills: async () => (seed.skills ?? []).map(({ content: _, ...s }) => s),
+		skill: async (name) => { const s = seed.skills?.find((x) => x.name === name); return s ? { name: s.name, content: s.content } : null; },
 		approvals: async (r) => (approvals[r] ?? []).filter((a) => !decided.some((d) => d.approvalId === a.approvalId)),
 		approval: async (id) => {
 			for (const [runId, l] of Object.entries(approvals)) if (l.some((a) => a.approvalId === id)) return { runId, pending: !decided.some((d) => d.approvalId === id) };

@@ -17,6 +17,7 @@ import { killpoint } from "../utils/killpoint";
 import { startDriver } from "../primitives/drivers";
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
+import type { AttachedSkill } from "../agents/skills";
 import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
 import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
@@ -76,6 +77,8 @@ async function remember(tx: any, key: string | undefined, kind: string, hash: st
 }
 
 const fail = (code: string, message: string): never => { throw new UserError(message, { code }); };
+/** A message row's attached skills ([{name, content}] JSON, or NULL). */
+const skillsOf = (v: unknown): AttachedSkill[] => { try { return v ? (JSON.parse(String(v)) as AttachedSkill[]) : []; } catch { return []; } };
 
 /** ADR-019 §2: why a running agent looks stuck ("idle", "spinning", "failing"; "dead" is derived, never stored). */
 export interface AgentNotice { kind: string; detail: string; at: number }
@@ -267,6 +270,8 @@ export const scopeActor = actor({
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
+      // Skills the sender attached ([{name, content}] JSON): the agent reads each SKILL.md with the message.
+      await addColumn(database, "messages", "skills", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, media_type TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS agent_logs (seq INTEGER PRIMARY KEY, agent_id TEXT NOT NULL, at INTEGER NOT NULL, stream TEXT NOT NULL, line TEXT NOT NULL)`);
       // harness.v1 thread items (packages/agent-thread): one row per item, rewritten on each rev; seq is the run-wide
@@ -547,8 +552,8 @@ export const scopeActor = actor({
       const grantedAt = Number(all.find((a) => a.agentId === params.agentId)?.grantedAt ?? 0);
       const used = budgetUsed(params.agentId, all, runBudget);
       // An agent that reads messages while it runs gets the ones sent since its cursor with each report.
-      const messages = params.inboxAfter === undefined ? undefined : ((await c.db.execute("SELECT seq, from_agent, body FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, params.inboxAfter)) as any[])
-        .map((r) => ({ seq: Number(r.seq), from: r.from_agent as string, body: r.body as string }));
+      const messages = params.inboxAfter === undefined ? undefined : ((await c.db.execute("SELECT seq, from_agent, body, skills FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, params.inboxAfter)) as any[])
+        .map((r) => ({ seq: Number(r.seq), from: r.from_agent as string, body: r.body as string, skills: skillsOf(r.skills) }));
       return { ...(over ? { stop: UNIT_LIMIT[over.unit], over } : { stop: null }), grantedAt, used, ...(messages ? { messages } : {}) };
     },
 
@@ -665,17 +670,19 @@ export const scopeActor = actor({
     },
 
     /** Mailbox: `send` appends (idempotent by key); `inbox` reads messages after a cursor. */
-    async sendMessage(c, params: { to: string; from: string; body: string; key?: string }) {
+    async sendMessage(c, params: { to: string; from: string; body: string; key?: string; skills?: AttachedSkill[] }) {
       if (params.key) { const r = await c.db.execute("SELECT seq FROM messages WHERE idem_key = ?", params.key); if (r.length) return { seq: Number(r[0]!.seq), replayed: true }; }
       let seq = 0;
       await c.db.transaction(async (tx: RawAccess) => {
         const m = await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM messages");
         seq = Number(m[0]!.m) + 1;
-        await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key) VALUES (?, ?, ?, ?, ?, ?)", seq, params.to, params.from, params.body, Date.now(), params.key ?? null);
+        const skills = (params.skills ?? []).map((s) => ({ name: String(s.name), content: String(s.content) }));
+        await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key, skills) VALUES (?, ?, ?, ?, ?, ?, ?)", seq, params.to, params.from, params.body, Date.now(), params.key ?? null, skills.length ? JSON.stringify(skills) : null);
         // 64 KB inline cap: longer bodies are stored in full as an attachment and the event carries a pointer.
         const inl = inlineOrAttach(redactShapes(params.body));
         if (inl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", inl.attachment.id, inl.attachment.sha256, inl.attachment.bytes, inl.attachment.mediaType, inl.body, Date.now());
-        await addEvent(tx, "MESSAGE_SENT", params.from, { to: params.to, seq, bytes: params.body.length, text: inl.text, attachment: inl.attachment }, `msg-${seq}`);
+        // The skills' names only: their SKILL.md goes to the agent (inbox, live delivery), not into the event log.
+        await addEvent(tx, "MESSAGE_SENT", params.from, { to: params.to, seq, bytes: params.body.length, text: inl.text, attachment: inl.attachment, skills: skills.map((s) => s.name) }, `msg-${seq}`);
       }, { name: "scopeSend" });
       return { seq };
     },
@@ -686,7 +693,7 @@ export const scopeActor = actor({
     },
     async inbox(c, params: { agentId: string; after?: number }) {
       return ((await c.db.execute("SELECT * FROM messages WHERE to_agent = ? AND seq > ? ORDER BY seq", params.agentId, params.after ?? 0)) as any[])
-        .map((r) => ({ seq: Number(r.seq), from: r.from_agent as string, body: r.body as string, at: Number(r.at) }));
+        .map((r) => ({ seq: Number(r.seq), from: r.from_agent as string, body: r.body as string, at: Number(r.at), skills: skillsOf(r.skills) }));
     },
 
     async appendLog(c, params: { agentId: string; stream: string; lines: string[] }) {

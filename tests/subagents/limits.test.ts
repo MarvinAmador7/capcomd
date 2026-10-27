@@ -258,6 +258,51 @@ test("harness API (menu bar): steer message, pause, resume and cancel go through
   expect(await post(`/v1/runs/${run}/agents/${b}/messages`, { body: "too late" })).toMatchObject({ status: 409, j: { code: "conflict" } });
 }, 180_000);
 
+test("harness API (menu bar): pause one running agent while another works on; resume runs it on; a steer with skills echoes them", async () => {
+  process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
+  const clientsPath = join(mkdtempSync(join(tmpdir(), "capcomd-clients-")), "clients.json");
+  const token = addClient("Menu bar", ["read", "steer"], clientsPath).token;
+  const app = harnessApp({ source: rivetSource(), clients: () => loadClients(clientsPath), state: harnessState(null) });
+  let n = 0;
+  const post = async (p: string, body?: unknown) => {
+    const r = await app.request(p, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "idempotency-key": `menubar-agent-${++n}` }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    return { status: r.status, j: (await r.json()) as any };
+  };
+  const get = async (p: string) => (await app.request(p, { headers: { authorization: `Bearer ${token}` } })).json() as Promise<any>;
+  expect(((await (await app.request("/v1/health")).json()) as any).capabilities).toEqual(expect.arrayContaining(["steer.skills", "agent.pause"]));
+
+  const run = (await cj(["run", "new"])).j?.runId;
+  const a = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "ap1"])).j?.agentId;
+  const b = (await cj(["spawn", run, "--profile", "open", "--task", "[wip] long job", "--key", "ap2"])).j?.agentId;
+  await edited(run, a);
+
+  // A steer with a skill: 200, and message.sent names the skill; an unknown one is refused before anything is sent.
+  expect(await post(`/v1/runs/${run}/agents/${a}/messages`, { body: "keep going", skills: ["nope"] })).toMatchObject({ status: 422, j: { code: "invalid" } });
+  const sent = await post(`/v1/runs/${run}/agents/${a}/messages`, { body: "keep going", skills: ["capcomd-orchestration"] });
+  expect(sent).toMatchObject({ status: 200, j: { to: a, from: "operator" } });
+  const msgs = ((await get(`/v1/events?scope=${run}`)) as any[]).filter((e) => e.type === "message.sent");
+  expect(msgs.map((e) => e.data)).toEqual([expect.objectContaining({ seq: sent.j.seq, to: a, skills: ["capcomd-orchestration"] })]);
+
+  // Pause only a: it stops at its next check with its work pushed; b keeps working, so the run isn't paused.
+  const p = await post(`/v1/runs/${run}/agents/${a}/pause`);
+  expect(p).toMatchObject({ status: 200, j: { runId: run, agentId: a, action: "pause", changed: [], pending: [a] } });
+  const paused = await until(run, a, "paused");
+  expect({ ...paused.result }).toMatchObject({ limit: "paused", by: expect.stringMatching(/^client:cli-/), branch: expect.stringMatching(/^capcomd\//) }); // a copy: the matchers replace what they match
+  expect((await new Git(repo.bare).run(["log", "-1", "--format=%B", paused.result.branch])).stdout).toContain("Capcomd-Stop: paused");
+  expect((await statusOf(run, b)).status).toBe("running");
+  const life = ((await get(`/v1/runs/${run}/lifecycle`)) as any[]).map((e) => e.type);
+  expect(life).toContain("agent.paused");
+  expect(life).not.toContain("run.paused");
+  expect(await post(`/v1/runs/${run}/agents/${a}/pause`)).toMatchObject({ status: 409, j: { code: "conflict" } });
+
+  const r = await post(`/v1/runs/${run}/agents/${a}/resume`);
+  expect(r).toMatchObject({ status: 200, j: { agentId: a, action: "resume", changed: [a], pending: [] } });
+  expect(await post(`/v1/runs/${run}/agents/${a}/resume`)).toMatchObject({ status: 409, j: { code: "conflict" } });
+  const done = (await cj(["await", run, a, "--timeout-ms", "90000"])).j?.agents?.[0];
+  expect(done).toMatchObject({ status: "done", epoch: 2 });
+  expect(await post(`/v1/runs/${run}/cancel`)).toMatchObject({ status: 200, j: { changed: [b] } });
+}, 180_000);
+
 test("a usage limit pauses the agent with its work kept; other agents on the login wait; resume runs them on", async () => {
   const run = (await cj(["run", "new"])).j?.runId;
   const first = (await cj(["spawn", run, "--profile", "open", "--task", "[quota] big job", "--key", "q1"])).j?.agentId;

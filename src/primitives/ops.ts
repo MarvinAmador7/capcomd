@@ -13,6 +13,7 @@ import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TE
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
 import { checkpointRef, stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
+import type { AttachedSkill } from "../agents/skills";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
@@ -631,22 +632,32 @@ export async function messageNote(runId: string, to: string): Promise<string | n
 }
 
 /** `capcomd send`: append a message to `to`'s mailbox (idempotent by key), with a note when it won't be read right away. */
-export async function sendToAgent(runId: string, o: { to: string; from: string; body: string; key?: string }) {
+export async function sendToAgent(runId: string, o: { to: string; from: string; body: string; key?: string; skills?: AttachedSkill[] }) {
   await assertEngine();
-  const r = await client().scope.getOrCreate([runId]).sendMessage({ to: o.to, from: o.from, body: o.body, ...(o.key ? { key: o.key } : {}) });
+  const r = await client().scope.getOrCreate([runId]).sendMessage({ to: o.to, from: o.from, body: o.body, ...(o.key ? { key: o.key } : {}), ...(o.skills?.length ? { skills: o.skills } : {}) });
   return { ...r, note: await messageNote(runId, o.to) };
 }
 
 /**
- * ADR-019 §6: run paused agents again now (one, or every paused agent in the run), each from its work so far. It is
- * the operator saying the login can work: its recorded quota is cleared, so other waiting agents may go too.
+ * ADR-019 §6: run paused agents again now (an agent and its paused descendants, as `pauseAgents` paused them, or every
+ * paused agent in the run), each from its work so far. It is the operator saying the login can work: its recorded quota
+ * is cleared, so other waiting agents may go too.
  */
 export async function resumeAgents(runId: string, agentId?: string, by = "operator") {
   await assertEngine();
   const s = client().scope.getOrCreate([runId]);
-  const all: ScopeAgent[] = agentId ? [await getAgentOrThrow(runId, agentId)] : await s.listAgents({});
+  let all: ScopeAgent[];
+  if (agentId) {
+    const target = await getAgentOrThrow(runId, agentId);
+    const every: ScopeAgent[] = await s.listAgents({});
+    const kids = new Map<string | null, ScopeAgent[]>();
+    for (const a of every) kids.set(a.parent, [...(kids.get(a.parent) ?? []), a]);
+    all = [];
+    const walk = (a: ScopeAgent) => { all.push(a); for (const k of kids.get(a.agentId) ?? []) walk(k); };
+    walk(target);
+  } else all = await s.listAgents({});
   const paused = all.filter((a) => a.status === "paused");
-  if (agentId && !paused.length) throw new RelayError("conflict", `agent ${agentId} is ${all[0]!.status}, not paused`, "Only a paused agent can be resumed; see `capcomd tree`.");
+  if (agentId && !paused.length) throw new RelayError("conflict", `agent ${agentId} is ${all[0]!.status}, not paused${all.length > 1 ? ", and none of its descendants is paused" : ""}`, "Only a paused agent can be resumed; see `capcomd tree`.");
   const resumed: string[] = [];
   for (const a of paused) {
     const login = loginOf(a.spec);
