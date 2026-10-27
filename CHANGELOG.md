@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: an agent's task at the top of its thread is folded by default ("› Task" and its first line, like a
+  thought); a click shows all of it, no longer cut at four lines.
 - Menu bar app: a reviewer's verdict in its thread shows as a card (a green or red seal, "Passed review" or "Didn't
   pass review", then each reason) instead of raw JSON (`{"passed": true, "reasons": [...]}`), under any prose before it.
   The reviewer's bot leads the card, cheering with a happy face when the work passes and making its "oops" face when
