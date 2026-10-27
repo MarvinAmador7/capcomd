@@ -111,3 +111,40 @@ public enum Highlight {
     }
   }
 }
+
+/// A reviewer's verdict: capcomd's review contract has the reviewer answer `{"passed": true|false, "reasons": [...]}`,
+/// as its whole message or as the last paragraph (or code block) after its prose. Every string in it is agent text.
+public struct Verdict: Sendable, Hashable {
+  public var passed: Bool
+  public var reasons: [String]
+
+  /// The verdict in `raw` when it is that JSON and nothing else (a ```json fence around it is fine).
+  public static func parse(_ raw: String) -> Verdict? {
+    var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if t.hasPrefix("```"), t.hasSuffix("```"), let nl = t.firstIndex(of: "\n") {
+      t = String(t[t.index(after: nl)..<t.index(t.endIndex, offsetBy: -3)]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    guard t.hasPrefix("{"), t.hasSuffix("}"), t.utf8.count <= 64_000,
+          let o = (try? JSONSerialization.jsonObject(with: Data(t.utf8))) as? [String: Any],
+          let passed = o["passed"] as? Bool else { return nil }
+    // JSON escapes can bring back what decoding stripped (\u202e): clean each reason again.
+    let reasons = ((o["reasons"] as? [Any]) ?? []).compactMap { $0 as? String }.map(clean)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    return Verdict(passed: passed, reasons: Array(reasons.prefix(50)))
+  }
+}
+
+extension Item {
+  /// A message that ends in a verdict: the prose before it (maybe none) and the verdict; nil for any other message.
+  public var verdictTail: (prose: [Block], verdict: Verdict)? {
+    guard kind == "say" || kind == "result" else { return nil }
+    guard let last = blocks.last else { return Verdict.parse(text).map { ([], $0) } }
+    let raw: String
+    switch last {
+    case .paragraph(let inlines): raw = inlines.map(\.plain).joined()
+    case .code(_, let text, _): raw = text
+    default: return nil
+    }
+    return Verdict.parse(raw).map { (Array(blocks.dropLast()), $0) }
+  }
+}
