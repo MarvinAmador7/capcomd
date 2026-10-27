@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: every agent now has its own little pixel bot, in the agent tree, the thread header, handoff cards and
+  the @ mention list. The bot is the same every time for the same agent, and agents in one run look different from each
+  other. The menu bar icon is now a bot head whose face shows what is going on: sleepy when nothing runs, eyes open while
+  agents work, and a raised hand (next to the approval count) when something needs you.
 - Menu bar app: stop an agent from its thread. While it works, press Esc in the empty message field or click the stop
   button; the thread says "Stopping lead…" until the agent has pushed its work and paused, then "lead is paused" with
   Resume. Pausing an agent pauses the agents under it too; the rest of the run keeps going. Needs a capcomd daemon that

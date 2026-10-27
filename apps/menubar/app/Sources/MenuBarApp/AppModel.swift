@@ -5,6 +5,7 @@ import UserNotifications
 import CapcomdStore
 import CapcomdLive
 import CapcomdClient
+import CapcomdBot
 
 /// UserDefaults-backed prefs for the store's remembered UI choices.
 final class DefaultsPreferences: PreferenceStoring {
@@ -131,6 +132,28 @@ final class AppModel {
     return false
   }
   func clearStart() { store.clearStart() }
+
+  // Bot avatars (brand direction B): one team per run, siblings kept distinct (botTeam). Agents join in spawn order, so
+  // a newcomer never changes an earlier agent's bot. Recomputed only when the run's agents change.
+  @ObservationIgnored private var teams: [String: (sig: String, bots: [String: BotTraits])] = [:]
+  func bot(runId: String, agentId: String) -> BotTraits? {
+    _ = revision
+    guard let run = store.runs[runId] else { return nil }
+    let agents = run.agents.values.sorted { ($0.spawnedAtMs, $0.id) < ($1.spawnedAtMs, $1.id) }
+    let sig = agents.map { "\($0.id):\($0.kind.rawValue)" }.joined(separator: ",")
+    if let t = teams[runId], t.sig == sig { return t.bots[agentId] }
+    let traits = botTeam(agents.map { (seed: $0.id, role: Optional($0.kind.rawValue)) })
+    let bots = Dictionary(uniqueKeysWithValues: zip(agents.map(\.id), traits))
+    teams[runId] = (sig, bots)
+    return bots[agentId]
+  }
+
+  /// The menu bar mark's face: a raised mitt when an approval waits, open eyes while anything runs, else sleepy.
+  var menuBarFace: MenuBarFace {
+    _ = revision
+    if store.badgeCount > 0 { return .approval }
+    return store.runs.values.contains { r in r.agents.values.contains { $0.status == .running } } ? .working : .idle
+  }
 
   // Panel height: each screen reports what its content needs; PanelView clamps it (Theme.Panel).
   var listHeight: CGFloat = 0

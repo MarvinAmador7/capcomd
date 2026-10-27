@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
 import CapcomdStore
+import CapcomdBot
 
 /// SPEC §4.6 thread input (thread-panel-v2 `.ib`, input-*.html, skills-picker.html): `+` · text · send. Return sends,
 /// ⇧Return adds a line. `@` mentions an agent under this one; `/` picks a skill when the daemon can attach one.
@@ -210,7 +211,7 @@ struct ThreadComposer: View {
       if !mentionRows.isEmpty {
         list(header: nil) {
           ForEach(Array(mentionRows.enumerated()), id: \.element.id) { i, n in
-            Button { pickMention(n) } label: { MentionRow(node: n, on: i == highlight) }.buttonStyle(.plain)
+            Button { pickMention(n) } label: { MentionRow(node: n, on: i == highlight, bot: model.bot(runId: runId, agentId: n.id)) }.buttonStyle(.plain)
           }
         }
       }
@@ -286,9 +287,10 @@ struct ThreadComposer: View {
 struct MentionRow: View {
   let node: AgentNode
   let on: Bool
+  var bot: BotTraits? = nil
   var body: some View {
     HStack(spacing: Theme.Thread.skillGap) {
-      ProfileIcon(kind: node.kind, tint: on ? .grey : node.iconTint).foregroundStyle(on ? Color.white : Color.primary)
+      BotAvatar(traits: bot, size: .xs)
       Text(verbatim: node.name).font(Theme.Thread.mentionFont).foregroundStyle(on ? Color.white : Theme.Thread.mentionText)
       if let s = node.suffix { Text(verbatim: s).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
       Spacer(minLength: 0)

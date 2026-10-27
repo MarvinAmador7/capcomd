@@ -405,8 +405,8 @@ struct SpanRow: View {
   @ViewBuilder private var icon: some View {
     let tint: Color = row.status == .failed ? Theme.red : row.status == .running ? Theme.accent : Theme.Drill.iconText
     let agentId = row.id.hasPrefix("pending:agent:") ? String(row.id.dropFirst("pending:agent:".count)) : nil
-    if row.kind == .agent, let k = agentId.flatMap({ model.run(runId)?.agents[$0]?.kind }) {
-      ProfileIcon(kind: k, tint: row.status == .running ? .blue : .grey)
+    if row.kind == .agent, let id = agentId, model.run(runId)?.agents[id] != nil {
+      BotAvatar(traits: model.bot(runId: runId, agentId: id), size: .xs)
     } else {
       Image(systemName: row.kind.symbol).font(Theme.Drill.iconFont).foregroundStyle(tint).accessibilityHidden(true)
     }

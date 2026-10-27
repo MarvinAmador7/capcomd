@@ -561,7 +561,7 @@ struct HandoffCard: View {
     Button { if let childId { model.path.append(.thread(runId: runId, agentId: childId)) } } label: {
       VStack(alignment: .leading, spacing: 0) {
         HStack(spacing: Theme.Content.handoffGap) {
-          ProfileIcon(kind: child?.kind ?? .other, tint: .grey)
+          BotAvatar(traits: childId.flatMap { model.bot(runId: runId, agentId: $0) }, size: .small)
           Text(verbatim: child?.displayName ?? "Agent").font(Theme.Content.handoffName).foregroundStyle(.white)
           if let s = childId.flatMap(node)?.suffix { Text(verbatim: s).font(Theme.Content.handoffSuffix).foregroundStyle(Theme.Content.handoffSuffixText) }
           Text(item.child?.status == "failed" ? "failed" : "handed back").font(Theme.Content.handoffNote).foregroundStyle(Theme.Content.handoffNoteText)
