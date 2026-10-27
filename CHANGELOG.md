@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Harness API: each agent's step history. Every time an agent finishes a step (read some files, edited, ran the
+  tests, started sub-agents…) the run's event log gets an `agent.step` event for that agent, in order, with
+  `{kind, n, startedAt, endedAt}` and a past-tense `text` ("Read 4 files", "Ran the tests"). They are durable: replayed
+  by `GET /v1/events?scope=<runId>` and delivered on the run stream, so a client can show what a finished agent did,
+  not only its last activity line. At most 500 per agent; a cancelled agent's unfinished last step is not recorded.
+  Clients detect it with the capability `agent.steps` in `GET /v1/health`.
 - Menu bar app: shell commands and other tool calls show a terminal icon (`>_`) instead of a wrench, in threads and in
   Activity; in a thread, every shell command does, since its row shows the command itself.
 - Menu bar app: every Activity row leads with the bot of the agent that did it ("[bot] Ran the tests"), with its name

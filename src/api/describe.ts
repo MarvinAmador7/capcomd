@@ -23,6 +23,8 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "agent.checkpointed": return `${a} saved a checkpoint (${Number(d.files) || 0} files).`;
 		case "agent.notice_raised": return `${a} needs attention.`;
 		case "agent.notice_cleared": return `${a} no longer needs attention.`;
+		// One finished step of the agent's history: the activity line in past tense ("Read 4 files", "Ran the tests").
+		case "agent.step": return describeActivity(typeof d.kind === "string" ? d.kind : "tool", Number(d.n), true);
 		case "agent.paused": return `${a} paused.`;
 		case "agent.resumed": return `${a} resumed.`;
 		case "agent.granted": return `${a} got more budget.`;

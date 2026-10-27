@@ -496,7 +496,9 @@ export const workerActor = actor({
         const beatEvery = heartbeatEveryMs();
         let beatAt = 0;
         // What it is doing now (harness.v1 Agent.activity): classified from its events, written at most once a second.
-        const activity = scope ? activityReporter((a) => scope.setActivity({ agentId: workerId, activity: a })) : null;
+        // Each finished step goes into its history too (agent.step), unthrottled; the last one when it ends (not on a cancel).
+        const activity = scope ? activityReporter((a) => scope.setActivity({ agentId: workerId, activity: a }), { onStep: (st) => scope.recordStep({ agentId: workerId, ...st }) }) : null;
+        let cancelSeen = false;
         // Its thread (harness.v1 thread items), written in order; flushed before the agent is reported finished. Agents
         // that may spawn get one too: the spool pump forwards only their capcomd calls, not their own events.
         const items = scope ? itemWriter(scope, workerId) : null;
@@ -523,17 +525,18 @@ export const workerActor = actor({
           ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: "/tmp/capcomd-rpc" } } : {}),
           isCancelled: async () => {
             const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
-            if (run?.state === "cancelled") return true;
+            if (run?.state === "cancelled") { cancelSeen = true; return true; }
             // Spawned agents (ADR-016): the worker id is the agent id in the run's scope actor.
             if (!workerId.startsWith("agt-")) return false;
             const a = await (c as any).client().scope.getOrCreate([runId]).getAgent({ agentId: workerId }).catch(() => null);
             pauseAsked = !!a?.pauseRequested;
+            if (a?.status === "cancelled") cancelSeen = true;
             return a?.status === "cancelled";
           },
           // The operator's pause (scope requestPause): the runner stops the agent and keeps its work; the driver pauses it.
           // Read from the agent row isCancelled just fetched (the runner asks right after it), so no extra actor call per poll.
           ...(scope ? { isPaused: async () => pauseAsked } : {}),
-        }).finally(async () => { activity?.stop(); await items?.flush(); });
+        }).finally(async () => { if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
         sha = res.sha;
         costUsd = res.costUsd;
         turns = res.turns;

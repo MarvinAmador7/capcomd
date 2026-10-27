@@ -56,6 +56,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 | `runs.options` | POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available |
 | `runs.options.repo` | GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles |
 | `runs.options.sandbox` | GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422) |
+| `agent.steps` | agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams |
 
 ## Event envelope
 
@@ -1155,6 +1156,7 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
 - [`agent.checkpointed`](events.md#agentcheckpointed)
 - [`agent.notice_raised`](events.md#agentnotice_raised)
 - [`agent.notice_cleared`](events.md#agentnotice_cleared)
+- [`agent.step`](events.md#agentstep)
 - [`agent.paused`](events.md#agentpaused)
 - [`agent.resumed`](events.md#agentresumed)
 - [`agent.granted`](events.md#agentgranted)

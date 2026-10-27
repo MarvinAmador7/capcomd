@@ -10,6 +10,7 @@
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
 #           error differing only in numbers, then finish normally (stuck: failing)
 #   [listen] edit, then work for ~8s, writing each message it reads on stdin to messages.txt (send mid-run)
+#   [steps] read two files (thinking in between) before the edit and run the tests after it, all inside a second (agent.step)
 #   [hold:N] the first run works N seconds (default 30) before editing (a daemon restart mid-run); a run started again
 #           in the same work dir finishes at once. Each run logs start, stopped (on SIGTERM) and finished to ../hold.log
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
@@ -46,10 +47,19 @@ if [[ "$prompt" == *"[fail]"* ]]; then
   emit '{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":1,"total_cost_usd":0.01}'
   exit 1
 fi
+case "$prompt" in *"[steps]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"src/sum.ts"}}]}}'
+  emit '{"type":"assistant","message":{"content":[{"type":"text","text":"Now the test."}]}}'
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r2","name":"Read","input":{"file_path":"src/sum.test.ts"}}]}}';;
+esac
 emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"src/sum.ts"}}]}}'
 if [[ "$prompt" != *"[nochange]"* ]]; then
   mkdir -p src && printf 'export const sum = (a: number, b: number) => a + b;\n' > src/sum.ts
 fi
+case "$prompt" in *"[steps]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"bun test"}}]}}'
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","content":"1 pass"}]}}';;
+esac
 case "$prompt" in *"[spin"*)
   n=$(printf '%s' "$prompt" | sed -n 's/.*\[spin:\([0-9]*\)\].*/\1/p')
   for i in $(seq 1 "${n:-30}"); do sleep 0.15

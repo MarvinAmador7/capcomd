@@ -7,6 +7,7 @@
 import { z } from "zod";
 import { AttachmentRef } from "./inline-cap";
 import { AgentWorkspace } from "./workspace";
+import { ACTIVITY_KINDS } from "../../packages/agent-thread/src/kinds";
 
 /** Text written by an agent or worker. Render as plain text only: never as markdown, links or actions. */
 export const UntrustedText = z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions" });
@@ -52,7 +53,7 @@ const kv = { k: S, version: N, writer: S.optional() };
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
 export const SCOPE_EVENT_TYPES = [
 	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED",
-	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED",
+	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED", "AGENT_STEP",
 	"AGENT_PAUSED", "AGENT_RESUMED", "AGENT_GRANTED", "AGENT_ADOPTED", "AGENT_REAPED", "AGENT_CANCELLED",
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
@@ -76,6 +77,12 @@ export const LegacyEventShapes = {
 	"agent.checkpointed": { ref: S, sha: S, at: N, reason: T, files: N },
 	"agent.notice_raised": { kind: S, detail: T, at: N },
 	"agent.notice_cleared": { kind: nS },
+	"agent.step": {
+		kind: S.describe(`What the agent did (icon hint): ${ACTIVITY_KINDS.filter((k) => k !== "think").join(", ")}. More may be added: treat an unknown kind as tool. Never think`),
+		n: z.number().int().min(1).describe("How many distinct things it acted on (files, commands, sub-agents); 1 or more"),
+		startedAt: z.number().int().describe("When the step began (epoch ms): its first tool call"),
+		endedAt: z.number().int().describe("When it ended (epoch ms, ≥ startedAt): when the agent's next step began, or when it ended"),
+	},
 	"agent.paused": { result: U.describe("Why: limit \"quota\" (a provider usage limit; resetAt, login) or \"paused\" (the operator: `by` is operator or client:<id>); branch/commit: the work it kept"), until: U.describe("When it resumes by itself (epoch ms); null when it waits for a resume"), ...cause },
 	"agent.resumed": { epoch: N, by: nS, ...cause },
 	"agent.granted": budget,
