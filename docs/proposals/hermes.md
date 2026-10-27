@@ -144,6 +144,11 @@ else (`tools.include` on its `mcp_servers.capcomd`). In Bot Mode's group chat th
   it's one bot account per profile.
 - **Decided (owner, 2026-10-27):** the target is Hermes's desktop Bot Mode only, for now; Telegram/Slack bots are out of
   scope.
+- Later (roadmap, nice to have; owner 2026-10-27): adopt bots the user already has in Hermes for capcomd's roles,
+  creating profiles only for unfilled roles: a role → profile map; setup writes the capcomd entry, ask-before-merge
+  rules and skills into each chosen profile and leaves its persona, memory and model alone; role-scoped tools; `setup
+  check` flags a profile with an "Always" allowlist or approvals off (merges still go through P1); decide whether agent
+  thread text may reach an adopted bot's memory/curator (scope out, or opt-in with a warning).
 - capcomd: `capcomd hermes bots` to create profiles (Hermes's `hermes profile create` does the dirs; we write
   `SOUL.md`, the MCP entry with a tool filter, the avatar). Hermes: profiles, desktop app for the roster.
 - Security: read + steer only; never approve tools.
