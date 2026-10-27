@@ -143,8 +143,8 @@ Outline, 1.5 pt stroke, round caps, 14 pt grid; secondary grey by default, blue 
 | plan | `list.bullet` |
 | file read | `doc.text` |
 | file write | `square.and.pencil` |
-| tool call | `wrench` |
-| shell | `apple.terminal` |
+| tool call | `terminal` (`>_`) |
+| shell | `terminal` |
 | sandbox | `shippingbox` |
 | model call | `sparkles` |
 | network | `globe` |

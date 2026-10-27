@@ -85,8 +85,8 @@ public enum StepStatus: Sendable, Hashable { case done, running, failed, queued,
 public enum StepKind: String, Sendable, Hashable { case plan, fileRead, fileWrite, tool, shell, sandbox, model, network, git, retry, approval, agent, verify
   public var symbol: String {
     switch self {
-    case .plan: "list.bullet"; case .fileRead: "doc.text"; case .fileWrite: "square.and.pencil"; case .tool: "wrench"
-    case .shell: "apple.terminal"; case .sandbox: "shippingbox"; case .model: "sparkles"; case .network: "globe"
+    case .plan: "list.bullet"; case .fileRead: "doc.text"; case .fileWrite: "square.and.pencil"; case .tool: "terminal"
+    case .shell: "terminal"; case .sandbox: "shippingbox"; case .model: "sparkles"; case .network: "globe"
     case .git: "arrow.triangle.branch"; case .retry: "arrow.clockwise"; case .approval: "hand.raised"
     case .agent: "hexagon"; case .verify: "checkmark.seal"
     }

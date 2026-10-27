@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: shell commands and other tool calls show a terminal icon (`>_`) instead of a wrench, in threads and in
+  Activity; in a thread, every shell command does, since its row shows the command itself.
 - Menu bar app: every Activity row leads with the bot of the agent that did it ("[bot] Ran the tests"), with its name
   and role as the tooltip; verify, merge and approval rows lead with the bot whose work they were. Steps of the run
   itself keep their icon.
