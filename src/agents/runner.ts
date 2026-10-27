@@ -157,6 +157,18 @@ export function logLinesOf(ev: AgentEvent): string[] {
   return out;
 }
 
+/**
+ * The subject of an agent's commit (and so of its pull request): the task's first line, cut at a word to fit 72
+ * characters. The task and agent are named in the trailers, so the subject is only what the change does.
+ */
+export function commitSubject(goal: string, max = 72): string {
+  const line = goal.split("\n")[0]!.trim().replace(/\s+/g, " ");
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  const at = cut.lastIndexOf(" ");
+  return `${(at > max / 2 ? cut.slice(0, at) : cut).replace(/[\s,;:(\-]+$/, "")}…`;
+}
+
 export function buildPrompt(t: AgentTask): string {
   const lines = [
     `You are working in a git checkout of the repository on branch ${t.branch} (based on ${t.target}).`,
@@ -639,7 +651,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     }
     // At a limit the stop is always recorded in a commit (empty if the agent committed everything itself), so a replay sees it.
     if (status.stdout.trim() || limit) {
-      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${task.taskId}: ${task.goal.split("\n")[0]!.slice(0, 60)}`;
+      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${commitSubject(task.goal)}`;
       const msg = `${subject}\n\n${r.text(state.resultText ?? "").slice(0, 1500)}\n\nCapcomd-Task: ${key}\nCapcomd-Epoch: ${task.epoch}\nCapcomd-Agent: ${name}@${version}\n${limit ? `Capcomd-Stop: ${limit}\n` : ""}`;
       await provider.upload(vmId, `${W}/commit-msg.txt`, new TextEncoder().encode(msg));
       must(await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", ...(limit ? ["--allow-empty"] : []), "-F", `${W}/commit-msg.txt`], repo), "git commit");

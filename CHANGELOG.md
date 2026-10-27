@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agents' commits, and the pull requests capcomd opens for them, are titled with what the change does, cut at a word
+  ("In src/math.ts add and export function multiply(a: number, b: number)…"), instead of the agent's id followed by
+  the task cut mid-word ("agt-k825d4…: In src/math.ts add and export function multiply(a: number, b"). The task and
+  agent are still in the commit's `Capcomd-Task` trailer.
 - Fix: runs started from the menu bar app or `POST /v1/runs` for a project (`repo`) now use that project's agent
   profiles (`.capcomd/agents.json` from `capcomd setup project`). Their planner used to fail about 5 seconds in with
   "An internal error occurred", because the daemon looked the profile up in its own agents file. Every agent now runs
