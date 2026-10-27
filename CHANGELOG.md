@@ -7,6 +7,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 - Menu bar app: a reviewer's verdict in its thread shows as a card (a green or red seal, "Passed review" or "Didn't
   pass review", then each reason) instead of raw JSON (`{"passed": true, "reasons": [...]}`), under any prose before it.
+  The reviewer's bot leads the card, cheering with a happy face when the work passes and making its "oops" face when
+  it doesn't.
 - Menu bar app: shell commands and other tool calls show a terminal icon (`>_`) instead of a wrench, in threads and in
   Activity; in a thread, every shell command does, since its row shows the command itself.
 - Menu bar app: every Activity row leads with the bot of the agent that did it ("[bot] Ran the tests"), with its name
