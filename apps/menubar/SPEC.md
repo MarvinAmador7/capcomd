@@ -121,6 +121,8 @@ Resume after reconnect with `--since-seq <last seq>`.
 
 Every agent has a bot from the `CapcomdBot` engine (a Swift port of `packages/bot-avatar`, checked against its golden files): seed = the agent id, role = its profile. A run's bots are one `botTeam` in spawn order, so siblings differ and a newcomer never changes an earlier bot. Sizes: xs 14 pt (tree rows, mentions, Activity and Trace rows), small 24 pt (thread header, handoff card), full 64 pt (moments). Bots are content: always opaque, drawn at whole points per cell with no interpolation, never on glass, never outlined. They replace the profile SF Symbols wherever an agent is named; status keeps the status marks.
 
+Polish (approved on the canvas Polish board): tree guides are 1 pt dotted circuit traces with a 3×3 node where a branch splits; a running agent's bot has a still glow behind its visor (centred on the visor's own pixels, tinted by its eye colour); hovering a row blinks its bot once (a 120 ms sprite swap, never with Reduce Motion); the footer hairlines are a 1 pt orange ordered dither; there is no hairline between a card's chips and its tree; the agent waiting for approval waves (small and full sizes) in addition to the amber mark; the empty panel is headed by the pixel CAPCOMD wordmark drawn from the bot catalog's glyphs; a run that just finished gets one ✦ beside its row that fades out within 300 ms (opacity only, none under Reduce Motion).
+
 The menu bar mark is the dome bot head without an antenna (16×16, 1-bit template image, tinted by macOS) with three faces: idle (sleepy eyes), working (eyes open, any agent running) and approval (a raised mitt, with the amber dot and count). No animation.
 
 # 5. Icons — `icons-sheet.png`, `icons-in-trace.png`, `agent-icons.png`

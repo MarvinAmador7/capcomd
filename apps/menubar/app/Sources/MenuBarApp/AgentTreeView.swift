@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
 import CapcomdStore
+import CapcomdBot
 
 /// SPEC §4.4 / tree-card-v3: an outline with hairline guides. 26 pt rows: chevron · profile icon · name · suffix ·
 /// folder chip · status. Under a row, at its name column: its approval when it waits, else its live activity. A
@@ -66,7 +67,12 @@ struct TreeGuides: View {
           p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: g == .tee ? size.height : y))
           if row { p.move(to: CGPoint(x: x, y: y)); p.addLine(to: CGPoint(x: x + Theme.Tree.guideArm, y: y)) }
         }
-        ctx.stroke(p, with: .color(Theme.Tree.guide), lineWidth: Theme.Tree.guideWidth)
+        // Circuit traces (Polish board, item 1): dotted guides, and a small square node where a branch splits off.
+        ctx.stroke(p, with: .color(Theme.Tree.guide), style: StrokeStyle(lineWidth: Theme.Tree.guideWidth, dash: Theme.Polish.traceDash))
+        if row, g == .tee || g == .elbow {
+          let n = Theme.Polish.traceNode
+          ctx.fill(Path(CGRect(x: x - n / 2, y: Theme.Tree.guideElbowY - n / 2, width: n, height: n)), with: .color(Theme.Tree.guide))
+        }
       }
     }
     .frame(width: CGFloat(guides.count) * Theme.Tree.indent)
@@ -77,10 +83,34 @@ struct TreeGuides: View {
 
 struct AgentTreeRow: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var blinking = false
   let runId: String
   let line: TreeLine
   let showFolder: Bool
   let onToggle: () -> Void
+
+  /// The bot, with a still glow behind its visor while it runs (item 2) and a blink when the pointer arrives (item 3).
+  @ViewBuilder private func avatar(_ node: AgentNode) -> some View {
+    let traits = model.bot(runId: runId, agentId: node.id)
+    let shown = blinking ? traits.flatMap { try? withOverrides($0, mood: .sleepy) } : traits
+    BotAvatar(traits: shown, size: .xs)
+      .background {
+        if node.status == .running, let t = traits, let glow = BotVisor.glow(t, size: .xs) {
+          let side = CGFloat(BotAvatar.cells(.xs))
+          Ellipse().fill(RadialGradient(colors: [glow.color.opacity(Theme.Polish.glowOpacity), glow.color.opacity(0)], center: .center,
+                                        startRadius: 0, endRadius: Theme.Polish.glowSize.width / 2))
+            .frame(width: Theme.Polish.glowSize.width, height: Theme.Polish.glowSize.height)
+            .offset(x: glow.center.x - side / 2, y: glow.center.y - side / 2)
+            .allowsHitTesting(false)
+        }
+      }
+      .onHover { inside in
+        guard inside, !reduceMotion, !blinking else { return }
+        blinking = true
+        Task { try? await Task.sleep(for: .seconds(Theme.Polish.blink)); blinking = false }
+      }
+  }
 
   var body: some View {
     let node = line.node
@@ -93,7 +123,7 @@ struct AgentTreeRow: View {
       }
       .buttonStyle(.plain).disabled(node.children.isEmpty)
       .accessibilityLabel(line.collapsed ? "Expand \(node.name)" : "Collapse \(node.name)")
-      BotAvatar(traits: model.bot(runId: runId, agentId: node.id), size: .xs)   // the waiting state stays the amber mark
+      avatar(node)   // the waiting state stays the amber mark
         .frame(width: Theme.Tree.icon).padding(.leading, Theme.Tree.iconLeading).padding(.trailing, Theme.Tree.iconTrailing)
       Button { model.path.append(.thread(runId: runId, agentId: node.id)) } label: {
         HStack(spacing: 0) {
