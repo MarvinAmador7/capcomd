@@ -275,3 +275,33 @@ Bun.serve({
 });
 chmodSync(sock, 0o600);
 console.log(`scenario ${SCENARIO}: ${runs.length} runs, ${HEAD} events on unix:${sock}`);
+
+// MOMENTS=1: a scripted live run for the identity moments. 4 s after start (then every 30 s, with a fresh id), a run is
+// created and its planner spawns a lead, two workers and a critic about 300 ms apart ("meet your team"); 9 s later it
+// completes (the cheer).
+if (process.env.MOMENTS) {
+  let n = 0, s = HEAD + 10_000;
+  const cycle = () => {
+    const rid = `run-mom${++n}`, pid = `prj-mom${n}`;
+    const ev = (type: string, entity: string, agentId: string | null, data: any) => {
+      const ms = Date.now();
+      const e = { v: 1, id: `evt_m_${++s}`, scope: rid, seq: s, entity, entitySeq: 1, type, typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms,
+        projectId: pid, runId: rid, agentId, data };
+      broadcast("daemon", e); broadcast(rid, e);
+    };
+    const team = [["agt-m0", null, "planner"], ["agt-m1", "agt-m0", "lead"], ["agt-m2", "agt-m0", "worker"], ["agt-m3", "agt-m0", "worker"], ["agt-m4", "agt-m0", "critic"]]
+      .map(([id, parent, profile]) => ({ id: `${id}-${n}`, parent: parent ? `${parent}-${n}` : null, profile }));
+    ev("run.created", rid, null, { runId: rid, budget: {}, label: null, goal: "Ship the matchkey dashboard" });
+    ev("run.started", rid, null, { cause: "started" });
+    team.forEach((a, i) => setTimeout(() => {
+      ev("agent.spawned", a.id, a.id, { parent: a.parent, depth: a.parent ? 1 : 0, profile: a.profile, budget: {}, limits: {}, agent: {}, task: null, key: null, operator: false,
+        workspace: { repo: "/src/matchkey", path: null, label: "matchkey" } });
+      ev("agent.started", a.id, a.id, {});
+    }, 200 + i * 300));
+    setTimeout(() => {
+      for (const a of team) ev("agent.done", a.id, a.id, { result: { summary: "done" } });
+      ev("run.completed", rid, null, { cause: "completed" });
+    }, 9_000);
+  };
+  setTimeout(cycle, 4_000); setInterval(cycle, 30_000);
+}
