@@ -164,6 +164,11 @@ final class AppModel {
   }
 
   var startState: StartState { _ = revision; return store.startState }
+  /// The project checkout new runs go to (remembered); nil: the daemon's default project.
+  var startRepo: String? {
+    get { _ = revision; return store.prefs.startRepo }
+    set { store.prefs.startRepo = newValue; revision &+= 1 }
+  }
   /// Starts a run; when the daemon has no default repository, asks for the project folder once and remembers it.
   func startRun(_ goal: String) async -> Bool {
     var state = await store.startRun(goal: goal, repo: store.prefs.startRepo)

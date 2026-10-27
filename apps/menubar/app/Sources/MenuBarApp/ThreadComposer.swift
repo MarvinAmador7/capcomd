@@ -58,11 +58,6 @@ struct ThreadComposer: View {
         Text(verbatim: why).font(Theme.Thread.writingFont).foregroundStyle(Theme.red).padding(Theme.Thread.writingPadding)
       }
       box
-      if focused {
-        HStack(spacing: Theme.Composer.hintGap) { Spacer(minLength: 0); Text("↩ send"); Text("⇧↩ newline") }
-          .font(Theme.Composer.hintFont).foregroundStyle(Theme.Composer.hintText).padding(Theme.Composer.hintPadding)
-          .transition(.opacity)
-      }
     }
     .padding(Theme.Thread.inputMargin)
     .animation(Theme.Motion.fast, value: focused)
@@ -74,21 +69,27 @@ struct ThreadComposer: View {
 
   private var box: some View {
     let ready = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    return HStack(alignment: .bottom, spacing: Theme.Thread.inputGap) {
-      plusMenu
-      VStack(alignment: .leading, spacing: Theme.Thread.chipGap) {
-        if !picked.isEmpty { chips }
-        editor
+    // Composer board: who it's for and picked skills as chips, 15 pt text, a tool row, the white send.
+    return VStack(alignment: .leading, spacing: Theme.Composer2.gap) {
+      HStack(spacing: Theme.Composer2.chipGap) {
+        Chip2(leading: BotAvatar(traits: model.bot(runId: runId, agentId: agentId), size: .xs), text: name, onRemove: nil)
+        chips
       }
-      sendButton(ready: ready)
+      editor.padding(.horizontal, Theme.Composer2.textInset)
+      HStack(spacing: Theme.Composer2.chipGap) {
+        plusMenu
+        HStack(spacing: 2) {
+          pill("@ Mention") { insertTrigger("@") }
+          if canAttachSkills { pill("/ Skill") { insertTrigger("/") } }
+        }
+        .padding(3).background(Capsule().fill(Theme.Composer2.pillGroupFill))
+        Spacer(minLength: 0)
+        if focused { Text("↩ send · ⇧↩ newline").font(Theme.Composer2.hintFont).foregroundStyle(Theme.Composer2.hintText).lineLimit(1).transition(.opacity) }
+        sendButton(ready: ready)
+      }
     }
-    .padding(Theme.Thread.inputPadding)
-    .background {
-      let shape = RoundedRectangle(cornerRadius: Theme.Thread.inputRadius, style: .continuous)
-      ControlSurface(shape: shape, fallback: focused ? Theme.Composer.focusedFill : Theme.Composer.fill)
-        .overlay(shape.strokeBorder(Theme.Composer.focusedStroke, lineWidth: Theme.Composer.focusedStrokeWidth).opacity(focused ? 1 : 0))
-        .background(shape.stroke(Theme.Composer.ring, lineWidth: Theme.Composer.ringWidth).padding(-Theme.Composer.ringWidth / 2).opacity(focused ? 1 : 0))
-    }
+    .padding(Theme.Composer2.padding)
+    .background { ComposerCard(focused: focused) }
     .disabled(ended)
   }
 
@@ -122,6 +123,14 @@ struct ThreadComposer: View {
       }
   }
 
+  private func pill(_ title: String, _ action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Text(title).font(Theme.Composer2.pillFont).foregroundStyle(Theme.Composer2.pillText)
+        .padding(.horizontal, 10).frame(height: Theme.Composer2.pillHeight).contentShape(Capsule())
+    }
+    .buttonStyle(PressableStyle())
+  }
+
   private var chips: some View {
     HStack(spacing: Theme.Thread.chipGap) {
       ForEach(picked, id: \.self) { s in
@@ -147,9 +156,9 @@ struct ThreadComposer: View {
       Button("Mention agent…") { insertTrigger("@") }
       if canAttachSkills { Button("Add skill…") { insertTrigger("/") } }
     } label: {
-      Image(systemName: "plus").font(Theme.Composer.plusIcon).foregroundStyle(Theme.Composer.plusText)
-        .frame(width: Theme.Thread.button, height: Theme.Thread.button)
-        .contentShape(RoundedRectangle(cornerRadius: Theme.Thread.plusRadius, style: .continuous))
+      Image(systemName: "plus").font(Theme.Composer2.plusFont).foregroundStyle(.white)
+        .frame(width: Theme.Composer2.round, height: Theme.Composer2.round)
+        .background(Circle().fill(Theme.Composer2.roundFill)).overlay(Circle().strokeBorder(Theme.Composer2.roundStroke, lineWidth: 0.5))
     }
     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()   // no borderless inset: centred on the first line
     .accessibilityLabel("Add")
@@ -157,18 +166,9 @@ struct ThreadComposer: View {
 
   @ViewBuilder private func sendButton(ready: Bool) -> some View {
     let canStop = canStop && !stopping
-    Button(action: canStop ? stop : send) {
-      ZStack {
-        Circle().fill(canStop ? Theme.Thread.stopFill : ready ? Theme.accent : Theme.Composer.sendIdle)
-        if canStop { RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(Color.black).frame(width: Theme.Thread.stopSquare, height: Theme.Thread.stopSquare) }
-        else { Image(systemName: "arrow.up").font(Theme.Composer.sendIcon).foregroundStyle(ready ? Color.white : Theme.Composer.plusText) }
-      }
-      .frame(width: Theme.Thread.button, height: Theme.Thread.button)
-    }
-    .buttonStyle(PressableStyle())
-    .disabled(!(ready || canStop))
-    .accessibilityLabel(canStop ? "Stop \(name)" : "Send")
+    SendCircle(ready: ready, stop: canStop, label: canStop ? "Stop \(name)" : "Send", action: canStop ? stop : send)
   }
+
 
   private var writing: some View {
     HStack(spacing: Theme.Thread.writingGap) {
