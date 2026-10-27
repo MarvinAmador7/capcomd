@@ -22,7 +22,7 @@ Swift views live in `apps/menubar/app/Sources/MenuBarApp/`.
 | Agent / profile icons | `agent-icons.png` | `Theme.swift`, `AgentTreeView.swift` |
 | Step-type icons (approved set "A", outline mono) | `icons-sheet.png`, `icons-in-trace.png` | `Theme.swift`, `RunDrillDownView.swift` |
 | Agent tree | `tree-card-v3.png`, `tree-detail-v2.png`, `tree-alt.png` | `AgentTreeView.swift` |
-| Settings (General, Accounts, Runs, About, and their states) | `settings/Main.dc.html`, `settings/GeneralLight.dc.html`, `settings/Accounts.dc.html`, `settings/Runs.dc.html`, `settings/About.dc.html`, `settings/States.dc.html` (spec: `settings-spec.md`; `settings/CloudExplore.dc.html` is an exploration, not built) | `SettingsView.swift`, `SettingsGeneral.swift`, `SettingsAccounts.swift`, `SettingsRuns.swift`, `SettingsAbout.swift`, `SettingsParts.swift`, `SettingsModel.swift`; data in `CapcomdStore/Settings.swift` |
+| Settings (General, Accounts, Runs, About, and their states) | `settings/Main.dc.html`, `settings/GeneralLight.dc.html`, `settings/Accounts.dc.html`, `settings/Runs.dc.html`, `settings/About.dc.html`, `settings/States.dc.html`, `settings/CloudExplore.dc.html` (a place's Details…, read-only, without the sites row or cost) (spec: `settings-spec.md`) | `SettingsView.swift`, `SettingsGeneral.swift`, `SettingsAccounts.swift`, `SettingsRuns.swift`, `SettingsPlaceDetails.swift`, `SettingsAbout.swift`, `SettingsParts.swift`, `SettingsModel.swift`; data in `CapcomdStore/Settings.swift`, `CapcomdStore/Sandboxes.swift` |
 
 ## Approved decisions
 

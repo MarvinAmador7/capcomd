@@ -29,6 +29,15 @@ public enum Capability {
   public static let environments = "environments"
   /// `GET /v1/service`: capcomd as a background service (Settings › General).
   public static let service = "service"
+  /// `GET /v1/sandboxes`, `/v1/sandboxes/{name}`: each place agents run described as data (ADR-021; Settings › Runs ›
+  /// Details…).
+  public static let sandboxes = "sandboxes"
+  /// `PATCH /v1/sandboxes/{name}/settings` (phase 2): without it a place's settings are read-only.
+  public static let sandboxesSettings = "sandboxes.settings"
+  /// `GET /v1/sandboxes/{name}/resources[/{id}]`: the machines in a place, and the command that opens a shell in one.
+  public static let sandboxesResources = "sandboxes.resources"
+  /// `POST …/resources/{id}/actions/{action}` (phase 3).
+  public static let sandboxesActions = "sandboxes.actions"
 }
 
 extension CapcomdStore {

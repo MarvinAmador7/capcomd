@@ -5,6 +5,7 @@
 //   SCENARIO=panel TOKEN=… bun scenarios.ts /tmp/capcomd-ui.sock
 //   swift run CapcomdMenuBar -capcomd.socketPath /tmp/capcomd-ui.sock     (argument domain: nothing is persisted)
 //   SETTINGS=mixed …                                                       Settings window routes (settings.ts)
+//   SETTINGS=mixed SANDBOXES=machines|stale|empty|unsafe|nores|off …     place details and machines (settings.ts)
 //
 // Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the

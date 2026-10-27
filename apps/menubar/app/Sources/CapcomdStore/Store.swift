@@ -56,6 +56,11 @@ public final class CapcomdStore {
   public internal(set) var logins: Fetched<[LoginInfo]>?
   public internal(set) var environments: Fetched<[EnvironmentInfo]>?
   public internal(set) var service: Fetched<ServiceInfo>?
+  /// Places as the daemon describes them (`sandboxes`; Sandboxes.swift), and per place its details and machines (read
+  /// while its Details screen shows).
+  public internal(set) var sandboxList: Fetched<[SandboxDescriptor]>?
+  public internal(set) var sandboxDetails: [String: Fetched<SandboxDetail>] = [:]
+  public internal(set) var sandboxResources: [String: Fetched<ResourcePage>] = [:]
   var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
 
   let subscriber: StreamSubscribing?

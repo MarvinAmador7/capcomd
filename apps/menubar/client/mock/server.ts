@@ -3,7 +3,8 @@
 // Routes: GET /v1/health (no token), /v1/runs, /v1/runs/:runId, /v1/runs/:runId/agents, /v1/runs/:runId/lifecycle?after=
 //         (404 for an unknown run), /v1/events?scope&after, GET /v1/streams/:scope/events[?feed=lifecycle] (SSE),
 //         POST /v1/approvals/:approvalId/decision (Idempotency-Key required). With SETTINGS=<scene> (settings.ts): also
-//         GET /v1/logins, /v1/environments, /v1/service, /v1/run-options and their capabilities in /v1/health.
+//         GET /v1/logins, /v1/environments, /v1/service, /v1/run-options and their capabilities in /v1/health; and
+//         (SANDBOXES=<scene>, settings.ts) GET /v1/sandboxes[/{name}[/resources[/{id}]]].
 // SSE frames per contract: `id: <seq>` / `event: <type>` / `data: <envelope>`; `event: stream.reset` {snapshotSeq, reason}
 //   then snapshot.run / agents / approvals / steps / threads / snapshot.end {snapshotSeq}, then live from snapshotSeq+1;
 //   `: heartbeat` comment every HEARTBEAT_MS (default 15000).

@@ -232,6 +232,25 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
   public func environments() async throws -> [EnvironmentInfo] { let d = try await settingsGet("/v1/environments"); return try decoded(SettingsWire.environments(d)) }
   /// `GET /v1/service` (capability `service`).
   public func service() async throws -> ServiceInfo { let d = try await settingsGet("/v1/service"); return try decoded(SettingsWire.service(d)) }
+  /// `GET /v1/sandboxes` (capability `sandboxes`).
+  public func sandboxes() async throws -> [SandboxDescriptor] { let d = try await settingsGet("/v1/sandboxes"); return try decoded(SandboxWire.sandboxes(d)) }
+  /// `GET /v1/sandboxes/{name}`.
+  public func sandbox(_ name: String) async throws -> SandboxDetail {
+    let d = try await settingsGet("/v1/sandboxes/\(LiveDetail.seg(name))"); return try decoded(SandboxWire.detail(d))
+  }
+  /// `GET /v1/sandboxes/{name}/resources?limit=200` (capability `sandboxes.resources`): the last list the daemon got from
+  /// the provider (cached there, so cheap to poll).
+  public func resources(sandbox: String) async throws -> ResourcePage {
+    let d = try await settingsGet("/v1/sandboxes/\(LiveDetail.seg(sandbox))/resources?limit=200"); return try decoded(SandboxWire.resources(d))
+  }
+  /// `GET /v1/sandboxes/{name}/resources/{id}`: one machine and its `terminalCommand`. The route exists (the caller checked
+  /// the capability), so a 404 means the machine is gone.
+  public func resource(sandbox: String, id: String) async throws -> ResourceDetail {
+    let d: Data
+    do { d = try await settingsGet("/v1/sandboxes/\(LiveDetail.seg(sandbox))/resources/\(LiveDetail.seg(id))") }
+    catch DetailUnavailable.unsupported { throw DetailUnavailable.failed(SandboxRows.gone) }
+    return try decoded(SandboxWire.resource(d))
+  }
   private func decoded<T>(_ f: @autoclosure () throws -> T) throws -> T {
     do { return try f() } catch let e as DetailUnavailable { throw e } catch is Unauthorized { throw Unauthorized() } catch { throw DetailUnavailable.failed("unexpected response") }
   }
