@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agent threads no longer show "System: task_started" and "System: task_notification": Claude Code's notices that a
+  background task (such as a planner's `capcomd await`) started or ended. The command's row and the child's hand-back
+  already show both. Threads recorded before this keep them.
 - Menu bar app: when capcomd comes back after being unreachable, the app reads again what it offers, so the composer's
   Local / VM switch and driver chip return. Opened while capcomd was down, the app used to lose them until restarted.
 - Menu bar app: the panel no longer jumps when it changes height. Folding a thread's task (or a thought, a command or a

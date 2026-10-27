@@ -41,6 +41,14 @@ describe("claude", () => {
 		const { items } = run("claude", [asst("m", { type: "text", text: "Done: fixed it." }), { type: "result", subtype: "success", result: "Done: fixed it." }]);
 		expect(items.map((i) => i.kind)).toEqual(["say"]);
 	});
+	test("background-task notices are bookkeeping, not items; other system events still show", () => {
+		const { items } = run("claude", [
+			{ type: "system", subtype: "task_started", task_id: "b1", description: "capcomd await" },
+			{ type: "system", subtype: "task_notification", task_id: "b1", status: "completed" },
+			{ type: "system", subtype: "something_new" },
+		]);
+		expect(items.map((i) => i.text)).toEqual(["System: something_new"]);
+	});
 	test("an error result with new text is an error item with the CLI's code", () => {
 		const { items } = run("claude", [{ type: "result", subtype: "error_max_turns", is_error: true }]);
 		expect(items).toMatchObject([{ kind: "error", text: "error_max_turns", error: { code: "error_max_turns" } }]);
