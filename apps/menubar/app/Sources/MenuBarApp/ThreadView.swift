@@ -40,7 +40,7 @@ struct ThreadView: View {
           }
           // Steers still on their way; each is replaced by its message.sent once the daemon confirms it.
           ForEach(model.pendingSteers(agentId)) { p in
-            SteerBubble(text: p.body, state: p.state,
+            SteerBubble(runId: runId, text: p.body, state: p.state,
                         onRetry: { model.retrySteer(runId: runId, agentId: agentId, p) },
                         onDiscard: { model.discardSteer(agentId: agentId, id: p.id) })
           }
@@ -116,7 +116,7 @@ struct ThreadHeader: View {
       Button { model.back() } label: {
         Image(systemName: "chevron.left").font(Theme.Drill.backIcon).foregroundStyle(Theme.Drill.switchOn)
           .frame(width: Theme.Drill.backSize, height: Theme.Drill.backSize)
-          .background(ControlSurface(shape: RoundedRectangle(cornerRadius: Theme.Drill.backRadius, style: .continuous), fallback: Theme.Drill.backFill))
+          .background(ControlSurface(shape: Circle(), fallback: Theme.Drill.backFill))
       }
       .buttonStyle(PressableStyle()).accessibilityLabel("Back")
       .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }
@@ -172,7 +172,7 @@ struct ThreadItemView: View {
           .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
       }
     case .message(let from, _, let text, _) where from == "operator" && text != nil:
-      SteerBubble(text: text!.plain)   // the operator's own words, right-aligned (.me)
+      SteerBubble(runId: runId, text: text!.plain)   // the operator's own words, right-aligned (.me)
     case .message(let from, let to, let text, let attachment):
       let outgoing = from == agentId
       HStack { if outgoing { Spacer() }

@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: when you @ mention an agent in a message, it becomes a pill with the agent's bot and name, right
+  where you typed it ("ask [Bolt] to retry shard 3"). Delete removes it in one keystroke, and your sent message shows
+  the same pills instead of the raw handles. The back button in a run or thread is now round.
 - Menu bar app: every agent's bot now has a name, and inside a thread you talk to it by name. The header shows the
   bot's name ("Bolt") with its role and project on one quiet line under it, the message box says "Tell Bolt…",
   handoff cards lead with the bot's name, and you can @ mention an agent by its bot's name. The agent tree

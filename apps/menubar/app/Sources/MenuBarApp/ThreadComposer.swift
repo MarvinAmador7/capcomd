@@ -11,12 +11,13 @@ struct ThreadComposer: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let runId: String
   let agentId: String
-  @State private var text = ""
+  @State private var text = ""                     // plain, a pill as U+FFFC (MentionTextView.swift)
+  @State private var beforeCaret = ""
+  @State private var editor = ComposerText()
   @State private var picked: [String] = []          // skill names, shown as chips
-  @State private var mentions: [String: String] = [:]   // "@worker-4423" → agentId
   @State private var highlight = 0
   @State private var dismissed: String?             // a token whose list the user closed with Esc
-  @FocusState private var focused: Bool
+  @State private var focused = false
 
   private var agent: AgentNode? { model.tree(runId).flatMap { [$0] + flat($0.children) }.first { $0.id == agentId } }
   private func flat(_ ns: [AgentNode]) -> [AgentNode] { ns.flatMap { [$0] + flat($0.children) } }
@@ -33,7 +34,7 @@ struct ThreadComposer: View {
 
   // MARK: the list open under the cursor's token
   enum Trigger: Equatable { case mention(String), skill(String) }
-  private var token: String { String(text.reversed().prefix { !$0.isWhitespace }.reversed()) }
+  private var token: String { String(beforeCaret.reversed().prefix { !$0.isWhitespace }.reversed()) }
   private var trigger: Trigger? {
     let t = token
     guard t != dismissed, let first = t.first else { return nil }
@@ -80,7 +81,7 @@ struct ThreadComposer: View {
           .help(name == role ? "" : role)
         chips
       }
-      editor.padding(.horizontal, Theme.Composer2.textInset)
+      field.padding(.horizontal, Theme.Composer2.textInset)
       HStack(spacing: Theme.Composer2.chipGap) {
         plusMenu
         HStack(spacing: 2) {
@@ -104,34 +105,24 @@ struct ThreadComposer: View {
     .disabled(ended)
   }
 
-  private var editor: some View {
-    // A hidden copy of the text sizes the box (1…6 lines); the editor scrolls past that.
-    Text(verbatim: text.isEmpty ? " " : text + " ")
-      .font(Theme.Thread.inputFont).lineSpacing(Theme.Thread.lineSpacing).lineLimit(1...Theme.Thread.inputMaxLines)
-      .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 2).hidden()
-      .overlay(alignment: .topLeading) {
-        TextEditor(text: $text)
-          .font(Theme.Thread.inputFont).foregroundStyle(Theme.Thread.inputText)
-          .scrollContentBackground(.hidden).scrollIndicators(.never)
-          .padding(.horizontal, -5)   // NSTextView's line fragment padding
-          .focused($focused)
-          .onKeyPress(.return, phases: .down) { press in
-            if press.modifiers.contains(.shift) || press.modifiers.contains(.option) { return .ignored }   // newline
-            if pickHighlighted() { return .handled }
-            send(); return .handled
-          }
-          .onKeyPress(.upArrow) { move(-1) }
-          .onKeyPress(.downArrow) { move(1) }
-          .onKeyPress(.tab) { pickHighlighted() ? .handled : .ignored }
-          .onKeyPress(.escape) { escape() }
-          .accessibilityLabel(name == role ? "Message \(name)" : "Message \(name), \(role)")
+  /// 1…6 lines, then it scrolls. An @ mention becomes an inline pill (MentionTextView.swift).
+  private var field: some View {
+    ComposerTextView(text: $text, beforeCaret: $beforeCaret, focused: $focused, controller: editor,
+                     accessibilityLabel: name == role ? "Message \(name)" : "Message \(name), \(role)") { command in
+      switch command {
+      case .send: if !pickHighlighted() { send() }; return true
+      case .up: return move(-1) == .handled
+      case .down: return move(1) == .handled
+      case .tab: return pickHighlighted()
+      case .escape: _ = escape(); return true
       }
-      .overlay(alignment: .topLeading) {
-        if text.isEmpty {
-          Text(verbatim: ended ? "\(name) has finished" : "Tell \(name)…").font(Theme.Thread.inputFont)
-            .foregroundStyle(Theme.Thread.inputPlaceholder).padding(.vertical, 2).allowsHitTesting(false)
-        }
+    }
+    .overlay(alignment: .topLeading) {
+      if text.isEmpty {
+        Text(verbatim: ended ? "\(name) has finished" : "Tell \(name)…").font(Theme.Thread.inputFont)
+          .foregroundStyle(Theme.Thread.inputPlaceholder).padding(.vertical, Theme.Thread.inputInset).allowsHitTesting(false)
       }
+    }
   }
 
   private func pill(_ title: String, _ action: @escaping () -> Void) -> some View {
@@ -273,24 +264,31 @@ struct ThreadComposer: View {
     case nil: return false
     }
   }
-  private func replaceToken(with s: String) { text = String(text.dropLast(token.count)) + s }
-  private func pickMention(_ n: AgentNode) { let h = handle(n); mentions[h] = n.id; replaceToken(with: h + " ") }
-  private func pickSkill(_ s: SkillInfo) { if !picked.contains(s.name) { picked.append(s.name) }; replaceToken(with: "") }
-  private func insertTrigger(_ c: String) { if !text.isEmpty, !(text.last?.isWhitespace ?? true) { text += " " }; text += c; focused = true }
+  private var tokenLength: Int { (token as NSString).length }
+  private func pickMention(_ n: AgentNode) {
+    let name = model.botName(runId: runId, agentId: n.id) ?? n.name
+    editor.replaceTokenBeforeCaret(length: tokenLength, with: .init(handle: handle(n), agentId: n.id), label: name, bot: model.bot(runId: runId, agentId: n.id))
+  }
+  private func pickSkill(_ s: SkillInfo) {
+    if !picked.contains(s.name) { picked.append(s.name) }
+    editor.replaceTokenBeforeCaret(length: tokenLength, with: nil)
+  }
+  private func insertTrigger(_ c: String) {
+    editor.focus()
+    editor.insert(!beforeCaret.isEmpty && !(beforeCaret.last?.isWhitespace ?? true) ? " " + c : c)
+  }
   private func escape() -> KeyPress.Result {
     if trigger != nil { dismissed = token; return .handled }
-    if !text.isEmpty || !picked.isEmpty { text = ""; picked = []; mentions = [:]; return .handled }
+    if !text.isEmpty || !picked.isEmpty { editor.clear(); picked = []; return .handled }
     if canStop && !stopping { stop(); return .handled }   // SPEC §4.6: …clears → stops the agent when empty
-    focused = false; return .handled
+    editor.unfocus(); return .handled
   }
   private func send() {
-    let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let body = editor.body().trimmingCharacters(in: .whitespacesAndNewlines)
     guard !body.isEmpty, !ended else { return }
     // Mentions are plain text for the agent; name the agents they point at so it can act on them.
-    let used = mentions.filter { body.contains($0.key) }.sorted { $0.key < $1.key }
-    let full = used.isEmpty ? body : body + "\n\n(" + used.map { "\($0.key) is agent \($0.value)" }.joined(separator: "; ") + ")"
-    model.steer(runId: runId, agentId: agentId, body: full, skills: picked)
-    text = ""; picked = []; mentions = [:]
+    model.steer(runId: runId, agentId: agentId, body: SteerMentions.compose(body, editor.mentions()), skills: picked)
+    editor.clear(); picked = []
   }
 }
 
@@ -351,6 +349,8 @@ struct SkillRow: View {
 
 /// `.me`: a steer to this agent, right-aligned. Pending ones show sending (dimmed) or failed (Retry · Discard).
 struct SteerBubble: View {
+  @Environment(AppModel.self) private var model
+  let runId: String
   let text: String
   var state: PendingSteer.State? = nil
   var onRetry: (() -> Void)? = nil
@@ -361,7 +361,7 @@ struct SteerBubble: View {
     HStack {
       Spacer(minLength: 0)
       VStack(alignment: .trailing, spacing: 4) {
-        Text(verbatim: text)   // what the operator typed, shown as typed
+        shown   // what the operator typed, with its mentions as pills again
           .font(Theme.Thread.bubbleFont).foregroundStyle(Theme.Thread.bubbleText)
           .lineSpacing(Theme.Thread.lineSpacing)
           .padding(Theme.Thread.bubblePadding)
@@ -385,5 +385,26 @@ struct SteerBubble: View {
     .accessibilityElement(children: .combine)
     .accessibilityLabel("You: \(text)" + (sending ? ", sending" : "") + (failure.map { ", not sent: \($0)" } ?? ""))
   }
+
+  /// Hide the line naming the mentioned agents (SteerMentions) and draw each handle it names as its pill; anything
+  /// else shows as typed.
+  private var shown: Text {
+    let (visible, mentions) = SteerMentions.parse(text)
+    guard !mentions.isEmpty else { return Text(verbatim: text) }
+    let agents = Dictionary(mentions.map { ($0.handle, $0.agentId) }, uniquingKeysWith: { a, _ in a })
+    let handles = agents.keys.sorted { $0.count > $1.count }
+    var out = Text(verbatim: ""), rest = Substring(visible)
+    while !rest.isEmpty {
+      let hit = handles.compactMap { h in rest.range(of: h).map { (h, $0) } }.min { $0.1.lowerBound < $1.1.lowerBound }
+      guard let (h, r) = hit else { out = out + Text(verbatim: String(rest)); break }
+      let id = agents[h]!
+      let pill = MentionPill.image(label: model.botName(runId: runId, agentId: id) ?? String(h.dropFirst()), bot: model.bot(runId: runId, agentId: id))
+      out = out + Text(verbatim: String(rest[..<r.lowerBound]))
+        + Text(Image(nsImage: pill)).baselineOffset(MentionPill.baseline(textSize: Theme.Thread.bubbleFontSize))
+      rest = rest[r.upperBound...]
+    }
+    return out
+  }
+
 }
 #endif
