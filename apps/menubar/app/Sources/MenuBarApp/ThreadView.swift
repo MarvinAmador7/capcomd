@@ -117,7 +117,7 @@ struct ThreadHeader: View {
         Text(verbatim: "\(model.run(runId)?.title ?? runId) / \(agent?.displayName ?? "Agent")")
           .font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).lineLimit(1)
         HStack(spacing: Theme.Content.handoffGap) {
-          ProfileIcon(kind: agent?.kind ?? .other, tint: node?.iconTint ?? .grey)
+          BotAvatar(traits: model.bot(runId: runId, agentId: agentId), size: .small)
           Text(verbatim: agent?.displayName ?? "Agent").font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn)
           if let s = node?.suffix { Text(verbatim: s).font(Theme.monoTime).foregroundStyle(.tertiary) }
           StatusMark(status: node?.statusSymbol)

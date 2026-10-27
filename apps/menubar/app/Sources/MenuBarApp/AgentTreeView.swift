@@ -93,7 +93,7 @@ struct AgentTreeRow: View {
       }
       .buttonStyle(.plain).disabled(node.children.isEmpty)
       .accessibilityLabel(line.collapsed ? "Expand \(node.name)" : "Collapse \(node.name)")
-      ProfileIcon(kind: node.kind, tint: node.waiting || bubbled ? .amber : node.iconTint)
+      BotAvatar(traits: model.bot(runId: runId, agentId: node.id), size: .xs)   // the waiting state stays the amber mark
         .frame(width: Theme.Tree.icon).padding(.leading, Theme.Tree.iconLeading).padding(.trailing, Theme.Tree.iconTrailing)
       Button { model.path.append(.thread(runId: runId, agentId: node.id)) } label: {
         HStack(spacing: 0) {

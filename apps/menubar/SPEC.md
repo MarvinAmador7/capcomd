@@ -117,6 +117,12 @@ Resume after reconnect with `--since-seq <last seq>`.
 
 `+` menu: Mention agent…, Add skill… (when skills can be attached). Add file… waits for a daemon route. Keyboard: Return sends (or picks when a list is open), ⇧Return newline, ↑↓ move in lists, Esc closes list → clears → blurs (→ stops streaming when empty), Backspace after a chip removes it.
 
+# 4.9 Bots (brand direction B, `design/brand/`)
+
+Every agent has a bot from the `CapcomdBot` engine (a Swift port of `packages/bot-avatar`, checked against its golden files): seed = the agent id, role = its profile. A run's bots are one `botTeam` in spawn order, so siblings differ and a newcomer never changes an earlier bot. Sizes: xs 14 pt (tree rows, mentions, Activity and Trace rows), small 24 pt (thread header, handoff card), full 64 pt (moments). Bots are content: always opaque, drawn at whole points per cell with no interpolation, never on glass, never outlined. They replace the profile SF Symbols wherever an agent is named; status keeps the status marks.
+
+The menu bar mark is the dome bot head without an antenna (16×16, 1-bit template image, tinted by macOS) with three faces: idle (sleepy eyes), working (eyes open, any agent running) and approval (a raised mitt, with the amber dot and count). No animation.
+
 # 5. Icons — `icons-sheet.png`, `icons-in-trace.png`, `agent-icons.png`
 
 Outline, 1.5 pt stroke, round caps, 14 pt grid; secondary grey by default, blue for current, red for errors. Use SF Symbols in the app.
