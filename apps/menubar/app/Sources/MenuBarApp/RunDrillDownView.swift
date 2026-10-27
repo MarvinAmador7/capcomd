@@ -62,7 +62,7 @@ struct DrillHeader: View {
       Button { model.back() } label: {
         Image(systemName: "chevron.left").font(Theme.Drill.backIcon).foregroundStyle(Theme.Drill.switchOn)
           .frame(width: Theme.Drill.backSize, height: Theme.Drill.backSize)
-          .background(ControlSurface(shape: RoundedRectangle(cornerRadius: Theme.Drill.backRadius, style: .continuous), fallback: Theme.Drill.backFill))
+          .background(ControlSurface(shape: Circle(), fallback: Theme.Drill.backFill))
       }
       .buttonStyle(PressableStyle()).accessibilityLabel("Back")
       .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }

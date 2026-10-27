@@ -117,7 +117,7 @@ enum Theme {
     static let headerPadding = EdgeInsets(top: 2, leading: 4, bottom: 10, trailing: 4)
     static let headerGap: CGFloat = 8
     static let threadRefreshSeconds: Double = 15                      // live frames carry the thread; this re-read covers a dropped stream
-    static let backSize: CGFloat = 24, backRadius: CGFloat = 6
+    static let backSize: CGFloat = 24   // a round back button, like the composer's round controls
     static let backFill = Color.white.opacity(0.07)
     static let backIcon = Font.system(size: 11, weight: .semibold)
     static let crumbFont = Font.system(size: 11.5)
@@ -279,7 +279,11 @@ enum Theme {
     static let inputPadding = EdgeInsets(top: 7, leading: 8, bottom: 6, trailing: 6)
     static let inputMargin = EdgeInsets(top: 8, leading: 4, bottom: 0, trailing: 4)
     static let inputRadius: CGFloat = 10, inputGap: CGFloat = 6
-    static let inputFont = Font.system(size: 15), inputLine: CGFloat = 21, inputMaxLines = 6   // Composer v2: 15 pt
+    static let inputFontSize: CGFloat = 15, inputLine: CGFloat = 21, inputMaxLines = 6, inputInset: CGFloat = 2   // Composer v2: 15 pt
+    static let inputFont = Font.system(size: inputFontSize)
+    // An @ mention in the text: an 18 pt capsule with the bot and its name (MentionAttachment).
+    static let pillHeight: CGFloat = 18, pillFontSize: CGFloat = 13, pillLeading: CGFloat = 3, pillGap: CGFloat = 4, pillTrailing: CGFloat = 8
+    static let pillFill = Color.white.opacity(0.12), pillStroke = Color.white.opacity(0.16), pillText = Color.white.opacity(0.92)
     static let lineSpacing: CGFloat = 3                    // 15 pt SF lines to 21 pt
     static let inputText = Color.white.opacity(0.92)
     static let inputPlaceholder = Color.white.opacity(0.38)
@@ -292,7 +296,8 @@ enum Theme {
     static let dot: CGFloat = 3, dotGap: CGFloat = 2, dotOpacities: [Double] = [0.9, 0.55, 0.3]
     // Steer bubble (.me)
     static let bubbleFill = Color.white.opacity(0.10)
-    static let bubbleFont = Font.system(size: 13), bubbleText = Color.white.opacity(0.90)
+    static let bubbleFontSize: CGFloat = 13
+    static let bubbleFont = Font.system(size: bubbleFontSize), bubbleText = Color.white.opacity(0.90)
     static let bubblePadding = EdgeInsets(top: 6, leading: 11, bottom: 6, trailing: 11)
     static let bubbleRadius: CGFloat = 13, bubbleTail: CGFloat = 4, bubbleMaxWidth: CGFloat = 0.76
     static let bubbleMargin = EdgeInsets(top: 6, leading: 0, bottom: 10, trailing: 0)
