@@ -50,6 +50,12 @@ public final class CapcomdStore {
   public internal(set) var daemonUnreachable = false
   /// Who can drive a new run and where it can run (`runs.options`); empty when the daemon can't be asked.
   public internal(set) var runOptions = RunOptions()
+  /// The daemon's version (`GET /v1/health` `version`), for Settings and About.
+  public internal(set) var daemonVersion: String?
+  /// Settings (Settings.swift): logins per AI × place, each place's agent environment, the background service.
+  public internal(set) var logins: Fetched<[LoginInfo]>?
+  public internal(set) var environments: Fetched<[EnvironmentInfo]>?
+  public internal(set) var service: Fetched<ServiceInfo>?
   var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
 
   let subscriber: StreamSubscribing?
@@ -427,7 +433,7 @@ public final class CapcomdStore {
     case "approval.requested":
       guard let id = e.data["approvalId"]?.string, let a = approvals[id] else { return }
       onNotify(.approvalRequested(approvalId: id, runId: a.runId, question: a.question))
-    case "run.completed", "run.failed":
+    case "run.completed", "run.failed", "run.cancelled":
       guard let rid = e.runId ?? e.data["runId"]?.string else { return }
       onNotify(.runFinished(runId: rid, type: e.type, title: runs[rid]?.title ?? rid))
     default: return

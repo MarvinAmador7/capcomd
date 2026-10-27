@@ -4,6 +4,7 @@
 //
 //   SCENARIO=panel TOKEN=… bun scenarios.ts /tmp/capcomd-ui.sock
 //   swift run CapcomdMenuBar -capcomd.socketPath /tmp/capcomd-ui.sock     (argument domain: nothing is persisted)
+//   SETTINGS=mixed …                                                       Settings window routes (settings.ts)
 //
 // Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
@@ -13,10 +14,14 @@
 // steer to it gets a live reply on connections that asked for ?thread=1.
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
+import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
 const SCENARIO = process.env.SCENARIO ?? "panel";
+// SETTINGS=mixed|fresh|building|failed|ready|old (settings.ts): the Settings window's routes and the run-options that
+// agree with them, with their capabilities added to CAPS.
+const SETTINGS = process.env.SETTINGS ? settingsScene(process.env.SETTINGS) : null;
 const NOW = Date.now(), min = 60_000, iso = (ms: number) => new Date(ms).toISOString();
 
 type AgentSpec = { id: string; parent?: string; profile: string; provider?: "claude" | "codex"; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number };
@@ -181,8 +186,9 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
     // CAPS=steer.skills,agent.pause advertises features the thread input checks for.
-    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: `mock-ui-${SCENARIO}`,
-      ...(process.env.CAPS ? { capabilities: process.env.CAPS.split(",") } : {}) });
+    const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : [])])];
+    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: SETTINGS ? "0.6.0" : `mock-ui-${SCENARIO}`,
+      ...(caps.length ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
     if (p === "/v1/skills") return Response.json([
       { name: "capcomd-orchestration", description: "Compose capcomd primitives into a plan: spawn, await, verify, merge.", source: "bundled" },
@@ -191,6 +197,11 @@ Bun.serve({
     ]);
     // runs.options: who can drive a new run (its planner) and where its agents run. NO_CODEX=1 / NO_DOCKER=1 report
     // those unavailable, as a daemon would when codex isn't logged in or Docker isn't running.
+    if (SETTINGS) {
+      const r = settingsRoute(p, SETTINGS);
+      if (r) return r;
+      if (p === "/v1/run-options") return Response.json(settingsRunOptions(SETTINGS));
+    }
     if (p === "/v1/run-options") return Response.json({
       drivers: [
         { provider: "claude", label: "Claude Code", model: "claude-opus-5-5", available: true, reason: null, default: true, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null },

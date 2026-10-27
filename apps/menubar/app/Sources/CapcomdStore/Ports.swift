@@ -95,6 +95,30 @@ public final class UIPreferences {
   /// The effort last picked for a driver ("high"); nil: the driver's default.
   public func startEffort(_ driver: String) -> String? { store.string(forKey: "startEffort.\(driver)") }
   public func setStartEffort(_ effort: String?, for driver: String) { store.set(effort, forKey: "startEffort.\(driver)") }
+  /// Settings › General › Notifications (both on unless turned off).
+  public var notifyApprovals: Bool {
+    get { store.string(forKey: "notifyApprovals") != "0" }
+    set { store.set(newValue ? "1" : "0", forKey: "notifyApprovals") }
+  }
+  /// Finished runs, including runs that failed or were stopped.
+  public var notifyRunFinished: Bool {
+    get { store.string(forKey: "notifyRunFinished") != "0" }
+    set { store.set(newValue ? "1" : "0", forKey: "notifyRunFinished") }
+  }
+  /// Settings › General › Bot faces: the menu bar mark naps, works and raises a hand. Off: always the plain mark.
+  public var botFaces: Bool {
+    get { store.string(forKey: "botFaces") != "0" }
+    set { store.set(newValue ? "1" : "0", forKey: "botFaces") }
+  }
+  /// Whether this notice may be posted (Settings › General › Notifications).
+  public func allows(_ n: Notice) -> Bool {
+    switch n {
+    case .approvalRequested: notifyApprovals
+    case .runFinished: notifyRunFinished
+    }
+  }
+  /// The stored effort pick for "let the CLI choose".
+  public static let autoEffort = "auto"
   public var activityCollapsed: Bool {
     get { store.string(forKey: "activityCollapsed") == "1" }
     set { store.set(newValue ? "1" : "0", forKey: "activityCollapsed") }
@@ -226,5 +250,18 @@ public protocol DaemonInfoFetching: Sendable {
   /// For the project checkout `repo` (nil: the daemon's own project). A folder that isn't a capcomd project throws
   /// `MessageRefused` with the daemon's reason.
   func runOptions(repo: String?) async throws -> RunOptions
+  /// `GET /v1/health`: version and capabilities.
+  func health() async throws -> DaemonHealth
+  /// `GET /v1/logins`, `/v1/environments`, `/v1/service` (Settings). `DetailUnavailable.unsupported` on daemons
+  /// without them.
+  func logins() async throws -> [LoginInfo]
+  func environments() async throws -> [EnvironmentInfo]
+  func service() async throws -> ServiceInfo
 }
-extension DaemonInfoFetching { public func runOptions(repo: String?) async throws -> RunOptions { RunOptions() } }
+extension DaemonInfoFetching {
+  public func runOptions(repo: String?) async throws -> RunOptions { RunOptions() }
+  public func health() async throws -> DaemonHealth { DaemonHealth(version: nil, capabilities: try await capabilities()) }
+  public func logins() async throws -> [LoginInfo] { throw DetailUnavailable.unsupported }
+  public func environments() async throws -> [EnvironmentInfo] { throw DetailUnavailable.unsupported }
+  public func service() async throws -> ServiceInfo { throw DetailUnavailable.unsupported }
+}

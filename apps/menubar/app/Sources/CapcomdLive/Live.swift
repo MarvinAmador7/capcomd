@@ -220,10 +220,29 @@ public struct LiveMessenger: AgentMessaging {
 public struct LiveDaemonInfo: DaemonInfoFetching {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
-  public func capabilities() async throws -> Set<String> {
+  public func capabilities() async throws -> Set<String> { try await health().capabilities }
+  public func health() async throws -> DaemonHealth {
     let (s, d) = try await transport.get("/v1/health")
-    guard s == 200, let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return [] }
-    return Set(o["capabilities"] as? [String] ?? [])
+    guard s == 200 else { return DaemonHealth() }
+    return SettingsWire.health(d)
+  }
+  /// `GET /v1/logins` (capability `logins`).
+  public func logins() async throws -> [LoginInfo] { let d = try await settingsGet("/v1/logins"); return try decoded(SettingsWire.logins(d)) }
+  /// `GET /v1/environments` (capability `environments`).
+  public func environments() async throws -> [EnvironmentInfo] { let d = try await settingsGet("/v1/environments"); return try decoded(SettingsWire.environments(d)) }
+  /// `GET /v1/service` (capability `service`).
+  public func service() async throws -> ServiceInfo { let d = try await settingsGet("/v1/service"); return try decoded(SettingsWire.service(d)) }
+  private func decoded<T>(_ f: @autoclosure () throws -> T) throws -> T {
+    do { return try f() } catch let e as DetailUnavailable { throw e } catch is Unauthorized { throw Unauthorized() } catch { throw DetailUnavailable.failed("unexpected response") }
+  }
+  private func settingsGet(_ path: String) async throws -> Data {
+    let (status, data) = try await transport.get(path)
+    switch status {
+    case 200: return data
+    case 401: throw Unauthorized()
+    case 404: throw DetailUnavailable.unsupported
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
   }
   public func skills() async throws -> [SkillInfo] {
     do { return try await transport.getJSON("/v1/skills", as: [SkillInfo].self) }
