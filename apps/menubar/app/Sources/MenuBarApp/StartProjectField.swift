@@ -20,7 +20,6 @@ struct StartProjectField: View {
       VStack(alignment: .leading, spacing: Theme.Composer2.gap) {
         HStack(spacing: Theme.Composer2.chipGap) {
           folderChip
-          driverChip
           Spacer(minLength: 0)
           if !focused && !starting { KeyCap(text: "⌘K").accessibilityHidden(true) }
         }
@@ -40,6 +39,7 @@ struct StartProjectField: View {
           .accessibilityLabel("Start a project")
         HStack(spacing: Theme.Composer2.chipGap) {
           addMenu
+          driverChip   // who drives it sits with the tools, by the send (owner's call)
           Spacer(minLength: 0)
           if starting { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
           SendCircle(ready: ready, stop: false, label: "Start project", action: submit)

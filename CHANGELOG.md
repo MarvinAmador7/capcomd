@@ -5,7 +5,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
-- Menu bar app: choose which AI drives a new project. Next to the project folder there's now a Claude Code / Codex
+- Menu bar app: choose which AI drives a new project. Next to the + under the goal there's now a Claude Code / Codex
   menu; the run's planner runs on the one you pick, and the app remembers your choice. Needs a daemon that offers it.
 - Menu bar app: you can now see which AI each agent runs on. The agent tree shows the Claude or Codex mark on every
   row (hover it for the model), and the agent's bot in the thread header, handoff cards and the team intro wears it
