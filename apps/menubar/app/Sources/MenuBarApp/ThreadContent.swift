@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import CapcomdStore
 import CapcomdThread
+import CapcomdBot
 
 /// SPEC §4.5 thread content from the daemon's blocks/1 tree (thread-panel-v2, thread-states). Every string is agent-written
 /// plain text: it goes into `Text(verbatim:)` or a plain `AttributedString(_:)` (never markdown), links act only on the
@@ -332,7 +333,7 @@ struct ThreadItemRow: View {
         // A reviewer's message that ends in its verdict JSON: the prose, then the verdict as a card.
         if let tail = item.verdictTail {
           if !tail.prose.isEmpty { BlocksView(runId: runId, agentId: agentId, blocks: tail.prose, leadingMargin: above) }
-          VerdictCard(verdict: tail.verdict)
+          VerdictCard(runId: runId, agentId: agentId, verdict: tail.verdict)
         } else { blocks }
       case "thinking": ThinkingRow(runId: runId, agentId: agentId, item: item, seconds: item.thinkingSeconds(next: next))
       case "tool": ToolCallRow(item: item)
@@ -564,13 +565,24 @@ struct DiffCard<Detail: View>: View {
 }
 
 /// `.ho`: a child that finished: profile icon, name + suffix, "handed back", its summary and artifacts; › opens its thread.
-/// A reviewer's verdict (its message was `{"passed", "reasons"}`) as a card instead of raw JSON: a green or red seal
-/// with "Passed review" / "Didn't pass review", then each reason. The reasons are agent text, shown as plain text.
+/// A reviewer's verdict (its message was `{"passed", "reasons"}`) as a card instead of raw JSON: the reviewer's bot, a
+/// green or red seal with "Passed review" / "Didn't pass review", then each reason. An identity moment: the bot cheers
+/// with a happy face when the work passes (as in the run-finished moment) and makes its "oops" face when it doesn't;
+/// the face is the bot's own, nothing is drawn on it. The reasons are agent text, shown as plain text.
 struct VerdictCard: View {
+  @Environment(AppModel.self) private var model
+  let runId: String
+  let agentId: String
   let verdict: Verdict
+  private var face: BotTraits? {
+    guard let t = model.bot(runId: runId, agentId: agentId) else { return nil }
+    return verdict.passed ? ((try? withOverrides(t, mood: .happy, pose: "cheer")) ?? (try? withOverrides(t, mood: .happy)) ?? t)
+                          : ((try? withOverrides(t, mood: .oops)) ?? t)
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: Theme.Content.verdictGap) {
       HStack(spacing: Theme.Content.handoffGap) {
+        if let face { BotAvatar(traits: face, size: .small).accessibilityHidden(true) }
         Image(systemName: verdict.passed ? "checkmark.seal.fill" : "xmark.seal.fill").font(Theme.Content.verdictIcon)
           .foregroundStyle(verdict.passed ? Theme.green : Theme.red)
         Text(verdict.passed ? "Passed review" : "Didn't pass review").font(Theme.Content.handoffName).foregroundStyle(.white)
