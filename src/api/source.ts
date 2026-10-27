@@ -196,7 +196,7 @@ export function memorySource(seed: Partial<{
 				{ provider: "claude", label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
 				{ provider: "codex", label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
 			],
-			sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "VM", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
+			sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
 		},
 		skill: async (name) => { const s = seed.skills?.find((x) => x.name === name); return s ? { name: s.name, content: s.content } : null; },
 		approvals: async (r) => (approvals[r] ?? []).filter((a) => !decided.some((d) => d.approvalId === a.approvalId)),

@@ -12,7 +12,7 @@ final class FakeOptions: DaemonInfoFetching, @unchecked Sendable {
     if let refuse { throw MessageRefused(refuse) }
     let planner = repo != nil
     return RunOptions(drivers: [DriverInfo(provider: "claude", label: "Claude Code", model: nil, available: planner, reason: planner ? nil : "No planner profile (run capcomd setup)", isDefault: planner)],
-                      sandboxes: [SandboxInfo(name: "boxd", label: "VM", isDefault: true)])
+                      sandboxes: [SandboxInfo(name: "boxd", label: "Cloud", isDefault: true)])
   }
 }
 

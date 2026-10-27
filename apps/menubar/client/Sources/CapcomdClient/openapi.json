@@ -3050,7 +3050,7 @@
                           },
                           "label": {
                             "type": "string",
-                            "description": "What to call it: \"Local\" (docker) or \"VM\" (boxd)"
+                            "description": "What to call it: \"Local\" (docker) or \"Cloud\" (boxd)"
                           },
                           "available": {
                             "type": "boolean"
