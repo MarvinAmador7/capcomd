@@ -38,11 +38,19 @@ struct ThreadView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
           ForEach(model.thread(agentId)) { ThreadItemView(runId: runId, agentId: agentId, item: $0) }
+          // Steers still on their way; each is replaced by its message.sent once the daemon confirms it.
+          ForEach(model.pendingSteers(agentId)) { p in
+            SteerBubble(text: p.body, state: p.state,
+                        onRetry: { model.retrySteer(runId: runId, agentId: agentId, p) },
+                        onDiscard: { model.discardSteer(agentId: agentId, id: p.id) })
+          }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.content = $0; report() }
       }
       .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.scroll = $0; report() }
+      .defaultScrollAnchor(.bottom)
       .mask(VStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16) })
+      ThreadComposer(runId: runId, agentId: agentId)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)   // an empty thread stays left-aligned
     .padding(Theme.inset)
@@ -89,6 +97,8 @@ struct ThreadItemView: View {
           .padding(.horizontal, 10).padding(.vertical, 6)
           .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.07)))
       }
+    case .message(let from, _, let text, _) where from == "operator" && text != nil:
+      SteerBubble(text: text!.plain)   // the operator's own words, right-aligned (.me)
     case .message(let from, let to, let text, let attachment):
       let outgoing = from == agentId
       HStack { if outgoing { Spacer() }

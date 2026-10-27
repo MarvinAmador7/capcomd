@@ -48,7 +48,8 @@ final class AppModel {
   static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) {
     let t = UnixSocketTransport(socketPath: socketPath, token: token)
     return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), detail: LiveDetail(transport: t),
-                         controls: LiveControls(transport: t), starter: LiveStarter(transport: t), prefs: DefaultsPreferences()), t)
+                         controls: LiveControls(transport: t), starter: LiveStarter(transport: t), messenger: LiveMessenger(transport: t),
+                         daemonInfo: LiveDaemonInfo(transport: t), prefs: DefaultsPreferences()), t)
   }
 
   static func live() -> AppModel {
@@ -127,6 +128,21 @@ final class AppModel {
   // Panel height: each screen reports what its content needs; PanelView clamps it (Theme.Panel).
   var listHeight: CGFloat = 0
   var routeHeight: CGFloat = 0
+
+  // Agent thread input (7c)
+  func pendingSteers(_ agentId: String) -> [PendingSteer] { _ = revision; return store.pendingSteers(agentId: agentId) }
+  func steer(runId: String, agentId: String, body: String, skills: [String]) { Task { await store.steer(runId: runId, agentId: agentId, body: body, skills: skills) } }
+  func retrySteer(runId: String, agentId: String, _ p: PendingSteer) { Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) } }
+  func discardSteer(agentId: String, id: String) { store.discardSteer(agentId: agentId, id: id) }
+  var capabilities: Set<String> { _ = revision; return store.capabilities }
+  var skills: [SkillInfo] { _ = revision; return store.skills?.value ?? [] }
+  func refreshDaemonInfo() async { await store.refreshDaemonInfo() }
+  /// The agents under `agentId` in its run, depth first: who a steer can @-mention.
+  func descendants(runId: String, of agentId: String) -> [AgentNode] {
+    func find(_ ns: [AgentNode]) -> AgentNode? { for n in ns { if n.id == agentId { return n }; if let f = find(n.children) { return f } }; return nil }
+    func flat(_ ns: [AgentNode]) -> [AgentNode] { ns.flatMap { [$0] + flat($0.children) } }
+    return find(tree(runId)).map { flat($0.children) } ?? []
+  }
 
   func open(run id: String) { store.openRun(id); path = [.run(id)] }
   func back() { if !path.isEmpty { path.removeLast() }; if path.isEmpty { store.closeRun() } }

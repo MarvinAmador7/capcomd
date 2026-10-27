@@ -55,6 +55,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   says so instead.
 - Menu bar app: the footer ("Open capcomd", "Summon ⌥Space") now sits on its own bar with a thin line above it, so
   projects scrolling underneath blur out instead of showing through the text.
+- Menu bar app: talk to an agent from its thread. Type in "Tell lead…" and press Return (⇧Return for a new line);
+  the message shows at once as your bubble and settles when capcomd confirms it, with Retry if it couldn't be sent.
+  Type `@` to mention an agent working under this one, and `/` to attach a skill when your capcomd supports it.
+  "lead is writing…" shows while the agent works. Needs a daemon with the agent messages route and a token with the
+  steer scope.
 - Menu bar app: start a run from the panel. Type a goal in "Start a project…" at the top (⌘K focuses it) and press
   Return; the new run shows up in the list. If capcomd has no default repository, the app asks once for the project's
   folder and remembers it. Needs a daemon with `POST /v1/runs` and a token with the steer scope.

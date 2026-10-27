@@ -105,3 +105,24 @@ public struct StartRefused: Error, Sendable, Hashable {
 public protocol RunStarting: Sendable {
   func start(goal: String, repo: String?, idempotencyKey: String) async throws -> String
 }
+
+/// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50, steer scope) with `Idempotency-Key`. `skills` rides
+/// along only when the daemon advertises `steer.skills`. Returns the message seq the confirming `message.sent` carries.
+public struct SentMessage: Sendable, Hashable { public var seq: Int; public var note: String?; public init(seq: Int, note: String?) { self.seq = seq; self.note = note } }
+public struct MessageRefused: Error, Sendable, Hashable { public var message: String; public init(_ m: String) { message = m } }
+public protocol AgentMessaging: Sendable {
+  func send(runId: String, agentId: String, body: String, skills: [String], idempotencyKey: String) async throws -> SentMessage
+}
+
+/// `GET /v1/skills` entry: name and description from SKILL.md frontmatter, `source` bundled or user.
+public struct SkillInfo: Codable, Sendable, Hashable, Identifiable {
+  public var id: String { name }
+  public var name: String; public var description: String; public var source: String
+  public init(name: String, description: String, source: String) { self.name = name; self.description = description; self.source = source }
+}
+/// What the daemon can do beyond the base contract (`GET /v1/health` `capabilities`, absent on older daemons), and
+/// its skills list.
+public protocol DaemonInfoFetching: Sendable {
+  func capabilities() async throws -> Set<String>
+  func skills() async throws -> [SkillInfo]
+}

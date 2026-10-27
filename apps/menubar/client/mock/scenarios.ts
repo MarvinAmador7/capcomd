@@ -143,14 +143,42 @@ const snapshot = (rs: RunSpec[]) =>
   + sse(HEAD, "snapshot.end", { snapshotSeq: HEAD });
 
 const err = (status: number, code: string, message: string) => Response.json({ code, message }, { status });
+// Open run streams, so a POST can confirm itself with a live event.
+const live = new Map<string, Set<ReadableStreamDefaultController>>();
+let msgSeq = 0;
+const broadcast = (scope: string, e: any) => {
+  for (const c of live.get(scope) ?? []) { try { c.enqueue(new TextEncoder().encode(sse(e.seq, e.type, e))); } catch { /* closed */ } }
+};
 if (existsSync(sock)) unlinkSync(sock);
 Bun.serve({
   unix: sock,
   idleTimeout: 0,
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
-    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: `mock-ui-${SCENARIO}` });
+    // CAPS=steer.skills,agent.pause advertises features the thread input checks for.
+    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: `mock-ui-${SCENARIO}`,
+      ...(process.env.CAPS ? { capabilities: process.env.CAPS.split(",") } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
+    if (p === "/v1/skills") return Response.json([
+      { name: "capcomd-orchestration", description: "Compose capcomd primitives into a plan: spawn, await, verify, merge.", source: "bundled" },
+      { name: "migrate-matchkey", description: "Steps and checks for matchkey schema migrations.", source: "user" },
+      { name: "validate-shards", description: "Null and row-count checks for parquet shards.", source: "user" },
+    ]);
+    const msg = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/messages$/);
+    if (msg && req.method === "POST") {   // agents.send (harness #50): answers at once, confirms on the run stream a moment later
+      if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+      const body: any = await req.json().catch(() => null);
+      if (typeof body?.body !== "string" || !body.body) return err(422, "invalid", "body must be {body: non-empty string}");
+      const run = runs.find(r => r.id === msg[1]), agent = run?.agents.find(a => a.id === msg[2]);
+      if (!run) return err(404, "not_found", `run ${msg[1]} not found`);
+      if (!agent) return err(404, "not_found", `agent ${msg[2]} not found`);
+      if (["done", "failed", "cancelled"].includes(agent.status)) return err(409, "conflict", `${agent.id} is ${agent.status}: nothing will read this message`);
+      const mseq = ++msgSeq, ms = Date.now();
+      setTimeout(() => broadcast(run.id, { v: 1, id: `evt_msg_${mseq}`, scope: run.id, seq: HEAD + mseq, entity: `msg-${mseq}`, entitySeq: 1, type: "message.sent",
+        typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: "operator",   // the sender, as scope.ts records it
+        data: { from: "operator", to: agent.id, seq: mseq, text: body.body, bytes: body.body.length, ...(body.skills ? { skills: body.skills } : {}) } }), 1200);
+      return Response.json({ runId: run.id, to: agent.id, from: "operator", seq: mseq, note: null });
+    }
     if (p === "/v1/runs" && req.method === "POST") {   // runs.create (harness #49): accepted, starts nothing here
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
       const body: any = await req.json().catch(() => null);
@@ -186,13 +214,15 @@ Bun.serve({
     const s = p.match(/^\/v1\/streams\/([^/]+)\/events$/);
     if (!s) return err(404, "not_found", "no such route");
     const scope = s[1], picked = scope === "daemon" ? runs : runs.filter(r => r.id === scope);
-    let hb: ReturnType<typeof setInterval> | undefined;
+    let hb: ReturnType<typeof setInterval> | undefined, stream: ReadableStreamDefaultController | undefined;
     return new Response(new ReadableStream({
       start(c) {
+        if (!live.has(scope)) live.set(scope, new Set()); live.get(scope)!.add(c);
+        stream = c;
         c.enqueue(new TextEncoder().encode(snapshot(picked)));
         hb = setInterval(() => { try { c.enqueue(new TextEncoder().encode(": heartbeat\n\n")); } catch { clearInterval(hb); } }, 15_000);
       },
-      cancel() { clearInterval(hb); },
+      cancel() { clearInterval(hb); if (stream) live.get(scope)?.delete(stream); },
     }), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
   },
 });

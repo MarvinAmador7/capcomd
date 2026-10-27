@@ -270,6 +270,69 @@ enum Theme {
     static let screenMargin: CGFloat = 48        // never taller than the screen's visible frame minus this
     static let initialHeight: CGFloat = 520      // until the first measurement lands
   }
+  /// Agent thread input and steers (thread-panel-v2.html `.ib`, `.strm`, `.me`; skills-picker.html `.skp`, `.sk`;
+  /// input-mention.html `.mpop`, `.mi`; input-with-skill.html `.chip`).
+  enum Thread {
+    static let inputPadding = EdgeInsets(top: 7, leading: 8, bottom: 6, trailing: 6)
+    static let inputMargin = EdgeInsets(top: 8, leading: 4, bottom: 0, trailing: 4)
+    static let inputRadius: CGFloat = 10, inputGap: CGFloat = 6
+    static let inputFont = Font.system(size: 13), inputLine: CGFloat = 18, inputMaxLines = 6
+    static let lineSpacing: CGFloat = 2.5                  // 13 pt SF lines to the mockup's 18 pt line height
+    static let inputText = Color.white.opacity(0.92)
+    static let inputPlaceholder = Color.white.opacity(0.38)
+    static let button: CGFloat = 22, plusRadius: CGFloat = 6
+    static let stopFill = Color.white.opacity(0.88), stopSquare: CGFloat = 7
+    // Writing row (.strm)
+    static let writingFont = Font.system(size: 11)
+    static let writingText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.45)
+    static let writingPadding = EdgeInsets(top: 0, leading: 6, bottom: 6, trailing: 4), writingGap: CGFloat = 6
+    static let dot: CGFloat = 3, dotGap: CGFloat = 2, dotOpacities: [Double] = [0.9, 0.55, 0.3]
+    // Steer bubble (.me)
+    static let bubbleFill = Color.white.opacity(0.10)
+    static let bubbleFont = Font.system(size: 13), bubbleText = Color.white.opacity(0.90)
+    static let bubblePadding = EdgeInsets(top: 6, leading: 11, bottom: 6, trailing: 11)
+    static let bubbleRadius: CGFloat = 13, bubbleTail: CGFloat = 4, bubbleMaxWidth: CGFloat = 0.76
+    static let bubbleMargin = EdgeInsets(top: 6, leading: 0, bottom: 10, trailing: 0)
+    static let bubbleSendingOpacity: Double = 0.6
+    static let bubbleNoteFont = Font.system(size: 11)
+    // Popovers (.skp / .mpop)
+    static let popFill = Color(red: 40 / 255, green: 44 / 255, blue: 54 / 255).opacity(0.94)
+    static let popStroke = Color.white.opacity(0.14), popRadius: CGFloat = 10, popPadding: CGFloat = 4
+    static let popMargin = EdgeInsets(top: 0, leading: 4, bottom: 6, trailing: 4)
+    static let popShadow = Color.black.opacity(0.4), popShadowRadius: CGFloat = 15, popShadowY: CGFloat = 10
+    static let popHeaderFont = Font.system(size: 10.5, weight: .semibold)
+    static let popHeaderText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.38)
+    static let popHeaderPadding = EdgeInsets(top: 4, leading: 8, bottom: 3, trailing: 8)
+    static let rowRadius: CGFloat = 6, rowHighlight = Theme.accent
+    static let skillPadding = EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8), skillGap: CGFloat = 8
+    static let skillName = Font.system(size: 11.5, design: .monospaced), skillNameText = Color.white.opacity(0.9)
+    static let skillSource = Font.system(size: 10.5)
+    static let skillSourceText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.36)
+    static let skillDesc = Font.system(size: 11)
+    static let skillDescText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.5)
+    static let skillMatch = Color(red: 0x40 / 255, green: 0x9C / 255, blue: 1)
+    static let skillDescOn = Color.white.opacity(0.75)
+    static let emptyFont = Font.system(size: 12)
+    static let emptyText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.45)
+    static let emptyPadding = EdgeInsets(top: 10, leading: 8, bottom: 9, trailing: 8)
+    static let footFont = Font.system(size: 10)
+    static let footText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.32)
+    static let footPadding = EdgeInsets(top: 5, leading: 8, bottom: 2, trailing: 8), footGap: CGFloat = 10, footDivider = Color.white.opacity(0.07)
+    static let mentionHeight: CGFloat = 28, mentionFont = Font.system(size: 12.5), mentionText = Color.white.opacity(0.85)
+    static let mentionSuffix = Font.system(size: 10.5, design: .monospaced)
+    static let mentionSuffixText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.35)
+    static let mentionStatus = Font.system(size: 11)
+    static let mentionStatusText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.4)
+    static let onHighlightSecondary = Color.white.opacity(0.7)
+    static let popMaxRows = 6
+    // Picked skill chip (.chip in input-with-skill)
+    static let chipHeight: CGFloat = 20, chipRadius: CGFloat = 6, chipGap: CGFloat = 4
+    static let chipPadding = EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 5)
+    static let chipFill = Theme.accent.opacity(0.16)
+    static let chipText = Color(red: 0x8C / 255, green: 0xC4 / 255, blue: 1)
+    static let chipFont = Font.system(size: 11, design: .monospaced)
+    static let chipClose: CGFloat = 14, chipCloseFill = Color.white.opacity(0.08)
+  }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {
     static let pressScale: CGFloat = 0.97

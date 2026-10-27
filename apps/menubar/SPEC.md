@@ -103,16 +103,16 @@ Resume after reconnect with `--since-seq <last seq>`.
 
 | State | Look |
 |---|---|
-| Idle | 10 pt radius field, `+` left, placeholder "Tell Lead…", grey send circle |
-| Focused | blue focus ring (3.5 pt, 28 % blue), grows to multi-line, hint row "↩ send · ⇧↩ newline" |
+| Idle | thread input `.ib`: 10 pt radius, white 7 %, padding 7/6/6/8; `+` (22 pt) · 13 pt text, placeholder "Tell lead…" at white 38 % (lowercase profile) · 22 pt send circle at white 10 % |
+| Focused | white 10 % fill, 0.5 pt white 18 % stroke, blue focus ring (3.5 pt, 28 % blue); grows to 6 lines then scrolls; hint row "↩ send   ⇧↩ newline" (10.5 pt, right) |
 | Has text | send = blue circle with arrow.up |
-| `@` mention | popover above: profile icon · name · suffix · status; highlighted row blue |
-| `/` skills (G2) | popover "Skills": book icon · mono name · source · one-line description; footer "↑↓ move · ↩ pick · esc close"; empty "No matching skills" |
-| Skill picked | removable blue chip (icon · name · ×) inline before the text |
-| Streaming | send becomes white circle with black stop square; "Lead is writing…" + "Esc to stop" above |
-| Sent | message appears as steer bubble / Activity row; field clears |
+| `@` mention | popover above (`.mpop`): the agents under this one, filtered by what follows `@`; 28 pt rows profile icon · name · mono suffix · status (Running/Done/Failed/Queued); highlighted row blue. Picking inserts `@worker-4423`; the sent text ends with "(@worker-4423 is agent agt-…)" so the agent can act on it |
+| `/` skills | popover "Skills" (`GET /v1/skills`): book icon · mono name (typed part blue) · source · one-line description; footer "↑↓ move · ↩ pick · esc close"; empty "No matching skills". Offered only when the daemon advertises `steer.skills` in `/v1/health` `capabilities`; picked skills ride on the steer as `skills: [name]` |
+| Skill picked | removable chip above the text (20 pt, blue 16 %, `#8CC4FF` 11 pt mono, 14 pt × circle) |
+| Streaming | while the agent runs: "••• lead is writing…" above (11 pt; three 3 pt blue dots at 90/55/30 %). "Esc to stop" and the white stop circle appear only when the daemon advertises `agent.pause` |
+| Sent | field clears; the steer shows at once as a right-aligned bubble (`.me`: white 10 %, radius 13/13/4/13, 13 pt, max 76 % wide), dimmed while sending, replaced by the daemon's `message.sent` (matched by its seq). A failure keeps the bubble with the reason, Retry (same Idempotency-Key) and Discard |
 
-`+` menu: Add file…, Add skill…, Mention agent…. Keyboard: Return sends (or picks when a list is open), ⇧Return newline, ↑↓ move in lists, Esc closes list → clears → blurs (→ stops streaming when empty), Backspace after a chip removes it.
+`+` menu: Mention agent…, Add skill… (when skills can be attached). Add file… waits for a daemon route. Keyboard: Return sends (or picks when a list is open), ⇧Return newline, ↑↓ move in lists, Esc closes list → clears → blurs (→ stops streaming when empty), Backspace after a chip removes it.
 
 # 5. Icons — `icons-sheet.png`, `icons-in-trace.png`, `agent-icons.png`
 
