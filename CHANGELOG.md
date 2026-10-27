@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: every Activity row says which agent did it: the agent's bot and role ("worker") before the time, with
+  its bot's name as the tooltip. Verify, merge and approval rows name the agent whose work they were.
 - Menu bar app: the composer shows who can drive a run for the project you picked and where it runs. Claude logged in
   for VM only shows as unavailable on Local, saying which command fixes it; a folder that isn't a capcomd project says
   so. Before, it showed the daemon's own answer, so a run could be offered and then fail.
