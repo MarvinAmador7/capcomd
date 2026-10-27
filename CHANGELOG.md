@@ -5,6 +5,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Harness API: delete a machine (capability `sandboxes.actions`). `POST /v1/sandboxes/{name}/resources/{id}/actions/delete`
+  (steer scope, an `Idempotency-Key`, no body) deletes one of capcomd's machines at a place. For an agent's machine it
+  cancels that agent (and the agents it started) the way `capcomd cancel <run> <agent>` does, and the agent's machine
+  is deleted as it stops; a machine left behind is deleted at the provider; a machine running capcomd's own checks,
+  login or environment build can't be deleted (409). capcomd looks at the machine again just before it acts: if who
+  uses it changed since it was listed, nothing is deleted (409), and a machine that's already gone answers
+  `changed: false`. A provider that doesn't answer is a new 503 `unavailable`. Machines you can delete carry
+  `destructive: true` and a `confirm` question to ask first ("Delete worker's machine? This stops the worker on “…”.
+  Work since its last checkpoint is lost."). Every delete is recorded on the daemon stream as
+  `sandbox.resource_action` (who asked, and which agent was stopped) and `sandbox.resource_deleted`; machines capcomd
+  deletes by itself are recorded too, with why: `idle_lifetime` (Docker's 5-minute sweep, or a machine's own idle
+  lifetime) or `run_ended` (its agent finished, failed or was stopped). Deletes boxd makes on its own aren't seen.
+- Menu bar app: Delete… on a machine in a place's Details (with a capcomd that has `sandboxes.actions`), next to Open in
+  Terminal. It asks first with capcomd's question and a red Delete button; for a working agent it says that the agent
+  stops and its work since the last checkpoint is lost. If capcomd refuses (the machine changed, it's capcomd's own, the
+  provider didn't answer), its reason shows under the machine. Machines running capcomd's own jobs still have no
+  buttons.
+- Docker's sweep no longer counts a container it failed to remove as removed; it tries again next time.
 - Menu bar app: build it as a real Mac app. `apps/menubar/scripts/build-app.sh` makes
   `apps/menubar/build/capcomd.app` (with its pixel bot icon and the repo's version), so Open at login and
   notifications work and About shows the app's version. It's signed ad hoc, which means the Keychain asks again for

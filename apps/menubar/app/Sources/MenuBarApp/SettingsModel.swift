@@ -79,6 +79,15 @@ extension AppModel {
     await store.refreshSandbox(name)
   }
   func terminalCommand(sandbox: String, resource: String) async -> TerminalCommand { await store.terminalCommand(sandbox: sandbox, resource: resource) }
+  /// A place's machine rows, with Delete… only where the daemon has `sandboxes.actions` (phase 3).
+  func machineRows(_ name: String) -> [MachineRow] { _ = revision; return store.machineRows(name) }
+  /// A machine's Delete on its way, or why the last one didn't go through.
+  func machineDeletion(_ name: String, _ id: String) -> MachineDeletion? { _ = revision; return store.machineDeletion(sandbox: name, id: id) }
+  /// Deletes a machine the person confirmed (`POST …/actions/delete`); the row follows the store.
+  func deleteMachine(_ name: String, _ id: String) {
+    let s = store
+    Task { await s.deleteMachine(sandbox: name, id: id) }
+  }
 
   /// Reads everything Settings shows once (the window polls this while it is open), then ends the Terminal hand-offs
   /// whose rows changed.

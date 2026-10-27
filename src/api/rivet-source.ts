@@ -16,7 +16,7 @@ import { startDetachedRun } from "./create-run";
 import { workspaceOf } from "./workspace";
 import { mirrorFor, workTips } from "./run-files";
 import { RUN_REPO_KV } from "../merge/run-config";
-import { sandboxSurface, taskLine, type MachineOwner } from "./sandboxes";
+import { liveDescendants, sandboxSurface, taskLine, type MachineOwner } from "./sandboxes";
 import { MACHINE_PREFIX, type SandboxProvider } from "../providers/sandbox";
 import { sandboxName, type ListedProvider } from "../providers/registry";
 import { jobOwnerText, liveJobMachines } from "../providers/machines";
@@ -76,6 +76,8 @@ export async function machineOwners(limit = 500): Promise<MachineOwner[]> {
 				sandbox, vmId: ctx.vmId, name: typeof ctx.idemKey === "string" ? vmNameFor(ctx.idemKey, MACHINE_PREFIX) : null,
 				runId: r.runId, agentId: a.agentId, role: lower(a.profile ?? null), task: taskLine(a.task),
 				workerState: String(wk.state), createdAt: Number.isFinite(Number(ctx.createdAt)) ? Number(ctx.createdAt) : null,
+				// Cancelling it (Delete) stops these too: its Delete question says how many.
+				descendants: liveDescendants(live, a.agentId),
 			};
 		}));
 		return rows.filter((x): x is MachineOwner => !!x);
@@ -91,8 +93,9 @@ export function jobOwners(env: Record<string, string | undefined> = process.env)
 	}));
 }
 
-// One list-only provider per place: the daemon's own (getDependencies) for its sandbox; for another, a provider made
-// once here (a DockerProvider has no side effects; boxd shares the daemon's per-sandbox one).
+// One provider per place for the resources routes (list, and an orphan's Delete): the daemon's own (getDependencies)
+// for its sandbox; for another, a provider made once here (a DockerProvider has no side effects until asked; boxd
+// shares the daemon's per-sandbox one).
 const listers = new Map<string, SandboxProvider>();
 async function lister(name: ListedProvider): Promise<SandboxProvider> {
 	let p = listers.get(name);
@@ -125,6 +128,13 @@ export function rivetSource(): HarnessSource {
 		},
 		list: async (name) => (await lister(name)).list(MACHINE_PREFIX),
 		owners: () => machineOwners(),
+		// Delete (capability sandboxes.actions): an orphan through the place's provider; an agent's machine by cancelling
+		// the agent the way `capcomd cancel <run> <agt>` does (its worker then destroys the machine).
+		destroy: async (name, vmId) => (await lister(name)).destroy(vmId),
+		cancelAgent: async (runId, agentId, by) => {
+			const r = await cancelAny(runId, agentId, `cancelled by ${by}`, by);
+			return { changed: r.kind === "agents" ? r.agents.cancelled.includes(agentId) : !!r.agents?.cancelled.includes(agentId) };
+		},
 	});
 	return {
 		version: VERSION,

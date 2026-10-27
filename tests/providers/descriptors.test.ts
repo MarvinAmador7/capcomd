@@ -44,13 +44,13 @@ describe("provider descriptors (registry)", () => {
 		}
 		expect(sandboxCaps({ CAPCOMD_SANDBOX: "docker" })).toBe(PROVIDERS.docker.caps);
 	});
-	test("served descriptors: the ADR's shape, actions limited to what this daemon serves (open_terminal)", () => {
-		expect(SERVED_ACTIONS).toEqual(["open_terminal"]);
+	test("served descriptors: the ADR's shape, actions limited to what this daemon serves (open_terminal, delete)", () => {
+		expect(SERVED_ACTIONS).toEqual(["open_terminal", "delete"]);
 		const boxd = servedDescriptor(PROVIDERS.boxd);
 		expect(boxd).toEqual({
 			name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
 			caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
-			settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal"],
+			settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
 		});
 		expect(PROVIDERS.boxd.actions).toEqual(["open_terminal", "delete"]);
 		expect(servedDescriptor(PROVIDERS.docker)).toMatchObject({ name: "docker", label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker" });

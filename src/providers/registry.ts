@@ -36,8 +36,10 @@ export type InfoId = (typeof INFO_IDS)[number];
 /** Actions on a resource: a closed list in code; a descriptor says which of them its provider supports. */
 export const RESOURCE_ACTIONS = ["open_terminal", "delete"] as const;
 export type ResourceAction = (typeof RESOURCE_ACTIONS)[number];
-/** Actions this daemon serves today (ADR-021 phase 1): open_terminal only; delete comes with phase 3. */
-export const SERVED_ACTIONS: readonly ResourceAction[] = ["open_terminal"];
+/** Actions this daemon serves (ADR-021): open_terminal (phase 1, a GET), delete (phase 3, capability sandboxes.actions). */
+export const SERVED_ACTIONS: readonly ResourceAction[] = ["open_terminal", "delete"];
+/** Actions a client POSTs (`…/resources/{id}/actions/{action}`); open_terminal is read with a GET instead. */
+export const POSTED_ACTIONS: readonly ResourceAction[] = ["delete"];
 
 export interface ProviderDescriptor {
   /** What CAPCOMD_SANDBOX and the API call it. */

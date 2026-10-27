@@ -28,6 +28,15 @@
 //                               is 409 with the new rev, and the next one (with that rev) goes through
 //                     owners    machines capcomd uses for itself next to an agent's and one left behind: Cloud has checks
 //                               for a run, a Claude Code login and an environment build; Local a doctor run
+//   Phase 3 (capability sandboxes.actions, every scene above but off, nores, readonly and noactions):
+//   POST /v1/sandboxes/{name}/resources/{id}/actions/delete, checked as the daemon does (the steer scope, an
+//   Idempotency-Key, a machine the place lists, capcomd's own machines refused with 409); a delete removes the machine
+//   for the server's life, and the same key answers the same again. Rows that can be deleted carry `destructive` and
+//   the daemon's `confirm` question.
+//                     changed   as machines, but every delete finds the machine changed since it was listed: 409
+//                     unavailable  as machines, but the provider doesn't answer a delete: 503 unavailable
+//                     noactions a phase 2 daemon: settings change, but no sandboxes.actions and no delete route (rows
+//                               still list delete, which the app must not offer)
 //   SCOPES=read,steer,approve  the app token's scopes (default: as the scene says; all four but for noconfigure).
 //   CONFLICTS=<n>  how many PATCHes answer 409 before one goes through (default: 1 for conflict, else 0).
 type Place = "docker" | "boxd";
@@ -48,12 +57,17 @@ export type SettingsScene = {
   revs: Record<Place, number>;
   /** PATCHes still to answer 409 (another client got there first). */
   conflicts: number;
+  /** Machines deleted with POST …/actions/delete, and the answers by Idempotency-Key. */
+  deleted: Set<string>;
+  answers: Map<string, { request: string; status: number; body: unknown }>;
 };
 
 export const SETTINGS_CAPS = ["runs.options", "runs.options.repo", "runs.options.sandbox", "logins", "environments", "service"];
-const SANDBOX_SCENES = ["machines", "stale", "empty", "unsafe", "nores", "off", "readonly", "envlocked", "noconfigure", "conflict", "owners"];
+const SANDBOX_SCENES = ["machines", "stale", "empty", "unsafe", "nores", "off", "readonly", "envlocked", "noconfigure", "conflict", "owners", "changed", "unavailable", "noactions"];
 /** Scenes whose daemon has PATCH …/settings (phase 2). */
 const hasSettings = (s: SettingsScene) => !["off", "nores", "readonly"].includes(s.sandboxes);
+/** Scenes whose daemon has POST …/actions/delete (phase 3). */
+const hasActions = (s: SettingsScene) => hasSettings(s) && s.sandboxes !== "noactions";
 const PLACE_LABEL: Record<Place, string> = { docker: "Local", boxd: "Cloud" };
 const DRIVER_LABEL: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
 const BUILT = "2026-10-24T09:12:03.000Z";
@@ -83,7 +97,7 @@ export function settingsScene(name = process.env.SETTINGS ?? "mixed", sandboxes 
   const scopes = process.env.SCOPES?.split(",").map(x => x.trim()).filter(Boolean)
     ?? (scene === "noconfigure" ? ["read", "steer", "approve"] : ["read", "steer", "approve", "configure"]);
   const conflicts = Number(process.env.CONFLICTS ?? (scene === "conflict" ? 1 : 0));
-  return { ...baseScene(name), sandboxes: scene, scopes, config: { docker: {}, boxd: {} }, revs: { docker: 1, boxd: 1 }, conflicts };
+  return { ...baseScene(name), sandboxes: scene, scopes, config: { docker: {}, boxd: {} }, revs: { docker: 1, boxd: 1 }, conflicts, deleted: new Set(), answers: new Map() };
 }
 function baseScene(name: string): Omit<SettingsScene, "sandboxes" | "scopes" | "config" | "revs" | "conflicts"> {
   const mixed = (local: "missing" | "building" | "failed") => ({
@@ -115,7 +129,7 @@ function baseScene(name: string): Omit<SettingsScene, "sandboxes" | "scopes" | "
 /** Capabilities a daemon with this scene advertises. */
 export const settingsCaps = (s: SettingsScene) => s.name === "old" ? ["runs.options", "runs.options.repo"]
   : [...SETTINGS_CAPS, ...(s.sandboxes === "off" ? [] : s.sandboxes === "nores" ? ["sandboxes"] : ["sandboxes", "sandboxes.resources"]),
-     ...(hasSettings(s) ? ["sandboxes.settings"] : [])];
+     ...(hasSettings(s) ? ["sandboxes.settings"] : []), ...(hasActions(s) ? ["sandboxes.actions"] : [])];
 
 /** run-options as the daemon would answer with this scene: a driver can run in a place when it is logged in there and the
  *  place's environment is built; the daemon's own place (and the default) is Cloud. */
@@ -145,6 +159,8 @@ export function settingsRoute(path: string, s: SettingsScene, req?: Request): Re
   if (path === "/v1/sandboxes" || path.startsWith("/v1/sandboxes/")) {
     const m = path.match(/^\/v1\/sandboxes\/([^/]+)\/settings$/);
     if (m && req?.method === "PATCH") return patchSettings(decodeURIComponent(m[1]), s, req);
+    const a = path.match(/^\/v1\/sandboxes\/([^/]+)\/resources\/([^/]+)\/actions\/([^/]+)$/);
+    if (a && req?.method === "POST") return postAction(a.slice(1).map(decodeURIComponent) as [string, string, string], s, req);
     return sandboxRoute(path, s);
   }
   if (!["/v1/logins", "/v1/environments", "/v1/service"].includes(path)) return null;
@@ -227,8 +243,47 @@ async function patchSettings(name: string, s: SettingsScene, req: Request): Prom
   return Response.json(detail(p, s));
 }
 
+/** POST /v1/sandboxes/{name}/resources/{id}/actions/{action} as the daemon answers it (src/api/sandboxes.ts act). */
+function postAction([name, id, action]: [string, string, string], s: SettingsScene, req: Request): Response {
+  const fail = (status: number, code: string, message: string) => Response.json({ code, message }, { status });
+  if (!hasActions(s)) return notFound("no such route");
+  if (!s.scopes.includes("steer")) return fail(403, "forbidden", "token lacks the steer scope");
+  const key = req.headers.get("idempotency-key");
+  if (!key || key.length < 8 || key.length > 200) return fail(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+  const request = JSON.stringify([name, id, action]);
+  const prior = s.answers.get(key);
+  if (prior) return prior.request === request ? Response.json(prior.body, { status: prior.status }) : fail(409, "idempotency_conflict", "Idempotency-Key reused with a different request");
+  if (name !== "docker" && name !== "boxd") return notFound(`sandbox ${name} not found`);
+  const p = name as Place;
+  if (action !== "delete") return notFound(`${/^[a-z_]{1,32}$/.test(action) ? action : "that"} isn't an action on machines (actions: delete)`);
+  const label = PLACE_LABEL[p], vendor = DESCRIPTORS[p].vendor;
+  const r: any = machines(p, s).find(x => x.id === id);
+  if (!r) return notFound(`machine ${id} isn't one of capcomd's machines on ${label}`);
+  if (r.owner && r.owner.kind !== "agent") return fail(409, "conflict", `capcomd is using this machine itself (${r.owner.label}) and deletes it when that's done.`);
+  if (s.sandboxes === "changed") return fail(409, "conflict", `This machine changed since you looked: ${r.owner ? "no agent is using it now" : "the worker agt-77 is using it now"}. Look again before deleting it.`);
+  if (s.sandboxes === "unavailable") return fail(503, "unavailable", `${vendor} didn't answer within 10 seconds, so nothing was deleted. Try again in a moment.`);
+  s.deleted.add(id);
+  const body = { resource: { ...r, state: "stopping", actions: [], destructive: false, confirm: null }, changed: true };
+  s.answers.set(key, { request, status: 200, body });
+  return Response.json(body);
+}
+
+/** The daemon's Delete question (src/api/sandboxes.ts deleteConfirm). */
+function confirmFor(owner: any): string {
+  if (!owner) return "Delete this machine? No agent is using it.";
+  const task = owner.task ? String(owner.task).split("\n")[0] : "";
+  const short = task.length <= 40 ? task : `${task.slice(0, 40).slice(0, task.slice(0, 40).lastIndexOf(" "))}…`;
+  return `Delete ${owner.role}'s machine? This stops the ${owner.role}${short ? ` on “${short}”` : ""}. Work since its last checkpoint is lost.`;
+}
+
 const MIN = 60_000;
 function machines(p: Place, s: SettingsScene) {
+  return listedMachines(p, s).filter(r => !s.deleted.has(r.id)).map(r => {
+    const del = hasActions(s) && r.actions.includes("delete");
+    return { ...r, destructive: del, confirm: del ? confirmFor(r.owner) : null };
+  });
+}
+function listedMachines(p: Place, s: SettingsScene) {
   if (s.sandboxes === "empty") return [];
   const now = Date.now(), at = (ago: number) => new Date(now - ago).toISOString(), until = (ms: number) => new Date(now + ms).toISOString();
   const actions = ["open_terminal", "delete"];

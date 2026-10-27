@@ -238,9 +238,16 @@ public struct SandboxResource: Decodable, Sendable, Hashable, Identifiable {
   public var createdAt: String?
   public var deleteAfter: String?
   public var actions: [String]
-  enum CodingKeys: String, CodingKey { case id, kind, state, owner, createdAt, deleteAfter, actions }
-  public init(id: String, kind: String = "machine", state: String, owner: Owner? = nil, createdAt: String? = nil, deleteAfter: String? = nil, actions: [String] = []) {
+  /// An action on it can't be undone (delete, phase 3): the app asks first.
+  public var destructive: Bool
+  /// The daemon's question before a Delete ("Delete worker's machine? This stops the worker on “…”. Work since its last
+  /// checkpoint is lost."). Shown as plain text: the quoted task is the agent's.
+  public var confirm: String?
+  enum CodingKeys: String, CodingKey { case id, kind, state, owner, createdAt, deleteAfter, actions, destructive, confirm }
+  public init(id: String, kind: String = "machine", state: String, owner: Owner? = nil, createdAt: String? = nil, deleteAfter: String? = nil, actions: [String] = [],
+              destructive: Bool = false, confirm: String? = nil) {
     self.id = id; self.kind = kind; self.state = state; self.owner = owner; self.createdAt = createdAt; self.deleteAfter = deleteAfter; self.actions = actions
+    self.destructive = destructive; self.confirm = confirm
   }
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -251,6 +258,8 @@ public struct SandboxResource: Decodable, Sendable, Hashable, Identifiable {
     createdAt = try? c.decodeIfPresent(String.self, forKey: .createdAt)
     deleteAfter = try? c.decodeIfPresent(String.self, forKey: .deleteAfter)
     actions = (try? c.decodeIfPresent([String].self, forKey: .actions)) ?? []
+    destructive = (try? c.decodeIfPresent(Bool.self, forKey: .destructive)) ?? false
+    confirm = try? c.decodeIfPresent(String.self, forKey: .confirm)
   }
   /// Nothing of capcomd's owns it: a machine left behind (a crash, a stopped run), which the idle lifetime cleans up.
   /// A machine capcomd uses for its own short job (checks, a login, building the environment) has an owner without an
@@ -292,6 +301,21 @@ public struct ResourceDetail: Sendable, Hashable {
   public init(resource: SandboxResource?, terminalCommand: String?) { self.resource = resource; self.terminalCommand = terminalCommand }
 }
 
+/// `POST /v1/sandboxes/{name}/resources/{id}/actions/{action}` (phase 3): what the daemon did.
+public struct ResourceActionResult: Decodable, Sendable, Hashable {
+  /// The machine as the daemon saw it just before acting (`stopping` once deleted); nil when it was already gone.
+  public var resource: SandboxResource?
+  /// This call deleted it; false when it was already gone.
+  public var changed: Bool
+  enum CodingKeys: String, CodingKey { case resource, changed }
+  public init(resource: SandboxResource? = nil, changed: Bool) { self.resource = resource; self.changed = changed }
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    resource = try? c.decodeIfPresent(SandboxResource.self, forKey: .resource)
+    changed = (try? c.decodeIfPresent(Bool.self, forKey: .changed)) ?? false
+  }
+}
+
 /// Decodes an array, dropping the elements that don't decode (a newer daemon's shapes never fail the whole list).
 struct Lossy<T: Decodable>: Decodable {
   var items: [T]
@@ -317,6 +341,8 @@ public enum SandboxWire {
   public static func detail(_ data: Data) throws -> SandboxDetail { try JSONDecoder().decode(SandboxDetail.self, from: data) }
   public static func resources(_ data: Data) throws -> ResourcePage { try JSONDecoder().decode(ResourcePage.self, from: data) }
   /// The resource either flat with `terminalCommand` beside its fields, or as `{resource, terminalCommand}`.
+  /// `POST …/resources/{id}/actions/{action}`: `{resource, changed}` (resource null when it was already gone).
+  public static func actionResult(_ data: Data) throws -> ResourceActionResult { try JSONDecoder().decode(ResourceActionResult.self, from: data) }
   public static func resource(_ data: Data) throws -> ResourceDetail {
     guard let o = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw DetailUnavailable.failed("unexpected response") }
     let inner = o["resource"] as? [String: Any]
@@ -483,11 +509,85 @@ public struct MachineRow: Sendable, Hashable, Identifiable {
   /// capcomd's own short-lived machine (checks, a login, an environment build), not an agent's.
   public var capcomdJob: Bool
   public var canOpenTerminal: Bool
-  /// The daemon offers Delete (phase 3); never for capcomd's own machines.
+  /// The daemon offers Delete (phase 3); never for capcomd's own machines. Shown only when the daemon has
+  /// `sandboxes.actions` (`CapcomdStore.machineRows`).
   public var canDelete: Bool
   public var createdAt: Date?
   public var deleteAfter: Date?
+  /// The daemon's question before a Delete; nil when it sends none (the app then asks plainly).
+  public var confirm: String? = nil
 }
+
+/// The confirmation a Delete… shows: a title, the rest of the daemon's question as the message, and the button.
+public struct DeleteQuestion: Sendable, Hashable {
+  public var title: String
+  public var message: String?
+  public var button: String
+  /// "Delete worker's machine? This stops the worker on “…”. Work since its last checkpoint is lost." → the question up
+  /// to its first "?" as the title, the rest as the message. No question mark: a plain title, the text as the message.
+  public static func from(_ confirm: String?) -> DeleteQuestion {
+    let text = (confirm ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return DeleteQuestion(title: "Delete this machine?", message: nil, button: "Delete") }
+    if let q = text.firstIndex(of: "?") {
+      let title = String(text[...q])
+      let rest = text[text.index(after: q)...].trimmingCharacters(in: .whitespaces)
+      return DeleteQuestion(title: title, message: rest.isEmpty ? nil : rest, button: "Delete")
+    }
+    return DeleteQuestion(title: "Delete this machine?", message: text, button: "Delete")
+  }
+}
+
+/// A machine's Delete on its way, or why the last one didn't go through (the daemon's sentence).
+public struct MachineDeletion: Sendable, Hashable {
+  public var deleting: Bool
+  public var error: String?
+  public init(deleting: Bool = false, error: String? = nil) { self.deleting = deleting; self.error = error }
+  public static func key(_ sandbox: String, _ id: String) -> String { "\(sandbox)/\(id)" }
+}
+
+extension CapcomdStore {
+  /// The daemon can delete machines (`sandboxes.actions`).
+  public var actionsSupported: Bool { capabilities.contains(Capability.sandboxesActions) }
+
+  /// A place's machine rows as the Details screen shows them: Delete… only where the daemon offers it and has
+  /// `sandboxes.actions` (an older daemon's `actions` may list delete without serving it).
+  public func machineRows(_ sandbox: String, now: Date = Date()) -> [MachineRow] {
+    guard let page = sandboxResources[sandbox]?.value else { return [] }
+    let can = actionsSupported
+    return SandboxRows.machines(page, descriptor: sandboxDescriptor(sandbox), now: now).map { r in
+      var r = r; r.canDelete = r.canDelete && can; return r
+    }
+  }
+
+  /// Deletes one machine (`POST /v1/sandboxes/{name}/resources/{id}/actions/delete`, a fresh Idempotency-Key per Delete),
+  /// after the person confirmed the daemon's question. Then reads the place again. A refusal (409: it changed, or it's
+  /// capcomd's own; 503: the provider didn't answer; 404: gone) shows the daemon's sentence under the row.
+  public func deleteMachine(sandbox: String, id: String) async {
+    guard let daemonInfo, actionsSupported else { return }
+    let key = MachineDeletion.key(sandbox, id)
+    guard machineDeletions[key]?.deleting != true else { return }
+    machineDeletions[key] = MachineDeletion(deleting: true); changed()
+    var problem: String?
+    do {
+      _ = try await daemonInfo.resourceAction(sandbox: sandbox, id: id, action: SandboxRows.delete, idempotencyKey: UUID().uuidString.lowercased())
+    } catch let r as ActionRefused {
+      problem = r.message
+    } catch is Unauthorized {
+      unauthorized = true; problem = "capcomd rejected this app's token."
+    } catch {
+      problem = Self.couldNotDelete
+    }
+    machineDeletions[key] = problem.map { MachineDeletion(error: $0) }
+    changed()
+    await refreshSandbox(sandbox)
+  }
+
+  /// The Delete on its way, or the last one's problem, for a row.
+  public func machineDeletion(sandbox: String, id: String) -> MachineDeletion? { machineDeletions[MachineDeletion.key(sandbox, id)] }
+
+  static let couldNotDelete = "Couldn't delete it just now. Try again."
+}
+
 
 /// The place's availability as its first row says it.
 public struct PlaceStatus: Sendable, Hashable {
@@ -563,7 +663,7 @@ public enum SandboxRows {
       return MachineRow(id: r.id, title: title, age: created.map { age(from: $0, now: now) } ?? "", tone: tone, orphaned: r.orphaned, capcomdJob: job,
                         canOpenTerminal: !job && shell && r.actions.contains(openTerminal) && r.state != "stopping",
                         canDelete: !job && r.actions.contains(delete),
-                        createdAt: created, deleteAfter: r.deleteAfter.flatMap(SettingsRows.parseISO))
+                        createdAt: created, deleteAfter: r.deleteAfter.flatMap(SettingsRows.parseISO), confirm: r.confirm)
     }
     return rows.enumerated().sorted { a, b in
       if a.element.orphaned != b.element.orphaned { return !a.element.orphaned }

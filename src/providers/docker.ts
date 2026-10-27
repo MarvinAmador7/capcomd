@@ -12,6 +12,7 @@ import type { InteractiveSession } from "../auth/interactive";
 import { stateDir } from "../utils/home";
 import { noGitCredentials, type GitCredentialHook } from "./boxd";
 import { SandboxConfigError, SandboxError, SandboxNotFoundError, SandboxTimeoutError } from "./boxd-errors";
+import { reportMachineDeleted } from "./machine-audit";
 import { MACHINE_PREFIX, type ExecResult, type SandboxProvider, type VmId, type VmInfo, type VmSpec } from "./sandbox";
 
 /** The default base image: Debian with node, git, curl, coreutils (`timeout`) and util-linux (`setsid`, `script`). */
@@ -189,13 +190,14 @@ export class DockerProvider implements SandboxProvider {
     this.setDeleteAfter(id, Date.now() + seconds * 1000);
   }
 
-  /** Removes capcomd's containers whose delete-after time has passed (the TTL boxd enforces itself). */
+  /** Removes capcomd's containers whose delete-after time has passed (the TTL boxd enforces itself), and returns the
+   *  names of the ones it removed (one it couldn't remove is tried again next time). */
   async sweep(now = Date.now()): Promise<string[]> {
     const l = this.ledger();
     const gone: string[] = [];
     for (const v of await this.list(this.prefix)) {
       const at = l[v.name];
-      if (at !== undefined && at < now) { await this.destroy(v.id).catch(() => {}); gone.push(v.name); }
+      if (at !== undefined && at < now && await this.destroy(v.id).then(() => true, () => false)) gone.push(v.name);
     }
     return gone;
   }
@@ -257,3 +259,11 @@ export function dockerTime(s: string | undefined): number | null {
 /** Snapshot names (`capcomd-env-<hash>`, `capcomd-auth-<agent>-<hash>`) as image references. */
 export const imageRef = (name: string) => `${name.toLowerCase()}:capcomd`;
 const fromImageRef = (ref: string) => ref.replace(/:capcomd$/, "");
+
+/** The engine's sweep (`capcomd serve`, every 5 minutes): removes capcomd's expired containers and audits each one as
+ *  deleted after its idle lifetime (sandbox.resource_deleted, cause idle_lifetime). Returns their names. */
+export async function sweepIdle(p: Pick<DockerProvider, "sweep">, now = Date.now()): Promise<string[]> {
+  const gone = await p.sweep(now);
+  for (const name of gone) reportMachineDeleted("docker", name, "idle_lifetime");
+  return gone;
+}

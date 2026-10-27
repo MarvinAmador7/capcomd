@@ -148,11 +148,18 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     process.exit(1);
   }
 
+  // The daemon's durable state (idempotency keys, its own audit events): the harness API and the engine share it, so
+  // machines the engine deletes (a worker's drain, the sweep below) are audited with the API's (ADR-021 §5).
+  const { harnessState } = await import("../../api/state");
+  const harnessStore = harnessState();
+  const audit = await import("../../providers/machine-audit");
+  audit.setMachineAuditSink((e) => { harnessStore.recordDaemonEvent(e); });
+
   // Docker doesn't delete containers by itself (ADR-020): remove capcomd's expired ones now and every 5 minutes.
   if ((await import("../../providers/registry")).sandboxName() === "docker") {
-    const { DockerProvider } = await import("../../providers/docker");
+    const { DockerProvider, sweepIdle } = await import("../../providers/docker");
     const docker = new DockerProvider();
-    const sweep = () => docker.sweep().then((gone) => { if (gone.length) console.log(`  removed ${gone.length} expired sandbox container(s)`); }, () => {});
+    const sweep = () => sweepIdle(docker).then((gone) => { if (gone.length) console.log(`  removed ${gone.length} expired sandbox container(s)`); }, () => {});
     void sweep();
     setInterval(sweep, 5 * 60_000).unref?.();
   }
@@ -172,7 +179,7 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   try {
     const { harnessApp } = await import("../../api/server");
     const { rivetSource } = await import("../../api/rivet-source");
-    const harness = await serveHarnessSocket(sock, harnessApp({ source: rivetSource() }).fetch);
+    const harness = await serveHarnessSocket(sock, harnessApp({ source: rivetSource(), state: harnessStore }).fetch);
     // Removed on the way out only while it is still ours: never another daemon's socket.
     process.on("exit", () => harness.release());
     console.log(`✓ harness.v1 API on ${sock}`);

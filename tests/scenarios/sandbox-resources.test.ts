@@ -35,6 +35,7 @@ test("a live agent's machine is owned (run, agent, role, task's first line); it'
 	}
 	expect(mine).toMatchObject({ sandbox: "fake", runId: run, agentId, role: "worker", task: "Add an abs(a) function" });
 	expect(mine!.vmId).toBeTruthy();
+	expect(mine!.descendants).toBe(0);   // no agents of its own: its Delete question names only it
 	expect(mine!.name).toMatch(/^relay-[0-9a-f]{16}$/);
 	expect(["idle", "busy", "provisioning"]).toContain(mine!.workerState);
 
@@ -48,7 +49,7 @@ test("a live agent's machine is owned (run, agent, role, task's first line); it'
 	expect(list.body.sandboxes.map((s: any) => [s.name, s.available, s.default])).toEqual([["docker", false, false], ["boxd", false, false]]);
 	expect((await get("/v1/sandboxes/boxd")).body.settings[0]).toMatchObject({ id: "idleLifetime", value: "3600", display: "1 hour" });
 	const dock = await get("/v1/sandboxes/docker/resources");
-	expect(dock).toEqual({ status: 200, body: { resources: [{ id: "relay-aaaaaaaaaaaaaaaa", kind: "machine", state: "orphaned", owner: null, createdAt: "2026-10-27T09:12:03.000Z", deleteAfter: null, actions: ["open_terminal"] }], asOf: expect.any(String), stale: false, error: null, next: null } });
+	expect(dock).toEqual({ status: 200, body: { resources: [{ id: "relay-aaaaaaaaaaaaaaaa", kind: "machine", state: "orphaned", owner: null, createdAt: "2026-10-27T09:12:03.000Z", deleteAfter: null, actions: ["open_terminal", "delete"], destructive: true, confirm: "Delete this machine? No agent is using it." }], asOf: expect.any(String), stale: false, error: null, next: null } });
 	expect((await get("/v1/sandboxes/docker/resources/relay-aaaaaaaaaaaaaaaa")).body.terminalCommand).toBe("capcomd sandbox shell --sandbox docker --machine relay-aaaaaaaaaaaaaaaa");
 	expect((await get("/v1/sandboxes/boxd/resources")).body).toMatchObject({ resources: [], asOf: null, stale: true, error: "boxd isn't set up or isn't reachable (run capcomd setup check)" });
 

@@ -36,6 +36,19 @@ class FakeSandboxDaemon: DaemonInfoFetching, @unchecked Sendable {
   /// Answers for the next PATCHes, in order (an error to throw, or nil to apply it); none left: apply it.
   var patchAnswers: [Error?] = []
   var gets = 0
+  /// What each POST …/actions/{action} sent: place, machine, action, key.
+  var actions: [(sandbox: String, id: String, action: String, key: String)] = []
+  /// Answers for the next actions, in order (an error to throw, or nil to delete it); none left: delete it.
+  var actionAnswers: [Error?] = []
+  func resourceAction(sandbox: String, id: String, action: String, idempotencyKey: String) async throws -> ResourceActionResult {
+    actions.append((sandbox, id, action, idempotencyKey))
+    if !actionAnswers.isEmpty, let e = actionAnswers.removeFirst() { throw e }
+    var page = pages[sandbox] ?? ResourcePage(resources: [])
+    guard let r = page.resources.first(where: { $0.id == id }) else { return ResourceActionResult(resource: nil, changed: false) }
+    page.resources.removeAll { $0.id == id }
+    pages[sandbox] = page
+    return ResourceActionResult(resource: r, changed: true)
+  }
   func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail {
     patches.append((name, values, rev))
     if !patchAnswers.isEmpty, let e = patchAnswers.removeFirst() { throw e }

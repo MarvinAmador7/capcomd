@@ -25,8 +25,8 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
-	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "invalid", "internal"])
-		.describe("conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended)"),
+	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "invalid", "internal", "unavailable"])
+		.describe("conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read. unavailable (503, capability sandboxes.actions): a provider didn't answer during an action. Treat a code you don't know as a generic error"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
 });
@@ -241,6 +241,23 @@ export const EventData = {
 		to: z.string().describe("The value now"),
 		clientId: z.string().describe("The API client that changed it (cli-…)"),
 	}).describe("Capability sandboxes.settings. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a place's setting was changed with PATCH /v1/sandboxes/{name}/settings. `entity` is sandbox:<name>; the envelope text says what changed, from daemon-written labels"),
+	"sandbox.resource_action": z.looseObject({
+		sandbox: z.string().describe("The place (a listed provider's name)"),
+		resourceId: z.string().describe("The machine's id (as GET …/resources lists it)"),
+		action: z.string().describe("The action: delete"),
+		owner: z.looseObject({
+			kind: z.string().describe("agent (more may come)"),
+			runId: z.string().nullable(),
+			agentId: z.string().nullable(),
+			role: z.string().nullable(),
+		}).nullable().describe("Who used the machine when the action ran: the agent that was cancelled (ids and role only, never its task); null for a machine left behind"),
+		clientId: z.string().describe("The API client that acted (cli-…)"),
+	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client's action on a machine (POST /v1/sandboxes/{name}/resources/{id}/actions/{action}) changed something. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Cloud: Delete on machine relay-…: cancelled worker agt-41 of run-8kq2.\"). A Delete is followed by sandbox.resource_deleted with cause action"),
+	"sandbox.resource_deleted": z.looseObject({
+		sandbox: z.string().describe("The place (a listed provider's name)"),
+		resourceId: z.string().describe("The machine's id"),
+		cause: z.string().describe("Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"),
+	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")"),
 } as const;
 export type EventType = keyof typeof EventData;
 
@@ -301,6 +318,7 @@ export const CAPABILITIES = {
 	sandboxes: "GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`",
 	"sandboxes.resources": "GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one",
 	"sandboxes.settings": "PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned",
+	"sandboxes.actions": "POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -427,7 +445,7 @@ export const SandboxDescriptor = z.object({
 	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime). Ignore ids you don't know"),
 	info: z.array(z.string()).describe("Info row ids its details show (logins, checkpoints). Ignore ids you don't know"),
 	resourceKinds: z.array(z.string()).describe("Kinds of resource it lists (machine)"),
-	actions: z.array(z.string()).describe("Resource actions this daemon serves for it, from a closed list: open_terminal (more come with later capabilities, e.g. delete). Ignore actions you don't know"),
+	actions: z.array(z.string()).describe("Resource actions this daemon serves for it, from a closed list: open_terminal, delete (capability sandboxes.actions; more come with later capabilities). Ignore actions you don't know"),
 });
 export const SandboxSummary = SandboxDescriptor.extend({
 	available: z.boolean().describe("It can be used now (as GET /v1/run-options `sandboxes[].available`)"),
@@ -483,7 +501,9 @@ export const SandboxResource = z.object({
 	owner: ResourceOwner.nullable().describe("Who uses it, from capcomd's own records (never from provider labels): an agent (its worker), or one of capcomd's own jobs (a ledger capcomd writes when it makes the machine); null when orphaned or unknown"),
 	createdAt: Timestamp.nullable().describe("When it was created; null when unknown"),
 	deleteAfter: Timestamp.nullable().describe("When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes"),
-	actions: z.array(z.string()).describe("Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Machines of capcomd's own jobs have none. Ignore actions you don't know"),
+	actions: z.array(z.string()).describe("Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`); delete (capability sandboxes.actions: POST …/resources/{id}/actions/delete; an agent's machine while it isn't starting or stopping, and one left behind). Machines of capcomd's own jobs have none. Ignore actions you don't know"),
+	destructive: z.boolean().optional().describe("Capability sandboxes.actions. An action here can't be undone (delete): ask first, with `confirm`, and a destructive button. Absent from older daemons: false"),
+	confirm: z.string().nullable().optional().describe("Capability sandboxes.actions. The question to ask before deleting it, written by the daemon: for an agent's machine it names the agent and says its work since the last checkpoint is lost (\"Delete worker's machine? This stops the worker on “Add an abs(a) function…”. Work since its last checkpoint is lost.\"); for one left behind, \"Delete this machine? No agent is using it.\" The quoted task is the agent's (untrusted): show it as plain text. null without a destructive action"),
 });
 export const ResourcePage = z.object({
 	resources: z.array(SandboxResource).describe("Sorted by id"),
@@ -499,6 +519,18 @@ export const RESOURCES_PAGE_MAX = 200;
 export const RESOURCES_DOC = "Capability sandboxes.resources. The machines capcomd's agents run on at this place: capcomd's own records (which agent holds which machine) joined with the provider's list of machines with capcomd's prefix; one with no live owner is `orphaned`. " +
 	"Needs the `read` scope. The provider is asked at most every 10 s (one request at a time, 3 s timeout), never once per machine; when it fails, the answer is still 200, from the last list that worked, with `stale: true` and `error`. " +
 	`\`limit\` (default 100, at most ${RESOURCES_PAGE_MAX}) and \`cursor\` (the previous page's \`next\`) page through them. 404 \`not_found\` for a name that isn't a listed place.`;
+export const ResourceActionResult = z.object({
+	resource: SandboxResource.nullable().describe("The machine as capcomd saw it just before acting, now `stopping` with no actions when this call deleted it; null when it was already gone"),
+	changed: z.boolean().describe("This call deleted it (true), or it was already gone (false). A replay answers what the first call did"),
+});
+export const ACTION_DOC = "Capability sandboxes.actions. Act on one machine; today the only action is delete (no body, no parameters). Needs the steer scope (403 `forbidden` without it), like cancelling a run. " +
+	"An agent's machine: that agent (and the agents it started) is cancelled through the normal cancel path, as POST …/cancel and `capcomd cancel <runId> <agt>` do (agent.cancelled on the run stream), and its lifecycle destroys the machine; the provider is never called for it directly. " +
+	"A machine left behind (`orphaned`): the provider deletes it. A machine of capcomd's own jobs (checks, logins, environment builds): 409 `conflict`. " +
+	"The id must be a machine capcomd lists at this place (only ids with capcomd's prefix; no batch or wildcard ids). Right before acting the daemon reads the machine again: when who uses it changed (an orphan an agent now uses, an agent that ended) it is 409 `conflict` and nothing is deleted; a machine already gone is 200 with `changed: false`. " +
+	"One action at a time per machine (another one under way: 409). 503 `unavailable` when the provider (or capcomd's records) doesn't answer in time: nothing was deleted, or, when the agent was already asked to stop, its machine may still go. " +
+	"404 `not_found` for a place that isn't listed, an unknown machine, an unknown action, open_terminal (read with GET …/resources/{id}), or an action the place's provider doesn't declare. " +
+	"Audited on the daemon stream: sandbox.resource_action {sandbox, resourceId, action, owner, clientId}, then sandbox.resource_deleted {sandbox, resourceId, cause: action}. " +
+	"`Idempotency-Key` (8-200 chars, required: 422 `invalid` without it) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay, nothing deleted twice); the same key on another machine or action: 409 `idempotency_conflict`. Only a 200 is kept: after an error, a retry looks again.";
 export const RESOURCE_DOC = "Capability sandboxes.resources. One machine (as in …/resources, from the same cached list) and `terminalCommand`, the command that opens a shell in it. 404 `not_found` when capcomd doesn't list it at this place (only ids with capcomd's prefix are ever looked up).";
 
 export const contract = {
@@ -597,6 +629,8 @@ export const contract = {
 			.input(z.object({ name: z.string(), id: z.string() })).output(ResourceDetail),
 		settings: oc.route({ method: "PATCH", path: "/v1/sandboxes/{name}/settings", inputStructure: "detailed", description: SETTINGS_DOC })
 			.input(z.object({ params: z.object({ name: z.string() }), body: SettingsBody })).output(SandboxDetail),
+		action: oc.route({ method: "POST", path: "/v1/sandboxes/{name}/resources/{id}/actions/{action}", inputStructure: "detailed", description: ACTION_DOC })
+			.input(z.object({ params: z.object({ name: z.string(), id: z.string(), action: z.string().describe("delete") }), headers: IdempotencyHeaders })).output(ResourceActionResult),
 	},
 	service: {
 		get: oc.route({ method: "GET", path: "/v1/service", description: SERVICE_DOC }).output(ServiceStatus),

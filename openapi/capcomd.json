@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -3515,7 +3515,7 @@
                             "items": {
                               "type": "string"
                             },
-                            "description": "Resource actions this daemon serves for it, from a closed list: open_terminal (more come with later capabilities, e.g. delete). Ignore actions you don't know"
+                            "description": "Resource actions this daemon serves for it, from a closed list: open_terminal, delete (capability sandboxes.actions; more come with later capabilities). Ignore actions you don't know"
                           },
                           "available": {
                             "type": "boolean",
@@ -3747,7 +3747,7 @@
                           "items": {
                             "type": "string"
                           },
-                          "description": "Resource actions this daemon serves for it, from a closed list: open_terminal (more come with later capabilities, e.g. delete). Ignore actions you don't know"
+                          "description": "Resource actions this daemon serves for it, from a closed list: open_terminal, delete (capability sandboxes.actions; more come with later capabilities). Ignore actions you don't know"
                         }
                       },
                       "required": [
@@ -4180,7 +4180,18 @@
                             "items": {
                               "type": "string"
                             },
-                            "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Machines of capcomd's own jobs have none. Ignore actions you don't know"
+                            "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`); delete (capability sandboxes.actions: POST …/resources/{id}/actions/delete; an agent's machine while it isn't starting or stopping, and one left behind). Machines of capcomd's own jobs have none. Ignore actions you don't know"
+                          },
+                          "destructive": {
+                            "type": "boolean",
+                            "description": "Capability sandboxes.actions. An action here can't be undone (delete): ask first, with `confirm`, and a destructive button. Absent from older daemons: false"
+                          },
+                          "confirm": {
+                            "description": "Capability sandboxes.actions. The question to ask before deleting it, written by the daemon: for an agent's machine it names the agent and says its work since the last checkpoint is lost (\"Delete worker's machine? This stops the worker on “Add an abs(a) function…”. Work since its last checkpoint is lost.\"); for one left behind, \"Delete this machine? No agent is using it.\" The quoted task is the agent's (untrusted): show it as plain text. null without a destructive action",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -4399,7 +4410,18 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`). Machines of capcomd's own jobs have none. Ignore actions you don't know"
+                      "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`); delete (capability sandboxes.actions: POST …/resources/{id}/actions/delete; an agent's machine while it isn't starting or stopping, and one left behind). Machines of capcomd's own jobs have none. Ignore actions you don't know"
+                    },
+                    "destructive": {
+                      "type": "boolean",
+                      "description": "Capability sandboxes.actions. An action here can't be undone (delete): ask first, with `confirm`, and a destructive button. Absent from older daemons: false"
+                    },
+                    "confirm": {
+                      "description": "Capability sandboxes.actions. The question to ask before deleting it, written by the daemon: for an agent's machine it names the agent and says its work since the last checkpoint is lost (\"Delete worker's machine? This stops the worker on “Add an abs(a) function…”. Work since its last checkpoint is lost.\"); for one left behind, \"Delete this machine? No agent is using it.\" The quoted task is the agent's (untrusted): show it as plain text. null without a destructive action",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "terminalCommand": {
                       "description": "The command that opens a shell in this machine (run it in Terminal): `capcomd sandbox shell <runId> <agentId>` for an agent's machine, `capcomd sandbox shell --sandbox <name> --machine <id>` for an orphan. Built from trusted ids only: a plain capcomd invocation of letters, digits and `._-` words. null without open_terminal",
@@ -4627,7 +4649,7 @@
                           "items": {
                             "type": "string"
                           },
-                          "description": "Resource actions this daemon serves for it, from a closed list: open_terminal (more come with later capabilities, e.g. delete). Ignore actions you don't know"
+                          "description": "Resource actions this daemon serves for it, from a closed list: open_terminal, delete (capability sandboxes.actions; more come with later capabilities). Ignore actions you don't know"
                         }
                       },
                       "required": [
@@ -4917,6 +4939,254 @@
           },
           "422": {
             "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sandboxes/{name}/resources/{id}/actions/{action}": {
+      "post": {
+        "operationId": "sandboxes.action",
+        "description": "Capability sandboxes.actions. Act on one machine; today the only action is delete (no body, no parameters). Needs the steer scope (403 `forbidden` without it), like cancelling a run. An agent's machine: that agent (and the agents it started) is cancelled through the normal cancel path, as POST …/cancel and `capcomd cancel <runId> <agt>` do (agent.cancelled on the run stream), and its lifecycle destroys the machine; the provider is never called for it directly. A machine left behind (`orphaned`): the provider deletes it. A machine of capcomd's own jobs (checks, logins, environment builds): 409 `conflict`. The id must be a machine capcomd lists at this place (only ids with capcomd's prefix; no batch or wildcard ids). Right before acting the daemon reads the machine again: when who uses it changed (an orphan an agent now uses, an agent that ended) it is 409 `conflict` and nothing is deleted; a machine already gone is 200 with `changed: false`. One action at a time per machine (another one under way: 409). 503 `unavailable` when the provider (or capcomd's records) doesn't answer in time: nothing was deleted, or, when the agent was already asked to stop, its machine may still go. 404 `not_found` for a place that isn't listed, an unknown machine, an unknown action, open_terminal (read with GET …/resources/{id}), or an action the place's provider doesn't declare. Audited on the daemon stream: sandbox.resource_action {sandbox, resourceId, action, owner, clientId}, then sandbox.resource_deleted {sandbox, resourceId, cause: action}. `Idempotency-Key` (8-200 chars, required: 422 `invalid` without it) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay, nothing deleted twice); the same key on another machine or action: 409 `idempotency_conflict`. Only a 200 is kept: after an error, a retry looks again.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "delete"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "resource": {
+                      "description": "The machine as capcomd saw it just before acting, now `stopping` with no actions when this call deleted it; null when it was already gone",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "The machine's name at the provider: capcomd's prefix (relay-) and letters, digits, `.`, `_`, `-` (at most 128). Stable for the machine's life"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "description": "machine. More may be added"
+                        },
+                        "state": {
+                          "type": "string",
+                          "description": "starting, running, orphaned (capcomd made it and nothing in capcomd uses it now: no live agent and none of capcomd's own jobs; a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"
+                        },
+                        "owner": {
+                          "description": "Who uses it, from capcomd's own records (never from provider labels): an agent (its worker), or one of capcomd's own jobs (a ledger capcomd writes when it makes the machine); null when orphaned or unknown",
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd env doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                            },
+                            "runId": {
+                              "description": "The run (agent, check); null for a job that belongs to no run",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "agentId": {
+                              "description": "The agent (kind agent); null otherwise",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "role": {
+                              "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "task": {
+                              "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                              "x-untrusted": true,
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "label": {
+                              "description": "Capability sandboxes.settings. For capcomd's own jobs, a daemon-written line (\"Checks for run-8kq2\", \"Logging in to Claude Code\", \"Building the agent environment\"); null for agents",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "runId",
+                            "agentId",
+                            "role",
+                            "task",
+                            "label"
+                          ]
+                        },
+                        "createdAt": {
+                          "description": "When it was created; null when unknown",
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time"
+                        },
+                        "deleteAfter": {
+                          "description": "When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes",
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time"
+                        },
+                        "actions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`); delete (capability sandboxes.actions: POST …/resources/{id}/actions/delete; an agent's machine while it isn't starting or stopping, and one left behind). Machines of capcomd's own jobs have none. Ignore actions you don't know"
+                        },
+                        "destructive": {
+                          "type": "boolean",
+                          "description": "Capability sandboxes.actions. An action here can't be undone (delete): ask first, with `confirm`, and a destructive button. Absent from older daemons: false"
+                        },
+                        "confirm": {
+                          "description": "Capability sandboxes.actions. The question to ask before deleting it, written by the daemon: for an agent's machine it names the agent and says its work since the last checkpoint is lost (\"Delete worker's machine? This stops the worker on “Add an abs(a) function…”. Work since its last checkpoint is lost.\"); for one left behind, \"Delete this machine? No agent is using it.\" The quoted task is the agent's (untrusted): show it as plain text. null without a destructive action",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "state",
+                        "owner",
+                        "createdAt",
+                        "deleteAfter",
+                        "actions"
+                      ]
+                    },
+                    "changed": {
+                      "type": "boolean",
+                      "description": "This call deleted it (true), or it was already gone (false). A replay answers what the first call did"
+                    }
+                  },
+                  "required": [
+                    "resource",
+                    "changed"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): the token lacks the steer scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error (503 unavailable): the provider (or capcomd's records) didn't answer in time",
             "content": {
               "application/json": {
                 "schema": {
@@ -5748,9 +6018,10 @@
               "idempotency_conflict",
               "conflict",
               "invalid",
-              "internal"
+              "internal",
+              "unavailable"
             ],
-            "description": "conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended)"
+            "description": "conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read. unavailable (503, capability sandboxes.actions): a provider didn't answer during an action. Treat a code you don't know as a generic error"
           },
           "message": {
             "type": "string"
@@ -7633,6 +7904,100 @@
         "additionalProperties": {},
         "description": "Capability sandboxes.settings. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a place's setting was changed with PATCH /v1/sandboxes/{name}/settings. `entity` is sandbox:<name>; the envelope text says what changed, from daemon-written labels",
         "x-event-type": "sandbox.settings_changed"
+      },
+      "SandboxResourceActionData": {
+        "type": "object",
+        "properties": {
+          "sandbox": {
+            "type": "string",
+            "description": "The place (a listed provider's name)"
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "The machine's id (as GET …/resources lists it)"
+          },
+          "action": {
+            "type": "string",
+            "description": "The action: delete"
+          },
+          "owner": {
+            "description": "Who used the machine when the action ran: the agent that was cancelled (ids and role only, never its task); null for a machine left behind",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "agent (more may come)"
+              },
+              "runId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "agentId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "runId",
+              "agentId",
+              "role"
+            ],
+            "additionalProperties": {}
+          },
+          "clientId": {
+            "type": "string",
+            "description": "The API client that acted (cli-…)"
+          }
+        },
+        "required": [
+          "sandbox",
+          "resourceId",
+          "action",
+          "owner",
+          "clientId"
+        ],
+        "additionalProperties": {},
+        "description": "Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client's action on a machine (POST /v1/sandboxes/{name}/resources/{id}/actions/{action}) changed something. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Cloud: Delete on machine relay-…: cancelled worker agt-41 of run-8kq2.\"). A Delete is followed by sandbox.resource_deleted with cause action",
+        "x-event-type": "sandbox.resource_action"
+      },
+      "SandboxResourceDeletedData": {
+        "type": "object",
+        "properties": {
+          "sandbox": {
+            "type": "string",
+            "description": "The place (a listed provider's name)"
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "The machine's id"
+          },
+          "cause": {
+            "type": "string",
+            "description": "Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"
+          }
+        },
+        "required": [
+          "sandbox",
+          "resourceId",
+          "cause"
+        ],
+        "additionalProperties": {},
+        "description": "Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")",
+        "x-event-type": "sandbox.resource_deleted"
       },
       "StreamResetFrame": {
         "type": "object",

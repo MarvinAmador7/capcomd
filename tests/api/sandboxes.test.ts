@@ -72,10 +72,10 @@ describe("GET /v1/sandboxes (capability sandboxes)", () => {
 		expect(r.body).toEqual({ sandboxes: [
 			{ name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
 				caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
-				settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal"], available: false, reason: "Docker isn't running", default: false },
+				settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "Docker isn't running", default: false },
 			{ name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
 				caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
-				settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal"], available: false, reason: "No boxd API key (run capcomd setup)", default: false },
+				settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "No boxd API key (run capcomd setup)", default: false },
 		] });
 	});
 	test("availability and the default follow GET /v1/run-options", async () => {
@@ -92,7 +92,7 @@ describe("GET /v1/sandboxes/{name}", () => {
 		const r = await get("/v1/sandboxes/boxd");
 		expect(r.status).toBe(200);
 		expect(SandboxDetail.parse(r.body)).toBeTruthy();
-		expect(r.body.descriptor).toMatchObject({ name: "boxd", title: "Cloud · boxd", actions: ["open_terminal"] });
+		expect(r.body.descriptor).toMatchObject({ name: "boxd", title: "Cloud · boxd", actions: ["open_terminal", "delete"] });
 		expect(r.body.settings).toEqual([{
 			id: "idleLifetime", type: "choice", label: "Delete idle machines after",
 			help: "A machine left behind (a crash, a stopped run) is deleted after this, so it stops billing.",
@@ -174,9 +174,11 @@ describe("GET /v1/sandboxes/{name}/resources (capability sandboxes.resources)", 
 		expect(ResourcePage.parse(r.body)).toBeTruthy();
 		expect(r.body).toEqual({
 			resources: [
-				{ id: "relay-0a0b0c0d0e0f1011", kind: "machine", state: "orphaned", owner: null, createdAt: "2026-10-27T07:00:00.000Z", deleteAfter: "2026-10-27T08:00:00.000Z", actions: ["open_terminal"] },
+				{ id: "relay-0a0b0c0d0e0f1011", kind: "machine", state: "orphaned", owner: null, createdAt: "2026-10-27T07:00:00.000Z", deleteAfter: "2026-10-27T08:00:00.000Z", actions: ["open_terminal", "delete"],
+					destructive: true, confirm: "Delete this machine? No agent is using it." },
 				{ id: "relay-3f9c2a1b7e5d4c60", kind: "machine", state: "running", owner: { kind: "agent", runId: "run-8kq2", agentId: "agt-41", role: "worker", task: "Add an abs(a) function to math.ts with [REDACTED]", label: null },
-					createdAt: "2026-10-27T09:12:03.000Z", deleteAfter: "2026-10-27T10:22:03.000Z", actions: ["open_terminal"] },
+					createdAt: "2026-10-27T09:12:03.000Z", deleteAfter: "2026-10-27T10:22:03.000Z", actions: ["open_terminal", "delete"],
+					destructive: true, confirm: "Delete worker's machine? This stops the worker on “Add an abs(a) function to math.ts with…”. Work since its last checkpoint is lost." },
 			],
 			asOf: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/), stale: false, error: null, next: null,
 		});

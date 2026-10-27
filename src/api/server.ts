@@ -17,6 +17,7 @@ import { harnessState, type DaemonEvent, type HarnessState } from "./state";
 import { parseSettingsPatch } from "./sandboxes";
 import { runFiles } from "./run-files";
 import { isListedProvider, PROVIDER_LABEL } from "../providers/registry";
+import { resourceActionEvent, resourceDeletedEvent } from "../providers/machine-audit";
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -30,7 +31,7 @@ export function servedType(bytes: Uint8Array, hint: string | null): { type: stri
 	return { type: "application/octet-stream", inline: false };
 }
 const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "already_decided", 422: "invalid" };
-const err = (c: Context, status: 401 | 403 | 404 | 409 | 422, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
+const err = (c: Context, status: 401 | 403 | 404 | 409 | 422 | 503, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
 
 /** agent.activity_changed: at most one frame per agent per this many ms (ACTIVITY_DOC). */
 export const ACTIVITY_MS = 1000;
@@ -395,6 +396,23 @@ export function harnessApp(o: ServerOptions) {
 			});
 		}
 		return c.json(r.detail, 200);
+	});
+
+	// POST /v1/sandboxes/{name}/resources/{id}/actions/{action} (capability sandboxes.actions; the steer scope, as
+	// cancelling a run). Today only delete. The write-route Idempotency-Key rules (a replay answers the first 200 and
+	// acts once). No body, no parameters: the machine and the action are the whole request. Each action that changed
+	// something is audited on the daemon stream: sandbox.resource_action, then sandbox.resource_deleted (cause action).
+	app.post("/v1/sandboxes/:name/resources/:id/actions/:action", (c) => {
+		const name = c.req.param("name"), id = c.req.param("id"), action = c.req.param("action");
+		return idempotent(c, ["sandboxes.action", name, id, action], async (client) => {
+			const r = await src.sandboxAction(name, id, action, `client:${client.clientId}`);
+			if (!r.ok) return { status: r.status, body: { code: r.code, message: r.message } };
+			if (r.changed) {
+				state.recordDaemonEvent(resourceActionEvent(name, id, action, r.owner, client.clientId));
+				state.recordDaemonEvent(resourceDeletedEvent(name, id, "action"));
+			}
+			return { status: 200, body: { resource: r.resource, changed: r.changed } };
+		});
 	});
 
 	app.get("/v1/streams/:scope/events", (c) => {

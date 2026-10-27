@@ -6,12 +6,18 @@
 // (which agent holds which machine) with the provider's list, asked at most every 10 s per provider, single-flight,
 // with a 3 s timeout, answering with the last good list (`stale`) when it fails. Every string a client shows is
 // written here from fixed templates: never a provider's error text, never a credential.
+// Phase 3: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (capability sandboxes.actions). An agent's machine
+// is deleted by cancelling that agent (its lifecycle destroys the machine); an orphan by the provider. Bounded: the
+// action comes from a closed list the provider declares, the id must be a machine capcomd lists there, the state is
+// read again right before acting, and one action runs at a time per machine.
 import { createHash } from "node:crypto";
 import { redactShapes } from "../agents/redact";
 import { env as envVar } from "../utils/env";
 import { isoTs } from "./envelope";
 import { SandboxConfigError } from "../providers/boxd-errors";
-import { descriptorOf, isListedProvider, LISTED_PROVIDERS, PROVIDERS, SERVED_ACTIONS, type ListedProvider, type ProviderDescriptor } from "../providers/registry";
+import { descriptorOf, isListedProvider, LISTED_PROVIDERS, POSTED_ACTIONS, PROVIDER_LABEL, PROVIDERS, RESOURCE_ACTIONS, SERVED_ACTIONS, type ListedProvider, type ProviderDescriptor, type ResourceAction } from "../providers/registry";
+import { SandboxNotFoundError } from "../providers/boxd-errors";
+import { beginMachineAction } from "../providers/machine-audit";
 import { MACHINE_PREFIX, type VmInfo } from "../providers/sandbox";
 import { ConfigFileError, currentIdleLifetime, IDLE_LIFETIME_DEFAULT, IDLE_LIFETIME_PRESETS, IDLE_LIFETIME_ENV, IDLE_LIFETIME_MIN, type IdleLifetime, type SettingsStore } from "../providers/settings";
 /** What the Logins row reads of GET /v1/logins. */
@@ -46,7 +52,7 @@ export interface Descriptor {
 export interface SandboxSummary extends Descriptor { available: boolean; reason: string | null; default: boolean }
 export interface SandboxDetail { descriptor: Descriptor; settings: Field[]; info: Field[]; rev: string }
 
-/** A descriptor as clients get it: its actions limited to the ones this daemon serves (phase 1: open_terminal). */
+/** A descriptor as clients get it: its actions limited to the ones this daemon serves (open_terminal, delete). */
 export function servedDescriptor(d: ProviderDescriptor): Descriptor {
 	return {
 		name: d.name, descriptorVersion: d.descriptorVersion, label: d.label, kind: d.kind, vendor: d.vendor, title: d.title, mark: d.mark, listed: d.listed,
@@ -200,6 +206,10 @@ export interface ResourceOwner {
 export interface Resource {
 	id: string; kind: "machine"; state: ResourceState; owner: ResourceOwner | null;
 	createdAt: string | null; deleteAfter: string | null; actions: string[];
+	/** An action on it can't be undone (delete): the app asks first, with `confirm`. */
+	destructive: boolean;
+	/** What the app asks before a destructive action, written here from fixed templates; null without one. */
+	confirm: string | null;
 }
 export interface ResourcePage { resources: Resource[]; asOf: string | null; stale: boolean; error: string | null; next: string | null }
 export interface ResourceDetail extends Resource { terminalCommand: string | null }
@@ -220,6 +230,8 @@ export interface MachineOwner {
 	/** The worker's lifecycle state: provisioning, idle, busy, draining (capcomd's own jobs: busy). */
 	workerState: string;
 	createdAt: number | null;
+	/** An agent's live descendants (pending, running, paused): cancelling the agent stops them too. */
+	descendants?: number;
 }
 
 /** Ids capcomd ever hands out or accepts for a machine: no shell metacharacters, no spaces, no quotes. */
@@ -233,6 +245,45 @@ export function taskLine(task: unknown): string | null {
 	const line = redactShapes(task).split("\n").map((l) => l.trim()).find(Boolean);
 	if (!line) return null;
 	return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
+
+/** How many of `live` descend from `agentId` (parent links). */
+export function liveDescendants(live: Array<{ agentId: string; parent?: string | null }>, agentId: string): number {
+	const byId = new Map(live.map((a) => [a.agentId, a]));
+	let n = 0;
+	for (const a of live) {
+		const seen = new Set<string>();
+		for (let p = a.parent ?? null; p && !seen.has(p); p = byId.get(p)?.parent ?? null) {
+			seen.add(p);
+			if (p === agentId) { n++; break; }
+		}
+	}
+	return n;
+}
+
+/** "Add an abs(a) function to math.ts…": a task line cut at a word to about 40 characters, for a question. */
+function shortTask(t: string): string {
+	if (t.length <= 40) return t;
+	const cut = t.slice(0, 40);
+	const at = cut.lastIndexOf(" ");
+	return `${(at >= 20 ? cut.slice(0, at) : cut).replace(/[\s.,;:–—-]+$/, "")}…`;
+}
+
+/**
+ * What the app asks before a Delete (ADR-021 question 6): for an agent's machine it names the agent and says the work
+ * since its last checkpoint is lost ("Delete worker's machine? This stops the worker on “Add an abs(a) function…”.
+ * Work since its last checkpoint is lost."); for one left behind, that no agent uses it. Fixed templates around
+ * trusted ids and the agent's task line (already redacted and cut).
+ */
+export function deleteConfirm(o: Pick<MachineOwner, "role" | "agentId" | "task" | "descendants"> | null): string {
+	if (!o) return "Delete this machine? No agent is using it.";
+	const role = o.role && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(o.role) ? o.role : null;
+	const who = role ?? (o.agentId && SAFE_ID.test(o.agentId) ? o.agentId : "this agent");
+	const the = role ? `the ${role}` : who;
+	const task = o.task ? ` on “${shortTask(o.task)}”` : "";
+	const n = o.descendants ?? 0;
+	const kids = n > 0 ? ` and ${n === 1 ? "the agent" : `the ${n} agents`} it started` : "";
+	return `Delete ${who}'s machine? This stops ${the}${task}${kids}. Work since ${n > 0 ? "their last checkpoints" : "its last checkpoint"} is lost.`;
 }
 
 const STARTING = new Set(["created", "creating", "starting", "pending", "booting", "provisioning", "restarting"]);
@@ -250,9 +301,23 @@ function providerState(s: string): ResourceState {
  */
 export function joinResources(name: string, rows: VmInfo[] | null, owners: MachineOwner[] | null): Resource[] {
 	const d = descriptorOf(name);
+	const serves = (a: ResourceAction) => !!d?.actions.includes(a) && SERVED_ACTIONS.includes(a);
 	// capcomd's own short jobs (checks, logins, environment builds) get no actions: nothing may stop them from here,
 	// and a login's machine holds a credential while it runs.
-	const actions = (state: ResourceState, o?: MachineOwner) => ((o?.kind ?? "agent") === "agent" && d?.caps.shell && d.actions.includes("open_terminal") && SERVED_ACTIONS.includes("open_terminal") && state !== "starting" && state !== "stopping" ? ["open_terminal"] : []);
+	const actions = (state: ResourceState, o?: MachineOwner) => {
+		const out: string[] = [];
+		const agent = !!o && (o.kind ?? "agent") === "agent";
+		const settled = state !== "starting" && state !== "stopping";
+		if ((agent || !o) && settled && d?.caps.shell && serves("open_terminal")) out.push("open_terminal");
+		// Delete: an agent's machine (cancels the agent; needs its run and id), or one left behind (orphaned: capcomd's
+		// records were read and nothing owns it). Never while it starts or stops, nor when ownership is unknown.
+		if (serves("delete") && settled && (agent ? !!o!.runId && !!o!.agentId : state === "orphaned")) out.push("delete");
+		return out;
+	};
+	const shaped = (r: Omit<Resource, "destructive" | "confirm">, o?: MachineOwner): Resource => {
+		const del = r.actions.includes("delete");
+		return { ...r, destructive: del, confirm: del ? deleteConfirm(o ?? null) : null };
+	};
 	const mine = (owners ?? []).filter((o) => o.sandbox === name);
 	const byVm = new Map(mine.filter((o) => o.vmId).map((o) => [o.vmId!, o]));
 	const byName = new Map(mine.filter((o) => o.name).map((o) => [o.name!, o]));
@@ -268,13 +333,13 @@ export function joinResources(name: string, rows: VmInfo[] | null, owners: Machi
 			used.add(o);
 			state = o.workerState === "draining" ? "stopping" : o.workerState === "provisioning" ? "starting" : providerState(r.state);
 		} else state = owners === null ? "unknown" : providerState(r.state) === "stopping" ? "stopping" : "orphaned";
-		out.set(r.name, { id: r.name, kind: "machine", state, owner: o ? ownerOf(o) : null, createdAt: ts(r.createdAt ?? o?.createdAt), deleteAfter: ts(r.deleteAt), actions: actions(state, o) });
+		out.set(r.name, shaped({ id: r.name, kind: "machine", state, owner: o ? ownerOf(o) : null, createdAt: ts(r.createdAt ?? o?.createdAt), deleteAfter: ts(r.deleteAt), actions: actions(state, o) }, o));
 	}
 	for (const o of mine) {
 		if (used.has(o) || !o.name || !isMachineId(o.name) || out.has(o.name)) continue;
 		const state: ResourceState | null = o.workerState === "provisioning" ? "starting" : rows === null ? "unknown" : null;
 		if (!state) continue; // the provider listed its machines and this one isn't there: gone
-		out.set(o.name, { id: o.name, kind: "machine", state, owner: ownerOf(o), createdAt: ts(o.createdAt), deleteAfter: null, actions: actions(state, o) });
+		out.set(o.name, shaped({ id: o.name, kind: "machine", state, owner: ownerOf(o), createdAt: ts(o.createdAt), deleteAfter: null, actions: actions(state, o) }, o));
 	}
 	return [...out.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
@@ -303,6 +368,10 @@ function listError(name: string, e: unknown): string {
 export const LIST_TTL_MS = 10_000;
 export const LIST_TIMEOUT_MS = 3_000;
 const OWNERS_TIMEOUT_MS = 10_000;
+/** An action reads the machine again right before acting: the provider's list and capcomd's records, within this. */
+export const ACTION_LOOKUP_TIMEOUT_MS = 10_000;
+/** How long an action waits for its effect (the provider's delete; an agent's cancel, which destroys its machine). */
+export const ACTION_TIMEOUT_MS = 30_000;
 
 function within<T>(p: Promise<T>, ms: number): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -317,6 +386,35 @@ export interface ResourceDeps {
 	now?: () => number;
 	ttlMs?: number;
 	timeoutMs?: number;
+	/** Deletes a machine at the provider (`provider.destroy` with its provider id): an orphan's Delete. */
+	destroy?(name: ListedProvider, vmId: string): Promise<void>;
+	/** Cancels one agent through the normal cancel path (as POST …/cancel and `capcomd cancel <run> <agt>`: agent.cancelled,
+	 *  and its lifecycle destroys its machine): an owned machine's Delete. `changed`: this call cancelled it. */
+	cancelAgent?(runId: string, agentId: string, by: string): Promise<{ changed: boolean }>;
+	lookupTimeoutMs?: number;
+	actionTimeoutMs?: number;
+}
+
+// ---- Actions (ADR-021 §3, §5; capability sandboxes.actions) ----
+export type ActionOutcome =
+	| { ok: true; resource: Resource | null; changed: boolean; owner: ResourceOwner | null }
+	| { ok: false; status: 404 | 409 | 503; code: "not_found" | "conflict" | "unavailable"; message: string };
+
+const ownerKey = (r: Resource) => (r.owner ? `${r.owner.kind}|${r.owner.runId ?? ""}|${r.owner.agentId ?? ""}` : "none");
+/** Why a machine can't take an action now (a 409's sentence), from what capcomd knows of it. */
+function refusal(r: Resource): string {
+	if (r.owner && r.owner.kind !== "agent") return `capcomd is using this machine itself (${r.owner.label ?? r.owner.kind}) and deletes it when that's done.`;
+	if (r.state === "starting") return "This machine is still starting, so it can't be deleted yet.";
+	if (r.state === "stopping") return "This machine is already being deleted.";
+	if (r.state === "unknown" || !r.owner) return "capcomd can't tell right now whether an agent uses this machine, so it won't delete it. Try again in a moment.";
+	return "This machine can't be deleted right now.";
+}
+/** Who uses a machine now, for "changed since you looked". */
+function userNow(r: Resource): string {
+	if (!r.owner) return "no agent is using it now";
+	if (r.owner.kind !== "agent") return `capcomd is using it now (${r.owner.label ?? r.owner.kind})`;
+	const id = r.owner.agentId && SAFE_ID.test(r.owner.agentId) ? ` ${r.owner.agentId}` : "";
+	return `${r.owner.role ? `the ${r.owner.role}` : "an agent"}${id} is using it now`;
 }
 
 /** The resources half of the surface: one cache per provider, refreshed at most every ttlMs, one refresh at a time. */
@@ -345,7 +443,98 @@ export function resourceCatalog(deps: ResourceDeps) {
 		else if (now() - e.triedAt >= ttl) await refresh(name, e);
 		return { resources: joinResources(name, e.rows, e.owners), asOf: e.asOf, stale: e.error !== null, error: e.error };
 	};
+	const lookupTimeout = deps.lookupTimeoutMs ?? ACTION_LOOKUP_TIMEOUT_MS;
+	const actionTimeout = deps.actionTimeoutMs ?? ACTION_TIMEOUT_MS;
+	/** Machines with an action under way (place + id): one at a time each. */
+	const acting = new Set<string>();
+	const entryOf = (name: ListedProvider) => {
+		let e = cache.get(name);
+		if (!e) { e = { triedAt: 0, inflight: null, rows: null, asOf: null, owners: null, error: null }; cache.set(name, e); }
+		return e;
+	};
+	/**
+	 * The machine as it is now, for an action: the provider's list and capcomd's records, both fresh (never the cache,
+	 * never the last good owners: acting on a guess could delete a machine an agent just took). Stored in the cache too,
+	 * so the next read shows it. Throws a 503 outcome when either doesn't answer.
+	 */
+	const lookup = async (name: ListedProvider): Promise<{ rows: VmInfo[]; owners: MachineOwner[] }> => {
+		const e = entryOf(name);
+		if (e.inflight) await e.inflight.catch(() => {});
+		const who = descriptorOf(name)?.vendor ?? name;
+		const [rows, owners] = await Promise.allSettled([within(Promise.resolve().then(() => deps.list(name)), lookupTimeout), within(Promise.resolve().then(() => deps.owners()), lookupTimeout)]);
+		if (rows.status === "rejected") {
+			const late = (rows.reason as { timeout?: boolean })?.timeout;
+			throw unavailable(late ? `${who} didn't answer within ${lookupTimeout / 1000} seconds, so nothing was deleted. Try again in a moment.` : `${who} couldn't list its machines, so nothing was deleted. Try again in a moment.`);
+		}
+		if (owners.status === "rejected") throw unavailable("capcomd couldn't read which agents use its machines, so nothing was deleted. Try again in a moment.");
+		lastOwners = owners.value;
+		Object.assign(e, { triedAt: now(), rows: rows.value, asOf: now(), owners: owners.value, error: null });
+		return { rows: rows.value, owners: owners.value };
+	};
+	const unavailable = (message: string) => Object.assign(new Error(message), { outcome: { ok: false as const, status: 503 as const, code: "unavailable" as const, message } });
 	return {
+		/**
+		 * POST …/resources/{id}/actions/{action}: today only delete. `by` names the client (client:<id>), as run controls do.
+		 * An agent's machine: that agent is cancelled through the normal cancel path, and its lifecycle destroys the
+		 * machine (the provider is never called for it here). An orphan: the provider deletes it. A machine of capcomd's
+		 * own jobs: 409. The id must be a machine capcomd lists at this place; the machine is read again just before
+		 * acting (409 when who uses it changed; already gone: 200 with changed false).
+		 */
+		async act(name: string, id: string, action: string, by: string): Promise<ActionOutcome> {
+			const fail = (status: 404 | 409 | 503, message: string): ActionOutcome => ({ ok: false, status, code: status === 404 ? "not_found" : status === 409 ? "conflict" : "unavailable", message });
+			if (!isListedProvider(name)) return fail(404, `sandbox ${name.slice(0, 64)} not found`);
+			const d = PROVIDERS[name] as ProviderDescriptor;
+			const known = (RESOURCE_ACTIONS as readonly string[]).includes(action) ? (action as ResourceAction) : null;
+			if (!known) return fail(404, `${/^[a-z_]{1,32}$/.test(action) ? action : "that"} isn't an action on machines (actions: ${POSTED_ACTIONS.join(", ")})`);
+			if (!POSTED_ACTIONS.includes(known)) return fail(404, `${known} isn't posted: GET /v1/sandboxes/{name}/resources/{id} for its terminalCommand`);
+			if (!d.actions.includes(known) || !SERVED_ACTIONS.includes(known)) return fail(404, `${d.vendor} machines have no ${known} action`);
+			const place = PROVIDER_LABEL[name];
+			if (!isMachineId(id)) return fail(404, `${SAFE_ID.test(id) ? `machine ${id}` : "that machine"} isn't one of capcomd's machines on ${place}`);
+			const seen = (await current(name)).resources.find((r) => r.id === id);
+			if (!seen) return fail(404, `machine ${id} isn't one of capcomd's machines on ${place}`);
+			if (!seen.actions.includes(known)) return fail(409, refusal(seen));
+			const k = `${name}\u0000${id}`;
+			if (acting.has(k)) return fail(409, "Another Delete of this machine is still under way.");
+			acting.add(k);
+			try {
+				let fresh: { rows: VmInfo[]; owners: MachineOwner[] };
+				try { fresh = await lookup(name); } catch (e) { const o = (e as { outcome?: ActionOutcome }).outcome; if (o) return o; throw e; }
+				const now_ = joinResources(name, fresh.rows, fresh.owners).find((r) => r.id === id);
+				// Gone already (deleted by its idle lifetime, its agent's end, or someone else): nothing left to do.
+				if (!now_) { entryOf(name).triedAt = 0; return { ok: true, resource: null, changed: false, owner: seen.owner }; }
+				if (ownerKey(now_) !== ownerKey(seen)) return fail(409, `This machine changed since you looked: ${userNow(now_)}. Look again before deleting it.`);
+				if (!now_.actions.includes(known)) return fail(409, refusal(now_));
+				const claim = beginMachineAction(name, id);
+				const who = d.vendor;
+				const secs = actionTimeout / 1000;
+				const o = now_.owner;
+				try {
+					if (o) {
+						if (!deps.cancelAgent) { claim.cancel(); return fail(503, "This daemon can't stop agents from here, so nothing was deleted."); }
+						const r = await within(Promise.resolve().then(() => deps.cancelAgent!(o.runId!, o.agentId!, by)), actionTimeout);
+						if (!r.changed) { claim.cancel(); return fail(409, `${o.agentId} has already ended, so this machine is no longer its own. Look again in a moment.`); }
+					} else {
+						const row = fresh.rows.find((r) => r.name === id);
+						if (!row || !deps.destroy) { claim.cancel(); return fail(503, `capcomd can't delete ${who} machines from here, so nothing was deleted.`); }
+						try { await within(Promise.resolve().then(() => deps.destroy!(name, row.id)), actionTimeout); } catch (e) {
+							if (e instanceof SandboxNotFoundError) { claim.cancel(); entryOf(name).triedAt = 0; return { ok: true, resource: null, changed: false, owner: null }; }
+							throw e;
+						}
+					}
+				} catch (e) {
+					if ((e as { timeout?: boolean })?.timeout) {
+						claim.gaveUp();
+						entryOf(name).triedAt = 0;
+						return fail(503, o ? `capcomd asked ${o.agentId} to stop, but ${who} didn't confirm its machine was deleted within ${secs} seconds. Look again in a moment.` : `${who} didn't answer within ${secs} seconds. Look again in a moment: the machine may still be deleted.`);
+					}
+					claim.cancel();
+					return fail(503, o ? `capcomd couldn't stop ${o.agentId} just now, so nothing was deleted. Try again in a moment.` : `${who} couldn't delete the machine just now. Try again in a moment.`);
+				}
+				claim.done();
+				entryOf(name).triedAt = 0;
+				return { ok: true, resource: { ...now_, state: "stopping", actions: [], destructive: false, confirm: null }, changed: true, owner: o };
+			} finally { acting.delete(k); }
+		},
 		/** One page: `limit` (≤ 200, default 100) resources after `cursor` (the last id of the previous page). */
 		async page(name: string, o: { limit?: number; cursor?: string } = {}): Promise<ResourcePage | null> {
 			if (!isListedProvider(name)) return null;
@@ -409,6 +598,7 @@ export function sandboxSurface(deps: SurfaceDeps) {
 		},
 		sandboxResources: (name: string, o: { limit?: number; cursor?: string } = {}) => catalog.page(name, o),
 		sandboxResource: (name: string, id: string) => catalog.get(name, id),
+		sandboxAction: (name: string, id: string, action: string, by: string) => catalog.act(name, id, action, by),
 	};
 }
 export type SandboxSurface = ReturnType<typeof sandboxSurface>;
