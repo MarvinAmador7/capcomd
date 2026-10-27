@@ -2,7 +2,7 @@
 // scope actors (src/primitives/ops.ts); tests use memorySource so tests/api stays fast and engine-free.
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, AgentStatus, Attachment, Decision, Message, Project, Run, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Agent, AgentStatus, Attachment, Decision, Message, Project, Run, RunOptions, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
@@ -14,7 +14,7 @@ export type PendingApproval = { approvalId: string; kind: "merge"; status: "pend
 type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
-export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string };
+export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string; driver?: "claude" | "codex"; effort?: string; sandbox?: "docker" | "boxd" };
 /** A run that can't be started as asked (bad repo, no repository, refused by `capcomd run`): 422 with this message. */
 export class CreateRunError extends Error {}
 
@@ -42,6 +42,8 @@ export interface HarnessSource {
 	workspaceFile(runId: string, agentId: string, path: string): Promise<WorkspaceFile | null>;
 	trace(runId: string): Promise<O<typeof Span>[]>;
 	skills(): Promise<O<typeof Skill>[]>;
+	/** GET /v1/run-options: drivers and sandboxes a new run may use, and whether each is available now. */
+	runOptions(): Promise<O<typeof RunOptions>>;
 	approvals(runId: string): Promise<PendingApproval[]>;
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
@@ -101,6 +103,8 @@ export function memorySource(seed: Partial<{
 	files: Record<string, Record<string, Record<string, Uint8Array>>>;
 	/** Skills GET /v1/skills lists, with the SKILL.md each sends. */
 	skills: Array<O<typeof Skill> & { content: string }>;
+	/** What GET /v1/run-options answers (default: both drivers and sandboxes, unavailable). */
+	runOptions: O<typeof RunOptions>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
@@ -171,6 +175,13 @@ export function memorySource(seed: Partial<{
 		},
 		trace: async () => [],
 		skills: async () => (seed.skills ?? []).map(({ content: _, ...s }) => s),
+		runOptions: async () => seed.runOptions ?? {
+			drivers: [
+				{ provider: "claude", label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false },
+				{ provider: "codex", label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false },
+			],
+			sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "VM", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
+		},
 		skill: async (name) => { const s = seed.skills?.find((x) => x.name === name); return s ? { name: s.name, content: s.content } : null; },
 		approvals: async (r) => (approvals[r] ?? []).filter((a) => !decided.some((d) => d.approvalId === a.approvalId)),
 		approval: async (id) => {

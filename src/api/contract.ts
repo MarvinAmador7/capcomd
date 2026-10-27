@@ -3,7 +3,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
+import { AgentProvider, AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 import { ACTIVITY_KINDS } from "../agents/activity";
@@ -70,6 +70,9 @@ export const Agent = z.object({
 	taskAttachment: AttachmentRef.nullable(),
 	result: AgentResult.nullable(),
 	workspace: AgentWorkspace.nullable(),
+	provider: AgentProvider.nullable().describe("The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent"),
+	model: z.string().nullable().describe("The model the agent runs with, when the daemon knows it (the profile's model or CAPCOMD_AGENT_MODEL); null: the provider CLI's default, or a fake agent"),
+	effort: z.string().nullable().describe("The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent"),
 	updatedAt: Timestamp.nullable(),
 });
 /** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */
@@ -278,6 +281,7 @@ export const CAPABILITIES = {
 	"agents.messages": "POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message",
 	"steer.skills": "POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message",
 	"agent.pause": "POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants",
+	"runs.options": "POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -297,12 +301,39 @@ export const CreateRunBody = z.object({
 		.describe("Absolute path of a project checkout on the daemon's machine, one `capcomd setup project` ran in: its .capcomd/config.json gives the run's repository, merge mode, target, checks and agent profiles. Omitted: the daemon's own repository settings (CAPCOMD_REPO); 422 when it has none."),
 	profile: ProfileName.max(63).optional().describe("Agent profile, as `capcomd run --profile`: the worker of the built-in recipe. Refused (422) when the run uses a planner agent, which picks its own workers."),
 	targetBranch: BranchName.optional().describe("Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target."),
+	driver: AgentProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
+	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
+	sandbox: z.enum(["docker", "boxd"]).optional().describe("Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox. GET /v1/run-options lists both."),
 });
 export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; " +
 	"the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. " +
 	"`Idempotency-Key` is scoped to the calling client: same key + same body replays the first response (201, header `Idempotent-Replayed: true`) without starting another run; " +
 	"same key + different body: 409 `idempotency_conflict`. Keys are kept 24 h; a request that failed (422, 500) is not recorded, so retrying it with the same key tries again. " +
-	"422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.";
+	"422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, `profile` with `driver`, a `driver` or `sandbox` that isn't available, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.";
+
+/** GET /v1/run-options: the choices POST /v1/runs takes for `driver` and `sandbox`, and whether each can be used now. */
+export const DriverOption = z.object({
+	provider: AgentProvider,
+	label: z.string().describe("What to call it: \"Claude Code\" or \"Codex\""),
+	model: z.string().nullable().describe("The model the planner would run with on this provider; null: the provider CLI's default"),
+	efforts: z.array(z.string()).describe("Reasoning effort levels this provider takes, lowest to highest (POST /v1/runs `effort`); empty when the daemon can't set its effort"),
+	effort: z.string().nullable().describe("The level a run gets when none is chosen: the planner profile's, else the provider's default; null: the provider CLI decides (claude: by model)"),
+	available: z.boolean(),
+	reason: z.string().nullable().describe("Why it isn't available, one short sentence written by the daemon (trusted), e.g. \"Not logged in to Codex (run capcomd auth login codex)\"; null when available"),
+	default: z.boolean().describe("The provider of the daemon's planner profile: what a run without `driver` uses"),
+});
+export const SandboxOption = z.object({
+	name: z.enum(["docker", "boxd"]),
+	label: z.string().describe("What to call it: \"Local\" (docker) or \"VM\" (boxd)"),
+	available: z.boolean(),
+	reason: z.string().nullable().describe("Why it isn't available (trusted), e.g. \"Docker isn't running\", \"No boxd API key (run capcomd setup)\"; null when available"),
+	default: z.boolean().describe("The daemon's own CAPCOMD_SANDBOX: what a run without `sandbox` uses (none is default when the daemon runs another sandbox)"),
+});
+export const RunOptions = z.object({
+	drivers: z.array(DriverOption).describe("Always claude, then codex"),
+	sandboxes: z.array(SandboxOption).describe("Always docker, then boxd"),
+});
+export const RUN_OPTIONS_DOC = "Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, whether Docker answers, cached a few seconds), so poll it freely.";
 
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
@@ -379,6 +410,9 @@ export const contract = {
 			.input(z.object({ runId: z.string(), attachmentId: z.string().regex(/^att-[0-9a-f]+$/) })).output(Attachment),
 		content: oc.route({ method: "GET", path: "/v1/runs/{runId}/attachments/{attachmentId}/content", description: ATTACHMENT_CONTENT_DOC })
 			.input(z.object({ runId: z.string(), attachmentId: z.string().regex(/^att-[0-9a-f]+$/) })).output(z.string().describe("The attachment's bytes")),
+	},
+	runOptions: {
+		get: oc.route({ method: "GET", path: "/v1/run-options", description: RUN_OPTIONS_DOC }).output(RunOptions),
 	},
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),

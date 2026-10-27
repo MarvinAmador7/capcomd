@@ -26,7 +26,9 @@ export async function runTests(git: Git, command: string, env: Record<string, st
   const prior = key && cache ? passes(cache).get(key) : undefined;
   if (prior) return { passed: true, output: `(this tree passed \`${command}\` at ${new Date(prior.at).toISOString()}; not run again)\n${prior.output}`.slice(-4000), where: "reused" };
   let r: { passed: boolean; output: string; where: ChecksMode };
-  if (checksMode() === "vm") r = { ...(await runInVm(git, command, env)), where: "vm" };
+  // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
+  const source = await (await import("../providers/run-sandbox")).runSandboxEnv(env.CAPCOMD_RUN_ID);
+  if (checksMode(source) === "vm") r = { ...(await runInVm(git, command, env, source)), where: "vm" };
   else {
     const proc = Bun.spawn(["sh", "-c", command], { cwd: git.cwd, env: { ...hostCheckEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
@@ -77,17 +79,17 @@ const CHECKS_TIMEOUT_MS = () => Number(process.env.CAPCOMD_CHECKS_TIMEOUT_MS ?? 
  * no .git), deps reused from the snapshot when the lockfile matches (else installed), the command with
  * only the run/task/target ids in its env, and the VM always destroyed.
  */
-async function runInVm(git: Git, command: string, env: Record<string, string>): Promise<{ passed: boolean; output: string }> {
-  const { getDependencies } = await import("../dependencies");
+async function runInVm(git: Git, command: string, env: Record<string, string>, source: Record<string, string | undefined> = process.env): Promise<{ passed: boolean; output: string }> {
+  const { providerNamed } = await import("../dependencies");
   const { loadAgentConfig, BASE_EGRESS } = await import("../agents/config");
   const { agentHome, agentPath, templateDir, sq } = await import("../agents/runner");
   const { resolveEnvSnapshot } = await import("../env/resolve");
-  const provider = getDependencies().provider;
-  const cfg = loadAgentConfig({ ...process.env, CAPCOMD_CREDENTIALS: "auto", CAPCOMD_AGENT: "fake" });
+  const provider = providerNamed(source.CAPCOMD_SANDBOX);
+  const cfg = loadAgentConfig({ ...source, CAPCOMD_CREDENTIALS: "auto", CAPCOMD_AGENT: "fake" });
   const home = agentHome(cfg);
   const tree = (await git.ok(["rev-parse", "HEAD^{tree}"])).trim();
   const W = `${cfg.workdir}/checks-${tree.slice(0, 12)}`;
-  const snap = resolveEnvSnapshot();
+  const snap = resolveEnvSnapshot(source);
   const { id } = await provider.ensure({
     idemKey: `capcomd-checks-${env.CAPCOMD_RUN_ID ?? "run"}-${env.CAPCOMD_TASK_ID ?? "task"}-${tree.slice(0, 12)}-${Date.now().toString(36)}`,
     isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "checks", ...(env.CAPCOMD_RUN_ID ? { run: env.CAPCOMD_RUN_ID } : {}) },

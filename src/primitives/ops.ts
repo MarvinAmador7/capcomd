@@ -9,6 +9,7 @@ import { join } from "path";
 import { client, assertEngine, cancelRun } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
+import { agentEffort, agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
 import { checkpointRef, stoppedAt } from "../agents/runner";
@@ -120,7 +121,9 @@ export async function namedCheck(runId: string, name: string): Promise<string> {
   return cmd;
 }
 
-export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string }
+export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string;
+  /** The run's own sandbox (`capcomd run --sandbox`): its agents and checks run there, not on the daemon's CAPCOMD_SANDBOX. */
+  sandbox?: string }
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
   const runId = o.runId ?? stableId("run", "run", o.key);
@@ -129,12 +132,13 @@ export async function runNew(o: RunNewOpts) {
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
   if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
   if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from main.");
-  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}) });
+  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, ...(o.goal ? { goal: o.goal } : {}), paramsHash: ph }).catch(asRelay);
   // The run carries its repository settings, so the engine (e.g. a background service) needn't have them.
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
   const repoEnv = repoEnvOf(process.env);
   if (Object.keys(repoEnv).length) await (await import("./state")).kvWrite(runId, { k: RUN_REPO_KV, value: repoEnv, writer: "operator" }).catch(() => {});
+  if (o.sandbox) await (await import("./state")).kvWrite(runId, { k: (await import("../providers/run-sandbox")).RUN_SANDBOX_KV, value: { name: o.sandbox }, writer: "operator" });
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
   if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
@@ -196,22 +200,28 @@ export async function spawnAgent(o: SpawnOpts) {
   const scope = o.parent ?? "operator";
   const agentId = stableId("agt", `${o.runId}\0${scope}`, o.key);
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
-  const envProblem = envSnapshotProblem(spec?.provider);
+  // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
+  const runSource = await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId);
+  const envProblem = envSnapshotProblem(spec?.provider, runSource);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
   // A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist).
   const egress = spec?.egress as string[] | undefined;
-  if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox() && !sandboxCaps().egressAllowlist)
-    throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName()} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
+  if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox(runSource) && !sandboxCaps(runSource).egressAllowlist)
+    throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(runSource)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   // Requested budget: the contract's `budget` ({usd, turns, wallSeconds}), then --budget per unit.
   let requested: Budget;
   try { requested = { ...parseBudget(o.contract?.budget), ...(o.budget ?? {}) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Budget units: usd, turns, wallSeconds (e.g. --budget usd=2,turns=40)."); }
   let grant: Grant;
   try { grant = { ...parseGrant(o.contract?.children), ...parseGrant(o.grant) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Grant fan-out with --children.maxChildren=N, --children.maxDepth=N, --children.maxTotalDescendants=N, --children.allowedChildProfiles=a,b, --children.budgetShare=0.5 (each may only narrow the ceiling)."); }
   const hasGrant = Object.keys(grant).length > 0;
+  // Recorded with the agent (agent.spawned, harness.v1 Agent.model): the model it runs with, as the worker decides it
+  // (loadAgentConfig: CAPCOMD_AGENT_MODEL, else the profile's). A fake agent runs no model.
+  const model = isRealAgent(resolved.kind) ? agentModel(resolved.spec) : undefined;
+  const effort = isRealAgent(resolved.kind) ? agentEffort(resolved.spec) : undefined;
   const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator, ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}) });
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
-    profile: resolved.name, ref: ref ?? resolved.name, spec: spec ? { ...spec, kind: resolved.kind } : { kind: resolved.kind },
+    profile: resolved.name, ref: ref ?? resolved.name, spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
   }).catch(asRelay);
@@ -447,7 +457,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   const mode = env("SPAWN_EXEC");
   const exec = mode === "fake" || mode === "script" ? undefined : (a.ref ?? undefined);
   // Fail fast (no retries, no driverless "running"): a real agent on boxd needs the env snapshot.
-  const envProblem = exec ? envSnapshotProblem((a.spec as any)?.provider) : null;
+  const envProblem = exec ? envSnapshotProblem((a.spec as any)?.provider, await (await import("../providers/run-sandbox")).runSandboxEnv(runId)) : null;
   if (envProblem) { clearInterval(hb); throw new EnvSnapshotMissing(envProblem); }
   // ADR-019 §6: the login this agent spends from is out of quota (another agent hit it): wait for the reset, don't run.
   const login = exec ? loginOf(a.spec) : null;
@@ -552,8 +562,7 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
   const wk: any = await w.getWorker({ workerId: agentId });
   const vmId = wk?.context?.vmId;
   if (!vmId) return null;
-  const { getDependencies } = await import("../dependencies");
-  const provider = getDependencies().provider;
+  const { provider } = await (await import("../dependencies")).providerForRun(runId);
   const { orchestrationSkill } = await import("../subagents/skill");
   const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
   const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true }), kind };

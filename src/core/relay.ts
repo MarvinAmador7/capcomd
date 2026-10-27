@@ -96,6 +96,8 @@ export interface RunOptions {
   approvalTimeoutMs?: number;
   /** How long to wait for a task's agent before failing the attempt (default 6 h); a wait that ends while it is paused on a quota waits again. */
   agentWaitMs?: number;
+  /** The run's own sandbox (`capcomd run --sandbox`); recorded at `run new` (planner and recipe runs). */
+  sandbox?: string;
   emit: Emit;
 }
 

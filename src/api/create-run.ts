@@ -9,6 +9,8 @@ import { REPO_ENV_KEYS } from "../merge/config";
 import { env as envVar } from "../utils/env";
 import { selfArgv } from "../utils/self";
 import { CreateRunError, type CreateRunInput } from "./source";
+import { withSandbox } from "../providers/run-sandbox";
+import { sandboxAvailable } from "./run-options";
 
 type Env = Record<string, string | undefined>;
 const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
@@ -21,8 +23,14 @@ const real = (p: string) => { try { return realpathSync(p); } catch { return res
  *   project's agent profiles and run defaults (checks, reviewer, target) apply too.
  * - `repo` omitted: the daemon's own settings and directory, when they name a repository (CAPCOMD_REPO).
  * Either way, no repository is a CreateRunError: a run without one would only record dry-run merges.
+ * `sandbox` (POST /v1/runs `sandbox`): the run's own CAPCOMD_SANDBOX, in this one command's environment (the CLI also
+ * gets `--sandbox`, which records it with the run for the engine); the daemon's own setting is never changed.
  */
-export function launchContext(repo: string | undefined, base: Env = process.env, cwd = process.cwd()): { cwd: string; env: Env; repo: string } {
+export function launchContext(repo: string | undefined, base: Env = process.env, cwd = process.cwd(), o: { sandbox?: string } = {}): { cwd: string; env: Env; repo: string } {
+	const ctx = contextFor(repo, base, cwd);
+	return o.sandbox ? { ...ctx, env: withSandbox(ctx.env, o.sandbox) } : ctx;
+}
+function contextFor(repo: string | undefined, base: Env, cwd: string): { cwd: string; env: Env; repo: string } {
 	if (repo === undefined) {
 		const r = envVar("REPO", base);
 		if (!r) throw new CreateRunError("repo is required: this daemon has no default repository (CAPCOMD_REPO, e.g. in ~/.capcomd/config.json). Pass repo, the absolute path of a project checkout set up with `capcomd setup project`.");
@@ -51,11 +59,18 @@ const REFUSALS = new Set(["usage", "config", "not_found", "conflict"]);
  * Run `capcomd run --detach --json` for `input` and wait for it to hand the run to its background process (a second or
  * two: it checks the profile and the engine, then forks). Resolves with the run's repository.
  */
-export async function startDetachedRun(input: CreateRunInput & { runId: string }, o: { env?: Env; cwd?: string; timeoutMs?: number } = {}): Promise<{ repo: string; log: string | null }> {
-	const ctx = launchContext(input.repo, o.env ?? process.env, o.cwd ?? process.cwd());
+export async function startDetachedRun(input: CreateRunInput & { runId: string }, o: { env?: Env; cwd?: string; timeoutMs?: number; sandboxCheck?: typeof sandboxAvailable; spawn?: typeof spawn } = {}): Promise<{ repo: string; log: string | null }> {
+	if (input.profile && input.driver) throw new CreateRunError("profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
+	if (input.profile && input.effort) throw new CreateRunError("profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
+	const ctx = launchContext(input.repo, o.env ?? process.env, o.cwd ?? process.cwd(), { ...(input.sandbox ? { sandbox: input.sandbox } : {}) });
+	if (input.sandbox) {
+		const s = await (o.sandboxCheck ?? sandboxAvailable)(input.sandbox, ctx.env);
+		if (!s.available) throw new CreateRunError(`sandbox ${input.sandbox} isn't available: ${s.reason}`);
+	}
 	const [cmd, ...args] = selfArgv("run", "--detach", "--json", "--run-id", input.runId,
-		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []), "--", input.goal);
-	const child = spawn(cmd!, args, { cwd: ctx.cwd, env: ctx.env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"] });
+		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []),
+		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []), "--", input.goal);
+	const child = (o.spawn ?? spawn)(cmd!, args, { cwd: ctx.cwd, env: ctx.env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"] });
 	let stdout = "", stderr = "";
 	child.stdout!.on("data", (b) => { stdout += b; });
 	child.stderr!.on("data", (b) => { stderr += b; });

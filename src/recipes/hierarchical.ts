@@ -54,7 +54,7 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
   emit("run.started", { goal: opts.goal, targetBranch: opts.targetBranch ?? null, recipe: "hierarchical" }, `Starting run: ${runId} (recipe)\nGoal: ${opts.goal}\n`);
 
   // 1. scope + run ledger (run new also creates the run actor in "planning").
-  const scope = await runNew({ runId, budget: opts.budgetUsd ? { usd: opts.budgetUsd } : {}, label: opts.goal, goal: opts.goal });
+  const scope = await runNew({ runId, budget: opts.budgetUsd ? { usd: opts.budgetUsd } : {}, label: opts.goal, goal: opts.goal, ...(opts.sandbox ? { sandbox: opts.sandbox } : {}) });
   emit(scope.created ? "run.created" : "run.resumed", { runId }, scope.created ? "✓ Run created (scope)" : "✓ Run resumed (scope)");
   const runH = c.run.getOrCreate([runId]);
   let run = await runH.getRun({ runId });

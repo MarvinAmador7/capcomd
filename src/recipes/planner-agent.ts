@@ -4,19 +4,12 @@
 // it changes and ends with the planner's summary. The fake-model recipe (hierarchical.ts) stays for offline runs.
 import { assertEngine, type RunOptions, type RunResult } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { resolveAgent } from "../agents/profiles";
 import { awaitAgents, runNew, spawnAgent, treeOf } from "../primitives/ops";
 import { TERMINAL_AGENT } from "../primitives/policy";
 
-export const DEFAULT_PLANNER = "planner";
-
-/** The planner profile `capcomd run` would use, if one may spawn: `--planner`, else the profile named "planner". */
-export function plannerProfile(name?: string): string | null {
-  try {
-    const r = resolveAgent(name ?? DEFAULT_PLANNER);
-    return (r.spec as { children?: { allowSpawn?: boolean } } | null)?.children?.allowSpawn ? r.name : null;
-  } catch { return null; }
-}
+// The planner choice lives with the run's driver choice (src/agents/run-driver.ts), which GET /v1/run-options reads too.
+export { DEFAULT_PLANNER, plannerProfile } from "../agents/run-driver";
+import { DEFAULT_PLANNER } from "../agents/run-driver";
 
 export function plannerBrief(goal: string, gates: { checks: string[]; reviewer: string | null; target: string | null }): string {
   return [
@@ -32,16 +25,18 @@ export function plannerBrief(goal: string, gates: { checks: string[]; reviewer: 
 }
 
 /** Runs the goal with a planner agent; ok when the planner finishes "done". */
-export async function runWithPlanner(opts: RunOptions & { profile: string; budget?: Record<string, number> }): Promise<RunResult> {
+export async function runWithPlanner(opts: RunOptions & { profile: string; driver?: string; budget?: Record<string, number> }): Promise<RunResult> {
   await assertEngine();
   const emit = opts.emit;
   const runId = opts.runId!;
   // Gates come from the project (`capcomd setup`), as for an MCP driver's runs.
   const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
   const target = opts.targetBranch ?? d.target;
-  const run = await runNew({ runId, budget: opts.budget ?? {}, label: opts.goal, goal: opts.goal, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(target ? { target } : {}) });
+  const run = await runNew({ runId, budget: opts.budget ?? {}, label: opts.goal, goal: opts.goal, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(target ? { target } : {}), ...(opts.sandbox ? { sandbox: opts.sandbox } : {}) });
   const gates = { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null };
-  emit("run.started", { goal: opts.goal, planner: opts.profile, gates, recipe: "planner" }, `Starting run: ${runId}\nGoal: ${opts.goal}\nPlanner: ${opts.profile}${gates.checks.length ? `  checks: ${gates.checks.join(", ")}` : ""}${gates.reviewer ? `  reviewer: ${gates.reviewer}` : ""}${gates.target ? `  target: ${gates.target}` : ""}\n`);
+  // `profile` may be a ref with overrides (`--planner-provider`): show its name and provider.
+  const planner = opts.profile.split(";")[0]!, driver = opts.driver ? ` (${opts.driver})` : "";
+  emit("run.started", { goal: opts.goal, planner, ...(opts.driver ? { driver: opts.driver } : {}), gates, recipe: "planner" }, `Starting run: ${runId}\nGoal: ${opts.goal}\nPlanner: ${planner}${driver}${gates.checks.length ? `  checks: ${gates.checks.join(", ")}` : ""}${gates.reviewer ? `  reviewer: ${gates.reviewer}` : ""}${gates.target ? `  target: ${gates.target}` : ""}\n`);
   if (!run.created) emit("run.resumed", { runId }, "✓ Run resumed");
   const root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates), key: "planner" });
   emit("planner.spawned", { agentId: root.agentId }, `→ Planner ${root.agentId} is working (follow it: capcomd tree ${runId}, capcomd logs ${runId} ${root.agentId} --follow)`);

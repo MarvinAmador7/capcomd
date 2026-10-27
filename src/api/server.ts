@@ -105,6 +105,7 @@ export function harnessApp(o: ServerOptions) {
 			get: os.attachments.get.handler(async ({ input }) => (await src.attachment(input.runId, input.attachmentId)) ?? (() => { throw nf(input.attachmentId); })()),
 			content: os.attachments.content.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
+		runOptions: { get: os.runOptions.get.handler(() => src.runOptions()) },
 		skills: { list: os.skills.list.handler(() => src.skills()) },
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
@@ -177,12 +178,23 @@ export function harnessApp(o: ServerOptions) {
 		const parsed = CreateRunBody.safeParse(await c.req.json().catch(() => undefined));
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
-			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?}");
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?, driver?, effort?, sandbox?}");
 		}
 		const p = parsed.data;
-		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}) };
+		if (p.profile !== undefined && p.driver !== undefined) return err(c, 422, "invalid", "profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
+		if (p.profile !== undefined && p.effort !== undefined) return err(c, 422, "invalid", "profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
+		if (p.effort !== undefined) {
+			// The chosen driver's levels (GET /v1/run-options), or the default driver's when none is chosen.
+			const drivers = (await src.runOptions()).drivers;
+			const d = p.driver !== undefined ? drivers.find((x) => x.provider === p.driver) : drivers.find((x) => x.default);
+			if (!d) return err(c, 422, "invalid", "effort needs a driver: this daemon has no default planner profile (run capcomd setup), so send driver too");
+			if (!d.efforts.includes(p.effort)) return err(c, 422, "invalid", d.efforts.length ? `effort ${JSON.stringify(p.effort)} isn't a ${d.label} level: use one of ${d.efforts.join(", ")}` : `${d.label}'s effort can't be set`);
+		}
+		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox } : {}) };
 		const kid = `${c.get("client").clientId}\u0000runs.create\u0000${key}`;
-		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null]);
+		// driver and sandbox are part of the body (another value: idempotency_conflict); a request without them hashes as
+		// before they existed, so a retry across the upgrade still replays.
+		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null, ...(input.driver || input.sandbox || input.effort ? [input.driver ?? null, input.sandbox ?? null, ...(input.effort ? [input.effort] : [])] : [])]);
 		const conflict = () => err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different body");
 		const replay = (r: Outcome) => c.json(r.body, r.status as 201, r.status === 201 ? { "idempotent-replayed": "true" } : {});
 		const prior = state.key(kid);

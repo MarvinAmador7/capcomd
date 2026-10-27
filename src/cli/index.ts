@@ -48,6 +48,10 @@ Usage:
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
                                            (default on boxd: the profile named "planner", which capcomd setup writes)
+             [--planner-provider claude|codex]  run the planner on that provider (its model and login: the project's
+                                           profile on it, else the provider's defaults)
+             [--planner-effort LEVEL]      the planner's reasoning effort (claude low..max, codex minimal..high)
+             [--sandbox docker|boxd]       where this run's agents and checks run (default: CAPCOMD_SANDBOX)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
   capcomd clients add <name> [--scopes read,steer,approve] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages)
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
@@ -76,7 +80,7 @@ Usage:
   capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start | --since-seq N]   (with --json: one JSON line per event; resume with --since-seq <last seq>)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
-                                       add/set flags: --provider --auth --model --max-turns --budget
+                                       add/set flags: --provider --auth --model --effort --max-turns --budget
                                        --timeout-ms --idle-after-ms --stuck-repeats --no-change-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
                                        --append-system-prompt --allowed-tools --disallowed-tools
                                        --description --default --spec JSON --unset k1,k2
@@ -148,6 +152,7 @@ async function main(argv: string[]): Promise<number> {
         provider: { type: "string" },
         auth: { type: "string" },
         model: { type: "string" },
+        effort: { type: "string" },
         "max-turns": { type: "string" },
         budget: { type: "string" },
         "timeout-ms": { type: "string" },
@@ -222,6 +227,8 @@ async function main(argv: string[]): Promise<number> {
         recipe: { type: "boolean" },
         legacy: { type: "boolean" },
         planner: { type: "string" },
+        "planner-provider": { type: "string" },
+        "planner-effort": { type: "string" },
         after: { type: "string", multiple: true },
         skill: { type: "string", multiple: true },
         all: { type: "boolean" },
@@ -323,15 +330,46 @@ async function main(argv: string[]): Promise<number> {
         // A planner agent plans real work: --planner P, or on real VMs the profile named "planner" (capcomd setup writes
         // it). The built-in recipe's planner is a placeholder model, so real VMs need --recipe/--legacy to use it.
         const PA = await import("../recipes/planner-agent");
+        // --sandbox NAME: where this run's agents and checks run (recorded with the run), instead of CAPCOMD_SANDBOX.
+        // This process (the planner's choice, preflight, the run's driver) sees it as its own CAPCOMD_SANDBOX.
+        let runSandbox: string | undefined;
+        if (values.sandbox !== undefined) {
+          const RS = await import("../providers/run-sandbox");
+          const n = String(values.sandbox).toLowerCase();
+          if (!RS.isProviderName(n)) usage(`--sandbox names where the run's agents run: docker or boxd (got ${values.sandbox})`);
+          if (values.legacy || (!values.recipe && !values.planner && !values["planner-provider"] && !values["planner-effort"] && (process.env.CAPCOMD_RUN_PATH ?? DEFAULT_RUN_PATH) === "legacy")) usage("--sandbox needs a planner or recipe run (not --legacy)");
+          process.env.CAPCOMD_SANDBOX = n;
+          delete process.env.RELAY_SANDBOX;
+          runSandbox = n;
+        }
+        // --planner-provider claude|codex: who drives the run, i.e. the planner agent's provider (src/agents/run-driver.ts).
+        const driver = values["planner-provider"] as string | undefined;
+        if (driver !== undefined) {
+          if (values.recipe || values.legacy) usage("--planner-provider runs a planner agent; don't combine it with --recipe/--legacy");
+          if (driver !== "claude" && driver !== "codex") usage(`--planner-provider must be claude or codex (got ${driver})`);
+        }
+        // --planner-effort LEVEL: the planner's reasoning effort (one of its provider's levels; checked with the profile).
+        const effort = values["planner-effort"] as string | undefined;
+        if (effort !== undefined && (values.recipe || values.legacy)) usage("--planner-effort sets a planner agent's effort; don't combine it with --recipe/--legacy");
         const realVms = (await import("../providers/registry")).realSandbox();
         let planner: string | null = null;
         if (values.planner !== undefined) {
           if (values.recipe || values.legacy) usage("--planner runs a planner agent; don't combine it with --recipe/--legacy");
           planner = PA.plannerProfile(values.planner as string);
           if (!planner) throw PA.noPlannerError(values.planner as string);
-        } else if (!values.recipe && !values.legacy && !process.env.CAPCOMD_RUN_PATH && realVms) {
+        } else if (driver !== undefined || effort !== undefined || (!values.recipe && !values.legacy && !process.env.CAPCOMD_RUN_PATH && realVms)) {
           planner = PA.plannerProfile();
           if (!planner) throw PA.noPlannerError();
+        }
+        // The planner agent's ref: its profile, with the provider swapped when --planner-provider names another.
+        let plannerRef = planner;
+        if (planner && (driver || effort)) {
+          const RD = await import("../agents/run-driver");
+          const p = (driver as "claude" | "codex" | undefined) ?? RD.profileProvider(planner);
+          const d = RD.plannerDriver(p, planner, process.env, effort);
+          if (!d.ok && d.code === "effort") usage(d.reason);
+          if (!d.ok) throw new RelayError("config", `${p} can't drive this run: ${d.reason}`, `Log in with \`capcomd auth login ${p}\` (or set its API key), or leave out --planner-provider to use the planner profile's own provider.`);
+          plannerRef = d.ref;
         }
         if (planner && (values.profile || values.agent || (values.set as string[] | undefined)?.length || values.overrides)) usage("--profile/--set pick the worker of the built-in recipe; a planner agent picks its own workers (from its profile's children.allowedChildProfiles)");
         // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
@@ -363,7 +401,7 @@ async function main(argv: string[]): Promise<number> {
           mkdirSync(dir, { recursive: true });
           const log = join(dir, `${runId}.ndjson`);
           const fd = openSync(log, "a");
-          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), "--", goal);
+          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), ...(driver ? ["--planner-provider", driver] : []), ...(effort ? ["--planner-effort", effort] : []), ...(runSandbox ? ["--sandbox", runSandbox] : []), "--", goal);
           const child = spawn(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
           child.unref();
           if (json) out({ runId, detached: true, log, pid: child.pid });
@@ -384,9 +422,9 @@ async function main(argv: string[]): Promise<number> {
           else console.log(human);
         };
         const result = planner
-          ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: planner })
+          ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: plannerRef!, ...(driver ? { driver } : {}), ...(runSandbox ? { sandbox: runSandbox } : {}) })
           : runPath === "recipe"
-          ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit })
+          ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit, ...(runSandbox ? { sandbox: runSandbox } : {}) })
           : await executeRun({ goal, runId, targetBranch, emit });
         if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
         return result.ok ? EXIT.ok : EXIT.run_failed;

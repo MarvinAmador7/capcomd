@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- API: `POST /v1/runs` takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox`
+  (docker or boxd) to pick who drives a run, how hard it thinks and where it runs; `GET /v1/run-options` lists them,
+  each driver's effort levels and whether each is available (capability `runs.options`). Agents now also report their
+  `effort`. On the command line: `capcomd run <goal> --planner-provider claude|codex` runs the project's planner on
+  that provider (with the model and login of your profile for it, else the provider's defaults), `--planner-effort
+  LEVEL` sets its effort, and `--sandbox docker|boxd` runs that run's agents and checks there instead of on
+  `CAPCOMD_SANDBOX`. Profiles take `effort` too (`capcomd agents set NAME --effort high`; claude: low to max, codex:
+  minimal to high), and `CAPCOMD_AGENT_EFFORT` overrides it.
+- API: agents now report which AI provider (claude or codex) and model they run on, as `provider` and `model` on
+  each agent (GET /v1/runs/{runId}/agents and the stream's `snapshot.agents`). `provider` is null for a fake agent;
+  `model` is null when the provider's default model is used. The `agent` field of `agent.spawned` events now has a
+  documented shape (`kind`, `provider`, `model`, plus the profile's other settings).
 - Menu bar app: opening the @ mention or / skill list in a thread no longer blanks out the top of the conversation;
   the list now floats over the thread.
 - Menu bar app: when you @ mention an agent in a message, it becomes a pill with the agent's bot and name, right
