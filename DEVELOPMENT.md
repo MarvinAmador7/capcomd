@@ -81,6 +81,7 @@ src/
 apps/
   canvas/       - web UI (capcomd ui)
   tui/          - terminal debugger
+  menubar/      - macOS menu bar app (SwiftUI); its README says how to run it and build capcomd.app
 packages/
   agent-thread/ - agent CLI streams (Claude stream-json, Codex --json) → harness.v1 thread items with a sanitized
                   blocks/1 tree; pure functions (no imports from src/), own tsconfig, tests and golden fixtures

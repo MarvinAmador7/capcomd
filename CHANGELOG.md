@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: build it as a real Mac app. `apps/menubar/scripts/build-app.sh` makes
+  `apps/menubar/build/capcomd.app` (with its pixel bot icon and the repo's version), so Open at login and
+  notifications work and About shows the app's version. It's signed ad hoc, which means the Keychain asks again for
+  the app's token after every rebuild; set `CAPCOMD_SIGN_IDENTITY` to a code-signing identity of yours and "Always
+  Allow" lasts across rebuilds. `--debug` makes a debug build. See `apps/menubar/README.md`.
 - Harness API: a place's details, for a settings screen that works for any provider (capability `sandboxes`).
   `GET /v1/sandboxes` lists each place agents run (today Local · Docker and Cloud · boxd) with what it can do, whether
   it's available and whether it's the default. `GET /v1/sandboxes/{name}` adds its settings and info rows as typed
