@@ -13,7 +13,16 @@ public final class UnixSocketTransport: @unchecked Sendable {
   let client: HTTPClient
   public init(socketPath: String, token: String) {
     self.socketPath = socketPath; self.token = token
-    self.client = HTTPClient(eventLoopGroupProvider: .singleton)
+    // A local socket: a refused connection means the daemon is down or restarting. Fail the request at once (connect
+    // timeout 3 s, no pool retry) and let the caller back off and reconnect; with the pool's retry an SSE request kept
+    // retrying inside its 24 h deadline, so feeds never came back after a daemon restart.
+    var config = HTTPClient.Configuration()
+    config.connectionPool.retryConnectionEstablishment = false
+    // Every SSE feed holds a connection for good (the daemon feed, one per followed run, the open thread's): the default
+    // 8 per host queued any feed past the eighth forever, so newer runs never showed their agents.
+    config.connectionPool.concurrentHTTP1ConnectionsPerHostSoftLimit = 64
+    config.timeout.connect = .seconds(3)
+    self.client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: config)
   }
   public func shutdown() async throws { try await client.shutdown() }
 

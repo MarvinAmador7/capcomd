@@ -94,7 +94,8 @@ export async function serveHarnessSocket(path: string, fetch: (req: Request) => 
 		// Create the socket already 0600: no window where another local user could connect. chmod stays as belt-and-braces.
 		const prev = process.umask(0o177);
 		let server: ReturnType<typeof Bun.serve>;
-		try { server = Bun.serve({ unix: tmp, fetch }); } finally { process.umask(prev); }
+		// idleTimeout above the SSE heartbeat (HEARTBEAT_MS, 15 s): Bun's default 10 s cut every quiet event stream.
+		try { server = Bun.serve({ unix: tmp, fetch, idleTimeout: 60 }); } finally { process.umask(prev); }
 		try {
 			chmodSync(tmp, 0o600);
 			linkSync(tmp, path);

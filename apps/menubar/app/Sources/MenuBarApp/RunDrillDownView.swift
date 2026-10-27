@@ -593,8 +593,7 @@ struct DrillFooter: View {
 
   private var bar: some View {
     HStack(spacing: Theme.Drill.footerGap) {
-      pauseButton
-      stopButton
+      if active { pauseButton; stopButton }   // an ended run has nothing to pause or stop
       Spacer(minLength: 0)
       terminalButton
     }

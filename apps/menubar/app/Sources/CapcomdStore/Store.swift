@@ -188,8 +188,9 @@ public final class CapcomdStore {
   /// Badge and notifications come from each run's lifecycle feed (`?feed=lifecycle`): one per known, unfinished run.
   func syncLifecycleFeeds() {
     guard subscriber != nil, subs["daemon"] != nil else { return }
+    // Active runs first: the daemon reports a finished run as `idle`, not a terminal state, so old ones mustn't crowd out new.
     let want = runs.values.filter { !Run.terminalStates.contains($0.state) }
-      .sorted { ($0.lastEventMs, $0.id) > ($1.lastEventMs, $1.id) }.prefix(Self.maxLifecycleFeeds).map(\.id)
+      .sorted { ($0.isActive ? 1 : 0, $0.lastEventMs, $0.id) > ($1.isActive ? 1 : 0, $1.lastEventMs, $1.id) }.prefix(Self.maxLifecycleFeeds).map(\.id)
     for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }   // live activity rides along (Live adds ?activity=1)
   }
   public var activeScopes: [String] { subs.keys.sorted() }
