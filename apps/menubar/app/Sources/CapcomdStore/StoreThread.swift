@@ -74,7 +74,7 @@ extension CapcomdStore {
     let options: RunOptions
     do { options = try await daemonInfo.runOptions(repo: repo) }
     catch let e as MessageRefused {
-      options = RunOptions(drivers: runOptions.drivers.map { var d = $0; d.available = false; d.reason = e.message; return d }, sandboxes: runOptions.sandboxes)
+      options = RunOptions(drivers: runOptions.drivers.map { var d = $0; d.available = false; d.reason = e.message; d.sandboxes = nil; return d }, sandboxes: runOptions.sandboxes)
     }
     catch { return }
     // The project changed while this was asked: its own refresh answers for it.

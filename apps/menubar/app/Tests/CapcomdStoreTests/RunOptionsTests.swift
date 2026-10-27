@@ -42,5 +42,22 @@ final class RunOptionsTests: XCTestCase {
     XCTAssertEqual(s.runOptions.drivers.map(\.available), [false])
     XCTAssertEqual(s.runOptions.drivers.first?.reason, info.refuse)
     XCTAssertEqual(s.runOptions.sandboxes.map(\.name), ["boxd"])             // where it runs doesn't depend on the folder
+    XCTAssertEqual(s.runOptions.drivers(in: "boxd").map(\.available), [false]) // nor do per-sandbox answers bring it back
+  }
+
+  func testADriverIsAvailableOnlyWhereItCanRun() {
+    let o = RunOptions(drivers: [DriverInfo(provider: "claude", label: "Claude Code", available: true,
+                                            sandboxes: ["boxd": DriverAvailability(available: true),
+                                                        "docker": DriverAvailability(available: false, reason: "Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)")])])
+    XCTAssertEqual(o.drivers(in: "boxd").first?.available, true)
+    XCTAssertEqual(o.drivers(in: "docker").first?.available, false)
+    XCTAssertEqual(o.drivers(in: "docker").first?.reason, "Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)")
+    XCTAssertEqual(o.drivers(in: nil).first?.available, true)                 // older daemon: its own sandbox's answer
+  }
+
+  func testPerSandboxAnswersDecode() throws {
+    let json = #"{"drivers":[{"provider":"claude","label":"Claude Code","model":null,"efforts":["low"],"effort":null,"available":true,"reason":null,"default":true,"sandboxes":{"docker":{"available":false,"reason":"No agent environment for Local yet"},"boxd":{"available":true,"reason":null}}}],"sandboxes":[{"name":"docker","label":"Local","available":true,"reason":null,"default":false}]}"#
+    let o = try JSONDecoder().decode(RunOptions.self, from: Data(json.utf8))
+    XCTAssertEqual(o.drivers.first?.sandboxes?["docker"], DriverAvailability(available: false, reason: "No agent environment for Local yet"))
   }
 }

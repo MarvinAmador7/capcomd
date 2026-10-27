@@ -166,6 +166,21 @@ public struct SandboxInfo: Codable, Sendable, Hashable, Identifiable {
 public struct RunOptions: Codable, Sendable, Hashable {
   public var drivers: [DriverInfo]; public var sandboxes: [SandboxInfo]
   public init(drivers: [DriverInfo] = [], sandboxes: [SandboxInfo] = []) { self.drivers = drivers; self.sandboxes = sandboxes }
+  /// The drivers as they stand for a run in `sandbox`: logins and agent environments are per sandbox, so Claude logged
+  /// in for VM only is unavailable on Local, saying why. Daemons without `runs.options.sandbox` answer for their own.
+  public func drivers(in sandbox: String?) -> [DriverInfo] {
+    guard let sandbox else { return drivers }
+    return drivers.map { d in
+      guard let here = d.sandboxes?[sandbox] else { return d }
+      var d = d; d.available = here.available; d.reason = here.reason; return d
+    }
+  }
+}
+
+/// Whether a driver can run in one sandbox (`GET /v1/run-options` `drivers[].sandboxes`), and why not.
+public struct DriverAvailability: Codable, Sendable, Hashable {
+  public var available: Bool; public var reason: String?
+  public init(available: Bool, reason: String? = nil) { self.available = available; self.reason = reason }
 }
 
 /// One AI that can drive a run as its planner (`GET /v1/run-options`).
@@ -178,12 +193,14 @@ public struct DriverInfo: Codable, Sendable, Hashable, Identifiable {
   /// Reasoning effort levels it takes, lowest first (empty or absent: not settable), and the one a run gets by default.
   public var efforts: [String]?
   public var effort: String?
+  /// Per sandbox (docker, boxd): whether it can drive a run there; `available` above is for the daemon's own sandbox.
+  public var sandboxes: [String: DriverAvailability]?
   public var id: String { provider }
-  enum CodingKeys: String, CodingKey { case provider, label, model, available, reason, isDefault = "default", efforts, effort }
+  enum CodingKeys: String, CodingKey { case provider, label, model, available, reason, isDefault = "default", efforts, effort, sandboxes }
   public init(provider: String, label: String, model: String? = nil, available: Bool = true, reason: String? = nil, isDefault: Bool? = nil,
-              efforts: [String]? = nil, effort: String? = nil) {
+              efforts: [String]? = nil, effort: String? = nil, sandboxes: [String: DriverAvailability]? = nil) {
     self.provider = provider; self.label = label; self.model = model; self.available = available; self.reason = reason; self.isDefault = isDefault
-    self.efforts = efforts; self.effort = effort
+    self.efforts = efforts; self.effort = effort; self.sandboxes = sandboxes
   }
 }
 

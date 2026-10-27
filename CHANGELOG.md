@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: the composer shows who can drive a run for the project you picked and where it runs. Claude logged in
+  for VM only shows as unavailable on Local, saying which command fixes it; a folder that isn't a capcomd project says
+  so. Before, it showed the daemon's own answer, so a run could be offered and then fail.
+- Menu bar app: a run that hasn't started its first step is headed "Starting…" (not its goal twice), and its Activity
+  says "Nothing has happened yet." instead of staying blank.
 - Agents' commits, and the pull requests capcomd opens for them, are titled with what the change does, cut at a word
   ("In src/math.ts add and export function multiply(a: number, b: number)…"), instead of the agent's id followed by
   the task cut mid-word ("agt-k825d4…: In src/math.ts add and export function multiply(a: number, b"). The task and
