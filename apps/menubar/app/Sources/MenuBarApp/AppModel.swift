@@ -170,8 +170,15 @@ final class AppModel {
     set { store.prefs.startRepo = newValue; revision &+= 1 }
   }
   /// Starts a run; when the daemon has no default repository, asks for the project folder once and remembers it.
-  /// Who can drive a new run as its planner (`runs.driver`); empty on daemons that can't be asked.
-  var drivers: [DriverInfo] { _ = revision; return store.drivers }
+  /// Who can drive a new run as its planner, and where it can run (`runs.options`); empty on daemons that can't say.
+  var drivers: [DriverInfo] { _ = revision; return store.runOptions.drivers }
+  var sandboxes: [SandboxInfo] { _ = revision; return store.runOptions.sandboxes }
+  /// Where new runs go: the one last picked while still available, else the project's default.
+  var startSandbox: SandboxInfo? {
+    let ss = sandboxes
+    return ss.first { $0.name == store.prefs.startSandbox && $0.available } ?? ss.first { $0.isDefault == true && $0.available } ?? ss.first(where: \.available)
+  }
+  func pickSandbox(_ name: String) { store.prefs.startSandbox = name; revision &+= 1 }
   /// The driver new runs go to: the one last picked while the daemon still offers it, else the project's default.
   var startDriver: DriverInfo? {
     let ds = drivers
@@ -180,11 +187,11 @@ final class AppModel {
   func pickDriver(_ provider: String) { store.prefs.startDriver = provider; revision &+= 1 }
 
   func startRun(_ goal: String) async -> Bool {
-    let driver = startDriver?.provider
-    var state = await store.startRun(goal: goal, repo: store.prefs.startRepo, driver: driver)
+    let driver = startDriver?.provider, sandbox = startSandbox?.name
+    var state = await store.startRun(goal: goal, repo: store.prefs.startRepo, driver: driver, sandbox: sandbox)
     if case .needsRepo = state, let folder = ProjectFolderPicker.choose() {
       store.prefs.startRepo = folder
-      state = await store.startRun(goal: goal, repo: folder, driver: driver)
+      state = await store.startRun(goal: goal, repo: folder, driver: driver, sandbox: sandbox)
     }
     if case .started = state { return true }
     return false

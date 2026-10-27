@@ -46,9 +46,9 @@ public final class CapcomdStore {
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
   public internal(set) var capabilities: Set<String> = []
   public internal(set) var skills: Fetched<[SkillInfo]>?
-  /// Who can drive a new run (`runs.driver`); empty when the daemon can't be asked.
-  public internal(set) var drivers: [DriverInfo] = []
-  var pendingStartKey: (goal: String, repo: String?, driver: String?, key: String)?
+  /// Who can drive a new run and where it can run (`runs.options`); empty when the daemon can't be asked.
+  public internal(set) var runOptions = RunOptions()
+  var pendingStartKey: (goal: String, repo: String?, driver: String?, sandbox: String?, key: String)?
 
   let subscriber: StreamSubscribing?
   let decider: ApprovalDeciding?

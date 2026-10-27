@@ -167,8 +167,9 @@ public struct LiveControls: RunControlling {
 public struct LiveStarter: RunStarting {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
-  public func start(goal: String, repo: String?, driver: String?, idempotencyKey: String) async throws -> String {
-    var body: [String: String] = ["goal": goal]; if let repo { body["repo"] = repo }; if let driver { body["driver"] = driver }
+  public func start(goal: String, repo: String?, driver: String?, sandbox: String?, idempotencyKey: String) async throws -> String {
+    var body: [String: String] = ["goal": goal]
+    if let repo { body["repo"] = repo }; if let driver { body["driver"] = driver }; if let sandbox { body["sandbox"] = sandbox }
     let (status, data) = try await transport.post("/v1/runs", headers: [("Idempotency-Key", idempotencyKey)], json: try JSONEncoder().encode(body))
     let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     let message = obj?["message"] as? String ?? "capcomd refused"
@@ -221,10 +222,9 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
     do { return try await transport.getJSON("/v1/skills", as: [SkillInfo].self) }
     catch let e as HTTPStatusError { if e.status == 401 { throw Unauthorized() }; throw e.status == 404 ? DetailUnavailable.unsupported : DetailUnavailable.failed("HTTP \(e.status)") }
   }
-  /// `GET /v1/drivers`: `{drivers: [DriverInfo]}`.
-  public func drivers() async throws -> [DriverInfo] {
-    struct Body: Decodable { var drivers: [DriverInfo] }
-    do { return try await transport.getJSON("/v1/drivers", as: Body.self).drivers }
+  /// `GET /v1/run-options`: `{drivers: [DriverInfo], sandboxes: [SandboxInfo]}`.
+  public func runOptions() async throws -> RunOptions {
+    do { return try await transport.getJSON("/v1/run-options", as: RunOptions.self) }
     catch let e as HTTPStatusError { if e.status == 401 { throw Unauthorized() }; throw e.status == 404 ? DetailUnavailable.unsupported : DetailUnavailable.failed("HTTP \(e.status)") }
   }
 }

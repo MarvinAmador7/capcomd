@@ -87,6 +87,11 @@ public final class UIPreferences {
     get { store.string(forKey: "startDriver") }
     set { store.set(newValue, forKey: "startDriver") }
   }
+  /// Where new runs go last picked ("docker", "boxd"); nil: the project's sandbox as configured.
+  public var startSandbox: String? {
+    get { store.string(forKey: "startSandbox") }
+    set { store.set(newValue, forKey: "startSandbox") }
+  }
   public var activityCollapsed: Bool {
     get { store.string(forKey: "activityCollapsed") == "1" }
     set { store.set(newValue ? "1" : "0", forKey: "activityCollapsed") }
@@ -129,11 +134,30 @@ public struct StartRefused: Error, Sendable, Hashable {
   public init(_ m: String, needsRepo: Bool = false) { message = m; self.needsRepo = needsRepo }
 }
 public protocol RunStarting: Sendable {
-  /// `driver`: which AI drives the run as its planner ("claude", "codex"); nil: the project's planner as configured.
-  func start(goal: String, repo: String?, driver: String?, idempotencyKey: String) async throws -> String
+  /// `driver`: which AI drives the run as its planner ("claude", "codex"); `sandbox`: where its agents run ("docker"
+  /// on this machine, "boxd" VMs). nil: the project's settings.
+  func start(goal: String, repo: String?, driver: String?, sandbox: String?, idempotencyKey: String) async throws -> String
 }
 
-/// One AI that can drive a run as its planner (`GET /v1/drivers`, with the `runs.driver` capability).
+/// Where a run's agents can run (`GET /v1/run-options`): "docker" (Local, this machine) or "boxd" (VM).
+public struct SandboxInfo: Codable, Sendable, Hashable, Identifiable {
+  public var name: String; public var label: String
+  /// False when it can't be used now (Docker not running, no boxd key); `reason` says which.
+  public var available: Bool; public var reason: String?
+  public var isDefault: Bool?
+  public var id: String { name }
+  enum CodingKeys: String, CodingKey { case name, label, available, reason, isDefault = "default" }
+  public init(name: String, label: String, available: Bool = true, reason: String? = nil, isDefault: Bool? = nil) {
+    self.name = name; self.label = label; self.available = available; self.reason = reason; self.isDefault = isDefault
+  }
+}
+/// `GET /v1/run-options` (with the `runs.options` capability): who can drive a run and where it can run.
+public struct RunOptions: Codable, Sendable, Hashable {
+  public var drivers: [DriverInfo]; public var sandboxes: [SandboxInfo]
+  public init(drivers: [DriverInfo] = [], sandboxes: [SandboxInfo] = []) { self.drivers = drivers; self.sandboxes = sandboxes }
+}
+
+/// One AI that can drive a run as its planner (`GET /v1/run-options`).
 public struct DriverInfo: Codable, Sendable, Hashable, Identifiable {
   public var provider: String; public var label: String; public var model: String?
   /// False when its CLI isn't installed or logged in on the daemon's machine; `reason` says which.
@@ -166,6 +190,6 @@ public struct SkillInfo: Codable, Sendable, Hashable, Identifiable {
 public protocol DaemonInfoFetching: Sendable {
   func capabilities() async throws -> Set<String>
   func skills() async throws -> [SkillInfo]
-  func drivers() async throws -> [DriverInfo]
+  func runOptions() async throws -> RunOptions
 }
-extension DaemonInfoFetching { public func drivers() async throws -> [DriverInfo] { [] } }
+extension DaemonInfoFetching { public func runOptions() async throws -> RunOptions { RunOptions() } }

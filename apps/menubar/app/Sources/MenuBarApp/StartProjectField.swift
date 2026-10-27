@@ -39,8 +39,9 @@ struct StartProjectField: View {
           .accessibilityLabel("Start a project")
         HStack(spacing: Theme.Composer2.chipGap) {
           addMenu
-          driverChip   // who drives it sits with the tools, by the send (owner's call)
+          sandboxSwitch
           Spacer(minLength: 0)
+          driverChip   // who drives it sits by the send, like the reference's model menu
           if starting { ProgressView().controlSize(.small).accessibilityLabel("Starting") }
           SendCircle(ready: ready, stop: false, label: "Start project", action: submit)
         }
@@ -72,6 +73,41 @@ struct StartProjectField: View {
         Chip2(icon: "folder", text: "Default project", onRemove: nil)
       }
       .buttonStyle(.plain).help("capcomd's default project; click to choose a checkout")
+    }
+  }
+
+  /// Where the run's agents work (owner's reference: the Web · Computer · Files group): Local (Docker on this Mac) or
+  /// VM (boxd), as the daemon offers them. The pick is remembered; one it can't use now is dimmed, with its reason.
+  @ViewBuilder private var sandboxSwitch: some View {
+    if let current = model.startSandbox, model.sandboxes.count > 1 {
+      HStack(spacing: 2) {
+        ForEach(model.sandboxes) { s in
+          let on = s.name == current.name
+          Button { model.pickSandbox(s.name) } label: {
+            HStack(spacing: Theme.Composer2.segmentIconGap) {
+              Image(systemName: s.name == "boxd" ? "cloud" : "laptopcomputer").font(Theme.Composer2.segmentIcon)
+              Text(verbatim: s.label).font(Theme.Composer2.pillFont)
+            }
+            .foregroundStyle(on ? Color.white : Theme.Composer2.pillText)
+            .padding(.horizontal, Theme.Composer2.segmentPadding).frame(height: Theme.Composer2.pillHeight)
+            .background {
+              if on {
+                Capsule().fill(Theme.Composer2.segmentOn)
+                  .overlay(Capsule().strokeBorder(Theme.Composer2.segmentOnStroke, lineWidth: 0.5))
+                  .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+              }
+            }
+            .contentShape(Capsule())
+          }
+          .buttonStyle(PressableStyle()).disabled(!s.available).opacity(s.available ? 1 : 0.4)
+          .help(s.available ? (s.name == "boxd" ? "Agents run on boxd VMs" : "Agents run in Docker on this Mac") : (s.reason ?? "Unavailable"))
+          .accessibilityLabel(s.label).accessibilityAddTraits(on ? .isSelected : [])
+        }
+      }
+      .padding(3).background(Capsule().fill(Theme.Composer2.pillGroupFill))
+      .fixedSize()
+      .animation(Theme.Motion.fast, value: current.name)
+      .accessibilityElement(children: .contain).accessibilityLabel("Where it runs")
     }
   }
 

@@ -135,14 +135,17 @@ extension CapcomdStore {
   /// Start a run on `goal`. One Idempotency-Key per submission, reused if the same goal is retried after a transport
   /// failure, so a lost response doesn't start it twice.
   @discardableResult
-  public func startRun(goal raw: String, repo: String? = nil, driver: String? = nil) async -> StartState {
+  public func startRun(goal raw: String, repo: String? = nil, driver: String? = nil, sandbox: String? = nil) async -> StartState {
     let goal = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let starter, !goal.isEmpty else { return .idle }
-    let key = pendingStartKey.flatMap { $0.goal == goal && $0.repo == repo && $0.driver == driver ? $0.key : nil } ?? makeKey()
-    pendingStartKey = (goal, repo, driver, key)
+    let same = { (p: (goal: String, repo: String?, driver: String?, sandbox: String?, key: String)) in
+      p.goal == goal && p.repo == repo && p.driver == driver && p.sandbox == sandbox
+    }
+    let key = pendingStartKey.flatMap { same($0) ? $0.key : nil } ?? makeKey()
+    pendingStartKey = (goal, repo, driver, sandbox, key)
     startState = .starting; changed()
     do {
-      let id = try await starter.start(goal: goal, repo: repo, driver: driver, idempotencyKey: key)
+      let id = try await starter.start(goal: goal, repo: repo, driver: driver, sandbox: sandbox, idempotencyKey: key)
       pendingStartKey = nil; startState = .started(runId: id)
     } catch let e as StartRefused {
       pendingStartKey = nil; startState = e.needsRepo ? .needsRepo(e.message) : .failed(e.message)
