@@ -9,40 +9,45 @@ import { PROVIDER_KIND } from "../agents/profiles";
 import { profileFor } from "../auth/profiles";
 import { env as envVar } from "../utils/env";
 import { withSandbox } from "../providers/run-sandbox";
+import { LISTED_PROVIDERS, type ListedProvider } from "../providers/registry";
 import { buildInProgress, buildMarkerPath, ledgerPath, readBuildMarker, readLedger, resolveEnvSnapshot, type EnvRecord } from "../env/resolve";
 import { LABEL, servicePath, UNIT } from "../cli/commands/service";
 import { isoTs } from "./envelope";
 
 type Env = Record<string, string | undefined>;
-export const SETTINGS_SANDBOXES = ["docker", "boxd"] as const;
-export type SettingsSandbox = (typeof SETTINGS_SANDBOXES)[number];
+/** The places Settings shows: the listed providers (src/providers/registry.ts), docker then boxd. */
+export const SETTINGS_SANDBOXES = LISTED_PROVIDERS;
+export type SettingsSandbox = ListedProvider;
 const PROVIDERS = ["claude", "codex"] as const;
 const API_KEY: Record<(typeof PROVIDERS)[number], string> = { claude: "ANTHROPIC_API_KEY", codex: "OPENAI_API_KEY" };
 
-export interface LoginState { provider: "claude" | "codex"; sandbox: SettingsSandbox; loggedIn: boolean; how: "plan" | "api_key" | null; detail: string | null; command: string }
+export interface LoginState { provider: "claude" | "codex"; sandbox: SettingsSandbox; loggedIn: boolean; how: "plan" | "api_key" | null; detail: string | null; hostBound: boolean; boundTo: string | null; command: string }
 export interface EnvironmentState { sandbox: SettingsSandbox; status: "ready" | "missing" | "building" | "failed"; name: string | null; versions: Record<string, string>; builtAt: string | null; command: string }
 export interface ServiceState { installed: boolean; loaded: boolean; installCommand: string; uninstallCommand: string }
 
 /**
  * GET /v1/logins: who each AI's agents log in as, in each sandbox (plan logins are per sandbox: its auth ledger). A plan
  * login wins over an API key (it is what a subscription profile uses); an API key counts when the daemon has it in its
- * environment, or (boxd only) when CAPCOMD_CREDENTIALS=secret keeps it as a boxd secret.
+ * environment, or (boxd only) when CAPCOMD_CREDENTIALS=secret keeps it as a boxd secret. `hostBound`/`boundTo`: the
+ * login is a host-bound secret (the ledger's `store: "secret"`, or CAPCOMD_CREDENTIALS=secret), so agents only see a
+ * placeholder and the platform swaps the value in on the way to `boundTo`. `sandbox` limits it to one place.
  */
-export function logins(source: Env = process.env): LoginState[] {
-	return PROVIDERS.flatMap((provider) => SETTINGS_SANDBOXES.map((sandbox): LoginState => {
+export function logins(source: Env = process.env, only?: SettingsSandbox): LoginState[] {
+	return PROVIDERS.flatMap((provider) => SETTINGS_SANDBOXES.filter((x) => !only || x === only).map((sandbox): LoginState => {
 		const s = withSandbox(source, sandbox);
 		const command = `capcomd auth login ${provider} --sandbox ${sandbox}`;
 		const host = AGENT_API_HOST[PROVIDER_KIND[provider]];
+		const unbound = { hostBound: false, boundTo: null };
 		const plan = profileFor(PROVIDER_KIND[provider], s);
 		if (plan) {
 			const detail = plan.store === "secret" ? `Kept as a boxd secret bound to ${host}` : plan.store === "snapshot" ? "Saved in the agent environment" : null;
-			return { provider, sandbox, loggedIn: true, how: "plan", detail, command };
+			return { provider, sandbox, loggedIn: true, how: "plan", detail, ...(plan.store === "secret" ? { hostBound: true, boundTo: host } : unbound), command };
 		}
 		const key = API_KEY[provider];
-		if (s[key]?.trim()) return { provider, sandbox, loggedIn: true, how: "api_key", detail: `${key} is set for capcomd`, command };
+		if (s[key]?.trim()) return { provider, sandbox, loggedIn: true, how: "api_key", detail: `${key} is set for capcomd`, ...unbound, command };
 		if (sandbox === "boxd" && envVar("CREDENTIALS", s)?.toLowerCase() === "secret")
-			return { provider, sandbox, loggedIn: true, how: "api_key", detail: `Kept as a boxd secret bound to ${host}`, command };
-		return { provider, sandbox, loggedIn: false, how: null, detail: null, command };
+			return { provider, sandbox, loggedIn: true, how: "api_key", detail: `Kept as a boxd secret bound to ${host}`, hostBound: true, boundTo: host, command };
+		return { provider, sandbox, loggedIn: false, how: null, detail: null, ...unbound, command };
 	}));
 }
 
@@ -65,8 +70,8 @@ function versionsOf(r: EnvRecord | undefined): Record<string, string> {
  * `capcomd env build` for it is running (its marker, with a live pid); `failed` when the last build failed (name,
  * versions and builtAt then still describe the environment agents use, if any); else `ready` or `missing`.
  */
-export function environments(source: Env = process.env, now = Date.now()): EnvironmentState[] {
-	return SETTINGS_SANDBOXES.map((sandbox): EnvironmentState => {
+export function environments(source: Env = process.env, now = Date.now(), only?: SettingsSandbox): EnvironmentState[] {
+	return SETTINGS_SANDBOXES.filter((x) => !only || x === only).map((sandbox): EnvironmentState => {
 		const s = withSandbox(source, sandbox);
 		const ledger = ledgerPath(s);
 		const l = readLedger(ledger);

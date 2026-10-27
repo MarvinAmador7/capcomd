@@ -8,13 +8,17 @@ import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
 import type { RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
+import type { ListedProvider } from "../providers/registry";
+import { LISTED_PROVIDERS } from "../providers/registry";
+import { sandboxSurface, type MachineOwner, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SurfaceDeps } from "./sandboxes";
+import type { VmInfo } from "../providers/sandbox";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
 type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
-export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string; driver?: "claude" | "codex"; effort?: string; sandbox?: "docker" | "boxd" };
+export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string; driver?: "claude" | "codex"; effort?: string; sandbox?: ListedProvider };
 /** A run that can't be started as asked (bad repo, no repository, refused by `capcomd run`): 422 with this message. */
 export class CreateRunError extends Error {}
 
@@ -53,6 +57,14 @@ export interface HarnessSource {
 	environments(): Promise<O<typeof Environment>[]>;
 	/** GET /v1/service. */
 	service(): Promise<O<typeof ServiceStatus>>;
+	/** GET /v1/sandboxes: every listed place's descriptor, availability and whether it's the default. Local only. */
+	sandboxes(): Promise<SandboxSummary[]>;
+	/** GET /v1/sandboxes/{name}: null when it isn't a listed place. Local only. */
+	sandbox(name: string): Promise<SandboxDetail | null>;
+	/** GET /v1/sandboxes/{name}/resources: one page; null when it isn't a listed place. */
+	sandboxResources(name: string, page: { limit?: number; cursor?: string }): Promise<ResourcePage | null>;
+	/** GET /v1/sandboxes/{name}/resources/{id}: null when capcomd doesn't list it there. */
+	sandboxResource(name: string, id: string): Promise<ResourceDetail | null>;
 	approvals(runId: string): Promise<PendingApproval[]>;
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
@@ -116,7 +128,7 @@ export function parseApprovalId(id: string): { runId: string; opId: string } | n
 }
 
 /** In-memory source for tests and fixtures. */
-const noPlanner = { docker: { available: false, reason: "No planner profile (run capcomd setup)" }, boxd: { available: false, reason: "No planner profile (run capcomd setup)" } };
+const noPlanner = Object.fromEntries(LISTED_PROVIDERS.map((n) => [n, { available: false, reason: "No planner profile (run capcomd setup)" }]));
 export function memorySource(seed: Partial<{
 	runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo>;
 	/** Thread items by run (tests push more as the agent "works"). */
@@ -131,6 +143,11 @@ export function memorySource(seed: Partial<{
 	logins: O<typeof Login>[];
 	environments: O<typeof Environment>[];
 	service: O<typeof ServiceStatus>;
+	/** The provider surface's inputs (GET /v1/sandboxes…): provider lists by place, capcomd's machine owners, the
+	 *  environment the info rows read. Default: no machines anywhere, and logins from `logins`. */
+	machines: Partial<Record<ListedProvider, VmInfo[] | (() => Promise<VmInfo[]>)>>;
+	owners: MachineOwner[] | (() => Promise<MachineOwner[]>);
+	surface: Partial<SurfaceDeps>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
@@ -143,6 +160,26 @@ export function memorySource(seed: Partial<{
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
 	const delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }> = [];
+	const loginsOf = async () => seed.logins ?? (["claude", "codex"] as const).flatMap((provider) => LISTED_PROVIDERS.map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` })));
+	const optionsOf = async () => seed.runOptions ?? {
+		drivers: [
+			{ provider: "claude" as const, label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
+			{ provider: "codex" as const, label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
+		],
+		sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
+	};
+	const surface = sandboxSurface({
+		env: { CAPCOMD_NO_CONFIG: "1" },
+		idleLifetimeSeconds: 3600,
+		logins: loginsOf,
+		availability: async (name) => {
+			const o = (await optionsOf()).sandboxes.find((x) => x.name === name);
+			return { available: o?.available ?? false, reason: o ? o.reason : "unknown", default: o?.default ?? false };
+		},
+		list: async (name) => { const m = seed.machines?.[name]; return typeof m === "function" ? m() : m ?? []; },
+		owners: async () => (typeof seed.owners === "function" ? seed.owners() : seed.owners ?? []),
+		...seed.surface,
+	});
 	const push = (runId: string, e: Omit<RawEvent, "seq">) => { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); return r; };
 	// Agent state changes as the scope actor writes them (a running agent pauses at once here: there is no runner).
 	const STEP: Record<RunAction, { from: string[]; to: O<typeof AgentStatus>; type: string; data: (by: string) => Record<string, unknown>; noop: string }> = {
@@ -201,15 +238,10 @@ export function memorySource(seed: Partial<{
 		},
 		trace: async () => [],
 		skills: async () => (seed.skills ?? []).map(({ content: _, ...s }) => s),
-		runOptions: async () => seed.runOptions ?? {
-			drivers: [
-				{ provider: "claude", label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
-				{ provider: "codex", label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
-			],
-			sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
-		},
-		logins: async () => seed.logins ?? (["claude", "codex"] as const).flatMap((provider) => (["docker", "boxd"] as const).map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` }))),
-		environments: async () => seed.environments ?? (["docker", "boxd"] as const).map((sandbox) => ({ sandbox, status: "missing" as const, name: null, versions: {}, builtAt: null, command: `capcomd env build --sandbox ${sandbox}` })),
+		runOptions: optionsOf,
+		logins: loginsOf,
+		...surface,
+		environments: async () => seed.environments ?? LISTED_PROVIDERS.map((sandbox) => ({ sandbox, status: "missing" as const, name: null, versions: {}, builtAt: null, command: `capcomd env build --sandbox ${sandbox}` })),
 		service: async () => seed.service ?? { installed: false, loaded: false, installCommand: "capcomd service install", uninstallCommand: "capcomd service uninstall" },
 		skill: async (name) => { const s = seed.skills?.find((x) => x.name === name); return s ? { name: s.name, content: s.content } : null; },
 		approvals: async (r) => (approvals[r] ?? []).filter((a) => !decided.some((d) => d.approvalId === a.approvalId)),

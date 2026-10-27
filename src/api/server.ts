@@ -15,6 +15,7 @@ import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
 import { harnessState, type HarnessState } from "./state";
 import { runFiles } from "./run-files";
+import { isListedProvider, PROVIDER_LABEL } from "../providers/registry";
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -116,8 +117,25 @@ export function harnessApp(o: ServerOptions) {
 			}
 		}) },
 		skills: { list: os.skills.list.handler(() => src.skills()) },
-		logins: { list: os.logins.list.handler(async () => ({ logins: await src.logins() })) },
-		environments: { list: os.environments.list.handler(async () => ({ environments: await src.environments() })) },
+		// ?sandbox= (capability sandboxes): one place's rows; a name that isn't a listed place is 404.
+		logins: { list: os.logins.list.handler(async ({ input }) => {
+			if (input.sandbox !== undefined && !isListedProvider(input.sandbox)) throw nf(`sandbox ${input.sandbox.slice(0, 64)}`);
+			return { logins: (await src.logins()).filter((l) => input.sandbox === undefined || l.sandbox === input.sandbox) };
+		}) },
+		environments: { list: os.environments.list.handler(async ({ input }) => {
+			if (input.sandbox !== undefined && !isListedProvider(input.sandbox)) throw nf(`sandbox ${input.sandbox.slice(0, 64)}`);
+			return { environments: (await src.environments()).filter((e) => input.sandbox === undefined || e.sandbox === input.sandbox) };
+		}) },
+		// ADR-021 (capabilities sandboxes, sandboxes.resources). Unlisted providers (the test fakes) are 404 like unknown ones.
+		sandboxes: {
+			list: os.sandboxes.list.handler(async () => ({ sandboxes: await src.sandboxes() })),
+			get: os.sandboxes.get.handler(async ({ input }) => (await src.sandbox(input.name)) ?? (() => { throw nf(`sandbox ${input.name.slice(0, 64)}`); })()),
+			resources: os.sandboxes.resources.handler(async ({ input }) => (await src.sandboxResources(input.name, { ...(input.limit ? { limit: input.limit } : {}), ...(input.cursor ? { cursor: input.cursor } : {}) })) ?? (() => { throw nf(`sandbox ${input.name.slice(0, 64)}`); })()),
+			resource: os.sandboxes.resource.handler(async ({ input }) => {
+				if (!isListedProvider(input.name)) throw nf(`sandbox ${input.name.slice(0, 64)}`);
+				return (await src.sandboxResource(input.name, input.id)) ?? (() => { throw nf(`resource ${input.id.slice(0, 128)}`); })();
+			}),
+		},
 		service: { get: os.service.get.handler(() => src.service()) },
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
@@ -210,9 +228,9 @@ export function harnessApp(o: ServerOptions) {
 			// Logins and agent environments are per sandbox: a driver that can't run in the chosen one is refused now, not
 			// minutes later (capability runs.options.sandbox).
 			const fit = p.sandbox !== undefined ? d?.sandboxes?.[p.sandbox] : undefined;
-			if (fit && !fit.available) return err(c, 422, "invalid", `${d!.label} can't drive a run in ${p.sandbox === "docker" ? "Local" : "VM"}: ${fit.reason ?? "unavailable"}`);
+			if (fit && !fit.available) return err(c, 422, "invalid", `${d!.label} can't drive a run in ${PROVIDER_LABEL[p.sandbox as keyof typeof PROVIDER_LABEL] ?? p.sandbox}: ${fit.reason ?? "unavailable"}`);
 		}
-		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox } : {}) };
+		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox as NonNullable<CreateRunInput["sandbox"]> } : {}) };
 		const kid = `${c.get("client").clientId}\u0000runs.create\u0000${key}`;
 		// driver and sandbox are part of the body (another value: idempotency_conflict); a request without them hashes as
 		// before they existed, so a retry across the upgrade still replays.

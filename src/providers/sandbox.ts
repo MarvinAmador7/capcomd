@@ -20,10 +20,18 @@ export interface ExecResult {
   stderr: string;
 }
 
+/** The name prefix capcomd gives every machine it creates (boxd VMs and Docker containers): `list(MACHINE_PREFIX)`
+ *  finds them. Kept from capcomd's old name, so existing idempotency keys and names stay stable. */
+export const MACHINE_PREFIX = "relay-";
+
 export interface VmInfo {
   id: VmId;
   name: string;
   state: string;
+  /** When the provider created it (ms epoch), when it says. */
+  createdAt?: number | null;
+  /** When it will be deleted (ms epoch): the platform's delete-after time, or capcomd's sweep ledger (Docker). */
+  deleteAt?: number | null;
 }
 
 export interface SandboxProvider {

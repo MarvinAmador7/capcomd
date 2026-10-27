@@ -102,6 +102,8 @@ Usage:
   capcomd upgrade [--to X.Y.Z] [--dry-run]
                                        Replace this capcomd with the latest release (the installed binary;
                                        npm and Homebrew installs say how to upgrade them)
+  capcomd sandbox shell <runId> <agentId>   A shell in the machine an agent runs on (its sandbox: what you change
+  capcomd sandbox shell --sandbox docker|boxd --machine <id>   can change its work), or in a machine capcomd left behind
   capcomd ui                             Launch the web UI
 
 Options:
@@ -165,6 +167,7 @@ async function main(argv: string[]): Promise<number> {
         "no-change-after-ms": { type: "string" },
         notices: { type: "boolean" },
         sandbox: { type: "string" },
+        machine: { type: "string" },
         egress: { type: "string" },
         "system-prompt": { type: "string" },
         "append-system-prompt": { type: "string" },
@@ -300,6 +303,11 @@ async function main(argv: string[]): Promise<number> {
         if (sub === "revoke" && arg) { if (!C.revokeClient(arg)) usage(`no active client ${arg}`); console.log(JSON.stringify({ revoked: arg })); return EXIT.ok; }
         usage("capcomd clients add <name> [--scopes read,steer,approve] | list | revoke <id>");
         return EXIT.usage;
+      }
+      case "sandbox": {
+        if (positionals[1] !== "shell") usage("usage: capcomd sandbox shell <runId> <agentId> | capcomd sandbox shell --sandbox <name> --machine <id>");
+        const { localShellDeps, sandboxShell } = await import("./commands/sandbox");
+        return await sandboxShell({ positionals: positionals.slice(2), ...(values.sandbox !== undefined ? { sandbox: values.sandbox as string } : {}), ...(values.machine !== undefined ? { machine: values.machine as string } : {}) }, localShellDeps());
       }
       case "serve":
         await serve({ port: parseInt(values.port as string, 10), ...(values["harness-socket"] ? { harnessSocket: values["harness-socket"] as string } : {}) });

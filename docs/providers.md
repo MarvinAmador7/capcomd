@@ -46,12 +46,40 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
      runs that way and later execs poll it.
    - `upload` / `download` absolute paths (parent directories exist), `destroy` (idempotent), `list(prefix)`.
    - Git network commands (`git clone/fetch/push`) get the per-exec credentials of a `GitCredentialHook`.
-2. Add its entry and capabilities to `src/providers/registry.ts`, and create it in `providerFromEnv`
-   (`src/dependencies.ts`):
+2. Add its descriptor to `PROVIDERS` in `src/providers/registry.ts` (ADR-021), and create it in `providerFromEnv`
+   (`src/dependencies.ts`). The descriptor is what the engine asks (`sandboxCaps()`) and what the daemon serves to
+   clients as data (`GET /v1/sandboxes`), so the app needs no change for a new place:
+
+   ```ts
+   lima: {
+     name: "lima", descriptorVersion: 1, label: "Local VM", kind: "local", vendor: "Lima", title: "Local VM · Lima",
+     mark: "lima", listed: true,
+     caps: { isolation: "vm", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true,
+             idleLifetime: "sweep", shell: true },
+     settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"],
+     actions: ["open_terminal", "delete"],
+   },
+   ```
+
+   - `label`, `vendor`, `title`: what clients call it ("Local VM", and "Local VM · Lima" on its details screen);
+     `kind` (`local` or `cloud`) groups it and picks the app's fallback glyph; `mark` is the id of a mark the app may
+     bundle (an unknown one falls back to the glyph). `listed: false` keeps it out of clients' lists (the test fakes).
    - `isolation`: `vm`, `container`, or `host` (tests only);
    - `snapshots`: also implement `snapshotCreate/Get/List/Delete` (`src/env/platform.ts`) for `capcomd env build`
      and plan logins;
    - `hostBoundSecrets`: `secretSet/List/Delete`, where the agent sees only a placeholder;
    - `egressAllowlist`: whether `spec.egressAllow` is enforced (`["*"]` means unrestricted);
-   - `interactive`: `streamExec` with a terminal, for `capcomd auth login`.
+   - `interactive`: `streamExec` with a terminal, for `capcomd auth login`;
+   - `idleLifetime`: who deletes a machine left behind once `ttlSeconds` is up: `platform` (the provider does, like
+     boxd's delete-after), `sweep` (capcomd's engine does, like Docker's ledger and 5-minute sweep), or `none`;
+   - `shell`: `capcomd sandbox shell` can open an interactive shell in a live machine (`streamExec` with a terminal,
+     or the provider's own CLI, like `docker exec -it`);
+   - `settings`, `info`, `actions`: the rows and resource actions its details screen offers, from the closed lists in
+     the registry (`SETTING_IDS`, `INFO_IDS`, `RESOURCE_ACTIONS`). The daemon serves only the actions it implements.
+
+   A listed provider also needs an availability check in `src/api/run-options.ts` (`AVAILABLE`: cheap and local, like
+   "is a key configured" or "does the CLI answer", cached), and its `list(prefix)` should fill `createdAt` and
+   `deleteAt` when it knows them: `GET /v1/sandboxes/{name}/resources` shows them. Machines must be named with
+   `MACHINE_PREFIX` (`src/providers/sandbox.ts`): that is how capcomd finds its own, and `capcomd sandbox shell` only
+   accepts ids that carry it.
 3. Run the conformance suite against it (`tests/providers/conformance.test.ts`: add it to `subjects`).

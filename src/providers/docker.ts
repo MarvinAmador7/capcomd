@@ -12,11 +12,12 @@ import type { InteractiveSession } from "../auth/interactive";
 import { stateDir } from "../utils/home";
 import { noGitCredentials, type GitCredentialHook } from "./boxd";
 import { SandboxConfigError, SandboxError, SandboxNotFoundError, SandboxTimeoutError } from "./boxd-errors";
-import type { ExecResult, SandboxProvider, VmId, VmInfo, VmSpec } from "./sandbox";
+import { MACHINE_PREFIX, type ExecResult, type SandboxProvider, type VmId, type VmInfo, type VmSpec } from "./sandbox";
 
 /** The default base image: Debian with node, git, curl, coreutils (`timeout`) and util-linux (`setsid`, `script`). */
 export const DOCKER_BASE_IMAGE = "node:22-bookworm";
-const LABEL = "dev.capcomd.sandbox";
+export const DOCKER_LABEL = "dev.capcomd.sandbox";
+const LABEL = DOCKER_LABEL;
 
 export interface DockerProviderOptions {
   /** The docker CLI (default: CAPCOMD_DOCKER_BIN, `docker` on PATH, or OrbStack's). */
@@ -54,7 +55,7 @@ export class DockerProvider implements SandboxProvider {
     this.bin = o.bin ?? dockerBin();
     this.image = o.image ?? process.env.CAPCOMD_DOCKER_IMAGE ?? DOCKER_BASE_IMAGE;
     this.gitCredentials = o.gitCredentials ?? noGitCredentials;
-    this.prefix = o.namePrefix ?? "relay-";
+    this.prefix = o.namePrefix ?? MACHINE_PREFIX;
     this.ledgerPath = o.ledgerPath ?? process.env.CAPCOMD_DOCKER_LEDGER ?? join(stateDir(), "docker-ttl.json");
   }
 
@@ -175,8 +176,13 @@ export class DockerProvider implements SandboxProvider {
   }
 
   async list(prefix: string): Promise<VmInfo[]> {
-    const out = await this.must(["ps", "-a", "--filter", `label=${LABEL}=1`, "--format", "{{.Names}}\t{{.State}}"], "ps");
-    return out.split("\n").filter(Boolean).map((l) => { const [name, state] = l.split("\t"); return { id: name!, name: name!, state: state ?? "unknown" }; }).filter((v) => v.name.startsWith(prefix));
+    const out = await this.must(["ps", "-a", "--filter", `label=${LABEL}=1`, "--format", "{{.Names}}\t{{.State}}\t{{.CreatedAt}}"], "ps");
+    const l = this.ledger();
+    return out.split("\n").filter(Boolean).map((line) => {
+      const [name, state, created] = line.split("\t");
+      const at = l[name!];
+      return { id: name!, name: name!, state: state ?? "unknown", createdAt: dockerTime(created), deleteAt: typeof at === "number" ? at : null };
+    }).filter((v) => v.name.startsWith(prefix));
   }
 
   async extendTtl(id: VmId, seconds: number): Promise<void> {
@@ -238,6 +244,14 @@ export class DockerProvider implements SandboxProvider {
       wait: () => p.exited,
     };
   }
+}
+
+/** `docker ps` {{.CreatedAt}} ("2026-10-27 09:12:03 +0000 UTC") as ms epoch; null when it isn't that shape. */
+export function dockerTime(s: string | undefined): number | null {
+  const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.\d+)? ([+-])(\d{2})(\d{2})/.exec(s?.trim() ?? "");
+  if (!m) return null;
+  const t = Date.parse(`${m[1]}T${m[2]}${m[3]}${m[4]}:${m[5]}`);
+  return Number.isFinite(t) ? t : null;
 }
 
 /** Snapshot names (`capcomd-env-<hash>`, `capcomd-auth-<agent>-<hash>`) as image references. */

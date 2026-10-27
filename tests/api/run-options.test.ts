@@ -66,7 +66,9 @@ describe("CreateRunBody", () => {
 	test("published: driver and sandbox enums on POST /v1/runs; runs.options capability; GET /v1/run-options", () => {
 		const body = (spec as any).paths["/v1/runs"].post.requestBody.content["application/json"].schema;
 		expect(body.properties.driver.enum).toEqual(["claude", "codex"]);
-		expect(body.properties.sandbox.enum).toEqual(["docker", "boxd"]);
+		// ADR-021: a string checked against the listed providers (wire-compatible: the same values are accepted)
+		expect(body.properties.sandbox.type).toBe("string");
+		expect(body.properties.sandbox.enum).toBeUndefined();
 		expect(body.required).toEqual(["goal"]);
 		expect(CAPABILITY_NAMES).toContain("runs.options");
 		const out = (spec as any).paths["/v1/run-options"].get.responses["200"].content["application/json"].schema;
@@ -561,7 +563,9 @@ describe("GET /v1/run-options?repo= (capability runs.options.repo)", () => {
 		expect(repo.required).toBeFalsy();
 		const driver = op.responses["200"].content["application/json"].schema.properties.drivers.items;
 		expect(driver.required).toContain("sandboxes");
-		expect(Object.keys(driver.properties.sandboxes.properties)).toEqual(["docker", "boxd"]);
+		// ADR-021: a record keyed by place name (the app decodes [String: DriverFit])
+		expect(driver.properties.sandboxes.type).toBe("object");
+		expect(driver.properties.sandboxes.additionalProperties.required).toEqual(["available", "reason"]);
 	});
 	test("a project's own profiles win over a CAPCOMD_AGENTS_FILE the daemon has", () => {
 		const p = project();
