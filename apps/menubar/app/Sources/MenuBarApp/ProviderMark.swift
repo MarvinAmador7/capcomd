@@ -20,19 +20,23 @@ enum ProviderMarks {
 
 /// Marks of the places agents run, by the descriptor's `mark` id (ADR-021 §6): bundled, never downloaded. Known ids
 /// get their mark (Docker's official one; boxd the cloud glyph until boxd's own arrives); an unknown id gets an SF
-/// Symbol by kind: `desktopcomputer` on this Mac, `cloud` for a cloud. With no kind (an older daemon, no descriptor), a box.
+/// Symbol by kind: `laptopcomputer` on this Mac, `cloud` for a cloud. With no kind (an older daemon, no descriptor), a box.
 enum PlaceMarks {
   enum Glyph { case path(String, Path), symbol(String) }
   static func glyph(_ mark: String, kind: SandboxDescriptor.Kind?) -> Glyph {
     switch mark {
     case "docker": return .path("docker", ProviderMarks.docker)
     case "boxd": return .symbol("cloud")
-    default:
-      switch kind {
-      case .local: return .symbol("desktopcomputer")
-      case .cloud: return .symbol("cloud")
-      case nil: return .symbol("shippingbox")
-      }
+    default: return kindGlyph(kind)
+    }
+  }
+  /// A kind of place, not its provider (Settings › Runs section headers, "Local" / "Cloud"): the composer's Local /
+  /// Cloud switch's symbols.
+  static func kindGlyph(_ kind: SandboxDescriptor.Kind?) -> Glyph {
+    switch kind {
+    case .local: return .symbol("laptopcomputer")
+    case .cloud: return .symbol("cloud")
+    case nil: return .symbol("shippingbox")
     }
   }
 }

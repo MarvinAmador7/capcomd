@@ -236,7 +236,9 @@ New capabilities: `sandboxes` (the two GETs), `sandboxes.settings` (PATCH), `san
   drawing.
 - **Marks are bundled, not downloaded.** `mark` is an id. `ProviderMarks` (`ProviderMark.swift:9`) maps known ids:
   `docker` is the official mark; `boxd` uses the cloud glyph until boxd's own mark arrives. An unknown id falls back
-  to an SF Symbol chosen by `kind` (`desktopcomputer` for local, `cloud` for cloud). The daemon never sends SVG.
+  to an SF Symbol chosen by `kind` (`laptopcomputer` for local, `cloud` for cloud). Section headers show the kind's
+  symbol only (amended 2026-10-27); the provider's mark shows where the provider is named (Runs on). The daemon never
+  sends SVG.
 - **Remove the name checks.** `SettingsRuns.swift:140-168` switches from `place.name == "boxd"/"docker"` to
   descriptor data (`caps.egressAllowlist` for the "can't limit sites" footer, a `status` field for the key row).
 - **Older daemons:** without `sandboxes`, the app shows today's Runs pane and no Details…; without

@@ -143,6 +143,10 @@ enum PlaceNames {
   static func title(_ name: String, label: String? = nil) -> String {
     switch name { case "docker": "Local"; case "boxd": "Cloud"; default: label ?? name }
   }
+  /// The kind of place, for daemons that don't describe their places.
+  static func kind(_ name: String) -> SandboxDescriptor.Kind? {
+    switch name { case "docker": .local; case "boxd": .cloud; default: nil }
+  }
   /// The row sub-line in Accounts (`.sub`).
   static func detail(_ name: String) -> String {
     switch name { case "docker": "Docker on this Mac"; case "boxd": "boxd machines"; default: name }
