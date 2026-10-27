@@ -10,7 +10,7 @@ import type { RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
 import type { ListedProvider } from "../providers/registry";
 import { LISTED_PROVIDERS } from "../providers/registry";
-import { sandboxSurface, type ActionOutcome, type MachineOwner, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
+import { sandboxSurface, type ActionOutcome, type MachineOwner, type RecordedMachine, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
 import type { VmInfo } from "../providers/sandbox";
 import { memorySettingsStore, type SettingsStore } from "../providers/settings";
 
@@ -152,6 +152,9 @@ export function memorySource(seed: Partial<{
 	 *  environment the info rows read. Default: no machines anywhere, and logins from `logins`. */
 	machines: Partial<Record<ListedProvider, VmInfo[] | (() => Promise<VmInfo[]>)>>;
 	owners: MachineOwner[] | (() => Promise<MachineOwner[]>);
+	/** This capcomd's machines ledger (the machines it made; null: unreadable). Default: every machine of the lists
+	 *  given as arrays, as if this capcomd made them all. */
+	recorded: RecordedMachine[] | null | (() => Promise<RecordedMachine[] | null>);
 	surface: Partial<SurfaceDeps>;
 	/** Provider settings (PATCH /v1/sandboxes/{name}/settings writes here). Default: empty, in memory. */
 	settings: SettingsStore;
@@ -198,7 +201,13 @@ export function memorySource(seed: Partial<{
 			return { available: o?.available ?? false, reason: o ? o.reason : "unknown", default: o?.default ?? false };
 		},
 		list: async (name) => { const m = seed.machines?.[name]; return typeof m === "function" ? m() : m ?? []; },
-		owners: async () => (typeof seed.owners === "function" ? seed.owners() : seed.owners ?? []),
+		owners: async () => {
+			const owners = typeof seed.owners === "function" ? await seed.owners() : seed.owners ?? [];
+			if (seed.recorded !== undefined) return { owners, recorded: typeof seed.recorded === "function" ? await seed.recorded() : seed.recorded };
+			// Default: every machine of the lists given as arrays (a list given as a function records nothing).
+			const recorded = LISTED_PROVIDERS.flatMap((n) => { const m = seed.machines?.[n]; return Array.isArray(m) ? m.map((r) => ({ sandbox: n as string, name: r.name })) : []; });
+			return { owners, recorded };
+		},
 		...seed.surface,
 	});
 	const push = (runId: string, e: Omit<RawEvent, "seq">) => { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); return r; };

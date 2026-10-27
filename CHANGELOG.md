@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a place's Machines list (and Delete) could show another capcomd's machines as "left behind". A boxd org lists
+  every member's machines, and a second capcomd on the same Mac (another checkout, a test daemon) sees the same Docker
+  containers, so a teammate's working agent could read "Delete this machine? No agent is using it." and Delete would
+  have destroyed it. The same happened to a live agent of an old run (beyond the 500 most recent). capcomd now keeps
+  its own record of every machine it creates (`~/.capcomd/state/machines/`, one file per machine, until the machine is
+  deleted), lists a machine nobody uses only when it's in that record, and asks a recorded machine's agent directly
+  before calling it left behind. Another capcomd's machines aren't listed at all, and deleting one by id is 404 without
+  asking the provider. When capcomd can't read its record, those machines show without a Delete button. Machines made
+  before this version aren't in the record: they no longer appear in the list (unless an agent is still using one) and
+  can't be deleted from the app; their idle lifetime deletes them.
 - Harness API: delete a machine (capability `sandboxes.actions`). `POST /v1/sandboxes/{name}/resources/{id}/actions/delete`
   (steer scope, an `Idempotency-Key`, no body) deletes one of capcomd's machines at a place. For an agent's machine it
   cancels that agent (and the agents it started) the way `capcomd cancel <run> <agent>` does, and the agent's machine

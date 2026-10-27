@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { joinResources, terminalCommandFor } from "../../src/api/sandboxes";
-import { jobOwners } from "../../src/api/rivet-source";
+import { jobOwners, recordedMachines } from "../../src/api/rivet-source";
 import { jobOwnerText, liveJobMachines, machineNameFor, machinesDir, recordJobMachine } from "../../src/providers/machines";
 import { vmNameFor } from "../../src/providers/boxd";
 import { FakeProvider } from "../../src/providers/fake";
@@ -37,7 +37,7 @@ class Watched extends FakeProvider {
 	seen: ReturnType<typeof joinResources>[] = [];
 	override async ensure(spec: VmSpec) { this.specs.push(spec); return super.ensure(spec); }
 	rows(): VmInfo[] { return this.specs.map((s, i) => ({ id: `m_${i}`, name: machineNameFor(s.idemKey), state: "running" })); }
-	look() { this.seen.push(joinResources("fake", this.rows(), jobOwners())); }
+	look() { this.seen.push(joinResources("fake", this.rows(), jobOwners(), recordedMachines())); }
 	override async exec(id: string, cmd: string[], opts?: Parameters<FakeProvider["exec"]>[2]) { if (!this.seen.length) this.look(); return super.exec(id, cmd, opts); }
 }
 
@@ -57,7 +57,7 @@ describe("the machines ledger", () => {
 		expect(readdirSync(env.CAPCOMD_MACHINES_LEDGER)).toEqual([]);
 	});
 
-	test("listed as running with an owner of their kind and no actions; an unrecorded machine is still orphaned", () => {
+	test("listed as running with an owner of their kind and no actions; a machine this capcomd didn't record isn't listed", () => {
 		const env = { CAPCOMD_MACHINES_LEDGER: mkdtempSync(join(tmpdir(), "capcomd-ledger-")) };
 		const jobs = [
 			recordJobMachine({ idemKey: "check-1", sandbox: "boxd", kind: "check", purpose: "checks", runId: "run-8kq2", ttlSeconds: 3600 }, env),
@@ -69,20 +69,24 @@ describe("the machines ledger", () => {
 		];
 		const keys = ["check-1", "login-1", "status-1", "build-1", "doctor-1", "docker-check", "left-behind"];
 		const rows: VmInfo[] = keys.map((k, i) => ({ id: `m_${i}`, name: machineNameFor(k), state: "running" }));
-		const res = joinResources("boxd", rows, jobOwners(env));
-		const by = (k: string) => res.find((r) => r.id === machineNameFor(k))!;
+		const res = joinResources("boxd", rows, jobOwners(env), recordedMachines(env));
+		const by = (k: string) => res.find((r) => r.id === machineNameFor(k));
 		expect(by("check-1")).toMatchObject({ state: "running", actions: [], owner: { kind: "check", runId: "run-8kq2", agentId: null, role: "checks", task: null, label: "Checks for run-8kq2" } });
 		expect(by("login-1")).toMatchObject({ state: "running", actions: [], owner: { kind: "login", runId: null, role: "login", label: "Logging in to Claude Code" } });
-		expect(by("status-1").owner).toMatchObject({ kind: "login", label: "Checking the Codex login" });
+		expect(by("status-1")!.owner).toMatchObject({ kind: "login", label: "Checking the Codex login" });
 		expect(by("build-1")).toMatchObject({ state: "running", actions: [], owner: { kind: "env_build", role: "environment", label: "Building the agent environment" } });
-		expect(by("doctor-1").owner).toMatchObject({ kind: "doctor", label: "Checking the agent environment" });
-		// Another place's job doesn't claim this place's machine; nothing records this one: left behind.
-		expect(by("docker-check")).toMatchObject({ state: "orphaned", owner: null });
-		expect(by("left-behind")).toMatchObject({ state: "orphaned", owner: null, actions: ["open_terminal", "delete"], destructive: true, confirm: "Delete this machine? No agent is using it." });
+		expect(by("doctor-1")!.owner).toMatchObject({ kind: "doctor", label: "Checking the agent environment" });
+		// Another place's record doesn't make this place's machine capcomd's, and nothing records this one: another
+		// capcomd's machines (a boxd org lists everyone's), not listed at all.
+		expect(by("docker-check")).toBeUndefined();
+		expect(by("left-behind")).toBeUndefined();
+		expect(res).toHaveLength(5);
 		for (const r of res.filter((x) => x.owner)) expect(r).toMatchObject({ actions: [], destructive: false, confirm: null });
 		for (const r of res.filter((x) => x.owner)) expect(terminalCommandFor("boxd", r)).toBeNull();
+		// A job whose process is gone: its machine is still capcomd's, left behind (deletable). Released: not capcomd's any more.
+		expect(joinResources("boxd", rows, [], recordedMachines(env)).map((r) => r.state)).toEqual(["orphaned", "orphaned", "orphaned", "orphaned", "orphaned"]);
 		for (const release of jobs) release();
-		expect(joinResources("boxd", rows, jobOwners(env)).every((r) => r.state === "orphaned")).toBe(true);
+		expect(joinResources("boxd", rows, jobOwners(env), recordedMachines(env))).toEqual([]);
 		expect(jobOwnerText({ kind: "check", purpose: "checks", runId: "run-$(x)", agent: null }).label).toBe("Checks");
 	});
 });
@@ -103,7 +107,7 @@ describe("capcomd's own jobs record their machines while they run", () => {
 			expect(await runTests(git, "sh ok.sh", { CAPCOMD_TASK_ID: "agt-1", CAPCOMD_TARGET: "main" })).toMatchObject({ passed: true, where: "vm" });
 		} finally { resetDependencies(); for (const k of ["CAPCOMD_CHECKS", "CAPCOMD_AGENT_WORKDIR", "CAPCOMD_ENV"]) if (env0[k] === undefined) delete process.env[k]; else process.env[k] = env0[k]; }
 		expect(p.seen[0]!.map((r) => [r.state, r.owner?.kind, r.owner?.label, r.actions])).toEqual([["running", "check", "Checks", []]]);
-		expect(joinResources("fake", p.rows(), jobOwners()).map((r) => r.state)).toEqual(["orphaned"]); // ended: no longer recorded
+		expect(joinResources("fake", p.rows(), jobOwners(), recordedMachines())).toEqual([]); // ended: no longer recorded, not listed
 		expect(liveJobMachines()).toEqual([]);
 	}, 60_000);
 

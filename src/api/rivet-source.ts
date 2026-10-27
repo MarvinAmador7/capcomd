@@ -16,10 +16,10 @@ import { startDetachedRun } from "./create-run";
 import { workspaceOf } from "./workspace";
 import { mirrorFor, workTips } from "./run-files";
 import { RUN_REPO_KV } from "../merge/run-config";
-import { liveDescendants, sandboxSurface, taskLine, type MachineOwner } from "./sandboxes";
+import { liveDescendants, sandboxSurface, taskLine, type MachineOwner, type Ownership, type RecordedMachine } from "./sandboxes";
 import { MACHINE_PREFIX, type SandboxProvider } from "../providers/sandbox";
 import { sandboxName, type ListedProvider } from "../providers/registry";
-import { jobOwnerText, liveJobMachines } from "../providers/machines";
+import { forgetMachine, jobOwnerText, jobsHeld, machineNameFor, readMachineLedger, type AgentMachine, type LedgerEntry } from "../providers/machines";
 import { fileSettingsStore, settingsPath } from "../providers/settings";
 
 const lower = (p: string | null) => (p ? p.toLowerCase() : null);
@@ -52,45 +52,112 @@ export function agentRuntime(spec: unknown): { provider: "claude" | "codex" | nu
 }
 
 const LIVE = new Set(["pending", "running", "paused"]);
+const TERMINAL_RUN = new Set(["completed", "failed", "cancelled"]);
+/** How long the direct look at one recorded machine's own agent may take before that machine counts as unknown. */
+const RECORD_CHECK_MS = 5_000;
+function within<T>(p: Promise<T>, ms: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([p, new Promise<T>((_, no) => { timer = setTimeout(() => no(new Error("timed out")), ms); })]).finally(() => clearTimeout(timer));
+}
+const daemonSandbox = () => { try { return sandboxName(); } catch { return null; /* unknown CAPCOMD_SANDBOX */ } };
+const workerKey = (runId: string, agentId: string, epoch: number) => (epoch > 1 ? [runId, agentId, `e${epoch}`] : [runId, agentId]);
+
+/** A live agent's machine as its owner, from its worker's record (null when the worker holds no machine now). */
+function agentOwner(runId: string, a: any, wk: any, live: any[], sandbox: string | null, name: (ctx: any) => string | null, needVm = true): MachineOwner | null {
+	const ctx = wk?.context ?? {};
+	if (!wk || wk.state === "destroyed" || wk.state === "failed") return null;
+	if (needVm && (typeof ctx.vmId !== "string" || !ctx.vmId)) return null;
+	const place = typeof ctx.sandbox === "string" && ctx.sandbox ? ctx.sandbox : sandbox;
+	if (!place) return null;
+	return {
+		sandbox: place, vmId: typeof ctx.vmId === "string" && ctx.vmId ? ctx.vmId : null, name: name(ctx),
+		runId, agentId: a.agentId, role: lower(a.profile ?? null), task: taskLine(a.task),
+		workerState: String(wk.state), createdAt: Number.isFinite(Number(ctx.createdAt)) ? Number(ctx.createdAt) : null,
+		// Cancelling it (Delete) stops these too: its Delete question says how many.
+		descendants: liveDescendants(live, a.agentId),
+	};
+}
+
 /**
- * The machines capcomd's live agents hold now (ADR-021 §3), from capcomd's own records: each pending, running or
- * paused agent of the recent runs whose worker actor holds a VM that isn't destroyed. Never from provider labels.
- * Reads existing actors only (a missing scope or worker is skipped, never created).
+ * Who holds one machine this capcomd recorded for an agent (src/actors/worker.ts), asked of that agent directly (its
+ * worker by its own key, its scope by run), not through the recent runs: an agent outside the newest 500 runs still
+ * owns its machine. null: nobody holds it now (the worker destroyed it or moved on, or the agent ended). Throws when
+ * the engine can't say (the machine is then unknown, never deletable).
  */
-export async function machineOwners(limit = 500): Promise<MachineOwner[]> {
+async function recordedAgentOwner(rec: AgentMachine, sandbox: string | null): Promise<MachineOwner | null> {
+	const wk = await (client().worker as any).get(rec.workerKey).getWorker({ workerId: rec.agentId });
+	if (!wk || wk.state === "destroyed" || wk.state === "failed") return null;
+	const ctx = wk.context ?? {};
+	// The worker's machine now is this one (the same idempotency key), on this place.
+	if (typeof ctx.idemKey === "string" && machineNameFor(ctx.idemKey) !== rec.name) return null;
+	if (!rec.agentId.startsWith("agt-")) {
+		// A `capcomd run` recipe's worker: no agent of its own; it holds its machine while its run hasn't ended.
+		const run = await client().run.getOrCreate([rec.runId]).getRun({ runId: rec.runId });
+		if (!run || TERMINAL_RUN.has(run.state)) return null;
+		const place = typeof ctx.sandbox === "string" && ctx.sandbox ? ctx.sandbox : sandbox;
+		if (!place) return null;
+		return { sandbox: place, vmId: typeof ctx.vmId === "string" && ctx.vmId ? ctx.vmId : null, name: rec.name, runId: rec.runId, agentId: null, role: null, task: null,
+			workerState: String(wk.state), createdAt: Number.isFinite(Number(ctx.createdAt)) ? Number(ctx.createdAt) : null };
+	}
+	const agents = (await existingScope(rec.runId).listAgents({})) as any[];
+	const live = agents.filter((a) => LIVE.has(a.status));
+	const a = live.find((x) => x.agentId === rec.agentId);
+	if (!a) return null;
+	// Its current worker is this one (a resumed agent runs on a new epoch's worker; the old one's machine is left behind).
+	if (workerKey(rec.runId, a.agentId, Number(a.epoch ?? 1)).join("\u0000") !== rec.workerKey.join("\u0000")) return null;
+	// Still provisioning (no vmId yet, the provider may list it already): owned, starting.
+	return agentOwner(rec.runId, a, wk, live, sandbox, () => rec.name, false);
+}
+
+/**
+ * Who uses capcomd's machines now (ADR-021 §3), from capcomd's own records, never from provider labels: each pending,
+ * running or paused agent of the recent runs whose worker actor holds a VM that isn't destroyed; capcomd's own jobs
+ * (the machines ledger); and, for a machine in this capcomd's ledger that none of those claims, that machine's own
+ * agent asked directly. `recorded` is the ledger itself (null when it can't be read): the only machines without an
+ * owner the resources route lists. Reads existing actors only (a missing scope or worker is skipped, never created).
+ */
+export async function machineOwners(limit = 500, env: Record<string, string | undefined> = process.env, o: { recordedOwner?: (rec: AgentMachine, daemon: string | null) => Promise<MachineOwner | null>; checkMs?: number } = {}): Promise<Ownership> {
 	const { vmNameFor } = await import("../providers/boxd");
-	let daemon: string | null = null;
-	try { daemon = sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX */ }
+	const daemon = daemonSandbox();
 	const perRun = await Promise.all(recentRuns(limit).map(async (r) => {
 		const agents = (await existingScope(r.runId).listAgents({}).catch(() => [])) as any[];
 		const live = agents.filter((a) => LIVE.has(a.status));
 		const rows = await Promise.all(live.map(async (a): Promise<MachineOwner | null> => {
-			const epoch = Number(a.epoch ?? 1);
-			const w = (client().worker as any).get(epoch > 1 ? [r.runId, a.agentId, `e${epoch}`] : [r.runId, a.agentId]);
-			const wk = await w.getWorker({ workerId: a.agentId }).catch(() => null);
-			const ctx = wk?.context ?? {};
-			if (!wk || wk.state === "destroyed" || wk.state === "failed" || typeof ctx.vmId !== "string" || !ctx.vmId) return null;
-			const sandbox = typeof ctx.sandbox === "string" && ctx.sandbox ? ctx.sandbox : daemon;
-			if (!sandbox) return null;
-			return {
-				sandbox, vmId: ctx.vmId, name: typeof ctx.idemKey === "string" ? vmNameFor(ctx.idemKey, MACHINE_PREFIX) : null,
-				runId: r.runId, agentId: a.agentId, role: lower(a.profile ?? null), task: taskLine(a.task),
-				workerState: String(wk.state), createdAt: Number.isFinite(Number(ctx.createdAt)) ? Number(ctx.createdAt) : null,
-				// Cancelling it (Delete) stops these too: its Delete question says how many.
-				descendants: liveDescendants(live, a.agentId),
-			};
+			const wk = await (client().worker as any).get(workerKey(r.runId, a.agentId, Number(a.epoch ?? 1))).getWorker({ workerId: a.agentId }).catch(() => null);
+			return agentOwner(r.runId, a, wk, live, daemon, (ctx) => (typeof ctx.idemKey === "string" ? vmNameFor(ctx.idemKey, MACHINE_PREFIX) : null));
 		}));
 		return rows.filter((x): x is MachineOwner => !!x);
 	}));
-	return [...perRun.flat(), ...jobOwners()];
+	const ledger = readMachineLedger(env);
+	const owners = [...perRun.flat(), ...jobOwners(env, ledger ?? [])];
+	if (ledger === null) return { owners, recorded: null };
+	const claimed = new Set(owners.filter((o) => o.name).map((o) => `${o.sandbox}\u0000${o.name}`));
+	const recorded = await Promise.all(ledger.map(async (e): Promise<RecordedMachine> => {
+		const rec = e.record;
+		if (!rec) return { sandbox: null, name: e.name, unsure: true };
+		const m: RecordedMachine = { sandbox: rec.sandbox, name: rec.name };
+		if (rec.kind !== "agent" || claimed.has(`${rec.sandbox}\u0000${rec.name}`)) return m;
+		try {
+			const held = await within((o.recordedOwner ?? recordedAgentOwner)(rec, daemon), o.checkMs ?? RECORD_CHECK_MS);
+			if (held) owners.push(held);
+			return m;
+		} catch { return { ...m, unsure: true }; }
+	}));
+	return { owners, recorded };
 }
 
 /** Machines capcomd's own jobs hold now (checks, logins, environment builds): the machines ledger, never provider labels. */
-export function jobOwners(env: Record<string, string | undefined> = process.env): MachineOwner[] {
-	return liveJobMachines(env).map((m) => ({
+export function jobOwners(env: Record<string, string | undefined> = process.env, ledger: LedgerEntry[] | null = readMachineLedger(env)): MachineOwner[] {
+	return jobsHeld(ledger ?? []).map((m) => ({
 		sandbox: m.sandbox, vmId: null, name: m.name, kind: m.kind, runId: m.runId, agentId: null, task: null,
 		...jobOwnerText(m), workerState: "busy", createdAt: m.createdAt,
 	}));
+}
+
+/** This capcomd's ledger as the resources route reads it (no agent lookups): tests and tools. */
+export function recordedMachines(env: Record<string, string | undefined> = process.env): RecordedMachine[] | null {
+	const ledger = readMachineLedger(env);
+	return ledger === null ? null : ledger.map((e) => (e.record ? { sandbox: e.record.sandbox, name: e.name } : { sandbox: null, name: e.name, unsure: true }));
 }
 
 // One provider per place for the resources routes (list, and an orphan's Delete): the daemon's own (getDependencies)
@@ -131,6 +198,7 @@ export function rivetSource(): HarnessSource {
 		// Delete (capability sandboxes.actions): an orphan through the place's provider; an agent's machine by cancelling
 		// the agent the way `capcomd cancel <run> <agt>` does (its worker then destroys the machine).
 		destroy: async (name, vmId) => (await lister(name)).destroy(vmId),
+		forget: (_name, machine) => forgetMachine(machine),
 		cancelAgent: async (runId, agentId, by) => {
 			const r = await cancelAny(runId, agentId, `cancelled by ${by}`, by);
 			return { changed: r.kind === "agents" ? r.agents.cancelled.includes(agentId) : !!r.agents?.cancelled.includes(agentId) };

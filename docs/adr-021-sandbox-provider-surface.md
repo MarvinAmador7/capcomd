@@ -132,9 +132,17 @@ sandbox read the daemon's current settings when the worker starts.
 
 A **resource** is something live that capcomd created at a provider. v1 has one kind, `machine`. The list comes from
 capcomd's records joined with the provider's list. Ownership comes from capcomd, never from provider labels: the
-worker actors that hold a `vmId` give the run, the agent and its role. Provider rows that carry capcomd's prefix
-(`boxd.ts:399-401`; Docker's `dev.capcomd.sandbox` label) but have no live owner are `orphaned`. Those are the
-"machines left behind" that the idle lifetime cleans up.
+worker actors that hold a `vmId` give the run, the agent and its role. Which machines are capcomd's at all comes from
+**this capcomd's machines ledger** (`<state>/machines/`, `src/providers/machines.ts`): every machine this capcomd
+creates is recorded there before `provider.ensure` (an agent's worker VM, the checks VM, a login, an environment build
+or doctor) and removed once it's destroyed. A provider row that has no live owner but is in this capcomd's machines
+ledger is `orphaned`: those are the "machines left behind" that the idle lifetime cleans up, and Delete can remove.
+Before calling one orphaned, the daemon asks the record's own agent directly (its worker by key, not via the recent
+runs), so a live agent of an old run still owns its machine. A row that only carries capcomd's prefix
+(`boxd.ts:399-401`; Docker's `dev.capcomd.sandbox` label) and isn't in the ledger is not listed at all: it belongs to
+another capcomd (a boxd org lists every member's machines; a second daemon on the same Mac sees the same containers),
+or predates the ledger, and its idle lifetime deletes it. While the ledger can't be read, or a record or its agent
+can't be, the machine is `unknown` and can't be deleted (amended 2026-10-27).
 
 ```json
 { "id": "relay-3f9c2a1b7e5d4c60", "kind": "machine", "state": "running",
@@ -217,7 +225,7 @@ New capabilities: `sandboxes` (the two GETs), `sandboxes.settings` (PATCH), `san
 - **Bounding the generic action endpoint.** The risks are verbs nobody reviewed, injection through ids, deleting
   machines that aren't capcomd's (a boxd org lists everyone's machines), and mass deletion. The limits: actions come
   from a closed list in code, and each provider declares a subset; `{id}` must resolve to a resource in capcomd's own
-  list (prefix + label or ledger) before any provider call; there are no batch or wildcard ids; destructive actions
+  list (a live owner, or this capcomd's machines ledger; never the prefix or a label alone) before any provider call; there are no batch or wildcard ids; destructive actions
   carry `destructive: true` and a daemon-written `confirm` text that the app shows in a sheet, and the daemon checks
   the state again before it acts; requests are idempotent; and requests carry no free-form parameters.
 
@@ -266,7 +274,7 @@ Deferred: cost, free-text fields (egress host lists), out-of-tree manifests, and
 | Descriptor | `{name:"lima", kind:"local", label:"Local VM", vendor:"Lima", mark:"lima", caps:{isolation:"vm", snapshots:true, hostBoundSecrets:false, egressAllowlist:false, interactive:true, idleLifetime:"sweep", shell:true, costs:false}, settings:["idleLifetime"], actions:["open_terminal","delete"]}` | – |
 | Availability | `available()` hook: is `limactl` on PATH and does it answer, cached like Docker | – |
 | Settings | `idleLifetime` comes for free (sweep) | – |
-| Resources | `list` by prefix; ownership from the worker actors as for the others | – |
+| Resources | `list` by prefix, kept to the machines in this capcomd's machines ledger; ownership from the worker actors as for the others | – |
 | Shell | `shell(id)` hook: `limactl shell <vm>` | – |
 | App | appears in Runs on, gets a place section and a Details… screen; the mark falls back to `desktopcomputer` | optional: a bundled `lima` mark |
 

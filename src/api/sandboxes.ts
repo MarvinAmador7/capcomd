@@ -10,6 +10,10 @@
 // is deleted by cancelling that agent (its lifecycle destroys the machine); an orphan by the provider. Bounded: the
 // action comes from a closed list the provider declares, the id must be a machine capcomd lists there, the state is
 // read again right before acting, and one action runs at a time per machine.
+// Only this capcomd's machines (ADR-021 §3, §5): a machine is listed when a live owner holds it or it's in this capcomd's
+// machines ledger (src/providers/machines.ts). A boxd org lists every member's machines and a second capcomd on the same
+// Mac sees the same containers, so a machine that merely carries capcomd's prefix is someone else's: not listed, never
+// deleted.
 import { createHash } from "node:crypto";
 import { redactShapes } from "../agents/redact";
 import { env as envVar } from "../utils/env";
@@ -234,6 +238,13 @@ export interface MachineOwner {
 	descendants?: number;
 }
 
+/** A machine in this capcomd's machines ledger: one it made. `sandbox` null: a record that can't be read, so its
+ *  place isn't known (it matches its name on any place). `unsure`: who uses it can't be told now (that record can't be
+ *  read, or its agent couldn't be asked), so it's `unknown`, never deletable. */
+export interface RecordedMachine { sandbox: string | null; name: string; unsure?: boolean }
+/** Who uses capcomd's machines now, and which machines are capcomd's at all. `recorded` null: the ledger can't be read. */
+export interface Ownership { owners: MachineOwner[]; recorded: RecordedMachine[] | null }
+
 /** Ids capcomd ever hands out or accepts for a machine: no shell metacharacters, no spaces, no quotes. */
 export const SAFE_ID = /^[A-Za-z0-9._-]{1,128}$/;
 /** A machine id clients may name: safe characters and capcomd's prefix. */
@@ -295,11 +306,14 @@ function providerState(s: string): ResourceState {
 
 /**
  * capcomd's records joined with the provider's list. A listed machine with an owner takes the owner's run, agent and
- * role; one with capcomd's prefix and no live owner is `orphaned` (a machine left behind), or `unknown` while capcomd's
- * records can't be read. An owned machine the provider doesn't list yet is `starting` while its worker provisions;
- * without any list (the provider never answered) owned machines show as `unknown`. Sorted by id.
+ * role. One with no live owner is listed only when it's in this capcomd's machines ledger (`recorded`): then it's
+ * `orphaned` (a machine left behind), or `unknown` when who uses it can't be told; a machine that only carries
+ * capcomd's prefix is another capcomd's and isn't listed. While capcomd's records can't be read at all (`owners` or
+ * `recorded` null) a machine without an owner is `unknown`. An owned machine the provider doesn't list yet is
+ * `starting` while its worker provisions; without any list (the provider never answered) owned machines show as
+ * `unknown`. Sorted by id.
  */
-export function joinResources(name: string, rows: VmInfo[] | null, owners: MachineOwner[] | null): Resource[] {
+export function joinResources(name: string, rows: VmInfo[] | null, owners: MachineOwner[] | null, recorded: RecordedMachine[] | null): Resource[] {
 	const d = descriptorOf(name);
 	const serves = (a: ResourceAction) => !!d?.actions.includes(a) && SERVED_ACTIONS.includes(a);
 	// capcomd's own short jobs (checks, logins, environment builds) get no actions: nothing may stop them from here,
@@ -319,6 +333,7 @@ export function joinResources(name: string, rows: VmInfo[] | null, owners: Machi
 		return { ...r, destructive: del, confirm: del ? deleteConfirm(o ?? null) : null };
 	};
 	const mine = (owners ?? []).filter((o) => o.sandbox === name);
+	const ours = recorded === null ? null : new Map(recorded.filter((m) => m.sandbox === name || m.sandbox === null).map((m) => [m.name, m]));
 	const byVm = new Map(mine.filter((o) => o.vmId).map((o) => [o.vmId!, o]));
 	const byName = new Map(mine.filter((o) => o.name).map((o) => [o.name!, o]));
 	const ts = (n: number | null | undefined) => (typeof n === "number" && Number.isFinite(n) ? isoTs(n) : null);
@@ -332,7 +347,12 @@ export function joinResources(name: string, rows: VmInfo[] | null, owners: Machi
 		if (o) {
 			used.add(o);
 			state = o.workerState === "draining" ? "stopping" : o.workerState === "provisioning" ? "starting" : providerState(r.state);
-		} else state = owners === null ? "unknown" : providerState(r.state) === "stopping" ? "stopping" : "orphaned";
+		} else if (owners === null || ours === null) state = "unknown";
+		else {
+			const m = ours.get(r.name);
+			if (!m) continue; // not in this capcomd's ledger: another capcomd's machine (or one from before the ledger)
+			state = providerState(r.state) === "stopping" ? "stopping" : m.unsure ? "unknown" : "orphaned";
+		}
 		out.set(r.name, shaped({ id: r.name, kind: "machine", state, owner: o ? ownerOf(o) : null, createdAt: ts(r.createdAt ?? o?.createdAt), deleteAfter: ts(r.deleteAt), actions: actions(state, o) }, o));
 	}
 	for (const o of mine) {
@@ -381,13 +401,15 @@ function within<T>(p: Promise<T>, ms: number): Promise<T> {
 export interface ResourceDeps {
 	/** The provider's machines with capcomd's prefix (`provider.list(MACHINE_PREFIX)`). */
 	list(name: ListedProvider): Promise<VmInfo[]>;
-	/** Machines capcomd's live agents hold (all providers). */
-	owners(): Promise<MachineOwner[]>;
+	/** Machines capcomd's live agents and jobs hold (all providers), and the machines this capcomd's ledger records. */
+	owners(): Promise<Ownership>;
 	now?: () => number;
 	ttlMs?: number;
 	timeoutMs?: number;
 	/** Deletes a machine at the provider (`provider.destroy` with its provider id): an orphan's Delete. */
 	destroy?(name: ListedProvider, vmId: string): Promise<void>;
+	/** Drops a machine from this capcomd's ledger once the provider deleted it (or said it's gone). */
+	forget?(name: ListedProvider, machine: string): void;
 	/** Cancels one agent through the normal cancel path (as POST …/cancel and `capcomd cancel <run> <agt>`: agent.cancelled,
 	 *  and its lifecycle destroys its machine): an owned machine's Delete. `changed`: this call cancelled it. */
 	cancelAgent?(runId: string, agentId: string, by: string): Promise<{ changed: boolean }>;
@@ -422,9 +444,9 @@ export function resourceCatalog(deps: ResourceDeps) {
 	const now = deps.now ?? Date.now;
 	const ttl = deps.ttlMs ?? LIST_TTL_MS;
 	const timeout = deps.timeoutMs ?? LIST_TIMEOUT_MS;
-	type Entry = { triedAt: number; inflight: Promise<void> | null; rows: VmInfo[] | null; asOf: number | null; owners: MachineOwner[] | null; error: string | null };
+	type Entry = { triedAt: number; inflight: Promise<void> | null; rows: VmInfo[] | null; asOf: number | null; owners: Ownership | null; error: string | null };
 	const cache = new Map<string, Entry>();
-	let lastOwners: MachineOwner[] | null = null;
+	let lastOwners: Ownership | null = null;
 	const refresh = (name: ListedProvider, e: Entry) => {
 		e.triedAt = now();
 		e.inflight = (async () => {
@@ -441,7 +463,7 @@ export function resourceCatalog(deps: ResourceDeps) {
 		if (!e) { e = { triedAt: 0, inflight: null, rows: null, asOf: null, owners: null, error: null }; cache.set(name, e); }
 		if (e.inflight) await e.inflight;
 		else if (now() - e.triedAt >= ttl) await refresh(name, e);
-		return { resources: joinResources(name, e.rows, e.owners), asOf: e.asOf, stale: e.error !== null, error: e.error };
+		return { resources: joinResources(name, e.rows, e.owners?.owners ?? null, e.owners?.recorded ?? null), asOf: e.asOf, stale: e.error !== null, error: e.error };
 	};
 	const lookupTimeout = deps.lookupTimeoutMs ?? ACTION_LOOKUP_TIMEOUT_MS;
 	const actionTimeout = deps.actionTimeoutMs ?? ACTION_TIMEOUT_MS;
@@ -457,7 +479,7 @@ export function resourceCatalog(deps: ResourceDeps) {
 	 * never the last good owners: acting on a guess could delete a machine an agent just took). Stored in the cache too,
 	 * so the next read shows it. Throws a 503 outcome when either doesn't answer.
 	 */
-	const lookup = async (name: ListedProvider): Promise<{ rows: VmInfo[]; owners: MachineOwner[] }> => {
+	const lookup = async (name: ListedProvider): Promise<{ rows: VmInfo[]; owners: Ownership }> => {
 		const e = entryOf(name);
 		if (e.inflight) await e.inflight.catch(() => {});
 		const who = descriptorOf(name)?.vendor ?? name;
@@ -497,9 +519,10 @@ export function resourceCatalog(deps: ResourceDeps) {
 			if (acting.has(k)) return fail(409, "Another Delete of this machine is still under way.");
 			acting.add(k);
 			try {
-				let fresh: { rows: VmInfo[]; owners: MachineOwner[] };
+				let fresh: { rows: VmInfo[]; owners: Ownership };
 				try { fresh = await lookup(name); } catch (e) { const o = (e as { outcome?: ActionOutcome }).outcome; if (o) return o; throw e; }
-				const now_ = joinResources(name, fresh.rows, fresh.owners).find((r) => r.id === id);
+				// The same rules as the list: a machine that isn't capcomd's (no owner, not in its ledger) isn't here.
+				const now_ = joinResources(name, fresh.rows, fresh.owners.owners, fresh.owners.recorded).find((r) => r.id === id);
 				// Gone already (deleted by its idle lifetime, its agent's end, or someone else): nothing left to do.
 				if (!now_) { entryOf(name).triedAt = 0; return { ok: true, resource: null, changed: false, owner: seen.owner }; }
 				if (ownerKey(now_) !== ownerKey(seen)) return fail(409, `This machine changed since you looked: ${userNow(now_)}. Look again before deleting it.`);
@@ -517,9 +540,10 @@ export function resourceCatalog(deps: ResourceDeps) {
 						const row = fresh.rows.find((r) => r.name === id);
 						if (!row || !deps.destroy) { claim.cancel(); return fail(503, `capcomd can't delete ${who} machines from here, so nothing was deleted.`); }
 						try { await within(Promise.resolve().then(() => deps.destroy!(name, row.id)), actionTimeout); } catch (e) {
-							if (e instanceof SandboxNotFoundError) { claim.cancel(); entryOf(name).triedAt = 0; return { ok: true, resource: null, changed: false, owner: null }; }
+							if (e instanceof SandboxNotFoundError) { claim.cancel(); deps.forget?.(name, id); entryOf(name).triedAt = 0; return { ok: true, resource: null, changed: false, owner: null }; }
 							throw e;
 						}
+						deps.forget?.(name, id);
 					}
 				} catch (e) {
 					if ((e as { timeout?: boolean })?.timeout) {
