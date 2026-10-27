@@ -1,7 +1,13 @@
 # Bot avatars: brand proposal
 
-**Status: proposal for review, not approved.** Nothing here changes `../SPEC.md` or the Swift app yet. When the
-direction is approved, the approved parts move into SPEC.md and the menu bar app's Swift renderer gets ported from
+**Status: direction approved, details in review.** The product owner approved:
+
+- **Direction B, identity moments** (below).
+- **The menu bar mark: variant A**, the dome head without the antenna (`MENU_BAR_MARK` in
+  `packages/bot-avatar/src/marks.ts`, shown in `menubar.png`).
+
+The remaining open questions are at the end of this file. Nothing here changes `../SPEC.md` or the Swift app yet. The
+approved parts move into SPEC.md with the Swift integration, when the menu bar app's renderer is ported from
 `packages/bot-avatar`.
 
 Every agent gets a generated pixel bot: same agent id, same bot, forever. The bots come from the capcomd brand material
@@ -10,12 +16,12 @@ and they are drawn by a small deterministic engine from a catalog of body parts.
 
 | Sheet | What it shows |
 |---|---|
-| `directions.png` | The three directions, side by side, and the recommendation |
+| `directions.png` | The three directions, side by side (B approved) |
 | `panel-tree.png` | The approved panel (`tree-card-v3`) with an avatar in every tree row |
 | `thread.png` | The approved thread (`thread-panel-v2`): a 24 pt bust in the header, the child's bust on its handoff card, the spawned heads on the spawn row |
 | `mention.png` | The approved input states (`thread-input`) with avatars in the `@` popover |
 | `moments.png` | Empty state, "meet your team" at a run's start, the run-finished celebration |
-| `menubar.png` | The menu bar mark, on dark and light bars, idle / approvals / open |
+| `menubar.png` | The approved menu bar mark (variant A: dome, no antenna), on dark and light bars, idle / approvals / open |
 | `catalog.png`, `catalog-body.png` | Every part in the catalog, the grids and anchors, palettes, dither styles, glyphs, names |
 | `contact-sheet.png` | 48 seeds at every size at 1x and 2x, and what the role changes for the same seed |
 | `hands-before-after.png` | One bot in every pose: the first jointed arms, then the floating hands (review record, not generated) |
@@ -25,7 +31,7 @@ and they are drawn by a small deterministic engine from a catalog of body parts.
 Three ways to make it fun (see `directions.png`):
 
 - **A · Badges.** Avatars replace the profile icons wherever an agent is named. Nothing else changes.
-- **B · Identity moments (recommended).** A, plus a few moments where the bots and the pixel language take the stage:
+- **B · Identity moments (approved).** A, plus a few moments where the bots and the pixel language take the stage:
   the empty state, "meet your team" when a run starts, the run's finish, the menu bar mark. Everywhere people
   read and act, the app stays the approved macOS panel.
 - **C · Arcade.** Pixel type, dithered fills, scanlines, stepped borders everywhere. The most distinctive, and it
@@ -204,12 +210,18 @@ python3 tools/quantize.py brand/*.png       # 256-colour PNGs before committing
 The mockups set SF Pro / SF Mono (the app's fonts) so they render true on a Mac; the approved HTML names Inter and
 JetBrains Mono.
 
+## Decisions
+
+- **Direction B, identity moments:** approved by the product owner.
+- **Menu bar mark:** approved as variant A, the dome head with no antenna. The bot head replaces the ring.
+- **Arms:** replaced by floating hands, after the product owner found the jointed, human-like arms weird (see
+  `hands-before-after.png`).
+
 ## Open questions
 
-1. Direction B, A or C? And which moments ship first (empty state and the finish are the cheapest).
-2. Bot names: show them (thread header, tooltip, VoiceOver "lead Ziggy") or keep only profiles?
-3. Moods following status (sleepy when queued, oops when failed): yes, or always the bot's own face?
-4. The menu bar mark: adopt the bot head, or keep the ring?
-5. Is the brand material (bot family, palette, wordmark) fine to derive from in this public repo? Only redrawn data
-   is committed here, never the source files.
-6. Extra palettes (lavender, steel, ivory): keep, or orange and purple only?
+1. Which moments ship first? The empty state and the finish cost the least.
+2. Bot names: show them (thread header, tooltip, VoiceOver "lead Ziggy"), or keep only profile names?
+3. Should moods follow status (sleepy when queued, "oops" when failed), or does each bot always keep its own face?
+4. Is it fine to derive from the brand material (bot family, palette, wordmark) in this public repo? Only redrawn
+   pixel data is committed here, never the source files.
+5. Keep the extra palettes (lavender, steel, ivory), or only orange, purple and their mixes?

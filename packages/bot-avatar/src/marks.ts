@@ -1,10 +1,13 @@
 // Fixed identity marks (not generated): the menu bar icon. 1-bit, drawn as a template image ("#" opaque, "." clear),
 // so macOS tints it for light and dark menu bars and for the highlighted state.
 
-/** 16×16 menu bar mark: the brand dome head with an antenna, a visor cut out of it, two eyes and a smile. */
+/**
+ * 16×16 menu bar mark (approved by the product owner: variant A, the dome with no antenna): the brand dome head with
+ * a visor cut out of it, two eyes and a smile.
+ */
 export const MENU_BAR_MARK: string[] = [
-	".......##.......",
-	".......##.......",
+	"................",
+	"................",
 	"....########....",
 	"..############..",
 	".##############.",
