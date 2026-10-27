@@ -116,6 +116,9 @@ export function harnessApp(o: ServerOptions) {
 			}
 		}) },
 		skills: { list: os.skills.list.handler(() => src.skills()) },
+		logins: { list: os.logins.list.handler(async () => ({ logins: await src.logins() })) },
+		environments: { list: os.environments.list.handler(async () => ({ environments: await src.environments() })) },
+		service: { get: os.service.get.handler(() => src.service()) },
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
 				if (!input.scope.startsWith("run-")) return [];

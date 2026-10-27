@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -3081,6 +3081,338 @@
                   "required": [
                     "drivers",
                     "sandboxes"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/logins": {
+      "get": {
+        "operationId": "logins.list",
+        "description": "Capability logins. Who agents can log in as, per AI and per sandbox (plan logins are saved per sandbox). Needs the `read` scope. Local files and the daemon's environment only (no VM, container or network call), so poll it freely. Never contains a credential.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "logins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "enum": [
+                              "claude",
+                              "codex"
+                            ],
+                            "type": "string"
+                          },
+                          "sandbox": {
+                            "enum": [
+                              "docker",
+                              "boxd"
+                            ],
+                            "type": "string",
+                            "description": "Where agents run: docker (\"Local\") or boxd (\"Cloud\")"
+                          },
+                          "loggedIn": {
+                            "type": "boolean",
+                            "description": "Agents of this provider can log in in this sandbox"
+                          },
+                          "how": {
+                            "description": "plan: a plan login (`capcomd auth login`) saved for this sandbox; api_key: ANTHROPIC_API_KEY / OPENAI_API_KEY is set for the daemon, or (boxd) kept as a boxd secret with CAPCOMD_CREDENTIALS=secret. A plan login wins when there are both. null when not logged in",
+                            "enum": [
+                              "plan",
+                              "api_key",
+                              null
+                            ],
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "detail": {
+                            "description": "Where the login lives, one short sentence written by the daemon (trusted, never a credential), e.g. \"Kept as a boxd secret bound to api.anthropic.com\", \"Saved in the agent environment\"; null when not logged in",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "command": {
+                            "type": "string",
+                            "description": "The CLI that logs in there, e.g. `capcomd auth login claude --sandbox docker` (interactive: run it in a terminal)"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "sandbox",
+                          "loggedIn",
+                          "how",
+                          "detail",
+                          "command"
+                        ]
+                      },
+                      "description": "Always four: claude in docker, claude in boxd, codex in docker, codex in boxd"
+                    }
+                  },
+                  "required": [
+                    "logins"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/environments": {
+      "get": {
+        "operationId": "environments.list",
+        "description": "Capability environments. The agent environment (env snapshot) each sandbox's agents boot from. Needs the `read` scope. Local files only (the env ledger and the build's marker), so poll it freely.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "environments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sandbox": {
+                            "enum": [
+                              "docker",
+                              "boxd"
+                            ],
+                            "type": "string",
+                            "description": "Where agents run: docker (\"Local\") or boxd (\"Cloud\")"
+                          },
+                          "status": {
+                            "enum": [
+                              "ready",
+                              "missing",
+                              "building",
+                              "failed"
+                            ],
+                            "type": "string",
+                            "description": "building: a `capcomd env build` for this sandbox is running now; failed: the last build failed (`name`, `versions` and `builtAt` then still describe the environment agents use, if any); ready: agents boot from `name`; missing: none built yet (agents can't run real CLIs there)"
+                          },
+                          "name": {
+                            "description": "The environment agents boot from (an env snapshot); null when none",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "versions": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "description": "Tool versions in it by tool (claude, codex, node): what the build found or installed, else its pins; empty when unknown"
+                          },
+                          "builtAt": {
+                            "description": "When it was built; null when unknown or none",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time"
+                          },
+                          "command": {
+                            "type": "string",
+                            "description": "The CLI that builds (or rebuilds) it, e.g. `capcomd env build --sandbox docker`"
+                          }
+                        },
+                        "required": [
+                          "sandbox",
+                          "status",
+                          "name",
+                          "versions",
+                          "builtAt",
+                          "command"
+                        ]
+                      },
+                      "description": "Always two: docker, then boxd"
+                    }
+                  },
+                  "required": [
+                    "environments"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/service": {
+      "get": {
+        "operationId": "service.get",
+        "description": "Capability service. Whether capcomd runs as a background service. Needs the `read` scope. Reads the service definition, and asks launchd (systemd) whether it is loaded at most every few seconds, for at most a second.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "installed": {
+                      "type": "boolean",
+                      "description": "The service definition is installed (`capcomd service install`: a launchd agent on macOS, a systemd user unit on Linux)"
+                    },
+                    "loaded": {
+                      "type": "boolean",
+                      "description": "launchd (systemd) has it loaded: it starts capcomd at login and restarts it when it crashes"
+                    },
+                    "installCommand": {
+                      "type": "string",
+                      "description": "`capcomd service install`"
+                    },
+                    "uninstallCommand": {
+                      "type": "string",
+                      "description": "`capcomd service uninstall`"
+                    }
+                  },
+                  "required": [
+                    "installed",
+                    "loaded",
+                    "installCommand",
+                    "uninstallCommand"
                   ]
                 }
               }
