@@ -19,8 +19,9 @@ they win wherever this text and they differ. `settings/CloudExplore.dc.html` is 
   An accessory app can't become active, so while Settings is open the app is a regular app (a Dock icon, as Apple's
   own menu bar apps do) and its window comes to the front with active controls; closing the window makes it an
   accessory again.
-- Each pane reports its content height and the window fits it (top edge fixed, no animation), up to the screen's
-  visible height; only past that does a pane scroll. ⌘W closes it. Panes have no ⌘1–4: Settings
+- Each pane reports its content height and the window fits it (top edge fixed, no animation) inside the screen's
+  visible frame (no menu bar, no Dock): a window that would run under the Dock moves up first; only a pane taller than
+  the whole visible height is capped and scrolls. ⌘W closes it. Panes have no ⌘1–4: Settings
   windows don't, and ⌘1–3 stay the panel's.
 - Freshness: while the window is open, `GET /v1/health`, `/v1/run-options`, `/v1/logins`, `/v1/environments` and
   `/v1/service` are read every 5 s (all cheap) and again whenever the app becomes active (back from Terminal).

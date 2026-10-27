@@ -167,7 +167,7 @@ struct PlaceSection: View {
         } else if place.name == "boxd" {
           StatusValue(.empty, reason ?? "No boxd API key")
           Button("Set Up…") { model.handOff(HandOffKey.boxdKey, command: SettingsRows.boxdKeyCommand, baseline: "\(model.boxdKey)") }
-            .buttonStyle(.borderedProminent)
+            .prominent()
             .accessibilityHint("Opens Terminal to set the boxd API key.")
         } else {
           StatusValue(.bad, reason ?? "Can't be used now")
@@ -216,7 +216,7 @@ struct PlaceSection: View {
         LabeledContent {
           HStack(spacing: Theme.Settings.rowGap) {
             StatusValue(.warn, "Not built")
-            Button("Build…") { build(env.command) }.buttonStyle(.borderedProminent).accessibilityHint("Opens Terminal to build it.")
+            Button("Build…") { build(env.command) }.prominent().accessibilityHint("Opens Terminal to build it.")
           }
         } label: {
           Text("Agent environment")
@@ -226,7 +226,7 @@ struct PlaceSection: View {
         LabeledContent {
           HStack(spacing: Theme.Settings.rowGap) {
             StatusValue(.bad, "Failed")
-            Button("Try Again…") { build(env.command) }.buttonStyle(.borderedProminent).accessibilityHint("Opens Terminal to build it again.")
+            Button("Try Again…") { build(env.command) }.prominent().accessibilityHint("Opens Terminal to build it again.")
           }
         } label: {
           Text("Agent environment")

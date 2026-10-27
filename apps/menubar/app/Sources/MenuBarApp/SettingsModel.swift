@@ -262,22 +262,22 @@ enum AppInfo {
     for w in NSApp.windows where w.isVisible && String(describing: type(of: w)).contains("MenuBarExtra") { w.close() }
   }
 
-  /// The tallest a pane gets before it scrolls: the screen's visible height less the window's title and tab bar.
+  /// The tallest a pane gets before it scrolls: the screen's visible height (no menu bar, no Dock) less the window's
+  /// title and tab bar.
   static var maxPaneHeight: CGFloat {
     let screen = (window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
     let chrome = window.map { $0.frame.height - $0.contentLayoutRect.height } ?? Theme.Settings.chrome
     return max(Theme.Settings.minPane, screen - chrome)
   }
 
-  /// Fits the window to the pane's height, top edge fixed, without animating (layout snaps, SPEC §7).
+  /// Fits the window to the pane's height, top edge fixed, without animating (layout snaps, SPEC §7), inside the
+  /// screen's visible frame: a window that would run under the Dock moves up first; only a pane taller than the whole
+  /// visible height is capped (and scrolls, PaneFit).
   static func fit(paneHeight h: CGFloat) {
     guard let w = window else { return }
     let chrome = w.frame.height - w.contentLayoutRect.height
-    let height = (h + chrome).rounded()
-    guard abs(w.frame.height - height) > 0.5 else { return }
-    var f = w.frame
-    f.origin.y += f.height - height
-    f.size.height = height
+    let f = WindowFit.fitted(w.frame, height: (h + chrome).rounded(), visible: (w.screen ?? NSScreen.main)?.visibleFrame)
+    guard f != w.frame else { return }
     w.setFrame(f, display: true, animate: false)
   }
 }

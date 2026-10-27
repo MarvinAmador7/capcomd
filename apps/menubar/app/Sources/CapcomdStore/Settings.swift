@@ -374,3 +374,24 @@ public struct HandOffs: Sendable, Hashable {
     }
   }
 }
+
+// MARK: window size
+
+/// The Settings window fitted to its pane (MenuBarApp's SettingsWindow.fit), in screen coordinates (y up).
+public enum WindowFit {
+  /// `frame` resized to `height` with its top edge kept, then kept inside `visible` (the screen's visible frame: no menu
+  /// bar, no Dock) by moving it, never by resizing it further, unless it is taller than all of `visible`.
+  public static func fitted(_ frame: CGRect, height: CGFloat, visible: CGRect?) -> CGRect {
+    // Foundation-only (the store builds on Linux): origin and size, not CoreGraphics' minY / maxY helpers.
+    let top = frame.origin.y + frame.size.height
+    var f = frame
+    f.size.height = height
+    f.origin.y = top - height
+    guard let v = visible else { return f }
+    let vTop = v.origin.y + v.size.height
+    f.size.height = min(f.size.height, v.size.height)
+    if f.origin.y < v.origin.y { f.origin.y = v.origin.y }                          // would run under the Dock: move up
+    if f.origin.y + f.size.height > vTop { f.origin.y = vTop - f.size.height }      // would run under the menu bar: move down
+    return f
+  }
+}

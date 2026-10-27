@@ -87,7 +87,7 @@ struct AccountsPane: View {
             Button("Change…") { setUp() }.accessibilityHint("Opens Terminal to change the boxd API key.")
           case .notSet:
             StatusValue(.empty, "Not set")
-            Button("Set Up…") { setUp() }.buttonStyle(.borderedProminent).accessibilityHint("Opens Terminal to set the boxd API key.")
+            Button("Set Up…") { setUp() }.prominent().accessibilityHint("Opens Terminal to set the boxd API key.")
           case .unknown:
             StatusValue(.empty, "Unknown")
             Button("Set Up…") { setUp() }.accessibilityHint("Opens Terminal to set the boxd API key.")
@@ -104,10 +104,10 @@ struct AccountsPane: View {
         case .waitingForKeychain: WaitingValue(text: "Waiting for Keychain access…")
         case .noToken:
           StatusValue(nil, "Not set")
-          Button("Paste Token…") { sheet = .paste }.buttonStyle(.borderedProminent)
+          Button("Paste Token…") { sheet = .paste }.prominent()
         case .rejected:
           StatusValue(.bad, "capcomd rejected it")
-          Button("Paste Token…") { sheet = .paste }.buttonStyle(.borderedProminent)
+          Button("Paste Token…") { sheet = .paste }.prominent()
         default:
           if model.tokenFromEnvironment {
             StatusValue(nil, "From CAPCOMD_TOKEN")
@@ -145,7 +145,7 @@ struct LoginRowView: View {
           .accessibilityLabel(row.isLoggedIn ? "Log in to \(ai) on \(place) again" : "Log in to \(ai) on \(place)")
           .accessibilityHint("Opens Terminal to log in.")
           // The AI new runs start with, not logged in here: the one thing to do on this pane (Accounts board).
-          if !row.isLoggedIn && row.provider == (model.startDriver?.provider ?? "claude") { button.buttonStyle(.borderedProminent) } else { button }
+          if !row.isLoggedIn && row.provider == (model.startDriver?.provider ?? "claude") { button.prominent() } else { button }
         }
       }
     } label: {

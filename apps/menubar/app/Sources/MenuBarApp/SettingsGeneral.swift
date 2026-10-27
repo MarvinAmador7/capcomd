@@ -91,7 +91,7 @@ struct GeneralPane: View {
           Button("Start capcomd") {
             model.handOff(HandOffKey.start, command: model.serviceInfo?.installCommand ?? SettingsRows.serviceInstall, baseline: "false")
           }
-          .buttonStyle(.borderedProminent)
+          .prominent()
           .accessibilityHint("Opens Terminal to start capcomd as a background service.")
         }
       } label: {
@@ -104,7 +104,7 @@ struct GeneralPane: View {
       LabeledContent {
         HStack(spacing: Theme.Settings.rowGap) {
           StatusValue(.empty, "Not connected")
-          Button("Paste Token…") { tokenSheet = true }.buttonStyle(.borderedProminent)
+          Button("Paste Token…") { tokenSheet = true }.prominent()
         }
       } label: {
         Text("Status")
@@ -114,7 +114,7 @@ struct GeneralPane: View {
       LabeledContent {
         HStack(spacing: Theme.Settings.rowGap) {
           StatusValue(.bad, "capcomd rejected this app's token")
-          Button("Paste Token…") { tokenSheet = true }.buttonStyle(.borderedProminent)
+          Button("Paste Token…") { tokenSheet = true }.prominent()
         }
       } label: {
         Text("Status")

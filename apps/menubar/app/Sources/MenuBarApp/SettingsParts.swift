@@ -157,6 +157,10 @@ struct TokenSheet: View {
 }
 
 extension View {
+  /// The one prominent action of a row (`.btn.pri`): the system's bordered prominent button in the accent colour. The
+  /// tint is explicit: a Form styles a row's value secondary, and a prominent button left to inherit that drew dark grey.
+  func prominent() -> some View { buttonStyle(.borderedProminent).tint(Color.accentColor) }
+
   /// A row whose data comes from capcomd: disabled while it can't be reached (it keeps showing the last values).
   func daemonRow(_ live: Bool) -> some View { disabled(!live) }
 }

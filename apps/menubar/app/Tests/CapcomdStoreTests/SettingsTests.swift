@@ -326,4 +326,23 @@ final class SettingsTests: XCTestCase {
       XCTAssertFalse(SettingsRows.isSafeCommand(bad), bad)
     }
   }
+
+  // MARK: window size
+
+  /// Accounts on a 949 pt screen with the Dock at the bottom: the window moves up rather than running under the Dock.
+  func testTheWindowStaysInsideTheVisibleFrame() {
+    let visible = CGRect(x: 0, y: 70, width: 1512, height: 849)            // Dock below 70, menu bar above 919
+    let window = CGRect(x: 400, y: 949 - 252 - 500, width: 620, height: 500) // top edge at y=252 from the top
+    // Taller pane: top kept when it fits…
+    let a = WindowFit.fitted(window, height: 600, visible: visible)
+    XCTAssertEqual(a.maxY, window.maxY); XCTAssertEqual(a.height, 600); XCTAssertGreaterThanOrEqual(a.minY, visible.minY)
+    // …moved up when it would run under the Dock.
+    let b = WindowFit.fitted(window, height: 820, visible: visible)
+    XCTAssertEqual(b.height, 820); XCTAssertEqual(b.minY, visible.minY); XCTAssertLessThanOrEqual(b.maxY, visible.maxY)
+    // Taller than the whole visible height: capped to it (the pane scrolls).
+    let c = WindowFit.fitted(window, height: 1200, visible: visible)
+    XCTAssertEqual(c, CGRect(x: 400, y: visible.minY, width: 620, height: visible.height))
+    // Shorter: the top edge stays.
+    XCTAssertEqual(WindowFit.fitted(window, height: 400, visible: visible).maxY, window.maxY)
+  }
 }
