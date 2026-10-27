@@ -29,6 +29,7 @@ import type { AttachedSkill } from "../agents/skills";
 import { resolveEnvSnapshot } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord } from "../agents/profiles";
+import { ENGINE_INSTANCE } from "../utils/engine-instance";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
 
@@ -37,7 +38,6 @@ const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
 // whose predecessor died mid-push) waits for that push instead of starting a second one. A lock
 // from a dead engine process (other instance id) or one past its lease can be taken over, and
 // the new holder first checks the remote branch and adopts a push that already landed.
-const ENGINE_INSTANCE = crypto.randomUUID();
 const PUSH_LOCK_MS = () => Number(process.env.CAPCOMD_PUSH_LOCK_MS ?? 30_000);
 const PUSH_LOCKS_SQL = `CREATE TABLE IF NOT EXISTS push_locks (
   idem_key TEXT PRIMARY KEY, holder TEXT NOT NULL, instance TEXT NOT NULL, until INTEGER NOT NULL,

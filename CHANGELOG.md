@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agents no longer fail when the daemon restarts. Before, agents that were running when `capcomd serve` stopped or
+  restarted (a Ctrl-C, a service restart, an upgrade) ended as failed a few seconds later, with "An internal error
+  occurred" or a connection error as their result. Now each agent waits for the daemon to come back (up to 5 minutes,
+  `CAPCOMD_DRIVE_OUTAGE_MS`) and then runs its task again in its VM, without counting the interruption as a failure;
+  the run it had going there is stopped first, so two copies never work in one checkout. If the daemon stays down
+  longer, the agent stays running and the next `capcomd await` picks it up. The work done before the restart is not
+  kept: the task starts over.
 - Menu bar app: an approval that's still waiting keeps its project's card under Active, even after its agents have
   finished; before, the card moved to Recent and took its Approve / Deny with it, while the menu bar still counted it.
 - Approvals for an agent's merge read "Merge this agent's work into main?" and name the branch, instead of the agent's

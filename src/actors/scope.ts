@@ -14,6 +14,7 @@ import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
+import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { startDriver } from "../primitives/drivers";
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
@@ -401,9 +402,10 @@ export const scopeActor = actor({
       const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
       const a = rowToAgent(r[0]);
-      if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { ok: false, agent: a };
+      // `instance`: which engine process answered (a driver tells a daemon restart from a fault by it).
+      if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { ok: false, agent: a, instance: ENGINE_INSTANCE };
       const now = Date.now();
-      if (a.driver && a.driver !== params.driver && a.driverUntil > now) return { ok: false, agent: a };
+      if (a.driver && a.driver !== params.driver && a.driverUntil > now) return { ok: false, agent: a, instance: ENGINE_INSTANCE };
       await c.db.transaction(async (tx: RawAccess) => {
         // Starting it is its first sign of life: its liveness window runs from here, not from spawn, so the time its
         // VM takes to come up doesn't read as "no heartbeat" (resume does the same). A takeover keeps the last heartbeat.
@@ -411,7 +413,7 @@ export const scopeActor = actor({
           params.driver, now + params.ttlMs, now, now, params.agentId);
         if (a.status === "pending") await addEvent(tx, "AGENT_STARTED", params.agentId, {}, `start-${params.agentId}`);
       }, { name: "scopeClaim" });
-      return { ok: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+      return { ok: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]), instance: ENGINE_INSTANCE };
     },
 
     async finish(c, params: { agentId: string; status: "done" | "failed"; result: Record<string, unknown>; spent?: Budget }) {
