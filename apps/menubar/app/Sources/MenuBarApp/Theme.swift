@@ -400,6 +400,21 @@ enum Theme {
     static let mediaRadius: CGFloat = 8, mediaMaxHeight: CGFloat = 180, mediaStroke = Color.white.opacity(0.08)
     static let truncatedFont = Font.system(size: 11), truncatedText = label.opacity(0.4)
   }
+  /// Identity moments (design/brand/moments.png): meet your team, run finished.
+  enum Moments {
+    static let meetWindow: Double = 6, cheerFor: Double = 2.2                   // s: a run's first seconds; the cheer
+    static let maxKids = 4, maxCheer = 5
+    static let leadCell: CGFloat = 2                                            // the planner at 64 pt
+    static let padding: CGFloat = 8, labelTop: CGFloat = 4, traceTop: CGFloat = 4, traceHeight: CGFloat = 18, statusTop: CGFloat = 10
+    static let traceWidth: CGFloat = 1, traceOpacity: Double = 0.8, memberGap: CGFloat = 2, statusGap: CGFloat = 6
+    static let leadFont = Font.system(size: 12.5), memberFont = Font.system(size: 11.5)
+    static let roleText = Color.white.opacity(0.85), nameText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.45)
+    static let statusFont = Font.system(size: 12.5), statusText = Color.white.opacity(0.78)
+    static let rise: CGFloat = 4, stagger: Double = 0.04, memberFade: Double = 0.2, reducedFade: Double = 0.15
+    static let cheerGap: CGFloat = 4, cheerPadding: CGFloat = 10, cheerBottom: CGFloat = 12, confettiCount = 26
+    static let confetti: [Color] = [Theme.Polish.brand, Color(red: 0x94 / 255, green: 0x57 / 255, blue: 0xDC / 255),
+                                    Color(red: 0x5E / 255, green: 0xE6 / 255, blue: 1), Color(red: 0xF7 / 255, green: 0xA3 / 255, blue: 0xDA / 255)]
+  }
   /// Approved Apple craft (canvas "Craft" and "Materials" boards).
   enum Craft {
     static let solidControl = Color(red: 0x30 / 255, green: 0x31 / 255, blue: 0x3A / 255)   // Reduce Transparency, macOS 14–15

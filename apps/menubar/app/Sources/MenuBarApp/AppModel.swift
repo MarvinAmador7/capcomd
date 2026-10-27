@@ -38,7 +38,7 @@ final class AppModel {
 
   private func attach(_ s: CapcomdStore) {
     s.onChange = { [weak self] in self?.revision &+= 1 }
-    s.onNotify = { [weak self] n in Notifier.post(n, bot: self?.notificationBot(n)) }
+    s.onNotify = { [weak self] n in self?.moment(n); Notifier.post(n, bot: self?.notificationBot(n)) }
   }
 
   static var socketPath: String {
@@ -51,6 +51,39 @@ final class AppModel {
     return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), detail: LiveDetail(transport: t),
                          controls: LiveControls(transport: t), starter: LiveStarter(transport: t), messenger: LiveMessenger(transport: t),
                          daemonInfo: LiveDaemonInfo(transport: t), thread: LiveThread(transport: t), prefs: DefaultsPreferences()), t)
+  }
+
+  // Identity moments: seen live only (never from a snapshot or a reopened panel), each once per run.
+  @ObservationIgnored private var celebrations: [String: Date] = [:]
+  @ObservationIgnored private var meetScheduled: Set<String> = []
+  @ObservationIgnored private let launched = Date()
+
+  /// A run that just completed (live): its project keeps a cheering card for `cheerFor` seconds. Never on failure.
+  func moment(_ n: Notice) {
+    guard case .runFinished(let rid, let type, _) = n, type == "run.completed" else { return }
+    celebrations[rid] = Date(); revision &+= 1
+    Task { [weak self] in try? await Task.sleep(for: .seconds(Theme.Moments.cheerFor)); self?.celebrations[rid] = nil; self?.revision &+= 1 }
+  }
+  func celebrating(_ p: Project) -> Run? {
+    _ = revision
+    return p.runs.first { celebrations[$0.id].map { Date().timeIntervalSince($0) < Theme.Moments.cheerFor } ?? false }
+  }
+
+  /// A run in its first seconds, started while the app was watching: the card shows "meet your team" until
+  /// `meetWindow` has passed, then the tree.
+  func meeting(_ p: Project) -> Run? {
+    _ = revision
+    let now = Date().timeIntervalSince1970 * 1000, start = launched.timeIntervalSince1970 * 1000
+    guard let run = p.activeRuns.first(where: { r in
+      guard let s = r.startedAtMs else { return false }
+      return Double(s) >= start && now - Double(s) < Theme.Moments.meetWindow * 1000
+    }), let s = run.startedAtMs else { return nil }
+    if !meetScheduled.contains(run.id) {
+      meetScheduled.insert(run.id)
+      let left = Theme.Moments.meetWindow - (now - Double(s)) / 1000
+      Task { [weak self] in try? await Task.sleep(for: .seconds(max(0.1, left))); self?.revision &+= 1 }
+    }
+    return run
   }
 
   /// The waiting agent's bot for an approval notification.

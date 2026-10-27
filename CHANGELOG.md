@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: two small moments with the bots. When a run starts, its card first introduces the team for a few
+  seconds: the planner waves over the agents it spawns, each with its bot's name. When a run finishes successfully,
+  its card shows the team cheering for a couple of seconds, in party hats and confetti, before it becomes the finished
+  line. Failed or stopped runs don't celebrate; with Reduce Motion the team simply fades in.
 - Menu bar app: on macOS 26 and later the panel's controls (the project field, the message box, Back, Approve and
   Deny, the footer) use Liquid Glass; earlier macOS versions keep today's look. Approval notifications now show the
   waiting agent's bot and have Approve and Deny buttons, so you can decide without opening the panel. Clicking Approve

@@ -28,13 +28,17 @@ struct PanelView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
           let projects = model.projects
-          let active = projects.filter(\.isActive)
-          let finished = Array(projects.filter { !$0.isActive }.prefix(Theme.Finished.maxRows))
+          // A project whose run just completed stays up as its celebration for a moment, then drops to the finished rows.
+          let active = projects.filter { $0.isActive || model.celebrating($0) != nil }
+          let finished = Array(projects.filter { !$0.isActive && model.celebrating($0) == nil }.prefix(Theme.Finished.maxRows))
           StartProjectField().padding(.top, Theme.Composer.sectionTop)
           Text("Active").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
             .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
           ForEach(active) { p in
-            ProjectCard(project: p).padding(.bottom, Theme.cardGap).transition(.opacity)
+            Group {
+              if let r = model.celebrating(p) { CelebrationCard(project: p, run: r) } else { ProjectCard(project: p) }
+            }
+            .padding(.bottom, Theme.cardGap).transition(.opacity)
           }
           if active.isEmpty {
             VStack(spacing: 10) {
@@ -49,7 +53,7 @@ struct PanelView: View {
         }
         .padding(Theme.Card.listPadding)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listContent = $0; model.listHeight = listContent + footerHeight }
-        .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map { "\($0.id)\($0.isActive)" })
+        .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map { "\($0.id)\($0.isActive)\(model.celebrating($0) != nil)" })
       }
       .safeAreaInset(edge: .bottom) {
         footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0; model.listHeight = listContent + footerHeight }
@@ -109,7 +113,7 @@ struct ProjectCard: View {
         .accessibilityHint("Opens the run")
       VStack(alignment: .leading, spacing: 0) {
         ForEach(project.activeRuns) { run in   // finished and failed runs leave the card
-          AgentTreeView(runId: run.id, compact: true)
+          if model.meeting(project)?.id == run.id { MeetTeamView(runId: run.id).transition(.opacity) } else { AgentTreeView(runId: run.id, compact: true) }
           // Approvals sit under their waiting agent; one with no agent in the tree goes under the run's tree.
           let inTree = Set(model.tree(run.id).flatMap(\.subtreeIds))
           ForEach(model.approvals(run.id).filter { !inTree.contains($0.agentId ?? "") }) {
