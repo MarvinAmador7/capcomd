@@ -179,6 +179,16 @@ final class AppModel {
     return ss.first { $0.name == store.prefs.startSandbox && $0.available } ?? ss.first { $0.isDefault == true && $0.available } ?? ss.first(where: \.available)
   }
   func pickSandbox(_ name: String) { store.prefs.startSandbox = name; revision &+= 1 }
+  /// The driver's reasoning effort for new runs: the one last picked for it while it still offers it, else its default.
+  var startEffort: String? {
+    guard let d = startDriver, let levels = d.efforts, !levels.isEmpty else { return nil }
+    _ = revision
+    return store.prefs.startEffort(d.provider).flatMap { levels.contains($0) ? $0 : nil } ?? d.effort.flatMap { levels.contains($0) ? $0 : nil }
+  }
+  func pickEffort(_ effort: String) {
+    guard let d = startDriver else { return }
+    store.prefs.setStartEffort(effort, for: d.provider); revision &+= 1
+  }
   /// The driver new runs go to: the one last picked while the daemon still offers it, else the project's default.
   var startDriver: DriverInfo? {
     let ds = drivers
@@ -187,11 +197,11 @@ final class AppModel {
   func pickDriver(_ provider: String) { store.prefs.startDriver = provider; revision &+= 1 }
 
   func startRun(_ goal: String) async -> Bool {
-    let driver = startDriver?.provider, sandbox = startSandbox?.name
-    var state = await store.startRun(goal: goal, repo: store.prefs.startRepo, driver: driver, sandbox: sandbox)
+    var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+    var state = await store.startRun(goal: goal, choice)
     if case .needsRepo = state, let folder = ProjectFolderPicker.choose() {
-      store.prefs.startRepo = folder
-      state = await store.startRun(goal: goal, repo: folder, driver: driver, sandbox: sandbox)
+      store.prefs.startRepo = folder; choice.repo = folder
+      state = await store.startRun(goal: goal, choice)
     }
     if case .started = state { return true }
     return false

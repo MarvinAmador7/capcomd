@@ -92,6 +92,9 @@ public final class UIPreferences {
     get { store.string(forKey: "startSandbox") }
     set { store.set(newValue, forKey: "startSandbox") }
   }
+  /// The effort last picked for a driver ("high"); nil: the driver's default.
+  public func startEffort(_ driver: String) -> String? { store.string(forKey: "startEffort.\(driver)") }
+  public func setStartEffort(_ effort: String?, for driver: String) { store.set(effort, forKey: "startEffort.\(driver)") }
   public var activityCollapsed: Bool {
     get { store.string(forKey: "activityCollapsed") == "1" }
     set { store.set(newValue ? "1" : "0", forKey: "activityCollapsed") }
@@ -134,9 +137,17 @@ public struct StartRefused: Error, Sendable, Hashable {
   public init(_ m: String, needsRepo: Bool = false) { message = m; self.needsRepo = needsRepo }
 }
 public protocol RunStarting: Sendable {
-  /// `driver`: which AI drives the run as its planner ("claude", "codex"); `sandbox`: where its agents run ("docker"
-  /// on this machine, "boxd" VMs). nil: the project's settings.
-  func start(goal: String, repo: String?, driver: String?, sandbox: String?, idempotencyKey: String) async throws -> String
+  func start(goal: String, choice: RunChoice, idempotencyKey: String) async throws -> String
+}
+
+/// How a new run starts, beside its goal; nil fields keep the project's settings. `repo`: the project checkout;
+/// `driver`: the AI that drives it as its planner ("claude", "codex"); `sandbox`: where its agents run ("docker" on
+/// this machine, "boxd" VMs); `effort`: the driver's reasoning effort, one of its `DriverInfo.efforts`.
+public struct RunChoice: Sendable, Hashable {
+  public var repo: String?, driver: String?, sandbox: String?, effort: String?
+  public init(repo: String? = nil, driver: String? = nil, sandbox: String? = nil, effort: String? = nil) {
+    self.repo = repo; self.driver = driver; self.sandbox = sandbox; self.effort = effort
+  }
 }
 
 /// Where a run's agents can run (`GET /v1/run-options`): "docker" (Local, this machine) or "boxd" (VM).
@@ -164,10 +175,15 @@ public struct DriverInfo: Codable, Sendable, Hashable, Identifiable {
   public var available: Bool; public var reason: String?
   /// The project's planner as configured runs on this one.
   public var isDefault: Bool?
+  /// Reasoning effort levels it takes, lowest first (empty or absent: not settable), and the one a run gets by default.
+  public var efforts: [String]?
+  public var effort: String?
   public var id: String { provider }
-  enum CodingKeys: String, CodingKey { case provider, label, model, available, reason, isDefault = "default" }
-  public init(provider: String, label: String, model: String? = nil, available: Bool = true, reason: String? = nil, isDefault: Bool? = nil) {
+  enum CodingKeys: String, CodingKey { case provider, label, model, available, reason, isDefault = "default", efforts, effort }
+  public init(provider: String, label: String, model: String? = nil, available: Bool = true, reason: String? = nil, isDefault: Bool? = nil,
+              efforts: [String]? = nil, effort: String? = nil) {
     self.provider = provider; self.label = label; self.model = model; self.available = available; self.reason = reason; self.isDefault = isDefault
+    self.efforts = efforts; self.effort = effort
   }
 }
 

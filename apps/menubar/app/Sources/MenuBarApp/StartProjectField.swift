@@ -131,13 +131,25 @@ struct StartProjectField: View {
         ForEach(model.drivers.filter { !$0.available }) { d in
           Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true)
         }
+        // Reasoning effort for the picked driver, lowest first; the bars show it on the chip.
+        if let levels = current.efforts, !levels.isEmpty, let effort = model.startEffort {
+          Divider()
+          Picker("Effort", selection: Binding(get: { effort }, set: { model.pickEffort($0) })) {
+            ForEach(Array(levels.enumerated()), id: \.element) { i, l in
+              Label { Text(verbatim: EffortBars.title(l)) } icon: { Image(systemName: "cellularbars", variableValue: EffortBars.value(i, of: levels.count)) }.tag(l)
+            }
+          }
+          .pickerStyle(.inline)
+        }
       } label: {
+        let effort = model.startEffort, levels = current.efforts ?? []
         Chip2(leading: ProviderMark(provider: provider, size: Theme.Provider.chipMark).foregroundStyle(ProviderMarks.badgeTint(provider)),
-              text: current.label, chevron: true, onRemove: nil)
+              text: current.label, chevron: true, onRemove: nil,
+              trailing: effort.flatMap { levels.firstIndex(of: $0) }.map { AnyView(EffortBars(level: $0, of: levels.count)) })
       }
       .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-      .help("Who drives this project: \(current.label)" + (current.model.map { " (\($0))" } ?? ""))
-      .accessibilityLabel("Driver: \(current.label)")
+      .help(([current.label, current.model, model.startEffort.map { "\(EffortBars.title($0)) effort" }] as [String?]).compactMap { $0 }.joined(separator: " · "))
+      .accessibilityLabel("Driver: \(current.label)" + (model.startEffort.map { ", \(EffortBars.title($0)) effort" } ?? ""))
     }
   }
 
@@ -206,10 +218,13 @@ struct Chip2<Leading: View>: View {
   /// A dropdown chip: a small chevron after the text.
   var chevron = false
   let onRemove: (() -> Void)?
+  /// Shown after the text, before the chevron (the driver chip's effort bars).
+  var trailing: AnyView? = nil
   var body: some View {
     HStack(spacing: Theme.Composer2.chipInnerGap) {
       leading
       Text(verbatim: text).font(mono ? Theme.Composer2.chipMono : Theme.Composer2.chipFont).lineLimit(1)
+      if let trailing { trailing }
       if chevron { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
       if let onRemove {
         Button(action: onRemove) { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
@@ -250,6 +265,23 @@ struct SendCircle: View {
     .accessibilityLabel(label)
   }
 }
+
+/// Reasoning effort as signal bars (owner's pick, after the reference's "Deep" control): `cellularbars` filled to the
+/// level's place among the driver's levels, so 4 levels fill 1–4 bars and 3 levels 2–4.
+struct EffortBars: View {
+  let level: Int
+  let of: Int
+  var body: some View {
+    Image(systemName: "cellularbars", variableValue: Self.value(level, of: of))
+      .font(Theme.Composer2.effortFont).foregroundStyle(Theme.Composer2.effortText)
+      .accessibilityHidden(true)
+  }
+  /// The bar fill for level `i` of `n` (lowest first): the top level fills all four bars.
+  static func value(_ i: Int, of n: Int) -> Double { n <= 1 ? 1 : (Double(4 - (n - 1 - i)) / 4).clamped(0.25, 1) }
+  static func title(_ level: String) -> String { level.prefix(1).uppercased() + level.dropFirst() }
+}
+
+extension Double { func clamped(_ lo: Double, _ hi: Double) -> Double { Swift.min(Swift.max(self, lo), hi) } }
 
 /// A keycap (⌘K, ⌥, Space).
 struct KeyCap: View {

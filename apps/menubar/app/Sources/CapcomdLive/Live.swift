@@ -167,9 +167,10 @@ public struct LiveControls: RunControlling {
 public struct LiveStarter: RunStarting {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
-  public func start(goal: String, repo: String?, driver: String?, sandbox: String?, idempotencyKey: String) async throws -> String {
+  public func start(goal: String, choice c: RunChoice, idempotencyKey: String) async throws -> String {
     var body: [String: String] = ["goal": goal]
-    if let repo { body["repo"] = repo }; if let driver { body["driver"] = driver }; if let sandbox { body["sandbox"] = sandbox }
+    if let v = c.repo { body["repo"] = v }; if let v = c.driver { body["driver"] = v }
+    if let v = c.sandbox { body["sandbox"] = v }; if let v = c.effort { body["effort"] = v }
     let (status, data) = try await transport.post("/v1/runs", headers: [("Idempotency-Key", idempotencyKey)], json: try JSONEncoder().encode(body))
     let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     let message = obj?["message"] as? String ?? "capcomd refused"

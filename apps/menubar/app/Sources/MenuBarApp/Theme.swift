@@ -424,6 +424,7 @@ enum Theme {
     static let round: CGFloat = 30, roundFill = Color.white.opacity(0.08), roundStroke = Color.white.opacity(0.16), plusFont = Font.system(size: 14, weight: .regular)
     static let pillHeight: CGFloat = 26, pillGroupFill = Color.black.opacity(0.22), pillText = Color.white.opacity(0.7), pillFont = Font.system(size: 12.5)
     static let send: CGFloat = 32, sendIcon = Font.system(size: 13, weight: .bold), sendArrowIdle: CGFloat = 0.3
+    static let effortFont = Font.system(size: 11, weight: .semibold), effortText = Color.white.opacity(0.75)
     static let keyFont = Font.system(size: 11.5, weight: .medium), keyText = Color.white.opacity(0.7), keyStroke = Color.white.opacity(0.25)
     static let hintFont = Font.system(size: 11), hintText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.4)
     // Recent rows (.continue)

@@ -9,7 +9,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   wider when the controls under the goal need the room, instead of spilling past its edge.
 - Menu bar app: choose how a new project runs. Under the goal, a two-icon switch (laptop or cloud) picks where its
   agents work (Docker on this Mac, or boxd VMs), and a Claude Code / Codex menu by the send button picks the AI that drives it as
-  its planner. Both apply to that run, and the app remembers your last picks. Needs a daemon that offers them.
+  its planner, and how hard it thinks: the bars on that menu show the reasoning effort, which you can change in the
+  same menu. Both apply to that run, and the app remembers your last picks. Needs a daemon that offers them.
 - Menu bar app: you can now see which AI each agent runs on. The agent tree shows the Claude or Codex mark on every
   row (hover it for the model), and the agent's bot in the thread header, handoff cards and the team intro wears it
   as a small badge. Needs a daemon that reports it; older daemons show no mark. Folder chips in the tree now line up
