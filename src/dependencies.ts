@@ -81,4 +81,31 @@ export function getDependencies(): Dependencies {
 
 export function resetDependencies() {
   deps = null;
+  bySandbox.clear();
+}
+
+// Runs started on another sandbox than the daemon's (`capcomd run --sandbox`): one provider per sandbox name.
+const bySandbox = new Map<string, SandboxProvider>();
+/** The provider for a sandbox name; the daemon's own (getDependencies) for its CAPCOMD_SANDBOX or no name. */
+export function providerNamed(name: string | null | undefined): SandboxProvider {
+  if (!name || name === sandboxName()) return getDependencies().provider;
+  let p = bySandbox.get(name);
+  if (!p) {
+    const raw = providerFromEnv({ ...process.env, CAPCOMD_SANDBOX: name, RELAY_SANDBOX: undefined });
+    // Docker doesn't delete containers by itself (ADR-020): `capcomd serve` sweeps its own sandbox's; this one's too.
+    if (name === "docker" && typeof (raw as any).sweep === "function") {
+      const sweep = () => { (raw as any).sweep().catch(() => {}); };
+      sweep();
+      setInterval(sweep, 5 * 60_000).unref?.();
+    }
+    p = tracedProvider(raw, raw.constructor?.name === "FakeProvider" ? "fake" : raw.constructor?.name ?? "provider");
+    bySandbox.set(name, p);
+  }
+  return p;
+}
+/** The provider a run's agents and checks use: its recorded sandbox, else the daemon's. */
+export async function providerForRun(runId: string | null | undefined): Promise<{ provider: SandboxProvider; sandbox: string | null }> {
+  const { runSandbox } = await import("./providers/run-sandbox");
+  const sandbox = await runSandbox(runId);
+  return { provider: providerNamed(sandbox), sandbox };
 }

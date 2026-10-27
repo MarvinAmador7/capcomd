@@ -31,7 +31,7 @@ function store() {
 }
 
 function app(o: { threadMs?: number } = {}) {
-	const agent: any = { id: "a1", runId: "run-1", parent: null, depth: 0, profile: "lead", status: "running", text: "Agent a1 is now running.", activity: null, task: "t", taskAttachment: null, result: null, workspace: null, provider: "claude", model: null, updatedAt: null };
+	const agent: any = { id: "a1", runId: "run-1", parent: null, depth: 0, profile: "lead", status: "running", text: "Agent a1 is now running.", activity: null, task: "t", taskAttachment: null, result: null, workspace: null, provider: "claude", model: null, effort: null, updatedAt: null };
 	const st = store();
 	const src = memorySource({
 		runs: [run], agents: { "run-1": [agent] }, items: { "run-1": st.items },

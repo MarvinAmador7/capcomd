@@ -101,6 +101,8 @@ export interface AgentConfig {
   allowedTools?: string[];
   disallowedTools: string[];
   model?: string;
+  /** Reasoning effort (claude --effort, codex model_reasoning_effort); unset: the CLI's default. */
+  effort?: string;
   /** Working dir inside the VM (persistent disk, so a snapshot keeps installs and the dep template). */
   workdir: string;
   /** Override the agent binary (tests: fake claude/codex). When set, detect/install is skipped. */
@@ -147,6 +149,11 @@ export function claudeCostUsd(u: ClaudeUsage): number {
   return (u.input * p.in + u.cacheWrite * p.in * 1.25 + u.cacheRead * (p.cacheRead ?? p.in * 0.1) + u.output * p.out) / 1e6;
 }
 
+/** The reasoning effort an agent runs with: CAPCOMD_AGENT_EFFORT, else its profile's; undefined means the CLI's default. */
+export function agentEffort(spec: { effort?: string } | null | undefined, source: Record<string, string | undefined> = process.env): string | undefined {
+  return envVar("AGENT_EFFORT", source) ?? spec?.effort;
+}
+
 /** The model an agent runs with: CAPCOMD_AGENT_MODEL, else its profile's; undefined means the CLI's own default. */
 export function agentModel(spec: { model?: string } | null | undefined, source: Record<string, string | undefined> = process.env): string | undefined {
   return envVar("AGENT_MODEL", source) ?? spec?.model;
@@ -188,6 +195,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     ...(envVar("AGENT_ALLOWED_TOOLS", source) !== undefined || spec?.allowedTools ? { allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? []) } : {}),
     disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), spec?.disallowedTools ?? []),
     model: agentModel(spec, source),
+    effort: agentEffort(spec, source),
     profile: ra.name,
     systemPrompt: spec?.systemPrompt,
     appendSystemPrompt: spec?.appendSystemPrompt,

@@ -43,6 +43,7 @@ export const SpawnedAgent = z.looseObject({
 	kind: z.enum(["fake", "claude-code", "codex"]).optional().describe("The runner: claude-code, codex, or fake (a local stand-in with no AI provider)"),
 	provider: AgentProvider.optional().describe("The profile's provider; absent when the agent was chosen by CAPCOMD_AGENT without a profile (then see kind)"),
 	model: z.string().nullable().optional().describe("The model it runs with (CAPCOMD_AGENT_MODEL, else the profile's); absent or null: the provider CLI's default"),
+	effort: z.string().nullable().optional().describe("The reasoning effort it runs with (CAPCOMD_AGENT_EFFORT, else the profile's or the run's chosen level); absent or null: the provider CLI's default"),
 }).describe("The agent's resolved profile and runner; null on events from daemons that recorded none");
 /** Set on lifecycle-feed copies of state-change events (GET /v1/runs/{runId}/lifecycle, ?feed=lifecycle): trusted reason code. */
 const cause = { cause: S.optional().describe("Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)") };

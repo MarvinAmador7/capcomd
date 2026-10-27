@@ -17,6 +17,8 @@ export interface AgentSpec {
   auth: AuthMode;
   description?: string;
   model?: string;
+  /** Reasoning effort, one of the provider's levels (PROVIDER_EFFORTS); unset: the CLI's default. */
+  effort?: string;
   /** Limits are optional (ADR-019): unset means none. An agent that reaches one is stopped and keeps its work. */
   maxTurns?: number;
   maxBudgetUsd?: number;
@@ -60,6 +62,14 @@ export interface AgentsFile { schema: typeof AGENTS_SCHEMA; default?: string; ag
 
 export const PROVIDER_KIND: Record<Provider, "claude-code" | "codex"> = { claude: "claude-code", codex: "codex" };
 
+/**
+ * Reasoning effort levels each provider's CLI takes, lowest to highest: claude `--effort <level>` (Claude Code
+ * `--help`: low, medium, high, xhigh, max), codex `-c model_reasoning_effort=<level>`.
+ */
+export const PROVIDER_EFFORTS: Record<Provider, readonly string[]> = { claude: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high"] };
+/** The level a provider's CLI uses when none is set, when it is fixed (codex: medium); null: the CLI decides (claude: by model). */
+export const PROVIDER_DEFAULT_EFFORT: Record<Provider, string | null> = { claude: null, codex: "medium" };
+
 /** JSON Schema (draft 2020-12) for `.capcomd/agents.json`; `capcomd agents schema` prints it. */
 export const AGENTS_JSON_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -87,6 +97,7 @@ export const AGENTS_JSON_SCHEMA = {
         auth: { enum: ["apikey", "subscription"], description: "Exactly one credential kind; no fallback" },
         description: { type: "string" },
         model: { type: "string", minLength: 1 },
+        effort: { enum: ["minimal", "low", "medium", "high", "xhigh", "max"], description: "Reasoning effort: claude low|medium|high|xhigh|max, codex minimal|low|medium|high" },
         maxTurns: { type: "integer", minimum: 1 },
         maxBudgetUsd: { type: "number", exclusiveMinimum: 0 },
         timeoutMs: { type: "integer", minimum: 1000 },
@@ -143,6 +154,10 @@ export function validateSpec(name: string, raw: unknown): string[] {
   if (s.maxBudgetUsd !== undefined && !(typeof s.maxBudgetUsd === "number" && s.maxBudgetUsd > 0)) at("maxBudgetUsd must be > 0");
   if (s.sandbox !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(s.sandbox as string)) at("sandbox is invalid");
   if (s.model !== undefined && (typeof s.model !== "string" || !s.model)) at("model must be a non-empty string");
+  if (s.effort !== undefined) {
+    const levels = PROVIDER_EFFORTS[s.provider as Provider];
+    if (typeof s.effort !== "string" || (levels && !levels.includes(s.effort))) at(`effort must be one of ${(levels ?? []).join(", ")} for provider ${s.provider}`);
+  }
   for (const k of ["egress", "allowedTools", "disallowedTools"]) {
     if (s[k] === undefined) continue;
     if (!Array.isArray(s[k]) || (s[k] as unknown[]).some((x) => typeof x !== "string" || !x)) at(`${k} must be an array of non-empty strings`);
@@ -270,7 +285,8 @@ export function resolveAgent(name?: string | null, source: Record<string, string
     const ref = decodeAgentRef(name);
     name = ref.name;
     const r = pick(name);
-    if (r && ref.overrides) return { ...r, spec: applyOverrides(name, r.spec!, ref.overrides), overridden: true };
+    // An operator override may change the provider (`capcomd run --planner-provider`): the runner follows it.
+    if (r && ref.overrides) { const spec = applyOverrides(name, r.spec!, ref.overrides); return { ...r, kind: PROVIDER_KIND[spec.provider], spec, overridden: true }; }
     if (!r) throw new AgentConfigError(`unknown agent profile "${name}" (defined: ${Object.keys(file.agents).join(", ") || "none"}; add one with \`capcomd agents add\`)`);
     return r;
   }
@@ -359,7 +375,7 @@ export function effectiveAgentRecord(ref?: string | null, source: Record<string,
     return {
       name: ra.name, kind: ra.kind, overridden: !!ra.overridden, operator: ref ? !!decodeAgentRef(ref).overrides?.operator : false,
       auth: c.credentialMode === "subscription" ? "subscription" : "apikey", credentialMode: c.credentialMode,
-      model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, noChangeAfterMs: c.noChangeAfterMs || null, checkpointEveryMs: c.checkpointEveryMs,
+      model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, noChangeAfterMs: c.noChangeAfterMs || null, checkpointEveryMs: c.checkpointEveryMs,
       sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools,
       systemPrompt: !!c.systemPrompt, appendSystemPrompt: !!c.appendSystemPrompt,
       children: { allowSpawn: false, ...(ra.spec?.children ?? {}) },

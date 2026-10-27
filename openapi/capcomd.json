@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -258,7 +258,7 @@
       },
       "post": {
         "operationId": "runs.create",
-        "description": "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. `Idempotency-Key` is scoped to the calling client: same key + same body replays the first response (201, header `Idempotent-Replayed: true`) without starting another run; same key + different body: 409 `idempotency_conflict`. Keys are kept 24 h; a request that failed (422, 500) is not recorded, so retrying it with the same key tries again. 422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.",
+        "description": "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. `Idempotency-Key` is scoped to the calling client: same key + same body replays the first response (201, header `Idempotent-Replayed: true`) without starting another run; same key + different body: 409 `idempotency_conflict`. Keys are kept 24 h; a request that failed (422, 500) is not recorded, so retrying it with the same key tries again. 422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, `profile` with `driver`, a `driver` or `sandbox` that isn't available, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.",
         "parameters": [
           {
             "name": "idempotency-key",
@@ -297,6 +297,28 @@
                     "type": "string",
                     "pattern": "^(?!-)(?!.*\\.\\.)(?!.*\\/\\/)(?!.*[./]$)[A-Za-z0-9._/-]{1,200}$",
                     "description": "Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target."
+                  },
+                  "driver": {
+                    "enum": [
+                      "claude",
+                      "codex"
+                    ],
+                    "type": "string",
+                    "description": "Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."
+                  },
+                  "effort": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "description": "Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."
+                  },
+                  "sandbox": {
+                    "enum": [
+                      "docker",
+                      "boxd"
+                    ],
+                    "type": "string",
+                    "description": "Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox. GET /v1/run-options lists both."
                   }
                 },
                 "required": [
@@ -1837,6 +1859,13 @@
                           "null"
                         ]
                       },
+                      "effort": {
+                        "description": "The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
                       "updatedAt": {
                         "type": [
                           "string",
@@ -1862,6 +1891,7 @@
                       "workspace",
                       "provider",
                       "model",
+                      "effort",
                       "updatedAt"
                     ]
                   }
@@ -2868,6 +2898,176 @@
         }
       }
     },
+    "/v1/run-options": {
+      "get": {
+        "operationId": "runOptions.get",
+        "description": "Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, whether Docker answers, cached a few seconds), so poll it freely.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "drivers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "enum": [
+                              "claude",
+                              "codex"
+                            ],
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "What to call it: \"Claude Code\" or \"Codex\""
+                          },
+                          "model": {
+                            "description": "The model the planner would run with on this provider; null: the provider CLI's default",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "efforts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Reasoning effort levels this provider takes, lowest to highest (POST /v1/runs `effort`); empty when the daemon can't set its effort"
+                          },
+                          "effort": {
+                            "description": "The level a run gets when none is chosen: the planner profile's, else the provider's default; null: the provider CLI decides (claude: by model)",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "available": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "description": "Why it isn't available, one short sentence written by the daemon (trusted), e.g. \"Not logged in to Codex (run capcomd auth login codex)\"; null when available",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "default": {
+                            "type": "boolean",
+                            "description": "The provider of the daemon's planner profile: what a run without `driver` uses"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "label",
+                          "model",
+                          "efforts",
+                          "effort",
+                          "available",
+                          "reason",
+                          "default"
+                        ]
+                      },
+                      "description": "Always claude, then codex"
+                    },
+                    "sandboxes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "enum": [
+                              "docker",
+                              "boxd"
+                            ],
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "What to call it: \"Local\" (docker) or \"VM\" (boxd)"
+                          },
+                          "available": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "description": "Why it isn't available (trusted), e.g. \"Docker isn't running\", \"No boxd API key (run capcomd setup)\"; null when available",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "default": {
+                            "type": "boolean",
+                            "description": "The daemon's own CAPCOMD_SANDBOX: what a run without `sandbox` uses (none is default when the daemon runs another sandbox)"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "label",
+                          "available",
+                          "reason",
+                          "default"
+                        ]
+                      },
+                      "description": "Always docker, then boxd"
+                    }
+                  },
+                  "required": [
+                    "drivers",
+                    "sandboxes"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/skills": {
       "get": {
         "operationId": "skills.list",
@@ -3776,6 +3976,13 @@
               },
               "model": {
                 "description": "The model it runs with (CAPCOMD_AGENT_MODEL, else the profile's); absent or null: the provider CLI's default",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "effort": {
+                "description": "The reasoning effort it runs with (CAPCOMD_AGENT_EFFORT, else the profile's or the run's chosen level); absent or null: the provider CLI's default",
                 "type": [
                   "string",
                   "null"
@@ -5642,6 +5849,13 @@
                     "null"
                   ]
                 },
+                "effort": {
+                  "description": "The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "updatedAt": {
                   "type": [
                     "string",
@@ -5667,6 +5881,7 @@
                 "workspace",
                 "provider",
                 "model",
+                "effort",
                 "updatedAt"
               ]
             }

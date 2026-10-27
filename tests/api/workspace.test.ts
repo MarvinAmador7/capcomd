@@ -39,7 +39,7 @@ describe("workspaceOf", () => {
 });
 
 describe("contract", () => {
-	const agent = { id: "agt-1", runId: "run-1", parent: null, depth: 0, profile: "planner", status: "running", text: "Running.", activity: null, task: "t", taskAttachment: null, result: null, provider: "claude", model: null, updatedAt: null };
+	const agent = { id: "agt-1", runId: "run-1", parent: null, depth: 0, profile: "planner", status: "running", text: "Running.", activity: null, task: "t", taskAttachment: null, result: null, provider: "claude", model: null, effort: null, updatedAt: null };
 	test("Agent.workspace is required and nullable", () => {
 		expect(Agent.parse({ ...agent, workspace: workspaceOf("/r/matchkey") }).workspace).toEqual({ repo: "/r/matchkey", path: null, label: "matchkey" });
 		expect(Agent.parse({ ...agent, workspace: null }).workspace).toBeNull();

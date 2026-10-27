@@ -134,7 +134,7 @@ const run = { id: "run-1", projectId: null, label: "demo", state: "running", goa
 const at = 1792900500000;
 
 function app() {
-	const agent: any = { id: "a1", runId: "run-1", parent: null, depth: 0, profile: "worker", status: "running", text: "Agent a1 is now running.", activity: agentActivity({ kind: "read", n: 2, at }, "running"), task: "t", taskAttachment: null, result: null, workspace: null, provider: "claude", model: null, updatedAt: null };
+	const agent: any = { id: "a1", runId: "run-1", parent: null, depth: 0, profile: "worker", status: "running", text: "Agent a1 is now running.", activity: agentActivity({ kind: "read", n: 2, at }, "running"), task: "t", taskAttachment: null, result: null, workspace: null, provider: "claude", model: null, effort: null, updatedAt: null };
 	const src = memorySource({ runs: [run], agents: { "run-1": [agent] }, events: { "run-1": [
 		{ seq: 1, at, type: "RUN_NEW", agentId: null, data: { budget: {}, label: "demo" } },
 		{ seq: 2, at, type: "AGENT_SPAWNED", agentId: "a1", data: { parent: null, depth: 0, profile: "worker", task: "t", key: null, operator: true, budget: {}, limits: {}, agent: null } },

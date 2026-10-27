@@ -17,7 +17,8 @@ import {
 } from "../utils/lifecycle";
 import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
-import { getDependencies } from "../dependencies";
+import { getDependencies, providerForRun, providerNamed } from "../dependencies";
+import { withSandbox } from "../providers/run-sandbox";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { AGENT_VM_TTL_SECONDS, runAgent, stoppedAt } from "../agents/runner";
 import { activityReporter } from "../agents/activity";
@@ -51,32 +52,32 @@ async function remoteBranchSha(remote: string, branch: string): Promise<string |
 }
 /** claude-code VMs may reach only GitHub, the Anthropic API and the package registries the bootstrap needs. */
 /** Real-agent VMs boot from the `capcomd env build` snapshot when one exists (else the default image). */
-function snapshotSpec(profile?: string): { fromSnapshot?: string } {
-  const agent = agentFromEnv(process.env, profile);
+// `source`: the env as the run sees it (its own sandbox, if it has one: snapshots and plan logins are per sandbox).
+function snapshotSpec(profile?: string, source: Record<string, string | undefined> = process.env): { fromSnapshot?: string } {
+  const agent = agentFromEnv(source, profile);
   if (!isRealAgent(agent)) return {};
   // Plan login (capcomd auth login): boot from the auth profile's snapshot when it has one.
-  if (loadAgentConfig(process.env, profile).credentialMode === "subscription") {
-    const prof = profileFor(agent);
+  if (loadAgentConfig(source, profile).credentialMode === "subscription") {
+    const prof = profileFor(agent, source);
     if (prof?.snapshot) return { fromSnapshot: prof.snapshot };
   }
-  const snap = resolveEnvSnapshot();
+  const snap = resolveEnvSnapshot(source);
   return snap ? { fromSnapshot: snap } : {};
 }
 
-function egressAllow(profile?: string): string[] {
-  return isRealAgent(agentFromEnv(process.env, profile)) ? loadAgentConfig(process.env, profile).egress : LEGACY_EGRESS;
+function egressAllow(profile?: string, source: Record<string, string | undefined> = process.env): string[] {
+  return isRealAgent(agentFromEnv(source, profile)) ? loadAgentConfig(source, profile).egress : LEGACY_EGRESS;
 }
 
 
 // Shared by drainWorker, reap and the TTL alarm. Idempotent and resumable.
 async function drainWorkerImpl(c: any, workerId: string) {
-
-            const { provider } = getDependencies();
-
       const workerLife = await getLifecycle(c.db, workerId);
       if (!workerLife) return;
 
-      const workerContext: WorkerContext = JSON.parse(workerLife.context);
+      const workerContext: WorkerContext & { sandbox?: string } = JSON.parse(workerLife.context);
+      // The VM lives on the sandbox it was made on (the run's own, recorded at provisioning), else the daemon's.
+      const provider = providerNamed(workerContext.sandbox);
       const workerSnapshot = workerMachine.resolveState({
         value: workerLife.state,
         context: workerContext,
@@ -161,7 +162,8 @@ export const workerActor = actor({
       }
     ) {
       const { workerId, runId, epoch } = params;
-      const { provider } = getDependencies();
+      const { provider, sandbox } = await providerForRun(runId);
+      const runSource = withSandbox(process.env, sandbox);
 
       const existing = await getLifecycle(c.db, workerId);
       if (existing && existing.state !== "provisioning" && existing.state !== "failed") {
@@ -180,7 +182,8 @@ export const workerActor = actor({
           createdAt: Date.now(),
           ttlMs: 3_600_000,
           idemKey,
-        });
+          ...(sandbox ? { sandbox } : {}),
+        } as any);
 
         await c.db.transaction(async (tx: RawAccess) => {
           await transitionLifecycle(
@@ -212,8 +215,8 @@ export const workerActor = actor({
           idemKey,
           isolated: true,
           ttlSeconds: AGENT_VM_TTL_SECONDS,
-          egressAllow: egressAllow(params.agent),
-        ...snapshotSpec(params.agent),
+          egressAllow: egressAllow(params.agent, runSource),
+        ...snapshotSpec(params.agent, runSource),
           labels: {
             runId,
             workerId,
@@ -384,7 +387,8 @@ export const workerActor = actor({
       const workerContext = JSON.parse(workerLife.context as string) as WorkerContext & {
         idemKey?: string;
       };
-      const { provider } = getDependencies();
+      const { provider, sandbox } = await providerForRun(params.runId);
+      const runSource = withSandbox(process.env, sandbox);
       const vmKey = workerContext.idemKey ?? `relay-worker-${workerId}`;
 
       // Acquire the push lock (or wait out a live push by another call).
@@ -428,8 +432,8 @@ export const workerActor = actor({
         idemKey: vmKey,
         isolated: true,
         ttlSeconds: AGENT_VM_TTL_SECONDS,
-        egressAllow: egressAllow(params.agent),
-        ...snapshotSpec(params.agent),
+        egressAllow: egressAllow(params.agent, runSource),
+        ...snapshotSpec(params.agent, runSource),
         labels: { workerId, taskId, epoch: String(epoch) },
       }).catch((error) => {
         if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
@@ -481,7 +485,7 @@ export const workerActor = actor({
           runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
           goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
           ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
-        }, loadAgentConfig(process.env, params.agent), {
+        }, loadAgentConfig(runSource, params.agent), {
           apiKey,
           heartbeatMs: beatEvery,
           onReport: (rep) => {
@@ -531,7 +535,7 @@ export const workerActor = actor({
 
       // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
       // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
-      if (!sha && !params.review && !params.report && cfg && getDependencies().fakeWork && params.runId) {
+      if (!sha && !params.review && !params.report && cfg && (sandbox ? sandbox.startsWith("fake") : getDependencies().fakeWork) && params.runId) {
         sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework, ...(params.fakePath ? { path: params.fakePath, content: params.fakeContent ?? "" } : {}) });
       }
 

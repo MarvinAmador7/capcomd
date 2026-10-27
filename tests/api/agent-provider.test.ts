@@ -8,20 +8,22 @@ import spec from "../../openapi/capcomd.json";
 
 describe("agentRuntime (from the spec recorded at spawn)", () => {
 	test("a profile's provider and model", () => {
-		expect(agentRuntime({ provider: "claude", auth: "subscription", kind: "claude-code", model: "claude-sonnet-4-5" })).toEqual({ provider: "claude", model: "claude-sonnet-4-5" });
-		expect(agentRuntime({ provider: "codex", auth: "apikey", kind: "codex", model: "gpt-5-codex" })).toEqual({ provider: "codex", model: "gpt-5-codex" });
-		expect(agentRuntime({ provider: "claude", auth: "subscription", kind: "claude-code" })).toEqual({ provider: "claude", model: null });
+		expect(agentRuntime({ provider: "claude", auth: "subscription", kind: "claude-code", model: "claude-sonnet-4-5" })).toEqual({ provider: "claude", model: "claude-sonnet-4-5", effort: null });
+		expect(agentRuntime({ provider: "codex", auth: "apikey", kind: "codex", model: "gpt-5-codex" })).toEqual({ provider: "codex", model: "gpt-5-codex", effort: null });
+		expect(agentRuntime({ provider: "claude", auth: "subscription", kind: "claude-code" })).toEqual({ provider: "claude", model: null, effort: null });
+		expect(agentRuntime({ provider: "codex", auth: "apikey", kind: "codex", effort: "high" })).toEqual({ provider: "codex", model: null, effort: "high" });
+		expect(agentRuntime({ kind: "fake", effort: "high" })).toEqual({ provider: null, model: null, effort: null });
 	});
 	test("CAPCOMD_AGENT without a profile: the runner kind names the provider", () => {
-		expect(agentRuntime({ kind: "claude-code" })).toEqual({ provider: "claude", model: null });
-		expect(agentRuntime({ kind: "codex", model: "gpt-5-mini" })).toEqual({ provider: "codex", model: "gpt-5-mini" });
+		expect(agentRuntime({ kind: "claude-code" })).toEqual({ provider: "claude", model: null, effort: null });
+		expect(agentRuntime({ kind: "codex", model: "gpt-5-mini" })).toEqual({ provider: "codex", model: "gpt-5-mini", effort: null });
 	});
 	test("a fake agent, and agents with no recorded spec, report null", () => {
-		expect(agentRuntime({ kind: "fake", model: "x" })).toEqual({ provider: null, model: null });
-		expect(agentRuntime({ provider: "claude", kind: "fake" })).toEqual({ provider: null, model: null });
-		expect(agentRuntime(null)).toEqual({ provider: null, model: null });
-		expect(agentRuntime(undefined)).toEqual({ provider: null, model: null });
-		expect(agentRuntime({ kind: "other", model: "x" })).toEqual({ provider: null, model: null });
+		expect(agentRuntime({ kind: "fake", model: "x" })).toEqual({ provider: null, model: null, effort: null });
+		expect(agentRuntime({ provider: "claude", kind: "fake" })).toEqual({ provider: null, model: null, effort: null });
+		expect(agentRuntime(null)).toEqual({ provider: null, model: null, effort: null });
+		expect(agentRuntime(undefined)).toEqual({ provider: null, model: null, effort: null });
+		expect(agentRuntime({ kind: "other", model: "x" })).toEqual({ provider: null, model: null, effort: null });
 	});
 });
 
@@ -33,19 +35,21 @@ test("agentModel: CAPCOMD_AGENT_MODEL wins over the profile's model", () => {
 });
 
 describe("contract", () => {
-	const agent = { id: "agt-1", runId: "run-1", parent: null, depth: 0, profile: "worker", status: "running", text: "Running.", activity: null, task: "t", taskAttachment: null, result: null, workspace: null, updatedAt: null };
-	test("Agent.provider and Agent.model are required and nullable", () => {
+	const agent = { id: "agt-1", runId: "run-1", parent: null, depth: 0, profile: "worker", status: "running", text: "Running.", activity: null, task: "t", taskAttachment: null, result: null, workspace: null, effort: null, updatedAt: null };
+	test("Agent.provider, Agent.model and Agent.effort are required and nullable", () => {
 		expect(Agent.parse({ ...agent, provider: "claude", model: "claude-sonnet-4-5" })).toMatchObject({ provider: "claude", model: "claude-sonnet-4-5" });
-		expect(Agent.parse({ ...agent, provider: "codex", model: null })).toMatchObject({ provider: "codex", model: null });
+		expect(Agent.parse({ ...agent, provider: "codex", model: null, effort: "high" })).toMatchObject({ provider: "codex", model: null, effort: "high" });
 		expect(Agent.parse({ ...agent, provider: null, model: null })).toMatchObject({ provider: null, model: null });
 		expect(Agent.safeParse({ ...agent, model: null }).success).toBe(false);
 		expect(Agent.safeParse({ ...agent, provider: "gemini", model: null }).success).toBe(false);
+		const { effort: _, ...noEffort } = agent;
+		expect(Agent.safeParse({ ...noEffort, provider: null, model: null }).success).toBe(false);
 	});
 	test("agent.spawned `agent` is typed (kind, provider, model) and open to the profile's other fields", () => {
 		const base = { parent: null, depth: 0, profile: "worker", budget: {}, limits: {}, task: "t", key: null, operator: false, workspace: null };
 		for (const a of [
 			{ provider: "claude", auth: "subscription", maxTurns: 20, kind: "claude-code", model: "claude-sonnet-4-5" },
-			{ provider: "codex", auth: "apikey", kind: "codex" },
+			{ provider: "codex", auth: "apikey", kind: "codex", effort: "high" },
 			{ kind: "codex", model: "gpt-5-mini" },
 			{ kind: "fake" },
 			null,
@@ -53,6 +57,7 @@ describe("contract", () => {
 		expect(strictEventData("agent.spawned", { ...base, agent: { provider: "gemini" } }).ok).toBe(false);
 		expect(strictEventData("agent.spawned", { ...base, agent: { kind: "claude" } }).ok).toBe(false);
 		expect(strictEventData("agent.spawned", { ...base, agent: { model: 3 } }).ok).toBe(false);
+		expect(strictEventData("agent.spawned", { ...base, agent: { effort: 3 } }).ok).toBe(false);
 		expect(EventData["agent.spawned"].parse({ ...base, agent: { kind: "codex", sandbox: "read-only" } }).agent).toEqual({ kind: "codex", sandbox: "read-only" });
 	});
 	test("published: Agent has provider and model as nullable required fields; AgentSpawnedData.agent is a nullable open object", () => {
@@ -61,11 +66,14 @@ describe("contract", () => {
 		expect(agentSchema.properties.provider.type).toEqual(["string", "null"]);
 		expect(agentSchema.properties.provider.enum).toEqual(["claude", "codex", null]);
 		expect(agentSchema.properties.model.type).toEqual(["string", "null"]);
+		expect(agentSchema.required).toContain("effort");
+		expect(agentSchema.properties.effort.type).toEqual(["string", "null"]);
 		const a = (spec as any).components.schemas.AgentSpawnedData.properties.agent;
 		expect(a.type).toEqual(["object", "null"]);
 		expect(a.additionalProperties).toEqual({});
 		expect(a.properties.kind.enum).toEqual(["fake", "claude-code", "codex"]);
 		expect(a.properties.provider.enum).toEqual(["claude", "codex"]);
 		expect(a.properties.model.type).toEqual(["string", "null"]);
+		expect(a.properties.effort.type).toEqual(["string", "null"]);
 	});
 });

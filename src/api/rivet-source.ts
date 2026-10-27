@@ -35,11 +35,12 @@ async function itemsAfter(runId: string, after: number, limit: number, agentId?:
 
 /** harness.v1 Agent.provider/model from the spec recorded at spawn ({...profile, kind, model}): the profile's provider,
  * else the runner's (an agent chosen by CAPCOMD_AGENT has no profile); a fake agent has neither. */
-export function agentRuntime(spec: unknown): { provider: "claude" | "codex" | null; model: string | null } {
+export function agentRuntime(spec: unknown): { provider: "claude" | "codex" | null; model: string | null; effort: string | null } {
 	const s = (spec && typeof spec === "object" ? spec : {}) as Record<string, unknown>;
-	if (s.kind === "fake") return { provider: null, model: null };
+	if (s.kind === "fake") return { provider: null, model: null, effort: null };
 	const provider = s.provider === "claude" || s.provider === "codex" ? s.provider : s.kind === "claude-code" ? "claude" : s.kind === "codex" ? "codex" : null;
-	return { provider, model: provider && typeof s.model === "string" && s.model ? s.model : null };
+	const str = (v: unknown) => (provider && typeof v === "string" && v ? v : null);
+	return { provider, model: str(s.model), effort: str(s.effort) };
 }
 
 export function rivetSource(): HarnessSource {
@@ -128,6 +129,7 @@ export function rivetSource(): HarnessSource {
 			}).sort((a, b) => a.start.localeCompare(b.start));
 		},
 		skills: () => listSkills(),
+		runOptions: async () => (await import("./run-options")).runOptions(),
 		skill: (name) => readSkill(name),
 		approvals: async (runId) => {
 			const ops = (await scope(runId).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as any[];

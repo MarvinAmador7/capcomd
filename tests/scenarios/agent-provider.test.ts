@@ -20,7 +20,7 @@ beforeAll(async () => {
   const path = join(w.dir, "agents.json");
   const f = JSON.parse(readFileSync(path, "utf8"));
   f.agents.sonnet = { provider: "claude", auth: "subscription", model: "claude-sonnet-4-5", maxTurns: 10 };
-  f.agents.coder = { provider: "codex", auth: "subscription", model: "gpt-5-codex", maxTurns: 10 };
+  f.agents.coder = { provider: "codex", auth: "subscription", model: "gpt-5-codex", effort: "high", maxTurns: 10 };
   writeFileSync(path, JSON.stringify(f));
 }, 120_000);
 afterAll(async () => { await w?.stop(); });
@@ -57,7 +57,7 @@ test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: cla
   // Recorded at spawn: agent.spawned carries the typed `agent` (kind, provider, model), and validates strictly.
   const spawned = new Map((await trajectory(w, run)).filter((e) => e.type === "AGENT_SPAWNED").map((e) => [e.agentId, e.data]));
   expect(spawned.get(ids.claude).agent).toMatchObject({ kind: "claude-code", provider: "claude", model: "claude-sonnet-4-5" });
-  expect(spawned.get(ids.codex).agent).toMatchObject({ kind: "codex", provider: "codex", model: "gpt-5-codex" });
+  expect(spawned.get(ids.codex).agent).toMatchObject({ kind: "codex", provider: "codex", model: "gpt-5-codex", effort: "high" });
   expect(spawned.get(ids.env).agent).toEqual({ kind: "codex", model: "gpt-5-mini" });
   expect(spawned.get(ids.fake).agent).toEqual({ kind: "fake" });
   for (const d of spawned.values()) expect(strictEventData("agent.spawned", d)).toEqual({ ok: true });
@@ -75,6 +75,7 @@ test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: cla
     const a = listed.find((x) => x.id === id);
     expect(Agent.safeParse(a).success).toBe(true);
     expect({ k, provider: a.provider, model: a.model }).toEqual({ k, ...want[k as keyof typeof ids] });
+    expect({ k, effort: a.effort }).toEqual({ k, effort: k === "codex" ? "high" : null });
   }
 
   // The lifecycle feed's snapshot.agents frame carries the same fields.

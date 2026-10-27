@@ -63,6 +63,7 @@ export const claudeAdapter: AgentAdapter = {
     (ctx.cfg.allowedTools ? ` --allowedTools ${q(ctx.cfg.allowedTools.join(","))}` : " --permission-mode bypassPermissions") +
     (ctx.cfg.disallowedTools.length ? ` --disallowedTools ${q(ctx.cfg.disallowedTools.join(","))}` : "") +
     (ctx.cfg.model ? ` --model ${q(ctx.cfg.model)}` : "") +
+    (ctx.cfg.effort ? ` --effort ${q(ctx.cfg.effort)}` : "") +
     (ctx.systemFile ? ` --system-prompt "$(cat ${q(ctx.systemFile)})"` : "") +
     (ctx.appendSystemFile ? ` --append-system-prompt "$(cat ${q(ctx.appendSystemFile)})"` : "") +
     (ctx.capcomd ? ` --mcp-config ${q(ctx.capcomd.mcpConfig)}` : "") +
@@ -162,6 +163,7 @@ export const codexAdapter: AgentAdapter = {
   command: (ctx, q) =>
     `${q(ctx.bin)} exec --json --color never --ephemeral --sandbox ${ctx.cfg.codexSandbox} -C ${q(ctx.repo)}` +
     (ctx.cfg.model ? ` -m ${q(ctx.cfg.model)}` : "") +
+    (ctx.cfg.effort ? ` -c ${q(`model_reasoning_effort="${ctx.cfg.effort}"`)}` : "") +
     (ctx.capcomd ? ` -c ${q('mcp_servers.capcomd.command="node"')} -c ${q(`mcp_servers.capcomd.args=["${ctx.capcomd.cli}","mcp"]`)}` : "") +
     ` -o ${q(`${ctx.dir}/last-message.txt`)} "$(cat ${q(ctx.promptFile)})"` +
     ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)} < /dev/null`,

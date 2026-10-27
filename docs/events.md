@@ -114,6 +114,13 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
             "string",
             "null"
           ]
+        },
+        "effort": {
+          "description": "The reasoning effort it runs with (CAPCOMD_AGENT_EFFORT, else the profile's or the run's chosen level); absent or null: the provider CLI's default",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": {},
@@ -2265,6 +2272,13 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "null"
             ]
           },
+          "effort": {
+            "description": "The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "updatedAt": {
             "type": [
               "string",
@@ -2295,6 +2309,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "workspace",
           "provider",
           "model",
+          "effort",
           "updatedAt"
         ]
       }
