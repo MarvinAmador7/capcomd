@@ -16,6 +16,8 @@ public enum Capability {
   public static let steerSkills = "steer.skills"
   /// An agent can be paused on its own (Esc to stop while it writes).
   public static let agentPause = "agent.pause"
+  /// `POST /v1/runs` takes `driver` and `GET /v1/drivers` lists them: pick the AI that drives a new run.
+  public static let runsDriver = "runs.driver"
 }
 
 extension CapcomdStore {
@@ -58,6 +60,7 @@ extension CapcomdStore {
     if let c = try? await daemonInfo.capabilities() { capabilities = c }
     do { skills = .loaded(try await daemonInfo.skills()) }
     catch { skills = .unavailable(error as? DetailUnavailable ?? .failed("Couldn't reach capcomd")) }
+    drivers = capabilities.contains(Capability.runsDriver) ? ((try? await daemonInfo.drivers()) ?? drivers) : []
     changed()
   }
 }

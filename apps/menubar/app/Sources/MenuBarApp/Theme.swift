@@ -432,7 +432,7 @@ enum Theme {
   /// The provider mark (ProviderMark.swift): 11 pt in tree rows, a badge disc on bots of 24 pt and up.
   enum Provider {
     static let claude = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)   // Claude's coral
-    static let rowSize: CGFloat = 11, rowText = Color.white.opacity(0.45), rowLeading: CGFloat = 6
+    static let rowSize: CGFloat = 11, rowText = Color.white.opacity(0.45), rowLeading: CGFloat = 6, chipMark: CGFloat = 12
     static func badge(_ side: CGFloat) -> CGFloat { side >= 48 ? 18 : side >= 24 ? 12 : 0 }
     static let markRatio: CGFloat = 0.68, badgeOut: CGFloat = 0.18
     static let badgeFill = Color(white: 0.13), badgeStroke = Color.white.opacity(0.14)

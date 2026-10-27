@@ -170,11 +170,21 @@ final class AppModel {
     set { store.prefs.startRepo = newValue; revision &+= 1 }
   }
   /// Starts a run; when the daemon has no default repository, asks for the project folder once and remembers it.
+  /// Who can drive a new run as its planner (`runs.driver`); empty on daemons that can't be asked.
+  var drivers: [DriverInfo] { _ = revision; return store.drivers }
+  /// The driver new runs go to: the one last picked while the daemon still offers it, else the project's default.
+  var startDriver: DriverInfo? {
+    let ds = drivers
+    return ds.first { $0.provider == store.prefs.startDriver && $0.available } ?? ds.first { $0.isDefault == true && $0.available } ?? ds.first(where: \.available)
+  }
+  func pickDriver(_ provider: String) { store.prefs.startDriver = provider; revision &+= 1 }
+
   func startRun(_ goal: String) async -> Bool {
-    var state = await store.startRun(goal: goal, repo: store.prefs.startRepo)
+    let driver = startDriver?.provider
+    var state = await store.startRun(goal: goal, repo: store.prefs.startRepo, driver: driver)
     if case .needsRepo = state, let folder = ProjectFolderPicker.choose() {
       store.prefs.startRepo = folder
-      state = await store.startRun(goal: goal, repo: folder)
+      state = await store.startRun(goal: goal, repo: folder, driver: driver)
     }
     if case .started = state { return true }
     return false

@@ -20,6 +20,7 @@ struct StartProjectField: View {
       VStack(alignment: .leading, spacing: Theme.Composer2.gap) {
         HStack(spacing: Theme.Composer2.chipGap) {
           folderChip
+          driverChip
           Spacer(minLength: 0)
           if !focused && !starting { KeyCap(text: "⌘K").accessibilityHidden(true) }
         }
@@ -58,6 +59,7 @@ struct StartProjectField: View {
       }
       line(state)
     }
+    .task { await model.refreshDaemonInfo() }   // capabilities and drivers, for the driver chip
   }
 
   /// Where the run goes: the remembered project checkout (× forgets it), else the daemon's default project.
@@ -70,6 +72,28 @@ struct StartProjectField: View {
         Chip2(icon: "folder", text: "Default project", onRemove: nil)
       }
       .buttonStyle(.plain).help("capcomd's default project; click to choose a checkout")
+    }
+  }
+
+  /// Who drives the run (the planner agent): Claude Code or Codex, as the daemon offers them (`runs.driver`). The
+  /// choice is remembered; a driver the daemon reports unavailable is listed, disabled, with its reason.
+  @ViewBuilder private var driverChip: some View {
+    if let current = model.startDriver, let provider = Provider(wire: current.provider) {
+      Menu {
+        Picker("Driver", selection: Binding(get: { current.provider }, set: { model.pickDriver($0) })) {
+          ForEach(model.drivers.filter(\.available)) { d in Text(verbatim: d.label + (d.model.map { " · \($0)" } ?? "")).tag(d.provider) }
+        }
+        .pickerStyle(.inline)
+        ForEach(model.drivers.filter { !$0.available }) { d in
+          Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true)
+        }
+      } label: {
+        Chip2(leading: ProviderMark(provider: provider, size: Theme.Provider.chipMark).foregroundStyle(ProviderMarks.badgeTint(provider)),
+              text: current.label, chevron: true, onRemove: nil)
+      }
+      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+      .help("Who drives this project: \(current.label)" + (current.model.map { " (\($0))" } ?? ""))
+      .accessibilityLabel("Driver: \(current.label)")
     }
   }
 
@@ -135,11 +159,14 @@ struct Chip2<Leading: View>: View {
   let text: String
   var mono = false
   var tint: Color? = nil
+  /// A dropdown chip: a small chevron after the text.
+  var chevron = false
   let onRemove: (() -> Void)?
   var body: some View {
     HStack(spacing: Theme.Composer2.chipInnerGap) {
       leading
       Text(verbatim: text).font(mono ? Theme.Composer2.chipMono : Theme.Composer2.chipFont).lineLimit(1)
+      if chevron { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
       if let onRemove {
         Button(action: onRemove) { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
           .buttonStyle(.plain).accessibilityLabel("Remove \(text)")
@@ -153,7 +180,7 @@ struct Chip2<Leading: View>: View {
 }
 extension Chip2 where Leading == AnyView {
   init(icon: String, text: String, mono: Bool = false, tint: Color? = nil, onRemove: (() -> Void)?) {
-    self.init(leading: AnyView(Image(systemName: icon).font(.system(size: 11))), text: text, mono: mono, tint: tint, onRemove: onRemove)
+    self.init(leading: AnyView(Image(systemName: icon).font(.system(size: 11))), text: text, mono: mono, tint: tint, chevron: false, onRemove: onRemove)
   }
 }
 

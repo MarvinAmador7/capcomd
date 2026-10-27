@@ -82,6 +82,11 @@ public final class UIPreferences {
     get { store.string(forKey: "startRepo") }
     set { store.set(newValue, forKey: "startRepo") }
   }
+  /// The AI last picked to drive new runs ("claude", "codex"); nil: the project's planner as configured.
+  public var startDriver: String? {
+    get { store.string(forKey: "startDriver") }
+    set { store.set(newValue, forKey: "startDriver") }
+  }
   public var activityCollapsed: Bool {
     get { store.string(forKey: "activityCollapsed") == "1" }
     set { store.set(newValue ? "1" : "0", forKey: "activityCollapsed") }
@@ -124,7 +129,22 @@ public struct StartRefused: Error, Sendable, Hashable {
   public init(_ m: String, needsRepo: Bool = false) { message = m; self.needsRepo = needsRepo }
 }
 public protocol RunStarting: Sendable {
-  func start(goal: String, repo: String?, idempotencyKey: String) async throws -> String
+  /// `driver`: which AI drives the run as its planner ("claude", "codex"); nil: the project's planner as configured.
+  func start(goal: String, repo: String?, driver: String?, idempotencyKey: String) async throws -> String
+}
+
+/// One AI that can drive a run as its planner (`GET /v1/drivers`, with the `runs.driver` capability).
+public struct DriverInfo: Codable, Sendable, Hashable, Identifiable {
+  public var provider: String; public var label: String; public var model: String?
+  /// False when its CLI isn't installed or logged in on the daemon's machine; `reason` says which.
+  public var available: Bool; public var reason: String?
+  /// The project's planner as configured runs on this one.
+  public var isDefault: Bool?
+  public var id: String { provider }
+  enum CodingKeys: String, CodingKey { case provider, label, model, available, reason, isDefault = "default" }
+  public init(provider: String, label: String, model: String? = nil, available: Bool = true, reason: String? = nil, isDefault: Bool? = nil) {
+    self.provider = provider; self.label = label; self.model = model; self.available = available; self.reason = reason; self.isDefault = isDefault
+  }
 }
 
 /// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50, steer scope) with `Idempotency-Key`. `skills` rides
@@ -146,4 +166,6 @@ public struct SkillInfo: Codable, Sendable, Hashable, Identifiable {
 public protocol DaemonInfoFetching: Sendable {
   func capabilities() async throws -> Set<String>
   func skills() async throws -> [SkillInfo]
+  func drivers() async throws -> [DriverInfo]
 }
+extension DaemonInfoFetching { public func drivers() async throws -> [DriverInfo] { [] } }
