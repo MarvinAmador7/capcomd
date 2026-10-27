@@ -400,6 +400,12 @@ enum Theme {
     static let mediaRadius: CGFloat = 8, mediaMaxHeight: CGFloat = 180, mediaStroke = Color.white.opacity(0.08)
     static let truncatedFont = Font.system(size: 11), truncatedText = label.opacity(0.4)
   }
+  /// Approved Apple craft (canvas "Craft" and "Materials" boards).
+  enum Craft {
+    static let solidControl = Color(red: 0x30 / 255, green: 0x31 / 255, blue: 0x3A / 255)   // Reduce Transparency, macOS 14–15
+    static let solidPanel = Color(red: 0x23 / 255, green: 0x24 / 255, blue: 0x2C / 255)
+    static let contrastStroke = Color.white.opacity(0.7), contrastStrokeWidth: CGFloat = 1   // Increase Contrast
+  }
   /// Approved polish (canvas "Polish" board): identity in lines and light, never in text, controls or chrome.
   enum Polish {
     static let brand = Color(red: 1, green: 0x7A / 255, blue: 0x10 / 255)        // the wordmark orange
@@ -466,7 +472,7 @@ struct StatusMark: View {
   let status: StepStatus?
   var body: some View {
     if let s = status, let sym = s.symbol {
-      Image(systemName: sym).foregroundStyle(Theme.color(s.tint)).font(.system(size: 11))
+      Image(systemName: sym).symbolRenderingMode(.hierarchical).foregroundStyle(Theme.color(s.tint)).font(.system(size: 11))
         .accessibilityLabel(String(describing: s))
     }
   }
@@ -505,7 +511,7 @@ struct ScopeChip: View {
     }
     .foregroundStyle(Theme.ScopeChip.text)
     .padding(.horizontal, Theme.ScopeChip.paddingHorizontal).padding(.vertical, Theme.ScopeChip.paddingVertical)
-    .background(RoundedRectangle(cornerRadius: Theme.ScopeChip.radius).fill(Theme.ScopeChip.fill))
+    .background(RoundedRectangle(cornerRadius: Theme.ScopeChip.radius, style: .continuous).fill(Theme.ScopeChip.fill))
   }
 }
 
@@ -514,7 +520,7 @@ struct Chip: View {
   var body: some View {
     Text(verbatim: text).font(Theme.chip).foregroundStyle(.secondary)
       .padding(.horizontal, 6).padding(.vertical, 2)
-      .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.07)))
+      .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.white.opacity(0.07)))
   }
 }
 #endif

@@ -36,15 +36,15 @@ struct StartProjectField: View {
         } else if !focused {
           Text(verbatim: "⌘K").font(Theme.Composer.kbdFont).foregroundStyle(Theme.Composer.kbdText)
             .padding(Theme.Composer.kbdPadding)
-            .overlay(RoundedRectangle(cornerRadius: Theme.Composer.kbdRadius).strokeBorder(Theme.Composer.kbdStroke, lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Composer.kbdRadius, style: .continuous).strokeBorder(Theme.Composer.kbdStroke, lineWidth: 0.5))
             .accessibilityHidden(true)
         }
       }
       .padding(.horizontal, Theme.Composer.panelPadding)
       .frame(height: Theme.Composer.panelHeight)
       .background {
-        let shape = RoundedRectangle(cornerRadius: Theme.Composer.panelRadius)
-        shape.fill(focused ? Theme.Composer.focusedFill : Theme.Composer.fill)
+        let shape = RoundedRectangle(cornerRadius: Theme.Composer.panelRadius, style: .continuous)
+        ControlSurface(shape: shape, fallback: focused ? Theme.Composer.focusedFill : Theme.Composer.fill)
           .overlay(shape.strokeBorder(Theme.Composer.focusedStroke, lineWidth: Theme.Composer.focusedStrokeWidth).opacity(focused ? 1 : 0))
           .background(shape.stroke(Theme.Composer.ring, lineWidth: Theme.Composer.ringWidth).padding(-Theme.Composer.ringWidth / 2).opacity(focused ? 1 : 0))
       }

@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: on macOS 26 and later the panel's controls (the project field, the message box, Back, Approve and
+  Deny, the footer) use Liquid Glass; earlier macOS versions keep today's look. Approval notifications now show the
+  waiting agent's bot and have Approve and Deny buttons, so you can decide without opening the panel. Clicking Approve
+  or Deny gives a light trackpad tap. With Increase Contrast, cards get a clear border; with Reduce Transparency, the
+  panel is drawn solid.
 - Menu bar app: small finishing touches to match the bots. The agent tree's lines are dotted like circuit traces,
   agents that are working have a soft glow behind their visor, a bot blinks when you point at it, the agent waiting
   for your approval waves, a run that just finished gets a brief sparkle, and an empty panel shows the pixel CAPCOMD
