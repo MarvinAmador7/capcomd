@@ -3,7 +3,8 @@
 //   1. accounts  boxd key (made with the logged-in boxd CLI, or given; validated; kept in the OS keychain),
 //                env snapshot, Claude/Codex logins, doctor
 //   2. project   repository, target branch, PR or direct merges, a default check, worker/reviewer/planner profiles
-//   3. agent     the capcomd plugin (MCP tools and skills) for Claude Code and Codex, and a prompt to try
+//   3. agent     the capcomd plugin (MCP tools and skills) for Claude Code and Codex, capcomd in Hermes (MCP server
+//                and skills in its config), and a prompt to try
 //   4. service   the engine as a background service
 // Each step also runs alone (`capcomd setup project`). Without a terminal, or with --yes, prompts take their
 // defaults and flags, so agents and scripts can run setup too. Settings land in ~/.capcomd/config.json (user)
@@ -159,7 +160,7 @@ async function keyFromBoxdCli(p: Prompter, v: Values): Promise<{ key: string; fr
 export interface KeyDeps {
   validate: (key: string) => Promise<boolean>; kcGet: () => string | null; kcSet: (key: string) => void; kcKind: () => string | null;
   /** Inside a boxd machine with credentials of its own (an agent like Hermes on boxd): no key needed. */
-  machine?: () => Promise<{ inside: boolean; credentials: boolean; detail: string }>;
+  machine?: () => Promise<{ inside: boolean; credentials: boolean; detail: string; name?: string }>;
 }
 const realKeyDeps: KeyDeps = { validate: validBoxdKey, kcGet: () => keychainGet(), kcSet: (k) => keychainSet(k), kcKind: () => keychainKind(), machine: async () => (await import("../../providers/boxd-machine")).boxdMachine() };
 
@@ -172,7 +173,9 @@ export async function boxdKeyStep(p: Prompter, v: Values, deps: KeyDeps = realKe
   if (!key && deps.machine) {
     const m = await deps.machine();
     if (m.credentials && (!p.interactive || await p.confirm(`${m.detail.replace(": using its credentials", "")}. Use its credentials instead of a boxd API key?`, true))) {
-      writeConfig(userConfigPath(), { env: { CAPCOMD_SANDBOX: "boxd" } });
+      // Recorded, so capcomd processes started without the login shell's BOXD_VM_* (an MCP server Hermes starts, the
+      // engine as a service) still know to use the machine's credentials.
+      writeConfig(userConfigPath(), { env: { CAPCOMD_SANDBOX: "boxd", CAPCOMD_BOXD_MACHINE: m.name ?? "1" } });
       return { step: "boxd key", ok: true, detail: `none needed: ${m.detail}` };
     }
   }
@@ -345,12 +348,14 @@ export function claudePluginInstalled(): boolean {
  * 3. capcomd in your agents: the plugin (the MCP tools and the orchestration and setup skills) for Claude Code and
  * Codex. Without either CLI, the orchestration skill for Claude Code and the line that registers the MCP server.
  */
-export async function agentIntegrationStep(p: Prompter, v: Values): Promise<Step[]> {
-  if (v["no-skill"] === true || v["no-plugin"] === true) return [{ step: "agent plugin", ok: true, detail: "skipped" }];
-  const source = pluginMarketplace();
+export async function agentIntegrationStep(p: Prompter, v: Values, cwd = process.cwd()): Promise<Step[]> {
   const steps: Step[] = [];
+  const hermes = v["no-hermes"] === true ? null : await hermesStep(p, v, cwd);
+  if (v["no-skill"] === true || v["no-plugin"] === true) return [{ step: "agent plugin", ok: true, detail: "skipped" }, ...(hermes ? [hermes] : [])];
+  const source = pluginMarketplace();
   const hasClaude = runs(claudeBin()), hasCodex = runs(codexBin());
   const tryIt = `Then ask your agent: "Use capcomd to fix the failing tests: one worker per file, each verified and reviewed, then merged."`;
+  if (hermes) steps.push(hermes);
   if (hasClaude && await p.confirm("Install the capcomd plugin in Claude Code (MCP tools and skills)?", true)) {
     const r = spawnSync(claudeBin(), ["plugin", "install", "capcomd", "--marketplace", source, "--json"], { encoding: "utf8", timeout: 300_000 });
     const out: any = json(r.stdout ?? "");
@@ -368,12 +373,66 @@ export async function agentIntegrationStep(p: Prompter, v: Values): Promise<Step
       ? { step: "codex plugin", ok, detail: `marketplace added (${source}): install capcomd from /plugins in Codex. ${tryIt}` }
       : { step: "codex plugin", ok, detail: `marketplace add failed: ${(r.stderr || r.stdout || "").trim().slice(0, 200)}`, hint: `Run \`codex plugin marketplace add ${source}\`, then install capcomd from /plugins.` });
   }
-  if (steps.length) return steps;
+  if (steps.length) return [...steps.filter((x) => x !== hermes), ...(hermes ? [hermes] : [])];
   // No plugin host: the skill alone (agents with a shell use the CLI), and how to register the MCP server.
   if (!(await p.confirm("No Claude Code or Codex CLI found. Install the capcomd skill for Claude Code anyway?", true))) return [{ step: "agent skill", ok: true, detail: "skipped" }];
   mkdirSync(legacySkill(), { recursive: true });
   writeFileSync(join(legacySkill(), "SKILL.md"), ORCHESTRATION_SKILL);
   return [{ step: "agent skill", ok: true, detail: `skill installed in ${legacySkill()}; for the MCP tools: \`claude mcp add capcomd -- capcomd mcp\`. ${tryIt}` }];
+}
+
+/**
+ * 3b. capcomd in Hermes, when Hermes is installed: `capcomd mcp` in its config.yaml (mcp_servers.capcomd, in this
+ * project's checkout, `trust: untrusted` so Hermes asks before merge/cancel/approve), the capcomd skills in its
+ * skills directory, and who approves merges into protected branches (asked; a person, unless the user says Hermes
+ * may after asking them). Null when there's no Hermes.
+ */
+export async function hermesStep(p: Prompter, v: Values, cwd = process.cwd(), machine: KeyDeps["machine"] = realKeyDeps.machine): Promise<Step | null> {
+  const H = await import("./hermes");
+  const h = H.detectHermes();
+  if (!h.found) return null;
+  if (v.approvals !== undefined && v.approvals !== "human" && v.approvals !== "client-confirmed") return { step: "hermes", ok: false, detail: `--approvals ${String(v.approvals)}?`, hint: "--approvals human (you approve with `capcomd approve`) or client-confirmed (Hermes approves after asking you)." };
+  const where = `${H.tilde(h.home)}${h.profile ? ` (profile ${h.profile})` : ""}`;
+  if (!h.homeExists) return { step: "hermes", ok: false, detail: `Hermes is installed (${h.bin}) but not set up yet (no ${H.tilde(h.home)})`, hint: "Run `hermes setup` once, then `capcomd setup agent`." };
+  if (!(await p.confirm(`Add capcomd to Hermes in ${where} (its MCP tools and skills)?`, true))) return { step: "hermes", ok: true, detail: "skipped" };
+  const cfg = H.readHermesConfig(h.config);
+  if (!cfg.ok) return { step: "hermes", ok: false, detail: `can't read ${H.tilde(h.config)}: ${cfg.error}; left it as it is`, hint: "Fix the file (Hermes can't read it either), then run `capcomd setup agent` again." };
+  // The project whose settings Hermes's capcomd uses: this checkout's .capcomd/config.json (not capcomd's own config).
+  const projPath = projectConfigPath(cwd);
+  const project = projPath && resolve(projPath) !== resolve(userConfigPath()) ? dirname(dirname(projPath)) : null;
+  const entry = { ...H.capcomdMcpCommand(), ...(project ? { cwd: project } : {}), ...(process.env.CAPCOMD_HOME ? { env: { CAPCOMD_HOME: resolve(process.env.CAPCOMD_HOME) } } : {}), trust: "untrusted" as const };
+  const edit = H.editHermesConfig(cfg.src, entry);
+  if (!edit.ok) {
+    const snippet = `mcp_servers:\n  capcomd:\n    command: ${JSON.stringify(entry.command)}\n    args: ${JSON.stringify(entry.args)}${project ? `\n    cwd: ${JSON.stringify(project)}` : ""}\n    trust: untrusted`;
+    return { step: "hermes", ok: false, detail: `didn't change ${H.tilde(h.config)}: ${edit.error}`, hint: `Add this to it by hand:\n${snippet}` };
+  }
+  if (edit.changes.length) H.writeHermesConfig(h.config, edit.text);
+  const sk = H.installHermesSkills(h.home);
+  const notes: string[] = [];
+  notes.push(edit.changes.length ? `${H.tilde(h.config)}: ${edit.changes.join("; ")}` : `${H.tilde(h.config)} already had capcomd`);
+  const skillsSaid = [sk.added.length ? `added ${sk.added.join(", ")}` : "", sk.updated.length ? `updated ${sk.updated.join(", ")}` : "", sk.current.length ? `${sk.current.join(", ")} current` : "",
+    sk.kept.length ? `kept your edited ${sk.kept.join(", ")} (delete it and re-run to get capcomd's)` : ""].filter(Boolean).join(", ");
+  notes.push(`skills in ${H.tilde(sk.dir)}: ${skillsSaid}`);
+  notes.push(project ? `capcomd runs in ${tildePath(project)} (its .capcomd/config.json)` : "no project here: run `capcomd setup agent` in your repository so Hermes's capcomd uses its settings");
+  // Who approves merges into protected branches: a person (`capcomd approve`) unless the user lets Hermes do it after
+  // asking them (driver.approvals: client-confirmed). Asked in a terminal; --approvals sets it; --yes alone changes nothing.
+  if (project && projPath) {
+    const cur = readConfig(projPath).driver?.approvals ?? "human";
+    const off = cfg.js?.approvals?.mode === false || cfg.js?.approvals?.mode === "off";
+    let want = typeof v.approvals === "string" ? v.approvals : null;
+    if (!want && p.interactive && !off) want = (await p.confirm("Merges into protected branches (like main) wait for an approval. May Hermes approve them after it asks you in chat? (No: you run `capcomd approve`)", cur === "client-confirmed")) ? "client-confirmed" : "human";
+    if (want === "client-confirmed" && off) notes.push("approvals left to you: Hermes's approvals.mode is off, so it wouldn't ask you first");
+    else if (want && want !== cur) { writeConfig(projPath, { driver: { ...readConfig(projPath).driver, approvals: want as "human" | "client-confirmed" } }); notes.push(want === "client-confirmed" ? "Hermes may approve merges after asking you (driver.approvals: client-confirmed)" : "merges into protected branches wait for you (`capcomd approve`)"); }
+    else notes.push(cur === "client-confirmed" ? (off ? "driver.approvals is client-confirmed, but Hermes's approvals.mode is off: it won't ask you first" : "Hermes approves merges after asking you") : "merges into protected branches wait for you (`capcomd approve`)");
+  }
+  if (!project && typeof v.approvals === "string") notes.push("--approvals not applied: it's a project setting, and there's no project here");
+  // Inside a boxd machine without a key, the MCP server Hermes starts doesn't see BOXD_VM_*: record the machine.
+  if (!process.env.BOXD_API_KEY && !readConfig(userConfigPath()).env?.CAPCOMD_BOXD_MACHINE && machine) {
+    const m = await machine();
+    if (m.credentials) { writeConfig(userConfigPath(), { env: { CAPCOMD_BOXD_MACHINE: m.name ?? "1" } }); notes.push(`boxd: using machine ${m.name ?? "(this one)"}'s credentials`); }
+  }
+  const tryIt = `In Hermes, /reload-mcp (a running gateway picks it up within a minute), then ask it: "Use capcomd to fix the failing tests: one worker per file, each verified and reviewed, then merged."`;
+  return { step: "hermes", ok: true, detail: `${notes.join("; ")}. ${tryIt}` };
 }
 
 /** 4. The engine as a background service. */
@@ -404,7 +463,11 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
   out.push({ step: "project", ok: !!repo, detail: repo ? `${repo} → ${target}${projPath ? ` (${projPath})` : " (environment)"}` : "no .capcomd/config.json here or above", ...(repo ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
   const plugin = runs(claudeBin()) && claudePluginInstalled();
   const skill = existsSync(join(legacySkill(), "SKILL.md"));
-  out.push({ step: "agent plugin", ok: plugin || skill, detail: plugin ? "capcomd plugin in Claude Code (MCP tools and skills)" : skill ? "Claude Code skill only (no MCP tools)" : "not installed", ...(plugin ? {} : { hint: `Run \`capcomd setup agent\`, or in Claude Code: \`/plugin install capcomd --marketplace ${pluginMarketplace()}\`.` }) });
+  const hermes = (await import("./hermes")).hermesStatus();
+  // Any agent that has capcomd counts: the plugin in Claude Code, the skill, or capcomd in Hermes.
+  const any = plugin || skill || (hermes.found && hermes.ok);
+  out.push({ step: "agent plugin", ok: any, detail: plugin ? "capcomd plugin in Claude Code (MCP tools and skills)" : skill ? "Claude Code skill only (no MCP tools)" : any ? "not in Claude Code (Hermes has capcomd)" : "not installed", ...(plugin ? {} : { hint: `Run \`capcomd setup agent\`, or in Claude Code: \`/plugin install capcomd --marketplace ${pluginMarketplace()}\`.` }) });
+  out.push({ step: "hermes", ok: hermes.ok, detail: hermes.detail, ...(hermes.hint ? { hint: hermes.hint } : {}) });
   const S = await import("./service");
   // The engine this CLI talks to (CAPCOMD_ENDPOINT), not only the service's default port.
   const { localPort } = await import("../../core/engine-start");

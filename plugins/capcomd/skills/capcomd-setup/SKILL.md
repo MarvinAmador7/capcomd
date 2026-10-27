@@ -31,6 +31,7 @@ That installs one self-contained executable (about 220 MB: the CLI and its engin
 `~/.capcomd/bin`; if that isn't on the user's PATH, the installer prints the line to add. Homebrew users can
 `brew install MarvinAmador7/tap/capcomd` instead. After installing, the
 plugin's tools load in a new session: ask the user to restart it (or reload plugins), then call `capcomd_setup`.
+In Hermes, `capcomd setup agent` (in the repository) adds the MCP server and these skills to it; then `/reload-mcp`.
 
 ## 3. The sandbox provider (boxd today)
 
@@ -40,6 +41,8 @@ for capcomd with the user's logged-in boxd CLI and keeps it in the OS keychain (
 - boxd CLI not installed: `curl -fsSL https://boxd.sh/downloads/install.sh | sh`.
 - Not logged in: **the user** runs `boxd auth login` (it opens a browser). Ask them to; don't try it yourself.
 - Several boxd orgs and none active: ask which one, then pass `--org <name>`.
+- Inside a boxd machine that isn't isolated (an agent like Hermes on its own VM): no key is needed; setup uses the
+  machine's own credentials and says so.
 
 Then run `capcomd setup accounts --yes --agents claude` (or `codex`, or `claude,codex`). It also builds the agent
 VM snapshot (a few minutes the first time) and checks each agent works from a VM.

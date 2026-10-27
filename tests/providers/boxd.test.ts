@@ -215,3 +215,17 @@ describe("BoxdProvider (mocked SDK)", () => {
     expect(() => providerFromEnv({ CAPCOMD_SANDBOX: "nope" })).toThrow();
   });
 });
+
+test("no key: refused outside a boxd machine; inside one (even known only from capcomd's config) the SDK uses its credentials", async () => {
+  const saved = { BOXD_API_KEY: process.env.BOXD_API_KEY, CAPCOMD_BOXD_MACHINE: process.env.CAPCOMD_BOXD_MACHINE };
+  const hints = ["BOXD_VM_ID", "BOXD_VM_NAME", "BOXD_PROXY_ENDPOINT"].filter((h) => process.env[h]);
+  if (hints.length) return; // running inside a boxd machine: the first half doesn't apply
+  try {
+    delete process.env.BOXD_API_KEY;
+    delete process.env.CAPCOMD_BOXD_MACHINE;
+    expect(() => new BoxdProvider({ dbPath: ":memory:", keepaliveMs: 0 })).toThrow(SandboxConfigError);
+    process.env.CAPCOMD_BOXD_MACHINE = "hermes";
+    const p = new BoxdProvider({ dbPath: ":memory:", keepaliveMs: 0 });
+    await (p as any).close?.();
+  } finally { for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+});

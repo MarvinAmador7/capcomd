@@ -30,3 +30,9 @@ test("no metadata service (hints but nothing answers): no credentials", async ()
   const m = await boxdMachine({ BOXD_VM_ID: "vm-1" }, { read, fetch: (async () => { throw new Error("ECONNREFUSED"); }) as any });
   expect(m).toMatchObject({ inside: true, credentials: false, detail: "in a boxd machine, but its metadata service didn't answer" });
 });
+
+test("the machine recorded by setup (CAPCOMD_BOXD_MACHINE) is a hint too: an MCP server or service without BOXD_VM_* still finds it", async () => {
+  const m = await boxdMachine({ CAPCOMD_BOXD_MACHINE: "hermes" }, { read, fetch: (async () => Response.json({ token: "t" })) as any });
+  expect(m).toEqual({ inside: true, credentials: true, name: "hermes", detail: "inside boxd machine hermes: using its credentials" });
+  expect(await boxdMachine({ CAPCOMD_BOXD_MACHINE: "1" }, { read, fetch: (async () => Response.json({ token: "t" })) as any })).toMatchObject({ credentials: true, detail: "inside boxd machine (unnamed): using its credentials" });
+});

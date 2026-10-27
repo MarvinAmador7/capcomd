@@ -13,6 +13,7 @@ import {
   mapBoxdError,
 } from "./boxd-errors";
 import { env } from "../utils/env";
+import { BOXD_MACHINE_HINTS } from "./boxd-machine";
 import { stateDir } from "../utils/home";
 
 export * from "./boxd-errors";
@@ -124,7 +125,7 @@ export class BoxdProvider implements SandboxProvider {
     } else {
       const apiKey = opts.apiKey ?? process.env.BOXD_API_KEY;
       // Inside a boxd machine the SDK mints the machine's own credentials when it has no key (boxd-machine.ts).
-      const inMachine = ["BOXD_VM_ID", "BOXD_VM_NAME", "BOXD_PROXY_ENDPOINT"].some((h) => process.env[h]);
+      const inMachine = BOXD_MACHINE_HINTS.some((h) => process.env[h]);
       if (!apiKey && !inMachine) throw new SandboxConfigError("BoxdProvider requires BOXD_API_KEY");
       // Lazy require keeps grpc-js out of processes that never select boxd.
       const { Boxd } = require("@boxd-sh/sdk") as typeof import("@boxd-sh/sdk");

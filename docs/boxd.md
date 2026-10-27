@@ -24,6 +24,10 @@ the org that owns it, and the boxd SDK uses them when it has no key. capcomd che
 
 - `capcomd setup` skips the key step ("none needed: inside boxd machine X: using its credentials"); in a terminal it
   asks first. `capcomd setup check` and preflight say the same.
+- `capcomd setup` records the machine in `~/.capcomd/config.json` (`CAPCOMD_BOXD_MACHINE`, applied by every capcomd
+  process at start), because processes that don't inherit the login shell lose the `BOXD_VM_*` hints: the
+  `capcomd mcp` that Hermes starts (Hermes passes a stdio server only `PATH`, `HOME` and a few more) and the engine
+  as a systemd service. It is a hint like the others: the metadata token is still the test.
 - An explicit `BOXD_API_KEY` still wins.
 - From a *shared* machine, boxd's credentials can't read secrets or other members' private machines: `capcomd
   secrets sync` and a Claude login kept as a boxd secret need a key there (a login kept in its auth snapshot works).

@@ -119,11 +119,13 @@ test("no OS keychain: a key setup created goes to the 0600 credentials file, not
 });
 
 test("inside a boxd machine with credentials of its own (an agent on boxd): no key is created or stored", async () => {
-  const s = await boxdKeyStep(yes, {}, { ...deps(), machine: async () => ({ inside: true, credentials: true, detail: "inside boxd machine hermes: using its credentials" }) });
+  const s = await boxdKeyStep(yes, {}, { ...deps(), machine: async () => ({ inside: true, credentials: true, name: "hermes", detail: "inside boxd machine hermes: using its credentials" }) });
   expect(s).toMatchObject({ ok: true, detail: "none needed: inside boxd machine hermes: using its credentials" });
   expect(log()).not.toContain("auth keys create");
   expect(kc.value).toBeNull();
-  expect(JSON.parse(readFileSync(join(process.env.CAPCOMD_HOME!, "config.json"), "utf8"))).toEqual({ env: { CAPCOMD_SANDBOX: "boxd" } });
+  // The machine is recorded: capcomd processes started without the login shell's BOXD_VM_* (an MCP server Hermes
+  // starts, the engine as a service) apply it from the config and still use the machine's credentials.
+  expect(JSON.parse(readFileSync(join(process.env.CAPCOMD_HOME!, "config.json"), "utf8"))).toEqual({ env: { CAPCOMD_SANDBOX: "boxd", CAPCOMD_BOXD_MACHINE: "hermes" } });
   // an isolated machine (no credentials) still goes the key way
   const iso = await boxdKeyStep(yes, {}, { ...deps(), machine: async () => ({ inside: true, credentials: false, detail: "403: VM is isolated" }) });
   expect(log()).toContain("auth keys create");

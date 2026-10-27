@@ -5,6 +5,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- `capcomd setup agent` (and `capcomd setup`) now also sets up [Hermes](https://github.com/NousResearch/hermes-agent)
+  when it's installed: it registers `capcomd mcp` in Hermes's `config.yaml` (`mcp_servers.capcomd`, run in the
+  repository you set up, `trust: untrusted` so Hermes asks you before merging, cancelling or approving), denies
+  `capcomd approve` to Hermes's terminal, and installs the orchestration and setup skills in Hermes's skills
+  directory. The file is edited in place (your other servers, settings and comments stay; the old file is kept as
+  `config.yaml.capcomd.bak`), and re-running updates the entry instead of adding another. In a terminal it asks
+  whether Hermes may approve merges into protected branches after asking you (`--approvals client-confirmed`;
+  default: you approve with `capcomd approve`). `--no-hermes` skips it. `capcomd setup check` has a `hermes` line.
+  See docs/integration-agents.md#hermes.
+- Inside a boxd machine without a boxd API key (Hermes on its own VM, say), capcomd started by Hermes or as a
+  service now uses the machine's credentials too: `capcomd setup` records the machine in `~/.capcomd/config.json`
+  (`CAPCOMD_BOXD_MACHINE`). Before, those processes didn't see the machine's `BOXD_VM_*` variables and asked for
+  `BOXD_API_KEY`. If you set up capcomd on such a machine before, run `capcomd setup accounts` (or
+  `capcomd setup agent`) once more.
+
 - Agent threads no longer show "System: task_started" and "System: task_notification": Claude Code's notices that a
   background task (such as a planner's `capcomd await`) started or ended. The command's row and the child's hand-back
   already show both. Threads recorded before this keep them.

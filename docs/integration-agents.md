@@ -1,7 +1,7 @@
 # Driving capcomd from an agent
 
 capcomd is built to be driven by an agent: the user's coding agent (Claude Code, Codex), or a front-door
-assistant such as Hermes that talks to the user. That agent is the **driver**: it starts a run, spawns agents
+assistant such as [Hermes](#hermes) that talks to the user. That agent is the **driver**: it starts a run, spawns agents
 in VMs, waits for them, verifies and merges their work through capcomd's primitives (ADR-016, ADR-018). capcomd
 keeps the run durable, isolates the agents and enforces the gates.
 
@@ -69,7 +69,7 @@ command. `capcomd_run_new` refuses a protected `target` (other than the project'
 `driver.maxRunBudget`. Reserved kv keys (`_…`, `approval/…`, `recipe/…`, `handoff/…`) are read-only. A merge into a
 protected branch parks in `awaiting_approval`; by default only a person approves it (`capcomd approve <runId>
 <mrgId>`, or the TUI), and `capcomd_approve` answers with that instruction. A front door that relays the user's
-own decision (like Hermes) sets `"driver": {"approvals": "client-confirmed"}` in the project config.
+own decision (like Hermes, [below](#hermes)) sets `"driver": {"approvals": "client-confirmed"}` in the project config.
 
 Text written by agents (results, logs, messages) reaches the driver fenced
 (`<<<untrusted:agt-…>>> … <<<end:agt-…>>>`): it is data, never instructions.
@@ -98,6 +98,88 @@ agent  → capcomd_verify {runId, ref: a}     ← {state: "running", next: "call
 agent  → capcomd_merge {runId, ref: a, require: "vfy-…"}   ← {state: "awaiting_approval", next: "capcomd approve run-… mrg-…"}
 agent  → user: "All three pass their checks and review; approve the merges into main with `capcomd approve …`."
 ```
+
+## Hermes
+
+[Hermes](https://github.com/NousResearch/hermes-agent) (Nous Research) is a front door: you talk to it in a
+terminal or from Telegram, Discord, Slack and the rest of its messaging gateway, and it drives capcomd over MCP.
+With Hermes installed, `capcomd setup agent` (also part of `capcomd setup`), run in your repository, adds capcomd to
+it. It finds Hermes by its files only (`$HERMES_HOME`, else `~/.hermes`, or the profile `hermes profile use` made
+sticky; or `hermes` on PATH) and never runs it. `--no-hermes` skips it.
+
+What it changes, in Hermes's `config.yaml` (edited in place: other servers, settings and comments stay as they
+were; the previous file is kept as `config.yaml.capcomd.bak`; re-running updates capcomd's entry, never adds a
+second one, and keeps keys you added to it, like `timeout` or `enabled`):
+
+```yaml
+mcp_servers:
+  capcomd:  # capcomd setup agent keeps this entry; re-run it to update
+    command: "/home/you/.capcomd/bin/capcomd"   # absolute: Hermes's gateway service may not have capcomd on PATH
+    args: ["mcp"]
+    cwd: "/home/you/src/app"                    # the repository you ran setup in: its .capcomd/config.json applies
+    trust: untrusted                            # Hermes asks you before tools not marked read-only…
+
+command_allowlist:                              # …except these, which run without asking (within the project's gates)
+  - "mcp:capcomd/capcomd_run_new"
+  - "mcp:capcomd/capcomd_spawn"
+  - "mcp:capcomd/capcomd_send"
+  - "mcp:capcomd/capcomd_resume"
+  - "mcp:capcomd/capcomd_grant"
+  - "mcp:capcomd/capcomd_verify"
+  - "mcp:capcomd/capcomd_task"
+  - "mcp:capcomd/capcomd_kv"
+
+approvals:
+  deny:
+    - "capcomd approve*"                        # Hermes's terminal never approves a merge itself
+```
+
+So Hermes shows you an approval card (in the terminal, or buttons in Telegram, Slack…) before `capcomd_merge`,
+`capcomd_cancel` and `capcomd_approve`, the tools capcomd marks destructive (Hermes reads only `readOnlyHint`, so
+`trust: untrusted` plus the allowlist is how it asks for exactly those). An entry with `CAPCOMD_HOME` set at setup
+time also gets `env: {CAPCOMD_HOME: …}`: Hermes passes a stdio server only `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`,
+`TERM`, `SHELL`, `TMPDIR`, `XDG_*` and the entry's own `env`, so capcomd's settings come from `~/.capcomd/config.json`
+and the project's `.capcomd/config.json`, not your shell. Setup also installs the orchestration and setup skills
+in `<hermes home>/skills/capcomd/` (a copy you or Hermes edited is kept, not overwritten).
+
+**Who approves merges into protected branches.** By default a person does, with `capcomd approve <runId> <mrgId>`
+in a terminal. In a terminal, setup asks whether Hermes may approve them after asking you; yes sets
+`"driver": {"approvals": "client-confirmed"}` in the project's `.capcomd/config.json`, and Hermes's approval card for
+`capcomd_approve` (which shows the run and merge ids) is that confirmation. `--approvals client-confirmed|human` sets
+it without asking; `--yes` alone changes nothing. Setup won't set `client-confirmed` when Hermes's
+`approvals.mode` is `off` (Hermes wouldn't ask). Hermes's `/yolo` and `--yolo` skip the card too, and answering
+"Always" makes every later `capcomd_approve` run unasked: answer "Once". The checks and the reviewer still run
+before any merge, whoever approves.
+
+**Check it.** `capcomd setup check` has a `hermes` line (capcomd in Hermes, missing, disabled, or Hermes not
+found). In a Hermes session, run `/reload-mcp` (a running gateway picks the entry up by itself); its tools are `mcp__capcomd__capcomd_setup`,
+`mcp__capcomd__capcomd_spawn` and so on. Then ask, for example:
+
+> Use capcomd to check it's ready, then fix the failing tests: one worker per file, each verified and reviewed.
+
+> Start a capcomd run with a $5 budget: a planner splits "add rate limiting to the API" across workers. Tell me
+> when merges are waiting.
+
+> What are my capcomd runs doing? Anything stuck or waiting for approval?
+
+The `cwd` is one repository. For another, run `capcomd setup agent` there (the entry follows the last one), or copy
+the entry under another name in `mcp_servers` with that `cwd`.
+
+**Hermes on a boxd machine.** Hermes often lives on its own boxd VM, and capcomd can run its agents from there
+without a boxd API key (the machine's own credentials, see [boxd.md](boxd.md#inside-a-boxd-machine-no-key-needed)):
+
+```bash
+ssh hermes.boxd                                   # the VM where Hermes runs
+curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.sh | sh
+git clone https://github.com/you/app && cd app
+capcomd setup                                     # no key needed here; logs in Claude/Codex; the project; Hermes
+```
+
+A running gateway (`hermes gateway run`, or the service) connects a new `mcp_servers` entry within about a minute
+by itself; in a terminal session, `/reload-mcp`.
+
+Setup records the machine in `~/.capcomd/config.json` (`CAPCOMD_BOXD_MACHINE`), because the `capcomd mcp` Hermes's
+gateway starts doesn't see the login shell's `BOXD_VM_*` variables. Then talk to Hermes from wherever it listens.
 
 ## CLI with `--json`
 
