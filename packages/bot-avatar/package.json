@@ -1,0 +1,14 @@
+{
+  "name": "@capcomd/bot-avatar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic pixel bot avatars for capcomd agents: seed + role + size to a crisp SVG, from a modular parts catalog. Pure functions, no dependencies.",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "golden": "bun scripts/golden.ts",
+    "golden:check": "bun scripts/golden.ts --check"
+  }
+}

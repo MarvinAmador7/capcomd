@@ -65,3 +65,6 @@ Some generators read other mockups' HTML as input, so re-run in dependency order
 `fidelity/` holds the side-by-sides (mockup · before · after) from each fidelity PR, captured from the running app against `../client/mock/scenarios.ts`.
 
 Rejected/superseded variants are intentionally not committed — don't reintroduce them.
+
+`brand/` holds the bot-avatar proposal (generated pixel bots per agent, identity moments, a new menu bar mark). It is
+**not approved**: build nothing from it until it is. See `brand/README.md`; `tools/renderbrand.sh` regenerates it.
