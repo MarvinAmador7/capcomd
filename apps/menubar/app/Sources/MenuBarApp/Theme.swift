@@ -429,6 +429,14 @@ enum Theme {
     static let rowSubText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55), rowHover = Color.white.opacity(0.07)
   }
   /// Identity moments (design/brand/moments.png): meet your team, run finished.
+  /// The provider mark (ProviderMark.swift): 11 pt in tree rows, a badge disc on bots of 24 pt and up.
+  enum Provider {
+    static let claude = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)   // Claude's coral
+    static let rowSize: CGFloat = 11, rowText = Color.white.opacity(0.45), rowLeading: CGFloat = 6
+    static func badge(_ side: CGFloat) -> CGFloat { side >= 48 ? 18 : side >= 24 ? 12 : 0 }
+    static let markRatio: CGFloat = 0.68, badgeOut: CGFloat = 0.18
+    static let badgeFill = Color(white: 0.13), badgeStroke = Color.white.opacity(0.14)
+  }
   enum Moments {
     static let meetWindow: Double = 6, cheerFor: Double = 2.2                   // s: a run's first seconds; the cheer
     static let maxKids = 4, maxCheer = 5

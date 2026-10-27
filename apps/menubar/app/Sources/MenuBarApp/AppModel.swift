@@ -196,6 +196,13 @@ final class AppModel {
     return bots[agentId]
   }
 
+  /// Which AI the agent runs on, and its model when the daemon says.
+  func provider(runId: String, agentId: String) -> (provider: Provider, model: String?)? {
+    _ = revision
+    guard let a = store.runs[runId]?.agents[agentId], let p = a.provider else { return nil }
+    return (p, a.model)
+  }
+
   /// The agent's bot name ("Ziggy"), shown beside its role in headers and handoffs and read in tooltips and VoiceOver.
   func botName(runId: String, agentId: String) -> String? { bot(runId: runId, agentId: agentId)?.name }
 

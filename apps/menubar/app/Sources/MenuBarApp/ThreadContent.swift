@@ -561,7 +561,8 @@ struct HandoffCard: View {
     Button { if let childId { model.path.append(.thread(runId: runId, agentId: childId)) } } label: {
       VStack(alignment: .leading, spacing: 0) {
         HStack(spacing: Theme.Content.handoffGap) {
-          BotAvatar(traits: childId.flatMap { model.bot(runId: runId, agentId: $0) }, size: .small)
+          ProvidedBot(traits: childId.flatMap { model.bot(runId: runId, agentId: $0) }, size: .small,
+                      provider: childId.flatMap { model.provider(runId: runId, agentId: $0)?.provider })
           // The bot's name leads; the role joins the note ("worker · handed back").
           let role = child?.displayName ?? "Agent", name = childId.flatMap { model.botName(runId: runId, agentId: $0) }
           Text(verbatim: name ?? role).font(Theme.Content.handoffName).foregroundStyle(.white)

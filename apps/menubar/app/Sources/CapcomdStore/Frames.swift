@@ -68,6 +68,9 @@ public struct SnapshotAgent: Codable, Sendable, Hashable {
   /// `{summary, artifacts}` once finished; summary is agent-written (untrusted).
   public var result: JSONValue?
   public var updatedAt: String?
+  /// "claude" | "codex" | null, and the model it runs (both optional: older daemons send neither).
+  public var provider: String?
+  public var model: String?
 }
 public struct SnapshotApproval: Codable, Sendable, Hashable {
   public var approvalId: String; public var kind: String; public var status: String; public var question: String

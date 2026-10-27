@@ -26,6 +26,16 @@ public enum ProfileKind: String, Sendable, Hashable {
 /// Icon tint state (SPEC §2/§5): grey by default, blue while running, amber on approval, red on failure.
 public enum Tint: Sendable, Hashable { case grey, blue, amber, red, tertiary }
 
+/// The AI provider an agent runs on. Wire values: `Agent.provider` ("claude", "codex"), or agent.spawned's
+/// `agent.provider` / `agent.kind` ("claude-code", "codex"; "fake" is none).
+public enum Provider: String, Sendable, Hashable {
+  case claude, codex
+  public init?(wire: String?) {
+    switch wire { case "claude", "claude-code": self = .claude; case "codex": self = .codex; default: return nil }
+  }
+  public var displayName: String { switch self { case .claude: "Claude"; case .codex: "Codex" } }
+}
+
 public struct Agent: Sendable, Hashable, Identifiable {
   public var id: String
   public var runId: String
@@ -50,6 +60,9 @@ public struct Agent: Sendable, Hashable, Identifiable {
   public var taskAttachment: AttachmentRef? = nil
   /// `result.summary` once the agent finished (agent-written, untrusted).
   public var resultSummary: UntrustedText? = nil
+  /// Which AI it runs on, and the model when the daemon knows it (daemon-written).
+  public var provider: Provider? = nil
+  public var model: String? = nil
   public var kind: ProfileKind { ProfileKind(profile: profile) }
   /// Profile names stay lowercase as the contract sends them ("lead"); nil → "agent".
   public var displayName: String {

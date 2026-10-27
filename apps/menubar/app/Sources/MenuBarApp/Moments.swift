@@ -20,7 +20,8 @@ struct MeetTeamView: View {
     VStack(spacing: 0) {
       if let root {
         let t = model.bot(runId: runId, agentId: root.id)
-        BotAvatar(traits: t.flatMap { try? withOverrides($0, pose: "wave") } ?? t, size: .full, cell: Theme.Moments.leadCell)
+        ProvidedBot(traits: t.flatMap { try? withOverrides($0, pose: "wave") } ?? t, size: .full, cell: Theme.Moments.leadCell,
+                    provider: model.provider(runId: runId, agentId: root.id)?.provider)
           .accessibilityHidden(true)
         label(root.name, t?.name, big: true).padding(.top, Theme.Moments.labelTop)
         if !kids.isEmpty {
@@ -29,7 +30,7 @@ struct MeetTeamView: View {
             ForEach(Array(kids.enumerated()), id: \.element.id) { i, k in
               TeamMember(index: i) {
                 VStack(spacing: Theme.Moments.memberGap) {
-                  BotAvatar(traits: model.bot(runId: runId, agentId: k.id), size: .full, cell: 1)
+                  ProvidedBot(traits: model.bot(runId: runId, agentId: k.id), size: .full, cell: 1, provider: model.provider(runId: runId, agentId: k.id)?.provider)
                   label(k.name, model.bot(runId: runId, agentId: k.id)?.name, big: false)
                 }
               }

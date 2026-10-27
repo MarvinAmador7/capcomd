@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: you can now see which AI each agent runs on. The agent tree shows the Claude or Codex mark on every
+  row (hover it for the model), and the agent's bot in the thread header, handoff cards and the team intro wears it
+  as a small badge. Needs a daemon that reports it; older daemons show no mark. Folder chips in the tree now line up
+  on finished agents too.
 - Menu bar app: opening the @ mention or / skill list in a thread no longer blanks out the top of the conversation;
   the list now floats over the thread.
 - Menu bar app: when you @ mention an agent in a message, it becomes a pill with the agent's bot and name, right
