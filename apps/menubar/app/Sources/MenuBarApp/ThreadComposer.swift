@@ -56,7 +56,6 @@ struct ThreadComposer: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      popover
       if agent?.status == .running { writing }
       else if agent?.status == .paused { pausedRow }
       if case .failed(let why) = control {
@@ -64,6 +63,9 @@ struct ThreadComposer: View {
       }
       box
     }
+    // The @ and / lists float over the thread, bottom edge on the composer's top. In the layout they would shrink the
+    // bottom-anchored thread, and its lazy stack then leaves the top rows undrawn (a blank band under the header).
+    .overlay(alignment: .top) { popover.alignmentGuide(.top) { $0[.bottom] } }
     .padding(Theme.Thread.inputMargin)
     .animation(Theme.Motion.fast, value: focused)
     .task { await model.refreshDaemonInfo() }

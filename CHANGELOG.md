@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: opening the @ mention or / skill list in a thread no longer blanks out the top of the conversation;
+  the list now floats over the thread.
 - Menu bar app: when you @ mention an agent in a message, it becomes a pill with the agent's bot and name, right
   where you typed it ("ask [Bolt] to retry shard 3"). Delete removes it in one keystroke, and your sent message shows
   the same pills instead of the raw handles. The back button in a run or thread is now round.

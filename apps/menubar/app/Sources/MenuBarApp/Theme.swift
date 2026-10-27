@@ -304,7 +304,7 @@ enum Theme {
     static let bubbleSendingOpacity: Double = 0.6
     static let bubbleNoteFont = Font.system(size: 11)
     // Popovers (.skp / .mpop)
-    static let popFill = Color(red: 40 / 255, green: 44 / 255, blue: 54 / 255).opacity(0.94)
+    static let popFill = Color(red: 40 / 255, green: 44 / 255, blue: 54 / 255)   // opaque: the lists float over the thread
     static let popStroke = Color.white.opacity(0.14), popRadius: CGFloat = 10, popPadding: CGFloat = 4
     static let popMargin = EdgeInsets(top: 0, leading: 4, bottom: 6, trailing: 4)
     static let popShadow = Color.black.opacity(0.4), popShadowRadius: CGFloat = 15, popShadowY: CGFloat = 10
