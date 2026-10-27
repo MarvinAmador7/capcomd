@@ -125,7 +125,7 @@ struct StepBar: View {
     .accessibilityHidden(true)
   }
   func color(_ s: StepStatus) -> Color {
-    switch s { case .done: Theme.Drill.barDone; case .running: Theme.Drill.barCurrent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued: Theme.Drill.barQueued }
+    switch s { case .done: Theme.Drill.barDone; case .running: Theme.Drill.barCurrent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued, .paused: Theme.Drill.barQueued }
   }
 }
 
@@ -138,7 +138,7 @@ struct StepIcon: View {
   let step: Step
   var body: some View {
     let tint: Color = switch step.status {
-      case .running: Theme.accent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued: Theme.Drill.rowQueued; case .done: Theme.Drill.iconText
+      case .running: Theme.accent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued, .paused: Theme.Drill.rowQueued; case .done: Theme.Drill.iconText
     }
     let profile = step.agentId.flatMap { model.run(runId)?.agents[$0]?.kind }
     Group {

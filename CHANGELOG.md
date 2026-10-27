@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: each goal you start is now its own card. Before, every run in the same repository was folded into one
+  card, titled after whichever goal came first; reruns of the same goal still share a card. A paused agent now shows
+  a pause mark in the tree and its thread.
+- Menu bar app: the menu bar icon appears right away even while macOS is asking whether the app may read its token
+  from the Keychain (the panel says it's waiting); before, nothing showed until that prompt was answered. When no AI
+  can drive a run yet, its menu stays visible, dimmed, with the reason (for example "No planner profile").
 - Menu bar app: the send button is always white (its arrow dims while there's nothing to send), and the panel grows
   wider when the controls under the goal need the room, instead of spilling past its edge.
 - Menu bar app: choose how a new project runs. Under the goal, a two-icon switch (laptop or cloud) picks where its
