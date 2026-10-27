@@ -107,7 +107,7 @@ struct StartProjectField: View {
             .contentShape(Capsule())
           }
           .buttonStyle(PressableStyle()).disabled(!s.available).opacity(s.available ? 1 : 0.4)
-          .help(s.available ? (s.name == "boxd" ? "\(s.label): agents run on boxd VMs" : "\(s.label): agents run in Docker on this Mac")
+          .help(s.available ? (s.name == "boxd" ? "\(s.label): agents run on boxd machines" : "\(s.label): agents run in Docker on this Mac")
                             : "\(s.label): \(s.reason ?? "unavailable")")
           .accessibilityLabel(s.label).accessibilityAddTraits(on ? .isSelected : [])
         }

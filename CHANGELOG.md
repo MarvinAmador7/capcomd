@@ -5,11 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Runs on boxd machines are now called **Cloud** (they were "VM") in the menu bar app and in run options and their
+  messages (`GET /v1/run-options` `label`, e.g. "Not logged in to Claude Code for Cloud"). The sandbox's name stays
+  `boxd` (`--sandbox boxd`, `"sandbox": "boxd"`).
 - Agent threads no longer show "System: task_started" and "System: task_notification": Claude Code's notices that a
   background task (such as a planner's `capcomd await`) started or ended. The command's row and the child's hand-back
   already show both. Threads recorded before this keep them.
 - Menu bar app: when capcomd comes back after being unreachable, the app reads again what it offers, so the composer's
-  Local / VM switch and driver chip return. Opened while capcomd was down, the app used to lose them until restarted.
+  Local / Cloud switch and driver chip return. Opened while capcomd was down, the app used to lose them until restarted.
 - Menu bar app: the panel no longer jumps when it changes height. Folding a thread's task (or a thought, a command or a
   diff) used to show the panel half the difference lower for a frame, so the header flashed down and back up; folds
   now snap without animating, and the window follows the panel in the same frame.
@@ -34,7 +37,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   and role as the tooltip; verify, merge and approval rows lead with the bot whose work they were. Steps of the run
   itself keep their icon.
 - Menu bar app: the composer shows who can drive a run for the project you picked and where it runs. Claude logged in
-  for VM only shows as unavailable on Local, saying which command fixes it; a folder that isn't a capcomd project says
+  for Cloud only shows as unavailable on Local, saying which command fixes it; a folder that isn't a capcomd project says
   so. Before, it showed the daemon's own answer, so a run could be offered and then fail.
 - Menu bar app: a run that hasn't started its first step is headed "Starting…" (not its goal twice), and its Activity
   says "Nothing has happened yet." instead of staying blank.

@@ -15,7 +15,7 @@ import { capcomdHome } from "../utils/home";
 type Env = Record<string, string | undefined>;
 export const RUN_SANDBOXES = ["docker", "boxd"] as const;
 export type RunSandbox = (typeof RUN_SANDBOXES)[number];
-export const SANDBOX_LABEL: Record<RunSandbox, string> = { docker: "Local", boxd: "VM" };
+export const SANDBOX_LABEL: Record<RunSandbox, string> = { docker: "Local", boxd: "Cloud" };
 
 export interface DriverFit { available: boolean; reason: string | null }
 export interface DriverOption { provider: "claude" | "codex"; label: string; model: string | null; efforts: string[]; effort: string | null; available: boolean; reason: string | null; default: boolean; sandboxes: Record<RunSandbox, DriverFit> }

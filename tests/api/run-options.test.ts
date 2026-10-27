@@ -51,7 +51,7 @@ const FITS = { docker: { available: true, reason: null }, boxd: { available: tru
 const READY = { drivers: [
 	{ provider: "claude" as const, label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: true, reason: null, default: false, sandboxes: FITS },
 	{ provider: "codex" as const, label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: true, reason: null, default: false, sandboxes: FITS },
-], sandboxes: [{ name: "docker" as const, label: "Local", available: true, reason: null, default: false }, { name: "boxd" as const, label: "VM", available: true, reason: null, default: false }] };
+], sandboxes: [{ name: "docker" as const, label: "Local", available: true, reason: null, default: false }, { name: "boxd" as const, label: "Cloud", available: true, reason: null, default: false }] };
 const dockerUp = async () => ({ ok: true, reason: null });
 const dockerDown = async () => ({ ok: false, reason: "Docker isn't running" });
 
@@ -138,7 +138,7 @@ describe("GET /v1/run-options", () => {
 		expect(r.status).toBe(200);
 		const body = RunOptions.parse(await r.json());
 		expect(body.drivers.map((d) => [d.provider, d.label])).toEqual([["claude", "Claude Code"], ["codex", "Codex"]]);
-		expect(body.sandboxes.map((s) => [s.name, s.label])).toEqual([["docker", "Local"], ["boxd", "VM"]]);
+		expect(body.sandboxes.map((s) => [s.name, s.label])).toEqual([["docker", "Local"], ["boxd", "Cloud"]]);
 		const h = (await (await app.request("/v1/health")).json()) as any;
 		expect(h.capabilities).toContain("runs.options");
 	});
@@ -156,7 +156,7 @@ describe("GET /v1/run-options", () => {
 			],
 			sandboxes: [
 				{ name: "docker", label: "Local", available: true, reason: null, default: false },
-				{ name: "boxd", label: "VM", available: true, reason: null, default: true },
+				{ name: "boxd", label: "Cloud", available: true, reason: null, default: true },
 			],
 		});
 	});
@@ -166,12 +166,12 @@ describe("GET /v1/run-options", () => {
 		const noCodex = await runOptions(world({ logins: ["claude-code"], env: { CAPCOMD_SANDBOX: "fake" } }), dockerDown);
 		expect(noCodex.drivers[1]).toEqual({ provider: "codex", label: "Codex", model: "gpt-5-codex", efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "Not logged in to Codex (run capcomd auth login codex)", default: false, sandboxes: {
 			docker: { available: false, reason: "Not logged in to Codex for Local (run `capcomd auth login codex --sandbox docker`)" },
-			boxd: { available: false, reason: "Not logged in to Codex for VM (run `capcomd auth login codex --sandbox boxd`)" },
+			boxd: { available: false, reason: "Not logged in to Codex for Cloud (run `capcomd auth login codex --sandbox boxd`)" },
 		} });
 		expect(noCodex.drivers[0]!.available).toBe(true);
 		expect(noCodex.sandboxes).toEqual([
 			{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false },
-			{ name: "boxd", label: "VM", available: false, reason: "No boxd API key (run capcomd setup)", default: false },
+			{ name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false },
 		]);
 		resetDockerCheck();
 		const none = await runOptions(world({ profiles: { schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey" } } }, env: { CAPCOMD_SANDBOX: "docker" } }), dockerUp);
@@ -391,7 +391,7 @@ describe("effort (the driver's reasoning effort)", () => {
 		const options = { drivers: [
 			{ provider: "claude" as const, label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: true, reason: null, default: true, sandboxes: FITS },
 			{ provider: "codex" as const, label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: true, reason: null, default: false, sandboxes: FITS },
-		], sandboxes: [{ name: "docker" as const, label: "Local", available: true, reason: null, default: true }, { name: "boxd" as const, label: "VM", available: true, reason: null, default: false }] };
+		], sandboxes: [{ name: "docker" as const, label: "Local", available: true, reason: null, default: true }, { name: "boxd" as const, label: "Cloud", available: true, reason: null, default: false }] };
 		const src = memorySource({ runOptions: options });
 		const app = harnessApp({ source: src, clients: () => loadClients(cpath), state: harnessState(null) });
 		const post = (body: unknown, key: string) => app.request("/v1/runs", { method: "POST", headers: { authorization: `Bearer ${steer}`, "content-type": "application/json", "idempotency-key": key }, body: JSON.stringify(body) });
@@ -473,7 +473,7 @@ describe("per sandbox: drivers[].sandboxes (capability runs.options.sandbox)", (
 		expect(envSnapshotProblem("claude", { ...env, CAPCOMD_SANDBOX: "boxd", CAPCOMD_ENV_LEDGER: "/nonexistent/x.json" })).toContain("missing in its VMs); run `capcomd env build --sandbox boxd` first");
 		// An API key is the same for every sandbox; an agent environment is still needed.
 		const keyed = await runOptions({ ...world({ profiles: { schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey" }, planner: { provider: "claude", auth: "apikey", children: { allowSpawn: true, allowedChildProfiles: ["worker"] } } } }, envs: ["docker"] }), ANTHROPIC_API_KEY: "k" }, dockerUp);
-		expect(keyed.drivers[0]!.sandboxes).toEqual({ docker: { available: true, reason: null }, boxd: { available: false, reason: "No agent environment for VM yet (run `capcomd env build --sandbox boxd`)" } });
+		expect(keyed.drivers[0]!.sandboxes).toEqual({ docker: { available: true, reason: null }, boxd: { available: false, reason: "No agent environment for Cloud yet (run `capcomd env build --sandbox boxd`)" } });
 		resetDockerCheck();
 	});
 	test("POST /v1/runs: a driver (or the default one) that can't run in the chosen sandbox is 422 with the reason, before anything starts", async () => {

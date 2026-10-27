@@ -199,7 +199,7 @@ Bun.serve({
       ],
       sandboxes: [
         { name: "docker", label: "Local", available: !process.env.NO_DOCKER, reason: process.env.NO_DOCKER ? "Docker isn't running" : null, default: false },
-        { name: "boxd", label: "VM", available: true, reason: null, default: true },
+        { name: "boxd", label: "Cloud", available: true, reason: null, default: true },
       ],
     });
     const msg = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/messages$/);

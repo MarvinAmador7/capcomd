@@ -333,7 +333,7 @@ export const DriverOption = z.object({
 });
 export const SandboxOption = z.object({
 	name: z.enum(["docker", "boxd"]),
-	label: z.string().describe("What to call it: \"Local\" (docker) or \"VM\" (boxd)"),
+	label: z.string().describe("What to call it: \"Local\" (docker) or \"Cloud\" (boxd)"),
 	available: z.boolean(),
 	reason: z.string().nullable().describe("Why it isn't available (trusted), e.g. \"Docker isn't running\", \"No boxd API key (run capcomd setup)\"; null when available"),
 	default: z.boolean().describe("The daemon's own CAPCOMD_SANDBOX: what a run without `sandbox` uses (none is default when the daemon runs another sandbox)"),
