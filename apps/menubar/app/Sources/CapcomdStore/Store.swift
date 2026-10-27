@@ -39,6 +39,8 @@ public final class CapcomdStore {
   public internal(set) var logUnavailable: [String: DetailUnavailable] = [:]
   var logCursor: [String: Int] = [:]
   public internal(set) var controlState: [String: ControlState] = [:]
+  /// Pause / resume of one agent (and its subtree), keyed by agent id; settles on agent.paused / agent.resumed.
+  public internal(set) var agentControlState: [String: ControlState] = [:]
   public internal(set) var startState: StartState = .idle
   /// Steers typed in a thread, per agent, until confirmed (StoreThread.swift).
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
@@ -416,6 +418,7 @@ public final class CapcomdStore {
   func setStatus(_ runId: String?, _ agentId: String?, _ s: AgentStatus, _ e: Envelope) {
     guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
     runs[runId]?.agents[agentId]?.status = s; runs[runId]?.agents[agentId]?.updatedAtMs = e.epochMs
+    settleAgentControl(agentId: agentId, status: s)
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == "agent:\(agentId)" }) {
       runs[runId]?.steps[i].status = Self.stepStatus(s); runs[runId]?.steps[i].epochMs = e.epochMs
     }

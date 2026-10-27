@@ -21,6 +21,11 @@ struct ThreadComposer: View {
   private func flat(_ ns: [AgentNode]) -> [AgentNode] { ns.flatMap { [$0] + flat($0.children) } }
   private var name: String { agent?.name ?? "agent" }
   private var ended: Bool { agent.map { [.done, .failed, .cancelled, .handedOff].contains($0.status) } ?? false }
+  private var canPause: Bool { model.capabilities.contains(Capability.agentPause) }
+  /// Esc or the stop button: pause this agent (and its subtree) while it works and the field is empty.
+  private var canStop: Bool { agent?.status == .running && text.isEmpty && picked.isEmpty && canPause }
+  private var control: ControlState { model.agentControlState(agentId) }
+  private var stopping: Bool { if case .requested(.pause) = control { return true }; if case .submitting(.pause) = control { return true }; return false }
   private var canAttachSkills: Bool { model.capabilities.contains(Capability.steerSkills) }
 
   // MARK: the list open under the cursor's token
@@ -47,6 +52,10 @@ struct ThreadComposer: View {
     VStack(alignment: .leading, spacing: 0) {
       popover
       if agent?.status == .running { writing }
+      else if agent?.status == .paused { pausedRow }
+      if case .failed(let why) = control {
+        Text(verbatim: why).font(Theme.Thread.writingFont).foregroundStyle(Theme.red).padding(Theme.Thread.writingPadding)
+      }
       box
       if focused {
         HStack(spacing: Theme.Composer.hintGap) { Spacer(minLength: 0); Text("↩ send"); Text("⇧↩ newline") }
@@ -146,8 +155,8 @@ struct ThreadComposer: View {
   }
 
   @ViewBuilder private func sendButton(ready: Bool) -> some View {
-    let canStop = agent?.status == .running && text.isEmpty && model.capabilities.contains(Capability.agentPause)
-    Button(action: send) {
+    let canStop = canStop && !stopping
+    Button(action: canStop ? stop : send) {
       ZStack {
         Circle().fill(canStop ? Theme.Thread.stopFill : ready ? Theme.accent : Theme.Composer.sendIdle)
         if canStop { RoundedRectangle(cornerRadius: 1.5).fill(Color.black).frame(width: Theme.Thread.stopSquare, height: Theme.Thread.stopSquare) }
@@ -156,8 +165,8 @@ struct ThreadComposer: View {
       .frame(width: Theme.Thread.button, height: Theme.Thread.button)
     }
     .buttonStyle(PressableStyle())
-    .disabled(!ready)
-    .accessibilityLabel("Send")
+    .disabled(!(ready || canStop))
+    .accessibilityLabel(canStop ? "Stop \(name)" : "Send")
   }
 
   private var writing: some View {
@@ -167,14 +176,31 @@ struct ThreadComposer: View {
           Circle().fill(Theme.accent).frame(width: Theme.Thread.dot, height: Theme.Thread.dot).opacity(Theme.Thread.dotOpacities[i])
         }
       }
-      Text(verbatim: "\(name) is writing…")
+      Text(verbatim: stopping ? "Stopping \(name)…" : "\(name) is writing…")
       Spacer(minLength: 0)
-      if model.capabilities.contains(Capability.agentPause) { Text("Esc to stop") }
+      if canPause && !stopping { Text("Esc to stop") }
     }
     .font(Theme.Thread.writingFont).foregroundStyle(Theme.Thread.writingText)
     .padding(Theme.Thread.writingPadding)
     .accessibilityElement(children: .combine)
   }
+
+  /// A paused agent: its work is pushed; Resume runs it (and its paused subtree) on from its branch.
+  private var pausedRow: some View {
+    HStack(spacing: Theme.Thread.writingGap) {
+      Text(verbatim: "\(name) is paused")
+      Spacer(minLength: 0)
+      if canPause {
+        Button("Resume") { model.controlAgent(runId: runId, agentId: agentId, .resume) }
+          .buttonStyle(.plain).foregroundStyle(Theme.accent)
+          .disabled({ if case .submitting = control { return true }; return false }())
+      }
+    }
+    .font(Theme.Thread.writingFont).foregroundStyle(Theme.Thread.writingText)
+    .padding(Theme.Thread.writingPadding)
+  }
+
+  private func stop() { guard canStop, !stopping else { return }; model.controlAgent(runId: runId, agentId: agentId, .pause) }
 
   // MARK: popover
 
@@ -242,6 +268,7 @@ struct ThreadComposer: View {
   private func escape() -> KeyPress.Result {
     if trigger != nil { dismissed = token; return .handled }
     if !text.isEmpty || !picked.isEmpty { text = ""; picked = []; mentions = [:]; return .handled }
+    if canStop && !stopping { stop(); return .handled }   // SPEC §4.6: …clears → stops the agent when empty
     focused = false; return .handled
   }
   private func send() {

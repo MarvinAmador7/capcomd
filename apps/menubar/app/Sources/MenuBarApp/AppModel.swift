@@ -137,6 +137,8 @@ final class AppModel {
   var routeHeight: CGFloat = 0
 
   // Agent thread input (7c)
+  func agentControlState(_ agentId: String) -> ControlState { _ = revision; return store.agentControlState[agentId] ?? .idle }
+  func controlAgent(runId: String, agentId: String, _ action: RunControl) { Task { _ = await store.controlAgent(runId: runId, agentId: agentId, action) } }
   func pendingSteers(_ agentId: String) -> [PendingSteer] { _ = revision; return store.pendingSteers(agentId: agentId) }
   func steer(runId: String, agentId: String, body: String, skills: [String]) { Task { await store.steer(runId: runId, agentId: agentId, body: body, skills: skills) } }
   func retrySteer(runId: String, agentId: String, _ p: PendingSteer) { Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) } }

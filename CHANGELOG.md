@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: stop an agent from its thread. While it works, press Esc in the empty message field or click the stop
+  button; the thread says "Stopping lead…" until the agent has pushed its work and paused, then "lead is paused" with
+  Resume. Pausing an agent pauses the agents under it too; the rest of the run keeps going. Needs a capcomd daemon that
+  supports pausing one agent (it advertises `agent.pause`); with an older one the stop control stays hidden.
 - Menu bar app: in the run view, the Activity list and the collapsed step strip sit 4 pt closer to the step bar, as
   designed.
 - Menu bar app: an agent's thread now shows what it actually did, as it happens: its messages with headings, lists,
