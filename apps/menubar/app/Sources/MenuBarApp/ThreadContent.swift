@@ -174,8 +174,8 @@ struct CodeBlock: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(RoundedRectangle(cornerRadius: Theme.Content.codeRadius).fill(Theme.Content.codeFill))
-    .overlay(RoundedRectangle(cornerRadius: Theme.Content.codeRadius).strokeBorder(Theme.Content.codeStroke, lineWidth: 0.5))
+    .background(RoundedRectangle(cornerRadius: Theme.Content.codeRadius, style: .continuous).fill(Theme.Content.codeFill))
+    .overlay(RoundedRectangle(cornerRadius: Theme.Content.codeRadius, style: .continuous).strokeBorder(Theme.Content.codeStroke, lineWidth: 0.5))
     .padding(.bottom, Theme.Content.codeBottom)
   }
 
@@ -289,7 +289,7 @@ struct MediaBlockView: View {
     Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
       .frame(maxWidth: img.size.width, maxHeight: min(img.size.height, Theme.Content.mediaMaxHeight))
       .frame(maxWidth: .infinity, alignment: .leading)
-      .clipShape(RoundedRectangle(cornerRadius: Theme.Content.mediaRadius))
+      .clipShape(RoundedRectangle(cornerRadius: Theme.Content.mediaRadius, style: .continuous))
       .accessibilityLabel(media.alt.isEmpty ? "Image" : media.alt)
   }
 
@@ -300,7 +300,7 @@ struct MediaBlockView: View {
       if let note { Text(verbatim: note).foregroundStyle(Theme.Content.truncatedText).lineLimit(1) }
     }
     .font(Theme.Content.artFont).foregroundStyle(Theme.Content.artText).padding(Theme.Content.artPadding)
-    .background(RoundedRectangle(cornerRadius: Theme.Content.artRadius).fill(Theme.Content.artFill))
+    .background(RoundedRectangle(cornerRadius: Theme.Content.artRadius, style: .continuous).fill(Theme.Content.artFill))
   }
 
   /// Explicit click only: an ephemeral session, no cookies, http(s) only, at most 5 MB, raster images only.
@@ -440,7 +440,7 @@ struct ToolCallRow: View {
         }
         .font(Theme.Content.toolFont).foregroundStyle(tool?.isError == true ? Theme.Content.errorText : Theme.Content.toolText)
         .frame(height: Theme.Content.toolHeight).padding(.horizontal, Theme.Content.toolInset)
-        .background(RoundedRectangle(cornerRadius: Theme.Content.toolRadius).fill(hover ? Theme.Content.toolHover : .clear))
+        .background(RoundedRectangle(cornerRadius: Theme.Content.toolRadius, style: .continuous).fill(hover ? Theme.Content.toolHover : .clear))
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain).onHover { hover = $0 }
@@ -463,7 +463,7 @@ struct ToolCallRow: View {
     }
     .font(Theme.Content.detailFont).foregroundStyle(Theme.Content.detailText).lineSpacing(Theme.Content.detailSpacing)
     .frame(maxWidth: .infinity, alignment: .leading).padding(Theme.Content.detailPadding)
-    .background(RoundedRectangle(cornerRadius: Theme.Content.detailRadius).fill(Theme.Content.detailFill))
+    .background(RoundedRectangle(cornerRadius: Theme.Content.detailRadius, style: .continuous).fill(Theme.Content.detailFill))
     .padding(Theme.Content.detailMargin)
   }
 
@@ -519,9 +519,9 @@ struct DiffCard<Detail: View>: View {
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(RoundedRectangle(cornerRadius: Theme.Content.diffRadius).fill(Theme.Content.diffFill))
-      .overlay(RoundedRectangle(cornerRadius: Theme.Content.diffRadius).strokeBorder(Theme.Content.diffStroke, lineWidth: 0.5))
-      .clipShape(RoundedRectangle(cornerRadius: Theme.Content.diffRadius))
+      .background(RoundedRectangle(cornerRadius: Theme.Content.diffRadius, style: .continuous).fill(Theme.Content.diffFill))
+      .overlay(RoundedRectangle(cornerRadius: Theme.Content.diffRadius, style: .continuous).strokeBorder(Theme.Content.diffStroke, lineWidth: 0.5))
+      .clipShape(RoundedRectangle(cornerRadius: Theme.Content.diffRadius, style: .continuous))
       .opacity(failed ? Theme.Content.diffFailedOpacity : 1)
       .padding(.bottom, open ? 6 : Theme.Content.diffBottom)
       if open { detail().transition(.opacity) }
@@ -578,8 +578,8 @@ struct HandoffCard: View {
       }
       .multilineTextAlignment(.leading)
       .padding(Theme.Content.handoffPadding)
-      .background(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius).fill(Theme.Content.handoffFill))
-      .overlay(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius).strokeBorder(Theme.Content.handoffStroke, lineWidth: 0.5))
+      .background(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).fill(Theme.Content.handoffFill))
+      .overlay(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).strokeBorder(Theme.Content.handoffStroke, lineWidth: 0.5))
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain).disabled(childId == nil)
@@ -612,7 +612,7 @@ struct ArtifactChip: View {
       Text(verbatim: link.text).lineLimit(1).truncationMode(.middle)
     }
     .font(Theme.Content.artFont).foregroundStyle(Theme.Content.artText).padding(Theme.Content.artPadding)
-    .background(RoundedRectangle(cornerRadius: Theme.Content.artRadius).fill(Theme.Content.artFill))
+    .background(RoundedRectangle(cornerRadius: Theme.Content.artRadius, style: .continuous).fill(Theme.Content.artFill))
     .help(link.destination ?? link.path ?? link.text)
   }
   var icon: String {

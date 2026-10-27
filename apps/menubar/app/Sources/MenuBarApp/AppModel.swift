@@ -38,7 +38,7 @@ final class AppModel {
 
   private func attach(_ s: CapcomdStore) {
     s.onChange = { [weak self] in self?.revision &+= 1 }
-    s.onNotify = { Notifier.post($0) }
+    s.onNotify = { [weak self] n in Notifier.post(n, bot: self?.notificationBot(n)) }
   }
 
   static var socketPath: String {
@@ -53,12 +53,22 @@ final class AppModel {
                          daemonInfo: LiveDaemonInfo(transport: t), thread: LiveThread(transport: t), prefs: DefaultsPreferences()), t)
   }
 
+  /// The waiting agent's bot for an approval notification.
+  func notificationBot(_ n: Notice) -> (traits: BotTraits, agentId: String)? {
+    guard case .approvalRequested(let aid, let runId, _) = n, let runId, let agentId = store.approvals[aid]?.agentId,
+          let t = bot(runId: runId, agentId: agentId) else { return nil }
+    return (t, agentId)
+  }
+
   static func live() -> AppModel {
     Notifier.requestAuthorization()
+    if Notifier.available { ApprovalNotifications.register() }
     guard let token = Keychain.token(), !token.isEmpty else {
       return AppModel(makeStore(token: ""), tokenMissing: true)   // not started: nothing to authenticate with
     }
-    let m = AppModel(makeStore(token: token)); m.store.start(); return m
+    let m = AppModel(makeStore(token: token)); m.store.start()
+    ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
+    return m
   }
 
   /// Saves the pasted token (generic password, service "capcomd", account NSUserName()) and reconnects with it.
@@ -214,13 +224,15 @@ enum Notifier {
     guard available else { return }
     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
   }
-  static func post(_ n: Notice) {
+  @MainActor static func post(_ n: Notice, bot: (traits: BotTraits, agentId: String)? = nil) {
     guard available else { return }
     let c = UNMutableNotificationContent()
     let id: String
     switch n {
     case .approvalRequested(let aid, _, let q):
       id = "approval-\(aid)"; c.title = "Approval needed"; c.body = q.plain   // plain text; notifications don't render markdown
+      c.categoryIdentifier = ApprovalNotifications.category; c.userInfo = ["approvalId": aid]
+      if let bot, let a = ApprovalNotifications.botAttachment(bot.traits, id: bot.agentId) { c.attachments = [a] }
     case .runFinished(let rid, let type, let title):
       id = "run-\(rid)-\(type)"; c.title = title
       c.body = type == "run.completed" ? "Run completed" : "Run failed"

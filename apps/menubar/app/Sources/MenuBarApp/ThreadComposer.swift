@@ -84,8 +84,8 @@ struct ThreadComposer: View {
     }
     .padding(Theme.Thread.inputPadding)
     .background {
-      let shape = RoundedRectangle(cornerRadius: Theme.Thread.inputRadius)
-      shape.fill(focused ? Theme.Composer.focusedFill : Theme.Composer.fill)
+      let shape = RoundedRectangle(cornerRadius: Theme.Thread.inputRadius, style: .continuous)
+      ControlSurface(shape: shape, fallback: focused ? Theme.Composer.focusedFill : Theme.Composer.fill)
         .overlay(shape.strokeBorder(Theme.Composer.focusedStroke, lineWidth: Theme.Composer.focusedStrokeWidth).opacity(focused ? 1 : 0))
         .background(shape.stroke(Theme.Composer.ring, lineWidth: Theme.Composer.ringWidth).padding(-Theme.Composer.ringWidth / 2).opacity(focused ? 1 : 0))
     }
@@ -137,7 +137,7 @@ struct ThreadComposer: View {
         }
         .foregroundStyle(Theme.Thread.chipText)
         .padding(Theme.Thread.chipPadding).frame(height: Theme.Thread.chipHeight)
-        .background(RoundedRectangle(cornerRadius: Theme.Thread.chipRadius).fill(Theme.Thread.chipFill))
+        .background(RoundedRectangle(cornerRadius: Theme.Thread.chipRadius, style: .continuous).fill(Theme.Thread.chipFill))
       }
     }
   }
@@ -149,7 +149,7 @@ struct ThreadComposer: View {
     } label: {
       Image(systemName: "plus").font(Theme.Composer.plusIcon).foregroundStyle(Theme.Composer.plusText)
         .frame(width: Theme.Thread.button, height: Theme.Thread.button)
-        .contentShape(RoundedRectangle(cornerRadius: Theme.Thread.plusRadius))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Thread.plusRadius, style: .continuous))
     }
     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()   // no borderless inset: centred on the first line
     .accessibilityLabel("Add")
@@ -160,7 +160,7 @@ struct ThreadComposer: View {
     Button(action: canStop ? stop : send) {
       ZStack {
         Circle().fill(canStop ? Theme.Thread.stopFill : ready ? Theme.accent : Theme.Composer.sendIdle)
-        if canStop { RoundedRectangle(cornerRadius: 1.5).fill(Color.black).frame(width: Theme.Thread.stopSquare, height: Theme.Thread.stopSquare) }
+        if canStop { RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(Color.black).frame(width: Theme.Thread.stopSquare, height: Theme.Thread.stopSquare) }
         else { Image(systemName: "arrow.up").font(Theme.Composer.sendIcon).foregroundStyle(ready ? Color.white : Theme.Composer.plusText) }
       }
       .frame(width: Theme.Thread.button, height: Theme.Thread.button)
@@ -241,9 +241,9 @@ struct ThreadComposer: View {
         .padding(.top, 3)
     }
     .padding(Theme.Thread.popPadding)
-    .background(RoundedRectangle(cornerRadius: Theme.Thread.popRadius).fill(Theme.Thread.popFill)
+    .background(RoundedRectangle(cornerRadius: Theme.Thread.popRadius, style: .continuous).fill(Theme.Thread.popFill)
       .shadow(color: Theme.Thread.popShadow, radius: Theme.Thread.popShadowRadius, y: Theme.Thread.popShadowY))
-    .overlay(RoundedRectangle(cornerRadius: Theme.Thread.popRadius).strokeBorder(Theme.Thread.popStroke, lineWidth: 0.5))
+    .overlay(RoundedRectangle(cornerRadius: Theme.Thread.popRadius, style: .continuous).strokeBorder(Theme.Thread.popStroke, lineWidth: 0.5))
     .padding(Theme.Thread.popMargin)
     .transition(.opacity)
   }
@@ -297,7 +297,7 @@ struct MentionRow: View {
       Text(status).font(Theme.Thread.mentionStatus).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionStatusText)
     }
     .padding(.horizontal, 8).frame(height: Theme.Thread.mentionHeight)
-    .background(RoundedRectangle(cornerRadius: Theme.Thread.rowRadius).fill(on ? Theme.Thread.rowHighlight : .clear))
+    .background(RoundedRectangle(cornerRadius: Theme.Thread.rowRadius, style: .continuous).fill(on ? Theme.Thread.rowHighlight : .clear))
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
   }
@@ -324,7 +324,7 @@ struct SkillRow: View {
       }
     }
     .padding(Theme.Thread.skillPadding)
-    .background(RoundedRectangle(cornerRadius: Theme.Thread.rowRadius).fill(on ? Theme.Thread.rowHighlight : .clear))
+    .background(RoundedRectangle(cornerRadius: Theme.Thread.rowRadius, style: .continuous).fill(on ? Theme.Thread.rowHighlight : .clear))
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
   }

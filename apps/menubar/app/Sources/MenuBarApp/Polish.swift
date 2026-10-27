@@ -4,7 +4,11 @@ import CapcomdBot
 
 /// A 1 pt ordered dither in brand orange: every other point lit. The footer hairlines (Polish board, item 5).
 struct DitherLine: View {
+  @Environment(\.colorSchemeContrast) private var contrast
   var body: some View {
+    if contrast == .increased { Rectangle().fill(Theme.Craft.contrastStroke).frame(height: 1).accessibilityHidden(true) } else { dots }
+  }
+  private var dots: some View {
     Canvas { ctx, size in
       var x: CGFloat = 0
       while x < size.width { ctx.fill(Path(CGRect(x: x, y: 0, width: 1, height: 1)), with: .color(Theme.Polish.dither)); x += 2 }
@@ -72,12 +76,14 @@ struct FinishSparkle: View {
   let endedAtMs: Int?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var visible = true
+  @State private var bounce = 0
   var body: some View {
     let fresh = endedAtMs.map { Double(Int(Date().timeIntervalSince1970 * 1000) - $0) / 1000 < Theme.Polish.sparkleWithin } ?? false
     if fresh && !reduceMotion {
       Image(systemName: "sparkle").font(.system(size: Theme.Polish.sparkle, weight: .semibold)).foregroundStyle(Theme.accent)
+        .symbolEffect(.bounce, value: bounce)   // one system bounce; macOS drops it with Reduce Motion
         .opacity(visible ? 1 : 0)
-        .onAppear { withAnimation(.easeOut(duration: Theme.Polish.sparkleFade).delay(0.4)) { visible = false } }
+        .onAppear { bounce += 1; withAnimation(.easeOut(duration: Theme.Polish.sparkleFade).delay(0.4)) { visible = false } }
         .accessibilityHidden(true)
     }
   }

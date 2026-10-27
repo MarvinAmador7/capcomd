@@ -110,7 +110,7 @@ struct ThreadHeader: View {
       Button { model.back() } label: {
         Image(systemName: "chevron.left").font(Theme.Drill.backIcon).foregroundStyle(Theme.Drill.switchOn)
           .frame(width: Theme.Drill.backSize, height: Theme.Drill.backSize)
-          .background(RoundedRectangle(cornerRadius: Theme.Drill.backRadius).fill(Theme.Drill.backFill))
+          .background(ControlSurface(shape: RoundedRectangle(cornerRadius: Theme.Drill.backRadius, style: .continuous), fallback: Theme.Drill.backFill))
       }
       .buttonStyle(PressableStyle()).accessibilityLabel("Back")
       .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }
@@ -164,7 +164,7 @@ struct ThreadItemView: View {
       HStack { Spacer()
         Text(verbatim: bytes.map { "Message sent (\($0) bytes)" } ?? "Message sent").font(Theme.body)
           .padding(.horizontal, 10).padding(.vertical, 6)
-          .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.07)))
+          .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
       }
     case .message(let from, _, let text, _) where from == "operator" && text != nil:
       SteerBubble(text: text!.plain)   // the operator's own words, right-aligned (.me)
@@ -177,7 +177,7 @@ struct ThreadItemView: View {
           if let a = attachment { Text(verbatim: a.label).font(Theme.chip).foregroundStyle(.tertiary) }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(outgoing ? 0.07 : 0.04)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(outgoing ? 0.07 : 0.04)))
         if !outgoing { Spacer() }
       }
     case .handoff(let childId, let name, let summary, let artifacts):
@@ -195,7 +195,7 @@ struct ThreadItemView: View {
           }
         }
         .padding(Theme.cardPadding)
-        .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.cardFill))
+        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.cardFill))
       }
       .buttonStyle(.plain)
     }

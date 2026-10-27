@@ -5,6 +5,7 @@ import CapcomdStore
 /// MenuBarExtra panel: project cards (SPEC §4.1). 380 pt wide on a HUD material.
 struct PanelView: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var listContent: CGFloat = 0
   @State private var footerHeight: CGFloat = 0
@@ -69,7 +70,7 @@ struct PanelView: View {
     .transaction(value: panelHeight) { $0.animation = nil }   // layout changes snap (SPEC §7); only content fades
     // MenuBarExtra(.window) sizes its window once; resize it ourselves, top edge pinned under the menu bar.
     .background(PanelWindowSizer(height: panelHeight))
-    .background(.ultraThinMaterial)   // HUD-style vibrancy; MenuBarExtra(.window) supplies the 16 pt rounded window
+    .background { if reduceTransparency { Theme.Craft.solidPanel } else { Rectangle().fill(.ultraThinMaterial) } }   // HUD vibrancy; solid with Reduce Transparency
     .animation(Theme.Motion.push(reduceMotion), value: model.path)   // keyboard back (⌘[) runs in a no-animation transaction
     }
   }
@@ -85,7 +86,7 @@ struct PanelView: View {
     }
     .padding(.horizontal, Theme.Footer.paddingHorizontal).padding(.vertical, Theme.Footer.paddingVertical)
     .frame(maxWidth: .infinity)
-    .background(Theme.Footer.material)
+    .background(ControlSurface(shape: Rectangle(), fallback: Theme.Footer.material))
     .overlay(alignment: .top) { DitherLine() }   // Polish board, item 5
   }
 }
@@ -96,6 +97,7 @@ struct PanelView: View {
 struct ProjectCard: View {
   @Environment(AppModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.colorSchemeContrast) private var contrast
   let project: Project
 
   var body: some View {
@@ -121,9 +123,10 @@ struct ProjectCard: View {
     .padding(.top, Theme.Card.paddingTop).padding(.horizontal, Theme.Card.paddingHorizontal).padding(.bottom, Theme.Card.paddingBottom)
     .background {
       // The tint crossfades (opacity only) instead of animating the fill colour.
-      let shape = RoundedRectangle(cornerRadius: Theme.cardRadius)
+      let shape = RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
       ZStack {
         shape.fill(Theme.cardFill).opacity(needsApproval ? 0 : 1)
+          .overlay(shape.strokeBorder(Theme.Craft.contrastStroke, lineWidth: Theme.Craft.contrastStrokeWidth).opacity(contrast == .increased && !needsApproval ? 1 : 0))
         shape.fill(Theme.Card.approvalFill)
           .overlay(shape.strokeBorder(Theme.Card.approvalStroke, lineWidth: Theme.Card.stroke))
           .opacity(needsApproval ? 1 : 0)

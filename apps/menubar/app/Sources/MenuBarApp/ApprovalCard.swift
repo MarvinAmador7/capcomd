@@ -42,9 +42,9 @@ struct ApprovalCard: View {
 
   private var buttons: some View {
     HStack(spacing: Theme.Approval.buttonGap) {
-      Button("Deny") { model.decide(approval.id, .deny) }
+      Button("Deny") { Haptics.decided(); model.decide(approval.id, .deny) }
         .buttonStyle(ApprovalButtonStyle(fill: Theme.Approval.denyFill))
-      Button("Approve") { model.decide(approval.id, .approve) }
+      Button("Approve") { Haptics.decided(); model.decide(approval.id, .approve) }
         .buttonStyle(ApprovalButtonStyle(fill: Theme.accent))
         .keyboardShortcut(.defaultAction)
     }
@@ -67,8 +67,9 @@ struct ApprovalButtonStyle: ButtonStyle {
     configuration.label
       .font(Theme.Approval.buttonFont).foregroundStyle(Theme.Approval.buttonText)
       .frame(maxWidth: .infinity).frame(height: Theme.Approval.buttonHeight)
-      .background(RoundedRectangle(cornerRadius: Theme.Approval.buttonRadius).fill(fill))
-      .contentShape(RoundedRectangle(cornerRadius: Theme.Approval.buttonRadius))
+      .background(ControlSurface(shape: RoundedRectangle(cornerRadius: Theme.Approval.buttonRadius, style: .continuous), fallback: fill,
+                                 tint: fill == Theme.accent ? Theme.accent : nil))   // Approve: the one tinted glass
+      .contentShape(RoundedRectangle(cornerRadius: Theme.Approval.buttonRadius, style: .continuous))
       .modifier(PressFeedback(isPressed: configuration.isPressed))
   }
 }

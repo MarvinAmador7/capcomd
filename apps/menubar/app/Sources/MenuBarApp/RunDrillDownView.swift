@@ -62,7 +62,7 @@ struct DrillHeader: View {
       Button { model.back() } label: {
         Image(systemName: "chevron.left").font(Theme.Drill.backIcon).foregroundStyle(Theme.Drill.switchOn)
           .frame(width: Theme.Drill.backSize, height: Theme.Drill.backSize)
-          .background(RoundedRectangle(cornerRadius: Theme.Drill.backRadius).fill(Theme.Drill.backFill))
+          .background(ControlSurface(shape: RoundedRectangle(cornerRadius: Theme.Drill.backRadius, style: .continuous), fallback: Theme.Drill.backFill))
       }
       .buttonStyle(PressableStyle()).accessibilityLabel("Back")
       .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }
@@ -120,7 +120,7 @@ struct StepBar: View {
   let steps: [Step]
   var body: some View {
     HStack(spacing: Theme.Drill.barGap) {
-      ForEach(steps) { s in RoundedRectangle(cornerRadius: Theme.Drill.barRadius).fill(color(s.status)).frame(height: Theme.Drill.barHeight) }
+      ForEach(steps) { s in RoundedRectangle(cornerRadius: Theme.Drill.barRadius, style: .continuous).fill(color(s.status)).frame(height: Theme.Drill.barHeight) }
     }
     .accessibilityHidden(true)
   }
@@ -224,8 +224,8 @@ struct ActivityView: View {
         .overlay(alignment: .leading) { Rectangle().fill(Theme.Drill.chevronDivider).frame(width: 0.5) }
     }
     .frame(height: Theme.Drill.stripHeight)
-    .background(RoundedRectangle(cornerRadius: Theme.Drill.stripRadius).fill(Theme.Drill.stripFill))
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Drill.stripRadius))
+    .background(RoundedRectangle(cornerRadius: Theme.Drill.stripRadius, style: .continuous).fill(Theme.Drill.stripFill))
+    .clipShape(RoundedRectangle(cornerRadius: Theme.Drill.stripRadius, style: .continuous))
     .padding(.top, Theme.Drill.stripTop)
   }
 
@@ -279,7 +279,7 @@ struct StripCell: View {
   var body: some View {
     StepIcon(runId: runId, step: step)
       .frame(width: Theme.Drill.cell, height: Theme.Drill.cell)
-      .background(RoundedRectangle(cornerRadius: Theme.Drill.cellRadius)
+      .background(RoundedRectangle(cornerRadius: Theme.Drill.cellRadius, style: .continuous)
         .fill(step.status == .running ? Theme.Drill.cellNow : hover ? Theme.Drill.cellHover : .clear))
       .onHover { hover = $0 }
       .accessibilityElement(children: .ignore)
@@ -463,7 +463,7 @@ struct DetailPane: View {
     }
     .padding(Theme.Drill.segInset)
     .frame(width: Theme.Drill.segWidth)
-    .background(RoundedRectangle(cornerRadius: Theme.Drill.segRadius).fill(Theme.Drill.segFill))
+    .background(RoundedRectangle(cornerRadius: Theme.Drill.segRadius, style: .continuous).fill(Theme.Drill.segFill))
     .padding(Theme.Drill.segPadding)
   }
 
@@ -472,7 +472,7 @@ struct DetailPane: View {
     return Button { withAnimation(Theme.Motion.ease(reduceMotion)) { model.detailTab = tab } } label: {
       Text(title).font(Theme.Drill.segFont).foregroundStyle(on ? Theme.Drill.switchOn : Theme.Drill.segOff)
         .frame(maxWidth: .infinity).frame(height: Theme.Drill.segItemHeight)
-        .background(RoundedRectangle(cornerRadius: Theme.Drill.segItemRadius).fill(on ? Theme.Drill.segOnFill : .clear)
+        .background(RoundedRectangle(cornerRadius: Theme.Drill.segItemRadius, style: .continuous).fill(on ? Theme.Drill.segOnFill : .clear)
           .shadow(color: .black.opacity(on ? 0.3 : 0), radius: 1, y: 1))
         .contentShape(Rectangle())
     }
@@ -512,7 +512,7 @@ struct DetailPane: View {
     }
     .padding(Theme.Drill.tailPadding)
     .frame(height: Theme.Drill.tailHeight, alignment: .top)
-    .background(RoundedRectangle(cornerRadius: Theme.Drill.tailRadius).fill(Theme.Drill.tailFill))
+    .background(RoundedRectangle(cornerRadius: Theme.Drill.tailRadius, style: .continuous).fill(Theme.Drill.tailFill))
     .padding(.bottom, Theme.Drill.paneHeight - Theme.Drill.tailHeight)   // .pane is 94; its .tail box is 84
   }
 
@@ -600,7 +600,7 @@ struct DrillFooter: View {
     }
     .padding(Theme.Drill.footerPadding)
     .frame(maxWidth: .infinity)
-    .background(Theme.Footer.material)
+    .background(ControlSurface(shape: Rectangle(), fallback: Theme.Footer.material))
     .overlay(alignment: .top) { DitherLine() }
   }
 
@@ -630,7 +630,7 @@ struct DrillFooter: View {
     Button(action: run) {
       Text(title).font(Theme.Drill.actionFont).foregroundStyle(Theme.Drill.actionText)
         .padding(.horizontal, Theme.Drill.actionPadding).frame(height: Theme.Drill.actionHeight)
-        .background(RoundedRectangle(cornerRadius: Theme.Drill.actionRadius).fill(fill))
+        .background(RoundedRectangle(cornerRadius: Theme.Drill.actionRadius, style: .continuous).fill(fill))
     }
     .buttonStyle(PressableStyle())
   }
