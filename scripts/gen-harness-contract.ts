@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { z } from "zod";
-import { ACTIVITY_DOC, ApiError, ATTACHMENT_CONTENT_DOC, BINARY_ROUTES, contract, ERROR_STATUSES, EventData, LIFECYCLE_DOC, StreamFrames, STREAM_DOC, THREAD_DOC, THREAD_STREAM_DOC, WORKSPACE_FILE_DOC } from "../src/api/contract";
+import { ACTIVITY_DOC, ApiError, CAPABILITIES, CAPABILITY_NAMES, ATTACHMENT_CONTENT_DOC, BINARY_ROUTES, contract, ERROR_STATUSES, EventData, LIFECYCLE_DOC, StreamFrames, STREAM_DOC, THREAD_DOC, THREAD_STREAM_DOC, WORKSPACE_FILE_DOC } from "../src/api/contract";
 import { Block, Inline, Link, ListItem, MediaSource, THREAD_FORMAT, ThreadItem, threadItemJsonSchema } from "../packages/agent-thread/src/index";
 import { HarnessEvent, TIMESTAMP_DOC, TIMESTAMP_PATTERN } from "../src/api/envelope";
 import { AgentWorkspace, WORKSPACE_DOC } from "../src/api/workspace";
@@ -121,6 +121,9 @@ const walk = (node: any, name: string[]): void => {
 	for (const [k, v] of Object.entries(node)) walk(v, [...name, k]);
 };
 walk(contract, []);
+hc += "\n## Capabilities\n\n`GET /v1/health` returns `capabilities`: one name per feature added after harness.v1 first shipped. A client feature-detects by checking for the name ";
+hc += "before it offers the feature (a daemon without the field has none of them), and ignores names it doesn't know. A name is never reused for something else.\n\n| Capability | What it means |\n|---|---|\n";
+for (const k of CAPABILITY_NAMES) hc += `| \`${k}\` | ${CAPABILITIES[k]} |\n`;
 hc += "\n## Event envelope\n\nEvery SSE event and replayed event has this shape. `seq` is persisted per scope in the same transaction as the event write, ";
 hc += "so it is a stable resume cursor across daemon restarts; `(entity, entitySeq)` is the exactly-once dedupe key. ";
 hc += "Today's upper-case types map to dotted names (`AGENT_SPAWNED` → `agent.spawned`); the CLI's `capcomd.v1` output is unchanged.\n\n";

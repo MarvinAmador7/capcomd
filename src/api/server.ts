@@ -5,7 +5,8 @@
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
@@ -55,7 +56,7 @@ export function harnessApp(o: ServerOptions) {
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
 	const router = {
-		health: os.health.handler(() => ({ ok: true as const, api: "harness.v1" as const, version: src.version })),
+		health: os.health.handler(() => ({ ok: true as const, api: "harness.v1" as const, version: src.version, capabilities: [...CAPABILITY_NAMES] })),
 		projects: { list: os.projects.list.handler(() => src.projects()) },
 		runs: {
 			list: os.runs.list.handler(() => src.runs()),
@@ -274,20 +275,42 @@ export function harnessApp(o: ServerOptions) {
 		});
 	}
 
+	// Agent controls (capability agent.pause): the agent and its descendants, through the same paths as `capcomd pause|resume <runId> <agt>`.
+	for (const action of ["pause", "resume"] as const) {
+		app.post(`/v1/runs/:runId/agents/:agentId/${action}`, (c) => {
+			const runId = c.req.param("runId"), agentId = c.req.param("agentId");
+			return idempotent(c, [`agents.${action}`, runId, agentId], async (client) => {
+				const agents = await src.agents(runId);
+				if (agents === null) return gone(`run ${runId}`);
+				if (!agents.some((x) => x.id === agentId)) return gone(`agent ${agentId}`);
+				const r = await src.control(runId, action, `client:${client.clientId}`, agentId);
+				if (r.noop) return { status: 409, body: { code: "conflict", message: r.noop } };
+				return { status: 200, body: { runId, agentId, action, changed: r.changed, pending: r.pending } };
+			});
+		});
+	}
+
 	app.post("/v1/runs/:runId/agents/:agentId/messages", async (c) => {
 		const runId = c.req.param("runId"), agentId = c.req.param("agentId");
-		const raw = await c.req.json().catch(() => null) as { body?: unknown } | null;
-		if (!raw || typeof raw.body !== "string" || !raw.body.length) return err(c, 422, "invalid", "body must be {body: non-empty string}");
+		const raw = await c.req.json().catch(() => null) as { body?: unknown; skills?: unknown } | null;
+		if (!raw || typeof raw.body !== "string" || !raw.body.length) return err(c, 422, "invalid", "body must be {body: non-empty string, skills?: [name]}");
 		if (Buffer.byteLength(raw.body) > MESSAGE_BODY_MAX_BYTES) return err(c, 422, "invalid", `body is over ${MESSAGE_BODY_MAX_BYTES} bytes`);
+		if (raw.skills !== undefined && (!Array.isArray(raw.skills) || raw.skills.some((x) => typeof x !== "string" || !x))) return err(c, 422, "invalid", "skills must be a list of skill names from GET /v1/skills");
 		const body = raw.body;
-		return idempotent(c, ["agents.send", runId, agentId, body], async (client, key) => {
+		const names = (raw.skills ?? []) as string[];
+		// Skills are part of the request: the same key with other skills is idempotency_conflict, like another body. A
+		// request without skills hashes as before skill attach, so a retry across the upgrade still replays.
+		return idempotent(c, ["agents.send", runId, agentId, body, ...(names.length ? [names] : [])], async (client, key) => {
 			const agents = await src.agents(runId);
 			if (agents === null) return gone(`run ${runId}`);
 			const a = agents.find((x) => x.id === agentId);
 			if (!a) return gone(`agent ${agentId}`);
 			if (ENDED.has(a.status)) return { status: 409, body: { code: "conflict", message: `${agentId} is ${a.status}: nothing will read this message` } };
+			// Read here (not before the key check), so a replay still answers after a skill is removed.
+			const sk = await resolveSkills(names, { read: (n) => src.skill(n) });
+			if ("error" in sk) return { status: 422, body: { code: "invalid", message: sk.error } };
 			// The scope's own message key: a retry after a daemon restart (or after the 24h key window) still sends once.
-			const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`);
+			const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`, sk.skills);
 			return { status: 200, body: { runId, to: agentId, from: "operator", seq: r.seq, note: r.note } };
 		});
 	});

@@ -12,6 +12,7 @@ import { readFileSync } from "fs";
 import { StuckWatch, type Stuck } from "./stuck";
 import { threadBuilder, type ItemDraft } from "../../packages/agent-thread/src/index";
 import type { ThreadAttachment } from "../actors/scope";
+import { withSkills, type AttachedSkill } from "./skills";
 
 /** Where an agent's checkpoints are pushed (ADR-019 §3); deleted once its work merges. */
 export const checkpointRef = (agentId: string) => `refs/capcomd/checkpoints/${agentId}`;
@@ -78,7 +79,7 @@ export interface AgentRunOptions {
    * records it and answers with a limit to stop at (e.g. "max_budget_usd") when a budget is over, else null, and
    * when the agent was last given more budget (a new grant resets the stuck window).
    */
-  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => Promise<{ stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string }[] }>;
+  onSpend?: (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => Promise<{ stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] }>;
   /**
    * ADR-019 §1: reports from the in-VM supervisor: heartbeats while it is alive, and checkpoints (already pushed to
    * `ref`). A VM without node has no supervisor; heartbeats then come from the agent CLI's own events.
@@ -135,10 +136,13 @@ const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turn
 export const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 export const SECRET_PLACEHOLDER_PREFIX = "bxds_";
 
+/** Messages up to this many bytes are appended to the VM's inbox with one shell command; longer ones are uploaded. */
+const INLINE_APPEND_MAX = 32 * 1024;
+
 /** A message sent to a running agent (`capcomd send`), as the agent reads it: from its parent or the operator. */
-export function messageText(m: { from: string; body: string }): string {
+export function messageText(m: { from: string; body: string; skills?: AttachedSkill[] }): string {
   const who = m.from === "operator" || m.from === "driver" ? "the operator" : `agent ${m.from} (your parent or an ancestor)`;
-  return `Message from ${who}, sent while you work (capcomd send):\n\n${m.body}`;
+  return `Message from ${who}, sent while you work (capcomd send):\n\n${withSkills(m.body, m.skills)}`;
 }
 
 /** An event as `capcomd logs` lines: its tool calls, failed results, text and final result. */
@@ -515,7 +519,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         const msgs = (rep?.messages ?? []).filter((m) => m.seq > inboxSeq);
         if (msgs.length) {
           const lines = msgs.map((m) => JSON.stringify({ seq: m.seq, text: messageText(m) })).join("\n") + "\n";
-          const put = await sh(`printf %s ${sq(lines)} >> ${sq(inboxFile)}`).catch(() => null);
+          // A long one (a big body, attached skills) goes up as a file: a shell argument can't hold it (128 KB on Linux).
+          const part = `${inboxFile}.part`;
+          const put = Buffer.byteLength(lines) <= INLINE_APPEND_MAX
+            ? await sh(`printf %s ${sq(lines)} >> ${sq(inboxFile)}`).catch(() => null)
+            : await provider.upload(vmId, part, new TextEncoder().encode(lines)).then(() => sh(`cat ${sq(part)} >> ${sq(inboxFile)} && rm -f ${sq(part)}`)).catch(() => null);
           if (put && !put.code) {
             inboxSeq = Math.max(...msgs.map((m) => m.seq));
             watch.reset(now());

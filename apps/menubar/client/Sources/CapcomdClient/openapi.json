@@ -8,7 +8,7 @@
     "/v1/health": {
       "get": {
         "operationId": "health",
-        "description": "Liveness; no token needed.",
+        "description": "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md).",
         "responses": {
           "200": {
             "description": "OK",
@@ -25,6 +25,13 @@
                     },
                     "version": {
                       "type": "string"
+                    },
+                    "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -1240,6 +1247,339 @@
         }
       }
     },
+    "/v1/runs/{runId}/pause": {
+      "post": {
+        "operationId": "runs.pause",
+        "description": "Pause every pending or running agent of the run (no body). An agent that hasn't started is paused now (`changed`); a running one is asked to stop (`pending`): at its next check it stops, its work is committed and pushed to its branch, and it is paused. Confirmed by agent.paused per agent and run.paused once every live agent is paused. 409 `conflict` when no agent is pending or running. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "enum": [
+                        "pause",
+                        "resume",
+                        "cancel"
+                      ],
+                      "type": "string"
+                    },
+                    "changed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Agents this call changed now. Each is confirmed by agent.paused / agent.resumed / agent.cancelled on the run stream"
+                    },
+                    "pending": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "pause only (else empty): running agents asked to stop. Each stops at its next check with its work pushed to its branch, confirmed by agent.paused (or agent.done / agent.failed when it finished first)"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "action",
+                    "changed",
+                    "pending"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/resume": {
+      "post": {
+        "operationId": "runs.resume",
+        "description": "Run every paused agent of the run again now (no body): paused here, with `capcomd pause`, or by a provider usage limit (that login's recorded limit is cleared). Each continues from its work on its branch as its next attempt. Confirmed by agent.resumed per agent and run.resumed. 409 `conflict` when no agent is paused. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "enum": [
+                        "pause",
+                        "resume",
+                        "cancel"
+                      ],
+                      "type": "string"
+                    },
+                    "changed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Agents this call changed now. Each is confirmed by agent.paused / agent.resumed / agent.cancelled on the run stream"
+                    },
+                    "pending": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "pause only (else empty): running agents asked to stop. Each stops at its next check with its work pushed to its branch, confirmed by agent.paused (or agent.done / agent.failed when it finished first)"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "action",
+                    "changed",
+                    "pending"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/cancel": {
+      "post": {
+        "operationId": "runs.cancel",
+        "description": "Stop the run (no body): every agent that hasn't ended is cancelled and its VM destroyed (`capcomd cancel <runId>`). Confirmed by agent.cancelled per agent and run.cancelled. 409 `conflict` when nothing is left to cancel. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "enum": [
+                        "pause",
+                        "resume",
+                        "cancel"
+                      ],
+                      "type": "string"
+                    },
+                    "changed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Agents this call changed now. Each is confirmed by agent.paused / agent.resumed / agent.cancelled on the run stream"
+                    },
+                    "pending": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "pause only (else empty): running agents asked to stop. Each stops at its next check with its work pushed to its branch, confirmed by agent.paused (or agent.done / agent.failed when it finished first)"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "action",
+                    "changed",
+                    "pending"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/runs/{runId}/agents": {
       "get": {
         "operationId": "agents.tree",
@@ -1862,6 +2202,400 @@
                 "schema": {
                   "type": "string",
                   "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/agents/{agentId}/messages": {
+      "post": {
+        "operationId": "agents.send",
+        "description": "Steer: send the agent a message from the operator (`capcomd send <runId> <agt> <text>`). Returns the thread `seq`; the message.sent event on the run stream with the same `data.seq` (and `data.to` = agentId) confirms it, so a client can match its optimistic bubble. 409 `conflict` when the agent has ended (nothing would read it). 422 `invalid` when `body` is empty or over 1048576 bytes, or a skill is unknown or too many. The same key with other `skills` is another request (409 `idempotency_conflict`). Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Message text (UTF-8, at most 1048576 bytes). Delivered to a running Claude agent at its next step; a Codex agent reads it only from its inbox (see note)"
+                  },
+                  "skills": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Capability steer.skills. Names from GET /v1/skills (at most 8; a repeated name is sent once): the agent gets each skill's SKILL.md with the message. An unknown name, or SKILL.md files over 262144 bytes together, is 422 `invalid` and sends nothing. The confirming message.sent echoes them as data.skills"
+                  }
+                },
+                "required": [
+                  "body"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string",
+                      "description": "The agent the message was sent to"
+                    },
+                    "from": {
+                      "type": "string",
+                      "description": "Sender as threads show it: operator"
+                    },
+                    "seq": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "exclusiveMinimum": 0,
+                      "description": "Thread message seq. The confirming message.sent event carries the same value as data.seq (with data.to = the agent), as does Message.seq in GET /v1/runs/{runId}/messages and snapshot.threads"
+                    },
+                    "note": {
+                      "description": "When the agent won't read it right away (a Codex agent reads messages only from its inbox); null when it will",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "to",
+                    "from",
+                    "seq",
+                    "note"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/agents/{agentId}/pause": {
+      "post": {
+        "operationId": "agents.pause",
+        "description": "Capability agent.pause. Pause one agent and its descendants (no body), as `capcomd pause <runId> <agt>`; the rest of the run keeps working. One that hasn't started is paused now (`changed`); a running one is asked to stop (`pending`): at its next check (about every 2 s) it stops, its work is committed and pushed to its branch (`Capcomd-Stop: paused`), and it is paused. Confirmed by agent.paused per agent (data.result.limit \"paused\", data.result.by client:<id>). The run's own state follows its agents: run.paused when this leaves every live agent of the run paused, else the run stays running. 409 `conflict` when neither the agent nor any descendant is pending or running. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "agentId": {
+                      "type": "string",
+                      "description": "The agent the call named; changed and pending may also list its descendants"
+                    },
+                    "action": {
+                      "enum": [
+                        "pause",
+                        "resume"
+                      ],
+                      "type": "string"
+                    },
+                    "changed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Agents this call changed now (the agent and its descendants, target first). Each is confirmed by agent.paused / agent.resumed on the run stream"
+                    },
+                    "pending": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "pause only (else empty): running agents asked to stop. Each stops at its next check with its work pushed to its branch, confirmed by agent.paused (or agent.done / agent.failed when it finished first)"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "agentId",
+                    "action",
+                    "changed",
+                    "pending"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/agents/{agentId}/resume": {
+      "post": {
+        "operationId": "agents.resume",
+        "description": "Capability agent.pause. Run the agent and its paused descendants again now (no body), as `capcomd resume <runId> <agt>`: paused here, by a run pause, or by a provider usage limit (that login's recorded limit is cleared). Each continues from its work on its branch as its next attempt. Confirmed by agent.resumed per agent, and run.resumed when the run was paused. 409 `conflict` when neither the agent nor any descendant is paused. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "agentId": {
+                      "type": "string",
+                      "description": "The agent the call named; changed and pending may also list its descendants"
+                    },
+                    "action": {
+                      "enum": [
+                        "pause",
+                        "resume"
+                      ],
+                      "type": "string"
+                    },
+                    "changed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Agents this call changed now (the agent and its descendants, target first). Each is confirmed by agent.paused / agent.resumed on the run stream"
+                    },
+                    "pending": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "pause only (else empty): running agents asked to stop. Each stops at its next check with its work pushed to its branch, confirmed by agent.paused (or agent.done / agent.failed when it finished first)"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "agentId",
+                    "action",
+                    "changed",
+                    "pending"
+                  ]
                 }
               }
             }
@@ -2849,9 +3583,11 @@
               "not_found",
               "already_decided",
               "idempotency_conflict",
+              "conflict",
               "invalid",
               "internal"
-            ]
+            ],
+            "description": "conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended)"
           },
           "message": {
             "type": "string"
@@ -3362,8 +4098,12 @@
       "AgentPausedData": {
         "type": "object",
         "properties": {
-          "result": {},
-          "until": {},
+          "result": {
+            "description": "Why: limit \"quota\" (a provider usage limit; resetAt, login) or \"paused\" (the operator: `by` is operator or client:<id>); branch/commit: the work it kept"
+          },
+          "until": {
+            "description": "When it resumes by itself (epoch ms); null when it waits for a resume"
+          },
           "cause": {
             "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
             "type": "string"
@@ -3599,6 +4339,13 @@
               "mediaType"
             ],
             "additionalProperties": {}
+          },
+          "skills": {
+            "description": "Names of the skills sent with the message (POST …/messages `skills`, `capcomd send --skill`); the agent got each one's SKILL.md with it. Empty when none; absent on events from before skill attach",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
