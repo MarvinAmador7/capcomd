@@ -154,7 +154,12 @@ public struct Run: Sendable, Hashable, Identifiable {
   public static let startGraceMs = 5 * 60_000
   /// Lifecycle states win; otherwise the daemon's own state, then its agents. The daemon snapshot says `idle` for a run
   /// whose agents all ended (it doesn't replay run.completed), so their statuses tell how it ended.
+  /// Approvals still waiting on a person for this run (set by the store when it builds the cards).
+  public var waitingApprovals = 0
   public func outcome(nowMs: Int) -> Outcome {
+    // An approval waiting on a person keeps the run active even after its agents ended (a merge parked on a protected
+    // target): otherwise its card, and the card's Approve / Deny, left the panel while the badge still counted it.
+    if waitingApprovals > 0, !["cancelled", "deleted", "failed"].contains(state) { return .active }
     switch state {
     case "completed": return .done
     case "failed": return .failed

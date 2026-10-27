@@ -6,7 +6,7 @@
 // is paused, run.resumed when one resumes, and run.completed / run.failed / run.cancelled when the last live agent ends
 // (always run.cancelled when a run-wide cancel ended it).
 import { z } from "zod";
-import { approvalIdFor, toEnvelope, type RawEvent } from "./source";
+import { approvalIdFor, mergeApprovalText, toEnvelope, type RawEvent } from "./source";
 import { dottedType, type HarnessEvent } from "./envelope";
 
 /** Trusted, machine-readable reason for a state change. Agent-written detail (cancel reason, error) stays in its own untrusted field. */
@@ -66,10 +66,10 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 		}
 		if (t === "RUN_DELETED" || t === "run.deleted") { runEvt({ ...e, agentId: null }, "run.deleted", "deleted"); run = "ended"; continue; }
 		if (t === "MERGE_AWAITING_APPROVAL") {
-			const d = e.data as any;
+			const d = e.data as any, text = mergeApprovalText(d);
 			const env = toEnvelope(runId, { ...e, type: "approval.requested", data: {
-				approvalId: approvalIdFor(runId, String(d.id)), kind: "merge", question: `Merge ${d.ref ?? "this work"} into ${d.target ?? "the target"}?`,
-				requestedBy: { agentId: e.agentId, runId }, subject: { target: d.target ?? null, ref: d.ref ?? null }, expiresAt: null, cause: "approval_needed",
+				approvalId: approvalIdFor(runId, String(d.id)), kind: "merge", question: text.question,
+				requestedBy: { agentId: e.agentId, runId }, subject: text.subject, expiresAt: null, cause: "approval_needed",
 			} }, next(k), projectId);
 			out.push(env); continue;
 		}

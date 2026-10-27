@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: an approval that's still waiting keeps its project's card under Active, even after its agents have
+  finished; before, the card moved to Recent and took its Approve / Deny with it, while the menu bar still counted it.
+- Approvals for an agent's merge read "Merge this agent's work into main?" and name the branch, instead of the agent's
+  id ("Merge agt-mvqa… into main?").
 - Fix: a client on the daemon or project event stream (the menu bar app) could overload the engine until `capcomd
   serve` gave up on it ("engine on :6420 stopped answering") when the daemon's state remembered runs its run list no
   longer shows. Each such run is now checked once instead of twice a second, the stream never starts a new check

@@ -98,7 +98,9 @@ public final class CapcomdStore {
     func goalKey(_ r: Run) -> String? { r.goal.map { $0.plain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() } }
     var newestGoal: [String: (key: String, at: Int)] = [:]
     for r in runs.values { if let g = goalKey(r), let p = r.projectId, r.recencyMs >= (newestGoal[p]?.at ?? .min) { newestGoal[p] = (g, r.recencyMs) } }
-    let grouped = Dictionary(grouping: runs.values) { r -> String in
+    let waiting = Dictionary(grouping: pendingApprovals.filter { if case .decided = $0.decision { return false }; return true }, by: \.runId)
+    let withApprovals = runs.values.map { r -> Run in var r = r; r.waitingApprovals = waiting[r.id]?.count ?? 0; return r }
+    let grouped = Dictionary(grouping: withApprovals) { r -> String in
       guard let p = r.projectId else { return r.id }
       guard let g = goalKey(r) ?? newestGoal[p]?.key else { return r.id }
       return "\(p)|\(Self.fnv1a(g))"
