@@ -1,6 +1,7 @@
 # Proposal: capcomd × Hermes, beyond MCP and skills
 
-Status: **draft** (not an ADR). Builds on the base integration (`capcomd setup agent` registers `capcomd mcp` in
+Status: **draft** (not an ADR); **P1, P1b and P3 are built** (branch `feat/hermes-elicit-approvals`, see
+[integration-agents.md#hermes](../integration-agents.md#hermes)). Builds on the base integration (`capcomd setup agent` registers `capcomd mcp` in
 Hermes and installs the skills; [integration-agents.md#hermes](../integration-agents.md#hermes)).
 
 Everything about Hermes below was checked in [NousResearch/hermes-agent] at commit
@@ -46,6 +47,13 @@ instructions, prompts or skills unreviewed; no token with `approve` sits where H
 
 ### P1. Approve merges from the chat, asked by capcomd itself (elicitation)
 
+**Built** (`feat/hermes-elicit-approvals`): `driver.approvals: "elicit"`, `driver.elicitTimeoutSeconds` (default
+300), `driver.elicitClients` (setup writes `["hermes-agent"]`; unset means any client but `claude-code`);
+`capcomd_approve` carries `_meta["anthropic/requiresUserInteraction"]` and no `idempotentHint`; the decision is
+recorded `by: "driver:elicited"`, with the client and the commit shown in kv `approval/<mrgId>` (not in the event:
+the published `merge.approved` payload is unchanged). Hermes's entry gets `timeout: 360` when it has none, so a call
+outlives the prompt. Still open: whether PreToolUse hooks can clear `requiresUserInteraction`.
+
 Today's `client-confirmed` trusts Hermes's trust prompt, which `/yolo`, `approvals.mode: off` and an earlier
 "Always" answer all skip. Proposed: a third `driver.approvals` value, **`elicit`**. `capcomd_approve` then sends
 `elicitation/create` (form mode, empty schema) with capcomd's own text: run, merge id, target, the checks that
@@ -79,6 +87,12 @@ declare the `elicitation` capability gets today's `forbidden` answer.
 
 ### P1b. One Hermes entry for all projects (decided, 2026-10-27)
 
+**Built** (`feat/hermes-elicit-approvals`): `projects: {default, list: [{name, path}]}` in the user config; a call for
+a project other than the server's own checkout is answered by a `capcomd mcp` started in that checkout (one per
+project, on demand; the client's name and form elicitation pass through), so each project's config, policy and
+profiles apply unchanged. Run-scoped tools default to the run's project. `--hermes-entry-per-project` and
+`--default-project` on `setup agent`.
+
 Replace the base integration's one-folder `cwd` with a project argument: a single `mcp_servers.capcomd` entry with no
 pinned `cwd`; `capcomd setup agent` in a repo adds it to capcomd's project list instead of moving the entry; tools take
 an optional `project` (default: the configured default, or the only project); a `capcomd_projects` tool lists them;
@@ -108,6 +122,9 @@ that chat continues in a session that has the context, and the approval goes thr
   public HTTPS URL, so loopback webhooks first.
 
 ### P3. Recipes: scheduled runs, digests, narration (no new code)
+
+**Documented** in [integration-agents.md#recipes-no-new-code](../integration-agents.md#recipes-no-new-code). There is
+no `capcomd runs` command yet; the digest reads the runs index (`~/.capcomd/state/runs.jsonl`) and `capcomd status`.
 
 - Nightly run: a Hermes cron job "Use capcomd to fix flaky tests, land on `capcomd/nightly`, report" with the
   capcomd skills attached, delivered to Telegram. Cron is unattended, so merge/approve prompts are refused: a run

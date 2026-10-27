@@ -83,3 +83,13 @@ export async function deleteRemoteRef(cfg: MergeConfig, ref: string): Promise<bo
   const res = await new Git(dir).run(["push", "--porcelain", cfg.remote, `:${ref}`]);
   return res.code === 0 || /remote ref does not exist|unable to delete .*: remote ref does not exist/.test(res.stdout + res.stderr);
 }
+
+/** The commit a branch points at on the remote (no clone needed), or null when it doesn't exist. Throws when git fails. */
+export async function remoteBranchSha(cfg: MergeConfig, branch: string, timeoutMs = 30_000): Promise<string | null> {
+  const dir = join(cfg.workdir, createHash("sha1").update(cfg.remote).digest("hex").slice(0, 12), "_refs");
+  if (!existsSync(join(dir, ".git"))) { mkdirSync(dir, { recursive: true }); await new Git(dir).ok(["init", "-q"]); }
+  const res = await new Git(dir).run(["ls-remote", cfg.remote, `refs/heads/${branch}`], { timeoutMs });
+  if (res.code !== 0) throw new Error(`git ls-remote failed${res.timedOut ? " (timed out)" : ""}: ${(res.stderr || res.stdout).trim().slice(-300)}`);
+  const sha = res.stdout.trim().split(/\s+/)[0];
+  return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}

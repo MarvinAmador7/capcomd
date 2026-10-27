@@ -382,48 +382,84 @@ export async function agentIntegrationStep(p: Prompter, v: Values, cwd = process
 }
 
 /**
- * 3b. capcomd in Hermes, when Hermes is installed: `capcomd mcp` in its config.yaml (mcp_servers.capcomd, in this
- * project's checkout, `trust: untrusted` so Hermes asks before merge/cancel/approve), the capcomd skills in its
- * skills directory, and who approves merges into protected branches (asked; a person, unless the user says Hermes
- * may after asking them). Null when there's no Hermes.
+ * 3b. capcomd in Hermes, when Hermes is installed: `capcomd mcp` in its config.yaml (one mcp_servers.capcomd entry for
+ * all projects, `trust: untrusted` so Hermes asks before merge/cancel/approve), this checkout added to capcomd's
+ * project list, the capcomd skills in its skills directory, and who approves merges into protected branches (asked:
+ * capcomd asks you itself in Hermes (elicit, recommended), or you in a terminal). Null when there's no Hermes.
  */
 export async function hermesStep(p: Prompter, v: Values, cwd = process.cwd(), machine: KeyDeps["machine"] = realKeyDeps.machine): Promise<Step | null> {
   const H = await import("./hermes");
+  const P = await import("../../config/projects");
   const h = H.detectHermes();
   if (!h.found) return null;
-  if (v.approvals !== undefined && v.approvals !== "human" && v.approvals !== "client-confirmed") return { step: "hermes", ok: false, detail: `--approvals ${String(v.approvals)}?`, hint: "--approvals human (you approve with `capcomd approve`) or client-confirmed (Hermes approves after asking you)." };
+  if (v.approvals !== undefined && !["human", "elicit", "client-confirmed"].includes(String(v.approvals))) return { step: "hermes", ok: false, detail: `--approvals ${String(v.approvals)}?`, hint: "--approvals elicit (capcomd asks you itself in Hermes; recommended) or human (you run `capcomd approve`). client-confirmed still works but isn't recommended." };
   const where = `${H.tilde(h.home)}${h.profile ? ` (profile ${h.profile})` : ""}`;
   if (!h.homeExists) return { step: "hermes", ok: false, detail: `Hermes is installed (${h.bin}) but not set up yet (no ${H.tilde(h.home)})`, hint: "Run `hermes setup` once, then `capcomd setup agent`." };
   if (!(await p.confirm(`Add capcomd to Hermes in ${where} (its MCP tools and skills)?`, true))) return { step: "hermes", ok: true, detail: "skipped" };
   const cfg = H.readHermesConfig(h.config);
   if (!cfg.ok) return { step: "hermes", ok: false, detail: `can't read ${H.tilde(h.config)}: ${cfg.error}; left it as it is`, hint: "Fix the file (Hermes can't read it either), then run `capcomd setup agent` again." };
-  // The project whose settings Hermes's capcomd uses: this checkout's .capcomd/config.json (not capcomd's own config).
+  // The project this checkout is: its .capcomd/config.json (not capcomd's own config).
   const projPath = projectConfigPath(cwd);
   const project = projPath && resolve(projPath) !== resolve(userConfigPath()) ? dirname(dirname(projPath)) : null;
-  const entry = { ...H.capcomdMcpCommand(), ...(project ? { cwd: project } : {}), ...(process.env.CAPCOMD_HOME ? { env: { CAPCOMD_HOME: resolve(process.env.CAPCOMD_HOME) } } : {}), trust: "untrusted" as const };
-  const edit = H.editHermesConfig(cfg.src, entry);
+  const perProject = v["hermes-entry-per-project"] === true;
+  if (perProject && !project) return { step: "hermes", ok: false, detail: "--hermes-entry-per-project needs a project here", hint: "Run it in your repository's checkout (after `capcomd setup project`)." };
+  const notes: string[] = [];
+  // One entry for every project: an entry an older setup pinned to a folder (`cwd`) is unpinned, and that folder joins
+  // the project list.
+  const old = cfg.js?.mcp_servers?.[H.HERMES_SERVER]?.cwd;
+  if (!perProject && typeof old === "string" && old && existsSync(old)) {
+    const m = P.addProject(old);
+    if (m.added) notes.push(`moved ${tildePath(old)} from Hermes's capcomd entry to capcomd's projects (as ${m.project.name})`);
+  }
+  let me: { name: string; path: string } | null = null;
+  if (project) {
+    const a = P.addProject(project);
+    me = a.project;
+    if (v["default-project"] === true && P.readProjects().default !== me.name) {
+      const cur = P.readProjects();
+      writeConfig(userConfigPath(), { projects: { list: cur.list, default: me.name } });
+      notes.push(`${me.name} is the default project`);
+    } else if (a.added) notes.push(`added ${me.name} (${tildePath(project)}) to capcomd's projects${a.madeDefault ? ", the default" : ""}`);
+  }
+  const server = perProject && me ? H.hermesProjectServer(me.name) : H.HERMES_SERVER;
+  const entry = { ...H.capcomdMcpCommand(), ...(perProject && project ? { cwd: project } : {}), ...(process.env.CAPCOMD_HOME ? { env: { CAPCOMD_HOME: resolve(process.env.CAPCOMD_HOME) } } : {}), trust: "untrusted" as const, timeout: H.HERMES_TOOL_TIMEOUT };
+  const edit = H.editHermesConfig(cfg.src, entry, { server });
   if (!edit.ok) {
-    const snippet = `mcp_servers:\n  capcomd:\n    command: ${JSON.stringify(entry.command)}\n    args: ${JSON.stringify(entry.args)}${project ? `\n    cwd: ${JSON.stringify(project)}` : ""}\n    trust: untrusted`;
+    const snippet = `mcp_servers:\n  ${server}:\n    command: ${JSON.stringify(entry.command)}\n    args: ${JSON.stringify(entry.args)}${perProject && project ? `\n    cwd: ${JSON.stringify(project)}` : ""}\n    trust: untrusted\n    timeout: ${H.HERMES_TOOL_TIMEOUT}`;
     return { step: "hermes", ok: false, detail: `didn't change ${H.tilde(h.config)}: ${edit.error}`, hint: `Add this to it by hand:\n${snippet}` };
   }
   if (edit.changes.length) H.writeHermesConfig(h.config, edit.text);
   const sk = H.installHermesSkills(h.home);
-  const notes: string[] = [];
-  notes.push(edit.changes.length ? `${H.tilde(h.config)}: ${edit.changes.join("; ")}` : `${H.tilde(h.config)} already had capcomd`);
+  notes.unshift(edit.changes.length ? `${H.tilde(h.config)}: ${edit.changes.join("; ")}` : `${H.tilde(h.config)} already had capcomd`);
   const skillsSaid = [sk.added.length ? `added ${sk.added.join(", ")}` : "", sk.updated.length ? `updated ${sk.updated.join(", ")}` : "", sk.current.length ? `${sk.current.join(", ")} current` : "",
     sk.kept.length ? `kept your edited ${sk.kept.join(", ")} (delete it and re-run to get capcomd's)` : ""].filter(Boolean).join(", ");
   notes.push(`skills in ${H.tilde(sk.dir)}: ${skillsSaid}`);
-  notes.push(project ? `capcomd runs in ${tildePath(project)} (its .capcomd/config.json)` : "no project here: run `capcomd setup agent` in your repository so Hermes's capcomd uses its settings");
-  // Who approves merges into protected branches: a person (`capcomd approve`) unless the user lets Hermes do it after
-  // asking them (driver.approvals: client-confirmed). Asked in a terminal; --approvals sets it; --yes alone changes nothing.
+  const all = P.readProjects();
+  notes.push(perProject ? `mcp_servers.${server} serves only ${me!.name}` : all.list.length ? `one capcomd for ${all.list.length} project${all.list.length === 1 ? "" : "s"} (${all.list.map((x) => x.name + (x.name === all.default ? " (default)" : "")).join(", ")}): ask Hermes about any of them by name` : "no project yet: run `capcomd setup agent` in your repository so Hermes's capcomd can work on it");
+  // Who approves merges into protected branches: capcomd asking you itself in Hermes (elicit, recommended), or you in a
+  // terminal. Asked in a terminal; --approvals sets it; --yes alone changes nothing.
   if (project && projPath) {
-    const cur = readConfig(projPath).driver?.approvals ?? "human";
+    const drv = readConfig(projPath).driver ?? {};
+    const cur = drv.approvals ?? "human";
     const off = cfg.js?.approvals?.mode === false || cfg.js?.approvals?.mode === "off";
     let want = typeof v.approvals === "string" ? v.approvals : null;
-    if (!want && p.interactive && !off) want = (await p.confirm("Merges into protected branches (like main) wait for an approval. May Hermes approve them after it asks you in chat? (No: you run `capcomd approve`)", cur === "client-confirmed")) ? "client-confirmed" : "human";
-    if (want === "client-confirmed" && off) notes.push("approvals left to you: Hermes's approvals.mode is off, so it wouldn't ask you first");
-    else if (want && want !== cur) { writeConfig(projPath, { driver: { ...readConfig(projPath).driver, approvals: want as "human" | "client-confirmed" } }); notes.push(want === "client-confirmed" ? "Hermes may approve merges after asking you (driver.approvals: client-confirmed)" : "merges into protected branches wait for you (`capcomd approve`)"); }
-    else notes.push(cur === "client-confirmed" ? (off ? "driver.approvals is client-confirmed, but Hermes's approvals.mode is off: it won't ask you first" : "Hermes approves merges after asking you") : "merges into protected branches wait for you (`capcomd approve`)");
+    if (!want && p.interactive) want = await p.choose("Merges into protected branches (like main) wait for an approval. Who approves them?", [
+      { value: "elicit", label: "you, in Hermes: capcomd itself asks you (a prompt, or buttons in Telegram/Slack), recommended" },
+      { value: "human", label: "you, in a terminal: `capcomd approve`" },
+    ], cur === "human" && drv.approvals === "human" ? "human" : "elicit");
+    const hermesElicitOff = cfg.js?.mcp_servers?.[server]?.elicitation?.enabled === false;
+    if (want === "client-confirmed" && off) notes.push("approvals left to you: Hermes's approvals.mode is off, so it wouldn't ask you first (`--approvals elicit` works with any mode)");
+    else if (want === "elicit") {
+      const clients = [...new Set([...(drv.elicitClients ?? []), HERMES_CLIENT])];
+      if (cur !== "elicit" || JSON.stringify(drv.elicitClients ?? null) !== JSON.stringify(clients)) writeConfig(projPath, { driver: { ...drv, approvals: "elicit", elicitClients: clients } });
+      notes.push(`capcomd asks you itself in Hermes before a merge into a protected branch; only your accept approves (driver.approvals: elicit, for ${clients.join(", ")})`);
+      if (hermesElicitOff) notes.push(`Hermes has elicitation turned off for capcomd (mcp_servers.${server}.elicitation.enabled: false): turn it on, or approve with \`capcomd approve\``);
+    } else if (want && want !== cur) {
+      writeConfig(projPath, { driver: { ...drv, approvals: want as "human" | "client-confirmed" } });
+      notes.push(want === "client-confirmed" ? "Hermes may approve merges after asking you (driver.approvals: client-confirmed; `--approvals elicit` is safer: /yolo, approvals off or an \"Always\" answer skip Hermes's card)" : "merges into protected branches wait for you (`capcomd approve`)");
+    } else notes.push(cur === "elicit" ? "capcomd asks you itself in Hermes before a merge into a protected branch (driver.approvals: elicit)"
+      : cur === "client-confirmed" ? (off ? "driver.approvals is client-confirmed, but Hermes's approvals.mode is off: it won't ask you first; use `--approvals elicit`" : "Hermes approves merges after asking you (client-confirmed; `--approvals elicit` is safer)")
+      : "merges into protected branches wait for you (`capcomd approve`; `--approvals elicit` lets capcomd ask you in Hermes)");
   }
   if (!project && typeof v.approvals === "string") notes.push("--approvals not applied: it's a project setting, and there's no project here");
   // Inside a boxd machine without a key, the MCP server Hermes starts doesn't see BOXD_VM_*: record the machine.
@@ -431,9 +467,12 @@ export async function hermesStep(p: Prompter, v: Values, cwd = process.cwd(), ma
     const m = await machine();
     if (m.credentials) { writeConfig(userConfigPath(), { env: { CAPCOMD_BOXD_MACHINE: m.name ?? "1" } }); notes.push(`boxd: using machine ${m.name ?? "(this one)"}'s credentials`); }
   }
-  const tryIt = `In Hermes, /reload-mcp (a running gateway picks it up within a minute), then ask it: "Use capcomd to fix the failing tests: one worker per file, each verified and reviewed, then merged."`;
+  const tryIt = `In Hermes, /reload-mcp (a running gateway picks it up within a minute), then ask it: "Use capcomd${me ? ` on ${me.name}` : ""} to fix the failing tests: one worker per file, each verified and reviewed, then merged."`;
   return { step: "hermes", ok: true, detail: `${notes.join("; ")}. ${tryIt}` };
 }
+
+/** Hermes's MCP client name (initialize clientInfo.name; NousResearch/hermes-agent tools/mcp_tool_transport.py). */
+export const HERMES_CLIENT = "hermes-agent";
 
 /** 4. The engine as a background service. */
 export async function serviceStep(p: Prompter, v: Values): Promise<Step> {

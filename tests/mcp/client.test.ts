@@ -82,7 +82,7 @@ describe("capcomd mcp: the driver's tools", () => {
     const { tools } = await mcp.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       "capcomd_approve", "capcomd_await", "capcomd_budget", "capcomd_cancel", "capcomd_events", "capcomd_grant", "capcomd_inspect", "capcomd_kv",
-      "capcomd_merge", "capcomd_profiles", "capcomd_resume", "capcomd_run_new", "capcomd_runs", "capcomd_send", "capcomd_setup", "capcomd_spawn",
+      "capcomd_merge", "capcomd_profiles", "capcomd_projects", "capcomd_resume", "capcomd_run_new", "capcomd_runs", "capcomd_send", "capcomd_setup", "capcomd_spawn",
       "capcomd_task", "capcomd_trace", "capcomd_tree", "capcomd_verify",
     ]);
     const by = Object.fromEntries(tools.map((t) => [t.name, t.annotations ?? {}]));

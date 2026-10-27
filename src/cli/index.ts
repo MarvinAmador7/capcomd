@@ -94,8 +94,10 @@ Usage:
         [--yes] [--demo|--skip-demo] [--agents claude,codex] [--auth subscription|apikey] [--repo URL]
         [--mode pr|direct] [--target B] [--check CMD] [--budget USD] [--service|--no-service] [--no-plugin] [--no-store]
         [--org NAME]                   (the boxd org for the key setup creates with your boxd CLI login)
-        [--no-hermes] [--approvals human|client-confirmed]
-                                       (capcomd in Hermes, when it's installed; who approves merges into protected branches)
+        [--no-hermes] [--approvals elicit|human] [--default-project] [--hermes-entry-per-project]
+                                       (capcomd in Hermes, when it's installed: one entry for all your projects, this
+                                       checkout added to them; who approves merges into protected branches: elicit,
+                                       capcomd asks you in Hermes (recommended), or human, capcomd approve)
   capcomd setup check                    What's configured and working (changes nothing)
   capcomd service install|uninstall|status [--port N] [--dry-run]
                                        The engine as a background service (launchd / systemd user unit)
@@ -199,6 +201,8 @@ async function main(argv: string[]): Promise<number> {
         "no-skill": { type: "boolean" },
         "no-plugin": { type: "boolean" },
         "no-hermes": { type: "boolean" },
+        "hermes-entry-per-project": { type: "boolean" },
+        "default-project": { type: "boolean" },
         approvals: { type: "string" },
         "no-store": { type: "boolean" },
         org: { type: "string" },

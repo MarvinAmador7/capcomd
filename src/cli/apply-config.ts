@@ -1,6 +1,7 @@
 // First import of the CLI entry point: persisted settings (~/.capcomd/config.json, the project's
 // .capcomd/config.json, the boxd key from the OS keychain) become environment defaults before any other
 // module reads the environment. Real env vars win. CAPCOMD_NO_CONFIG=1 skips it (tests set it).
+import "../utils/startup-env"; // snapshots the environment before the settings are applied
 import { applyConfig } from "../config/store";
 
 if (!process.env.CAPCOMD_NO_CONFIG) {
