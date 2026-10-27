@@ -178,8 +178,8 @@ struct PlaceDetailsView: View {
   }
 }
 
-/// A place's section header: its mark and its kind of place ("Local", "Cloud"). Which provider is the default, and
-/// Details…, are on the provider's status row below.
+/// A place's section header: its kind of place ("Local", "Cloud") and that kind's symbol (a laptop, a cloud; the
+/// provider's own mark stays in Runs on). Which provider is the default, and Details…, are on its status row below.
 struct PlaceHeader: View {
   let name: String
   let descriptor: SandboxDescriptor?
@@ -188,7 +188,7 @@ struct PlaceHeader: View {
 
   var body: some View {
     HStack(spacing: Theme.Settings.headerGap) {
-      if let d = descriptor { PlaceMark(mark: d.mark ?? d.name, kind: d.kind) } else { PlaceMark(name: name) }
+      PlaceMark(kind: descriptor?.kind ?? PlaceNames.kind(name))
       Text(verbatim: descriptor?.label ?? PlaceNames.title(name, label: fallbackLabel))
     }
   }

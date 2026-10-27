@@ -62,17 +62,14 @@ struct DefaultBadge: View {
   }
 }
 
-/// A place's mark in its section header, by the descriptor's `mark` id (PlaceMarks): Docker's (one colour), the cloud
-/// for boxd (a stand-in until boxd's own mark), else a glyph by kind. Without a descriptor, the place's name is the id.
+/// A place's symbol in its section header, by its kind (PlaceMarks.kindGlyph): a laptop for Local, a cloud for Cloud.
+/// The provider's own mark (Docker's) shows where the provider is named, in Runs on.
 struct PlaceMark: View {
-  let mark: String
-  var kind: SandboxDescriptor.Kind? = nil
-  init(name: String) { mark = name }
-  init(mark: String, kind: SandboxDescriptor.Kind) { self.mark = mark; self.kind = kind }
+  let kind: SandboxDescriptor.Kind?
   var body: some View {
     let side = Theme.Settings.placeMark
     Group {
-      switch PlaceMarks.glyph(mark, kind: kind) {
+      switch PlaceMarks.kindGlyph(kind) {
       case .path(_, let path): SVGShape(path: path, viewBox: 24).frame(width: side, height: side)
       case .symbol(let s): Image(systemName: s).font(.system(size: side * 0.8)).frame(width: side, height: side)
       }

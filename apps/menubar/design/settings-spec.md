@@ -94,11 +94,12 @@ clouds show here as capcomd supports them."). Footer "The composer starts with t
 changes them here too." Runs on, each place's Default badge / **Make Default**, and the composer's Local / Cloud switch
 are one setting (`startSandbox`): the place last picked anywhere. The composer uses it while it can be used.
 
-One section per place, header: its mark (Docker's one-colour mark for Local; the cloud glyph for Cloud until boxd's
-own) and the kind of place only, "Local" / "Cloud" (the descriptor's `label`). The provider's status row says which is
+One section per place, header: the kind of place only, "Local" / "Cloud" (the descriptor's `label`), with that
+kind's symbol (SF Symbols `laptopcomputer` / `cloud`, the composer's Local / Cloud switch's); the provider's own mark
+(Docker's) shows in Runs on, where the provider is named. The provider's status row says which is
 the default: the **Default** (accent badge) after the provider's name, or **Make Default** at the end of the row, then
 **Details…** (§4.1) when capcomd describes its places (`sandboxes`). With `sandboxes`, nothing in the section depends on
-a place's name: the header is the descriptor's `label` and `mark`, the status row is labelled with its `vendor` and
+a place's name: the header is the descriptor's `label` and `kind`, the status row is labelled with its `vendor` and
 says "Running" (`kind: local`) or "Ready" (cloud), an unavailable place shows the daemon's reason (the empty ring and
 **Set Up…** when the reason names a plain capcomd command to run, as "No boxd API key (run capcomd setup)" does; red
 otherwise), and the footer says "Agents work in containers on this Mac." (or "virtual machines") from `kind` and
@@ -119,7 +120,7 @@ logins or keys."
 Details… does (an ellipsis button opens a window or sheet; a pushed page would want a › row and a toolbar back
 button, which a tabbed Settings window doesn't have). The sheet is 560 pt wide, as tall as its content up to the
 screen's visible height (then it scrolls), with **Done** at the bottom right (Return or Esc closes it). The section
-header in Runs holds only the mark, the title and Default / Make Default. The sections and their
+header in Runs holds only the kind's symbol and label. The sections and their
 order are fixed here, as on the board; which rows appear and what they say come from the daemon. Phase 1 is
 read-only except Open in Terminal; phase 2 lets the app change a setting the daemon marks `editable` (the idle
 lifetime). Owner's removals from the board: no "Sites agents can reach" row and no
@@ -127,7 +128,7 @@ lifetime). Owner's removals from the board: no "Sites agents can reach" row and 
 
 | Section | Rows | From |
 |---|---|---|
-| Header | mark, `title`, Default / Make Default (as in Runs) | `GET /v1/sandboxes` descriptor |
+| Header | the kind's symbol and `label` (as in Runs); the status row: `vendor`, Default or Make Default | `GET /v1/sandboxes` descriptor |
 | (status) | the availability row (as in Runs); then any `status` rows the daemon sends (a provider's key); then Agent environment (as in Runs, with Build… / Rebuild…) | `/v1/sandboxes`, `/v1/sandboxes/{name}` `info`, `/v1/environments` |
 | Machines | one row per machine: a dot (green running, orange left behind, ring starting / stopping), "worker · Add an abs(a) function…" (role · the task's first line), "checks · run-8kq2" / "login · Logging in to Claude Code" / "environment · Building the agent environment" for capcomd's own short-lived machines (`owner.kind` other than `agent`: role · its run, else role · the daemon's `label`), or "Left behind · no agent owns it" (no owner at all, or `state: "orphaned"`: a machine this capcomd made, in its machines ledger, that nothing uses now; another capcomd's machines are never listed), its age ("4 min", "2 h"), **Open in Terminal** (never on capcomd's own machines), **Delete…** (phase 3, below); owned machines first, newest first; the tooltip adds the machine's id and when it is deleted if left idle. "No machines running." when there are none. Then "Delete idle machines after" (`idleLifetime`): a popup of its choices ("1 hour") and help, disabled unless it can be changed (below) | `GET /v1/sandboxes/{name}/resources`, every 5 s while the screen shows; `idleLifetime` from `settings` |
 | Safety | **Logins**: "Bound" (green) when every login here is bound to its AI's API, "Codex isn't bound" (orange) when some aren't, "Not bound" when none are, "No logins"; the sub names the hosts. **Checkpoints**: the daemon's `display` ("After each commit and every 10 minutes"). Footer: "Local (Docker) can't bind logins to a host; Cloud does." from the descriptors' `caps.hostBoundSecrets` | `/v1/logins` `hostBound` / `boundTo`; `info` rows |
@@ -137,8 +138,8 @@ Rows render by field type: `choice` → popup (enabled only as below), `toggle` 
 a value (a `status` row's `state` picks its dot); a type the app doesn't know shows its `label` and `display`
 read-only. A value set in capcomd's environment (`source: "env"`, `editable: false`) shows the daemon's `display` instead of a
 control ("Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment").
-Marks are bundled by id (`PlaceMarks`): `docker` the official mark, `boxd` the cloud glyph for now; an unknown id gets
-`desktopcomputer` (local) or `cloud`.
+Marks are bundled by id (`PlaceMarks`), for Runs on: `docker` the official mark, `boxd` the cloud glyph for now; an
+unknown id gets `laptopcomputer` (local) or `cloud`. Section headers use the kind's symbol only.
 
 - **Stale list**: when the provider didn't answer (`stale: true`), the last list stays with a quiet footer
   "Couldn't reach boxd just now. These are the machines it listed at 10:22." A failed read of the route itself keeps
