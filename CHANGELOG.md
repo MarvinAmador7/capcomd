@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agents' commits, and the pull requests capcomd opens for them, are titled with what the change does, cut at a word
+  ("In src/math.ts add and export function multiply(a: number, b: number)…"), instead of the agent's id followed by
+  the task cut mid-word ("agt-k825d4…: In src/math.ts add and export function multiply(a: number, b"). The task and
+  agent are still in the commit's `Capcomd-Task` trailer.
 - Agents no longer fail when the daemon restarts. Before, agents that were running when `capcomd serve` stopped or
   restarted (a Ctrl-C, a service restart, an upgrade) ended as failed a few seconds later, with "An internal error
   occurred" or a connection error as their result. Now each agent waits for the daemon to come back (up to 5 minutes,
