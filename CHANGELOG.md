@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: small finishing touches to match the bots. The agent tree's lines are dotted like circuit traces,
+  agents that are working have a soft glow behind their visor, a bot blinks when you point at it, the agent waiting
+  for your approval waves, a run that just finished gets a brief sparkle, and an empty panel shows the pixel CAPCOMD
+  logo. The line between a card's folders and its agents is gone. Nothing moves when Reduce Motion is on.
 - Menu bar app: every agent now has its own little pixel bot, in the agent tree, the thread header, handoff cards and
   the @ mention list. The bot is the same every time for the same agent, and agents in one run look different from each
   other. The menu bar icon is now a bot head whose face shows what is going on: sleepy when nothing runs, eyes open while

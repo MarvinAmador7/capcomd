@@ -601,7 +601,7 @@ struct DrillFooter: View {
     .padding(Theme.Drill.footerPadding)
     .frame(maxWidth: .infinity)
     .background(Theme.Footer.material)
-    .overlay(alignment: .top) { Rectangle().fill(Theme.Footer.divider).frame(height: Theme.Footer.dividerHeight) }
+    .overlay(alignment: .top) { DitherLine() }
   }
 
   private var pauseButton: some View {

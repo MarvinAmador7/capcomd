@@ -36,7 +36,11 @@ struct PanelView: View {
             ProjectCard(project: p).padding(.bottom, Theme.cardGap).transition(.opacity)
           }
           if active.isEmpty {
-            Text(projects.isEmpty ? "No projects yet" : "Nothing running").font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)
+            VStack(spacing: 10) {
+              PixelWordmark()   // Polish board, item 7
+              Text(projects.isEmpty ? "No projects yet" : "Nothing running").font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)
+            }
+            .frame(maxWidth: .infinity)
               .padding(.vertical, Theme.Finished.paddingVertical).padding(.horizontal, Theme.Finished.paddingHorizontal)
           }
           // Finished and failed projects leave the Active cards: the latest few stay as one-line rows.
@@ -82,7 +86,7 @@ struct PanelView: View {
     .padding(.horizontal, Theme.Footer.paddingHorizontal).padding(.vertical, Theme.Footer.paddingVertical)
     .frame(maxWidth: .infinity)
     .background(Theme.Footer.material)
-    .overlay(alignment: .top) { Rectangle().fill(Theme.Footer.divider).frame(height: Theme.Footer.dividerHeight) }
+    .overlay(alignment: .top) { DitherLine() }   // Polish board, item 5
   }
 }
 
@@ -111,10 +115,7 @@ struct ProjectCard: View {
           }
         }
       }
-      .padding(.top, Theme.Card.treeInnerTop)
-      .overlay(alignment: .top) {
-        Rectangle().fill(Theme.Card.divider).frame(height: Theme.Card.stroke).padding(.horizontal, -Theme.Card.treeBleed)
-      }
+      .padding(.top, Theme.Card.treeInnerTop)   // no hairline above the tree: the chips lead straight into it
       .padding(.top, Theme.Card.treeTop)
     }
     .padding(.top, Theme.Card.paddingTop).padding(.horizontal, Theme.Card.paddingHorizontal).padding(.bottom, Theme.Card.paddingBottom)
@@ -169,6 +170,7 @@ struct FinishedRow: View {
           .font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.titleText).lineLimit(1).truncationMode(.tail)
           .padding(.leading, Theme.Finished.titleIndent)
         Spacer(minLength: 0)
+        FinishSparkle(endedAtMs: project.latestRun?.lastEventMs)
         Text(verbatim: line).font(Theme.Finished.trailingFont).foregroundStyle(Theme.Finished.trailingText)
           .lineLimit(1).fixedSize()
       }

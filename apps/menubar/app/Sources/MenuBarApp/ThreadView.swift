@@ -2,6 +2,7 @@
 import SwiftUI
 import CapcomdStore
 import CapcomdThread
+import CapcomdBot
 
 /// SPEC §4.5 agent thread (thread-panel-v2): header, then the agent's thread (the daemon's structured items, harness #59,
 /// with your steers between them; against an older daemon, the event-built lines), then the composer. Agent text is
@@ -117,7 +118,10 @@ struct ThreadHeader: View {
         Text(verbatim: "\(model.run(runId)?.title ?? runId) / \(agent?.displayName ?? "Agent")")
           .font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).lineLimit(1)
         HStack(spacing: Theme.Content.handoffGap) {
-          BotAvatar(traits: model.bot(runId: runId, agentId: agentId), size: .small)
+          // The waiting agent raises a floating mitt (Polish board, item 6); the amber mark still carries the state.
+          let waiting = model.approvals(runId).contains { $0.agentId == agentId }
+          let bot = model.bot(runId: runId, agentId: agentId)
+          BotAvatar(traits: waiting ? bot.flatMap { try? withOverrides($0, pose: "wave") } ?? bot : bot, size: .small)
           Text(verbatim: agent?.displayName ?? "Agent").font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn)
           if let s = node?.suffix { Text(verbatim: s).font(Theme.monoTime).foregroundStyle(.tertiary) }
           StatusMark(status: node?.statusSymbol)

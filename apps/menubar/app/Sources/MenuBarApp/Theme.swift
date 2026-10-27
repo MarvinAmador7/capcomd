@@ -400,6 +400,17 @@ enum Theme {
     static let mediaRadius: CGFloat = 8, mediaMaxHeight: CGFloat = 180, mediaStroke = Color.white.opacity(0.08)
     static let truncatedFont = Font.system(size: 11), truncatedText = label.opacity(0.4)
   }
+  /// Approved polish (canvas "Polish" board): identity in lines and light, never in text, controls or chrome.
+  enum Polish {
+    static let brand = Color(red: 1, green: 0x7A / 255, blue: 0x10 / 255)        // the wordmark orange
+    static let dither = brand.opacity(0.45)                                      // 1 pt ordered dither, footer hairlines
+    static let traceDash: [CGFloat] = [1, 1]                                     // tree guides as dotted traces
+    static let traceNode: CGFloat = 3                                            // a 3×3 node where a branch splits
+    static let glowSize = CGSize(width: 20, height: 14), glowOpacity: Double = 0.45
+    static let blink: Double = 0.12                                              // hover blink, a sprite swap
+    static let sparkle: CGFloat = 10, sparkleFade: Double = 0.3, sparkleWithin: Double = 10   // s after a run ends
+    static let wordmarkCell: CGFloat = 3, wordmarkGap: CGFloat = 1               // glyph cells; gap in cells
+  }
   /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
   enum Motion {
     static let pressScale: CGFloat = 0.97
