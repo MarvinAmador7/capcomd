@@ -45,6 +45,18 @@ final class RunOptionsTests: XCTestCase {
     XCTAssertEqual(s.runOptions.drivers(in: "boxd").map(\.available), [false]) // nor do per-sandbox answers bring it back
   }
 
+  func testOptionsAreReadAgainWhenTheDaemonComesBack() async throws {
+    let info = FakeOptions(); info.caps = []                                   // down at launch: nothing read
+    let s = CapcomdStore(daemonInfo: info)
+    await s.refreshDaemonInfo()
+    XCTAssertTrue(s.runOptions.drivers.isEmpty)
+    info.caps = [Capability.runsOptions]
+    s.receive(.link(up: false), scope: "daemon")
+    s.receive(.link(up: true), scope: "daemon")
+    for _ in 0..<100 where s.runOptions.drivers.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+    XCTAssertEqual(s.runOptions.drivers.map(\.provider), ["claude"])
+  }
+
   func testADriverIsAvailableOnlyWhereItCanRun() {
     let o = RunOptions(drivers: [DriverInfo(provider: "claude", label: "Claude Code", available: true,
                                             sandboxes: ["boxd": DriverAvailability(available: true),

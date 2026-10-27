@@ -241,6 +241,9 @@ public final class CapcomdStore {
     case .link(let up):
       guard scope == "daemon", daemonUnreachable == up else { return }   // the panel follows the daemon feed only
       daemonUnreachable = !up
+      // Back: what the daemon can do and offers may have changed (a restart, an upgrade), and a first read made while it
+      // was down got nothing, which hid the composer's Local/VM and driver row until the app was restarted.
+      if up { Task { await refreshDaemonInfo() } }
     case .snapshotSteps(let st): pendingReset[scope, default: ResetBuffer()].steps += st; return
     case .snapshotThreads(let m): pendingReset[scope, default: ResetBuffer()].messages += m; return
     case .reset(let s, _):
