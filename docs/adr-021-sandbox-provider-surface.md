@@ -301,10 +301,10 @@ work is in `login.ts`, not in the surface.
 2. ~~**Idle lifetime presets.**~~ **Decided (2026-10-27):** 15 min, 1 h (default), 4 h and 12 h, the same on every
    provider. Docker's value is approximate, within 5 minutes.
 3. ~~**A new `configure` scope, or reuse `steer` for settings?**~~ **Decided (2026-10-27):** a new `configure` scope.
-4. **What does Open in Terminal open:** a shell in the machine, or the run's `capcomd tui`? *Recommend the shell
-   (`capcomd sandbox shell`), since that is what "a machine" means. The TUI stays on the run drill-down.*
-5. **Cost per machine.** *Recommend leaving it out of v1. boxd's SDK use here reports no price; show age and
-   deadline instead.*
+4. ~~**What does Open in Terminal open?**~~ **Decided (2026-10-27):** a shell in the machine (`capcomd sandbox shell`);
+   the TUI stays on the run drill-down.
+5. ~~**Cost per machine.**~~ **Decided (2026-10-27):** no cost stats; show age and delete-by time. The `costs` cap
+   and `cost` field are dropped from v1.
 6. **Should Delete on a working machine cancel the agent, or be offered only for orphaned machines?** *Recommend
    allowing it, as a cancel of that agent, with a confirmation that names the agent and says its work since the last
    checkpoint is lost.*
