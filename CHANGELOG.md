@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: a Settings window (⌘, or Settings… in the composer's + menu) with General, Accounts, Runs and About.
+  General shows whether capcomd is connected and its version, keeps capcomd running as a background service, opens
+  the app at login, turns the menu bar bot's faces on or off, and turns approval and finished-run notifications on or
+  off (finished runs now include runs that failed or were stopped). Accounts shows whether Claude and Codex are logged
+  in on Cloud and on Local, the boxd API key and this app's token, with Log In…, Set Up… and Reset… buttons that open
+  Terminal with the command ready; the row updates by itself when you're done. Runs sets what new runs start with
+  (project, driver, effort and where they run, the same default the composer's Local / Cloud switch changes) and shows
+  each place's agent environment, with Build… and Rebuild…. With an older capcomd, the rows it can't report are hidden
+  or say so.
+- Menu bar app: the token prompt named a command that doesn't exist (`capcomd token`); it now says to make a token
+  with `capcomd clients add menubar --scopes read,steer,approve`.
+
 - Runs on boxd machines are now called **Cloud** (they were "VM") in the menu bar app and in run options and their
   messages (`GET /v1/run-options` `label`, e.g. "Not logged in to Claude Code for Cloud"). The sandbox's name stays
   `boxd` (`--sandbox boxd`, `"sandbox": "boxd"`).

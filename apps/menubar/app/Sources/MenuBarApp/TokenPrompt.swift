@@ -12,7 +12,7 @@ struct TokenPrompt: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       Text("Connect to capcomd").font(Theme.panelTitle)
-      Text(rejected ? "capcomd rejected the saved token. Paste a new one." : "Paste the token from `capcomd token`.")
+      Text(rejected ? "capcomd rejected the saved token. Paste a new one." : "Make a token with `capcomd clients add menubar --scopes read,steer,approve` and paste it here.")
         .font(Theme.body).foregroundStyle(.secondary)
       SecureField("Token", text: $token).textFieldStyle(.roundedBorder).onSubmit(save)
       if failed { Text("Couldn’t save the token to the Keychain.").font(Theme.chip).foregroundStyle(.secondary) }

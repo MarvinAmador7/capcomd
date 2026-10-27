@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings: General</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#4ea1ff}a:hover{color:#7cb9ff}
+.win{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;color:#f5f5f7;-webkit-font-smoothing:antialiased;letter-spacing:-0.08px}
+.bar{background:#2b2b2d;border-bottom:0.5px solid #000;padding:10px 12px 8px;position:relative}
+.lights{position:absolute;left:14px;top:14px;display:flex;gap:8px}
+.light{width:12px;height:12px;border-radius:50%;box-shadow:inset 0 0 0 0.5px rgba(0,0,0,.25)}
+.wtitle{text-align:center;font-size:13px;font-weight:600;color:#e5e5e7;height:20px;line-height:20px}
+.tabs{display:flex;justify-content:center;gap:2px;margin-top:4px}
+.tab{display:flex;flex-direction:column;align-items:center;gap:2px;width:68px;padding:5px 0 4px;border-radius:8px;color:#a1a1a6;font:inherit;font-size:11px;background:none;border:0}
+.tab.on{background:rgba(255,255,255,.1);color:#4ea1ff}
+.body{padding:20px 24px 24px;display:flex;flex-direction:column;gap:22px}
+.sec{display:flex;flex-direction:column;gap:6px}
+.sh{font-size:13px;font-weight:600;padding:0 2px}
+.grp{background:rgba(255,255,255,.05);border:0.5px solid rgba(255,255,255,.09);border-radius:10px}
+.row{display:flex;align-items:center;gap:12px;min-height:40px;padding:7px 12px;box-sizing:border-box}
+.row + .row{border-top:0.5px solid rgba(255,255,255,.08)}
+.lbl{flex:1;font-size:13px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.sub{font-size:11px;color:#98989d;line-height:1.35}
+.foot{font-size:11px;color:#98989d;padding:0 2px;line-height:1.4}
+.val{font-size:13px;color:#98989d;display:flex;align-items:center;gap:6px}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px}
+.btn{height:22px;padding:0 10px;border-radius:6px;background:rgba(255,255,255,.13);border:0;box-shadow:0 0.5px 0 rgba(255,255,255,.08) inset;color:#f5f5f7;font:inherit;font-size:13px}
+.pop{height:22px;padding:0 5px 0 9px;border-radius:6px;background:rgba(255,255,255,.13);border:0;color:#f5f5f7;font:inherit;font-size:13px;display:flex;align-items:center;gap:6px}
+.tog{width:38px;height:22px;border-radius:11px;background:rgba(255,255,255,.18);position:relative;border:0;padding:0;flex:none}
+.tog.on{background:#0a84ff}
+.knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.tog.on .knob{left:18px}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+</style>
+</helmet>
+<div class="win" style="width: 620px; height: 700px; background: #1e1e1f; display: flex; flex-direction: column; overflow: hidden">
+  <div class="bar">
+    <div class="lights" aria-hidden="true">
+      <span class="light" style="background: #ff5f57"></span>
+      <span class="light" style="background: #febc2e"></span>
+      <span class="light" style="background: #4a4a4c"></span>
+    </div>
+    <div class="wtitle">General</div>
+    <div class="tabs" role="tablist" aria-label="Settings">
+      <button class="tab on" role="tab" aria-selected="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        General
+      </button>
+      <a class="tab" role="tab" aria-selected="false" href="Accounts.dc.html" style="text-decoration: none">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><circle cx="12" cy="10" r="3.2"></circle><path d="M6.2 18.6c1.3-2.3 3.4-3.5 5.8-3.5s4.5 1.2 5.8 3.5"></path></svg>
+        Accounts
+      </a>
+      <a class="tab" role="tab" aria-selected="false" href="Runs.dc.html" style="text-decoration: none">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 3.5 7.5 12 12l8.5-4.5z"></path><path d="m3.5 12 8.5 4.5 8.5-4.5"></path><path d="m3.5 16.5 8.5 4.5 8.5-4.5"></path></svg>
+        Runs
+      </a>
+      <a class="tab" role="tab" aria-selected="false" href="About.dc.html" style="text-decoration: none">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><path d="M12 11v6"></path><circle cx="12" cy="7.6" r="0.6" fill="currentColor"></circle></svg>
+        About
+      </a>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="sec">
+      <div class="sh">capcomd</div>
+      <div class="grp">
+        <div class="row">
+          <div class="lbl">Status</div>
+          <div class="val"><span class="dot" style="background: #30d158"></span>Connected · capcomd 0.6.0-rc.1</div>
+        </div>
+        <div class="row">
+          <div class="lbl">Keep capcomd running<span class="sub">Starts it at login and restarts it if it stops, so agents keep working after you close Terminal.</span></div>
+          <button class="tog on" role="switch" aria-checked="true" aria-label="Keep capcomd running"><span class="knob"></span></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sh">Menu bar</div>
+      <div class="grp">
+        <div class="row">
+          <div class="lbl">Open at login</div>
+          <button class="tog on" role="switch" aria-checked="true" aria-label="Open at login"><span class="knob"></span></button>
+        </div>
+        <div class="row">
+          <div class="lbl">Bot faces<span class="sub">The menu bar bot naps when nothing runs and raises a hand when something needs you.</span></div>
+          <div style="display: flex; gap: 6px; align-items: center" aria-hidden="true">
+            <span style="width: 32px; height: 32px; border-radius: 7px; background: rgba(255,255,255,.07); display: flex; align-items: center; justify-content: center"><img src="/_blob/0695cc35fac192e79a51e5857656e707" alt="" style="width: 16px; height: 16px; image-rendering: pixelated"></span>
+          </div>
+          <button class="tog on" role="switch" aria-checked="true" aria-label="Bot faces"><span class="knob"></span></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sh">Notifications</div>
+      <div class="grp">
+        <div class="row">
+          <div class="lbl">Approval requests<span class="sub">Approve or deny a merge from the notification.</span></div>
+          <button class="tog on" role="switch" aria-checked="true" aria-label="Notify for approval requests"><span class="knob"></span></button>
+        </div>
+        <div class="row">
+          <div class="lbl">Finished runs<span class="sub">Including runs that failed or were stopped.</span></div>
+          <button class="tog on" role="switch" aria-checked="true" aria-label="Notify when a run finishes"><span class="knob"></span></button>
+        </div>
+      </div>
+      <div class="foot">Banners and sounds follow <a href="https://support.apple.com/guide/mac-help/change-notifications-settings-mh40583/mac">System Settings › Notifications</a>.</div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":620,"height":700}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
