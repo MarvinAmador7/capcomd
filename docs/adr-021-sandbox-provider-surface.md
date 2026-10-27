@@ -1,6 +1,6 @@
 # ADR-021: A provider surface for place details: descriptors, settings, resources and actions
 
-**Status:** proposed (2026-10-27). Design only; nothing here is built. Builds on ADR-020 (the provider registry and
+**Status:** accepted (2026-10-27; every open question decided by the owner). Nothing here is built yet. Builds on ADR-020 (the provider registry and
 its capabilities), ADR-015 (host-bound secrets, plan logins), ADR-016 (primitives, scoped tokens) and ADR-019 §3, §7
 (checkpoints; no restrictions by default).
 
@@ -305,6 +305,5 @@ work is in `login.ts`, not in the surface.
    the TUI stays on the run drill-down.
 5. ~~**Cost per machine.**~~ **Decided (2026-10-27):** no cost stats; show age and delete-by time. The `costs` cap
    and `cost` field are dropped from v1.
-6. **Should Delete on a working machine cancel the agent, or be offered only for orphaned machines?** *Recommend
-   allowing it, as a cancel of that agent, with a confirmation that names the agent and says its work since the last
-   checkpoint is lost.*
+6. ~~**Should Delete on a working machine cancel the agent?**~~ **Decided (2026-10-27):** yes, as a cancel of that
+   agent, with a confirmation that names it and says its work since the last checkpoint is lost.
