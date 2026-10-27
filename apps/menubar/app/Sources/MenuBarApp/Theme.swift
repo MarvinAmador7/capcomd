@@ -152,12 +152,8 @@ enum Theme {
     static let timeFont = Font.system(size: 10.5, design: .monospaced)
     static let timeText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.38)
     static let timeGap: CGFloat = 6
-    // Who did the step: the agent's bot (xs) and role, before the time.
-    static let whoFont = Font.system(size: 11)
-    static let whoText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55)
-    static let whoGap: CGFloat = 4
-    // Fixed columns so bots and times line up row to row ("now" … "10m ago"; roles up to "reviewer").
-    static let whoColumn: CGFloat = 78, timeColumn: CGFloat = 46
+    // Times line up row to row ("now" … "10m ago").
+    static let timeColumn: CGFloat = 46
     static let statusFont = Font.system(size: 11)
     // Collapsed strip (.strip, .si2, .pdv, .cvx)
     static let stripTop: CGFloat = 8, stripHeight: CGFloat = 30, stripRadius: CGFloat = 8   // .strip margin-top 12 collapses with the bar's 4

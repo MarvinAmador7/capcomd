@@ -147,9 +147,11 @@ struct StepIcon: View {
     }
     let profile = step.agentId.flatMap { model.run(runId)?.agents[$0]?.kind }
     Group {
-      if step.status == .waiting { Image(systemName: "hand.raised") }
-      // An agent with no activity line yet is named by its bot, as in Trace rows (SPEC: bots replace the profile icons).
-      else if step.kind == .agent, let id = step.agentId, let bot = model.bot(runId: runId, agentId: id) { BotAvatar(traits: bot, size: .xs) }
+      // Who did it leads the row: the agent's bot ("[bot] Ran the tests"), for its own steps and for the verify, merge and
+      // approval of its work, as in Trace rows (SPEC: bots replace the profile icons). Steps of the run itself keep
+      // their event icon.
+      if let id = step.agentId, let bot = model.bot(runId: runId, agentId: id) { BotAvatar(traits: bot, size: .xs) }
+      else if step.status == .waiting { Image(systemName: "hand.raised") }
       else if step.kind == .agent, let k = profile { ZStack { Image(systemName: k.symbol); if k.hasCentreDot { Circle().frame(width: 3, height: 3) } } }
       else { Image(systemName: step.kind.symbol) }
     }
@@ -278,7 +280,6 @@ struct ActivityRow: View {
         .font(step.status == .running ? Theme.Drill.rowNowFont : Theme.Drill.rowFont).foregroundStyle(color).lineLimit(1)
       Spacer(minLength: 0)
       HStack(spacing: Theme.Drill.timeGap) {
-        if let who, !(step.kind == .agent && step.text == who.displayName) { whoMark(who) } else if step.agentId != nil { Color.clear.frame(width: Theme.Drill.whoColumn, height: 1) }
         if step.status != .queued {
           TimelineView(.periodic(from: .now, by: 30)) { ctx in
             Text(verbatim: step.status == .running ? "now" : relativeAgo(ms: step.epochMs, nowMs: Int(ctx.date.timeIntervalSince1970 * 1000)))
@@ -291,23 +292,14 @@ struct ActivityRow: View {
     }
     .frame(height: Theme.Drill.rowHeight)
     .padding(.horizontal, Theme.Drill.rowPadding)
+    .help(who.map { a in [model.botName(runId: runId, agentId: a.id), a.displayName].compactMap { $0 }.joined(separator: " · ") } ?? "")
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("\(who.map { "\($0.displayName): " } ?? "")\(step.text), \(String(describing: step.status))")
   }
 
-  /// The agent that did this step (or whose work it was: verify, merge, approval), if the run knows it.
+  /// The agent that did this step (or whose work it was: verify, merge, approval), if the run knows it; its bot leads
+  /// the row, and its name and role are the tooltip.
   private var who: Agent? { step.agentId.flatMap { model.run(runId)?.agents[$0] } }
-
-  /// Its bot and role, like the tree (the bot's name is the tooltip). An agent's own row that already leads with its
-  /// bot (no activity yet) shows the role only.
-  private func whoMark(_ a: Agent) -> some View {
-    HStack(spacing: Theme.Drill.whoGap) {
-      if step.kind != .agent, let bot = model.bot(runId: runId, agentId: a.id) { BotAvatar(traits: bot, size: .xs) }
-      Text(verbatim: a.displayName).font(Theme.Drill.whoFont).foregroundStyle(Theme.Drill.whoText).lineLimit(1)
-    }
-    .frame(width: Theme.Drill.whoColumn, alignment: .leading)
-    .help(model.botName(runId: runId, agentId: a.id) ?? a.displayName)
-  }
 }
 
 /// `.si2`: a 24 pt icon cell; the current step on a faint blue tile, an approval amber, finished muted.
