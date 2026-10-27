@@ -393,6 +393,8 @@ enum Theme {
     static let handoffSummaryMargin = EdgeInsets(top: 5, leading: 0, bottom: 7, trailing: 0)
     static let artFont = Font.system(size: 10.5, design: .monospaced), artText = label.opacity(0.6), artFill = Color.white.opacity(0.07)
     static let artRadius: CGFloat = 5, artPadding = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6), artGap: CGFloat = 4
+    // The agent's task above its thread, folded like a thought; its first line trails the label, quieter.
+    static let taskPreviewText = label.opacity(0.32)
     // Reviewer verdict card: the handoff card's surface; a seal and "Passed review" / "Didn't pass review", then reasons.
     static let verdictIcon = Font.system(size: 13), verdictGap: CGFloat = 6, verdictReasonGap: CGFloat = 4, verdictBullet = label.opacity(0.35)
     // Diff card (.df, .fh, .ln2)

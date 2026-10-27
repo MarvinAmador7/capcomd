@@ -7,6 +7,38 @@ import CapcomdBot
 /// SPEC §4.5 agent thread (thread-panel-v2): header, then the agent's thread (the daemon's structured items, harness #59,
 /// with your steers between them; against an older daemon, the event-built lines), then the composer. Agent text is
 /// never markdown, links or actions beyond what the daemon classified (ThreadContent.swift).
+/// The agent's task, folded by default like a thought: "› Task" and its first line; a click shows all of it.
+struct TaskRow: View {
+  let task: UntrustedText
+  @State private var open = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button { withAnimation(Theme.Motion.ease(reduceMotion)) { open.toggle() } } label: {
+        HStack(spacing: Theme.Content.thinkGap) {
+          Chevron(open: open)
+          Text("Task")
+          if !open { RedactableText(text: UntrustedText(task.firstLine)).foregroundStyle(Theme.Content.taskPreviewText).lineLimit(1) }
+        }
+        .font(Theme.Content.thinkFont).foregroundStyle(Theme.Content.thinkText)
+        .frame(height: Theme.Content.thinkHeight).contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(open ? "Task, shown" : "Task: \(task.firstLine)").accessibilityHint(open ? "Hides the task" : "Shows the whole task")
+      if open {
+        RedactableText(text: task).font(Theme.Content.thoughtFont).foregroundStyle(Theme.Content.thoughtText)
+          .lineSpacing(Theme.Content.thoughtSpacing).textSelection(.enabled)
+          .padding(.leading, Theme.Content.thoughtIndent)
+          .overlay(alignment: .leading) { Rectangle().fill(Theme.Content.thoughtRule).frame(width: 1) }
+          .padding(Theme.Content.thoughtMargin)
+          .transition(.opacity)
+      }
+    }
+    .padding(.bottom, Theme.Content.proseBottom)
+  }
+}
+
 struct ThreadView: View {
   @Environment(AppModel.self) private var model
   let runId: String
@@ -20,11 +52,7 @@ struct ThreadView: View {
       ThreadHeader(runId: runId, agentId: agentId)
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
-          if let task = agent?.task {
-            RedactableText(text: task).font(Theme.Content.thoughtFont).foregroundStyle(Theme.Content.thoughtText)
-              .lineSpacing(Theme.Content.thoughtSpacing).lineLimit(4).textSelection(.enabled)
-              .padding(.bottom, Theme.Content.proseBottom)
-          }
+          if let task = agent?.task { TaskRow(task: task).id(agentId) }
           ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
             switch e {
             case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]))
