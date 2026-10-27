@@ -815,7 +815,7 @@ export const scopeActor = actor({
         const op = opRow(r[0]);
         if (op.state !== "running") return;
         await tx.execute("UPDATE ops SET state = 'awaiting_approval', updated_at = ? WHERE op_id = ? AND state = 'running'", Date.now(), params.opId);
-        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, reason: params.reason }, `park-${params.opId}`);
+        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason }, `park-${params.opId}`);
       }, { name: "scopeParkOp" });
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
     },

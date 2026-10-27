@@ -954,6 +954,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "target": {},
     "ref": {},
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "reason": {
       "type": [
         "string",
