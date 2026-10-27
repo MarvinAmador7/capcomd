@@ -187,11 +187,11 @@ final class AppModel {
   /// The project checkout new runs go to (remembered); nil: the daemon's default project.
   var startRepo: String? {
     get { _ = revision; return store.prefs.startRepo }
-    set { store.prefs.startRepo = newValue; revision &+= 1 }
+    set { store.prefs.startRepo = newValue; revision &+= 1; Task { await store.refreshRunOptions() } }
   }
   /// Starts a run; when the daemon has no default repository, asks for the project folder once and remembers it.
   /// Who can drive a new run as its planner, and where it can run (`runs.options`); empty on daemons that can't say.
-  var drivers: [DriverInfo] { _ = revision; return store.runOptions.drivers }
+  var drivers: [DriverInfo] { _ = revision; return store.runOptions.drivers(in: startSandbox?.name) }
   var sandboxes: [SandboxInfo] { _ = revision; return store.runOptions.sandboxes }
   /// Where new runs go: the one last picked while still available, else the project's default.
   var startSandbox: SandboxInfo? {
@@ -222,7 +222,10 @@ final class AppModel {
     var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
     var state = await store.startRun(goal: goal, choice)
     if case .needsRepo = state, let folder = ProjectFolderPicker.choose() {
-      store.prefs.startRepo = folder; choice.repo = folder
+      // The project's own drivers: the daemon's (it has no project) may have had none to offer.
+      store.prefs.startRepo = folder; revision &+= 1
+      await store.refreshRunOptions()
+      choice = RunChoice(repo: folder, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
       state = await store.startRun(goal: goal, choice)
     }
     if case .started = state { return true }
