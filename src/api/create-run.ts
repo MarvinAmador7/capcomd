@@ -3,7 +3,8 @@
 // the engine and the background process; this file only decides the directory and environment it runs in.
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { defaultAgentsFile } from "../utils/home";
 import { applyConfig, projectConfigPath, readConfig, userConfigPath } from "../config/store";
 import { REPO_ENV_KEYS } from "../merge/config";
 import { env as envVar } from "../utils/env";
@@ -44,12 +45,23 @@ function contextFor(repo: string | undefined, base: Env, cwd: string): { cwd: st
 	if (!project || real(project) === real(userConfigPath(base))) throw new CreateRunError(`${dir} is not a capcomd project (no .capcomd/config.json in it or above it). Run \`capcomd setup project\` in it first.`);
 	const env: Env = { ...base };
 	for (const k of REPO_ENV_KEYS) { delete env[`CAPCOMD_${k}`]; delete env[`RELAY_${k}`]; }
+	// The project's own profiles (.capcomd/agents.json, which the CLI finds from its directory) win over the daemon's file.
+	if (existsSync(join(dir, ".capcomd", "agents.json"))) { delete env.CAPCOMD_AGENTS_FILE; delete env.RELAY_AGENTS_FILE; }
 	// CAPCOMD_NO_CONFIG (tests) skips the user's settings, never the project the request named.
 	if (base.CAPCOMD_NO_CONFIG) { for (const [k, v] of Object.entries(readConfig(project).env ?? {})) if (env[k] === undefined && typeof v === "string") env[k] = v; }
 	else applyConfig(env, dir);
 	const r = envVar("REPO", env);
 	if (!r) throw new CreateRunError(`${project} names no repository (CAPCOMD_REPO). Run \`capcomd setup project\` in ${dir}.`);
 	return { cwd: dir, env, repo: r };
+}
+
+/**
+ * The env the daemon itself evaluates a run of `repo` in (GET /v1/run-options?repo=): the launch env, with the agents
+ * file the CLI finds from the project's directory named explicitly (this process's directory is not the project's).
+ */
+export function projectSource(repo: string, base: Env = process.env): Env {
+	const ctx = launchContext(repo, base);
+	return { ...ctx.env, CAPCOMD_AGENTS_FILE: envVar("AGENTS_FILE", ctx.env) ?? defaultAgentsFile(ctx.env, ctx.cwd) };
 }
 
 /** The CLI errors that mean "not like this" (422), as opposed to a daemon fault. */

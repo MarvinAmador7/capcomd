@@ -263,7 +263,8 @@ export function envSnapshotProblem(provider: unknown, source: Record<string, str
   if ((source.CAPCOMD_SPAWN_EXEC ?? "") === "fake" || (source.CAPCOMD_SPAWN_EXEC ?? "") === "script") return null;
   if ((source.CAPCOMD_ENV ?? "").toLowerCase() === "image") return null;
   if (resolveEnvSnapshot(source)) return null;
-  return `no capcomd env snapshot for this env (the ${provider} CLI would be missing in the VM); run \`capcomd env build\` first`;
+  const name = sandboxName(source);
+  return `no capcomd env snapshot for the ${name} sandbox (the ${provider} CLI would be missing in its ${name === "docker" ? "containers" : "VMs"}); run \`capcomd env build --sandbox ${name}\` first`;
 }
 
 export function view(a: ScopeAgent) {
@@ -459,7 +460,8 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
         if (df && df.consecutive >= maxSame) break;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
         // A limit (timeout, turns, budget) is a decision, not a fault: running the same task again hits it again.
-        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit") break;
+        // So does a configuration problem (an unknown or invalid profile, no credentials): its message says what to fix.
+        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config") break;
         await sleep(2000 * attempt);
       }
     }
@@ -521,7 +523,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   try {
     let wk = await w.getWorker({ workerId: agentId });
     if (!wk || wk.state === "provisioning" || wk.state === "failed") {
-      await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec } : {}) });
+      await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}) });
       wk = await w.getWorker({ workerId: agentId });
     }
     if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
@@ -557,7 +559,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
     const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
     // Children branch from the run's target (a staging branch) when the operator set one.
     const target = await runTarget(runId);
-    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
+    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
     const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
     const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
     const costUsd = Number(rec.costUsd ?? 0);

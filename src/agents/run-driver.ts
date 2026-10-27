@@ -12,14 +12,21 @@ export const DRIVERS = ["claude", "codex"] as const satisfies readonly Provider[
 export const DRIVER_LABEL: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
 export const DEFAULT_PLANNER = "planner";
 
-/** Is this provider's credential in this auth mode present, the way capcomd checks logins (never reads a value out)? */
-export function credentialReady(provider: Provider, auth: AuthMode, source: Env = process.env): { ready: boolean; reason: string | null } {
+/** A sandbox a check is made for, by name (for the command that fixes it) and as the app calls it. */
+export interface SandboxWhere { name: string; label: string }
+
+/**
+ * Is this provider's credential in this auth mode present, the way capcomd checks logins (never reads a value out)?
+ * Plan logins are per sandbox (`source`'s CAPCOMD_SANDBOX); `where` names that sandbox in the reason.
+ */
+export function credentialReady(provider: Provider, auth: AuthMode, source: Env = process.env, where?: SandboxWhere): { ready: boolean; reason: string | null } {
   if (auth === "apikey") {
     const key = provider === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
     if (source[key]?.trim() || envVar("CREDENTIALS", source)?.toLowerCase() === "secret") return { ready: true, reason: null };
     return { ready: false, reason: `${key} isn't set` };
   }
-  return profileFor(PROVIDER_KIND[provider], source) ? { ready: true, reason: null } : { ready: false, reason: `Not logged in to ${DRIVER_LABEL[provider]} (run capcomd auth login ${provider})` };
+  if (profileFor(PROVIDER_KIND[provider], source)) return { ready: true, reason: null };
+  return { ready: false, reason: where ? `Not logged in to ${DRIVER_LABEL[provider]} for ${where.label} (run \`capcomd auth login ${provider} --sandbox ${where.name}\`)` : `Not logged in to ${DRIVER_LABEL[provider]} (run capcomd auth login ${provider})` };
 }
 
 /** The planner profile `capcomd run` would use, if one may spawn: `name`, else the profile named "planner". */
@@ -50,7 +57,7 @@ export function effortProblem(provider: Provider, effort: string): string | null
  * `effort`: what the planner runs with (the chosen level, else its profile's, else null: the CLI's default);
  * `defaultEffort`: what a run without a chosen level gets (its profile's, else the provider's default).
  */
-export function plannerDriver(provider: Provider, name?: string, source: Env = process.env, chosen?: string): DriverChoice {
+export function plannerDriver(provider: Provider, name?: string, source: Env = process.env, chosen?: string, where?: SandboxWhere): DriverChoice {
   const fallback = PROVIDER_DEFAULT_EFFORT[provider];
   if (chosen !== undefined) { const bad = effortProblem(provider, chosen); if (bad) return { ok: false, code: "effort", reason: bad, model: null, defaultEffort: fallback }; }
   const planner = plannerProfile(name, source);
@@ -58,7 +65,7 @@ export function plannerDriver(provider: Provider, name?: string, source: Env = p
   const file = readAgentsFile(agentsFilePath(source));
   const spec = file.agents[planner]!;
   if (spec.provider === provider) {
-    const c = credentialReady(provider, spec.auth, source), model = agentModel(spec, source) ?? null;
+    const c = credentialReady(provider, spec.auth, source, where), model = agentModel(spec, source) ?? null;
     const configured = agentEffort(spec, source) ?? null, defaultEffort = configured ?? fallback;
     if (!c.ready) return { ok: false, code: "login", reason: c.reason!, model, defaultEffort };
     // A chosen effort is a plain override (it widens nothing).
@@ -69,7 +76,7 @@ export function plannerDriver(provider: Provider, name?: string, source: Env = p
   const names = [...(spec.children?.allowedChildProfiles ?? []), ...Object.keys(file.agents)];
   const peer = names.map((n) => file.agents[n]).find((s): s is AgentSpec => !!s && s.provider === provider);
   const modes: AuthMode[] = peer ? [peer.auth] : [spec.auth, spec.auth === "apikey" ? "subscription" : "apikey"];
-  const checks = modes.map((m) => ({ m, c: credentialReady(provider, m, source) }));
+  const checks = modes.map((m) => ({ m, c: credentialReady(provider, m, source, where) }));
   const ok = checks.find((x) => x.c.ready);
   const model = agentModel({ model: peer?.model }, source) ?? null;
   const configured = agentEffort({ effort: peer?.effort }, source) ?? null, defaultEffort = configured ?? fallback;

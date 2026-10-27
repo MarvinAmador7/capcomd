@@ -5,6 +5,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: runs started from the menu bar app or `POST /v1/runs` for a project (`repo`) now use that project's agent
+  profiles (`.capcomd/agents.json` from `capcomd setup project`). Their planner used to fail about 5 seconds in with
+  "An internal error occurred", because the daemon looked the profile up in its own agents file. Every agent now runs
+  with the profile it was spawned with, including a planner whose provider `driver` swapped.
+- When an agent can't start because of its configuration (an unknown or invalid profile, missing credentials), its
+  result and its driver log now say what's wrong (e.g. `unknown agent profile "planner" …`) instead of "An internal
+  error occurred", and it fails at once instead of retrying three times.
+- `GET /v1/run-options?repo=<project checkout>` answers for a run of that project, with its own profiles (capability
+  `runs.options.repo`); a directory that isn't a capcomd project is 422 with the same message `POST /v1/runs` gives.
+  `POST /v1/runs` checks `effort` against the body's `repo` too.
+- `GET /v1/run-options` says, for each driver, whether it can run in each sandbox: `drivers[].sandboxes.docker` and
+  `.boxd`, with a reason naming the command that fixes it (capability `runs.options.sandbox`). Logins and agent
+  environments are per sandbox, so Claude logged in for boxd only shows as unavailable for Local. `POST /v1/runs` with
+  a `sandbox` the driver can't run in is now refused at once (422, with that reason) instead of failing later.
+- `capcomd env build`, `env status`, `auth login|status|logout` and `doctor` take `--sandbox docker|boxd` to work on
+  that sandbox instead of `CAPCOMD_SANDBOX`. The "no capcomd env snapshot" error names the sandbox and the exact
+  command (`capcomd env build --sandbox docker`), and no longer says "in the VM" for Docker.
+
 - Agents no longer fail when the daemon restarts. Before, agents that were running when `capcomd serve` stopped or
   restarted (a Ctrl-C, a service restart, an upgrade) ended as failed a few seconds later, with "An internal error
   occurred" or a connection error as their result. Now each agent waits for the daemon to come back (up to 5 minutes,

@@ -50,23 +50,36 @@ async function remoteBranchSha(remote: string, branch: string): Promise<string |
   const sha = out.trim().split(/\s+/)[0];
   return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
-/** claude-code VMs may reach only GitHub, the Anthropic API and the package registries the bootstrap needs. */
-/** Real-agent VMs boot from the `capcomd env build` snapshot when one exists (else the default image). */
-// `source`: the env as the run sees it (its own sandbox, if it has one: snapshots and plan logins are per sandbox).
-function snapshotSpec(profile?: string, source: Record<string, string | undefined> = process.env): { fromSnapshot?: string } {
-  const agent = agentFromEnv(source, profile);
-  if (!isRealAgent(agent)) return {};
-  // Plan login (capcomd auth login): boot from the auth profile's snapshot when it has one.
-  if (loadAgentConfig(source, profile).credentialMode === "subscription") {
-    const prof = profileFor(agent, source);
-    if (prof?.snapshot) return { fromSnapshot: prof.snapshot };
+/**
+ * This worker's agent, resolved once per action: its kind and, for a real agent, its config, the VM's egress and the
+ * snapshot it boots from (a plan login's when it has one, else the `capcomd env build` snapshot, else the default image).
+ * `pinned`: the spec recorded when the agent was spawned (the scope's agent record), which wins over the profile by
+ * name: this process (the daemon) need not see the project's agents file, and its own may define the name otherwise or
+ * not at all. `source`: the env as the run sees it (its own sandbox, if it has one: snapshots and plan logins are per
+ * sandbox). A problem here is configuration (an unknown or invalid profile, no credentials): it crosses the actor
+ * boundary as a typed error with its message, not rivetkit's opaque "internal error".
+ */
+function agentSetup(profile: string | undefined, pinned: unknown, source: Record<string, string | undefined>) {
+  try {
+    const kind = agentFromEnv(source, profile, pinned);
+    if (!isRealAgent(kind)) return { kind, config: null, egressAllow: LEGACY_EGRESS, snapshot: {} as { fromSnapshot?: string }, record: null };
+    const config = loadAgentConfig(source, profile, pinned);
+    let snapshot: { fromSnapshot?: string } = {};
+    if (config.credentialMode === "subscription") {
+      const prof = profileFor(kind, source);
+      if (prof?.snapshot) snapshot = { fromSnapshot: prof.snapshot };
+    }
+    if (!snapshot.fromSnapshot) { const snap = resolveEnvSnapshot(source); if (snap) snapshot = { fromSnapshot: snap }; }
+    return { kind, config, egressAllow: config.egress, snapshot, record: effectiveAgentRecord(profile, source, pinned) };
+  } catch (e) {
+    throw configError(e);
   }
-  const snap = resolveEnvSnapshot(source);
-  return snap ? { fromSnapshot: snap } : {};
 }
 
-function egressAllow(profile?: string, source: Record<string, string | undefined> = process.env): string[] {
-  return isRealAgent(agentFromEnv(source, profile)) ? loadAgentConfig(source, profile).egress : LEGACY_EGRESS;
+/** A configuration problem as an error rivetkit passes on (code "config", the redacted message); never retried. */
+export function configError(e: unknown): UserError {
+  if (e instanceof UserError) return e;
+  return new UserError(redactShapes(String((e as Error)?.message ?? e)).slice(0, 2000), { code: "config", metadata: { kind: "config", retryable: false } });
 }
 
 
@@ -159,6 +172,8 @@ export const workerActor = actor({
         epoch: number;
         /** Agent profile name (.capcomd/agents.json) for this worker's task. */
         agent?: string;
+        /** The spec the agent was spawned with (its scope record): wins over `agent` looked up by name. */
+        agentSpec?: Record<string, unknown> | null;
       }
     ) {
       const { workerId, runId, epoch } = params;
@@ -170,6 +185,7 @@ export const workerActor = actor({
         const ctx = JSON.parse(existing.context as string);
         return { workerId, vmId: ctx.vmId as string, state: existing.state };
       }
+      const setup = agentSetup(params.agent, params.agentSpec, runSource);
 
       const idemKey =
         existing && JSON.parse(existing.context as string).idemKey
@@ -192,7 +208,7 @@ export const workerActor = actor({
             "worker",
             snapshot.value as string,
             snapshot.context,
-            { type: "PROVISIONING", ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
+            { type: "PROVISIONING", ...(setup.record ? { agent: setup.record } : {}) },
             `worker-${workerId}-provisioning`,
             [
               {
@@ -215,8 +231,8 @@ export const workerActor = actor({
           idemKey,
           isolated: true,
           ttlSeconds: AGENT_VM_TTL_SECONDS,
-          egressAllow: egressAllow(params.agent, runSource),
-        ...snapshotSpec(params.agent, runSource),
+          egressAllow: setup.egressAllow,
+          ...setup.snapshot,
           labels: {
             runId,
             workerId,
@@ -363,6 +379,8 @@ export const workerActor = actor({
         conflictFiles?: string[];
         /** Agent profile name for this task. */
         agent?: string;
+        /** The spec the agent was spawned with (its scope record): wins over `agent` looked up by name. */
+        agentSpec?: Record<string, unknown> | null;
         /** verify's reviewer: review this commit; nothing is committed or pushed. */
         review?: { sha: string; branch: string; target: string };
         /** Report mode: read-only work; the final message is the result, nothing is pushed. */
@@ -428,12 +446,13 @@ export const workerActor = actor({
 
       killpoint("push.mid");
 
+      const setup = agentSetup(params.agent, params.agentSpec, runSource);
       const { id: vmId } = await provider.ensure({
         idemKey: vmKey,
         isolated: true,
         ttlSeconds: AGENT_VM_TTL_SECONDS,
-        egressAllow: egressAllow(params.agent, runSource),
-        ...snapshotSpec(params.agent, runSource),
+        egressAllow: setup.egressAllow,
+        ...setup.snapshot,
         labels: { workerId, taskId, epoch: String(epoch) },
       }).catch((error) => {
         if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
@@ -452,7 +471,7 @@ export const workerActor = actor({
       let adopted = false;
       // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
       const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
-      const agent = agentFromEnv(process.env, params.agent);
+      const agent = setup.kind;
       // Takeover: a push that reached the remote before its holder died is adopted, not redone.
       if (takeover && cfg) {
         const remote = await remoteBranchSha(cfg.remote, branch).catch(() => null);
@@ -485,7 +504,7 @@ export const workerActor = actor({
           runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
           goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
           ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
-        }, loadAgentConfig(runSource, params.agent), {
+        }, setup.config!, {
           apiKey,
           heartbeatMs: beatEvery,
           onReport: (rep) => {
@@ -549,7 +568,7 @@ export const workerActor = actor({
           "worker",
           workerLife.state,
           { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}), ...(adopted ? { adopted: true } : {}), ...(isRealAgent(agentFromEnv(process.env, params.agent)) ? { agent: effectiveAgentRecord(params.agent) } : {}) },
+          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}), ...(adopted ? { adopted: true } : {}), ...(setup.record ? { agent: setup.record } : {}) },
           idemKey,
           []
         );

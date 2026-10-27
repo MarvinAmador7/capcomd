@@ -42,8 +42,9 @@ Usage:
   capcomd trace <runId>                  Show the span waterfall
   capcomd approve <runId> <taskId|mrgId> [--deny] [--reason R]
                                        Approve (or deny) a merge parked in awaiting_approval
-  capcomd env build [--force]            Bake agent CLIs + repo deps into a boxd snapshot (no secrets)
-  capcomd env status | env rm [name|all] List / delete env snapshots
+  capcomd env build [--force]            Bake agent CLIs + repo deps into a snapshot (no secrets)
+  capcomd env status | env rm [name|all] List / delete env snapshots (env, auth, doctor: --sandbox docker|boxd
+                                       works on that sandbox instead of CAPCOMD_SANDBOX)
   capcomd agents list|show|add|set|rm|schema|validate
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work

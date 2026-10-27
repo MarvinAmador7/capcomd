@@ -132,7 +132,7 @@ export function rivetSource(): HarnessSource {
 			}).sort((a, b) => a.start.localeCompare(b.start));
 		},
 		skills: () => listSkills(),
-		runOptions: async () => (await import("./run-options")).runOptions(),
+		runOptions: async (repo) => (await import("./run-options")).runOptionsFor(repo),
 		skill: (name) => readSkill(name),
 		approvals: async (runId) => {
 			const ops = (await scope(runId).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as any[];
