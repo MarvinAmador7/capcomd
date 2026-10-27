@@ -173,6 +173,8 @@ tool activity, diffs, streamed chunks) so the runner gets structured output for 
 - capcomd: the adapter (ACP → thread items), installer and snapshot, credentials as boxd secrets, the supervisor,
   turn/cost accounting from ACP, a run in the isolated VM with Hermes's approvals off (the VM is the boundary).
 - Effort **L**. After P1–P3; needs a stable ACP surface.
+- **Decided (owner, 2026-10-27):** yes, on the roadmap: Hermes as a worker provider. Open for later: Hermes workers use
+  the user's existing Hermes provider config, or a separate capcomd-managed set of logins (separate model bills)?
 
 ### Rejected / not now
 
@@ -205,7 +207,7 @@ into something safe to recommend, and P2 then only has to deliver the nudge.
 2. ~~P2: is a daemon-side outbound notifier~~ Yes, where it's the best approach (2026-10-27). (HTTP POSTs from capcomd, loopback by default) in scope, or should
    notifications stay pull-only (MCP, SSE)?
 3. ~~P5: is the desktop-app Bot Mode a target, or is Telegram/Slack the surface that matters?~~ Bot Mode only, for now (2026-10-27).
-4. P7: is a third provider (and the model bills it brings) wanted at all, or is capcomd Claude Code + Codex only?
+4. ~~P7: is a third provider (and the model bills it brings) wanted at all, or is capcomd Claude Code + Codex only?~~ Yes, later (2026-10-27).
 5. Should capcomd publish a Hermes portable plugin (P4) from this repo, or keep `capcomd setup agent` as the only path?
 
 [d-mcp]: https://github.com/NousResearch/hermes-agent/blob/e5ea5fd9ccdf2913c0b21b24eb3d22b321d2e2a6/website/docs/user-guide/features/mcp.md
