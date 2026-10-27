@@ -7,11 +7,12 @@ import CapcomdStore
 /// phase 2 a setting the daemon marks `editable` can be changed, with `sandboxes.settings` and the `configure` scope).
 /// One generic screen for every place: the sections and their order are fixed here, as on the board; which rows appear
 /// and what they say come from the daemon (`/v1/sandboxes/{name}`, `…/resources`, `/v1/logins`, `/v1/environments`).
-/// It is pushed in place of the Runs pane, with a back control (⌘[ or Esc) and the window titled "Runs › Cloud".
+/// It opens as a sheet on the Settings window (Details… on the place's status row, as Wi-Fi's Details…), Done or Esc
+/// closes it; it is as tall as its content up to the screen's visible height, then scrolls.
 struct PlaceDetailsView: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
   let name: String
-  let back: () -> Void
   /// The machine whose terminal command is being asked for.
   @State private var opening: String?
   /// Why the last Open in Terminal didn't open.
@@ -23,16 +24,15 @@ struct PlaceDetailsView: View {
     let place = model.sandboxes.first { $0.name == name }
     let title = d?.label ?? PlaceNames.title(name, label: place?.label)
     let sections = model.sandboxDetail(name).map(SandboxRows.sections) ?? DetailSections()
+    let isDefault = model.defaultPlace?.name == name
     VStack(alignment: .leading, spacing: 0) {
-      backBar
       Form {
         Section {
-          if let d { PlaceStatusRow(descriptor: d, place: place) }
+          if let d { PlaceStatusRow(descriptor: d, place: place, isDefault: isDefault, canMakeDefault: place != nil) }
           ForEach(sections.status) { setting($0) }
           if let env = model.environmentRows?.first(where: { $0.sandbox == name }) { PlaceEnvironmentRow(env: env, title: title) }
         } header: {
-          PlaceHeader(name: name, descriptor: d, fallbackTitle: place.map(PlaceNames.header) ?? title, fallbackLabel: place?.label,
-                      isDefault: model.defaultPlace?.name == name, canMakeDefault: place != nil, showDetails: nil)
+          PlaceHeader(name: name, descriptor: d, fallbackLabel: place?.label)
         } footer: {
           VStack(alignment: .leading, spacing: 4) {
             if let w = model.handOffs.waiting(HandOffKey.environment(name)) ?? model.handOffs.waiting(HandOffKey.placeSetup(name)) {
@@ -52,7 +52,17 @@ struct PlaceDetailsView: View {
       }
       .formStyle(.grouped)
       .disabled(!live)
+      .sheetFit(reserve: Theme.Settings.Details.actionsHeight)
+      Divider()
+      HStack {
+        Spacer(minLength: 0)
+        Button("Done") { dismiss() }
+          .keyboardShortcut(.defaultAction)
+      }
+      .padding(.horizontal, Theme.Settings.Details.actionsPaddingH)
+      .frame(height: Theme.Settings.Details.actionsHeight)
     }
+    .frame(width: Theme.Settings.Details.sheetWidth)
     // The daemon caches provider calls, so the machines are cheap to read every few seconds while this shows.
     .task(id: name) {
       while !Task.isCancelled {
@@ -60,32 +70,13 @@ struct PlaceDetailsView: View {
         try? await Task.sleep(for: .seconds(Theme.Settings.poll))
       }
     }
-    .onAppear { SettingsWindow.setTitle(Self.windowTitle(title)) }
-    .onChange(of: title) { _, t in SettingsWindow.setTitle(Self.windowTitle(t)) }
-    .onDisappear { if SettingsWindow.title == Self.windowTitle(title) { SettingsWindow.setTitle("Runs") } }
-    .onExitCommand(perform: back)
+    .onExitCommand { dismiss() }
   }
-
-  static func windowTitle(_ place: String) -> String { "Runs › \(place)" }
 
   /// A setting as the store says it can be shown here: a picker that changes it, or its value read-only.
   private func setting(_ field: SandboxField) -> some View {
     let name = name
     return FieldRow(field: field, control: model.fieldControl(name, field)) { model.changeSetting(name, id: field.id, to: $0) }
-  }
-
-  /// Back to Runs: the system's back chevron, ⌘[ as in every macOS navigation.
-  private var backBar: some View {
-    HStack {
-      Button(action: back) { Label("Runs", systemImage: "chevron.backward") }
-        .buttonStyle(.borderless)
-        .keyboardShortcut("[", modifiers: .command)
-        .help("Back to Runs")
-        .accessibilityLabel("Back to Runs")
-      Spacer(minLength: 0)
-    }
-    .padding(.horizontal, Theme.Settings.Details.backPaddingH)
-    .padding(.top, Theme.Settings.Details.backPaddingTop)
   }
 
   /// Machines: what capcomd runs at this place now, owned ones first, then any left behind; then the idle lifetime.
@@ -170,47 +161,66 @@ struct PlaceDetailsView: View {
   }
 }
 
-/// A place's section header: its mark, title, Default (or Make Default), and Details… where the daemon describes it.
+/// A place's section header: its mark and its kind of place ("Local", "Cloud"). Which provider is the default, and
+/// Details…, are on the provider's status row below.
 struct PlaceHeader: View {
-  @Environment(AppModel.self) private var model
   let name: String
   let descriptor: SandboxDescriptor?
-  let fallbackTitle: String
   /// The place's label when there is no descriptor ("Local", from run-options).
   var fallbackLabel: String? = nil
+
+  var body: some View {
+    HStack(spacing: Theme.Settings.headerGap) {
+      if let d = descriptor { PlaceMark(mark: d.mark ?? d.name, kind: d.kind) } else { PlaceMark(name: name) }
+      Text(verbatim: descriptor?.label ?? PlaceNames.title(name, label: fallbackLabel))
+    }
+  }
+}
+
+/// A provider's name on its status row, with the Default badge when new runs start there.
+struct PlaceRowLabel: View {
+  let text: String
+  let title: String
   let isDefault: Bool
-  var canMakeDefault = true
+
+  var body: some View {
+    HStack(spacing: Theme.Settings.headerGap) {
+      Text(verbatim: text)
+      if isDefault { DefaultBadge().accessibilityLabel("\(title) is the default") }
+    }
+  }
+}
+
+/// The trailing controls every status row shares: Make Default where this isn't the default, then Details….
+struct PlaceRowActions: View {
+  @Environment(AppModel.self) private var model
+  let name: String
+  let title: String
+  let canMakeDefault: Bool
   let showDetails: (() -> Void)?
 
   var body: some View {
-    let title = descriptor?.label ?? PlaceNames.title(name, label: fallbackLabel)
-    HStack(spacing: Theme.Settings.headerGap) {
-      if let d = descriptor { PlaceMark(mark: d.mark ?? d.name, kind: d.kind) } else { PlaceMark(name: name) }
-      Text(verbatim: descriptor?.displayTitle ?? fallbackTitle)
-      Spacer(minLength: 0)
-      if isDefault {
-        DefaultBadge().accessibilityLabel("\(title) is the default")
-      } else if canMakeDefault {
-        Button("Make Default") { model.setDefaultPlace(name) }
-          .controlSize(.small).font(Theme.Settings.headerButtonFont)
-          .accessibilityLabel("Make \(title) the default")
-      }
-      if let showDetails {
-        Button("Details…", action: showDetails)
-          .controlSize(.small).font(Theme.Settings.headerButtonFont)
-          .accessibilityLabel("\(title) details")
-          .accessibilityHint("Shows its machines, logins and checkpoints.")
-      }
+    if canMakeDefault {
+      Button("Make Default") { model.setDefaultPlace(name) }
+        .accessibilityLabel("Make \(title) the default")
+    }
+    if let showDetails {
+      Button("Details…", action: showDetails)
+        .accessibilityLabel("\(title) details")
+        .accessibilityHint("Shows its machines, logins and checkpoints.")
     }
   }
 }
 
 /// Whether a place can be used now, from its descriptor: "Running" / "Ready", or the daemon's reason, with Set Up…
-/// when the reason names a capcomd command to run.
+/// when the reason names a capcomd command to run; then Make Default (or the Default badge by the name) and Details….
 struct PlaceStatusRow: View {
   @Environment(AppModel.self) private var model
   let descriptor: SandboxDescriptor
   let place: SandboxInfo?
+  let isDefault: Bool
+  var canMakeDefault = true
+  var showDetails: (() -> Void)? = nil
 
   var body: some View {
     let s = SandboxRows.status(descriptor, place: place)
@@ -228,9 +238,10 @@ struct PlaceStatusRow: View {
               .accessibilityHint("Opens Terminal to set up \(descriptor.vendorName).")
           }
         }
+        PlaceRowActions(name: descriptor.name, title: descriptor.label, canMakeDefault: canMakeDefault && !isDefault, showDetails: showDetails)
       }
     } label: {
-      Text(verbatim: descriptor.vendorName)
+      PlaceRowLabel(text: descriptor.vendorName, title: descriptor.label, isDefault: isDefault)
     }
   }
 }

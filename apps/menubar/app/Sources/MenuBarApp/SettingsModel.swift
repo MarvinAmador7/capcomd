@@ -138,10 +138,6 @@ enum PlaceNames {
   static func detail(_ name: String) -> String {
     switch name { case "docker": "Docker on this Mac"; case "boxd": "boxd machines"; default: name }
   }
-  /// The section header in Runs: "Local · Docker on this Mac", "Cloud · boxd".
-  static func header(_ s: SandboxInfo) -> String {
-    switch s.name { case "docker": "Local · Docker on this Mac"; case "boxd": "Cloud · boxd"; default: "\(s.label) · \(s.name)" }
-  }
   /// The Runs on popup: "Local · Docker", "Cloud · boxd".
   static func menu(_ s: SandboxInfo) -> String {
     switch s.name { case "docker": "Local · Docker"; case "boxd": "Cloud · boxd"; default: "\(s.label) · \(s.name)" }
@@ -257,11 +253,6 @@ enum AppInfo {
   private static var window: NSWindow?
   private static var closeObserver: NSObjectProtocol?
 
-  /// A pushed screen's title ("Runs › Cloud"); the pane's own title comes back when it is popped. Best effort: the
-  /// tab view sets the title again whenever the pane changes.
-  static func setTitle(_ title: String) { window?.title = title }
-  static var title: String? { window?.title }
-
   /// Settings… in the panel: close the panel (it would stay on top), become a regular app, open the window.
   static func open(_ openSettings: OpenSettingsAction) {
     closePanel()
@@ -359,6 +350,28 @@ struct PaneFit: ViewModifier {
 extension View {
   /// Settings panes: the window fits the pane (PaneFit).
   func paneFit() -> some View { modifier(PaneFit()) }
+  /// A sheet's form: as tall as its content, up to the screen's visible height less `reserve` (SheetFit).
+  func sheetFit(reserve: CGFloat) -> some View { modifier(SheetFit(reserve: reserve)) }
+}
+
+/// PaneFit for a sheet: the form is as tall as its content (a Form's own ideal height is small), and scrolls once it
+/// would be taller than the screen's visible height under the window's toolbar, less the sheet's own bar (`reserve`).
+struct SheetFit: ViewModifier {
+  let reserve: CGFloat
+  @State private var overflow = false
+  func body(content: Content) -> some View {
+    let cap = SettingsWindow.maxPaneHeight - reserve
+    Group {
+      if overflow {
+        content.frame(height: cap)
+      } else {
+        content.scrollDisabled(true).fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+      if !overflow && h > cap + 0.5 { overflow = true }
+    }
+  }
 }
 
 /// Marks drawn from SVG paths as images, for popup menus (which take images, not shapes). Template images are tinted

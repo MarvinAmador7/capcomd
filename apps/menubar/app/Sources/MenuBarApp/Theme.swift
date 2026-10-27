@@ -510,7 +510,8 @@ enum Theme {
     static let sheetWidth: CGFloat = 380, sheetPadding: CGFloat = 20, sheetGap: CGFloat = 10
     /// A place's details (CloudExplore.dc.html), pushed from Runs.
     enum Details {
-      static let backPaddingH: CGFloat = 20, backPaddingTop: CGFloat = 12   // the back control, aligned with the Form's groups
+      static let sheetWidth: CGFloat = 560                             // the sheet (`.win` 560 px)
+      static let actionsHeight: CGFloat = 52, actionsPaddingH: CGFloat = 20   // `.actions`: Done at the bottom right
       static let machineGap: CGFloat = 10                              // `.mrow` gap
       static let machineFont = Font.system(size: 12)                   // `.mrow` 12 px
       static let ageFont = Font.system(size: 11, design: .monospaced)  // `.mono`

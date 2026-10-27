@@ -6,24 +6,19 @@ import CapcomdStore
 /// Settings › Runs (Runs.dc.html; States: building an agent environment): what new runs start with, and each place
 /// agents can run, with its agent environment. "Runs on" and each place's Default / Make Default are one setting,
 /// the composer's starting place, which the composer's Local / Cloud switch changes too. A place's Details… (daemons
-/// with `sandboxes`) pushes its details screen in place of the pane (SettingsPlaceDetails.swift); back returns here.
+/// with `sandboxes`), at the end of its status row, opens its details as a sheet (SettingsPlaceDetails.swift).
 struct RunsPane: View {
   @Environment(AppModel.self) private var model
   private static let chooseFolder = "\u{1}choose"
-  /// The place whose details are pushed, if any.
+  /// The place whose details sheet is open, if any.
   @State private var details: String?
 
   var body: some View {
-    Group {
-      if let name = details {
-        PlaceDetailsView(name: name) { details = nil }
-      } else {
-        runs
+    runs
+      .paneFit()
+      .sheet(isPresented: Binding(get: { details != nil }, set: { if !$0 { details = nil } })) {
+        if let name = details { PlaceDetailsView(name: name) }
       }
-    }
-    // A new identity per screen: the window fits each one afresh (PaneFit), and the pushed screen starts its own polling.
-    .paneFit()
-    .id(details ?? "")
   }
 
   @ViewBuilder private var runs: some View {
@@ -136,7 +131,7 @@ struct PlaceSection: View {
   let last: Bool
   let environmentsUnsupported: Bool
   let live: Bool
-  /// Details…: pushes the place's details screen.
+  /// Details…: opens the place's details sheet.
   let showDetails: () -> Void
 
   var body: some View {
@@ -145,7 +140,7 @@ struct PlaceSection: View {
       statusRow
       if let env { PlaceEnvironmentRow(env: env, title: title) }
     } header: {
-      PlaceHeader(name: place.name, descriptor: descriptor, fallbackTitle: PlaceNames.header(place), fallbackLabel: place.label, isDefault: isDefault, showDetails: descriptor == nil ? nil : showDetails)
+      PlaceHeader(name: place.name, descriptor: descriptor, fallbackLabel: place.label)
     } footer: {
       VStack(alignment: .leading, spacing: 4) {
         if let w = model.handOffs.waiting(HandOffKey.environment(place.name)) ?? model.handOffs.waiting(setupKey) {
@@ -170,13 +165,14 @@ struct PlaceSection: View {
   private var setupKey: String { descriptor == nil ? (place.name == "boxd" ? HandOffKey.boxdKey : HandOffKey.placeSetup(place.name)) : HandOffKey.placeSetup(place.name) }
 
   @ViewBuilder private var statusRow: some View {
-    if let descriptor { PlaceStatusRow(descriptor: descriptor, place: place) } else { legacyStatusRow }
+    if let descriptor { PlaceStatusRow(descriptor: descriptor, place: place, isDefault: isDefault, showDetails: showDetails) } else { legacyStatusRow }
   }
 
   /// Daemons without `sandboxes`: the row as it was, by name.
   @ViewBuilder private var legacyStatusRow: some View {
     let reason = PlaceNames.reason(place.reason)
-    LabeledContent(PlaceNames.engine(place.name)) {
+    let title = PlaceNames.title(place.name, label: place.label)
+    LabeledContent {
       HStack(spacing: Theme.Settings.rowGap) {
         if place.name == "boxd" && model.handOffs.waiting(HandOffKey.boxdKey) != nil {
           WaitingValue()
@@ -191,7 +187,10 @@ struct PlaceSection: View {
         } else {
           StatusValue(.bad, reason ?? "Can't be used now")
         }
+        PlaceRowActions(name: place.name, title: title, canMakeDefault: !isDefault, showDetails: nil)
       }
+    } label: {
+      PlaceRowLabel(text: PlaceNames.engine(place.name), title: title, isDefault: isDefault)
     }
   }
 }
