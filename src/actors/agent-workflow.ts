@@ -154,9 +154,25 @@ async function poll(c: any, p: StartAgent, n: number): Promise<Poll> {
   return { state: "failed", error: JSON.parse(row.error ?? "{}") };
 }
 
+/**
+ * The workflow's shape version (ADR-022 "Changing the workflow"). History is matched by entry names, so an agent in
+ * flight when capcomd is upgraded replays its recorded entries against the new code. Every change to the order, names
+ * or kinds of entries is gated: bump the version here and branch on what `getVersion` returns (an agent that had
+ * already run past the gate under older code gets the version it ran with, 1 for code before any gate; a new one gets
+ * the latest), and mark an entry the new code no longer makes with `ctx.removed(name, kind)`. LIFECYCLE gates the
+ * top level; DRIVE gates one iteration of the drive loop (each iteration resolves its own).
+ */
+// Test only (workflow-upgrade.test.ts): the upgrade drill's "next version". "1": shape 2 behind the gates; "ungated":
+// shape 2 for everyone, as a change made without the rule would be (the drill's control: it must diverge).
+const DRILL = () => env("WORKFLOW_DRILL");
+const LIFECYCLE_SHAPE = () => (DRILL() ? 2 : 1);
+const DRIVE_SHAPE = () => (DRILL() ? 2 : 1);
+const gate = async (ctx: any, name: string, latest: number) => (DRILL() === "ungated" ? latest : ctx.getVersion(name, latest));
+
 async function agentLifecycle(ctx: any): Promise<void> {
   const msg = await ctx.queue.next("wait-start", { names: ["start"] });
   const p = msg.body as StartAgent;
+  const shape: number = await gate(ctx, "lifecycle-shape", LIFECYCLE_SHAPE());
   const driver = `wf-${p.agentId}-e${p.epoch}`;
   // The agent's drive settings (recorded at spawn: how it runs, the driver's timings), over this host's env, for every
   // step and the run it starts. Read by the first step (its output is history, so a replay knows them too).
@@ -184,6 +200,8 @@ async function agentLifecycle(ctx: any): Promise<void> {
   if (!prep.ok) return giveUp(failureOf(prep));
   if (prep.value.kind === "end") return;
   if (prep.value.kind === "paused") { if (prep.value.until > 0) await wakeAt(ctx, step, p, prep.value.until); return; }
+  // The upgrade drill's version 2 adds a step here; agents that started under version 1 never see it.
+  if (shape >= 2) await step("drill-v2", async () => (await scopeOf(p.runId)).appendLog({ agentId: p.agentId, stream: "workflow", lines: ["workflow shape 2"] }));
   const startedAt: number = prep.value.startedAt ?? Date.now();
 
   // One flat loop, one phase per iteration (a loop nested in a loop's iteration, or in a try block, diverges on replay
@@ -195,6 +213,10 @@ async function agentLifecycle(ctx: any): Promise<void> {
       const lstep = (name: string, run: (c: any) => Promise<any>, o: Record<string, unknown> = {}) =>
         l.tryStep({ name, timeout: 60_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 15_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run: inEnv(run) });
       const n = st.n;
+      const iterShape: number = await gate(l, "drive-shape", DRIVE_SHAPE());
+      // The upgrade drill's version 2 of an iteration: one more (no-op) step before each phase, and the watch's entries
+      // renamed (an iteration that recorded "attempt-wait"/"poll" under shape 1 must replay those names).
+      if (iterShape >= 2) await lstep("drill-iteration-v2", async () => ({ phase: st.phase }));
       const failed = (r: any) => Loop.continue({ phase: "failed", n, error: { ...failureOf(r), final: false } });
       if (st.phase === "ensure") {
         const r = await lstep("ensure-machine", async () => {
@@ -220,8 +242,8 @@ async function agentLifecycle(ctx: any): Promise<void> {
       }
       if (st.phase === "watch") {
         // Woken by the run's `attempt` message when it ends; else it looks every WATCH_MS (a cancel, a lost run).
-        await l.queue.nextBatch("attempt-wait", { names: ["attempt"], count: 1, timeout: watchMs });
-        const r = await lstep("poll", (c) => poll(c, p, n), { maxRetries: 10 });
+        await l.queue.nextBatch(iterShape >= 2 ? "attempt-wait-2" : "attempt-wait", { names: ["attempt"], count: 1, timeout: watchMs });
+        const r = await lstep(iterShape >= 2 ? "look" : "poll", (c) => poll(c, p, n), { maxRetries: 10 });
         if (!r.ok) return failed(r);
         const v: Poll = r.value;
         if (v.state === "running") return Loop.continue(st);

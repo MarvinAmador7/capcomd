@@ -114,11 +114,38 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
   over their 5 s read window. With a fresh home they pass both ways. Worth a look on its own (a stream's first frames
   shouldn't depend on how many runs the home has seen).
 
+## Changing the workflow (the rule; since 2026-10-28)
+
+An agent can be in flight across a capcomd upgrade: its workflow replays the history it recorded under the old code,
+matched to the new code by entry name. The workflow carries two shape gates (`src/actors/agent-workflow.ts`):
+`ctx.getVersion("lifecycle-shape", N)` at the top, and `l.getVersion("drive-shape", M)` at the start of every
+drive-loop iteration. `getVersion` returns the version the instance (or that iteration) started with: 1 for one that
+had already run past the gate under code from before the gate existed, the latest for one that reaches it fresh; the
+answer is recorded, so a replay gets the same one.
+
+- **Any change to the names, kinds or order of workflow entries** (a step, sleep, queue wait, loop, try) bumps the
+  version of the scope it's in: `LIFECYCLE_SHAPE` for the top level, `DRIVE_SHAPE` for an iteration of the drive loop.
+- **Branch on the returned version**: code for older versions stays until no agent can still be on it (one release
+  after the change, then remove it with the next bump). New entries go in the new branch only.
+- **An entry the new code no longer makes** is marked `await ctx.removed(name, kind)` where it used to be.
+- **Never** rename or reorder an entry in place, change a step's output shape that later code reads without a
+  version check, or nest a loop in a loop (or a try block).
+- **Changing what a step does inside** (its body, not its name or output) needs no bump: completed steps aren't re-run,
+  and an interrupted one runs again with the new body. It must stay idempotent.
+- Run `tests/subagents/workflow-upgrade.test.ts` for any change here.
+
+The drill (`workflow-upgrade.test.ts`, test-only `CAPCOMD_WORKFLOW_DRILL`): agent A is mid-run under shape 1 when the
+engine host dies; it comes back with shape 2 (a new top-level step, and in every drive-loop iteration a new step plus
+the watch's `attempt-wait`/`poll` entries renamed). With the gates, A replays its shape-1 history, never runs the new
+top-level step, finishes, and nothing diverges; agent B, started after the upgrade, runs shape 2. The control makes the
+same change without the gates (`=ungated`): A runs the shape-2 step it never started with and its workflow diverges
+from its history (`HistoryDivergedError`), so it would never finish. Both pass (2026-10-28).
+
 ## Failure modes
 
-- **Workflow replay and code changes.** History is matched by step names; changing the workflow's shape breaks
-  in-flight agents (`HistoryDivergedError`). Use `ctx.getVersion`/`ctx.removed` for changes once agents can be in
-  flight across an upgrade, or drain (no running agent) before upgrading.
+- **Workflow replay and code changes.** History is matched by entry names; changing the workflow's shape under an
+  in-flight agent breaks it (`HistoryDivergedError`), or makes it run steps of a shape it never started with. Every
+  change follows "Changing the workflow" below.
 - **Nested loops diverge on replay (rivetkit 2.3.31).** A loop inside another loop's iteration resumes at its saved
   iteration, and the outer iteration's check then finds the retained earlier inner iterations unvisited. Found by the
   first version of this spike; the workflow is one flat loop with a phase per iteration. Upstream report worth filing.
@@ -167,7 +194,7 @@ host instead, mid-step, and checks the same property (`tests/chaos/primitives.ts
    Claude + Codex) and the same goal on the Docker (Local) provider pass; a daemon restart mid-run of a real agent
    recovers; an hour-long agent's workflow history and the engine host's memory with a dozen agents are measured
    (every run now lives in the engine host process, not in one process per agent).
-3. A workflow-shape change is shipped once with `getVersion` against in-flight agents (upgrade drill).
+3. Met (2026-10-28): the upgrade drill above passes, and the version gates are in the workflow.
 4. `agent.run` spans and the menu bar's live views are unchanged with the flag on.
 5. Then: remove `agent-drive`, `driveAgent`/`engineOutage`, the process-side lease heartbeat and the scope's `wakeDue`
    alarm path; keep `claimDriver` only as the workflow's liveness lease.
