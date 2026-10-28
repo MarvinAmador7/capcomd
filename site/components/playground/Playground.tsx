@@ -229,7 +229,7 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
               <p className="pg__hint">The link holds the id, the role, every part and the size, so it redraws exactly this bot.</p>
             </Pop>
           </div>
-          <p className="pg__brand">{SITE.brand}</p>
+          <p className="pg__license">{SITE.license}</p>
         </div>
 
         <form className="pg__panel" data-ui data-load style={{ ["--d" as string]: "180ms" }} onSubmit={(e) => e.preventDefault()} aria-label="Bot editor">

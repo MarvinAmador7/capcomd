@@ -8,6 +8,6 @@ export const SITE = {
   description:
     "Durable orchestration for swarms of coding agents: one VM and branch per agent, operator-owned checks and a reviewer agent, exactly-once merges of the commit that passed.",
   repo: "https://github.com/MarvinAmador7/capcomd",
-  /** The brand notice, as the owner states it. */
-  brand: "The capcomd name, bots and brand are © 2026 Marvin Amador Campos. capcomd's code is MIT-licensed.",
+  /** The licence line shown under the playground. */
+  license: "capcomd is open source, released under the MIT License.",
 } as const;

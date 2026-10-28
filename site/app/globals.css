@@ -549,7 +549,7 @@ html:not(.js) .stage__title { display: block; }
   .pg__meta { margin: 0; display: flex; gap: 10px; align-items: baseline; font-size: var(--text-body); }
   .pg__meta span { font-style: italic; }
   .pg__odds { margin: 6px 0 0; font-size: var(--text-small); color: var(--color-muted); }
-  .pg__brand { margin: 10px 0 0; font-size: 13px; color: var(--color-muted); }
+  .pg__license { margin: 10px 0 0; font-size: 13px; color: var(--color-muted); }
 
   /* The action bar: one row of Mac-style buttons; Download and Share open small popovers. */
   .pg__bar { position: relative; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; } /* above the editor, so its popovers do too */
@@ -690,7 +690,7 @@ html:not(.js) .stage__title { display: block; }
     .pg__odds { order: 2; margin-top: -8px; }
     .pg__bar { order: 3; margin-top: 0; }
     .pg__panel { order: 4; }
-    .pg__brand { order: 5; margin-top: 0; }
+    .pg__license { order: 5; margin-top: 0; }
     .pg__panel :is(input, button, select), .pg__bar > * { scroll-margin-top: 216px; }
     .pg__options { flex: none; }
     .pg__grid { max-height: 300px; }
