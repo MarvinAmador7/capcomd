@@ -98,8 +98,6 @@
 .hero__do { grid-column: 1 / span 6; display: flex; gap: 24px; align-items: center; margin-top: 4px; }
 .hero__do a.text { font-size: var(--text-body); text-underline-offset: 0.2em; }
 .hero__note { grid-column: 8 / span 5; grid-row: 1 / span 2; align-self: end; margin: 0; min-width: 0; font-size: var(--text-body); line-height: 1.45; }
-.hero__note button { all: unset; cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em; }
-.hero__note button:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 2px; }
 
 /* The install line in a small Mac window: the first native touch on the page. */
 .win { display: block; margin-top: 16px; border-radius: 10px; overflow: clip; background: var(--color-window); color: var(--color-app-text); font: 400 13px/1.35 var(--font-ui); box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.14); } /* taste-skill-ignore: interface fragment, window chrome */
@@ -950,4 +948,26 @@ html:not(.js) .stage__title { display: block; }
 @layer components {
   .spec__prov { display: inline-flex; align-items: center; gap: 10px; }
   .spec__mark { width: 0.72em; height: 0.72em; fill: currentColor; margin-top: -0.08em; }
+}
+
+/* The hero's install buttons: one per coding agent, each copies the README's step 1 for it. */
+@layer components {
+  .agents { position: relative; margin: 16px 0 18px; }
+  .agents.is-waiting { visibility: hidden; }
+  .agents__row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .agents__lbl { margin-right: 6px; font-size: var(--text-body); }
+  .agents__btn { all: unset; box-sizing: border-box; position: relative; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 10px; background: var(--color-ink); color: var(--color-paper); cursor: pointer; transition: transform 140ms var(--ease-out), background-color 160ms ease, color 160ms ease; }
+  .agents__btn svg { width: 24px; height: 24px; fill: currentColor; }
+  .agents__btn:hover { background: var(--color-plum); }
+  .agents__btn:active { transform: scale(0.96); }
+  .agents__btn:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 2px; }
+  .agents__btn.is-done { background: var(--color-accent); color: var(--color-ink); }
+  .agents__btn::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; translate: -50% 4px; padding: 5px 8px; border-radius: 6px; background: var(--color-ink); color: var(--color-paper); font: 500 12px/1 var(--font-ui); white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 140ms ease, translate 160ms var(--ease-out); }
+  .agents__btn:hover::after, .agents__btn:focus-visible::after { opacity: 1; translate: -50% 0; }
+  .agents__status { position: absolute; z-index: 5; left: 0; top: calc(100% + 10px); width: min(440px, 100%); margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--color-ink); color: var(--color-paper); font: 400 14px/1.45 var(--font-ui); }
+  .agents__status:empty { display: none; }
+  .agents__status b { display: block; font-weight: 600; }
+  .agents__status code { display: block; margin: 6px 0; color: var(--color-accent-light); overflow-wrap: anywhere; }
+  .agents__status span code { display: inline; margin: 0; }
+  @media (prefers-reduced-motion: reduce) { .agents__btn, .agents__btn::after { transition: none; } }
 }

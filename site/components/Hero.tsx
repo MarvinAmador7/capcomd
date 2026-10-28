@@ -1,3 +1,4 @@
+import { AgentInstall } from "./AgentInstall";
 import { HeroCrew } from "./crew";
 import { Win, delay } from "./marks";
 import { Nav } from "./Nav";
@@ -25,6 +26,7 @@ export function Hero() {
         </div>
         <div className="hero__note" data-load style={delay(620)}>
           <p className="m-0">Open source. One executable for macOS and Linux.</p>
+          <AgentInstall />
           <Win title="zsh" label="Install with Homebrew"><code tabIndex={0}>brew install MarvinAmador7/tap/capcomd</code></Win>
         </div>
       </div>

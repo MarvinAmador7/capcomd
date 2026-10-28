@@ -32,6 +32,7 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 | `app/robots.ts`, `app/sitemap.ts` | `robots.txt` and `sitemap.xml`, written at build time. |
 | `components/` | One component per section. Server components by default, so the copy is in the static HTML and works without JS. The client parts are only `crew.tsx` (the crew, redrawn per visit and on "Draw another", and the typed goal), `RunAccordion.tsx` (the stages, an APG accordion of disclosure buttons) and `Reveals.tsx` (scroll entrances). |
 | `lib/site.ts` | The site's origin (`https://capcomd.vercel.app`, one value), the title, the description, and the licence line. |
+| `lib/agent-icons.ts` | The Claude Code, Codex and Hermes Agent marks on the hero's install buttons (from `@lobehub/icons-static-svg` 1.101.0, MIT; the marks belong to their owners). |
 | `lib/crew.ts`, `lib/marks.ts` | The crew's roles and default seed (`run_7e9410`, what the static HTML is drawn with), the wordmark, the menu bar mark. |
 | `lib/vendor/bot-avatar.js` | packages/bot-avatar, bundled as one ESM file by `bun run vendor` (with hand-written types beside it). |
 | `public/fonts/OFL-*.txt` | The fonts' licences, linked from the footer. |
