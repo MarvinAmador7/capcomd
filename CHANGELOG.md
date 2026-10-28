@@ -19,7 +19,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   An agent's `result` records how its merge ended (`merge`: target and merged, failed or denied) and, when its checks
   failed, how (`verification.checks.reason`) and the lines of the check output that name the failure
   (`verification.checks.excerpt`). `capcomd merge --json` of a parked merge includes the same `diff`.
-
+- Menu bar app: the folder picker (**+ › Choose Project Folder…**, and Choose… in Settings › Runs) opens in front of
+  other apps' windows and keeps the folder you pick; it could open behind the app you were using, and the first click
+  in it closed it with no folder. After you pick a folder the menu bar panel opens again on what the folder needs.
 - Menu bar app: set a project up right in the composer. Pick a folder with **+ › Choose Project Folder…**: a capcomd
   project is used at once as before; any other folder gets an orange dot on its chip and, in place of the tool row, what
   it needs next. A GitHub checkout shows its repository, the target branch, how changes land (pull requests, or pushes
