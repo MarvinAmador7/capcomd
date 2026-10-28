@@ -19,10 +19,11 @@ export async function releasePort(port = 6420): Promise<void> {
 }
 
 export async function wipeEngineData(opts: EngineOpts = {}): Promise<void> {
+  // Never a default: serve's default data dir is the user's real one (<capcomd home>/engine/<port>, with its backups).
+  if (!opts.dataDir) throw new Error("wipeEngineData needs an explicit dataDir (refusing to delete the default engine data dir)");
   await releasePort(opts.port ?? 6420);
   const { rm } = await import("fs/promises");
-  // `capcomd serve`'s own default (src/engine/data.ts): capcomd's home, never rivetkit's ~/.rivetkit.
-  const dir = opts.dataDir ?? (await import("../../src/engine/data")).engineDataDir(opts.port ?? 6420);
+  const dir = opts.dataDir;
   await rm(dir, { recursive: true, force: true });
 }
 

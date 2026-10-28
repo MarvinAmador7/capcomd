@@ -6,7 +6,8 @@
 //   <home>/engine/<port>/db                    the engine's RocksDB (RIVET__FILE_SYSTEM__PATH, set by engine-wrapper.sh)
 //   <home>/engine/<port>/engine.pid            the running engine's pid (engine-wrapper.sh writes it)
 //   <home>/engine/<port>/engine-version.json   the engine version that last opened db (capcomd writes it)
-//   <home>/engine/<port>/backups/<v>-<UTC>/    db as it was before an engine of another version opened it (newest 3)
+//   <home>/engine/<port>/backups/<v>-<UTC>/    db/ and engine-version.json as they were before an engine of another
+//                                              version opened it (newest 3)
 //   <home>/engine/<port>/migrated-from-rivetkit.json   the one-time copy from ~/.rivetkit (6420 only)
 //   <home>/engine/<port>/.rivetkit/            rivetkit's own engine logs and runtime stamp (RIVETKIT_STORAGE_PATH)
 //
@@ -15,7 +16,7 @@
 import { spawnSync } from "child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
 import { capcomdHome } from "../utils/home";
 
 type Env = Record<string, string | undefined>;
@@ -51,17 +52,6 @@ export function engineVersionOf(binary: string): string | null {
   return m ? m[1]! : null;
 }
 
-/** Semver order (pre-releases sort before their release). */
-export function compareVersions(a: string, b: string): number {
-  const parse = (v: string) => { const [core, pre] = v.split("-", 2) as [string, string | undefined]; return { nums: core.split(".").map((n) => Number(n) || 0), pre }; };
-  const x = parse(a), y = parse(b);
-  for (let i = 0; i < 3; i++) if ((x.nums[i] ?? 0) !== (y.nums[i] ?? 0)) return (x.nums[i] ?? 0) - (y.nums[i] ?? 0);
-  if (x.pre === y.pre) return 0;
-  if (x.pre === undefined) return 1;
-  if (y.pre === undefined) return -1;
-  return x.pre < y.pre ? -1 : 1;
-}
-
 /** Files (recursively) and their total bytes. */
 export function treeStats(dir: string): { files: number; bytes: number } {
   let files = 0, bytes = 0;
@@ -80,18 +70,19 @@ const hasData = (db: string) => existsSync(db) && readdirSync(db).length > 0;
 
 /**
  * Pids of processes that have a file in `dir` open (an engine holds its RocksDB LOCK and files open for its whole
- * life). `lsof +d` on macOS (and Linux when it has lsof), /proc/<pid>/fd on Linux otherwise. Our own pid is left out.
+ * life), or null when that can't be told (lsof failed and there's no /proc): callers then refuse rather than guess.
+ * `lsof +d` on macOS (and Linux when it has lsof), /proc/<pid>/fd on Linux otherwise. Our own pid is left out.
  */
-export function holdersOf(path: string): number[] {
+export function holdersOf(path: string): number[] | null {
   if (!existsSync(path)) return [];
   const dir = realpathSync(path); // lsof and /proc report resolved paths (/var → /private/var on macOS)
   const found = new Set<number>();
   // Open files only: not a shell whose working directory happens to be there.
   const lsof = spawnSync("lsof", ["-a", "-d", "^cwd,^rtd,^txt", "-t", "+d", dir], { encoding: "utf8", timeout: 20_000 });
-  if (!lsof.error) {
+  if (!lsof.error && lsof.signal === null) {
     for (const l of (lsof.stdout ?? "").split("\n")) { const n = Number(l.trim()); if (n > 0) found.add(n); }
   } else if (existsSync("/proc")) {
-    const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+    const prefix = `${dir}/`;
     for (const p of readdirSync("/proc")) {
       if (!/^\d+$/.test(p)) continue;
       let fds: string[] = [];
@@ -102,10 +93,13 @@ export function holdersOf(path: string): number[] {
         if (target === dir || target.startsWith(prefix)) { found.add(Number(p)); break; }
       }
     }
-  }
+  } else return null;
   found.delete(process.pid);
   return [...found];
 }
+
+/** "process 1234" / "processes 1, 2", or why we couldn't tell. */
+export const describeHolders = (held: number[] | null) => held === null ? "possibly another process (lsof couldn't check)" : `process${held.length > 1 ? "es" : ""} ${held.join(", ")}`;
 
 export type MigrationResult =
   | { action: "none"; reason: string }
@@ -114,34 +108,36 @@ export type MigrationResult =
 
 /**
  * The one-time copy of rivetkit's shared default db into capcomd's own data dir, for an engine on the default port
- * when capcomd's dir has no db yet. Copies (never moves or deletes) into a temporary dir, checks the file count and
- * bytes against the source, then renames it into place and writes a marker; the source is left as it was, as a
- * backup. Refuses while any process holds the source open (an engine still running on it). Idempotent: once the
- * marker exists it never copies again.
+ * when capcomd's dir has no db yet. Copies (never moves or deletes) into a temporary dir, checks that nothing opened
+ * the source meanwhile and that the copy matches it (files, bytes), then renames it into place and writes a marker;
+ * the source is left as it was. Refuses while any process holds the source open (an engine still running on it), or
+ * when that can't be told. Idempotent: once the marker exists it never copies again.
  */
 export function migrateLegacyEngineData(o: {
   dataDir: string; legacyDb: string; engineVersion?: string | null; capcomdVersion?: string;
-  holders?: (dir: string) => number[]; now?: () => Date;
+  holders?: (dir: string) => number[] | null; now?: () => Date;
 }): MigrationResult {
   const db = dbDir(o.dataDir);
   const marker = migrationMarkerOf(o.dataDir);
+  const holders = o.holders ?? holdersOf;
   if (existsSync(marker)) return { action: "none", reason: "already copied" };
   if (hasData(db)) return { action: "none", reason: "capcomd's data dir already has a db" };
   if (!hasData(o.legacyDb)) return { action: "none", reason: "no rivetkit db to copy" };
-  const held = (o.holders ?? holdersOf)(o.legacyDb);
-  if (held.length) {
-    return { action: "refused", message: `capcomd now keeps its engine data in ${db}, but the old data in ${o.legacyDb} is still open by process${held.length > 1 ? "es" : ""} ${held.join(", ")} (an engine still running on it): stop that engine (or the old capcomd serve) and start capcomd again to copy it.` };
-  }
-  const before = treeStats(o.legacyDb);
+  const refuse = (held: number[] | null) => ({ action: "refused" as const, message: `capcomd now keeps its engine data in ${db}, but the old data in ${o.legacyDb} is open by ${describeHolders(held)} (an engine still running on it?): stop that engine (or the old capcomd serve) and start capcomd again to copy it.` });
+  const held = holders(o.legacyDb);
+  if (held === null || held.length) return refuse(held);
   mkdirSync(o.dataDir, { recursive: true });
   const tmp = join(o.dataDir, `db.copying-${process.pid}`);
   rmSync(tmp, { recursive: true, force: true });
+  let copied: { files: number; bytes: number };
   try {
     cpSync(o.legacyDb, tmp, { recursive: true, preserveTimestamps: true, errorOnExist: true, force: false });
-    const copied = treeStats(tmp), after = treeStats(o.legacyDb);
-    if (copied.files !== before.files || copied.bytes !== before.bytes || after.files !== before.files || after.bytes !== before.bytes) {
-      throw new Error(`the copy doesn't match the source (source ${before.files} files/${before.bytes} bytes, now ${after.files}/${after.bytes}; copy ${copied.files}/${copied.bytes}); was something writing to it?`);
-    }
+    // Nothing may have opened it meanwhile, and the copy must match it file for file.
+    const late = holders(o.legacyDb);
+    if (late === null || late.length) { rmSync(tmp, { recursive: true, force: true }); return refuse(late); }
+    copied = treeStats(tmp);
+    const source = treeStats(o.legacyDb);
+    if (copied.files !== source.files || copied.bytes !== source.bytes) throw new Error(`the copy doesn't match the source (source ${source.files} files/${source.bytes} bytes, copy ${copied.files}/${copied.bytes}); was something writing to it?`);
     if (hasData(db)) throw new Error(`${db} appeared while copying`);
     rmSync(db, { recursive: true, force: true }); // an empty dir only (hasData was false)
     renameSync(tmp, db);
@@ -150,10 +146,10 @@ export function migrateLegacyEngineData(o: {
     return { action: "refused", message: `capcomd couldn't copy its engine data from ${o.legacyDb} to ${db}: ${(e as Error).message}. Nothing was changed; the old data is untouched.` };
   }
   const at = (o.now ?? (() => new Date()))().toISOString();
-  writeFileSync(marker, JSON.stringify({ source: o.legacyDb, copiedTo: db, copiedAt: at, files: before.files, bytes: before.bytes,
+  writeFileSync(marker, JSON.stringify({ source: o.legacyDb, copiedTo: db, copiedAt: at, files: copied.files, bytes: copied.bytes,
     engineVersion: o.engineVersion ?? null, capcomdVersion: o.capcomdVersion ?? null, sourceLeftUntouched: true }, null, 2) + "\n");
-  return { action: "copied", from: o.legacyDb, to: db, files: before.files, bytes: before.bytes,
-    message: `capcomd now keeps its engine data in ${db}: copied ${before.files} files (${(before.bytes / 1048576).toFixed(1)} MB) from ${o.legacyDb}, which is left untouched as a backup.` };
+  return { action: "copied", from: o.legacyDb, to: db, files: copied.files, bytes: copied.bytes,
+    message: `capcomd now keeps its engine data in ${db}: copied ${copied.files} files (${(copied.bytes / 1048576).toFixed(1)} MB) from ${o.legacyDb}, which is left untouched.` };
 }
 
 export interface VersionRecord { version: string; openedAt: string; capcomdVersion?: string | null }
@@ -176,7 +172,7 @@ export function listBackups(dataDir: string): string[] {
 export type PrepareResult =
   | { action: "fresh" | "same" | "unknown-engine" }
   | { action: "backed-up"; from: string; backup: string; message: string }
-  | { action: "no-backup"; from: string; message: string }
+  | { action: "already-backed-up"; from: string; backup: string }
   | { action: "refused"; message: string };
 
 /**
@@ -184,38 +180,51 @@ export type PrepareResult =
  *  - no db yet, or the same version last opened it: nothing to do;
  *  - a NEWER engine last opened it: refuse (the engine would refuse too: it stamps its version into the db and
  *    won't open one stamped newer), naming both versions and the newest backup;
- *  - another (older, or unrecorded) version: copy db to backups/<old>-<UTC>/ first, keeping the newest `keep`.
- * Then records `engineVersion` as the one that last opened it. `skipBackup` (with a reason) is for a db that was
- * just copied from a source that stays untouched: that source is the backup.
+ *  - another (older, or unrecorded) version: copy db (and its version record) to backups/<old>-<UTC>/ first, keeping
+ *    the newest `keep`; not again while that backup is newer than the record (an engine that never came up).
+ * Writes nothing else: the version is recorded once the engine answers (recordEngineVersion).
  */
-export function prepareEngineData(o: { dataDir: string; engineVersion: string | null; capcomdVersion?: string; keep?: number; now?: () => Date; skipBackup?: string }): PrepareResult {
+export function prepareEngineData(o: { dataDir: string; engineVersion: string | null; keep?: number; now?: () => Date }): PrepareResult {
   const engineVersion = o.engineVersion;
   if (!engineVersion) return { action: "unknown-engine" };
   const db = dbDir(o.dataDir);
-  const now = (o.now ?? (() => new Date()))();
   const record = readVersionRecord(o.dataDir);
-  const write = () => {
-    mkdirSync(o.dataDir, { recursive: true });
-    const tmp = `${versionFileOf(o.dataDir)}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ version: engineVersion, openedAt: now.toISOString(), capcomdVersion: o.capcomdVersion ?? null } satisfies VersionRecord, null, 2) + "\n");
-    renameSync(tmp, versionFileOf(o.dataDir));
-  };
-  if (!hasData(db)) { write(); return { action: "fresh" }; }
-  if (record && record.version === engineVersion) { write(); return { action: "same" }; }
-  if (record && compareVersions(record.version, engineVersion) > 0) {
+  if (!hasData(db)) return { action: "fresh" };
+  if (record && record.version === engineVersion) return { action: "same" };
+  if (record && Bun.semver.order(record.version, engineVersion) > 0) {
     const newest = listBackups(o.dataDir)[0];
-    return { action: "refused", message: `the engine data in ${db} was last opened by Rivet engine ${record.version}, newer than this capcomd's ${engineVersion}, which can't open it (Rivet refuses to roll an engine back): run the newer capcomd, or restore ${newest ? `the newest backup (${newest}) into ${db}` : `a backup of ${db}`} and delete ${versionFileOf(o.dataDir)}.` };
+    return { action: "refused", message: `the engine data in ${db} was last opened by Rivet engine ${record.version}, newer than this capcomd's ${engineVersion}, which can't open it (Rivet refuses to roll an engine back): run the newer capcomd, or stop capcomd and restore ${newest ? `the newest backup's db/ and engine-version.json (${newest})` : `a backup of ${db}`} in place of the current ones.` };
   }
   const old = record?.version ?? "unknown";
-  if (o.skipBackup) { write(); return { action: "no-backup", from: old, message: o.skipBackup }; }
+  const newest = listBackups(o.dataDir)[0];
+  if (newest && basename(newest).startsWith(`${old}-`) && basename(newest).slice(old.length + 1) >= stamp(new Date(record?.openedAt ?? 0))) return { action: "already-backed-up", from: old, backup: newest };
+  const now = (o.now ?? (() => new Date()))();
   const backups = backupsDirOf(o.dataDir);
-  mkdirSync(backups, { recursive: true });
   const dest = join(backups, `${old}-${stamp(now)}`);
   const tmp = `${dest}.partial`;
   rmSync(tmp, { recursive: true, force: true });
-  cpSync(db, tmp, { recursive: true, preserveTimestamps: true });
+  mkdirSync(tmp, { recursive: true });
+  cpSync(db, join(tmp, "db"), { recursive: true, preserveTimestamps: true });
+  if (record) cpSync(versionFileOf(o.dataDir), join(tmp, "engine-version.json"));
   renameSync(tmp, dest);
   for (const extra of listBackups(o.dataDir).slice(o.keep ?? KEEP_BACKUPS)) rmSync(extra, { recursive: true, force: true });
-  write();
-  return { action: "backed-up", from: old, backup: dest, message: `engine ${old} → ${o.engineVersion}: backed up ${db} to ${dest} first (the newest ${o.keep ?? KEEP_BACKUPS} backups are kept).` };
+  return { action: "backed-up", from: old, backup: dest, message: `engine ${old} → ${engineVersion}: backed up ${db} to ${dest} first (the newest ${o.keep ?? KEEP_BACKUPS} backups are kept).` };
+}
+
+/** The engine that just answered on this data dir is the one that last opened it. */
+export function recordEngineVersion(dataDir: string, version: string, capcomdVersion?: string, now = new Date()): void {
+  mkdirSync(dataDir, { recursive: true });
+  const tmp = `${versionFileOf(dataDir)}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ version, openedAt: now.toISOString(), capcomdVersion: capcomdVersion ?? null } satisfies VersionRecord, null, 2) + "\n");
+  renameSync(tmp, versionFileOf(dataDir));
+}
+
+/** The last lines rivetkit's engine wrote to its newest stderr log here: why an engine didn't come up. */
+export function engineLogTail(dataDir: string, lines = 12): string {
+  try {
+    const dir = join(dataDir, ".rivetkit", "var", "logs", "rivet-engine");
+    const newest = readdirSync(dir).filter((n) => n.endsWith("-stderr.log")).sort().pop();
+    if (!newest) return "";
+    return readFileSync(join(dir, newest), "utf8").trimEnd().split("\n").slice(-lines).join("\n");
+  } catch { return ""; }
 }

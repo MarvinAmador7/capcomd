@@ -93,24 +93,23 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     if (f !== pidFile) rmSync(f, { force: true });
   }
   // Once per start (not again in the engine host below): the one-time copy from ~/.rivetkit, then the version guard.
+  // The engine's version is recorded only once it answers (below), so the record never names an engine that didn't open it.
   if (process.env.CAPCOMD_SERVE_EXEC !== "1") {
     const real = process.env.CAPCOMD_REAL_ENGINE ?? process.env.CAPCOMD_CHAOS_REAL_ENGINE ?? process.env.RIVET_ENGINE_BINARY!;
     const engineVersion = data.engineVersionOf(real);
+    if (engineVersion) process.env.CAPCOMD_ENGINE_VERSION = engineVersion;
     const { VERSION } = await import("../../utils/self");
-    let skipBackup: string | undefined;
     if (port === data.DEFAULT_PORT && data.isDefaultDataDir()) {
       const m = data.migrateLegacyEngineData({ dataDir, legacyDb: data.legacyRivetkitDb(), engineVersion, capcomdVersion: VERSION });
       if (m.action === "refused") { console.error(`capcomd serve: ${m.message}`); process.exit(1); }
-      if (m.action === "copied") { console.log(`  ${m.message}`); skipBackup = `the copy's source (${m.from}) is its backup`; }
+      if (m.action === "copied") console.log(`  ${m.message}`);
     }
+    const held = data.holdersOf(data.dbDir(dataDir));
+    if (held === null || held.length) { console.error(`capcomd serve: ${data.dbDir(dataDir)} is in use by ${data.describeHolders(held)} (another engine on this data dir?); stop it and retry.`); process.exit(1); }
     if (engineVersion === null) console.log(`  couldn't read the engine's version (${real} --version); starting without the version check or backup`);
-    else {
-      const held = data.holdersOf(data.dbDir(dataDir));
-      if (held.length) { console.error(`capcomd serve: ${data.dbDir(dataDir)} is in use by process${held.length > 1 ? "es" : ""} ${held.join(", ")} (another engine on this data dir?); stop it and retry.`); process.exit(1); }
-      const p = data.prepareEngineData({ dataDir, engineVersion, capcomdVersion: VERSION, ...(skipBackup ? { skipBackup } : {}) });
-      if (p.action === "refused") { console.error(`capcomd serve: ${p.message}`); process.exit(1); }
-      if (p.action === "backed-up") console.log(`  ${p.message}`);
-    }
+    const p = data.prepareEngineData({ dataDir, engineVersion });
+    if (p.action === "refused") { console.error(`capcomd serve: ${p.message}`); process.exit(1); }
+    if (p.action === "backed-up") console.log(`  ${p.message}`);
   }
   rmSync(pidFile, { force: true });
   // rivet-services (RivetKit starts it on the default port) is a child of this process that only RivetKit's own shutdown
@@ -164,6 +163,8 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     await registry.start();
   } catch (e) {
     console.error(`capcomd serve: engine failed to start: ${(e as Error).message}`);
+    const tail = data.engineLogTail(dataDir);
+    if (tail) console.error(`  the engine's last words (${dataDir}/.rivetkit/var/logs/rivet-engine/):\n${tail.replace(/^/gm, "    ")}`);
     process.exit(1);
   }
   let endpoint: string | undefined;
@@ -195,8 +196,22 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   const t0 = Date.now();
   let up = false, misses = 0;
   setInterval(async () => {
-    if (await alive()) { if (!up) console.log(`✓ Rivet engine running at http://localhost:${port}`); up = true; misses = 0; return; }
-    if (!up && Date.now() - t0 > 90_000) { console.error(`capcomd serve: engine never answered on :${port} within 90s; exiting`); process.exit(1); }
+    if (await alive()) {
+      if (!up) {
+        console.log(`✓ Rivet engine running at http://localhost:${port}`);
+        // It opened the data: record which engine did (its /health says; else the binary's --version).
+        const health: any = await fetch(`${url}health`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json(), () => null);
+        const version = typeof health?.version === "string" ? health.version : process.env.CAPCOMD_ENGINE_VERSION;
+        if (version) try { data.recordEngineVersion(dataDir, version, (await import("../../utils/self")).VERSION); } catch {}
+      }
+      up = true; misses = 0; return;
+    }
+    if (!up && Date.now() - t0 > 90_000) {
+      console.error(`capcomd serve: engine never answered on :${port} within 90s; exiting`);
+      const tail = data.engineLogTail(dataDir);
+      if (tail) console.error(`  the engine's last words:\n${tail.replace(/^/gm, "    ")}`);
+      process.exit(1);
+    }
     if (up && ++misses >= 10) { console.error(`capcomd serve: engine on :${port} stopped answering; exiting`); process.exit(1); }
   }, 2000);
 

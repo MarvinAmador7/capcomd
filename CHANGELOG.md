@@ -15,14 +15,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   using Rivet on your Mac also writes (a newer one could stamp the database so capcomd's engine refused to start).
   capcomd no longer reads or writes `~/.rivetkit` at all; rivetkit's own engine logs go to
   `~/.capcomd/engine/<port>/.rivetkit/`. The first time the new version starts on 6420 it copies your existing data
-  from `~/.rivetkit/var/engine/db` once (it never moves or deletes it: the old folder stays as a backup, and you can
-  remove it yourself once you're happy), checks the copy and prints one line saying so; if an engine is still running
-  on the old folder it refuses with a sentence saying to stop it first. capcomd also records which engine version last
-  opened its data (`engine-version.json`): before a different version opens it, it copies the database to
-  `~/.capcomd/engine/<port>/backups/<old version>-<UTC time>/` (the newest three are kept), and it refuses to start on
-  data a newer engine already opened, naming both versions and the newest backup. The engine is Rivet 2.3.31 (from
-  2.3.27), which keeps scheduled wake-ups (lease expiry, machine reaping, quota resets) across engine restarts.
-
+  from `~/.rivetkit/var/engine/db` once (it never moves or deletes it: you can remove the old folder yourself once
+  you're happy), checks the copy and prints one line saying so; if an engine is still running on the old folder it
+  refuses with a sentence saying to stop it first. capcomd also records which engine version last opened its data
+  (`engine-version.json`): before a different version opens it, it copies the database to
+  `~/.capcomd/engine/<port>/backups/<old version>-<UTC time>/` (the newest three are kept; restore by putting its
+  `db/` and `engine-version.json` back), it refuses to start on data a newer engine already opened, naming both
+  versions and the newest backup, and when the engine doesn't come up it prints the engine's own last log lines.
+  The engine is Rivet 2.3.31 (from 2.3.27), which keeps scheduled wake-ups (lease expiry, machine reaping, quota
+  resets) across engine restarts.
 - Harness API: set a folder up as a capcomd project without Terminal (capability `projects.setup`), so the menu bar
   app can offer it for a folder you pick. `GET /v1/projects/inspect?path=` (read scope, writes nothing) says what a
   setup form needs: the git checkout the folder is in, its origin (the repository a project always uses), its branches

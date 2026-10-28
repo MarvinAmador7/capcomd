@@ -28,8 +28,8 @@ per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_QUOTA_
 
 The Rivet engine's data is always under the capcomd home (`~/.capcomd`, or `$CAPCOMD_HOME`), checkout or not, one
 directory per port (`src/engine/data.ts`; `CAPCOMD_ENGINE_DATA` names another): `engine/<port>/db` (RocksDB),
-`engine.pid`, `engine-version.json` (the engine version that last opened it), `backups/<version>-<UTC>/` (taken
-before a different engine version opens it; newest 3), `.rivetkit/` (rivetkit's engine logs and runtime stamp,
+`engine.pid`, `engine-version.json` (the engine version that last opened it), `backups/<version>-<UTC>/{db,engine-version.json}`
+(taken before a different engine version opens it; newest 3), `.rivetkit/` (rivetkit's engine logs and runtime stamp,
 via `RIVETKIT_STORAGE_PATH`) and, on 6420, `migrated-from-rivetkit.json` (the one-time copy from `~/.rivetkit`).
 Nothing reads or writes `~/.rivetkit`. When you run a daemon by hand, give it `CAPCOMD_ENGINE_DATA` and its own
 `--port`/`CAPCOMD_ENDPOINT`; `capcomd serve` on 6420 with no override is the user's real data.
