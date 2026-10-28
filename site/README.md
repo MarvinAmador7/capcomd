@@ -31,7 +31,7 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 | `app/icon.svg` | The favicon: the menu bar bot mark (`MENU_BAR_MARK` in packages/bot-avatar) on a plum tile. |
 | `app/robots.ts`, `app/sitemap.ts` | `robots.txt` and `sitemap.xml`, written at build time. |
 | `components/` | One component per section. Server components by default, so the copy is in the static HTML and works without JS. The client parts are only `crew.tsx` (the crew, redrawn per visit and on "Draw another", and the typed goal), `RunAccordion.tsx` (the stages, an APG accordion of disclosure buttons) and `Reveals.tsx` (scroll entrances). |
-| `lib/site.ts` | **The site's origin, one value. It's a placeholder (`https://capcomd.example`) until the domain is decided (TODO).** Also the title and description. |
+| `lib/site.ts` | The site's origin (`https://capcomd.vercel.app`, one value), the title, the description, and the brand notice. |
 | `lib/crew.ts`, `lib/marks.ts` | The crew's roles and default seed (`run_7e9410`, what the static HTML is drawn with), the wordmark, the menu bar mark. |
 | `lib/vendor/bot-avatar.js` | packages/bot-avatar, bundled as one ESM file by `bun run vendor` (with hand-written types beside it). |
 | `lib/version.ts` | capcomd's version for "Early release, 0.6", read from the repo's root `package.json` at build time. |
@@ -46,11 +46,27 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 Run every command from `site/`: `lib/version.ts` reads `../package.json` and `next.config.ts` roots Turbopack
 at the current folder, both relative to it.
 
-## Hosting
+## Deploying on Vercel
 
-Serve `out/` as is. Set `SITE_URL` in `lib/site.ts` first, and use `404.html` as the not-found page. Turn on gzip
-or brotli. `_next/static/` is content-hashed, so it can be cached for good. None of this is configured here, because
-no host is chosen yet.
+The site is meant for https://capcomd.vercel.app (`SITE_URL` in `lib/site.ts`). It deploys as a normal Next.js
+project. With `output: "export"`, Vercel runs `next build` and serves the exported files. No `vercel.json` is needed:
+Vercel serves `404.html` for missing paths, and it already caches `_next/static/` for good.
+
+Project settings (Vercel → New Project → import the capcomd repository):
+
+| Setting | Value |
+|---|---|
+| Framework preset | Next.js |
+| Root Directory | `site` |
+| Include files outside the root directory in the Build Step | On (the default). The build reads capcomd's version from the repo's root `package.json`. |
+| Install command | `bun install --frozen-lockfile` (Vercel picks Bun from `site/bun.lock`; npm also works with `npm install`, but then there's no lockfile pinning) |
+| Build command | `bun run build` (the default `next build` works too) |
+| Output directory | Leave the default |
+| Node.js version | 22.x (Next.js 16 needs 20.9 or later; `engines` in `package.json` says so) |
+| Environment variables | None |
+
+Before building, check that the domain in `lib/site.ts` is the one the project gets. The build fetches the two
+Google fonts once to self-host them, so it needs network access, which Vercel builds have.
 
 ## Note for the repo
 

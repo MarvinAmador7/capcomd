@@ -46,9 +46,12 @@ illustrations, not captures, and they show the menu bar app as it is on `main` (
 
 ## Open decisions (defaults used)
 
-- The domain: `lib/site.ts` → `SITE_URL` is the placeholder `https://capcomd.example`. Canonical, Open Graph,
-  robots and sitemap URLs use it.
-- Hosting: none chosen. `out/` (the Next.js static export) is a plain static folder.
+- The domain: decided. The site is https://capcomd.vercel.app (`SITE_URL` in `lib/site.ts`).
+- Hosting: decided. Vercel, with Root Directory `site` (see README.md). It's still a static export.
+- Brand notice (the owner's wording): "The capcomd name, bots and brand are © 2026 Marvin Amador Campos. capcomd's code is
+  MIT-licensed." It appears in the footer and on /bots next to download and share. Usage terms for downloaded bots
+  are still the owner's to decide.
+- Not built yet: per-bot share previews (would mean leaving the static export) and a "random role" pull.
 - Footage: none recorded. The rebuilt panels are the product imagery.
 - The name: the site doesn't explain what CAPCOM means.
 - Bot names: not used. Agents are named by role, plus a short suffix in the panels, as in the app's tree.

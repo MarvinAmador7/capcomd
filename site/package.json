@@ -23,5 +23,8 @@
     "postcss": "8.5.32",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=20.9.0"
   }
 }

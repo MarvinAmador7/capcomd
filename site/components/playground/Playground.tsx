@@ -4,6 +4,7 @@
 // of its 14 parts, keep a crew (localStorage, optional), download SVG or PNG, share a link that redraws it exactly.
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CATALOG, MOODS, botGrid, botTraits, gridSvg, rng, withOverrides, type Mood } from "@/lib/vendor/bot-avatar.js";
+import { SITE } from "@/lib/site";
 import {
   PART_SLOTS, ROLES, SLOT_LABEL, botPng, crewPng, decode, describe, download, encode, fileName, fits, odds, partOf,
   randomSeed, setPart, type Backdrop, type BotTraits, type PartSlot, type Role, type Size,
@@ -223,6 +224,7 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
         </div>
       </section>
 
+      <p className="pg__brand">{SITE.brand}</p>
       <section className="pg-crew" aria-labelledby="pg-crew-title">
         <div className="pg-crew__head">
           <h2 className="big" id="pg-crew-title" data-reveal><span>Your crew.</span></h2>
