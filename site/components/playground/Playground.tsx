@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CATALOG, MOODS, botGrid, botTraits, gridSvg, rng, withOverrides, type Mood } from "@/lib/vendor/bot-avatar.js";
 import { SITE } from "@/lib/site";
-import { Pipeline } from "./Pipeline";
+import { Exploded } from "./Exploded";
 import { Dropdown } from "./Dropdown";
 import {
   PART_SLOTS, ROLES, SLOT_LABEL, botPng, partIcon, crewPng, decode, describe, download, encode, fileName, fits, odds, partOf,
@@ -168,7 +168,7 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
   // this bot at each size, and its face in each mood.
   const headSvg = (x: BotTraits) => gridSvg(botGrid(x, "xs"), { label: "", decorative: true, scale: 2 });
   const roleIcons = useMemo(() => Object.fromEntries(ROLES.map((r) => [r, headSvg(botTraits(t.seed, r))])) as Record<Role, string>, [t.seed]);
-  // Size: the bot as that size draws it, at 20 px (xs 14 cells at 1×; small and full shown whole at 20 px).
+  // Size: the bot as that size draws it (xs at 2×, small and full at 1×), shown in the 28-px icon box.
   const sizeIcons = useMemo(() => Object.fromEntries(SIZES.map(([z]) => [z, gridSvg(botGrid(t, z), { label: "", decorative: true, scale: z === "xs" ? 2 : 1 })])) as Record<Size, string>, [t]);
   const moodIcons = useMemo(() => ({ ...Object.fromEntries((Object.keys(MOODS) as Mood[]).map((m) => [m, headSvg(withOverrides(t, { mood: m }))])), own: headSvg(t) }) as Record<Mood | "own", string>, [t]);
   const mood = (Object.keys(MOODS) as Mood[]).find((m) => t.eyes === MOODS[m].eyes && t.mouth === MOODS[m].mouth);
@@ -303,7 +303,7 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
         </div>
       </section>
 
-      <Pipeline t={t} />
+      <Exploded t={t} onPull={pull} />
       <p className="pg__status" role="status" aria-live="polite">{status}</p>
     </>
   );

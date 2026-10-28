@@ -168,8 +168,8 @@ export const fileName = (t: BotTraits) => `${t.name}-${t.role}-${t.seed}`.toLowe
 // Every icon is 28 px and pixel-crisp: a 14-cell window drawn at 2×. The head is the engine's own head-only drawing
 // (xs). The other face and head parts are crops of the head-and-shoulders render, the body parts of the full-body
 // render, around the cells that part draws: found by rendering the bot once more with another part in that slot
-// (no part when the slot has "none") and keeping the cells that change. A part drawn on both sides (ears, arms)
-// shows its left one. Palette is a swatch of its colours; dither is a tile of its shading from the engine's tone().
+// (no part when the slot has "none") and keeping the cells that change. Ears show the left one; a pose shows the
+// hand that differs between poses (the right). Palette is a swatch of its colours; dither is a tile of its shading from the engine's tone().
 
 const ICON_CELLS = 14, ICON_SCALE = 2;
 const ICON_SIZE: Partial<Record<PartSlot, Size>> = {

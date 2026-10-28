@@ -29,7 +29,7 @@ export default function BotsPage() {
       <header className="pg-head">
         <Nav home={false} current="bots" />
         <div className="pg-head__copy">
-          <h1 className="pg-head__title" data-load style={{ ["--d" as string]: "0ms" }}>Pull a bot.</h1>
+          <h1 className="pg-head__title">Pull a bot.</h1>
           <p className="pg-head__lead" data-load style={{ ["--d" as string]: "80ms" }}>Every capcomd agent gets a pixel bot drawn from its id. Pull one, change any of its 14 parts, keep a crew, take it with you.</p>
         </div>
       </header>
