@@ -35,7 +35,7 @@ export const registry = setup({ use: { taskBoard } });
 ```
 
 ## 6. Pain points
-Original table lost. Known since: `bun build --compile` breaks rivetkit's native module; 60 s action/transaction timeouts force outbox + polling for long VM operations.
+Original table lost. Known since: `bun build --compile` breaks rivetkit's native module; 60 s action/transaction timeouts force polling (or, with ADR-022, workflow steps) for long VM operations.
 
 ## Amendment (2026-10-17): storage
-All durable actor data (lifecycle rows, event log, outbox) lives in `c.db`, written via `c.db.transaction`. `c.state` is used only for disposable caches, because it saves on a throttle and isn't atomic with `c.db`. Event log durability = the local engine's disk for now (Rivet Cloud deferred, ADR-009); back up per durability.md. `bun build --compile` currently fails to embed rivetkit's native module. See rivet-sqlite.md.
+All durable actor data (lifecycle rows, event log) lives in `c.db`, written via `c.db.transaction`. `c.state` is used only for disposable caches, because it saves on a throttle and isn't atomic with `c.db`. Event log durability = the local engine's disk for now (Rivet Cloud deferred, ADR-009); back up per durability.md. `bun build --compile` currently fails to embed rivetkit's native module. See rivet-sqlite.md.

@@ -1,4 +1,4 @@
-// S1 (docs/durability.md, "Side effects"): there is no outbox. A transition's side effects run where it happens, each
+// S1 (docs/durability.md, "Ground rules"): there is no outbox. A transition's side effects run where it happens, each
 // with its own idempotency key; nothing is queued to run "later, on wake". Before, rows were written for a lease grant
 // and a worker's provisioning and then marked dispatched on wake (or by `flushOutbox`) without anything running them.
 // Across an engine restart (every actor wakes again) nothing is re-run, invented or lost: the event logs and states

@@ -49,60 +49,6 @@ export async function setupLifecycleTables(db: RawAccess): Promise<void> {
   // (docs/durability.md). Actors created before keep an unused `outbox` table.
 }
 
-async function transitionLifecycleInner(
-  tx: RawAccess,
-  entityId: string,
-  machine: string,
-  newState: string,
-  newContext: any,
-  event: any,
-  idemKey: string,
-  traceMetadata?: { traceId: string; spanId: string }
-): Promise<void> {
-  const now = Date.now();
-
-  const existingEvent = await tx.execute(
-    "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
-    idemKey
-  );
-
-  if (existingEvent.length > 0) {
-    return;
-  }
-
-  const existing = await tx.execute(
-    "SELECT seq FROM lifecycle WHERE entity_id = ?",
-    entityId
-  );
-
-  const seq = existing.length > 0 && existing[0] ? Number(existing[0].seq) + 1 : 1;
-
-  await tx.execute(
-    `INSERT INTO lifecycle_events (entity_id, seq, event, idem_key, at, trace_id, span_id) 
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    entityId, seq, JSON.stringify(event), idemKey, now,
-    traceMetadata?.traceId || null,
-    traceMetadata?.spanId || null
-  );
-
-  killpoint("tx.mid");
-
-  if (existing.length > 0) {
-    await tx.execute(
-      `UPDATE lifecycle 
-       SET state = ?, context = ?, seq = ?, version = version + 1
-       WHERE entity_id = ?`,
-      newState, JSON.stringify(newContext), seq, entityId
-    );
-  } else {
-    await tx.execute(
-      `INSERT INTO lifecycle (entity_id, machine, version, state, context, seq)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      entityId, machine, 1, newState, JSON.stringify(newContext), seq
-    );
-  }
-}
-
 export async function getLifecycle(
   db: RawAccess,
   entityId: string
@@ -127,6 +73,10 @@ export async function getLifecycle(
   };
 }
 
+/**
+ * One state change inside the caller's transaction: the event (once per idempotency key: a repeat is a no-op) and the
+ * lifecycle row, traced as `transition.<machine>`.
+ */
 export async function transitionLifecycle(
   tx: RawAccess,
   entityId: string,
@@ -134,17 +84,26 @@ export async function transitionLifecycle(
   newState: string,
   newContext: any,
   event: any,
-  idemKey: string,
-  traceMetadata?: { traceId: string; spanId: string }
+  idemKey: string
 ): Promise<void> {
-  const prev = await tx.execute("SELECT state, version FROM lifecycle WHERE entity_id = ?", entityId);
-  const from = prev.length > 0 && prev[0] ? String(prev[0].state) : "(new)";
-  const version = prev.length > 0 && prev[0] ? Number(prev[0].version) + 1 : 1;
+  const prev = (await tx.execute("SELECT state, version, seq FROM lifecycle WHERE entity_id = ?", entityId))[0];
+  const version = prev ? Number(prev.version) + 1 : 1;
   const span = startSpan(`transition.${machine}`, { "relay.entity_id": entityId, "relay.idempotency_key": idemKey });
-  recordStateTransition(span, from, newState, String(event?.type ?? "unknown"), version);
-  const meta = traceMetadata ?? (activeSpan() ? { traceId: span.traceId, spanId: span.spanId } : undefined);
+  recordStateTransition(span, prev ? String(prev.state) : "(new)", newState, String(event?.type ?? "unknown"), version);
+  const meta = activeSpan() ? { traceId: span.traceId, spanId: span.spanId } : undefined;
   try {
-    await transitionLifecycleInner(tx, entityId, machine, newState, newContext, event, idemKey, meta);
+    if ((await tx.execute("SELECT idem_key FROM lifecycle_events WHERE idem_key = ?", idemKey)).length > 0) { span.status.code = 1; return; }
+    const seq = prev ? Number(prev.seq) + 1 : 1;
+    await tx.execute(
+      `INSERT INTO lifecycle_events (entity_id, seq, event, idem_key, at, trace_id, span_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      entityId, seq, JSON.stringify(event), idemKey, Date.now(), meta?.traceId ?? null, meta?.spanId ?? null
+    );
+    killpoint("tx.mid");
+    if (prev) {
+      await tx.execute("UPDATE lifecycle SET state = ?, context = ?, seq = ?, version = version + 1 WHERE entity_id = ?", newState, JSON.stringify(newContext), seq, entityId);
+    } else {
+      await tx.execute("INSERT INTO lifecycle (entity_id, machine, version, state, context, seq) VALUES (?, ?, ?, ?, ?, ?)", entityId, machine, 1, newState, JSON.stringify(newContext), seq);
+    }
     span.status.code = 1;
   } catch (error) {
     span.status = { code: 2, message: error instanceof Error ? error.message : String(error) };

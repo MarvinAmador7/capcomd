@@ -99,7 +99,7 @@ Each persisted row stores `machine` + `version`. On load, if `version < current`
 Bun 1.4.2 + xstate 5.33.2: `setup().createMachine`, `initialTransition`, `transition`, guarded `can` with an epoch guard, JSON round-trip + `resolveState`, `getShortestPaths`. All worked under `bun run` **and** a `bun build --compile` binary. (Note: rivetkit itself does not survive `--compile`; see rivet-sqlite.md.)
 
 ## Alternative: discriminated unions
-Hand-written TS discriminated unions + a `switch` reducer: zero deps, simplest types, but no `can()`, no graph-based path generation, guards ad hoc. Choose this if XState's types or bundle become a burden, or if machines stay tiny. The persistence/outbox design is identical either way.
+Hand-written TS discriminated unions + a `switch` reducer: zero deps, simplest types, but no `can()`, no graph-based path generation, guards ad hoc. Choose this if XState's types or bundle become a burden, or if machines stay tiny. The persistence design is identical either way.
 
 ## Amendment (2026-10-17): c.db transactions verified
 Rivet docs confirm `c.db.transaction(cb, {name, timeout})`: it commits on resolve, rolls back on throw, serializes FIFO, and has a 60 s timeout (https://rivet.dev/docs/actors/sqlite). A box test (Bun, rivetkit 2.3.27) confirmed that a UNIQUE violation on the event's idem_key rolls back the lifecycle row update. The former UNVERIFIED flag is resolved: use `db.transaction` (not manual BEGIN), never touch `c.state` for lifecycle data (it is a separate store saved on a 1 s throttle), and never await external I/O inside the tx. Durability: commits are replicated in the hot tier per Rivet's engine blog. Locally, durability is single host. See rivet-sqlite.md.

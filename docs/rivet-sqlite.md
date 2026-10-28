@@ -47,5 +47,5 @@ Researched 2026-10-17. **[Doc]** = Rivet docs/blog/crate docs (URL). **[Test]** 
 1. **ADR-008's open question is answered: yes.** Write the lifecycle row and the event row in one `c.db.transaction({name:"lifecycle-transition"})`. Duplicate events are rejected atomically by `idem_key UNIQUE`. Catch the error inside the tx wrapper and treat it as "already applied".
 2. **Don't put lifecycle or event-log data in `c.state`.** It is throttled and separate from `c.db`. Keep `c.state` for caches only, or use none at all.
 3. **Event log durability:** with Rivet Cloud or a replicated hot tier (FDB or Postgres HA), an acknowledged commit is replicated [Doc]. A single-host local engine is only as durable as that host's disk [Inference]. Local mode must back up the engine data dir (durability.md).
-4. **Avoid long transactions.** They serialize all actor SQL (FIFO). Never await LLM or VM calls inside a tx; use the outbox pattern from ADR-008.
+4. **Avoid long transactions.** They serialize all actor SQL (FIFO). Never await LLM or VM calls inside a tx: run them before or after it with their own idempotency key, or as a workflow step (ADR-022). There is no outbox (docs/durability.md).
 5. **Compiled single binary:** blocked for now. Ship as `bun run` plus node_modules, or fix the napi embedding.

@@ -4,7 +4,7 @@
 2026-10-17. Builds on ADR-002 (event log), ADR-008 (lifecycles), rivet-sqlite.md, boxd.md, ADR-009. Claims about Rivet and boxd cite those docs; the expected behaviour below is **our design (inference)** and must be proven by the suite.
 
 ## Ground rules (design)
-- Every state change = one `c.db.transaction` writing {lifecycle row, event row with UNIQUE idem_key}. **There is no outbox** (removed 2026-10-27: its rows were written and then marked dispatched without anything running them). A side effect runs where the transition happens (an action, a driver, or with `CAPCOMD_AGENT_WORKFLOW=1` a step of the agent's workflow, ADR-022), before or after its commit, and is made safe to repeat by its own idempotency key (below); a crash between the effect and the commit repeats the effect, which the key turns into a no-op.
+- Every state change = one `c.db.transaction` writing {lifecycle row, event row with UNIQUE idem_key}. **There is no outbox** (removed 2026-10-27: its rows were written and then marked dispatched without anything running them). A side effect runs where the transition happens (an action, a driver, or with `CAPCOMD_AGENT_WORKFLOW=1` a step of the agent's workflow, ADR-022), before or after its commit. The external effects carry idempotency keys (next line), so a crash between the effect and the commit repeats the effect harmlessly. A transition's own event key makes a repeated transition a no-op only where the key is stable (an epoch, a VM id); a few keys still embed a timestamp (drain, destroy, task done, verify), and there the XState `can()` guard is what stops a repeat.
 - External effects carry idempotency keys: VM name `relay-<run8>-<worker>-e<epoch>` (boxd), git push = `--force-with-lease` to a task branch, merge = compare-and-swap on the green-branch SHA, budget = `charge_id` UNIQUE.
 - Leases carry an epoch; every worker result is guarded by `epochMatches`.
 - Every VM has a boxd `deleteAfter` TTL [boxd.md].
@@ -20,7 +20,7 @@
 | Rivet outage (Cloud, deferred) / local engine down | The CLI can't reach actors, but worker VMs keep running and pushing branches. No merges happen. | When Rivet is back, actors wake, process the queued heartbeats and results, and expire stale leases. |
 | Network partition (orchestrator ↔ VM) | The worker can't report; the lease expires; a new epoch is assigned elsewhere. The old worker may still push. | Pushes go to `task/<id>/e<epoch>`; only the current epoch's branch is considered. The merge CAS prevents a stale merge. |
 | Lease expiry | `LEASE_EXPIRED` → task back to `pending` (or `failed` once over the retry budget). Worker → draining → VM destroyed. | Automatic. |
-| Duplicate delivery (action retry, client retry, a driver's or workflow's re-run) | The UNIQUE idem_key insert fails and the transaction rolls back, so the call is treated as "already applied" and returns the stored result. | Automatic. |
+| Duplicate delivery (action retry, client retry, a driver's or workflow's re-run) | The transition sees its idem_key already in the event log and returns without writing (the UNIQUE index backs that up), so the call is treated as "already applied". | Automatic. |
 
 ## Crash-test suite
 Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.ts`.
@@ -31,7 +31,7 @@ Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.t
   3. `merge.after_cas.before_event` and `merge.before_cas`: expect no double merge; the reconciler detects the green SHA already containing the task commit and records `merged` once.
   4. `push.mid` (the fake git remote drops the connection) and `push.after.before_event`: expect the push retried under the same branch and lease.
   5. `vm.create.after_request.before_record`: expect `ensure()` to find the VM by name, so exactly one VM exists.
-  6. `lease.expire.mid`, `budget.charge.mid`. (`outbox.dispatch.after_send.before_ack` is gone with the outbox; the seeded list keeps its name so other seeds keep their killpoints.)
+  6. `lease.expire.mid`, `budget.charge.mid`. (`outbox.dispatch.after_send.before_ack` went with the outbox; its slot in the seeded list is now `merge.lock.acquired`.)
 - **Randomised mode:** 200 runs with a random kill point and random hit count, seeded and reproducible. Each failure prints its seed.
 - **Invariants** (checked after every run by `checkInvariants()`):
   - *No double merge:* each task id appears at most once in `merged` events, and git history has one merge commit per task.
