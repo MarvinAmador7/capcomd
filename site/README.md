@@ -31,7 +31,7 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 | `app/icon.svg` | The favicon: the menu bar bot mark (`MENU_BAR_MARK` in packages/bot-avatar) on a plum tile. |
 | `app/robots.ts`, `app/sitemap.ts` | `robots.txt` and `sitemap.xml`, written at build time. |
 | `components/` | One component per section. Server components by default, so the copy is in the static HTML and works without JS. The client parts are only `crew.tsx` (the crew, redrawn per visit and on "Draw another", and the typed goal), `RunAccordion.tsx` (the stages, an APG accordion of disclosure buttons) and `Reveals.tsx` (scroll entrances). |
-| `lib/site.ts` | The site's origin (`https://capcomd.vercel.app`, one value), the title, the description, and the brand notice. |
+| `lib/site.ts` | The site's origin (`https://capcomd.vercel.app`, one value), the title, the description, and the licence line. |
 | `lib/crew.ts`, `lib/marks.ts` | The crew's roles and default seed (`run_7e9410`, what the static HTML is drawn with), the wordmark, the menu bar mark. |
 | `lib/vendor/bot-avatar.js` | packages/bot-avatar, bundled as one ESM file by `bun run vendor` (with hand-written types beside it). |
 | `lib/version.ts` | capcomd's version for "Early release, 0.6", read from the repo's root `package.json` at build time. |
