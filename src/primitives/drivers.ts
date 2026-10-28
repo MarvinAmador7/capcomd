@@ -14,6 +14,10 @@ import { agentWorkflowOn } from "../utils/agent-workflow-flag";
 export async function startDriver(runId: string, agentId: string): Promise<void> {
   if (env("NO_DRIVER") === "1") return;
   if (agentWorkflowOn()) return startAgentWorkflow(runId, agentId);
+  spawnDriver(runId, agentId);
+}
+
+function spawnDriver(runId: string, agentId: string): void {
   const dir = join(stateDir(), "drivers");
   mkdirSync(dir, { recursive: true });
   const fd = openSync(join(dir, `${agentId}.log`), "a");
@@ -31,6 +35,8 @@ async function startAgentWorkflow(runId: string, agentId: string): Promise<void>
     const key = a.epoch > 1 ? [runId, agentId, `e${a.epoch}`] : [runId, agentId];
     await (c.worker.getOrCreate(key) as any).startAgent({ runId, agentId, epoch: a.epoch });
   } catch (e) {
+    // An engine started without the flag has no workflow: drive it the old way rather than not at all.
+    if ((e as any)?.code === "action_not_found") return spawnDriver(runId, agentId);
     // Like a driver that failed to start: the next await (or the engine, for a workflow already running) carries on.
     console.error(`capcomd: couldn't start ${agentId}'s workflow: ${(e as Error)?.message ?? e}`);
   }

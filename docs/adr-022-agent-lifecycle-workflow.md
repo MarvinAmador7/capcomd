@@ -31,14 +31,16 @@ With `CAPCOMD_AGENT_WORKFLOW=1` (it must be set for the engine host and the CLI 
 
    ```
    wait-start (queue "start")
-   prepare        claim the agent (driver "wf-<agent>-e<N>"), the operator's pause, env snapshot, the login's quota
+   prepare        claim the agent with a 6 h lease (driver "wf-<agent>-e<N>"), operator pause, env snapshot, login quota
    drive loop     one phase per iteration:
-     ensure-machine   provision + assign (idempotent by the VM name)          15 min, 3 retries, backoff 2 s → 30 s
-     start-agent      start the run in the actor's background (keepAwake), recording it in agent_attempts
-     poll             renew the lease every LEASE/3, read the attempt row    + sleep(poll-wait, 1 s)
-     restart-agent    the row names another engine process: the daemon went away mid-run, run it again
+     ensure-machine   re-claim, provision + assign (idempotent by the VM name)  15 min, 3 retries, backoff 2 s → 30 s
+     start-agent      start the run in the actor's background (keepAwake), recording it in agent_attempts; the run
+                      sends `attempt` to its own actor when it ends
+     watch            queue.nextBatch("attempt", timeout LEASE/3) → poll: the agent ended (cancel)? the row's outcome?
+     restart-agent    the row says running but no live run in this process: the daemon or actor went away, run again
      attempt-failed   DRIVE_FAILED, the driver's rules (3 attempts, N identical, final kinds); sleep(retry-backoff)
-   settle         charge, task done, drain, finish or pause
+   settle         charge, task done, drain, finish or pause; the agent.run span
+   give-up        any step whose retries ran out: the agent fails with that error (never left "running")
    [quota]        sleepUntil(usage-reset) → wake (scope.wakeDue: resume as the next epoch, start its workflow)
    ```
 
@@ -52,8 +54,9 @@ With `CAPCOMD_AGENT_WORKFLOW=1` (it must be set for the engine host and the CLI 
 4. **Waiting is event-driven**: the scope broadcasts `agentsChanged` when an agent finishes, pauses, resumes, is
    cancelled or gets a notice; `await` holds one connection to the scope and looks again on each event, with a 5 s poll
    as the fallback (`CAPCOMD_AWAIT_FALLBACK_MS`) instead of 300 ms.
-5. **A usage-limit pause wakes from the paused epoch's own workflow** (`sleepUntil`): `scope.pause` no longer schedules
-   `wakeDue` with the flag on, and an await past the reset only wakes that workflow.
+5. **A usage-limit pause wakes from the paused epoch's own workflow** (`sleepUntil`), and an await past the reset only
+   wakes that workflow. The scope's `wakeDue` alarm stays as a backstop (a pause written by a driver, a workflow that
+   died or diverged): whichever comes first resumes the agent, the other finds it resumed.
 
 The driver code is shared, not copied: `driveOnce` was split into `preflightDrive`, `ensureWorker`, `runAttempt` and
 `settlePushed` (`ops.ts`), which both the driver process (flag off) and the workflow's steps call.
@@ -63,12 +66,13 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
 | Today | With the flag |
 |---|---|
 | `agent-drive` process per agent, its pid/log files | none: the worker actor's workflow |
-| driver lease heartbeat `setInterval` in that process | the workflow's poll step (the lease still exists: awaits read it) |
+| driver lease heartbeat `setInterval` in that process | one long lease (6 h) the workflow takes when it claims and after a failure |
 | `engineOutage`, "engine restarted" re-runs | workflow replay; an attempt row from another engine instance is re-run |
 | retry sleeps (`2 s × n`) in a process | durable `sleep("retry-backoff")` |
+| a driver polling the run | the run's own `attempt` message to its actor's queue (a LEASE/3 timeout as the fallback) |
 | `pushBranch` as a 60-minute action | the same code in the actor's background, kept awake |
 | await polling at 300 ms + kicks | `agentsChanged` events + 5 s fallback (kicks stay, they're cheap and idempotent) |
-| `wakeDue` alarm + `startDriver` process | `sleepUntil` in the paused epoch's workflow, then `start` for the next epoch |
+| `wakeDue` alarm + `startDriver` process | `sleepUntil` in the paused epoch's workflow, then `start` for the next epoch (the alarm stays as a backstop) |
 
 ## Results (2026-10-27)
 
@@ -91,16 +95,23 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
   iterations; a 60-minute agent at 1 s polls writes ~3600 small entries over its life.
 - **The run is not resumable mid-way**: after a restart the attempt runs again from the start in the same VM (same as
   the driver). Real re-attach needs the runner split into start/poll/finish around the VM's files (later).
-- **The background run lives in the engine host process.** It is held by `keepAwake`; if the actor is stopped (engine
-  restart, rescheduling) the run dies with it and the poll step sees the attempt as lost. Two runs of one attempt are
-  prevented by the engine instance check and the push lock.
-- **Both paths during a mixed rollout**: a CLI without the flag starts a driver process for an agent whose engine has
-  the flag (the driver claims the lease first and runs it; the workflow's `prepare` then ends). Set the flag for the
-  daemon and every client together.
+- **The background run lives in the engine host process.** It is held by `keepAwake` and listed in a per-process map;
+  a row that says "running" with no live run there (the daemon restarted, or the actor was stopped and woken) is lost
+  and runs again. The push lock keeps two pushes of one attempt from both landing.
+- **A step that keeps failing** (an engine that won't answer for minutes) ends in `give-up`: the agent fails with the
+  step's error rather than staying "running"; a later `capcomd spawn --continue` picks its work up.
+- **Both paths during a mixed rollout**: a CLI without the flag starts a driver process; whichever claims the lease
+  first drives the agent (the workflow's 6 h lease keeps a driver out once it has it; a driver's 15 s one keeps the
+  workflow's `prepare` out). A CLI with the flag against an engine without it falls back to a driver process. Set
+  the flag for the daemon and every client together.
 - **Events are best effort**: a missed `agentsChanged` (reconnect) costs at most the fallback poll.
 - **Observability**: the driver's `agent.run` span wraps the drive in its own process; the workflow writes one at the
   end instead (same ids and attributes, `agent.driver: workflow`, start = when it claimed the agent), so traces keep
   their parenting. Spans opened inside the run (the worker's actions) are unchanged.
+- **Review (2026-10-27, applied):** exhausted steps fail the agent (give-up) instead of sleeping forever; a lost run is
+  detected per actor, not per process; `start` is sent before it's remembered; final prepare failures are recorded as
+  DRIVE_FAILED like the driver's; the watch waits on the run's `attempt` message instead of a 1 s poll (an hour's agent
+  writes ~720 loop entries instead of ~7200); the lease is claimed once, not renewed.
 - **Where driver-side settings are read.** The driver process read its environment from the CLI that started it; the
   workflow reads the engine host's. Production settings live in config both read, but test knobs set only for one CLI
   call (`CAPCOMD_SCRIPT_<PROFILE>` for a scripted agent) don't reach the engine: `run-planner.test.ts` fails with the

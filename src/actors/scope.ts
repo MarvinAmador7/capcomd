@@ -514,8 +514,9 @@ export const scopeActor = actor({
         await addEvent(tx, "AGENT_PAUSED", params.agentId, { result: params.result, until: params.until || null }, `pause-${params.agentId}-e${a.epoch}`);
       }, { name: "scopePause" });
       // Wake at the reset even when nobody awaits it (the engine host starts its driver). With the agent workflow
-      // (ADR-022) the paused epoch's own workflow sleeps until then and wakes it instead.
-      if (params.until > 0 && !agentWorkflowOn()) await c.schedule.at(params.until, "wakeDue", { agentId: params.agentId, epoch: a.epoch });
+      // (ADR-022) the paused epoch's own workflow sleeps until then and wakes it; this alarm stays as the backstop
+      // (a pause from a driver, a workflow that died): wakeDue only resumes a pause that is still this one.
+      if (params.until > 0) await c.schedule.at(params.until, "wakeDue", { agentId: params.agentId, epoch: a.epoch });
       agentsChanged(c);
       return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
