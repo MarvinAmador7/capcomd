@@ -36,13 +36,6 @@ export default function BotsPage() {
       <main id="main" tabIndex={-1} className="pg-main">
         <noscript><p className="pg__noscript">The playground needs JavaScript. Here is one bot, drawn from <code>agt-7e9410</code>.</p></noscript>
         <Playground initialSeed="agt-7e9410" counts={counts} />
-        <section className="pg-about" aria-labelledby="pg-about-title">
-          <h2 className="big" id="pg-about-title" data-reveal><span>How bots</span> <span>are drawn.</span></h2>
-          <div className="two">
-            <p data-reveal>Same id, same bot, forever: the engine hashes the agent&apos;s id and picks each of the 14 parts in a fixed order, so any copy of capcomd draws the same bot. In a crew, a sibling that would look like another gets a variant, so the app can show a different bot than this page for the same id.</p>
-            <p data-reveal style={{ ["--d" as string]: "60ms" }}>The role changes the odds: planners always get the crown and leads the flag; critics lean purple, square heads, dishes, monocles and the spark pose; workers lean hats, headlamps and treads. Everything here runs in your browser; nothing is sent anywhere.</p>
-          </div>
-        </section>
       </main>
       <Footer />
       <Reveals />

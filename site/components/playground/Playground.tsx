@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CATALOG, MOODS, botGrid, botTraits, gridSvg, rng, withOverrides, type Mood } from "@/lib/vendor/bot-avatar.js";
 import { SITE } from "@/lib/site";
+import { Pipeline } from "./Pipeline";
+import { Dropdown } from "./Dropdown";
 import {
   PART_SLOTS, ROLES, SLOT_LABEL, botPng, partIcon, crewPng, decode, describe, download, encode, fileName, fits, odds, partOf,
   randomSeed, setPart, type Backdrop, type BotTraits, type PartSlot, type Role, type Size,
@@ -14,7 +16,7 @@ import {
 const STORE = "capcomd.bots.crew.v1";
 const KEYS = "capcomd.bots.keys.v1";
 const CREW_MAX = 12;
-const SIZES: Array<[Size, string]> = [["full", "Body"], ["small", "Bust"], ["xs", "Head"]];
+const SIZES: Array<[Size, string]> = [["full", "Full body"], ["small", "Head and shoulders"], ["xs", "Head"]];
 const SIZE_NAME: Record<Size, string> = { full: "full body", small: "head and shoulders", xs: "head" };
 const MOOD_LABEL: Record<Mood, string> = { happy: "Happy", sleepy: "Sleepy", oops: "Oops", love: "Love" };
 /** The 14 parts, grouped as you'd look at a bot. Order of the engine's slots is kept within each group. */
@@ -162,6 +164,13 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
   const crewBots = useMemo(() => crew.map((c) => ({ code: c, bot: decode(c)! })), [crew]);
   // One engine-drawn icon per part, redrawn as the bot changes (about 15 ms for all 14).
   const icons = useMemo(() => Object.fromEntries(PART_SLOTS.map((sl) => [sl, partIcon(t, sl)])) as Record<PartSlot, string>, [t]);
+  // Icons for role, size and mood, all drawn by the engine from this bot's id: the head this id gets in each role,
+  // this bot at each size, and its face in each mood.
+  const headSvg = (x: BotTraits) => gridSvg(botGrid(x, "xs"), { label: "", decorative: true, scale: 2 });
+  const roleIcons = useMemo(() => Object.fromEntries(ROLES.map((r) => [r, headSvg(botTraits(t.seed, r))])) as Record<Role, string>, [t.seed]);
+  // Size: the bot as that size draws it, at 20 px (xs 14 cells at 1×; small and full shown whole at 20 px).
+  const sizeIcons = useMemo(() => Object.fromEntries(SIZES.map(([z]) => [z, gridSvg(botGrid(t, z), { label: "", decorative: true, scale: z === "xs" ? 2 : 1 })])) as Record<Size, string>, [t]);
+  const moodIcons = useMemo(() => ({ ...Object.fromEntries((Object.keys(MOODS) as Mood[]).map((m) => [m, headSvg(withOverrides(t, { mood: m }))])), own: headSvg(t) }) as Record<Mood | "own", string>, [t]);
   const mood = (Object.keys(MOODS) as Mood[]).find((m) => t.eyes === MOODS[m].eyes && t.mouth === MOODS[m].mouth);
   const sizePx = CATALOG.frames[size].w;
 
@@ -233,18 +242,13 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
             <button type="button" className="button pg__pullbtn" onClick={pull} aria-keyshortcuts="R">Pull</button>
           </div>
           <div className="pg__trio">
-            <Group legend="Role" wide>
-              {ROLES.map((r) => <Seg key={r} name="role" checked={t.role === r} onChange={() => change(botTraits(t.seed, r))}>{r}</Seg>)}
-            </Group>
-            <Group legend="Size">
-              {SIZES.map(([s, l]) => <Seg key={s} name="size" checked={size === s} onChange={() => setSize(s)}>{l}</Seg>)}
-            </Group>
-            <Group legend="Mood">
-              {(Object.keys(MOODS) as Mood[]).map((m) => (
-                <button key={m} type="button" className="pg__chip" aria-pressed={mood === m}
-                  onClick={() => change(setPart(setPart(t, "eyes", MOODS[m].eyes), "mouth", MOODS[m].mouth))}>{MOOD_LABEL[m]}</button>
-              ))}
-            </Group>
+            <Dropdown label="Role" value={t.role} onChange={(r) => change(botTraits(t.seed, r))}
+              options={ROLES.map((r) => ({ value: r, label: r, icon: roleIcons[r] }))} />
+            <Dropdown label="Size" value={size} onChange={setSize}
+              options={SIZES.map(([z, l]) => ({ value: z, label: l, icon: sizeIcons[z] }))} />
+            <Dropdown label="Mood" value={mood ?? null} align="right" placeholder={{ label: "Own face", icon: moodIcons.own }}
+              onChange={(m) => change(setPart(setPart(t, "eyes", MOODS[m].eyes), "mouth", MOODS[m].mouth))}
+              options={(Object.keys(MOODS) as Mood[]).map((m) => ({ value: m, label: MOOD_LABEL[m], icon: moodIcons[m] }))} />
           </div>
 
           <fieldset className="pg__picker">
@@ -299,6 +303,7 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
         </div>
       </section>
 
+      <Pipeline t={t} />
       <p className="pg__status" role="status" aria-live="polite">{status}</p>
     </>
   );
@@ -351,11 +356,11 @@ function Group({ legend, wide, children }: { legend: string; wide?: boolean; chi
   );
 }
 
-function Seg({ name, checked, onChange, children }: { name: string; checked: boolean; onChange: () => void; children: ReactNode }) {
+function Seg({ name, checked, onChange, icon, big, children }: { name: string; checked: boolean; onChange: () => void; icon?: string; big?: boolean; children: ReactNode }) {
   return (
-    <label className="pg__opt">
+    <label className={`pg__opt${icon ? " pg__opt--icon" : ""}`}>
       <input type="radio" name={name} checked={checked} onChange={onChange} />
-      <span>{children}</span>
+      <span>{icon && <span className={`pg__oicon${big ? " pg__oicon--big" : ""}`} aria-hidden="true" dangerouslySetInnerHTML={{ __html: icon }} />}<span className="pg__oname">{children}</span></span>
     </label>
   );
 }
