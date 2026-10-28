@@ -107,12 +107,9 @@ async function startAttempt(c: any, p: StartAgent, n: number): Promise<"started"
     try {
       const o = await ops();
       const a = await o.getAgentOrThrow(p.runId, p.agentId);
-      const { pushBranchImpl } = await import("./worker");
       const shim = { db, key, client: () => cl };
-      // Traced as the pushBranch action is (actor.worker.pushBranch, with the run's id), so its sandbox and git spans
-      // land in the run's trace as they did when a driver called the action.
-      const traced = traceActions("worker", { pushBranch: pushBranchImpl });
-      value = await o.runAttempt(p.runId, a, w, (params: any) => traced.pushBranch(shim, params));
+      const push = await tracedPush();
+      value = await o.runAttempt(p.runId, a, w, (params: any) => push(shim, params));
       state = "done"; col = "outcome";
     } catch (e) {
       value = await classify(e);
@@ -130,6 +127,16 @@ async function startAttempt(c: any, p: StartAgent, n: number): Promise<"started"
   return "started";
 }
 
+/**
+ * The worker's push, traced as the pushBranch action is (actor.worker.pushBranch, with the run's id), so its sandbox and
+ * git spans land in the run's trace as they did when a driver called the action. (./worker imports this module.)
+ */
+let pushTraced: ((c: any, params: any) => Promise<any>) | null = null;
+async function tracedPush() {
+  pushTraced ??= traceActions("worker", { pushBranch: (await import("./worker")).pushBranchImpl }).pushBranch;
+  return pushTraced;
+}
+
 /** One look at attempt `n`: ended (cancelled or finished by someone else), still running, lost, or its outcome. */
 async function poll(c: any, p: StartAgent, n: number): Promise<Poll> {
   const a = await (await scopeOf(p.runId)).getAgent({ agentId: p.agentId });
@@ -139,7 +146,8 @@ async function poll(c: any, p: StartAgent, n: number): Promise<Poll> {
   if (!row) return { state: "lost" };
   if (row.state === "running") {
     if (!liveRuns.has(`${c.actorId}:${n}`)) return { state: "lost" };
-    killpoint("workflow.watch.running"); // chaos: the engine host dies mid-step, with the agent's run in flight
+    // Chaos: the engine host dies mid-step, with the agent's run in flight and its push lock held (mid-push).
+    if (process.env.CAPCOMD_KILLPOINT && (await c.db.execute("SELECT 1 FROM push_locks WHERE state = 'running' AND until > ?", Date.now()).catch(() => [])).length) killpoint("workflow.watch.running");
     return { state: "running" };
   }
   if (row.state === "done") return { state: "done", outcome: JSON.parse(row.outcome ?? "null") };
@@ -151,9 +159,13 @@ async function agentLifecycle(ctx: any): Promise<void> {
   const p = msg.body as StartAgent;
   const driver = `wf-${p.agentId}-e${p.epoch}`;
   // The agent's drive settings (recorded at spawn: how it runs, the driver's timings), over this host's env, for every
-  // step and the run it starts. Known from prepare on (its output is history, so a replay knows them too).
+  // step and the run it starts. Read by the first step (its output is history, so a replay knows them too).
   let driveEnv: Record<string, string> | null = null;
   const inEnv = (run: (c: any) => Promise<any>) => (c: any) => withDriveEnv(driveEnv, () => run(c));
+  const settings = await ctx.tryStep({ name: "settings", timeout: 60_000, maxRetries: 10, retryBackoffBase: 1000, retryBackoffMax: 30_000, retryOnTimeout: true, catch: ALL_FAILURES,
+    run: async () => { const a = await (await ops()).getAgentOrThrow(p.runId, p.agentId); return { driveEnv: a.driveEnv, watchMs: withDriveEnv(a.driveEnv, WATCH_MS) }; } });
+  driveEnv = settings.ok ? settings.value.driveEnv : null;
+  const watchMs: number = settings.ok ? settings.value.watchMs : WATCH_MS();
   const step = (name: string, run: (c: any) => Promise<any>, o: Record<string, unknown> = {}) =>
     ctx.tryStep({ name, timeout: 120_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 30_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run: inEnv(run) });
   const failureOf = (r: any): AttemptError => ({ kind: "error", message: String(r.failure?.error?.message ?? `${r.failure?.stepName ?? "a step"} failed`).slice(0, 2000), final: true });
@@ -163,15 +175,13 @@ async function agentLifecycle(ctx: any): Promise<void> {
   // Claim it, then the checks the driver made before making a VM. A paused (quota) agent sleeps to its reset.
   const prep = await step("prepare", async () => {
     const o = await ops();
-    const a = await o.getAgentOrThrow(p.runId, p.agentId);
-    try { return { ...(await withDriveEnv(a.driveEnv, () => o.prepareDrive(p.runId, p.agentId, driver, WF_LEASE_MS))), driveEnv: a.driveEnv }; } catch (e) {
+    try { return await o.prepareDrive(p.runId, p.agentId, driver, WF_LEASE_MS); } catch (e) {
       const err = await classify(e);
-      if (err.final) return { kind: "fail", error: err, driveEnv: a.driveEnv };
+      if (err.final) return { kind: "fail", error: err };
       throw e;
     }
   });
   if (!prep.ok) return giveUp(failureOf(prep));
-  driveEnv = prep.value.driveEnv ?? null;
   if (prep.value.kind === "end") return;
   if (prep.value.kind === "paused") { if (prep.value.until > 0) await wakeAt(ctx, step, p, prep.value.until); return; }
   const startedAt: number = prep.value.startedAt ?? Date.now();
@@ -210,7 +220,7 @@ async function agentLifecycle(ctx: any): Promise<void> {
       }
       if (st.phase === "watch") {
         // Woken by the run's `attempt` message when it ends; else it looks every WATCH_MS (a cancel, a lost run).
-        await l.queue.nextBatch("attempt-wait", { names: ["attempt"], count: 1, timeout: withDriveEnv(driveEnv, WATCH_MS) });
+        await l.queue.nextBatch("attempt-wait", { names: ["attempt"], count: 1, timeout: watchMs });
         const r = await lstep("poll", (c) => poll(c, p, n), { maxRetries: 10 });
         if (!r.ok) return failed(r);
         const v: Poll = r.value;

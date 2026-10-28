@@ -1,8 +1,8 @@
-import { Engine, assertPrivate, runClient, sleep, pidsListening, type EngineOpts } from "./engine";
+import { Engine, assertPrivate, assertPrivatePort, runClient, sleep, pidsListening, type EngineOpts } from "./engine";
 import { auditRun } from "./invariants";
 
 export async function releasePort(port: number): Promise<void> {
-  assertPrivate({ port, dataDir: "/" }, "releasePort"); // it SIGKILLs whatever listens there
+  assertPrivatePort(port, "releasePort"); // it SIGKILLs whatever listens there
   let killed = false;
   for (const pid of await pidsListening(port)) {
     killed = true;

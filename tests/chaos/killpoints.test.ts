@@ -11,21 +11,18 @@ import { createClient } from "rivetkit/client";
 import { Engine } from "./engine";
 import { testPort } from "../helpers/engine";
 
-const saved = { ...process.env };
 let engine: Engine;
 let client: any;
 
 beforeAll(async () => {
-  // The engine host's own fakes: an in-memory sandbox and the fake model (the defaults without other settings).
-  Object.assign(process.env, { CAPCOMD_SANDBOX: "fake", CAPCOMD_SKIP_PREFLIGHT: "1" });
   const port = await testPort();
-  engine = new Engine(`killpoints-${port}`, { port, dataDir: mkdtempSync(join(tmpdir(), "capcomd-chaos-kp-")) });
+  // The engine host's own fakes: an in-memory sandbox and the fake model (given to the engine only).
+  engine = new Engine(`killpoints-${port}`, { port, dataDir: mkdtempSync(join(tmpdir(), "capcomd-chaos-kp-")), env: { CAPCOMD_SANDBOX: "fake", CAPCOMD_SKIP_PREFLIGHT: "1" } });
   client = createClient({ endpoint: `http://127.0.0.1:${port}` });
 });
 
 afterAll(async () => {
   await engine?.stop();
-  for (const k of ["CAPCOMD_SANDBOX", "CAPCOMD_SKIP_PREFLIGHT"]) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
 });
 
 /** Start the engine with `killpoint`, make the call that hits it (it dies under the call), then restart it clean. */
@@ -34,6 +31,8 @@ async function crashOn(killpoint: string, call: () => Promise<unknown>): Promise
   const r = await call().then(() => "returned", (e) => `threw: ${String((e as Error)?.message ?? e).slice(0, 120)}`);
   for (let i = 0; i < 100 && !engine.sawKill; i++) await Bun.sleep(100);
   expect({ killpoint, killed: engine.sawKill, call: r.startsWith("threw") ? "threw" : r }).toEqual({ killpoint, killed: true, call: "threw" });
+  // Killed by this killpoint, not some other death.
+  expect(await Bun.file(engine.logPath).text()).toContain(`[KILLPOINT] Exiting at ${killpoint}`);
   await engine.stop();
   await engine.start(null);
 }
@@ -82,7 +81,7 @@ describe("Chaos Tests - Named Killpoints (private engine, real crashes)", () => 
     const chargeId = `${runId}-charge-1`;
     await crashOn("budget.charge.mid:1", () => run().chargeBudget({ runId, chargeId, amount: 0.5 }));
     const first = await run().chargeBudget({ runId, chargeId, amount: 0.5 });
-    expect(first.charged).not.toBe(false); // the crashed transaction left nothing behind
+    expect(first.charged).toBe(true); // the crashed transaction left nothing behind
     expect(await run().chargeBudget({ runId, chargeId, amount: 0.5 })).toMatchObject({ charged: false, reason: "Already charged" });
     const charges: any[] = await run().getCharges({ runId });
     expect(charges.filter((c) => c.chargeId === chargeId || c.charge_id === chargeId).length).toBe(1);

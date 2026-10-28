@@ -4,7 +4,9 @@ import type { Registry } from "../../src/registry";
 // Readiness probe for an engine on <port>. Exits 0 when an actor call succeeds, 1 at the deadline.
 // Each attempt is bounded (a client call against a half-up engine can hang forever: live Mac
 // 2026-10-20 sat 14+ min), and a hard timer exits at the deadline whatever is pending.
-const port = Number(process.argv[2] ?? "6420");
+// Always the caller's private engine: no default port (never a developer's :6420).
+if (!process.argv[2]) { console.error("usage: ready-probe.ts <port>"); process.exit(2); }
+const port = Number(process.argv[2]);
 const DEADLINE_MS = Number(process.env.CAPCOMD_READY_DEADLINE_MS ?? 45_000);
 const ATTEMPT_MS = Number(process.env.CAPCOMD_READY_ATTEMPT_MS ?? 5_000);
 const deadline = Date.now() + DEADLINE_MS;

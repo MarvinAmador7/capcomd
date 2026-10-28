@@ -14,8 +14,11 @@ const SEED_SUITE_TIMEOUT_MS = 5_400_000;
 
 import { KILLPOINTS } from "./cases";
 
-/** A private engine for one case: its own port block and data dir (never :6420 or the user's engine data). */
-const privateOpts = async (tag: string) => ({ port: await testPort(), dataDir: mkdtempSync(join(tmpdir(), `capcomd-chaos-sub-${tag}-`)) });
+/**
+ * A private engine for one case: its own port block and data dir (never :6420 or the user's engine data), with a real
+ * git repo (direct merges), as chaos:fast runs them: the merge.lock / merge.after_fetch killpoints only fire on one.
+ */
+const privateOpts = async (tag: string) => ({ port: await testPort(), dataDir: mkdtempSync(join(tmpdir(), `capcomd-chaos-sub-${tag}-`)), repo: true });
 
 
 describe("Chaos Tests - Subprocess Killpoints", () => {

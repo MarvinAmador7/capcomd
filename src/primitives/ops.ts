@@ -6,7 +6,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { client, assertEngine, cancelRun } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { agentsFilePath, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
@@ -255,7 +255,7 @@ export async function spawnAgent(o: SpawnOpts) {
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
     // ADR-022: how this shell (or the parent's driver) drives agents travels with the agent, for the engine to use.
     // The agents file the driver would have resolved its children's profiles from (this shell's, or the project's).
-    driveEnv: { ...captureDriveEnv(), CAPCOMD_AGENTS_FILE: agentsFilePath() },
+    driveEnv: { ...captureDriveEnv(), CAPCOMD_AGENTS_FILE: resolve(agentsFilePath()) },
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };

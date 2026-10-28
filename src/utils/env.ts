@@ -29,7 +29,8 @@ export function env(name: string, source: Record<string, string | undefined> = p
  */
 const DRIVE_ENV = new Set(["SPAWN_EXEC", "AGENTS_FILE", "AWAIT_POLL_MS", "AWAIT_FALLBACK_MS", "DRIVER_LEASE_MS", "DRIVE_MAX_FAILURES", "DRIVE_OUTAGE_MS",
   "VM_RPC_POLL_MS", "TOKEN_TTL_MS", "DRIVER_KILLPOINT", "DRIVER_KILLPOINT_MARKER", "AGENT_WORKFLOW_POLL_MS", "QUOTA_RETRY_MS"]);
-const isDriveName = (n: string) => DRIVE_ENV.has(n) || (n.startsWith("SCRIPT_") && !/KEY|TOKEN|SECRET|PASSWORD/.test(n));
+const SECRETISH = /(^|_)(KEY|KEYS|TOKEN|TOKENS|SECRET|SECRETS|PASSWORD|CREDENTIAL|CREDENTIALS)(_|$)/;
+const isDriveName = (n: string) => DRIVE_ENV.has(n) || (n.startsWith("SCRIPT_") && !SECRETISH.test(n));
 
 /** This context's drive settings (the agent's being driven, else this process's), as CAPCOMD_* pairs. */
 export function captureDriveEnv(source: Record<string, string | undefined> = process.env): Record<string, string> {

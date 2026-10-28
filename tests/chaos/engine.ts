@@ -2,29 +2,36 @@ import { env as envVar } from "../../src/utils/env";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { createRequire } from "module";
 import { join, resolve } from "path";
-import { userInfo } from "os";
-import { openSync, readFileSync, readdirSync, readlinkSync } from "fs";
+import { tmpdir, userInfo } from "os";
+import { openSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "fs";
 import { privateHarnessSocket } from "../helpers/harness-socket";
 
 /**
- * Every engine (and every port a helper kills listeners on) must be private: an explicit port that isn't the default
- * 6420 (a developer's daemon; the cleanup kills whatever listens there), and an explicit data dir outside the user's
- * real ~/.capcomd and ~/.rivetkit (found from the passwd entry, so a scratch $HOME doesn't hide them).
+ * Every engine (and every port a helper kills listeners on) must be private: an explicit port outside the default
+ * engine's block (6420, +1, +10: a developer's daemon; the cleanup kills whatever listens there), and an explicit data
+ * dir in a temp area (the OS temp dir, /tmp, or CAPCOMD_CHAOS_DATA_ROOT): never the user's real ~/.capcomd or
+ * ~/.rivetkit, their home, the checkout or `/` (helpers delete it).
  */
-export function assertPrivate(o: { port?: number; dataDir?: string }, what = "a chaos/test engine"): { port: number; dataDir: string } {
-  if (o.port === undefined || !Number.isInteger(o.port)) throw new Error(`${what} needs an explicit private port (refusing the default :6420)`);
-  if (o.port >= 6410 && o.port <= 6430) throw new Error(`${what}: port ${o.port} is the default engine's block (6420, +1, +10); use a private port (tests/helpers/engine.ts testPort())`);
-  if (!o.dataDir) throw new Error(`${what} needs an explicit data dir (refusing the default, the user's real engine data)`);
-  assertPrivateDir(o.dataDir, what);
-  return { port: o.port, dataDir: o.dataDir };
+export function assertPrivatePort(port: number | undefined, what = "a chaos/test helper"): number {
+  if (port === undefined || !Number.isInteger(port)) throw new Error(`${what} needs an explicit private port (refusing the default :6420)`);
+  if (port >= 6410 && port <= 6430) throw new Error(`${what}: port ${port} is in the default engine's block (6420, +1, +10); use a private port (tests/helpers/engine.ts testPort())`);
+  return port;
 }
-export function assertPrivateDir(dir: string, what = "a chaos/test helper"): void {
+export function assertPrivateDir(dir: string | undefined, what = "a chaos/test helper"): string {
+  if (!dir) throw new Error(`${what} needs an explicit data dir (refusing the default, the user's real engine data)`);
+  const d = realOrResolved(dir);
+  const raw = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders", envVar("CHAOS_DATA_ROOT")].filter(Boolean) as string[];
+  const roots = [...new Set([...raw.map((r) => resolve(r)), ...raw.map(realOrResolved)])];
+  if (!roots.some((r) => d !== r && d.startsWith(`${r}/`))) throw new Error(`${what}: refusing data dir ${d}: it must be inside a temp dir (${roots.join(", ")})`);
   const home = userInfo().homedir;
-  const d = resolve(dir);
-  for (const real of [join(home, ".capcomd"), join(home, ".rivetkit")]) {
-    if (d === real || d.startsWith(`${real}/`)) throw new Error(`${what}: refusing ${d}, inside the user's real ${real}`);
-  }
+  for (const real of [join(home, ".capcomd"), join(home, ".rivetkit")]) if (d === real || d.startsWith(`${real}/`)) throw new Error(`${what}: refusing ${d}, inside the user's real ${real}`);
+  return dir;
 }
+const realOrResolved = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
+export function assertPrivate(o: { port?: number; dataDir?: string }, what = "a chaos/test engine"): { port: number; dataDir: string } {
+  return { port: assertPrivatePort(o.port, what), dataDir: assertPrivateDir(o.dataDir, what) };
+}
+
 const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 
 export function sleep(ms: number): Promise<void> {
@@ -135,7 +142,7 @@ function pidsHolding(files: string[]): number[] {
 
 /** PIDs of `src/cli/index.ts serve --port <port>` runners. Scoped by port so parallel workers never touch each other. */
 export async function serveRunnerPids(port: number): Promise<number[]> {
-  assertPrivate({ port, dataDir: "/" }, "serveRunnerPids");
+  assertPrivatePort(port, "serveRunnerPids");
   const proc = Bun.spawn(["pgrep", "-f", `src/cli/index.ts serve --port ${port}( |$)`], { stdout: "pipe", stderr: "ignore" });
   const text = await new Response(proc.stdout).text();
   await proc.exited;

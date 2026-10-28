@@ -6,12 +6,12 @@ import { captureDriveEnv, env, withDriveEnv } from "../../src/utils/env";
 test("capture keeps only the drive settings: how it runs, scripted agents' scripts, driver timings; never a secret or state path", () => {
   const got = captureDriveEnv({
     CAPCOMD_SPAWN_EXEC: "script", CAPCOMD_SCRIPT_PLANNER: "sh plan.sh", CAPCOMD_SCRIPT_VM_DIR: "/tmp/vms", CAPCOMD_DRIVER_LEASE_MS: "4000",
-    CAPCOMD_AGENTS_FILE: "/p/.capcomd/agents.json", RELAY_AWAIT_POLL_MS: "200", CAPCOMD_RPC_KEY: "secret", CAPCOMD_SCRIPT_API_KEY: "x", ANTHROPIC_API_KEY: "sk-ant", CAPCOMD_HOME: "/h",
+    CAPCOMD_AGENTS_FILE: "/p/.capcomd/agents.json", RELAY_AWAIT_POLL_MS: "200", CAPCOMD_RPC_KEY: "secret", CAPCOMD_SCRIPT_API_KEY: "x", CAPCOMD_SCRIPT_GH_TOKEN: "y", CAPCOMD_SCRIPT_KEYPER: "sh keyper.sh", ANTHROPIC_API_KEY: "sk-ant", CAPCOMD_HOME: "/h",
     CAPCOMD_QUOTA_LEDGER: "/q", CAPCOMD_REPO: "/r", CAPCOMD_ENDPOINT: "http://x",
   });
   expect(got).toEqual({
     CAPCOMD_SPAWN_EXEC: "script", CAPCOMD_SCRIPT_PLANNER: "sh plan.sh", CAPCOMD_SCRIPT_VM_DIR: "/tmp/vms", CAPCOMD_DRIVER_LEASE_MS: "4000",
-    CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_AGENTS_FILE: "/p/.capcomd/agents.json",
+    CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_AGENTS_FILE: "/p/.capcomd/agents.json", CAPCOMD_SCRIPT_KEYPER: "sh keyper.sh",
   });
 });
 

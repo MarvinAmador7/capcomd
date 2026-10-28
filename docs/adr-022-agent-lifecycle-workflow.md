@@ -65,8 +65,10 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
    started it; the workflow runs in the engine host, whose env is another's. So `spawn` records the spawner's drive
    settings on the agent (`agents_v2.drive_env`): how it runs (`CAPCOMD_SPAWN_EXEC`), scripted agents' scripts and
    spool knobs (`CAPCOMD_SCRIPT_*`), the agents file its children's profiles resolve from (`CAPCOMD_AGENTS_FILE`, as
-   that shell resolved it), the driver's timings and test killpoints. It's an allowlist (`src/utils/env.ts`): never a
-   secret (no `*_KEY`, token, credential) and no state path. Each workflow step and the run it starts apply them over
+   that shell resolved it, made absolute: a config path, the one state-ish value), the driver's timings and test
+   killpoints. It's an allowlist (`src/utils/env.ts`): never a secret (no `KEY`, `TOKEN`, `SECRET`, `PASSWORD`,
+   `CREDENTIAL` name segment) and no path to capcomd's own state. A spawn replayed by key keeps the settings it was
+   first recorded with. Each workflow step and the run it starts apply them over
    the host's env through an `AsyncLocalStorage` (`withDriveEnv`), so `env()` reads them for that agent only, and what
    the agent spawns from its VM inherits them. Recorded with the flag off too (harmless, and a mixed rollout works).
 
