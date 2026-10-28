@@ -61,7 +61,9 @@ for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.
 	if (op.operationId === "health") continue;
 	for (const s of ERROR_STATUSES) op.responses[String(s)] ??= { description: `Error (${s})`, content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// Routes that need a scope a token may lack (configure is new in sandboxes.settings): 403 forbidden.
-	if (op.operationId === "sandboxes.settings" || op.operationId === "projects.setup") op.responses["403"] ??= { description: "Error (403): the token lacks the configure scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+	if (["sandboxes.settings", "projects.setup", "projects.gitInit", "projects.publish"].includes(op.operationId)) op.responses["403"] ??= { description: "Error (403): the token lacks the configure scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+	// Publishing (projects.git): 503 unavailable when the GitHub CLI fails.
+	if (op.operationId === "projects.publish") op.responses["503"] ??= { description: "Error (503 unavailable): the GitHub CLI couldn't create or push the repository", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// Actions (sandboxes.actions): the steer scope, and 503 unavailable when a provider doesn't answer.
 	if (op.operationId === "sandboxes.action") {
 		op.responses["403"] ??= { description: "Error (403): the token lacks the steer scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };

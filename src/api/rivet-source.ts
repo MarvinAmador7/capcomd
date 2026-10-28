@@ -344,6 +344,9 @@ export function rivetSource(): HarnessSource {
 		},
 		inspectProject: async (path) => { const P = await import("./projects"); return P.inspectProject(path, await projectDeps()); },
 		setUpProject: async (input) => { const P = await import("./projects"); return P.setUpProject(input, await projectDeps()); },
+		initGit: async (path) => { const G = await import("./project-git"); return G.initGit(path, await projectDeps()); },
+		publishOptions: async (path) => { const G = await import("./project-git"); return G.publishOptions(path, await projectDeps()); },
+		publishProject: async (input) => { const G = await import("./project-git"); return G.publishProject(input, await projectDeps()); },
 	};
 }
 
