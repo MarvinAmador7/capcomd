@@ -59,15 +59,19 @@ struct PanelView: View {
             .accessibilityElement(children: .combine)
             .transition(.opacity)
           }
-          Text("Active").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
-            .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
+          // While a folder's next steps show, an empty Active section steps aside (design/setup/InlineSetup).
+          let quiet = active.isEmpty && model.setupShowing
+          if !quiet {
+            Text("Active").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
+              .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
+          }
           ForEach(active) { p in
             Group {
               if let r = model.celebrating(p) { CelebrationCard(project: p, run: r) } else { ProjectCard(project: p) }
             }
             .padding(.bottom, Theme.cardGap).transition(.opacity)
           }
-          if active.isEmpty {
+          if active.isEmpty && !quiet {
             VStack(spacing: 10) {
               PixelWordmark()   // Polish board, item 7
               Text(projects.isEmpty ? "No projects yet" : "Nothing running").font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)

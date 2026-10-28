@@ -16,6 +16,8 @@ struct StartProjectField: View {
     let state = model.startState
     let starting = state == .starting
     let ready = !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !starting
+    // A picked folder that isn't set up yet: its next steps take the tool row's place (design/setup).
+    let setup = model.setupScreen(goal: goal).flatMap { $0.phase == .loading ? nil : $0 }
     VStack(alignment: .leading, spacing: 0) {
       // Composer board: the panel's centrepiece. Context chips, large text, a tool row, the white send.
       VStack(alignment: .leading, spacing: Theme.Composer2.gap) {
@@ -34,11 +36,18 @@ struct StartProjectField: View {
           .focused($focused).disabled(starting)
           .onSubmit(submit)
           .onKeyPress(.escape) {
+            if model.setup.isOpen { model.cancelSetup(); return .handled }   // Esc cancels the setup, the goal stays
             if !goal.isEmpty { goal = ""; model.clearStart(); return .handled }
             focused = false; return .handled
           }
           .accessibilityLabel("Start a project")
-        toolRow(ready: ready, starting: starting)
+        Group {
+          if let setup {
+            InlineSetupSection(screen: setup, defaultKey: !focused, onPrimary: runPrimary).transition(.opacity)
+          } else {
+            toolRow(ready: ready, starting: starting)
+          }
+        }
           // Its natural width, measured on a hidden copy: the panel widens to fit rather than squeezing it.
           .background(alignment: .leading) {
             toolRow(ready: ready, starting: starting).fixedSize().hidden().allowsHitTesting(false).accessibilityHidden(true)
@@ -50,25 +59,44 @@ struct StartProjectField: View {
       .contentShape(Rectangle())
       .onTapGesture { focused = true }
       .background { keyboardOnly("k") { focused = true } }
+      .background {
+        // Esc cancels the setup while the field isn't focused too (it handles Esc itself when it is).
+        if model.setup.isOpen {
+          Button { model.cancelSetup() } label: { EmptyView() }.keyboardShortcut(.cancelAction).opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+        }
+      }
       .animation(Theme.Motion.fast, value: focused)
+      .animation(Theme.Motion.fast, value: setup == nil)
       // The panel opens with nothing focused (idle look, ⌘K hint); ⌘K or a click focuses the field.
       .defaultFocus($focused, false)
       // AppKit makes the first text field first responder whenever the panel window becomes key; undo that on open.
       .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
         DispatchQueue.main.async { if goal.isEmpty { focused = false; NSApp.keyWindow?.makeFirstResponder(nil) } }
+        // Back from Terminal (a GitHub CLI login, `capcomd setup project`): look at the folder again.
+        if model.setup.isOpen { Task { await model.setup.refresh() } }
       }
       line(state)
     }
     .task { await model.refreshDaemonInfo() }   // capabilities and drivers, for the driver chip
   }
 
-  /// Where the run goes: the remembered project checkout (× forgets it), else the daemon's default project.
+  /// Where the run goes: the remembered project checkout (× forgets it), else the daemon's default project. While a
+  /// picked folder is looked at or set up, that folder, with a spinner or the orange "not set up" dot; × cancels.
   @ViewBuilder private var folderChip: some View {
-    if let repo = model.startRepo {
+    if model.setup.isOpen, let path = model.setup.path {
+      let screen = model.setupScreen(goal: "")
+      Chip2(leading: AnyView(Image(systemName: "folder").font(.system(size: 11))), text: screen?.name ?? (path as NSString).lastPathComponent,
+            onRemove: { model.cancelSetup() },
+            trailing: AnyView(Group {
+              if screen?.phase == .loading { ProgressView().controlSize(.mini).frame(width: Theme.Setup.spinner, height: Theme.Setup.spinner).accessibilityLabel("Looking at the folder") }
+              else { SetupDot() }
+            }))
+        .help(path)
+    } else if let repo = model.startRepo {
       Chip2(icon: "folder", text: (repo as NSString).lastPathComponent, onRemove: { model.startRepo = nil })
         .help(repo)
     } else {
-      Button { if let f = ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f } } label: {
+      Button { model.chooseProjectFolder() } label: {
         Chip2(icon: "folder", text: "Default project", onRemove: nil)
       }
       .buttonStyle(.plain).help("capcomd's default project; click to choose a checkout")
@@ -170,7 +198,7 @@ struct StartProjectField: View {
 
   private var addMenu: some View {
     Menu {
-      Button("Choose Project Folder…") { if let f = ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f } }
+      Button("Choose Project Folder…") { model.chooseProjectFolder() }
       if model.startRepo != nil { Button("Use the Default Project") { model.startRepo = nil } }
       Divider()
       Button("Settings…") { SettingsWindow.open(openSettings) }
@@ -198,7 +226,26 @@ struct StartProjectField: View {
     }
   }
 
+  /// The card's primary (Set Up, Set Up and Start, Initialize Git, …). Set Up hands the field its focus back; Set Up and
+  /// Start clears it, as a started run does.
+  private func runPrimary(_ a: SetupAction) {
+    let g = goal
+    Task {
+      switch await model.setupAction(a, goal: g) {
+      case .setUp: focused = true
+      case .started: goal = ""; focused = false
+      case .startFailed, .showing: break
+      }
+    }
+  }
+
   private func submit() {
+    // Return while a folder's next steps show runs the card's primary when it's Set Up (or Set Up and Start).
+    if let p = model.setupScreen(goal: goal)?.primary {
+      if (p.action == .setUp || p.action == .setUpAndStart) && p.enabled && !p.busy { runPrimary(p.action) }
+      return
+    }
+    if model.setup.isOpen { return }   // still looking at the folder
     let g = goal
     guard !g.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     Task { if await model.startRun(g) { goal = ""; focused = false } }

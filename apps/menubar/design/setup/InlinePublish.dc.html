@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Project setup inline: publish to GitHub</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#4ea1ff}a:hover{color:#7cb9ff}
+.stage{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;color:#f2f2f7;-webkit-font-smoothing:antialiased;letter-spacing:-0.08px;display:flex;gap:60px;align-items:flex-start}
+.cap{font:600 12px -apple-system,BlinkMacSystemFont,sans-serif;color:#98989d;letter-spacing:.02em;text-transform:uppercase;margin:0 0 10px 2px;width:380px;line-height:1.4}
+.panel{width:380px;box-sizing:border-box;border-radius:16px;background:#1d1d1f;border:0.5px solid rgba(255,255,255,.16);box-shadow:0 0 0 .5px rgba(0,0,0,.6),0 20px 50px rgba(0,0,0,.45);padding:10px;position:relative}
+.comp{border-radius:20px;background:rgba(255,255,255,.06);border:0.5px solid rgba(255,255,255,.12);padding:12px;display:flex;flex-direction:column;gap:12px}
+.comp.f{box-shadow:0 0 0 3.5px rgba(10,132,255,.22)}
+.chiprow{display:flex;align-items:center;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:13px;background:rgba(255,255,255,.08);border:0.5px solid rgba(255,255,255,.14);font-size:12.5px;color:#f2f2f7;box-sizing:border-box;white-space:nowrap}
+.chip .x{color:rgba(235,235,245,.55);font-size:10px;font-weight:700;margin-left:1px}
+.dot{width:7px;height:7px;border-radius:50%;background:#ff9f0a;display:inline-block;flex:none}
+.key{margin-left:auto;font-size:11.5px;font-weight:500;color:rgba(255,255,255,.7);border:0.5px solid rgba(255,255,255,.25);border-radius:6px;padding:2px 6px}
+.goal{font-size:17px;letter-spacing:-.17px;padding:0 4px;line-height:22px}
+.ph{color:rgba(255,255,255,.4)}
+.car{display:inline-block;width:1.5px;height:18px;background:#0a84ff;vertical-align:-3px;margin-left:1px}
+.tools{display:flex;align-items:center;gap:8px}
+.round{width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.08);border:0.5px solid rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center;box-sizing:border-box;flex:none}
+.seg{display:flex;padding:3px;border-radius:16px;background:rgba(0,0,0,.22)}
+.seg span{width:36px;height:26px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.7)}
+.seg span.on{background:rgba(255,255,255,.12);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.18),0 1px 2px rgba(0,0,0,.25);color:#fff}
+.model{margin-left:auto;display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:15px;background:rgba(255,255,255,.06);font-size:12.5px;color:rgba(255,255,255,.7)}
+.send{width:32px;height:32px;border-radius:50%;background:#f5f5f7;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 6px rgba(0,0,0,.35);flex:none}
+.send.idle svg{opacity:.3}
+.next{margin:0 -12px;padding:10px 12px 0;border-top:.5px solid rgba(255,255,255,.1)}
+.nh{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#f2f2f7;font-weight:500;padding:0 2px}
+.card{margin-top:10px;border-radius:14px;background:rgba(255,255,255,.05);border:0.5px solid rgba(255,255,255,.1);padding:12px 12px 12px}
+.card.amb{background:rgba(255,159,10,.06);border-color:rgba(255,159,10,.32)}
+.ch{display:flex;align-items:flex-start;gap:10px}
+.ch .t{font-size:13.5px;font-weight:600;letter-spacing:-.01em}
+.ch .p{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;color:rgba(235,235,245,.5);margin-top:2px}
+.ch .close{margin-left:auto;width:20px;height:20px;border-radius:10px;background:rgba(255,255,255,.08);border:0;color:rgba(235,235,245,.6);display:flex;align-items:center;justify-content:center;flex:none;padding:0}
+.rows{margin:8px 0 0}
+.r{display:flex;align-items:center;gap:10px;min-height:32px;padding:3px 2px;box-sizing:border-box}
+.rw + .rw{border-top:.5px solid rgba(255,255,255,.07)}
+.rn{display:flex;align-items:center;gap:8px;font-size:11px;line-height:1.35;color:rgba(235,235,245,.5);padding:0 2px 8px}
+.rn span{flex:1}
+.rn.warn{color:#ff9f0a}
+.mini{height:20px;padding:0 8px;border-radius:5px;border:0;background:rgba(255,255,255,.1);color:#f2f2f7;font:inherit;font-size:11.5px;flex:none}
+.r .l{width:84px;flex:none;font-size:12px;color:rgba(235,235,245,.55)}
+.r .v{flex:1;min-width:0;display:flex;align-items:center;gap:6px;font-size:12.5px;justify-content:flex-end;flex-wrap:wrap}
+.pop{height:22px;padding:0 5px 0 8px;border-radius:6px;background:rgba(255,255,255,.1);border:0;color:#f2f2f7;font:inherit;font-size:12.5px;display:inline-flex;align-items:center;gap:5px}
+.fld{height:22px;min-width:120px;box-sizing:border-box;border-radius:6px;background:rgba(0,0,0,.25);border:0.5px solid rgba(255,255,255,.16);padding:0 7px;font:12px ui-monospace,"SF Mono",Menlo,monospace;color:#f2f2f7;display:inline-flex;align-items:center}
+.fld.err{border-color:#ff9f0a;box-shadow:0 0 0 2.5px rgba(255,159,10,.25)}
+.ag{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px 0 7px;border-radius:12px;font-size:12px;border:0.5px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:rgba(255,255,255,.7)}
+.ag.on{background:rgba(10,132,255,.18);border-color:rgba(10,132,255,.55);color:#fff}
+.ag.dis{opacity:.45}
+.note{font-size:11.5px;color:rgba(235,235,245,.5);line-height:1.4;margin-top:10px}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px}
+.warn{color:#ff9f0a}
+.sub{font-size:11px;color:rgba(235,235,245,.5);line-height:1.35;width:100%;text-align:right}
+.acts{display:flex;align-items:center;gap:8px;margin-top:12px}
+.acts .sp{flex:1}
+.b{height:27px;padding:0 12px;border-radius:7px;font:inherit;font-size:12.5px;font-weight:500;border:0;background:rgba(255,255,255,.1);color:#f2f2f7;display:inline-flex;align-items:center;gap:6px}
+.b.p{background:#0a84ff;color:#fff}
+.b.off{opacity:.55}
+.b.q{background:transparent;color:rgba(235,235,245,.7);padding:0 6px}
+.callout{font-size:12.5px;line-height:1.45;margin-top:8px;color:rgba(235,235,245,.7);padding:0 2px}
+.sec{font-size:11px;font-weight:600;color:rgba(255,255,255,.45);margin:14px 6px 6px}
+.dim{opacity:.35}
+.recent{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:14px}
+.tile{width:34px;height:34px;border-radius:10px;background:#c4561b;flex:none;position:relative;overflow:hidden}
+.tile i{position:absolute;left:9px;top:12px;width:16px;height:8px;border-radius:2px;background:#3b2a6b}
+.rt{font-size:13.5px;font-weight:500}.rs{font-size:12px;color:rgba(235,235,245,.55);margin-top:2px}
+.kc{margin-left:auto;font-size:11.5px;font-weight:500;color:rgba(255,255,255,.7);border:0.5px solid rgba(255,255,255,.25);border-radius:6px;padding:2px 6px}
+.ok{display:flex;align-items:center;gap:7px;font-size:11.5px;color:rgba(235,235,245,.6);padding:7px 10px 0;line-height:1.4}
+.menu{position:absolute;z-index:2;width:176px;border-radius:8px;background:rgba(44,44,48,.98);border:0.5px solid rgba(255,255,255,.16);box-shadow:0 10px 30px rgba(0,0,0,.5);padding:5px;font-size:13px}
+.mi{height:22px;border-radius:4px;display:flex;align-items:center;gap:6px;padding:0 8px 0 6px}
+.mi .ck{width:12px;display:inline-flex}
+.mi.hl{background:#0a84ff;color:#fff}
+.msep{height:.5px;background:rgba(255,255,255,.12);margin:4px 6px}
+.mh{font-size:11px;color:rgba(235,235,245,.45);padding:2px 8px 3px 24px}
+.spin{width:11px;height:11px;border-radius:50%;border:1.5px solid rgba(255,255,255,.3);border-top-color:#fff;box-sizing:border-box}
+</style>
+</helmet>
+<div class="stage" style="width: 2140px; height: 640px">
+<div><div class="cap">1 · After Initialize Git, or a checkout with no remote: publish it first</div><div class="panel"><div class="comp">
+  <div class="chiprow"><span class="chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>my-app<span class="dot" aria-label="Not set up"></span><span class="x"><svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m1 1 6 6M7 1 1 7"></path></svg></span></span><span class="key">⌘K</span></div>
+  <div class="goal"><span class="ph">Describe a project for your agents…</span></div>
+  <div class="next"><div class="nh"><span class="dot"></span><span>my-app isn’t on GitHub yet.</span></div><div class="rows"><div class="rw"><div class="r"><span class="l">Account</span><span class="v"><button class="pop" aria-label="Account: marvin"><svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>marvin<svg width="8" height="11" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg></button></span></div></div><div class="rw"><div class="r"><span class="l">Name</span><span class="v"><span class="fld" style="min-width:0;width:150px">my-app</span></span></div></div><div class="rw"><div class="r"><span class="l">Visibility</span><span class="v"><button class="pop" aria-label="Visibility: Private">Private<svg width="8" height="11" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg></button></span></div></div></div><div class="callout">Creates <span class="mono">github.com/marvin/my-app</span>, commits the folder’s 24 files as the first commit, and pushes <span class="mono">main</span>.</div><div class="acts"><button class="b">Choose Another Folder…</button><span class="sp"></span><button class="b p">Publish to GitHub</button></div></div>
+</div><div class="sec">Recent</div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Ship to main</div><div class="rs">Done in 4m</div></div><span class="kc">⌘1</span></div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Build a thing</div><div class="rs">Done in 12m</div></div><span class="kc">⌘2</span></div></div></div><div><div class="cap">2 · Account lists you and the organizations you can create repositories in</div><div class="panel"><div class="comp">
+  <div class="chiprow"><span class="chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>my-app<span class="dot" aria-label="Not set up"></span><span class="x"><svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m1 1 6 6M7 1 1 7"></path></svg></span></span><span class="key">⌘K</span></div>
+  <div class="goal"><span class="ph">Describe a project for your agents…</span></div>
+  <div class="next"><div class="nh"><span class="dot"></span><span>my-app isn’t on GitHub yet.</span></div><div class="rows"><div class="rw"><div class="r"><span class="l">Account</span><span class="v"><button class="pop" aria-label="Account: marvin"><svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>marvin<svg width="8" height="11" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg></button></span></div></div><div class="rw"><div class="r"><span class="l">Name</span><span class="v"><span class="fld" style="min-width:0;width:150px">my-app</span></span></div></div><div class="rw"><div class="r"><span class="l">Visibility</span><span class="v"><button class="pop" aria-label="Visibility: Private">Private<svg width="8" height="11" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg></button></span></div></div></div><div class="callout">Creates <span class="mono">github.com/marvin/my-app</span>, commits the folder’s 24 files as the first commit, and pushes <span class="mono">main</span>.</div><div class="acts"><button class="b">Choose Another Folder…</button><span class="sp"></span><button class="b p">Publish to GitHub</button></div></div>
+</div><div class="sec">Recent</div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Ship to main</div><div class="rs">Done in 4m</div></div><span class="kc">⌘1</span></div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Build a thing</div><div class="rs">Done in 12m</div></div><span class="kc">⌘2</span></div><div class="menu" style="right:22px;top:150px" role="menu">
+<div class="mi"><span class="ck"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 6.4 2.6 2.6L10 3.4"></path></svg></span>marvin</div>
+<div class="msep"></div>
+<div class="mh">Organizations</div>
+<div class="mi hl"><span class="ck"></span>acme</div>
+<div class="mi"><span class="ck"></span>dnamic-labs</div>
+</div></div></div><div><div class="cap">3 · Publishing: the values lock, the line says what’s happening</div><div class="panel"><div class="comp">
+  <div class="chiprow"><span class="chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>my-app<span class="dot" aria-label="Not set up"></span><span class="x"><svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m1 1 6 6M7 1 1 7"></path></svg></span></span><span class="key">⌘K</span></div>
+  <div class="goal"><span class="ph">Describe a project for your agents…</span></div>
+  <div class="next"><div class="nh"><span class="dot"></span><span>my-app isn’t on GitHub yet.</span></div><div class="rows" style="opacity:.5"><div class="rw"><div class="r"><span class="l">Account</span><span class="v"><button class="pop" aria-label="Account: marvin"><svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>marvin<svg width="8" height="11" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg></button></span></div></div><div class="rw"><div class="r"><span class="l">Name</span><span class="v"><span class="fld" style="min-width:0;width:150px">my-app</span></span></div></div><div class="rw"><div class="r"><span class="l">Visibility</span><span class="v"><button class="pop" aria-label="Visibility: Private">Private<svg width="8" height="11" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg></button></span></div></div></div><div class="callout">Pushing <span class="mono">main</span> to <span class="mono">github.com/marvin/my-app</span>…</div><div class="acts"><span class="sp"></span><button class="b p off"><span class="spin"></span>Publishing…</button></div></div>
+</div><div class="sec">Recent</div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Ship to main</div><div class="rs">Done in 4m</div></div><span class="kc">⌘1</span></div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Build a thing</div><div class="rs">Done in 12m</div></div><span class="kc">⌘2</span></div></div></div><div><div class="cap">4 · Published: straight into the usual setup, the new repository already filled in</div><div class="panel"><div class="comp">
+  <div class="chiprow"><span class="chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>my-app<span class="dot" aria-label="Not set up"></span><span class="x"><svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m1 1 6 6M7 1 1 7"></path></svg></span></span><span class="key">⌘K</span></div>
+  <div class="goal"><span class="ph">Describe a project for your agents…</span></div>
+  <div class="next"><div class="nh"><span class="dot"></span><span>my-app isn't set up for capcomd yet.</span></div><div class="rows"><div class="rw"><div class="r"><span class="l">Repository</span><span class="v"><svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>marvin/my-app</span></div><div class="rn"><span>Published just now, private.</span></div></div><div class="rw"><div class="r"><span class="l">Target branch</span><span class="v"><button class="pop" aria-label="Target branch: main">main<svg width="8" height="11" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg></button></span></div></div><div class="rw"><div class="r"><span class="l">Changes land as</span><span class="v"><button class="pop" aria-label="Changes land as: Pull requests">Pull requests<svg width="8" height="11" viewBox="0 0 9 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m1.5 4.2 3-2.7 3 2.7"></path><path d="m1.5 7.8 3 2.7 3-2.7"></path></svg></button></span></div></div><div class="rw"><div class="r"><span class="l">Agents</span><span class="v"><span class="ag on" role="switch" aria-checked="true"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path fill="#d97757" d="M12 1.5l1.6 7.2 6.4-3.8-3.8 6.4 7.3 1.6-7.3 1.6 3.8 6.4-6.4-3.8L12 24l-1.6-7.1-6.4 3.8 3.8-6.4L.5 12.7l7.3-1.6L4 4.9l6.4 3.8z"></path></svg>Claude Code</span><span class="ag dis" role="switch" aria-checked="false"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"></rect><path d="m8 10 2.5 2L8 14"></path><path d="M13 14h3"></path></svg>Codex</span></span></div></div></div><div class="acts"><span class="sp"></span><button class="b q">Cancel</button><button class="b p">Set Up</button></div></div>
+</div><div class="sec">Recent</div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Ship to main</div><div class="rs">Done in 4m</div></div><span class="kc">⌘1</span></div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Build a thing</div><div class="rs">Done in 12m</div></div><span class="kc">⌘2</span></div></div></div><div><div class="cap">GitHub CLI logged out: log in first, then publish</div><div class="panel"><div class="comp">
+  <div class="chiprow"><span class="chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2h8.8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>my-app<span class="dot" aria-label="Not set up"></span><span class="x"><svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m1 1 6 6M7 1 1 7"></path></svg></span></span><span class="key">⌘K</span></div>
+  <div class="goal"><span class="ph">Describe a project for your agents…</span></div>
+  <div class="next"><div class="nh"><span class="dot"></span><span>my-app isn’t on GitHub yet.</span></div><div class="callout">Publishing needs the GitHub CLI logged in on this Mac.</div><div class="acts"><button class="b">Choose Another Folder…</button><span class="sp"></span><button class="b p">Log In to GitHub…</button></div></div>
+</div><div class="sec">Recent</div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Ship to main</div><div class="rs">Done in 4m</div></div><span class="kc">⌘1</span></div>
+<div class="recent"><span class="tile"><i></i></span><div><div class="rt">Build a thing</div><div class="rs">Done in 12m</div></div><span class="kc">⌘2</span></div></div></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2140,"height":640}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

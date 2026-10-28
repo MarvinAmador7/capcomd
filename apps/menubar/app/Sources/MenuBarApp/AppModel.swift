@@ -23,6 +23,8 @@ final class AppModel {
   /// The transport behind `store`. AsyncHTTPClient traps in debug if its client is freed without shutdown(),
   /// so a replaced transport must be shut down explicitly before it is released.
   @ObservationIgnored private var transport: UnixSocketTransport
+  /// The composer's inline project setup (ProjectSetupInline.swift), on `store`.
+  @ObservationIgnored private(set) var setup: ProjectSetupFlow
   private(set) var revision = 0
   var path: [Route] = []
   /// No Keychain token yet (first launch) or the daemon answered 401: the panel shows the token prompt.
@@ -35,11 +37,14 @@ final class AppModel {
 
   init(_ pair: (CapcomdStore, UnixSocketTransport), tokenMissing: Bool = false) {
     self.store = pair.0; self.transport = pair.1; self.tokenMissing = tokenMissing
+    self.setup = ProjectSetupFlow(store: pair.0, actions: SetupActions(store: pair.0))
     attach(store)
   }
 
   private func attach(_ s: CapcomdStore) {
     s.onChange = { [weak self] in self?.revision &+= 1 }
+    setup = ProjectSetupFlow(store: s, actions: SetupActions(store: s))
+    setup.onChange = { [weak self] in self?.revision &+= 1 }
     s.onNotify = { [weak self] n in
       guard let self else { return }
       self.moment(n)
@@ -220,10 +225,10 @@ final class AppModel {
     var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
     var state = await store.startRun(goal: goal, choice)
     if case .needsRepo = state, let folder = ProjectFolderPicker.choose() {
-      // The project's own drivers: the daemon's (it has no project) may have had none to offer.
-      store.prefs.startRepo = folder; revision &+= 1
-      await store.refreshRunOptions()
-      choice = RunChoice(repo: folder, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+      // A folder that isn't set up yet shows its next steps in the composer (the goal stays: Set Up and Start). A set-up
+      // one takes the run, with the project's own drivers (the daemon's, without a project, may have had none to offer).
+      guard await setup.pick(folder) else { return false }
+      choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
       state = await store.startRun(goal: goal, choice)
     }
     if case .started = state { return true }

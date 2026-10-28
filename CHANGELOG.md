@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Menu bar app: set a project up right in the composer. Pick a folder with **+ › Choose Project Folder…**: a capcomd
+  project is used at once as before; any other folder gets an orange dot on its chip and, in place of the tool row, what
+  it needs next. A GitHub checkout shows its repository, the target branch, how changes land (pull requests, or pushes
+  when the GitHub CLI isn't logged in, with **Log In…**), the agents that can work on it, and a spend cap when one of
+  them would bill an API key where your runs go; edit any of them in place and press **Set Up**, or **Set Up and Start**
+  when you've already typed a goal. A folder that isn't a git checkout, or isn't on GitHub, says so with **Choose
+  Another Folder…** (and **Open in Terminal** for `capcomd setup project` on other hosts). **Cancel**, the chip's × or
+  Esc go back to the project you had; new runs never move until the folder is set up. Needs a capcomd with
+  `projects.setup`; with an older one, a picked folder is used as before. Settings › General has a new **Keep .capcomd/
+  out of git** switch (off by default) for projects you set up from now on; it turns on once capcomd can apply it.
 - Harness API: set a folder up as a capcomd project without Terminal (capability `projects.setup`), so the menu bar
   app can offer it for a folder you pick. `GET /v1/projects/inspect?path=` (read scope, writes nothing) says what a
   setup form needs: the git checkout the folder is in, its origin (the repository a project always uses), its branches

@@ -50,6 +50,11 @@ menu bar bot naps when nothing runs and raises a hand when something needs you."
 tile, then the toggle). Off: the menu bar mark stays the plain face (no sleepy, working or approval faces); the amber
 dot and count stay.
 
+**New projects**: **Keep .capcomd/ out of git** (off by default; sub "Adds `.capcomd/` to the project's .gitignore when
+you set it up. Off: commit it, so everyone who works on the project shares the setup."), footer "Applies to projects you
+set up from now on." It goes with setups from the composer (`setup/setup-spec.md`); until the app can send it (the
+store's project git routes) the switch is disabled and the footer adds "Update capcomd to use this."
+
 **Notifications**: **Approval requests** ("Approve or deny a merge from the notification.") and **Finished runs**
 ("Including runs that failed or were stopped."), both on by default; they gate the notifications the app posts.
 Footer: "Banners and sounds follow System Settings › Notifications." (a link to that pane); when notifications are
