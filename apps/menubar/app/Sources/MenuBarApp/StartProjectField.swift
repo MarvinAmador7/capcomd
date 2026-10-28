@@ -258,7 +258,11 @@ enum ProjectFolderPicker {
     let p = NSOpenPanel()
     p.canChooseDirectories = true; p.canChooseFiles = false; p.allowsMultipleSelection = false
     p.prompt = "Use This Project"; p.message = prompt
-    NSApp.activate(ignoringOtherApps: true)
+    // A menu bar app isn't active, and macOS 14+ may decline activate(ignoringOtherApps:): the panel then opened
+    // behind the frontmost app's windows. Float it and bring it forward so the picker is always on top.
+    NSApp.activate()
+    p.level = .floating
+    p.orderFrontRegardless()
     return p.runModal() == .OK ? p.url?.path : nil
   }
 }
