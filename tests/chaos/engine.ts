@@ -1,12 +1,30 @@
 import { env as envVar } from "../../src/utils/env";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { createRequire } from "module";
-import { engineDataDir } from "../../src/engine/data";
-import { join } from "path";
+import { join, resolve } from "path";
+import { userInfo } from "os";
 import { openSync, readFileSync, readdirSync, readlinkSync } from "fs";
 import { privateHarnessSocket } from "../helpers/harness-socket";
 
-const DEFAULT_PORT = 6420;
+/**
+ * Every engine (and every port a helper kills listeners on) must be private: an explicit port that isn't the default
+ * 6420 (a developer's daemon; the cleanup kills whatever listens there), and an explicit data dir outside the user's
+ * real ~/.capcomd and ~/.rivetkit (found from the passwd entry, so a scratch $HOME doesn't hide them).
+ */
+export function assertPrivate(o: { port?: number; dataDir?: string }, what = "a chaos/test engine"): { port: number; dataDir: string } {
+  if (o.port === undefined || !Number.isInteger(o.port)) throw new Error(`${what} needs an explicit private port (refusing the default :6420)`);
+  if (o.port >= 6410 && o.port <= 6430) throw new Error(`${what}: port ${o.port} is the default engine's block (6420, +1, +10); use a private port (tests/helpers/engine.ts testPort())`);
+  if (!o.dataDir) throw new Error(`${what} needs an explicit data dir (refusing the default, the user's real engine data)`);
+  assertPrivateDir(o.dataDir, what);
+  return { port: o.port, dataDir: o.dataDir };
+}
+export function assertPrivateDir(dir: string, what = "a chaos/test helper"): void {
+  const home = userInfo().homedir;
+  const d = resolve(dir);
+  for (const real of [join(home, ".capcomd"), join(home, ".rivetkit")]) {
+    if (d === real || d.startsWith(`${real}/`)) throw new Error(`${what}: refusing ${d}, inside the user's real ${real}`);
+  }
+}
 const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 
 export function sleep(ms: number): Promise<void> {
@@ -116,7 +134,8 @@ function pidsHolding(files: string[]): number[] {
 }
 
 /** PIDs of `src/cli/index.ts serve --port <port>` runners. Scoped by port so parallel workers never touch each other. */
-export async function serveRunnerPids(port: number = DEFAULT_PORT): Promise<number[]> {
+export async function serveRunnerPids(port: number): Promise<number[]> {
+  assertPrivate({ port, dataDir: "/" }, "serveRunnerPids");
   const proc = Bun.spawn(["pgrep", "-f", `src/cli/index.ts serve --port ${port}( |$)`], { stdout: "pipe", stderr: "ignore" });
   const text = await new Response(proc.stdout).text();
   await proc.exited;
@@ -164,14 +183,12 @@ const REAL_ENGINE = createRequire(import.meta.url)("@rivetkit/engine-cli").getEn
 
 export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  const port = opts.port ?? DEFAULT_PORT;
+  const { port } = assertPrivate(opts, "engineEnv");
   env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${port}`;
-  if (opts.port !== undefined) {
-    env.RIVET_RUN_ENGINE_PORT = String(port);
-    // rivet-services (agentOS/durable streams, unused by relay) binds a fixed :8642 and
-    // runs outside the runner's process group; parallel workers would share it.
-    env.RIVET_RUN_SERVICES = "0";
-  }
+  env.RIVET_RUN_ENGINE_PORT = String(port);
+  // rivet-services (agentOS/durable streams, unused by relay) binds a fixed :8642 and
+  // runs outside the runner's process group; parallel workers would share it.
+  env.RIVET_RUN_SERVICES = "0";
   Object.assign(env, repoEnv(opts));
   if (opts.env) Object.assign(env, opts.env);
   if (opts.dataDir) {
@@ -197,7 +214,7 @@ export class Engine {
 
   constructor(label: string, opts: EngineOpts = {}) {
     this.opts = opts;
-    this.port = opts.port ?? DEFAULT_PORT;
+    this.port = assertPrivate(opts, `engine ${label}`).port;
     this.harnessSocket = opts.env?.CAPCOMD_HARNESS_SOCKET ?? privateHarnessSocket();
     this.logPath = `/tmp/relay-chaos-${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180)}.log`;
   }
@@ -209,7 +226,8 @@ export class Engine {
 
   private noteKill = (code: number | null) => {
     if (this.stopping) return;
-    if (code === 137 || tailFile(this.logPath).includes("[KILLPOINT]")) {
+    // [DRIVER-KILL]: a driver killpoint fired in this engine host (ADR-022: the agent workflow runs the spool pump here).
+    if (code === 137 || /\[KILLPOINT\]|\[DRIVER-KILL\]/.test(tailFile(this.logPath))) {
       this.sawKill = true;
       // A killpoint is a whole-host crash. The SIGKILLed runner can't reap its
       // rivet-engine child, so take the process group down. Otherwise a runner-less
@@ -230,7 +248,6 @@ export class Engine {
    * Guards every non-group kill against PID reuse and path/port mistakes hitting a sibling worker.
    */
   private owns(pid: number): boolean {
-    if (this.opts.port === undefined) return true;
     if (!HAS_PROC) {
       // No readable environ: ours = our serve child or its descendants, our engine (pid file), or a
       // serve runner for this exact port (stragglers from an earlier start of this instance).
@@ -319,7 +336,7 @@ export class Engine {
     // (e.g. the rivetkit napi .node / rivet-engine binary), and treating those as "locks"
     // made stop() SIGKILL every other parallel worker's runner and engine.
     // Trailing slash: "/w1" must not prefix-match "/w10".."/w15" (fast attempt 2, run 1).
-    const root = `${(this.opts.dataDir ?? engineDataDir(this.port)).replace(/\/$/, "")}/`;
+    const root = `${this.opts.dataDir!.replace(/\/$/, "")}/`;
     this.dataFiles = [...files].filter((path) => path.startsWith(root));
   }
 
