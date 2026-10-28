@@ -4,7 +4,8 @@
 # It gets a goal in plain words and has to run the swarm itself: a run, three workers in boxd VMs (two Claude, one
 # Codex), each verified (its check in a checks VM, then a reviewer agent) and merged into `integration`.
 # Same fixture as scripts/mac-subagents-e2e.sh: a private repo with three broken functions, one test each.
-# Needs: bun, gh (logged in), claude (logged in), BOXD_API_KEY, working claude + codex agent logins.
+# Needs: bun, gh (logged in), claude (logged in), a boxd key (BOXD_API_KEY, or the one `capcomd setup` keeps in
+# the keychain), working claude + codex agent logins.
 # The GitHub repo is kept (the delete command is printed). Ends with `E2E PASS` or `E2E FAIL: <reasons>`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -16,7 +17,6 @@ REPO="$OWNER/capcomd-plugin-$TS"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/capcomd-plugin.XXXXXX")"
 T0=$(date +%s)
 die() { echo "mac-plugin-e2e: $*" >&2; echo "artifacts: $WORK"; exit 1; }
-[ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
 for c in bun gh claude; do command -v $c >/dev/null || die "$c not on PATH"; done
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
 claude plugin validate --strict plugins/capcomd >/dev/null || die "the plugin doesn't validate"

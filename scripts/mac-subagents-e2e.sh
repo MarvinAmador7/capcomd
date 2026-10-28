@@ -5,7 +5,8 @@
 # 5 s: their checkpoint refs must reach GitHub and be deleted when their work merges. Prints the tree, rollups and
 # timings.
 # The GitHub repo is NOT deleted (inspect it; the delete command is printed at the end).
-# Needs: bun, gh (logged in), BOXD_API_KEY, working claude + codex logins (capcomd auth status).
+# Needs: bun, gh (logged in), a boxd key (BOXD_API_KEY, or the one `capcomd setup` keeps in the keychain),
+# working claude + codex logins (capcomd auth status).
 # Override profiles with CAPCOMD_PLANNER_SPEC / CAPCOMD_CLAUDE_WORKER_SPEC / CAPCOMD_CODEX_WORKER_SPEC /
 # CAPCOMD_REVIEWER_SPEC (JSON). Every verify is also reviewed by the read-only `reviewer` profile.
 set -euo pipefail
@@ -17,7 +18,6 @@ REPO="$OWNER/capcomd-subagents-$TS"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/capcomd-subagents.XXXXXX")"
 T0=$(date +%s)
 die() { echo "mac-subagents-e2e: $*" >&2; echo "artifacts: $WORK"; exit 1; }
-[ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
 command -v bun >/dev/null || die "bun not on PATH"
 command -v gh >/dev/null || die "gh not installed"
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
