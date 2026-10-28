@@ -5,6 +5,10 @@
 import { describe, expect, test } from "bun:test";
 import { randomKillpoint } from "./harness";
 import { survive } from "./survive";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { testPort } from "../helpers/engine";
 import { auditRun } from "./invariants";
 
 describe("chaos regression: seed 36", () => {
@@ -13,7 +17,7 @@ describe("chaos regression: seed 36", () => {
   });
 
   test("merge.after_cas.before_event:2 → recovery reaps the sandbox (all invariants hold)", async () => {
-    const r = await survive("merge.after_cas.before_event", 2, true);
+    const r = await survive("merge.after_cas.before_event", 2, true, { port: await testPort(), dataDir: mkdtempSync(join(tmpdir(), "capcomd-chaos-seed-")) });
     expect(r.error).toBeUndefined();
     expect(r.killed).toBe(true);
     expect(r.ok).toBe(true);

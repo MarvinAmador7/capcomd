@@ -17,17 +17,20 @@
 import { queue } from "rivetkit";
 import { Loop, workflow } from "rivetkit/workflow";
 import type { RawAccess } from "rivetkit/db";
-import { env } from "../utils/env";
+import { env, withDriveEnv } from "../utils/env";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { redactShapes } from "../agents/redact";
 import { TERMINAL_AGENT } from "../primitives/policy";
+import { killpoint } from "../utils/killpoint";
+import { traceActions } from "../utils/tracing-simple";
 
 export { agentWorkflowOn } from "../utils/agent-workflow-flag";
 
 export interface StartAgent { runId: string; agentId: string; epoch: number }
 
 /** How long the watch waits for the run's `attempt` message before it looks anyway (cancel, a lost run). */
-const WATCH_MS = () => Number(env("AGENT_WORKFLOW_POLL_MS") ?? Math.max(1000, Number(env("DRIVER_LEASE_MS") ?? 15_000) / 3));
+// An integer: the workflow engine refuses a fractional timeout ("Not an integer"), e.g. a 4000 ms lease / 3.
+const WATCH_MS = () => Math.ceil(Number(env("AGENT_WORKFLOW_POLL_MS") ?? Math.max(1000, Number(env("DRIVER_LEASE_MS") ?? 15_000) / 3)));
 /** The workflow holds the agent's driver lease for this long, so an await never "kicks" it and a driver process
  *  (a client without the flag) can't take it over while the workflow runs it. */
 const WF_LEASE_MS = 6 * 3600_000;
@@ -104,9 +107,9 @@ async function startAttempt(c: any, p: StartAgent, n: number): Promise<"started"
     try {
       const o = await ops();
       const a = await o.getAgentOrThrow(p.runId, p.agentId);
-      const { pushBranchImpl } = await import("./worker");
       const shim = { db, key, client: () => cl };
-      value = await o.runAttempt(p.runId, a, w, (params: any) => pushBranchImpl(shim, params));
+      const push = await tracedPush();
+      value = await o.runAttempt(p.runId, a, w, (params: any) => push(shim, params));
       state = "done"; col = "outcome";
     } catch (e) {
       value = await classify(e);
@@ -124,6 +127,16 @@ async function startAttempt(c: any, p: StartAgent, n: number): Promise<"started"
   return "started";
 }
 
+/**
+ * The worker's push, traced as the pushBranch action is (actor.worker.pushBranch, with the run's id), so its sandbox and
+ * git spans land in the run's trace as they did when a driver called the action. (./worker imports this module.)
+ */
+let pushTraced: ((c: any, params: any) => Promise<any>) | null = null;
+async function tracedPush() {
+  pushTraced ??= traceActions("worker", { pushBranch: (await import("./worker")).pushBranchImpl }).pushBranch;
+  return pushTraced;
+}
+
 /** One look at attempt `n`: ended (cancelled or finished by someone else), still running, lost, or its outcome. */
 async function poll(c: any, p: StartAgent, n: number): Promise<Poll> {
   const a = await (await scopeOf(p.runId)).getAgent({ agentId: p.agentId });
@@ -131,7 +144,12 @@ async function poll(c: any, p: StartAgent, n: number): Promise<Poll> {
   await c.db.execute(ATTEMPTS_SQL);
   const row: any = (await c.db.execute("SELECT * FROM agent_attempts WHERE attempt = ?", n))[0];
   if (!row) return { state: "lost" };
-  if (row.state === "running") return liveRuns.has(`${c.actorId}:${n}`) ? { state: "running" } : { state: "lost" };
+  if (row.state === "running") {
+    if (!liveRuns.has(`${c.actorId}:${n}`)) return { state: "lost" };
+    // Chaos: the engine host dies mid-step, with the agent's run in flight and its push lock held (mid-push).
+    if (process.env.CAPCOMD_KILLPOINT && (await c.db.execute("SELECT 1 FROM push_locks WHERE state = 'running' AND until > ?", Date.now()).catch(() => [])).length) killpoint("workflow.watch.running");
+    return { state: "running" };
+  }
   if (row.state === "done") return { state: "done", outcome: JSON.parse(row.outcome ?? "null") };
   return { state: "failed", error: JSON.parse(row.error ?? "{}") };
 }
@@ -140,8 +158,16 @@ async function agentLifecycle(ctx: any): Promise<void> {
   const msg = await ctx.queue.next("wait-start", { names: ["start"] });
   const p = msg.body as StartAgent;
   const driver = `wf-${p.agentId}-e${p.epoch}`;
+  // The agent's drive settings (recorded at spawn: how it runs, the driver's timings), over this host's env, for every
+  // step and the run it starts. Read by the first step (its output is history, so a replay knows them too).
+  let driveEnv: Record<string, string> | null = null;
+  const inEnv = (run: (c: any) => Promise<any>) => (c: any) => withDriveEnv(driveEnv, () => run(c));
+  const settings = await ctx.tryStep({ name: "settings", timeout: 60_000, maxRetries: 10, retryBackoffBase: 1000, retryBackoffMax: 30_000, retryOnTimeout: true, catch: ALL_FAILURES,
+    run: async () => { const a = await (await ops()).getAgentOrThrow(p.runId, p.agentId); return { driveEnv: a.driveEnv, watchMs: withDriveEnv(a.driveEnv, WATCH_MS) }; } });
+  driveEnv = settings.ok ? settings.value.driveEnv : null;
+  const watchMs: number = settings.ok ? settings.value.watchMs : WATCH_MS();
   const step = (name: string, run: (c: any) => Promise<any>, o: Record<string, unknown> = {}) =>
-    ctx.tryStep({ name, timeout: 120_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 30_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run });
+    ctx.tryStep({ name, timeout: 120_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 30_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run: inEnv(run) });
   const failureOf = (r: any): AttemptError => ({ kind: "error", message: String(r.failure?.error?.message ?? `${r.failure?.stepName ?? "a step"} failed`).slice(0, 2000), final: true });
   // A step that never succeeds (its retries exhausted): the agent fails with that error, never stays "running".
   const giveUp = async (err: AttemptError) => { await step("give-up", async () => (await ops()).finishFailed(p.runId, p.agentId, p.epoch, err), { maxRetries: 10 }); };
@@ -167,7 +193,7 @@ async function agentLifecycle(ctx: any): Promise<void> {
     name: "drive", state: { phase: "ensure", n: 1 } as Drive,
     run: async (l: any, st: Drive) => {
       const lstep = (name: string, run: (c: any) => Promise<any>, o: Record<string, unknown> = {}) =>
-        l.tryStep({ name, timeout: 60_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 15_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run });
+        l.tryStep({ name, timeout: 60_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 15_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run: inEnv(run) });
       const n = st.n;
       const failed = (r: any) => Loop.continue({ phase: "failed", n, error: { ...failureOf(r), final: false } });
       if (st.phase === "ensure") {
@@ -194,7 +220,7 @@ async function agentLifecycle(ctx: any): Promise<void> {
       }
       if (st.phase === "watch") {
         // Woken by the run's `attempt` message when it ends; else it looks every WATCH_MS (a cancel, a lost run).
-        await l.queue.nextBatch("attempt-wait", { names: ["attempt"], count: 1, timeout: WATCH_MS() });
+        await l.queue.nextBatch("attempt-wait", { names: ["attempt"], count: 1, timeout: watchMs });
         const r = await lstep("poll", (c) => poll(c, p, n), { maxRetries: 10 });
         if (!r.ok) return failed(r);
         const v: Poll = r.value;
@@ -230,7 +256,7 @@ async function agentLifecycle(ctx: any): Promise<void> {
  * epoch runs in that epoch's worker, started like any agent. `wakeDue` checks it is still this pause.
  */
 async function wakeAt(ctx: any, step: (name: string, run: (c: any) => Promise<any>, o?: Record<string, unknown>) => Promise<any>, p: StartAgent, until: number) {
-  await ctx.sleepUntil("usage-reset", until);
+  await ctx.sleepUntil("usage-reset", Math.ceil(until));
   // (The scope's own wakeDue alarm is the backstop: whichever comes first resumes it, the other finds it resumed.)
   await step("wake", async () => (await scopeOf(p.runId)).wakeDue({ agentId: p.agentId, epoch: p.epoch }));
 }
