@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { tmpdir, userInfo } from "os";
 import { join } from "path";
 import { applyConfig, projectConfigPath, readConfig, runDefaults, userConfigPath, writeConfig } from "../../src/config/store";
 import { keychainGet, keychainKind, keychainSet, type Runner } from "../../src/config/keychain";
@@ -41,6 +41,20 @@ describe("persisted config", () => {
     expect(projectConfigPath(deep)).toBe(join(proj, ".capcomd", "config.json"));
     expect(runDefaults(deep)).toEqual({ checks: { unit: "bun test" }, target: "capcomd/staging" });
     expect(projectConfigPath(tmp())).toBeNull();
+  });
+
+  test("the search stops at HOME and at the account's home, and capcomd's user config is never a project's", () => {
+    // Above HOME: not looked at.
+    const t = tmp(), home = join(t, "home"), proj = join(home, "code", "app");
+    mkdirSync(proj, { recursive: true });
+    writeConfig(join(t, ".capcomd", "config.json"), { env: { CAPCOMD_SANDBOX: "boxd" } });
+    expect(projectConfigPath(proj, { HOME: home, CAPCOMD_HOME: join(t, "ch") })).toBeNull();
+    // capcomd's user config (CAPCOMD_HOME's) sits where a project's would: still not a project.
+    const u = tmp(), sub = join(u, "src"); mkdirSync(sub);
+    writeConfig(join(u, ".capcomd", "config.json"), { env: { CAPCOMD_SANDBOX: "boxd" } });
+    expect(projectConfigPath(sub, { HOME: tmp(), CAPCOMD_HOME: join(u, ".capcomd") })).toBeNull();
+    // A scratch HOME (tests, agents) never lets the walk reach the account's real ~/.capcomd/config.json.
+    expect(projectConfigPath(userInfo().homedir, { HOME: tmp(), CAPCOMD_HOME: tmp() })).toBeNull();
   });
 });
 

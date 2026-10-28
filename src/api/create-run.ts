@@ -2,10 +2,10 @@
 // directory. The daemon runs that command itself, so the CLI stays the one place that resolves profiles, the planner,
 // the engine and the background process; this file only decides the directory and environment it runs in.
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { defaultAgentsFile } from "../utils/home";
-import { applyConfig, projectConfigPath, readConfig, userConfigPath } from "../config/store";
+import { applyConfig, projectConfigPath, readConfig } from "../config/store";
 import { REPO_ENV_KEYS } from "../merge/config";
 import { env as envVar } from "../utils/env";
 import { selfArgv } from "../utils/self";
@@ -14,7 +14,6 @@ import { withSandbox } from "../providers/run-sandbox";
 import { sandboxAvailable } from "./run-options";
 
 type Env = Record<string, string | undefined>;
-const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
 
 /**
  * Where a run starts and with which settings.
@@ -40,9 +39,8 @@ function contextFor(repo: string | undefined, base: Env, cwd: string): { cwd: st
 	if (!isAbsolute(repo)) throw new CreateRunError(`repo must be an absolute path, got ${JSON.stringify(repo)}`);
 	const dir = resolve(repo);
 	if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new CreateRunError(`repo ${dir} is not a directory on this machine`);
-	const project = projectConfigPath(dir);
-	// The nearest config from a directory in $HOME can be capcomd's own (~/.capcomd/config.json): that is no project.
-	if (!project || real(project) === real(userConfigPath(base))) throw new CreateRunError(`${dir} is not a capcomd project (no .capcomd/config.json in it or above it). Run \`capcomd setup project\` in it first.`);
+	const project = projectConfigPath(dir, base);   // never capcomd's own ~/.capcomd/config.json
+	if (!project) throw new CreateRunError(`${dir} is not a capcomd project (no .capcomd/config.json in it or above it). Run \`capcomd setup project\` in it first.`);
 	const env: Env = { ...base };
 	for (const k of REPO_ENV_KEYS) { delete env[`CAPCOMD_${k}`]; delete env[`RELAY_${k}`]; }
 	// The project's own profiles (.capcomd/agents.json, which the CLI finds from its directory) win over the daemon's file.
