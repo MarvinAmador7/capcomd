@@ -170,11 +170,11 @@ struct SetupRowView: View {
       .accessibilityElement(children: .combine).accessibilityLabel("Repository: \(repo)")
     case .target(let target, let choices):
       SetupPopup(text: target, accessibility: "Target branch: \(target)") {
-        ForEach(choices, id: \.self) { b in
-          Toggle(isOn: Binding(get: { b == target }, set: { _ in flow.setTarget(b) })) { Text(verbatim: b) }
+        Section("Branches") {
+          ForEach(choices, id: \.self) { b in
+            Toggle(isOn: Binding(get: { b == target }, set: { _ in flow.setTarget(b) })) { Text(verbatim: b) }
+          }
         }
-        Divider()
-        Text("Branches on GitHub")
       }
     case .mode(let mode, let target, let pullRequests):
       let title = mode == "pr" ? "Pull requests" : "Pushes to \(target)"

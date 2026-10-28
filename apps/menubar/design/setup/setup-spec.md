@@ -59,7 +59,7 @@ won't publish listed at the end of the publish callout ("Leaves out `.env` (reas
 | Row | Value | Edits | From |
 |---|---|---|---|
 | Repository | the GitHub mark and `owner/name` | no (never typed: it is the folder's origin) | `github` |
-| Target branch | a menu (`.pop`): the default branch, the checkout's branches, the current pick; then a separator and "Branches on GitHub" | pick | `defaultBranch`, `branches` |
+| Target branch | a menu (`.pop`): under a "Branches" header: the default branch, the checkout's branches, the current pick | pick | `defaultBranch`, `branches` |
 | Changes land as | "Pull requests" or "Pushes to <target>"; Pull requests is disabled while the GitHub CLI is logged out | pick | `suggestedMode`, `pullRequestsAvailable` |
 | Agents | chips: Claude Code (its coral spark), Codex; on = accent capsule; one not logged in anywhere is dimmed and can't be chosen | toggle; at least one | `agents[].loggedIn`, `suggestedAgents` |
 | Spend cap | "$" field, 76 pt, "5.00" to start; note "Claude Code bills your API key. A run stops at this amount." | type; empty is no limit | shown only when a chosen agent bills an API key **where new runs go** (the composer's Local / Cloud: its `places[]` entry for that place is `how: "api_key"`, and its `auth` is `apikey`, so a plan login anywhere never asks) |
@@ -114,6 +114,5 @@ projects you set up from now on."
 
 ## 7. Open
 
-- The target menu's "Branches on GitHub" is the board's copy, but `branches` are the checkout's local branches.
 - Codex's chip uses the app's stand-in Codex glyph (as everywhere) until the official mark lands; the board draws a
   terminal glyph.
