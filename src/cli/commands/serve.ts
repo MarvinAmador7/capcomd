@@ -57,6 +57,7 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // ~/.rivetkit, which other rivetkit projects also use (a newer one stamps the db and ours then refuses to open it).
   const data = await import("../../engine/data");
   const dataDir = data.engineDataDir(port);
+  const copyLegacy = data.copiesLegacyData(port);   // before CAPCOMD_ENGINE_DATA is set below
   mkdirSync(dataDir, { recursive: true });
   const pidFile = process.env.CAPCOMD_ENGINE_PIDFILE ?? data.pidFileOf(dataDir);
   process.env.CAPCOMD_ENGINE_PIDFILE = pidFile;
@@ -99,7 +100,7 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     const engineVersion = data.engineVersionOf(real);
     if (engineVersion) process.env.CAPCOMD_ENGINE_VERSION = engineVersion;
     const { VERSION } = await import("../../utils/self");
-    if (port === data.DEFAULT_PORT && data.isDefaultDataDir()) {
+    if (copyLegacy) {
       const m = data.migrateLegacyEngineData({ dataDir, legacyDb: data.legacyRivetkitDb(), engineVersion, capcomdVersion: VERSION });
       if (m.action === "refused") { console.error(`capcomd serve: ${m.message}`); process.exit(1); }
       if (m.action === "copied") console.log(`  ${m.message}`);
