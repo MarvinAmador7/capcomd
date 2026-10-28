@@ -18,6 +18,15 @@ the repo root.
 | A live run | 2026-10-21; three broken functions, one failing test each; 2 Claude workers + 1 Codex worker; 3 of 3 merged, suite green; 7 agents; 13 VMs; 228 s; $0 billed, about $0.37 at API prices | README "A real run" |
 | Drive it from your agent | the integrations table and each row's status; `relay.v1`, stable exit codes; `tui`, `logs --follow`, `tree`; the menu bar app is macOS only and built from source; the install commands; the early-release line | README "Connecting your agent", "Integrations", "Quickstart"; apps/menubar/README.md; STATUS.md |
 
+## The bot playground (/bots/)
+
+Everything on it comes from the avatar engine (packages/bot-avatar) and its catalog. Every part, mood, size, pose and
+the role weights are the engine's own. The odds and the "possible bots" counts are computed by the engine's rules
+(`candidates`, `weightOf`, `countCombinations`). "Cheer" applies the app's run-finished moment (Moments.swift): cheer
+pose, happy face, a party hat for anyone without a crown or flag, and confetti placed by `rng(seed, "confetti")`.
+Copy sources: apps/menubar/design/brand/README.md ("Every agent gets a generated pixel bot: same agent id, same bot,
+forever"; the role weights).
+
 ## Sample content to confirm or replace
 
 The pictures of the app are rebuilt in HTML from the approved mockups (`apps/menubar/design/`). They're

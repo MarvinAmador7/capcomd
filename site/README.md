@@ -24,6 +24,8 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 | `app/layout.tsx` | Fonts (`next/font/google`: Bebas Neue and EB Garamond, self-hosted at build time, SIL OFL), metadata (title, description, canonical, Open Graph, Twitter, icons), and the one inline script that marks the page as scripted. |
 | `app/page.tsx` | The page: Hero, Run, Sandboxes, RoleTree, AtScale, Patterns, Drive, Footer. |
 | `app/globals.css` | Tailwind, the design tokens in `@theme` (colours, type, spacing, easing), and the art direction's components in `@layer components` (the hero slot, the stages, the app panels, the tree), which read only those tokens. Simple layouts such as the footer use utilities. |
+| `app/bots/page.tsx`, `components/playground/`, `lib/playground.ts` | The bot playground at `/bots/`: pull a bot from an id and a role, set any of its 14 parts, a mood and a size, keep a crew (localStorage), download SVG or PNG, share a link (`#s=…&r=…&t=…&z=…`) that redraws the bot exactly. Its OG image is `app/bots/og.png/route.tsx`. |
+| `components/Nav.tsx` | The navigation, shared by both pages. |
 | `app/not-found.tsx` | The 404 page (exported as `404.html`). |
 | `app/og.png/route.tsx`, `app/apple-touch-icon.png/route.tsx` | Rendered once at build time with `next/og` into `out/og.png` (1200×630, the hero's art) and `out/apple-touch-icon.png`. They're static GETs, with nothing at runtime. |
 | `app/icon.svg` | The favicon: the menu bar bot mark (`MENU_BAR_MARK` in packages/bot-avatar) on a plum tile. |

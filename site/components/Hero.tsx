@@ -1,20 +1,12 @@
 import { HeroCrew, RedrawButton, RunId } from "./crew";
-import { Win, Wordmark, delay } from "./marks";
+import { Win, delay } from "./marks";
+import { Nav } from "./Nav";
 import { SITE } from "@/lib/site";
-
-const NAV = [["#run", "Run"], ["#sandboxes", "Sandboxes"], ["#roles", "Roles"], ["#scale", "At scale"], ["#patterns", "Patterns"]] as const;
 
 export function Hero({ version }: { version: string }) {
   return (
     <header className="hero">
-      <nav className="nav" aria-label="Main">
-        <Wordmark className="nav__mark" />
-        <ul className="nav__links m-0 list-none p-0">
-          {NAV.map(([href, label]) => <li key={href}><a href={href}>{label}</a></li>)}
-          <li><a href={SITE.repo}>GitHub</a></li>
-        </ul>
-        <a className="button" href="#install">Install</a>
-      </nav>
+      <Nav />
 
       <h1 className="sentence">
         <span className="w" style={{ ["--i" as string]: 0 }}>Put a</span>{" "}
@@ -32,7 +24,7 @@ export function Hero({ version }: { version: string }) {
           <a className="text" href={SITE.repo}>Read the README</a>
         </div>
         <div className="hero__note" data-load style={delay(620)}>
-          <p className="m-0">Crew drawn from <RunId />; every agent&apos;s bot is seeded by its id. <RedrawButton />MIT. Early release, {version}. One executable for macOS and Linux, arm64 and x64.</p>
+          <p className="m-0">Crew drawn from <RunId />; every agent&apos;s bot is seeded by its id. <RedrawButton /><a href="/bots/">Make your own</a>. MIT. Early release, {version}. One executable for macOS and Linux, arm64 and x64.</p>
           <Win title="zsh" label="Install with Homebrew"><code tabIndex={0}>brew install MarvinAmador7/tap/capcomd</code></Win>
         </div>
       </div>
