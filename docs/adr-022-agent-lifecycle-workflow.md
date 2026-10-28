@@ -81,7 +81,15 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
   attempt (the run left in the VM is stopped first: `start, stopped, start, finished`), the agent finishes, no
   `DRIVE_FAILED`, never an `agent-drive` process; a usage-limit pause with nobody awaiting → its workflow sleeps to the
   reset and the next epoch finishes.
-- The full scenario suites run with the flag off and on (numbers in the stage report / PR).
+- Suites (2026-10-28, this Mac, other worktrees' tests running alongside): `test:fast` 653/653; `tests/agents` 58/58
+  flag off and on; `test:scenarios` 108/110 flag off and 107/110 flag on. The two failing both ways (agent-provider's
+  and observability's harness-stream reads) fail the same way on the commit before this spike today; the third with
+  the flag on is `run-planner` (below).
+- Chaos (`tests/chaos/fast.ts`, private ports and data): the named killpoints (legacy run path, no agents) 11/11 with
+  the flag off. The primitives cases 12/14 off (the two that read driver pid files from `.relay/` don't find them when
+  `CAPCOMD_HOME` is set) and 4/14 on: the harness gives `CAPCOMD_SPAWN_EXEC=fake` to its client only, so the engine,
+  which now runs the agent, runs a real one ("needs a repo"); `driver.kill` and the driver killpoints have no driver
+  process to kill. Making the chaos suite pass with the flag on is part of the criteria below.
 
 ## Failure modes
 
@@ -122,7 +130,9 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
 
 ## Criteria to make it the default (S3, not now)
 
-1. The scenario suites, `tests/agents` and the chaos fast gate pass with the flag on, twice in a row, with no new flake.
+1. The scenario suites, `tests/agents` and the chaos fast gate pass with the flag on, twice in a row, with no new flake:
+   the harnesses give the engine the driver-side knobs (`CAPCOMD_SPAWN_EXEC`, `CAPCOMD_SCRIPT_*`), or spawn records
+   them with the agent, and the driver-process killpoints get workflow equivalents (kill the engine mid-step).
 2. The live end-to-end (`scripts/mac-subagents-e2e.sh`, boxd + Claude + Codex) passes with the flag on; a daemon
    restart mid-run of a real agent recovers.
 3. A workflow-shape change is shipped once with `getVersion` against in-flight agents (upgrade drill).
