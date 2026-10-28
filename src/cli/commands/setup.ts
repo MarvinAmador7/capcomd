@@ -10,7 +10,7 @@
 // defaults and flags, so agents and scripts can run setup too. Settings land in ~/.capcomd/config.json (user)
 // and <project>/.capcomd/config.json; the boxd key never sits in a file unless there is no keychain and you agree.
 import { spawnSync } from "child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { homedir, hostname, tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 import { capcomdHome } from "../../utils/home";
@@ -18,6 +18,7 @@ import { selfArgv } from "../../utils/self";
 import { ORCHESTRATION_SKILL } from "../../utils/assets";
 import { projectConfigPath, readConfig, userConfigPath, writeConfig } from "../../config/store";
 import { keychainGet, keychainKind, keychainSet } from "../../config/keychain";
+import { githubRepoOf, gitRoot, httpsRemote, isUserConfigDir, originHead, originUrl, parseBudget, planProject, suggestCheck, writeProject } from "../../config/project-setup";
 import { prompter, type Prompter } from "../prompt";
 
 export interface Step { step: string; ok: boolean; detail: string; hint?: string }
@@ -38,30 +39,8 @@ function self(args: string[], o: { env?: Record<string, string | undefined>; inh
 const json = (s: string): any => { try { return JSON.parse(s.trim().split("\n").pop() ?? ""); } catch { return null; } };
 const sh = (cmd: string, args: string[], cwd?: string) => { const r = spawnSync(cmd, args, { cwd, encoding: "utf8" }); return { code: r.status ?? 1, out: (r.stdout ?? "").trim() }; };
 
-// ── pure helpers (tested) ─────────────────────────────────────────────────────────────────────
-/** git@github.com:o/r.git → https://github.com/o/r.git (VMs clone over https with a per-push credential). */
-export function httpsRemote(url: string): string {
-  const m = /^git@([^:]+):(.+?)(\.git)?$/.exec(url.trim());
-  if (m) return `https://${m[1]}/${m[2]}.git`;
-  const s = /^ssh:\/\/git@([^/]+)\/(.+?)(\.git)?$/.exec(url.trim());
-  return s ? `https://${s[1]}/${s[2]}.git` : url.trim();
-}
-/** owner/repo for a GitHub remote, else null. */
-export function githubRepoOf(url: string): string | null {
-  const m = /github\.com[/:]([^/]+)\/([^/]+?)(\.git)?$/.exec(url.trim());
-  return m ? `${m[1]}/${m[2]}` : null;
-}
-/** A test command from the project's files: package.json "test" (bun or npm), else null. */
-export function suggestCheck(dir: string): string | null {
-  const pj = join(dir, "package.json");
-  if (!existsSync(pj)) return null;
-  try {
-    const p = JSON.parse(readFileSync(pj, "utf8"));
-    const usesBun = existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"));
-    if (p.scripts?.test) return usesBun ? "bun run test" : "npm test";
-    return usesBun ? "bun test" : null;
-  } catch { return null; }
-}
+// ── pure helpers (tested; src/config/project-setup.ts has them, re-exported here) ─────────────
+export { githubRepoOf, httpsRemote, suggestCheck };
 
 // ── steps ─────────────────────────────────────────────────────────────────────────────────────
 /** 0. A real run on a private engine with fake agents: no accounts, about a minute. */
@@ -246,11 +225,13 @@ export async function agentAccountsStep(p: Prompter, v: Values, log: (s: string)
   return steps;
 }
 
-/** 2. The project: repository, target, merge mode, a default check and reviewer, and the agent profiles. */
+/**
+ * 2. The project: repository, target, merge mode, a default check and reviewer, and the agent profiles. The questions
+ * are asked here; the decisions and the writing are src/config/project-setup.ts's (POST /v1/projects calls it too).
+ */
 export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): Promise<Step[]> {
   // The project's settings live in its checkout (.capcomd/): the one setup runs in, else the one the person names.
   // Never the home directory: its .capcomd/config.json is capcomd's user config, so the project would apply everywhere.
-  const gitRoot = (d: string) => { const r = sh("git", ["rev-parse", "--show-toplevel"], d); return r.code === 0 && r.out ? r.out : null; };
   const here = tildePath(cwd);
   let dir = gitRoot(cwd);
   if (!dir && p.interactive) {
@@ -264,55 +245,31 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
     dir = cwd;
   }
   // The project's config file must not be capcomd's own (setup run in the home directory, or CAPCOMD_HOME's parent).
-  const real = (f: string): string => { const d = dirname(f); if (d === f) return f; try { return join(realpathSync(d), f.slice(d.length + 1)); } catch { return join(real(d), f.slice(d.length + 1)); } };
-  if (real(join(dir, ".capcomd", "config.json")) === real(userConfigPath())) return [{ step: "project", ok: false, detail: "won't keep project settings in your home directory (that's where capcomd's own settings are)", hint: "Run `capcomd setup project` inside your repository, or pass --repo <url> in a directory for that project." }];
-  const origin = sh("git", ["remote", "get-url", "origin"], dir).out;
+  if (isUserConfigDir(dir)) return [{ step: "project", ok: false, detail: "won't keep project settings in your home directory (that's where capcomd's own settings are)", hint: "Run `capcomd setup project` inside your repository, or pass --repo <url> in a directory for that project." }];
+  const origin = originUrl(dir);
   const repo = httpsRemote(String(v.repo ?? await p.ask("Repository the agents work on", origin)));
   if (!repo) return [{ step: "project", ok: false, detail: "no repository", hint: "Run setup inside a git checkout, or pass --repo <url>." }];
-  const head = sh("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], dir).out.replace(/^origin\//, "");
+  const head = originHead(dir);
   const gh = githubRepoOf(repo);
   const ghOk = !!gh && sh("gh", ["auth", "status"]).code === 0;
   const mode = String(v.mode ?? await p.choose("How should verified work land?", [{ value: "pr", label: "as a pull request merged by capcomd (GitHub)" }, { value: "direct", label: "pushed directly to the target branch" }], ghOk ? "pr" : "direct"));
   const target = String(v.target ?? await p.ask("Target branch (agent merges into protected branches like main wait for `capcomd approve`)", head || "main"));
   const check = String(v.check ?? await p.ask("The check every change must pass (a command; empty for none)", suggestCheck(dir) ?? ""));
-  const cfgPath = join(dir, ".capcomd", "config.json");
   const agents: string[] = (v as any)._agents ?? String(v.agents ?? "claude").split(",");
-  const provider = agents.includes("claude") ? "claude" : "codex";
   const authOf = (a: string) => String((v as any)._auths?.[a] ?? v.auth ?? "subscription");
   // No turn, time or money limits on the profiles (ADR-019): agents work as long as they make progress. A plan
   // login is already paid for; with an API key, a cap per run is asked once (empty: no limit).
   let cap: string | null = null;
   if (agents.some((a) => authOf(a) === "apikey")) {
-    const raw = String(v.budget ?? await p.ask("Your agents bill an API key. Cap the spend per run, in USD (empty for no limit)", "")).trim();
-    if (raw && raw !== "none") {
-      const usd = Number(raw.replace(/^usd=/, ""));
-      if (!(usd > 0)) return [{ step: "project", ok: false, detail: `"${raw}" isn't an amount in USD`, hint: "Pass --budget 20 (USD per run), or leave it empty for no limit." }];
-      cap = `usd=${usd}`;
-    }
+    const b = parseBudget(String(v.budget ?? await p.ask("Your agents bill an API key. Cap the spend per run, in USD (empty for no limit)", "")));
+    if ("error" in b) return [{ step: "project", ok: false, detail: b.error, hint: "Pass --budget 20 (USD per run), or leave it empty for no limit." }];
+    cap = b.cap;
   }
-  writeConfig(cfgPath, {
-    env: { CAPCOMD_REPO: repo, CAPCOMD_MERGE_MODE: mode, CAPCOMD_MERGE_TARGET: target, ...(gh ? { CAPCOMD_GITHUB_REPO: gh } : {}) },
-    run: { ...(check ? { checks: { unit: check } } : {}), reviewer: "reviewer" },
-    ...(cap ? { driver: { ...readConfig(cfgPath).driver, maxRunBudget: cap } } : {}),
-  });
-  // Profiles: one worker per chosen agent, a read-only reviewer, a planner that may spawn workers.
-  const auth = authOf(provider);
-  const af = join(dir, ".capcomd", "agents.json");
-  const workers = agents.map((a) => (a === provider ? "worker" : `${a}-worker`));
-  const profiles: Array<[string, Record<string, unknown>]> = [
-    ...agents.map((a, i): [string, Record<string, unknown>] => [workers[i]!, { provider: a, auth: authOf(a) }]),
-    ["reviewer", { provider, auth, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...(check ? [`Bash(${check.split(" ").slice(0, 2).join(" ")}:*)`] : [])] }],
-    // No fan-out limits either: the planner may spawn workers as it sees fit (set children.* to bound it).
-    ["planner", { provider, auth, children: { allowSpawn: true, allowedChildProfiles: workers } }],
-  ];
-  const made: string[] = [], kept: string[] = [];
-  for (const [name, spec] of profiles) {
-    const r = self(["agents", "add", name, "--spec", JSON.stringify(spec)], { env: { CAPCOMD_AGENTS_FILE: af } });
-    (r.code === 0 ? made : kept).push(name);
-  }
+  const plan = planProject({ dir, repo, mode, target, check, agents, authOf, cap });
+  const { made, kept } = writeProject(plan);
   return [
-    { step: "project", ok: true, detail: `${repo} → ${target} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${cfgPath}` },
-    { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${af})` },
+    { step: "project", ok: true, detail: `${repo} → ${target} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${plan.configPath}` },
+    { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${plan.agentsPath})` },
   ];
 }
 

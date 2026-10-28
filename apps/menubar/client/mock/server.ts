@@ -5,7 +5,9 @@
 //         POST /v1/approvals/:approvalId/decision (Idempotency-Key required). With SETTINGS=<scene> (settings.ts): also
 //         GET /v1/logins, /v1/environments, /v1/service, /v1/run-options and their capabilities in /v1/health; and
 //         (SANDBOXES=<scene>, settings.ts) GET /v1/sandboxes[/{name}[/resources[/{id}]]], PATCH
-//         /v1/sandboxes/{name}/settings and POST /v1/sandboxes/{name}/resources/{id}/actions/delete.
+//         /v1/sandboxes/{name}/settings and POST /v1/sandboxes/{name}/resources/{id}/actions/delete. With PROJECTS=<scene>
+//         (projects.ts): GET /v1/projects/inspect and POST /v1/projects, capability projects.setup, and run-options?repo=
+//         refusing a folder that isn't set up.
 // SSE frames per contract: `id: <seq>` / `event: <type>` / `data: <envelope>`; `event: stream.reset` {snapshotSeq, reason}
 //   then snapshot.run / agents / approvals / steps / threads / snapshot.end {snapshotSeq}, then live from snapshotSeq+1;
 //   `: heartbeat` comment every HEARTBEAT_MS (default 15000).
@@ -22,10 +24,14 @@
 //   seq-4 group is re-sent; the client must deliver run.started (and agent.started) exactly once. Then heartbeats only.
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
+import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/harness.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
 // SETTINGS=<scene> (settings.ts) adds the Settings routes, run-options and their capabilities; unset, none of them.
 const settings = process.env.SETTINGS ? settingsScene(process.env.SETTINGS) : null;
+// PROJECTS=<scene> (projects.ts): project setup from the app.
+const projects = process.env.PROJECTS ? projectsScene(process.env.PROJECTS) : null;
+const caps = [...(settings ? settingsCaps(settings) : []), ...(projects ? projectsCaps(projects) : [])];
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS ?? 15000);
 const RESET_AFTER = 12, DROP_AFTER = 22, COMPACTED_BELOW = 3, RUN = "run-demo", PRJ = "prj-demo", GOAL = "ship transport spike";
 const T0 = Date.UTC(2026, 9, 25, 6, 0, 0);
@@ -136,8 +142,12 @@ Bun.serve({
   idleTimeout: 0,
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
-    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-pr40", ...(settings ? { capabilities: settingsCaps(settings) } : {}) });
+    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-pr40", ...(settings || projects ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
+    if (projects) {
+      const r = projectsRoute(url, projects, req) ?? projectsRunOptionsRefusal(url, projects);
+      if (r) return r;
+    }
     if (settings) {
       const r = settingsRoute(p, settings, req);
       if (r) return r;

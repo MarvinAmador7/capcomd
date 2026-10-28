@@ -8,6 +8,7 @@
 //   SETTINGS=mixed SANDBOXES=machines|stale|empty|unsafe|nores|off …     place details and machines (settings.ts)
 //   SETTINGS=mixed SANDBOXES=readonly|envlocked|noconfigure|conflict|owners …   changing settings, capcomd's own machines
 //   SETTINGS=mixed SANDBOXES=changed|unavailable|noactions …          deleting machines (409, 503, a phase 2 daemon)
+//   PROJECTS=ready|configured|notgit|notgithub|nogh|apikey|refuse|old …   setting a folder up as a project (projects.ts)
 //
 // Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
@@ -18,6 +19,7 @@
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
 import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
+import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
@@ -25,6 +27,8 @@ const SCENARIO = process.env.SCENARIO ?? "panel";
 // SETTINGS=mixed|fresh|building|failed|ready|old (settings.ts): the Settings window's routes and the run-options that
 // agree with them, with their capabilities added to CAPS.
 const SETTINGS = process.env.SETTINGS ? settingsScene(process.env.SETTINGS) : null;
+// PROJECTS=<scene> (projects.ts): project setup from the app, with its capability.
+const PROJECTS = process.env.PROJECTS ? projectsScene(process.env.PROJECTS) : null;
 const NOW = Date.now(), min = 60_000, iso = (ms: number) => new Date(ms).toISOString();
 
 type AgentSpec = { id: string; parent?: string; profile: string; provider?: "claude" | "codex"; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number };
@@ -189,10 +193,14 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
     // CAPS=steer.skills,agent.pause advertises features the thread input checks for.
-    const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : [])])];
+    const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : []), ...(PROJECTS ? projectsCaps(PROJECTS) : [])])];
     if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: SETTINGS ? "0.6.0" : `mock-ui-${SCENARIO}`,
       ...(caps.length ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
+    if (PROJECTS) {
+      const r = projectsRoute(url, PROJECTS, req) ?? projectsRunOptionsRefusal(url, PROJECTS);
+      if (r) return r;
+    }
     if (p === "/v1/skills") return Response.json([
       { name: "capcomd-orchestration", description: "Compose capcomd primitives into a plan: spawn, await, verify, merge.", source: "bundled" },
       { name: "migrate-matchkey", description: "Steps and checks for matchkey schema migrations.", source: "user" },

@@ -70,6 +70,11 @@ public final class CapcomdStore {
   /// `MachineDeletion.key(place, id)`.
   public internal(set) var machineDeletions: [String: MachineDeletion] = [:]
   var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
+  /// Setting a folder up as a project (`projects.setup`; Projects.swift): the inspected folder, and the setup on its way
+  /// or how it ended.
+  public internal(set) var projectInspect: ProjectInspectState = .idle
+  public internal(set) var projectSetup: ProjectSetupState = .idle
+  var pendingSetupKey: (request: ProjectSetupRequest, key: String)?
 
   let subscriber: StreamSubscribing?
   let decider: ApprovalDeciding?
@@ -79,6 +84,7 @@ public final class CapcomdStore {
   let messenger: AgentMessaging?
   let daemonInfo: DaemonInfoFetching?
   let threadSource: ThreadFetching?
+  let projectSetter: ProjectSettingUp?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -102,9 +108,12 @@ public final class CapcomdStore {
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
               starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil, thread: ThreadFetching? = nil,
+              projects: ProjectSettingUp? = nil,
               prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
     self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter
     self.messenger = messenger; self.daemonInfo = daemonInfo; self.threadSource = thread; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
+    // The live daemon adapter sets projects up too; tests may pass a port of their own.
+    self.projectSetter = projects ?? (daemonInfo as? ProjectSettingUp)
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 
