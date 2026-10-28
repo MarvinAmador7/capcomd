@@ -1,15 +1,8 @@
 import type { CSSProperties, ReactNode } from "react";
 import { AgentSuffix, Bot } from "./crew";
 import { delay } from "./marks";
+import { RUNTIME_PATHS } from "@/lib/runtime-icons";
 
-const ROWS: Array<[string, string, string]> = [
-  ["Runs", "Cloud VMs", "Containers on this machine: Docker Desktop, OrbStack, Colima, Podman"],
-  ["Isolation", "A VM per agent, and a separate throwaway VM for checks", "A container: the agent can't see your files; a kernel exploit would reach the host"],
-  ["Snapshots", "Yes", "Images"],
-  ["Secrets", "Host-bound: the agent sees a placeholder", "An API key reaches the agent's environment; plan logins unaffected"],
-  ["Egress allowlist", "Yes", "No: a profile that sets egress is refused"],
-  ["In the menu bar app", "Cloud", "Local"],
-];
 
 /** boxd's mark, as boxd.sh draws it in its header (one path; coloured by the text around it). */
 const BoxdMark = ({ className }: { className?: string }) => (
@@ -86,12 +79,6 @@ function Bay() {
   );
 }
 
-/** A table value; a plain yes or no gets a mark beside the word. */
-const Val = ({ v }: { v: string }) => {
-  const yes = /^Yes\b/.test(v), no = /^No\b/.test(v);
-  if (!yes && !no) return <>{v}</>;
-  return <span className={`val val--${yes ? "yes" : "no"}`}><svg viewBox="0 0 16 16" aria-hidden="true">{yes ? <path d="M3.5 8.5 6.5 11.5 12.5 4.5" /> : <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />}</svg>{v}</span>;
-};
 
 export function Sandboxes() {
   return (
@@ -102,14 +89,27 @@ export function Sandboxes() {
         <p data-reveal style={delay(60)}>Inside its VM an agent is unrestricted by default: every tool, open network. A profile narrows its tools, sandbox and egress. Writing a provider is documented in <code>docs/providers.md</code>.</p>
       </div>
       <Bay />
-      <div className="spec" data-reveal style={delay(120)}>
-        <div className="scroll" tabIndex={0} role="region" aria-label="boxd and Docker compared">
-          <table>
-            <thead><tr><th scope="col"><span className="sr">Property</span></th><th scope="col"><span className="spec__prov"><BoxdMark className="spec__mark" />boxd</span></th><th scope="col">Docker</th></tr></thead>
-            <tbody>{ROWS.map(([k, a, b]) => <tr key={k}><th scope="row">{k}</th><td><Val v={a} /></td><td><Val v={b} /></td></tr>)}</tbody>
-          </table>
+      <div className="runs" data-reveal style={delay(120)}>
+        <h3 className="runs__title">Supported sandboxes</h3>
+        <div className="runs__grid">
+          <div className="runs__group">
+            <p className="runs__kind">Cloud VMs</p>
+            <ul className="runs__list">
+              <li className="runs__item runs__item--wide"><span className="runs__logo"><BoxdMark className="runs__boxd" /></span><span><b>boxd</b><small>A VM per agent and a throwaway VM for checks; host-bound secrets, an egress allowlist, snapshots.</small></span></li>
+            </ul>
+          </div>
+          <div className="runs__group">
+            <p className="runs__kind">Containers on your machine, through the Docker provider</p>
+            <ul className="runs__list">
+              <li className="runs__item"><span className="runs__logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#2496ED" d={RUNTIME_PATHS.docker} /></svg></span><b>Docker Desktop</b></li>
+              <li className="runs__item"><span className="runs__logo"><img src="/logos/orbstack.png" alt="" width={40} height={40} /></span><b>OrbStack</b></li>
+              <li className="runs__item"><span className="runs__logo"><img src="/logos/colima.png" alt="" width={40} height={40} /></span><b>Colima</b></li>
+              <li className="runs__item"><span className="runs__logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#892CA0" d={RUNTIME_PATHS.podman} /></svg></span><b>Podman</b></li>
+            </ul>
+            <p className="runs__note">A container, not a VM: no host-bound secrets and no egress allowlist.</p>
+          </div>
         </div>
-        <p className="spec__note">The app learns about providers from the daemon, so a new one needs no change there.</p>
+        <p className="runs__note">The app learns about providers from the daemon, so a new one needs no change there.</p>
       </div>
       <div className="facts">
         <div data-reveal><h3>Credentials</h3><p>VM snapshots are scrubbed of secrets. An agent&apos;s VM holds only its own login; agents never hold push credentials, and a checks VM holds none.</p></div>
