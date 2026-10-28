@@ -46,6 +46,7 @@ Design documents live in `docs/`. Start with:
 - `adr-017-subagents-in-vm.md` - agents orchestrating agents from inside their VMs
 - `adr-018-agent-plugins.md` - capcomd as a plugin for your agent: MCP tools, skills, the driver role
 - `adr-019-agents-report-up.md` - (proposed) agents report up to their parents; turn, time and money limits are optional
+- `adr-022-agent-lifecycle-workflow.md` - (spike, `CAPCOMD_AGENT_WORKFLOW=1`) an agent's lifecycle as a Rivet workflow in its worker actor
 - `adr-015-agent-envs-secrets-codex.md` - agent profiles, credentials, env snapshots
 - `actors-v1.md`, `adr-008-lifecycle-state-machines.md`, `durability.md` - actors, state machines, failure handling
 - `output-contract.md` - the JSON, events and spans that callers can rely on

@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Experimental, off by default: with `CAPCOMD_AGENT_WORKFLOW=1` set for both the engine (`capcomd serve`) and the CLI,
+  each agent is driven by a durable workflow inside the engine instead of a `capcomd agent-drive` process: it carries on
+  by itself after the engine restarts (no `await` needed to kick it), a usage-limit pause wakes at its reset from the
+  engine, and `capcomd await` waits for change events instead of polling. Without the variable nothing changes.
+  Design and limits: docs/adr-022-agent-lifecycle-workflow.md.
 - capcomd's engine data now lives in capcomd's own folder: `~/.capcomd/engine/<port>/db` (or `$CAPCOMD_HOME/engine/<port>/db`)
   for every port, the default 6420 included, instead of rivetkit's shared `~/.rivetkit`, which any other project
   using Rivet on your Mac also writes (a newer one could stamp the database so capcomd's engine refused to start).

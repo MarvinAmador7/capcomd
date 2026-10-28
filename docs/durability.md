@@ -4,7 +4,7 @@
 2026-10-17. Builds on ADR-002 (event log), ADR-008 (lifecycles), rivet-sqlite.md, boxd.md, ADR-009. Claims about Rivet and boxd cite those docs; the expected behaviour below is **our design (inference)** and must be proven by the suite.
 
 ## Ground rules (design)
-- Every state change = one `c.db.transaction` writing {lifecycle row, event row with UNIQUE idem_key}. **There is no outbox** (removed 2026-10-27: its rows were written and then marked dispatched without anything running them). A side effect runs where the transition happens (an action or a driver), before or after its commit, and is made safe to repeat by its own idempotency key (below); a crash between the effect and the commit repeats the effect, which the key turns into a no-op.
+- Every state change = one `c.db.transaction` writing {lifecycle row, event row with UNIQUE idem_key}. **There is no outbox** (removed 2026-10-27: its rows were written and then marked dispatched without anything running them). A side effect runs where the transition happens (an action, a driver, or with `CAPCOMD_AGENT_WORKFLOW=1` a step of the agent's workflow, ADR-022), before or after its commit, and is made safe to repeat by its own idempotency key (below); a crash between the effect and the commit repeats the effect, which the key turns into a no-op.
 - External effects carry idempotency keys: VM name `relay-<run8>-<worker>-e<epoch>` (boxd), git push = `--force-with-lease` to a task branch, merge = compare-and-swap on the green-branch SHA, budget = `charge_id` UNIQUE.
 - Leases carry an epoch; every worker result is guarded by `epochMatches`.
 - Every VM has a boxd `deleteAfter` TTL [boxd.md].

@@ -31,6 +31,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord } from "../agents/profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
+import { agentWorkflowOn, agentWorkflowParts, queueStart, type StartAgent } from "./agent-workflow";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
 
@@ -187,9 +188,248 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
       }
 }
 
+export type PushBranchParams = {
+  workerId: string; taskId: string; epoch: number; branch: string; runId?: string; parentAgentId?: string | null; target?: string; rework?: boolean; resumed?: boolean;
+  /** `spawn --continue`: the stopped agent whose work this branch starts from. */
+  from?: { agentId: string; ref: string; stopped: string };
+  /** Task goal for a real agent (claude-code). */
+  goal?: string;
+  /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
+  fakePath?: string; fakeContent?: string;
+  /** ADR-017: install in-VM capcomd + skill (agents allowed to spawn). */
+  subagents?: { skill: string; kind?: string };
+  conflictFiles?: string[];
+  /** Agent profile name for this task. */
+  agent?: string;
+  /** The spec the agent was spawned with (its scope record): wins over `agent` looked up by name. */
+  agentSpec?: Record<string, unknown> | null;
+  /** verify's reviewer: review this commit; nothing is committed or pushed. */
+  review?: { sha: string; branch: string; target: string };
+  /** Report mode: read-only work; the final message is the result, nothing is pushed. */
+  report?: boolean;
+};
+
+/**
+ * The agent's run and push (provision is done): the pushBranch action, and (ADR-022) the worker's own workflow, which
+ * calls it with the actor's db, key and client (`c` needs only those).
+ */
+export async function pushBranchImpl(c: { db: any; key: string[]; client: () => any }, params: PushBranchParams) {
+  const { workerId, taskId, epoch, branch } = params;
+  const idemKey = `worker-${workerId}-push-${taskId}-e${epoch}`;
+  const already = await c.db.execute(
+    "SELECT idem_key, event FROM lifecycle_events WHERE idem_key = ?",
+    idemKey
+  );
+  if (already.length > 0) {
+    // Replay: return what the first push recorded (a resumed driver needs the commit).
+    let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string; resetAt?: number } = {};
+    try { prev = JSON.parse(String(already[0]!.event)); } catch {}
+    return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}), ...(prev.resetAt ? { resetAt: prev.resetAt } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
+  }
+
+  const workerLife = await getLifecycle(c.db, workerId);
+  if (!workerLife) throw new Error(`Worker ${workerId} not found`);
+  const workerContext = JSON.parse(workerLife.context as string) as WorkerContext & {
+    idemKey?: string;
+  };
+  const { provider, sandbox } = await providerForRun(params.runId);
+  const runSource = withSandbox(process.env, sandbox);
+  const vmKey = workerContext.idemKey ?? `relay-worker-${workerId}`;
+  // The run's idle machine lifetime: the VM's delete deadline, renewed while the agent runs.
+  const lifeSeconds = await runIdleLifetime(params.runId, sandbox);
+
+  // Acquire the push lock (or wait out a live push by another call).
+  await c.db.execute(PUSH_LOCKS_SQL);
+  const holder = crypto.randomUUID();
+  let takeover = false;
+  for (let waited = 0; ; waited += 500) {
+    const done = await c.db.execute("SELECT event FROM lifecycle_events WHERE idem_key = ?", idemKey);
+    if (done.length) {
+      let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string; resetAt?: number } = {};
+      try { prev = JSON.parse(String(done[0]!.event)); } catch {}
+      return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}), ...(prev.resetAt ? { resetAt: prev.resetAt } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
+    }
+    const now = Date.now();
+    const rows = await c.db.execute("SELECT * FROM push_locks WHERE idem_key = ?", idemKey);
+    const lk: any = rows[0];
+    const live = lk && lk.state === "running" && lk.instance === ENGINE_INSTANCE && Number(lk.until) > now;
+    if (!live) {
+      takeover = !!lk && lk.state === "running";
+      await c.db.execute(
+        `INSERT INTO push_locks (idem_key, holder, instance, until, attempts, state, updated_at) VALUES (?, ?, ?, ?, 1, 'running', ?)
+         ON CONFLICT(idem_key) DO UPDATE SET holder = excluded.holder, instance = excluded.instance, until = excluded.until,
+           attempts = push_locks.attempts + 1, state = 'running', updated_at = excluded.updated_at
+         WHERE NOT (push_locks.state = 'running' AND push_locks.instance = ? AND push_locks.until > ?)`,
+        idemKey, holder, ENGINE_INSTANCE, now + PUSH_LOCK_MS(), now, ENGINE_INSTANCE, now
+      );
+      const mine = await c.db.execute("SELECT holder FROM push_locks WHERE idem_key = ?", idemKey);
+      if (mine[0]?.holder === holder) break;
+    }
+    if (waited > 60 * 60_000) throw new UserError(`push ${idemKey} still in progress after 1h`, { code: "push_in_progress" });
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const renew = setInterval(() => {
+    c.db.execute("UPDATE push_locks SET until = ?, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now() + PUSH_LOCK_MS(), Date.now(), idemKey, holder).catch(() => {});
+  }, Math.max(200, PUSH_LOCK_MS() / 3));
+  try {
+
+  killpoint("push.mid");
+
+  const setup = agentSetup(params.agent, params.agentSpec, runSource);
+  recordWorkerVm(c, { idemKey: vmKey, sandbox: sandbox ?? (workerContext as { sandbox?: string }).sandbox, runId: params.runId, workerId, ttlSeconds: lifeSeconds });
+  const { id: vmId } = await provider.ensure({
+    idemKey: vmKey,
+    isolated: true,
+    ttlSeconds: lifeSeconds,
+    egressAllow: setup.egressAllow,
+    ...setup.snapshot,
+    labels: { workerId, taskId, epoch: String(epoch) },
+  }).catch((error) => {
+    if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
+    throw error;
+  });
+  await provider.waitReady(vmId, 90_000);
+
+  let sha = "";
+  let costUsd = 0;
+  let turns = 0;
+  let billing: string | undefined;
+  let notionalCostUsd = 0; // subscription billing: what the CLI says the tokens would cost at API prices
+  let resultText: string | undefined; // a reviewer's final message (its verdict)
+  let limit: string | undefined; // stopped at a limit: the branch holds the work so far
+  let resetAt: number | undefined; // limit "quota": when the provider said the usage limit resets (ms epoch)
+  let adopted = false;
+  // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
+  const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
+  const agent = setup.kind;
+  // Takeover: a push that reached the remote before its holder died is adopted, not redone.
+  if (takeover && cfg) {
+    const remote = await remoteBranchSha(cfg.remote, branch).catch(() => null);
+    if (remote) { sha = remote; adopted = true; }
+  }
+  const pushStarted = Date.now();
+  const fakeDelay = Number(process.env.CAPCOMD_FAKE_PUSH_DELAY_MS ?? 0);
+  if (adopted) {
+    // nothing to run: the branch is already on the remote
+  } else if (isRealAgent(agent)) {
+    // Real worker: the agent edits the repo in the VM, commits with trailers, pushes the task branch.
+    if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
+    if (!params.runId) throw new Error(`pushBranch needs runId for ${agent}`);
+    const adapter = adapterFor(agent);
+    // Optional: with a boxd host-bound secret the VM holds a bxds_ placeholder and this is unused.
+    const apiKey = process.env[adapter.secretName];
+    const runId = params.runId;
+    // ADR-019 §1: liveness is reported up by the in-VM supervisor (or, without one, the agent CLI's own events), for
+    // every agent, so one that can't spawn isn't flagged stuck while it works. Checkpoints are recorded too.
+    const scope = workerId.startsWith("agt-") ? (c as any).client().scope.getOrCreate([runId]) : null;
+    let pauseAsked = false;
+    const beatEvery = heartbeatEveryMs();
+    let beatAt = 0;
+    // What it is doing now (harness.v1 Agent.activity): classified from its events, written at most once a second.
+    // Each finished step goes into its history too (agent.step), unthrottled; the last one when it ends (not on a cancel).
+    const activity = scope ? activityReporter((a) => scope.setActivity({ agentId: workerId, activity: a }), { onStep: (st) => scope.recordStep({ agentId: workerId, ...st }) }) : null;
+    let cancelSeen = false;
+    // Its thread (harness.v1 thread items), written in order; flushed before the agent is reported finished. Agents
+    // that may spawn get one too: the spool pump forwards only their capcomd calls, not their own events.
+    const items = scope ? itemWriter(scope, workerId) : null;
+    const res = await runAgent(adapter, provider, vmId, {
+      runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
+      goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
+      ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
+    }, setup.config!, {
+      apiKey,
+      heartbeatMs: beatEvery,
+      vmTtlSeconds: lifeSeconds,
+      onRenew: (secs) => { renewWorkerLease(c.db, workerId, Date.now() + secs * 1000).catch(() => {}); },
+      onReport: (rep) => {
+        if (!scope) return;
+        if (rep.type === "checkpoint") { scope.checkpoint({ agentId: workerId, ref: rep.ref, sha: rep.sha, reason: rep.reason, files: rep.files }).catch(() => {}); return; }
+        if (Date.now() - beatAt < beatEvery) return;
+        beatAt = Date.now();
+        scope.heartbeat({ agentId: workerId }).catch(() => {});
+      },
+      onNotice: (n) => { scope?.notice({ agentId: workerId, notice: n }).catch(() => {}); },
+      ...(activity ? { onEvent: activity.event } : {}),
+      ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
+      // Agents that may spawn already have their raw stream tailed into the log by the spool pump (driver.ts).
+      ...(scope && !params.subagents ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
+      ...(items ? { onItems: items } : {}),
+      ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: "/tmp/capcomd-rpc" } } : {}),
+      isCancelled: async () => {
+        const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
+        if (run?.state === "cancelled") { cancelSeen = true; return true; }
+        // Spawned agents (ADR-016): the worker id is the agent id in the run's scope actor.
+        if (!workerId.startsWith("agt-")) return false;
+        const a = await (c as any).client().scope.getOrCreate([runId]).getAgent({ agentId: workerId }).catch(() => null);
+        pauseAsked = !!a?.pauseRequested;
+        if (a?.status === "cancelled") cancelSeen = true;
+        return a?.status === "cancelled";
+      },
+      // The operator's pause (scope requestPause): the runner stops the agent and keeps its work; the driver pauses it.
+      // Read from the agent row isCancelled just fetched (the runner asks right after it), so no extra actor call per poll.
+      ...(scope ? { isPaused: async () => pauseAsked } : {}),
+    }).finally(async () => { if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
+    sha = res.sha;
+    costUsd = res.costUsd;
+    turns = res.turns;
+    billing = res.billing;
+    notionalCostUsd = res.notionalCostUsd ?? 0;
+    resultText = res.resultText;
+    limit = res.limit;
+    resetAt = res.resetAt;
+    // The `capcomd run` recipe has no stopped state: its task fails, with the work kept on the branch.
+    if (limit && !workerId.startsWith("agt-")) throw new UserError(`agent ${stoppedAt(limit)}; its work so far is on ${branch}`, { code: "limit", metadata: { kind: "limit" } });
+  } else if (params.review || params.report) {
+    // Fake sandbox reviewer/reporter: nothing to run or push (a scripted one declares its result itself).
+  } else {
+    if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
+    if (process.env.CAPCOMD_FAKE_PUSH_FAIL) throw new Error(process.env.CAPCOMD_FAKE_PUSH_FAIL); // test knob: a push that always fails
+    await provider.exec(vmId, ["git", "push", "origin", branch]);
+  }
+
+  // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
+  // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
+  if (!sha && !params.review && !params.report && cfg && (sandbox ? sandbox.startsWith("fake") : getDependencies().fakeWork) && params.runId) {
+    sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework, ...(params.fakePath ? { path: params.fakePath, content: params.fakeContent ?? "" } : {}) });
+  }
+
+  killpoint("push.after.before_event");
+  const wallSeconds = Math.round((Date.now() - pushStarted) / 100) / 10;
+
+  await c.db.transaction(async (tx: RawAccess) => {
+    await transitionLifecycle(
+      tx,
+      workerId,
+      "worker",
+      workerLife.state,
+      { ...workerContext, vmId },
+      { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}), ...(adopted ? { adopted: true } : {}), ...(setup.record ? { agent: setup.record } : {}) },
+      idemKey
+    );
+    await tx.execute("UPDATE push_locks SET state = 'done', sha = ?, adopted = ?, until = 0, updated_at = ? WHERE idem_key = ?", sha || null, adopted ? 1 : 0, Date.now(), idemKey);
+  }, { name: "pushBranch" });
+
+  return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}) };
+  } catch (error) {
+    // Release so a retry can take over at once (the attempt count records the retry).
+    await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});
+    // rivetkit masks plain errors as "An internal error occurred": surface the (redacted) cause.
+    if (error instanceof UserError) throw error;
+    const kind = String((error as any)?.kind ?? (error as any)?.code ?? "push_failed");
+    throw new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind } });
+  } finally {
+    clearInterval(renew);
+  }
+}
+
+// ADR-022: with CAPCOMD_AGENT_WORKFLOW=1 (read when the engine host loads), an agent's worker also runs its lifecycle as
+// a workflow (`run`), started by one `start` message (`startAgent`). Off, the actor is exactly as before.
+const WORKFLOW = agentWorkflowOn();
+
 export const workerActor = actor({
   // A claude-code task runs for minutes inside pushBranch (install + agent + push).
   options: { actionTimeout: 60 * 60_000 },
+  ...(WORKFLOW ? (agentWorkflowParts() as {}) : {}),
   db: db({
     onMigrate: async (database) => {
       await setupLifecycleTables(database);
@@ -397,235 +637,8 @@ export const workerActor = actor({
       return { workerId, taskId, vmId: workerContext.vmId };
     },
 
-    async pushBranch(
-      c,
-      params: {
-        workerId: string; taskId: string; epoch: number; branch: string; runId?: string; parentAgentId?: string | null; target?: string; rework?: boolean; resumed?: boolean;
-        /** `spawn --continue`: the stopped agent whose work this branch starts from. */
-        from?: { agentId: string; ref: string; stopped: string };
-        /** Task goal for a real agent (claude-code). */
-        goal?: string;
-        /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
-        fakePath?: string; fakeContent?: string;
-        /** ADR-017: install in-VM capcomd + skill (agents allowed to spawn). */
-        subagents?: { skill: string; kind?: string };
-        conflictFiles?: string[];
-        /** Agent profile name for this task. */
-        agent?: string;
-        /** The spec the agent was spawned with (its scope record): wins over `agent` looked up by name. */
-        agentSpec?: Record<string, unknown> | null;
-        /** verify's reviewer: review this commit; nothing is committed or pushed. */
-        review?: { sha: string; branch: string; target: string };
-        /** Report mode: read-only work; the final message is the result, nothing is pushed. */
-        report?: boolean;
-      }
-    ) {
-      const { workerId, taskId, epoch, branch } = params;
-      const idemKey = `worker-${workerId}-push-${taskId}-e${epoch}`;
-      const already = await c.db.execute(
-        "SELECT idem_key, event FROM lifecycle_events WHERE idem_key = ?",
-        idemKey
-      );
-      if (already.length > 0) {
-        // Replay: return what the first push recorded (a resumed driver needs the commit).
-        let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string; resetAt?: number } = {};
-        try { prev = JSON.parse(String(already[0]!.event)); } catch {}
-        return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}), ...(prev.resetAt ? { resetAt: prev.resetAt } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
-      }
-
-      const workerLife = await getLifecycle(c.db, workerId);
-      if (!workerLife) throw new Error(`Worker ${workerId} not found`);
-      const workerContext = JSON.parse(workerLife.context as string) as WorkerContext & {
-        idemKey?: string;
-      };
-      const { provider, sandbox } = await providerForRun(params.runId);
-      const runSource = withSandbox(process.env, sandbox);
-      const vmKey = workerContext.idemKey ?? `relay-worker-${workerId}`;
-      // The run's idle machine lifetime: the VM's delete deadline, renewed while the agent runs.
-      const lifeSeconds = await runIdleLifetime(params.runId, sandbox);
-
-      // Acquire the push lock (or wait out a live push by another call).
-      await c.db.execute(PUSH_LOCKS_SQL);
-      const holder = crypto.randomUUID();
-      let takeover = false;
-      for (let waited = 0; ; waited += 500) {
-        const done = await c.db.execute("SELECT event FROM lifecycle_events WHERE idem_key = ?", idemKey);
-        if (done.length) {
-          let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string; resetAt?: number } = {};
-          try { prev = JSON.parse(String(done[0]!.event)); } catch {}
-          return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}), ...(prev.resetAt ? { resetAt: prev.resetAt } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
-        }
-        const now = Date.now();
-        const rows = await c.db.execute("SELECT * FROM push_locks WHERE idem_key = ?", idemKey);
-        const lk: any = rows[0];
-        const live = lk && lk.state === "running" && lk.instance === ENGINE_INSTANCE && Number(lk.until) > now;
-        if (!live) {
-          takeover = !!lk && lk.state === "running";
-          await c.db.execute(
-            `INSERT INTO push_locks (idem_key, holder, instance, until, attempts, state, updated_at) VALUES (?, ?, ?, ?, 1, 'running', ?)
-             ON CONFLICT(idem_key) DO UPDATE SET holder = excluded.holder, instance = excluded.instance, until = excluded.until,
-               attempts = push_locks.attempts + 1, state = 'running', updated_at = excluded.updated_at
-             WHERE NOT (push_locks.state = 'running' AND push_locks.instance = ? AND push_locks.until > ?)`,
-            idemKey, holder, ENGINE_INSTANCE, now + PUSH_LOCK_MS(), now, ENGINE_INSTANCE, now
-          );
-          const mine = await c.db.execute("SELECT holder FROM push_locks WHERE idem_key = ?", idemKey);
-          if (mine[0]?.holder === holder) break;
-        }
-        if (waited > 60 * 60_000) throw new UserError(`push ${idemKey} still in progress after 1h`, { code: "push_in_progress" });
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      const renew = setInterval(() => {
-        c.db.execute("UPDATE push_locks SET until = ?, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now() + PUSH_LOCK_MS(), Date.now(), idemKey, holder).catch(() => {});
-      }, Math.max(200, PUSH_LOCK_MS() / 3));
-      try {
-
-      killpoint("push.mid");
-
-      const setup = agentSetup(params.agent, params.agentSpec, runSource);
-      recordWorkerVm(c, { idemKey: vmKey, sandbox: sandbox ?? (workerContext as { sandbox?: string }).sandbox, runId: params.runId, workerId, ttlSeconds: lifeSeconds });
-      const { id: vmId } = await provider.ensure({
-        idemKey: vmKey,
-        isolated: true,
-        ttlSeconds: lifeSeconds,
-        egressAllow: setup.egressAllow,
-        ...setup.snapshot,
-        labels: { workerId, taskId, epoch: String(epoch) },
-      }).catch((error) => {
-        if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
-        throw error;
-      });
-      await provider.waitReady(vmId, 90_000);
-
-      let sha = "";
-      let costUsd = 0;
-      let turns = 0;
-      let billing: string | undefined;
-      let notionalCostUsd = 0; // subscription billing: what the CLI says the tokens would cost at API prices
-      let resultText: string | undefined; // a reviewer's final message (its verdict)
-      let limit: string | undefined; // stopped at a limit: the branch holds the work so far
-      let resetAt: number | undefined; // limit "quota": when the provider said the usage limit resets (ms epoch)
-      let adopted = false;
-      // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
-      const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
-      const agent = setup.kind;
-      // Takeover: a push that reached the remote before its holder died is adopted, not redone.
-      if (takeover && cfg) {
-        const remote = await remoteBranchSha(cfg.remote, branch).catch(() => null);
-        if (remote) { sha = remote; adopted = true; }
-      }
-      const pushStarted = Date.now();
-      const fakeDelay = Number(process.env.CAPCOMD_FAKE_PUSH_DELAY_MS ?? 0);
-      if (adopted) {
-        // nothing to run: the branch is already on the remote
-      } else if (isRealAgent(agent)) {
-        // Real worker: the agent edits the repo in the VM, commits with trailers, pushes the task branch.
-        if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
-        if (!params.runId) throw new Error(`pushBranch needs runId for ${agent}`);
-        const adapter = adapterFor(agent);
-        // Optional: with a boxd host-bound secret the VM holds a bxds_ placeholder and this is unused.
-        const apiKey = process.env[adapter.secretName];
-        const runId = params.runId;
-        // ADR-019 §1: liveness is reported up by the in-VM supervisor (or, without one, the agent CLI's own events), for
-        // every agent, so one that can't spawn isn't flagged stuck while it works. Checkpoints are recorded too.
-        const scope = workerId.startsWith("agt-") ? (c as any).client().scope.getOrCreate([runId]) : null;
-        let pauseAsked = false;
-        const beatEvery = heartbeatEveryMs();
-        let beatAt = 0;
-        // What it is doing now (harness.v1 Agent.activity): classified from its events, written at most once a second.
-        // Each finished step goes into its history too (agent.step), unthrottled; the last one when it ends (not on a cancel).
-        const activity = scope ? activityReporter((a) => scope.setActivity({ agentId: workerId, activity: a }), { onStep: (st) => scope.recordStep({ agentId: workerId, ...st }) }) : null;
-        let cancelSeen = false;
-        // Its thread (harness.v1 thread items), written in order; flushed before the agent is reported finished. Agents
-        // that may spawn get one too: the spool pump forwards only their capcomd calls, not their own events.
-        const items = scope ? itemWriter(scope, workerId) : null;
-        const res = await runAgent(adapter, provider, vmId, {
-          runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
-          goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
-          ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
-        }, setup.config!, {
-          apiKey,
-          heartbeatMs: beatEvery,
-          vmTtlSeconds: lifeSeconds,
-          onRenew: (secs) => { renewWorkerLease(c.db, workerId, Date.now() + secs * 1000).catch(() => {}); },
-          onReport: (rep) => {
-            if (!scope) return;
-            if (rep.type === "checkpoint") { scope.checkpoint({ agentId: workerId, ref: rep.ref, sha: rep.sha, reason: rep.reason, files: rep.files }).catch(() => {}); return; }
-            if (Date.now() - beatAt < beatEvery) return;
-            beatAt = Date.now();
-            scope.heartbeat({ agentId: workerId }).catch(() => {});
-          },
-          onNotice: (n) => { scope?.notice({ agentId: workerId, notice: n }).catch(() => {}); },
-          ...(activity ? { onEvent: activity.event } : {}),
-          ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
-          // Agents that may spawn already have their raw stream tailed into the log by the spool pump (driver.ts).
-          ...(scope && !params.subagents ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
-          ...(items ? { onItems: items } : {}),
-          ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: "/tmp/capcomd-rpc" } } : {}),
-          isCancelled: async () => {
-            const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
-            if (run?.state === "cancelled") { cancelSeen = true; return true; }
-            // Spawned agents (ADR-016): the worker id is the agent id in the run's scope actor.
-            if (!workerId.startsWith("agt-")) return false;
-            const a = await (c as any).client().scope.getOrCreate([runId]).getAgent({ agentId: workerId }).catch(() => null);
-            pauseAsked = !!a?.pauseRequested;
-            if (a?.status === "cancelled") cancelSeen = true;
-            return a?.status === "cancelled";
-          },
-          // The operator's pause (scope requestPause): the runner stops the agent and keeps its work; the driver pauses it.
-          // Read from the agent row isCancelled just fetched (the runner asks right after it), so no extra actor call per poll.
-          ...(scope ? { isPaused: async () => pauseAsked } : {}),
-        }).finally(async () => { if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
-        sha = res.sha;
-        costUsd = res.costUsd;
-        turns = res.turns;
-        billing = res.billing;
-        notionalCostUsd = res.notionalCostUsd ?? 0;
-        resultText = res.resultText;
-        limit = res.limit;
-        resetAt = res.resetAt;
-        // The `capcomd run` recipe has no stopped state: its task fails, with the work kept on the branch.
-        if (limit && !workerId.startsWith("agt-")) throw new UserError(`agent ${stoppedAt(limit)}; its work so far is on ${branch}`, { code: "limit", metadata: { kind: "limit" } });
-      } else if (params.review || params.report) {
-        // Fake sandbox reviewer/reporter: nothing to run or push (a scripted one declares its result itself).
-      } else {
-        if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
-        if (process.env.CAPCOMD_FAKE_PUSH_FAIL) throw new Error(process.env.CAPCOMD_FAKE_PUSH_FAIL); // test knob: a push that always fails
-        await provider.exec(vmId, ["git", "push", "origin", branch]);
-      }
-
-      // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
-      // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
-      if (!sha && !params.review && !params.report && cfg && (sandbox ? sandbox.startsWith("fake") : getDependencies().fakeWork) && params.runId) {
-        sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework, ...(params.fakePath ? { path: params.fakePath, content: params.fakeContent ?? "" } : {}) });
-      }
-
-      killpoint("push.after.before_event");
-      const wallSeconds = Math.round((Date.now() - pushStarted) / 100) / 10;
-
-      await c.db.transaction(async (tx: RawAccess) => {
-        await transitionLifecycle(
-          tx,
-          workerId,
-          "worker",
-          workerLife.state,
-          { ...workerContext, vmId },
-          { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}), ...(adopted ? { adopted: true } : {}), ...(setup.record ? { agent: setup.record } : {}) },
-          idemKey
-        );
-        await tx.execute("UPDATE push_locks SET state = 'done', sha = ?, adopted = ?, until = 0, updated_at = ? WHERE idem_key = ?", sha || null, adopted ? 1 : 0, Date.now(), idemKey);
-      }, { name: "pushBranch" });
-
-      return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}) };
-      } catch (error) {
-        // Release so a retry can take over at once (the attempt count records the retry).
-        await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});
-        // rivetkit masks plain errors as "An internal error occurred": surface the (redacted) cause.
-        if (error instanceof UserError) throw error;
-        const kind = String((error as any)?.kind ?? (error as any)?.code ?? "push_failed");
-        throw new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind } });
-      } finally {
-        clearInterval(renew);
-      }
+    async pushBranch(c, params: PushBranchParams) {
+      return pushBranchImpl(c, params);
     },
 
     async listEventSeqs(c, _params: Record<string, never>) {
@@ -697,6 +710,11 @@ export const workerActor = actor({
       await drainWorkerImpl(c, params.workerId, "idle_lifetime");
       return { reaped: true, reason: "ttl" };
     },
+
+    ...(WORKFLOW ? {
+      /** ADR-022: queue the `start` this worker's agent workflow waits for (idempotent). */
+      async startAgent(c: any, params: StartAgent) { return queueStart(c, params); },
+    } : {}),
 
     async getWorker(c, params: { workerId: string }) {
       const workerLife = await getLifecycle(c.db, params.workerId);
