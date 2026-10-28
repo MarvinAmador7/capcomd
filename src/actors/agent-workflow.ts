@@ -28,9 +28,14 @@ export { agentWorkflowOn } from "../utils/agent-workflow-flag";
 
 export interface StartAgent { runId: string; agentId: string; epoch: number }
 
-/** How long the watch waits for the run's `attempt` message before it looks anyway (cancel, a lost run). */
-// An integer: the workflow engine refuses a fractional timeout ("Not an integer"), e.g. a 4000 ms lease / 3.
-const WATCH_MS = () => Math.ceil(Number(env("AGENT_WORKFLOW_POLL_MS") ?? Math.max(1000, Number(env("DRIVER_LEASE_MS") ?? 15_000) / 3)));
+/**
+ * How long the watch waits for the run's `attempt` message before it looks anyway. The run sends it when it ends (a
+ * cancel or the operator's pause ends it too), and the worker sends it to itself when it wakes with a run in flight
+ * (onWake: a restarted daemon), so this only bounds the rare case nothing tells it. Every look writes workflow history
+ * and its engine storage (ADR-022 "Measurements": at 5 s, four times the driver path's writes; at 60 s, about the
+ * same), hence a long default. An integer: the workflow engine refuses a fractional timeout.
+ */
+const WATCH_MS = () => Math.ceil(Number(env("AGENT_WORKFLOW_POLL_MS") ?? 60_000));
 /** The workflow holds the agent's driver lease for this long, so an await never "kicks" it and a driver process
  *  (a client without the flag) can't take it over while the workflow runs it. */
 const WF_LEASE_MS = 6 * 3600_000;
@@ -44,7 +49,17 @@ export const STARTS_SQL = "CREATE TABLE IF NOT EXISTS agent_workflow_start (id I
 
 /** The worker actor's queue and run handler, added only with the flag on (the flag off leaves the actor as it was). */
 export function agentWorkflowParts() {
-  return { queues: { start: queue<StartAgent>(), attempt: queue<{ n: number }>() }, run: workflow(agentLifecycle) };
+  return {
+    queues: { start: queue<StartAgent>(), attempt: queue<{ n: number }>() },
+    run: workflow(agentLifecycle),
+    // A worker that wakes with a run recorded as in flight (the daemon restarted under it) wakes its watch at once, so
+    // the lost run is found and run again now, not at the watch's timeout.
+    async onWake(c: any) {
+      await c.db.execute(ATTEMPTS_SQL).catch(() => {});
+      const running: any[] = await c.db.execute("SELECT attempt FROM agent_attempts WHERE state = 'running'").catch(() => []);
+      for (const r of running) await c.queue.send("attempt", { n: Number(r.attempt) }).catch(() => {});
+    },
+  };
 }
 
 /**
@@ -58,6 +73,14 @@ export async function queueStart(c: any, p: StartAgent): Promise<{ queued: boole
   await c.queue.send("start", p);
   await c.db.execute("INSERT OR IGNORE INTO agent_workflow_start (id, run_id, agent_id, epoch, at) VALUES (1, ?, ?, ?, ?)", p.runId, p.agentId, p.epoch, Date.now());
   return { queued: true };
+}
+
+/** ADR-022 measurements: the workflow's stored history (rows, bytes) and the actor database's size. */
+export async function workflowStats(c: any): Promise<{ rows: number; bytes: number; dbBytes: number; looks: number }> {
+  const h: any = (await c.db.execute("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(key) + LENGTH(value)), 0) AS b FROM _rivet_wf_kv").catch(() => [{ n: 0, b: 0 }]))[0];
+  const pc: any = (await c.db.execute("PRAGMA page_count").catch(() => [{}]))[0];
+  const ps: any = (await c.db.execute("PRAGMA page_size").catch(() => [{}]))[0];
+  return { looks: looks.get(c.actorId) ?? 0, rows: Number(h?.n ?? 0), bytes: Number(h?.b ?? 0), dbBytes: Number(Object.values(pc ?? {})[0] ?? 0) * Number(Object.values(ps ?? {})[0] ?? 0) };
 }
 
 /** What a failed attempt was, as stored (the driver's classification: some failures are never retried). */
@@ -138,7 +161,11 @@ async function tracedPush() {
 }
 
 /** One look at attempt `n`: ended (cancelled or finished by someone else), still running, lost, or its outcome. */
+/** Looks per worker actor in this process (measurements: workflowStats). */
+const looks = new Map<string, number>();
+
 async function poll(c: any, p: StartAgent, n: number): Promise<Poll> {
+  looks.set(c.actorId, (looks.get(c.actorId) ?? 0) + 1);
   const a = await (await scopeOf(p.runId)).getAgent({ agentId: p.agentId });
   if (!a || TERMINAL_AGENT.has(a.status)) return { state: "ended" };
   await c.db.execute(ATTEMPTS_SQL);

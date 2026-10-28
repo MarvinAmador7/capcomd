@@ -73,6 +73,7 @@ const shape2Logged = async (run: string, id: string) =>
   ((await (await scope(run)).getLogs({ agentId: id, tail: 500 })) as any[]).some((l) => l.stream === "workflow" && l.line.includes("workflow shape 2"));
 
 test("upgrade drill: an agent in flight on shape 1 finishes after the engine comes back with shape 2; a new one runs shape 2", async () => {
+  const logFrom = existsSync(engine.logPath) ? readFileSync(engine.logPath, "utf8").length : 0; // the log file outlives runs
   const run = (await cj(["run", "new"])).j?.runId;
   expect(run).toMatch(/^run-/);
   const a = (await cj(["spawn", run, "--profile", "worker", "--task", "[hold:90] make the failing test pass", "--key", "a"])).j?.agentId;
@@ -98,7 +99,7 @@ test("upgrade drill: an agent in flight on shape 1 finishes after the engine com
   const events = (await cj(["events", run])).stdout;
   expect(events).not.toContain('"DRIVE_FAILED"');
   // No workflow diverged from its history.
-  expect(readFileSync(engine.logPath, "utf8")).not.toMatch(/HistoryDivergedError|was not visited/);
+  expect(readFileSync(engine.logPath, "utf8").slice(logFrom)).not.toMatch(/HistoryDivergedError|was not visited/);
 }, 360_000);
 
 test("control: the same change without the gates runs the new shape inside an agent that started under the old one", async () => {

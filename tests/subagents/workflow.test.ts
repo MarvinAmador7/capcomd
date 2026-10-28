@@ -31,7 +31,6 @@ beforeAll(async () => {
   env = {
     ...r.env,
     CAPCOMD_AGENT_WORKFLOW: "1",
-    CAPCOMD_AGENT_WORKFLOW_POLL_MS: "250",
     CAPCOMD_HOME: join(dir, "home"),
     CAPCOMD_AGENTS_FILE: agentsFile,
     CAPCOMD_SANDBOX: "fake-host",
@@ -101,8 +100,12 @@ test("restart mid-agent: the workflow resumes by itself, runs the attempt again 
   await engine.stop();
   await sleep(4000);
   await engine.start(null);
+  const back = Date.now();
 
   const a = await untilStatus(run, agent, "done", 150_000);
+  // The worker wakes its watch itself when it comes back with a run in flight (onWake), not at the 60 s watch timeout.
+  console.log(`  done ${Math.round((Date.now() - back) / 1000)}s after the engine came back`);
+  expect(Date.now() - back).toBeLessThan(55_000);
   expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
   const events = (await cj(["events", run])).stdout;
   expect(events).toContain('"AGENT_DONE"');

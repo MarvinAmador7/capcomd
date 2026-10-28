@@ -114,6 +114,31 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
   over their 5 s read window. With a fresh home they pass both ways. Worth a look on its own (a stream's first frames
   shouldn't depend on how many runs the home has seen).
 
+## Measurements (2026-10-28, `tests/chaos/measure-workflow.ts`)
+
+Fake agents on the in-memory sandbox, a slowed push standing in for a long run, one private engine on this Mac (other
+agents' tests running alongside). "Looks" are watch iterations (one `attempt-wait` + `poll` each). Engine data is
+the size of its RocksDB folder; host RSS is the engine host (`capcomd serve`, which runs every workflow); engine RSS
+is `rivet-engine`; the worker's history is its `_rivet_wf_kv` rows (worker action `getWorkflowStats`).
+
+| Case | Looks per agent | History per agent | Actor DB | Host RSS | Engine RSS | Engine data |
+|---|---|---|---|---|---|---|
+| (a) one agent, 240 s at a 50 ms watch (≈ 65 h of looks at the 60 s default) | 3899 | ≤ 210 rows, ≤ 17 KB, flat | 136 KB, flat | 166–204 MB, flat | 134 → 303 MB | 0.3 → 130 MB |
+| (b) 12 agents, 300 s, default 60 s watch | 5 | ≤ 59 rows, 4.4 KB | 120 KB | peak 148 MB | peak 157 MB | 5.5 MB |
+| (b) baseline: 12 agents, driver processes (flag off), 120–300 s | – | – | – | peak 137 MB, **+ 12 `agent-drive` processes, 664 MB** | peak 152–160 MB | 2.7–4.9 MB |
+| (b) 12 agents, 120 s, a 5 s watch (the earlier default) | ~24 | ≤ 146 rows | 128 KB | 144 MB | 173 MB | 10.3 MB |
+
+- **Bounded:** the workflow's own history (the drive loop prunes old iterations every 20 and keeps 20; rivetkit
+  default), the worker actor's database, and the host's memory. Twelve agents cost the engine host ~10 MB more than
+  one, where the driver path ran a ~55 MB process per agent.
+- **Grows with writes, not reclaimed while idle:** the engine's data folder (~33 KB per look: every history flush is
+  an actor SQLite commit the engine stores) and, while writing, `rivet-engine`'s memory (it fell back from 303 to 185
+  MB once idle). The driver path writes too (a lease renewal every 5 s). So the watch writes rarely: its default went
+  from LEASE/3 (5 s) to 60 s, which brings 12 agents to about the driver path's writes. Nothing waits on it: the run
+  sends `attempt` when it ends, and a worker that wakes with a run in flight (a restarted daemon) sends it to itself
+  (`onWake`), so a lost run is found at once (the restart scenario: done 25 s after the engine came back, with the 60 s
+  default). `CAPCOMD_AGENT_WORKFLOW_POLL_MS` overrides it. Compacting the engine's storage is Rivet's (residual).
+
 ## Changing the workflow (the rule; since 2026-10-28)
 
 An agent can be in flight across a capcomd upgrade: its workflow replays the history it recorded under the old code,

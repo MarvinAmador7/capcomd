@@ -63,7 +63,8 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
   const mode = vm ? "subagent" : board ? "board" : kv ? "kv" : merge ? "merge" : driverKill || adopt ? "driverkill" : "tree";
   const opts: EngineOpts = { ...baseOpts, ...(adopt || merge ? { repo: true } : {}), ...(driverKill && !vm ? { env: { CAPCOMD_FAKE_PUSH_DELAY_MS: "4000" } } : {}) };
   const engine = new Engine(`prim-${tag}`, opts);
-  const extra: Record<string, string> = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: vm ? "script" : "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1" };
+  // The workflow looks at its run every second here (default 60 s): driver.kill's killpoint must fire during the push.
+  const extra: Record<string, string> = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: vm ? "script" : "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1", CAPCOMD_AGENT_WORKFLOW_POLL_MS: "1000" };
   if (vm) Object.assign(extra, {
     CAPCOMD_RPC_KEY: `chaos-${tag}`, CAPCOMD_SCRIPT_RPC_TIMEOUT_MS: "240000", CAPCOMD_SCRIPT_VM_DIR: mkdtempSync(join(tmpdir(), "capcomd-chaos-vms-")),
     ...(vmDriver ? { CAPCOMD_DRIVER_KILLPOINT: kp.slice(3).split(":")[0]!, CAPCOMD_DRIVER_KILLPOINT_MARKER: join(mkdtempSync(join(tmpdir(), "capcomd-chaos-dk-")), "fired") } : {}),
