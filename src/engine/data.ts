@@ -31,6 +31,12 @@ export function engineDataDir(port: number, env: Env = process.env): string {
 /** True when the data dir is capcomd's default for the port (no explicit override). */
 export const isDefaultDataDir = (env: Env = process.env) => !env.CAPCOMD_ENGINE_DATA && !env.CAPCOMD_CHAOS_ENGINE_DATA;
 
+/**
+ * Whether `serve` on `port` makes the one-time copy from ~/.rivetkit: the default port on capcomd's default data dir.
+ * Ask before serve sets CAPCOMD_ENGINE_DATA for its engine (it always does), or the answer is always no.
+ */
+export const copiesLegacyData = (port: number, env: Env = process.env) => port === DEFAULT_PORT && isDefaultDataDir(env);
+
 export const dbDir = (data: string) => join(data, "db");
 export const pidFileOf = (data: string) => join(data, "engine.pid");
 export const versionFileOf = (data: string) => join(data, "engine-version.json");

@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 import {
-  dbDir, engineDataDir, engineLogTail, engineVersionOf, holdersOf, isDefaultDataDir, legacyRivetkitDb, listBackups, migrateLegacyEngineData,
+  copiesLegacyData, dbDir, engineDataDir, engineLogTail, engineVersionOf, holdersOf, isDefaultDataDir, legacyRivetkitDb, listBackups, migrateLegacyEngineData,
   migrationMarkerOf, pidFileOf, prepareEngineData, readVersionRecord, recordEngineVersion, treeStats, versionFileOf,
 } from "../../src/engine/data";
 import { CLI, REPO, testPort } from "../helpers/engine";
@@ -43,6 +43,20 @@ describe("paths", () => {
     expect(pidFileOf("/c/engine/6420")).toBe("/c/engine/6420/engine.pid");
     expect(versionFileOf("/c/engine/6420")).toBe("/c/engine/6420/engine-version.json");
     expect(legacyRivetkitDb({ HOME: "/h" })).toBe("/h/.rivetkit/var/engine/db");
+  });
+
+  test("serve copies from ~/.rivetkit only on 6420 with the default data dir, and decides before it sets CAPCOMD_ENGINE_DATA", () => {
+    expect(copiesLegacyData(6420, {})).toBe(true);
+    expect(copiesLegacyData(6420, { CAPCOMD_HOME: "/c" })).toBe(true);
+    expect(copiesLegacyData(7000, {})).toBe(false);
+    expect(copiesLegacyData(6420, { CAPCOMD_ENGINE_DATA: "/x" })).toBe(false);
+    // serve sets CAPCOMD_ENGINE_DATA for its engine on every start, so asking after that always said no and the
+    // first 2.3.31 start on 6420 opened an empty db (live Mac, 2026-10-28). A serve test can't take 6420, so: the order.
+    const serve = readFileSync(join(REPO, "src", "cli", "commands", "serve.ts"), "utf8");
+    const asked = serve.indexOf("data.copiesLegacyData(port)");
+    expect(asked).toBeGreaterThan(-1);
+    expect(asked).toBeLessThan(serve.indexOf("process.env.CAPCOMD_ENGINE_DATA = dataDir"));
+    expect(serve).not.toContain("isDefaultDataDir()");
   });
 
   test("the engine's version comes from `--version` (a fake engine here)", () => {
