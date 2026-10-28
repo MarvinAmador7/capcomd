@@ -881,3 +881,73 @@ html:not(.js) .stage__title { display: block; }
     .c4__steps { grid-template-columns: 1fr; }
   }
 }
+
+/* Sandboxes: the bay. Three workers in their VMs and the checks VM on the desk colour, the git graph below. The graph
+   draws in when the figure enters (desktop, motion allowed); otherwise it is simply there. */
+@layer components {
+  .bay { margin: 72px 0 0; padding: 24px 14px 20px; background: var(--color-desk); color: var(--color-on-dark); border-radius: 16px; }
+  .bay__row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .bay__vm { margin: 0 10px; padding: 0 0 18px; background: rgba(255,255,255,0.05); border-radius: 12px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14); overflow: clip; } /* taste-skill-ignore: interface fragment, a machine's 1px edge */
+  .bay__vm--checks { background: transparent; box-shadow: none; outline: 1px dashed rgba(255,255,255,0.4); outline-offset: -1px; } /* taste-skill-ignore: a throwaway machine, dashed */
+  .bay__bar { margin: 0; display: flex; justify-content: space-between; gap: 8px; padding: 10px 14px; background: rgba(255,255,255,0.06); font: 500 13px/1.2 var(--font-ui); color: var(--color-on-dark-soft); }
+  .bay__bar span:first-child { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: var(--color-on-dark); }
+  .bay__mark { width: 14px; height: 14px; fill: currentColor; }
+  .bay__bar code { color: var(--color-on-dark); }
+  .bay__bot { display: block; width: 96px; height: 96px; margin: 20px auto 16px; }
+  .bay__bot svg { display: block; width: 100%; height: 100%; }
+  .bay__checks { display: grid; place-items: center; height: 96px; margin: 20px 14px 16px; font: 400 40px/1 var(--font-display); text-transform: uppercase; letter-spacing: 0.02em; color: var(--color-on-dark-soft); }
+  .bay__vm ul { list-style: none; margin: 0; padding: 0 14px; display: grid; gap: 9px; font: 400 15px/1.35 var(--font-ui); color: var(--color-on-dark-soft); }
+  .bay__vm li { display: flex; gap: 9px; align-items: flex-start; }
+  .bay__vm li svg { flex: none; width: 16px; height: 16px; margin-top: 2px; fill: none; stroke: var(--color-accent-light); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+  .bay__git { display: block; width: 100%; height: auto; margin-top: 6px; overflow: visible; }
+  .bay__main { fill: none; stroke: var(--color-on-dark-soft); stroke-width: 2; }
+  .bay__tip { fill: var(--color-on-dark-soft); }
+  .bay__lane { fill: none; stroke: var(--color-accent); stroke-width: 2.5; }
+  .bay__commit { fill: var(--color-desk); stroke: var(--color-accent); stroke-width: 2.5; }
+  .bay__vm-link { fill: none; stroke: rgba(255,255,255,0.28); stroke-width: 1.5; stroke-dasharray: 3 4; }
+  .bay__pass circle { fill: var(--color-accent-light); }
+  .bay__pass path { fill: none; stroke: var(--color-desk); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .bay__ckpt path { fill: none; stroke: var(--color-accent-light); stroke-width: 1.5; stroke-dasharray: 3 3; }
+  .bay__ckpt circle { fill: var(--color-desk); stroke: var(--color-accent-light); stroke-width: 2; }
+  .bay__lbl { font: 500 11px/1 var(--font-ui); fill: var(--color-on-dark-soft); }
+  .bay figcaption { margin: 14px 10px 0; max-width: 92ch; font: 400 15px/1.45 var(--font-ui); color: var(--color-on-dark-soft); }
+  .bay figcaption code { color: var(--color-on-dark); }
+
+  @media (min-width: 761px) and (prefers-reduced-motion: no-preference) {
+    .reveal .bay .bay__vm { opacity: 0; transform: translateY(16px); transition: opacity 600ms var(--ease-out), transform 800ms var(--ease-out); transition-delay: calc(200ms + var(--k) * 90ms); }
+    .reveal .bay :is(.bay__main, .bay__lane) { stroke-dasharray: 1 1; stroke-dashoffset: 1; transition: stroke-dashoffset 1100ms var(--ease-out); }
+    .reveal .bay .bay__main { transition-delay: 500ms; }
+    .reveal .bay .bay__br .bay__lane { transition-delay: calc(700ms + var(--k) * 220ms); }
+    .reveal .bay :is(.bay__commit, .bay__pass, .bay__ckpt, .bay__tip) { opacity: 0; transition: opacity 360ms ease; }
+    .reveal .bay .bay__commit { transition-delay: calc(1100ms + var(--k) * 220ms + var(--j) * 90ms); }
+    .reveal .bay :is(.bay__pass, .bay__ckpt) { transition-delay: calc(1700ms + var(--k) * 220ms); }
+    .reveal .bay .bay__tip { transition-delay: 1400ms; }
+    .reveal .bay.is-in .bay__vm { opacity: 1; transform: none; }
+    .reveal .bay.is-in :is(.bay__main, .bay__lane) { stroke-dashoffset: 0; }
+    .reveal .bay.is-in :is(.bay__commit, .bay__pass, .bay__ckpt, .bay__tip) { opacity: 1; }
+    .bay.is-in .bay__br.is-live .bay__commit:nth-of-type(3) { animation: bay-live 1600ms ease-in-out 2600ms infinite; }
+    @keyframes bay-live { 50% { opacity: 0.35; } }
+  }
+  @media (max-width: 1100px) {
+    .bay__row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 0; }
+    .bay__git, .bay__more { display: none; }
+  }
+  @media (max-width: 760px) {
+    .bay { margin-top: 48px; padding: 16px 6px 16px; border-radius: 12px; }
+    .bay__vm { margin: 0 6px; }
+    .bay__bot { width: 64px; height: 64px; margin: 14px auto 12px; }
+    .bay__checks { height: 64px; margin: 14px 10px 12px; font-size: 28px; }
+    .bay__vm ul { padding: 0 10px; font-size: 14px; }
+    .bay__bar { padding: 8px 10px; font-size: 12px; }
+  }
+}
+@layer components {
+  .val { display: inline-flex; gap: 8px; align-items: flex-start; }
+  .val svg { flex: none; width: 18px; height: 18px; margin-top: 3px; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .val--yes svg { stroke: var(--color-plum); }
+  .val--no svg { stroke: var(--color-link); }
+}
+@layer components {
+  .spec__prov { display: inline-flex; align-items: center; gap: 10px; }
+  .spec__mark { width: 0.72em; height: 0.72em; fill: currentColor; margin-top: -0.08em; }
+}
