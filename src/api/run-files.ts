@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Git } from "../merge/git";
-import { FILES_AGENTS_MAX, FILES_MAX } from "./contract";
+import { APPROVAL_FILES_MAX, FILES_AGENTS_MAX, FILES_MAX } from "./contract";
 import { dottedType, isoTs } from "./envelope";
 import type { RawEvent } from "./source";
 
@@ -239,6 +239,29 @@ export const mirrorFor = (repo: RunRepo) => {
 };
 /** Tests: serve a repository from this mirror (e.g. one with a short fetch timeout). */
 export const useMirror = (repo: RunRepo, m: FilesMirror) => { mirrors.set(mirrorKey(repo), m); };
+
+/** A merge approval's diff (merge.approval_requested `diff`, the approval's subject): the files with the most changed lines
+ *  first (then by path), at most APPROVAL_FILES_MAX; the totals count every file (binaries have no line counts). */
+export type ApprovalDiff = { files: Array<{ path: string; status: FileStatus; added: number | null; removed: number | null }>; filesTotal: number; added: number; removed: number };
+export function summarizeDiff(files: FileStat[]): ApprovalDiff {
+	const size = (f: FileStat) => (f.added ?? 0) + (f.removed ?? 0);
+	const top = [...files].sort((a, b) => size(b) - size(a) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, APPROVAL_FILES_MAX);
+	return {
+		files: top.map((f) => ({ path: f.path, status: f.status, added: f.added, removed: f.removed })),
+		filesTotal: files.length,
+		added: files.reduce((n, f) => n + (f.added ?? 0), 0),
+		removed: files.reduce((n, f) => n + (f.removed ?? 0), 0),
+	};
+}
+/** The diff of a merge about to be parked for approval: the verified commit against where its branch left the target, read
+ *  from the run's mirror like GET …/files. Null when it can't be read (no commit, the remote unreachable): the approval
+ *  then goes out without files rather than waiting on git. */
+export async function approvalDiff(repo: RunRepo, w: { agentId: string | null; sha: string | null; branch: string }): Promise<ApprovalDiff | null> {
+	if (!w.sha || !SHA.test(w.sha) || !SAFE_NAME.test(w.branch)) return null;
+	const tip: WorkTip = { agentId: w.agentId ?? "merge", sha: w.sha, ref: `refs/heads/${w.branch}`, from: "commit", seq: 0, targetBefore: null };
+	const d = (await mirrorFor(repo).diff([tip], repo.target)).get(tip.agentId);
+	return d && "files" in d ? summarizeDiff(d.files) : null;
+}
 
 /** The response of GET /v1/runs/{runId}/files. */
 export async function runFiles(o: { runId: string; events: RawEvent[]; repo: RunRepo | null; agentId?: string; limit?: number; now?: () => number }): Promise<RunFiles> {

@@ -63,12 +63,55 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// Which AI it runs on, and the model when the daemon knows it (daemon-written).
   public var provider: Provider? = nil
   public var model: String? = nil
+  /// When `activity` last changed (`Agent.activity.at`, or the live event): the card's sentence follows the latest one.
+  public var activityAtMs: Int? = nil
+  /// Read from `result` (the agent's result bag, field by field; `read(result:)`): what it cost, why it stopped, how its
+  /// checks and its merge went.
+  public var costUsd: Double? = nil
+  /// "quota" (a provider usage limit; `resetAtMs` says when it resets) or "paused" (someone paused it).
+  public var limit: String? = nil
+  public var resetAtMs: Int? = nil
+  /// `result.error` (agent-written, untrusted): why it failed.
+  public var error: UntrustedText? = nil
+  public var checks: CheckOutcome? = nil
+  public var merge: MergeOutcome? = nil
   public var kind: ProfileKind { ProfileKind(profile: profile) }
   /// Profile names stay lowercase as the contract sends them ("lead"); nil → "agent".
   public var displayName: String {
     guard let p = profile, !p.isEmpty else { return "agent" }
     return p
   }
+  /// The fields of `result` the card reads. Absent fields leave what is known (a live event may carry less than the
+  /// snapshot did).
+  public mutating func read(result: JSONValue?) {
+    guard let r = result, case .object = r else { return }
+    if let c = r["costUsd"]?.double { costUsd = c }
+    if let l = r["limit"]?.string { limit = l }
+    if let t = r["resetAt"]?.int, t > 0 { resetAtMs = t }
+    if let e = r["error"]?.string, !e.isEmpty { error = UntrustedText(e) }
+    if let v = r["verification"], case .object = v { checks = CheckOutcome(v) }
+    if let m = r["merge"], let st = m["state"]?.string { merge = MergeOutcome(state: st, target: m["target"]?.string) }
+  }
+}
+
+/// `result.verification` (set by `capcomd verify`): whether its checks passed, and when not, how (`reason`) and the
+/// lines of the check output that name the failure (`excerpt`). Both are the checked code's output: untrusted.
+public struct CheckOutcome: Sendable, Hashable {
+  public var passed: Bool
+  public var reason: UntrustedText?
+  public var excerpt: UntrustedText?
+  public init(passed: Bool, reason: UntrustedText? = nil, excerpt: UntrustedText? = nil) { self.passed = passed; self.reason = reason; self.excerpt = excerpt }
+  init(_ v: JSONValue) {
+    passed = v["pass"]?.bool ?? v["checks"]?["passed"]?.bool ?? false
+    reason = v["checks"]?["reason"]?.string.flatMap { $0.isEmpty ? nil : UntrustedText($0) }
+    excerpt = v["checks"]?["excerpt"]?.string.flatMap { $0.isEmpty ? nil : UntrustedText($0) }
+  }
+}
+/// `result.merge`: how its work's merge ended (merged, failed or denied) and on which branch.
+public struct MergeOutcome: Sendable, Hashable {
+  public var state: String
+  public var target: String?
+  public init(state: String, target: String?) { self.state = state; self.target = target }
 }
 
 public enum StepStatus: Sendable, Hashable { case done, running, failed, queued, waiting, paused, stopped
@@ -127,6 +170,46 @@ public struct PendingApproval: Sendable, Hashable, Identifiable {
   public var decision: DecisionState = .idle
   /// Reused for every retry of the same (approval, decision) so a lost response replays instead of double-deciding.
   public var idempotencyKeys: [ApprovalDecision: String] = [:]
+  /// A merge's target branch (`subject.target`), for the question the card words itself.
+  public var target: String? = nil
+  /// A merge's changed files (`subject.files`…), when the daemon read them.
+  public var diff: ApprovalDiff? = nil
+  /// When it was asked (the approval.requested envelope, or snapshot `requestedAt`).
+  public var requestedAtMs: Int? = nil
+
+  public init(id: String, runId: String?, agentId: String?, kind: String, question: UntrustedText, branchLine: String?,
+              target: String? = nil, diff: ApprovalDiff? = nil, requestedAtMs: Int? = nil) {
+    self.id = id; self.runId = runId; self.agentId = agentId; self.kind = kind; self.question = question; self.branchLine = branchLine
+    self.target = target; self.diff = diff; self.requestedAtMs = requestedAtMs
+  }
+  /// From an approval's wire fields: the branch line, the target and the files come from its structured `subject`.
+  public init(id: String, runId: String?, agentId: String?, kind: String, question: String, subject: [String: JSONValue], requestedAtMs: Int?) {
+    self.init(id: id, runId: runId, agentId: agentId, kind: kind, question: UntrustedText(question), branchLine: CapcomdStore.branchLine(kind: kind, subject: subject),
+              target: kind == "merge" ? subject["target"]?.string.map { UntrustedText($0).plain } : nil,
+              diff: kind == "merge" ? ApprovalDiff(subject: subject) : nil, requestedAtMs: requestedAtMs)
+  }
+}
+
+/// A merge approval's changed files (`subject.files`, `filesTotal`, `added`, `removed`): its branch against where it left
+/// the target, read by the daemon when the merge was parked, biggest change first. Paths are the agent's (untrusted).
+public struct ApprovalDiff: Sendable, Hashable {
+  public struct File: Sendable, Hashable {
+    public var path: UntrustedText
+    /// Lines added and removed; nil for a binary file.
+    public var added: Int?, removed: Int?
+    public init(path: String, added: Int?, removed: Int?) { self.path = UntrustedText(path); self.added = added; self.removed = removed }
+  }
+  public var files: [File]
+  /// Every file the branch changes (`files` lists the first ones), and the lines across all of them.
+  public var total: Int, added: Int, removed: Int
+  public init(files: [File], total: Int, added: Int, removed: Int) { self.files = files; self.total = total; self.added = added; self.removed = removed }
+  public init?(subject: [String: JSONValue]) {
+    guard let rows = subject["files"]?.array else { return nil }
+    files = rows.compactMap { f in f["path"]?.string.map { File(path: $0, added: f["added"]?.int, removed: f["removed"]?.int) } }
+    total = subject["filesTotal"]?.int ?? files.count
+    added = subject["added"]?.int ?? files.compactMap(\.added).reduce(0, +)
+    removed = subject["removed"]?.int ?? files.compactMap(\.removed).reduce(0, +)
+  }
 }
 
 public struct Run: Sendable, Hashable, Identifiable {

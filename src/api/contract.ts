@@ -182,14 +182,30 @@ export const Decision = z.looseObject({
 });
 
 const RequestedBy = z.object({ agentId: z.string().nullable(), runId: z.string() }).describe("Who asked; ancestors of agentId may decide within their budget cap");
-const ApprovalSubject = z.record(z.string(), z.unknown()).describe("Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
+/** A merge approval's changed files (subject.files): its branch against where it left the target, biggest change first. */
+export const APPROVAL_FILES_MAX = 20;
+const ApprovalFile = z.object({
+	path: UntrustedText,
+	status: FileStatus,
+	added: z.number().int().nonnegative().nullable().describe("Lines added; null for a binary file"),
+	removed: z.number().int().nonnegative().nullable().describe("Lines removed; null for a binary file"),
+});
+const ApprovalSubject = z.looseObject({
+	target: z.string().nullable().optional().describe("merge: the branch it lands on"),
+	ref: z.string().nullable().optional().describe("merge: the branch (or ref) being merged"),
+	files: z.array(ApprovalFile).max(APPROVAL_FILES_MAX).optional().describe(`merge: the files the branch changes, \`git diff --numstat\` of the verified commit against where its branch left the target, the ${APPROVAL_FILES_MAX} with the most changed lines first (then by path). Absent when the daemon couldn't read the diff (no repository, the remote unreachable) or on a daemon that predates it`),
+	filesTotal: z.number().int().nonnegative().optional().describe("merge: how many files the branch changes (files lists at most the first ones)"),
+	added: z.number().int().nonnegative().optional().describe("merge: lines added across all its files (binary files not counted)"),
+	removed: z.number().int().nonnegative().optional().describe("merge: lines removed across all its files (binary files not counted)"),
+}).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
 
 /** Frames on GET /v1/streams/{scope}/events besides ordinary events (SSE `event:` names). */
 export const StreamFrames = {
 	"stream.reset": z.looseObject({ snapshotSeq: z.number().int().nonnegative(), reason: z.enum(["compacted", "overflow"]) }),
 	"snapshot.run": z.looseObject({ run: z.lazy(() => Run) }),
 	"snapshot.agents": z.looseObject({ agents: z.array(z.lazy(() => Agent)) }),
-	"snapshot.approvals": z.looseObject({ approvals: z.array(z.looseObject({ approvalId: ApprovalId, kind: ApprovalKind, status: ApprovalStatus, question: UntrustedText, requestedBy: RequestedBy, subject: ApprovalSubject })) }),
+	"snapshot.approvals": z.looseObject({ approvals: z.array(z.looseObject({ approvalId: ApprovalId, kind: ApprovalKind, status: ApprovalStatus, question: UntrustedText, requestedBy: RequestedBy, subject: ApprovalSubject,
+		requestedAt: Timestamp.nullable().optional().describe("When it was asked (a merge: when it was parked); absent on daemons that predate it") })) }),
 	"snapshot.steps": z.looseObject({ steps: z.array(z.lazy(() => HarnessEvent)).describe("Recent durable events of the scope, oldest first (step history)") }),
 	"snapshot.threads": z.looseObject({ messages: z.array(z.lazy(() => Message)).describe("Recent thread messages, oldest first") }),
 	"snapshot.end": z.looseObject({ snapshotSeq: z.number().int().nonnegative() }),

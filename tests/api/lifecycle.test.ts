@@ -50,6 +50,19 @@ describe("lifecycle_events", () => {
 		expect(new Set(l.map((e) => e.id)).size).toBe(l.length);
 	});
 
+	test("a parked merge's approval carries the files its branch changes (subject.files), as the park event read them", () => {
+		const diff = { files: [{ path: "src/math.test.ts", status: "added", added: 13, removed: 0 }, { path: "src/math.ts", status: "modified", added: 11, removed: 0 }], filesTotal: 2, added: 24, removed: 0 };
+		const park = { id: "op2", target: "main", ref: "agt-a1", branch: "capcomd/run-1/agt-a1", reason: "target main is protected", diff };
+		expect(strictEventData("merge.approval_requested", park)).toEqual({ ok: true });
+		expect(strictEventData("merge.approval_requested", { ...park, diff: { ...diff, filesTotal: "2" } }).ok).toBe(false);
+		const req = lifecycleEvents("run-1", [ev(1, "AGENT_SPAWNED", "a1", {}), ev(2, "MERGE_AWAITING_APPROVAL", "a1", park)]).find((e) => e.type === "approval.requested")!;
+		expect(req.data.subject).toEqual({ target: "main", ref: "capcomd/run-1/agt-a1", ...diff });
+		expect(EventData["approval.requested"].safeParse(req.data).success).toBe(true);
+		// Without a diff (no repository, an older park event): the subject is unchanged.
+		const old = lifecycleEvents("run-1", [ev(1, "MERGE_AWAITING_APPROVAL", "a1", { id: "op3", target: "main", ref: "b" })]).find((e) => e.type === "approval.requested")!;
+		expect(old.data.subject).toEqual({ target: "main", ref: "b" });
+	});
+
 	test("decision 9 names: every lifecycle type is a published dotted past-tense type", () => {
 		for (const t of LIFECYCLE_TYPES) { expect(t in EventData).toBe(true); expect(t).toMatch(/^[a-z]+\.[a-z_]+$/); expect(t.split(".").at(-1)!).toMatch(/(ed|done)$/); }
 	});

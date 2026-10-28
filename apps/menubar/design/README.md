@@ -9,8 +9,8 @@ Swift views live in `apps/menubar/app/Sources/MenuBarApp/`.
 | Screen / state | Mockup | Swift view |
 |---|---|---|
 | Panel (overall shell, footer, input) | `v5-a-final.png`, `v5-a-iconsA.png` | `PanelView.swift`, `Theme.swift` |
-| Project cards (goal title, scope chips, nested runs) | `v5-a-final.png`, `tree-card-v3.png` | `PanelView.swift` |
-| Approval state on a card (amber tint) | `v5-a-final.png` | `ApprovalCard.swift` |
+| Active card (direction B: folded sentence; unfolds to the ask, a failure or a usage-limit pause; the outcome of the newest finished run) | `active-card/Main.dc.html` (`Main.png`), `active-card/Motion.dc.html` (`Motion.png`) (spec: `active-card/card-spec.md`) | `ActiveCardView.swift`, `PanelView.swift`, `Theme.swift` (`Theme.Ask`); state in `CapcomdStore/ActiveCard.swift` |
+| Approval in the run drill-down | `active-card/Main.dc.html` (the ask's files and buttons) | `ApprovalCard.swift` |
 | Run drill-down | `drill-a2-log-iconsA.png` | `RunDrillDownView.swift` |
 | Activity \| Trace toggle | `view-activity.png`, `view-trace.png` | `RunDrillDownView.swift` |
 | Activity collapsed row | `activity-collapse.png`, `drill-collapsed.png` | `RunDrillDownView.swift` |
@@ -27,9 +27,10 @@ Swift views live in `apps/menubar/app/Sources/MenuBarApp/`.
 
 ## Approved decisions
 
-- Project cards are **titled by the goal**, with **scope chips** and the runs nested inside. Runs are grouped by project ID, never by goal text.
-- **No count/progress text** on cards. State is shown visually: **amber tint** when approval is needed, **status marks**, and the **step bar**.
-- The card body line shows live activity (or the approval question), never a repeat of the title. Run IDs belong in detail, not on the card chip.
+- Active cards follow **direction B, "The ask leads"** (`active-card/`): one sentence while nothing needs you (crew heads, who is doing what, elapsed time); an approval, a failure or a usage-limit pause unfolds the card into a headline, who it concerns, the evidence and one bar of controls. The tree is one click away. Runs are grouped by project ID, never by goal text.
+- Cards may show **elapsed time, the agent count ("+5") and API cost** (this replaces the earlier "no count/progress text" rule). The amber tint became a 1 pt amber ring on a card that asks.
+- **Approve is the inverted fill with ↩** (near-white in dark, near-black in light), so it reads with any accent colour; Deny is an outline. Return approves only while the card has focus; Esc never denies.
+- A merge's approval shows **the files it lands with +/−**, never a run ID. Run IDs belong in detail.
 - **Lowercase profile names** (`planner`, `lead`, `worker`, `critic`).
 - Profile icons (SF Symbols): planner = dotted path (`point.3.connected.trianglepath.dotted`), lead = `flag`, worker = `hammer`, critic = `checkmark.seal`, unknown = `hexagon` + dot.
 - Step icons: icon set **A** (outline monochrome; blue only on the current span, red on errors).

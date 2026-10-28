@@ -6,7 +6,7 @@ import type { Agent, AgentStatus, Attachment, Decision, Environment, Login, Mess
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
-import type { RunRepo } from "./run-files";
+import type { ApprovalDiff, RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
 import type { ListedProvider } from "../providers/registry";
 import { LISTED_PROVIDERS } from "../providers/registry";
@@ -17,7 +17,7 @@ import { inspectProject, setUpProject, type ProjectDeps, type ProjectInspection,
 import { initGit, publishOptions, publishProject, type GitInitOutcome, type OptionsOutcome, type PublishInput, type PublishOutcome } from "./project-git";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
-export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
+export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
 type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
@@ -128,12 +128,15 @@ export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
  * A parked merge's question and subject. The merge's `ref` is often just the agent's id (`capcomd_merge ref: agt-…`),
  * which made "Merge agt-mvqa… into main?": name the work as the agent's, and give the branch it pushed as the subject's ref.
  */
-export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown }): { question: string; subject: { target: string | null; ref: string | null } } {
+export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown }): { question: string; subject: { target: string | null; ref: string | null } & Partial<ApprovalDiff> } {
 	const ref = typeof d.ref === "string" ? d.ref : null, branch = typeof d.branch === "string" ? d.branch : null;
 	const target = typeof d.target === "string" ? d.target : null;
 	const byAgent = ref !== null && /^agt-/.test(ref);
 	const what = byAgent ? "this agent's work" : (ref ?? branch ?? "this work");
-	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref } };
+	// The files the branch changes, as read when the merge was parked (op data / the park event's `diff`).
+	const diff = d.diff && typeof d.diff === "object" && Array.isArray((d.diff as ApprovalDiff).files) ? (d.diff as ApprovalDiff) : null;
+	const files = diff ? { files: diff.files, filesTotal: diff.filesTotal, added: diff.added, removed: diff.removed } : {};
+	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref, ...files } };
 }
 
 export const approvalIdFor = (runId: string, opId: string) => `apr-${Buffer.from(`${runId}\u0000${opId}`).toString("hex")}`;

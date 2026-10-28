@@ -839,15 +839,17 @@ export const scopeActor = actor({
       return r.length ? opRow(r[0]) : null;
     },
 
-    /** Merges into a protected target wait for the operator: running → awaiting_approval (idempotent). */
-    async parkOp(c, params: { opId: string; reason: string }) {
+    /** Merges into a protected target wait for the operator: running → awaiting_approval (idempotent). `diff`, the files
+     *  the branch changes (read before parking), is kept on the op and the event, so the approval can show them. */
+    async parkOp(c, params: { opId: string; reason: string; diff?: Record<string, unknown> }) {
       await c.db.transaction(async (tx: RawAccess) => {
         const r = await tx.execute("SELECT * FROM ops WHERE op_id = ?", params.opId);
         if (!r.length) fail("not_found", `${params.opId} not found`);
         const op = opRow(r[0]);
         if (op.state !== "running") return;
-        await tx.execute("UPDATE ops SET state = 'awaiting_approval', updated_at = ? WHERE op_id = ? AND state = 'running'", Date.now(), params.opId);
-        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason }, `park-${params.opId}`);
+        const data = params.diff ? { ...op.data, diff: params.diff } : op.data;
+        await tx.execute("UPDATE ops SET state = 'awaiting_approval', data = ?, updated_at = ? WHERE op_id = ? AND state = 'running'", JSON.stringify(data), Date.now(), params.opId);
+        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason, ...(params.diff ? { diff: params.diff } : {}) }, `park-${params.opId}`);
       }, { name: "scopeParkOp" });
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
     },

@@ -293,7 +293,7 @@ export function rivetSource(): HarnessSource {
 			return ops.map((op): PendingApproval => {
 				const text = mergeApprovalText(op.data);
 				return { approvalId: approvalIdFor(runId, op.id), kind: "merge", status: "pending", question: text.question,
-					requestedBy: { agentId: (op.data.agentId as string) ?? null, runId }, subject: text.subject, expiresAt: null };
+					requestedBy: { agentId: (op.data.agentId as string) ?? null, runId }, subject: text.subject, expiresAt: null, requestedAt: isoTs(op.updatedAt) };
 			});
 		},
 		approval: async (approvalId) => {

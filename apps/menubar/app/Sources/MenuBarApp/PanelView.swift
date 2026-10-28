@@ -67,7 +67,7 @@ struct PanelView: View {
           }
           ForEach(active) { p in
             Group {
-              if let r = model.celebrating(p) { CelebrationCard(project: p, run: r) } else { ProjectCard(project: p) }
+              if let r = model.celebrating(p) { CelebrationCard(project: p, run: r) } else { ActiveCardView(project: p) }
             }
             .padding(.bottom, Theme.cardGap).transition(.opacity)
           }
@@ -84,7 +84,11 @@ struct PanelView: View {
             Text("Recent").font(Theme.Card.sectionFont).foregroundStyle(Theme.Card.sectionText)
               .padding(.top, Theme.Card.sectionTop).padding(.leading, Theme.Card.sectionLeading).padding(.bottom, Theme.Card.sectionBottom)
           }
-          ForEach(Array(finished.enumerated()), id: \.element.id) { i, p in RecentRow(project: p, index: i + 1).transition(.opacity) }
+          // The newest finished project folds to its outcome (direction B); the ones before it stay one row each.
+          ForEach(Array(finished.enumerated()), id: \.element.id) { i, p in
+            Group { if i == 0 { OutcomeRow(project: p).padding(.bottom, Theme.cardGap) } else { RecentRow(project: p, index: i + 1) } }
+              .transition(.opacity)
+          }
         }
         .padding(Theme.Card.listPadding)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listContent = $0; model.listHeight = listContent }
@@ -135,73 +139,6 @@ extension View {
   func hiddenUnlessTop(_ route: AppModel.Route) -> some View { modifier(HiddenUnlessTop(route: route)) }
 }
 
-/// Project card (tree-card-v3): the goal as title, scope chips, then each run's agent tree, grouped by project id.
-/// No counts or progress text: state shows as the amber tint (an approval is waiting) and the tree's status marks.
-/// Run ids stay in the drill-down.
-struct ProjectCard: View {
-  @Environment(AppModel.self) private var model
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.colorSchemeContrast) private var contrast
-  let project: Project
-
-  var body: some View {
-    let needsApproval = project.runs.contains { !model.approvals($0.id).isEmpty }
-    VStack(alignment: .leading, spacing: 0) {
-      Button(action: open) { header }
-        .buttonStyle(PressableStyle())
-        .accessibilityLabel(project.title + (needsApproval ? ", waiting for approval" : ""))
-        .accessibilityHint("Opens the run")
-      VStack(alignment: .leading, spacing: 0) {
-        ForEach(project.activeRuns) { run in   // finished and failed runs leave the card
-          if model.meeting(project)?.id == run.id { MeetTeamView(runId: run.id).transition(.opacity) } else { AgentTreeView(runId: run.id, compact: true) }
-          // Approvals sit under their waiting agent; one with no agent in the tree goes under the run's tree.
-          let inTree = Set(model.tree(run.id).flatMap(\.subtreeIds))
-          ForEach(model.approvals(run.id).filter { !inTree.contains($0.agentId ?? "") }) {
-            ApprovalCard(approval: $0).padding(.leading, Theme.Tree.nameInset(0) + Theme.Approval.leadingExtra)
-          }
-        }
-      }
-      .padding(.top, Theme.Card.treeInnerTop)   // no hairline above the tree: the chips lead straight into it
-      .padding(.top, Theme.Card.treeTop)
-    }
-    .padding(.top, Theme.Card.paddingTop).padding(.horizontal, Theme.Card.paddingHorizontal).padding(.bottom, Theme.Card.paddingBottom)
-    .background {
-      // The tint crossfades (opacity only) instead of animating the fill colour.
-      let shape = RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-      ZStack {
-        shape.fill(Theme.cardFill).opacity(needsApproval ? 0 : 1)
-          .overlay(shape.strokeBorder(Theme.Craft.contrastStroke, lineWidth: Theme.Craft.contrastStrokeWidth).opacity(contrast == .increased && !needsApproval ? 1 : 0))
-        shape.fill(Theme.Card.approvalFill)
-          .overlay(shape.strokeBorder(Theme.Card.approvalStroke, lineWidth: Theme.Card.stroke))
-          .opacity(needsApproval ? 1 : 0)
-      }
-      .animation(Theme.Motion.ease(reduceMotion), value: needsApproval)
-    }
-  }
-
-  private var header: some View {
-    let scopes = project.scopes
-    return VStack(alignment: .leading, spacing: 0) {
-      Text(verbatim: project.title)   // untrusted goal: verbatim, never markdown
-        .font(Theme.Card.titleFont).tracking(Theme.Card.titleTracking).foregroundStyle(Theme.Card.titleText)
-        .lineLimit(2).multilineTextAlignment(.leading)
-      if !scopes.isEmpty {
-        HStack(spacing: Theme.Card.chipGap) {
-          ForEach(scopes.prefix(Theme.Card.maxChips), id: \.self) { ScopeChip(text: $0) }
-          if scopes.count > Theme.Card.maxChips { ScopeChip(text: "+\(scopes.count - Theme.Card.maxChips)", folder: false) }
-        }
-        .padding(.top, Theme.Card.chipsTop)
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  /// Opens the run that is doing something now, else the most recent one.
-  private func open() {
-    if let run = project.activeRuns.first ?? project.runs.first { model.open(run: run.id) }
-  }
-}
-
 /// A recent project (Composer board "Continue" rows): its planner's bot on a tile in the bot's palette, the goal, how it
 /// ended in words, and ⌘1–⌘3 to open it. No counts beyond the approved "· n repos".
 struct RecentRow: View {
@@ -222,7 +159,7 @@ struct RecentRow: View {
           .background(RoundedRectangle(cornerRadius: Theme.Composer2.tileRadius, style: .continuous).fill(Self.tile(bot)))
           .overlay(RoundedRectangle(cornerRadius: Theme.Composer2.tileRadius, style: .continuous).strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5))
         VStack(alignment: .leading, spacing: 2) {
-          Text(verbatim: project.title).font(Theme.Composer2.rowTitle).foregroundStyle(.white).lineLimit(1).truncationMode(.tail)
+          Text(verbatim: project.title).font(Theme.Composer2.rowTitle).foregroundStyle(Theme.Ask.text).lineLimit(1).truncationMode(.tail)
           Text(verbatim: project.endedLine ?? "Done").font(Theme.Composer2.rowSub).foregroundStyle(Theme.Composer2.rowSubText).lineLimit(1)
         }
         Spacer(minLength: 0)

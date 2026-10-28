@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Active card · motion</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+
+body{margin:0}
+.board{position:relative;background:#111216;color:#e9e9ee;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+.board *{box-sizing:border-box}
+.bh{position:absolute;left:60px;top:48px;right:60px}
+.bh h1{margin:0;font-size:30px;line-height:36px;font-weight:650;letter-spacing:-0.6px;color:#f5f5f7}
+.bh p{margin:10px 0 0;font-size:15px;line-height:22px;color:#b9b9c2;max-width:1100px}
+.lab{position:absolute;font-size:14px;font-weight:600;color:#f5f5f7;letter-spacing:-0.1px}
+.lab span{font-weight:400;color:#9d9da6;margin-left:6px}
+.ann{position:absolute;font-size:12.5px;line-height:18px;color:#b2b2bb}
+.ann b{color:#ececf1;font-weight:600}
+.ann p{margin:0 0 6px}
+.band{position:absolute;left:0;right:0;background:#d6d7dc}
+.band .lab,.lt-lab{color:#1d1d1f}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.num{font-variant-numeric:tabular-nums}
+
+.pnl{--pnl:#1f2025;--pstroke:rgba(255,255,255,.16);--card:rgba(255,255,255,.06);--card2:rgba(255,255,255,.075);--chip:#2a2b30;--sunk:rgba(0,0,0,.2);--tx:#f2f2f7;--tx2:rgba(235,235,245,.68);--tx3:rgba(235,235,245,.57);--guide:rgba(235,235,245,.32);--amber:#ffb020;--amberTx:#ffc457;--amberRing:rgba(255,176,32,.6);--amberWash:rgba(255,176,32,.08);--red:#ff6961;--green:#30d158;--blue:#0a84ff;--blueTx:#fff;--invBg:#f2f2f7;--invTx:#1d1d1f;--ghost:rgba(255,255,255,.09);--ghostStroke:rgba(255,255,255,.2);--dither:rgba(255,122,16,.5);--brand:#ff7a10;--composer:rgba(255,255,255,.07);
+  position:relative;width:380px;border-radius:26px;background:var(--pnl);border:.5px solid var(--pstroke);padding:10px 10px 0;color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;font-size:13px;letter-spacing:-0.08px;overflow:hidden}
+.pnl.lt{--pnl:#ececee;--pstroke:rgba(0,0,0,.14);--card:rgba(0,0,0,.045);--card2:rgba(0,0,0,.06);--chip:#e1e1e4;--sunk:rgba(0,0,0,.05);--tx:#1d1d1f;--tx2:rgba(60,60,67,.86);--tx3:rgba(60,60,67,.8);--guide:rgba(60,60,67,.38);--amber:#c77700;--amberTx:#8a5300;--amberRing:rgba(199,119,0,.62);--amberWash:rgba(255,176,32,.13);--red:#c00013;--green:#1a6b32;--blue:#0062cc;--invBg:#1d1d1f;--invTx:#fff;--ghost:rgba(0,0,0,.05);--ghostStroke:rgba(0,0,0,.2);--dither:rgba(214,96,0,.6);--brand:#d65f00;--composer:rgba(0,0,0,.05)}
+.pnl .ic{display:block;flex:none}
+.blue{color:var(--blue)}.amber{color:var(--amber)}.red{color:var(--red)}.green{color:var(--green)}.t2{color:var(--tx2)}.t3{color:var(--tx3)}.prov{color:var(--tx3)}
+.cmp{height:36px;border-radius:9px;background:var(--composer);display:flex;align-items:center;gap:8px;padding:0 10px;font-size:13.5px;color:var(--tx3)}
+.cmp .kbd{margin-left:auto;font-size:11.5px;border:.5px solid var(--ghostStroke);border-radius:5px;padding:1px 5px;color:var(--tx3)}
+.sec{font-size:11px;font-weight:600;color:var(--tx3);padding:14px 6px 6px}
+.ft{display:flex;justify-content:space-between;align-items:center;margin:10px -10px 0;padding:10px 16px;border-top:1px dotted var(--dither);font-size:12.5px}
+.ft .h{color:var(--tx3)}
+.done{display:flex;align-items:center;gap:8px;padding:9px 12px 9px 20px;font-size:13px}
+.done .tt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx2)}
+.done .tr2{font-size:12px;color:var(--tx3);flex:none}
+.card{position:relative;border-radius:11px;background:var(--card);padding:12px 12px 6px}
+.card + .card{margin-top:8px}
+.card.ask{background:var(--amberWash);box-shadow:inset 0 0 0 .5px var(--amberRing)}
+.card.ring{box-shadow:inset 0 0 0 1px var(--amberRing)}
+.ctitle{font-size:14px;line-height:18px;font-weight:600;letter-spacing:-0.14px;color:var(--tx)}
+.chip{display:inline-flex;align-items:center;gap:4px;height:19px;padding:0 6px;border-radius:5px;background:var(--ghost);font-size:11.5px;color:var(--tx2);margin-top:7px}
+.chip .ic{opacity:.8}
+/* tree */
+.tree{position:relative}
+.tr{position:absolute;left:0;right:0}
+.tr .chev{position:absolute;top:0;bottom:0;width:12px;display:flex;align-items:center;justify-content:center;color:var(--tx3)}
+.tr .tb{position:absolute;width:14px;height:14px}
+.tb svg,.bust svg,.head svg{position:relative;display:block}
+.glow{position:absolute;border-radius:50%;pointer-events:none}
+.tr .tn{position:absolute;top:0;font-size:12.5px;color:var(--tx);white-space:nowrap}
+.tn.run{font-weight:500}
+.tn.dim{color:var(--tx3)}
+.tn.fin{color:var(--tx2)}
+.tn .sfx{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:10.5px;color:var(--tx3);margin-left:6px}
+.tr .trt{position:absolute;right:0;top:0;bottom:0;display:flex;align-items:center;gap:6px}
+.st{width:14px;display:flex;justify-content:flex-end;flex:none}
+.fold{display:flex;align-items:center;gap:3px;font-size:11px;color:var(--tx3)}
+.gv{position:absolute;width:0;border-left:1px dotted var(--guide)}
+.gh{position:absolute;height:0;border-top:1px dotted var(--guide)}
+.gn{position:absolute;width:3px;height:3px;background:var(--guide)}
+.tblk{position:absolute}
+/* buttons */
+.btn{appearance:none;border:0;margin:0;font:inherit;height:28px;border-radius:7px;font-size:12.5px;font-weight:500;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:7px;color:var(--tx);background:var(--ghost);flex:none;letter-spacing:-0.05px}
+.btn.ghost{background:transparent;box-shadow:inset 0 0 0 .5px var(--ghostStroke)}
+.btn.blue{background:var(--blue);color:#fff}
+.btn.inv{background:var(--invBg);color:var(--invTx);font-weight:600}
+.btn.sm{height:24px;font-size:12px;padding:0 10px;border-radius:6px}
+.btn.txt{background:transparent;padding:0 2px;color:var(--tx2);font-weight:500}
+.key{display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;border-radius:4px;font-size:10.5px;font-weight:600;padding:0 3px}
+.btn.blue .key{background:rgba(255,255,255,.24)}
+.btn.inv .key{background:rgba(127,127,127,.22)}
+.add{color:var(--green)}.rem0{color:var(--tx3)}
+
+
+.tbl{position:absolute;border-collapse:collapse;font-size:12.5px;line-height:17px;color:#c9c9d1}
+.tbl th{font-size:12px;font-weight:600;color:#f5f5f7;text-align:left;padding:0 14px 8px 0;vertical-align:bottom}
+.tbl td{padding:8px 14px 8px 0;vertical-align:top;border-top:1px solid #2a2b31}
+.tbl td:first-child{color:#f5f5f7;font-weight:500;white-space:nowrap}
+.tbl code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11.5px;color:#ffd08a}
+.frame{position:absolute;padding:10px;border-radius:18px}
+
+/* today */
+.t-q{font-size:12px;font-weight:500;line-height:15px;margin-top:2px}
+.t-br{font-size:12px;line-height:15px;color:var(--tx2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t-btns{display:flex;gap:8px;margin-top:8px}
+.t-btns .btn{flex:1 1 0;height:27px}
+.t-deny{background:var(--ghost)!important}.pnl:not(.lt) .t-deny{background:rgba(255,255,255,.10)!important}
+/* A */
+.a-meta{display:flex;align-items:center;gap:5px;margin-top:5px;font-size:11.5px;color:var(--tx2);height:16px}
+.a-meta .ic{color:var(--tx3)}
+.a-meta .sep{color:var(--tx3)}
+.a-prov{margin-left:auto;display:flex}
+.a-act{display:flex;align-items:center;gap:5px;height:16px;margin-top:-3px;font-size:11.5px;color:var(--tx2);white-space:nowrap;overflow:hidden}
+.a-act .mono{font-size:11px}
+.a-q{font-size:12.5px;font-weight:600;line-height:17px;margin-top:2px;letter-spacing:-0.1px}
+.a-ev{display:flex;gap:6px;align-items:center;font-size:11px;line-height:16px;margin-top:2px;color:var(--tx2);white-space:nowrap}
+.a-btns{display:flex;align-items:center;gap:8px;margin-top:9px}
+.sp{flex:1}
+.a-btns .btn.blue{width:116px}
+.a-btns .btn.ghost{width:64px}
+.a-row2{display:flex;gap:6px;margin-top:5px}
+.a-done{padding:9px 12px 10px 20px;border-radius:11px;background:var(--card)}
+.a-done .l1{display:flex;gap:8px;font-size:13px;align-items:baseline}
+.a-done .l1 .tt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx)}
+.a-done .l1 .t{font-size:12px;color:var(--tx3)}
+.a-done .l2{display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--tx2);margin-top:4px}
+/* B */
+.card.b{padding:12px}
+.b-top{display:flex;align-items:baseline;gap:10px}
+.b-title{flex:1;min-width:0;font-size:13px;font-weight:600;line-height:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.1px}
+.b-goal{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.b-time{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--tx3);font-variant-numeric:tabular-nums;flex:none}
+.b-line{display:flex;align-items:center;gap:8px;margin-top:8px;height:20px}
+.crew{display:flex;flex:none;padding-left:4px;align-items:center}
+.crew .hd{width:18px;height:18px;border-radius:5px;background:var(--chip);display:flex;align-items:center;justify-content:center;margin-left:-4px;position:relative;box-shadow:0 0 0 1.5px var(--chip)}
+.crew .hd.askd{box-shadow:0 0 0 1.5px var(--chip),0 0 0 2.5px var(--amber)}
+.crew .hd.bad{box-shadow:0 0 0 1.5px var(--chip),0 0 0 2.5px var(--red)}
+.crew .more{font-size:11px;color:var(--tx3);margin-left:5px}
+.b-sent{flex:1;min-width:0;font-size:12.5px;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.b-sent b,.b-who b{color:var(--tx);font-weight:500}
+.b-sent .mono{font-size:11.5px}
+.b-exp{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--tx3);background:transparent;border:0;padding:0;flex:none}
+.b-head{display:flex;gap:7px;align-items:flex-start;margin-top:9px;font-size:15px;font-weight:600;line-height:20px;letter-spacing:-0.25px}
+.b-head .ic{margin-top:3px}
+.b-who{display:flex;gap:6px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--tx2);white-space:nowrap}
+.b-who > span:not(.crew){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.files{width:100%;border-collapse:collapse;margin-top:10px;font-size:11.5px}
+.files td{height:20px;padding:0}
+.files td.f{font-family:ui-monospace,"SF Mono",Menlo,monospace;color:var(--tx)}
+.files td.n{text-align:right;width:36px;font-variant-numeric:tabular-nums}
+.files tr + tr td{border-top:.5px solid var(--card2)}
+.b-bar{display:flex;align-items:center;gap:8px;margin:12px -12px -12px;padding:10px 12px;background:var(--sunk);border-radius:0 0 11px 11px}
+.b-bar .btn.inv{min-width:112px}
+.b-note{font-size:12px;color:var(--tx3)}
+.b-err{margin-top:10px;border-radius:7px;background:var(--sunk);padding:7px 9px;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;line-height:16px;color:var(--tx2)}
+.b-err b{color:var(--tx);font-weight:500}
+.b-stats{display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--tx2);margin-top:4px}
+.b-tree{margin-top:10px;padding-top:6px;border-radius:8px}
+/* C */
+.card.c{padding:12px}
+.c-top{display:flex;gap:10px;align-items:flex-start}
+.c-title{flex:1;min-width:0;font-size:13.5px;font-weight:600;line-height:18px;letter-spacing:-0.14px}
+.c-title.one{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.c-time{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--tx3);font-variant-numeric:tabular-nums;line-height:18px;flex:none}
+.stage{position:relative;margin-top:12px}
+.bust{position:absolute;width:24px;height:24px}
+.head{position:absolute;width:14px;height:14px}
+.clab{position:absolute;text-align:center;font-size:11.5px;line-height:14px;color:var(--tx2);display:flex;justify-content:center;align-items:center;gap:4px;white-space:nowrap}
+.clab.on{color:var(--tx);font-weight:500}
+.clab.dim{color:var(--tx3)}
+.plab{position:absolute;font-size:11.5px;line-height:14px;color:var(--tx2);display:flex;align-items:center;gap:4px;white-space:nowrap}
+.floor{position:absolute;height:0;border-top:1px dotted var(--dither)}
+.pk{position:absolute;width:3px;height:3px;background:var(--brand)}
+.sm8{position:absolute;width:10px;display:flex;justify-content:center}
+.zz{position:absolute;color:var(--tx3)}
+.gv.a{border-left-color:var(--amber);border-left-style:dotted}
+.gn.a{background:var(--amber)}
+.c-now{display:flex;align-items:center;gap:6px;min-height:20px;font-size:12px;color:var(--tx2);white-space:nowrap;overflow:hidden;margin-top:8px}
+.c-now + .c-now{margin-top:2px}
+.c-now b{color:var(--tx);font-weight:500}
+.c-now .mono{font-size:11.5px}
+.c-ask{position:relative;padding-top:12px}
+.c-slip{border-radius:9px;background:var(--card2);padding:10px 12px}
+.c-q{font-size:13px;font-weight:600;line-height:18px;letter-spacing:-0.1px}
+.c-btns{display:flex;gap:8px;margin-top:10px;align-items:center}
+.c-btns .btn.inv{min-width:112px}
+.c-crew{display:flex;align-items:center;gap:8px;margin-top:9px;height:20px}
+.c-heads{position:relative;display:flex;gap:4px;padding:0 2px 3px;border-bottom:1px dotted var(--dither);flex:none}
+.c-heads .h14{width:14px;height:14px;position:relative}
+
+</style>
+</helmet>
+<div class="board" style="width: 2600px; height: 640px;"><div class="bh"><h1>Active card · motion (B)</h1><p>Transform and opacity only (plus a 2 pt blur on the crossfade); keyboard actions never animate; nothing loops. Springs are SwiftUI <span class="mono">.spring(response:dampingFraction:)</span>, no bounce. Theme.Ask holds the values.</p></div><div class="lab" style="left:60px;top:160px">0 ms · sentence</div><div class="pnl frame" style="left:60px;top:190px"><div class="card b"><div class="b-top"><span class="b-title">Add a clamp(x, lo, hi) function to src/math.ts with a bun test for it in src/math.test.ts</span><span class="b-time">4:12</span></div><div class="b-line"><span class="crew" aria-hidden="true"><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#9457DC" d="M4 2h1v1h-1zm2 0h2v1h-2zm3 0h1v1h-1zm-5 1h6v1h-6z"></path><path fill="#FFB566" d="M2 4h4v1h-4zm-1 1h1v1h-1zm2 0h1v1h-1z"></path><path fill="#FF7410" d="M6 4h6v1h-6zm-2 1h7v1h-7zm8 0h1v1h-1zm-11 1h12v1h-12zm0 1h2v5h-2zm10 0h2v4h-2zm0 4h1v1h-1zm-10 1h9v1h-9zm1 1h5v1h-5z"></path><path fill="#BDB7BC" d="M2 5h1v1h-1z"></path><path fill="#857D81" d="M11 5h1v1h-1zm-11 3h1v2h-1zm13 0h1v2h-1z"></path><path fill="#07101A" d="M3 7h8v1h-8zm0 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-6 2h6v1h-6zm-1 1h8v1h-8z"></path><path fill="#ECFFFE" d="M4 8h1v1h-1zm4 0h1v1h-1z"></path><path fill="#36D6DE" d="M5 8h1v1h-1zm4 0h1v1h-1zm-5 1h2v1h-2zm4 0h2v1h-2z"></path><path fill="#4F494C" d="M0 10h1v1h-1zm13 0h1v1h-1z"></path><path fill="#C065D0" d="M3 10h1v1h-1zm7 0h1v1h-1z"></path><path fill="#C8530E" d="M12 11h1v1h-1zm-2 1h3v1h-3zm-3 1h5v1h-5z"></path></svg></span><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#BDB7BC" d="M5 2h1v1h-1z"></path><path fill="#857D81" d="M8 2h1v1h-1zm-2 1h1v1h-1zm-6 5h1v1h-1zm13 0h1v1h-1z"></path><path fill="#4F494C" d="M7 3h1v1h-1zm-7 6h1v1h-1zm13 0h1v1h-1z"></path><path fill="#CDAAF5" d="M5 4h1v1h-1zm-2 1h1v1h-1z"></path><path fill="#9457DC" d="M6 4h3v1h-3zm-2 1h7v1h-7zm-2 1h10v1h-10zm0 1h2v1h-2zm8 0h2v1h-2zm-9 1h2v3h-2zm10 0h2v3h-2zm-9 3h2v1h-2zm8 0h2v1h-2zm-9 1h9v1h-9zm1 1h5v1h-5z"></path><path fill="#07101A" d="M4 7h6v1h-6zm-1 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-6 2h6v1h-6zm0 1h1v1h-1zm5 0h1v1h-1z"></path><path fill="#ECFFFE" d="M4 8h1v1h-1zm4 0h1v1h-1z"></path><path fill="#36D6DE" d="M5 8h1v1h-1zm4 0h1v1h-1zm-5 1h2v1h-2zm4 0h2v1h-2z"></path><path fill="#C065D0" d="M3 10h1v1h-1zm7 0h1v1h-1z"></path><path fill="#5DE2DF" d="M5 11h4v1h-4z"></path><path fill="#5E2BA8" d="M10 12h3v1h-3zm-3 1h5v1h-5z"></path></svg></span><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#CDAAF5" d="M6 2h1v1h-1z"></path><path fill="#9457DC" d="M7 2h1v1h-1z"></path><path fill="#857D81" d="M6 3h1v1h-1zm-5 5h1v2h-1zm11 0h1v2h-1z"></path><path fill="#4F494C" d="M7 3h1v1h-1zm-6 7h1v1h-1zm11 0h1v1h-1z"></path><path fill="#FFB566" d="M4 4h2v1h-2zm-1 1h1v1h-1z"></path><path fill="#FF7410" d="M6 4h4v1h-4zm-2 1h7v1h-7zm-2 1h10v1h-10zm0 1h2v1h-2zm8 0h2v1h-2zm-8 1h1v3h-1zm9 0h1v3h-1zm-9 3h2v1h-2zm8 0h2v1h-2zm-8 1h8v1h-8zm1 1h4v1h-4z"></path><path fill="#2A0D52" d="M4 7h6v1h-6zm-1 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-7 2h8v1h-8zm1 1h1v1h-1zm2 0h2v1h-2zm3 0h1v1h-1z"></path><path fill="#FFFFFF" d="M4 8h2v2h-2zm4 0h2v2h-2z"></path><path fill="#E9DDFB" d="M5 11h1v1h-1zm3 0h1v1h-1z"></path><path fill="#8F4FD6" d="M10 12h2v1h-2zm-3 1h4v1h-4z"></path></svg></span></span><span class="b-sent"><b>worker</b> is editing 2 files</span><button class="b-exp" aria-label="Show the agents"><svg class="ic " width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 3l2.5 2.5L6.5 3"></path></svg></button></div></div></div><div class="lab" style="left:464px;top:160px">90 ms · unfolding, blur crossfade</div><div class="pnl frame" style="left:464px;top:190px"><div class="card b" style="box-shadow:inset 0 0 0 1px rgba(255,176,32,.3);height:118px;overflow:hidden"><div class="b-top"><span class="b-goal" style="opacity:.7">Add a clamp(x, lo, hi) function to src/math.ts with a bun test for it in src/math.test.ts</span><span class="b-time">4:12</span></div><div style="position:relative"><div class="b-line" style="position:absolute;left:0;right:0;top:0;margin-top:6px;opacity:.3;filter:blur(2px)"><span class="crew" aria-hidden="true"><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#9457DC" d="M4 2h1v1h-1zm2 0h2v1h-2zm3 0h1v1h-1zm-5 1h6v1h-6z"></path><path fill="#FFB566" d="M2 4h4v1h-4zm-1 1h1v1h-1zm2 0h1v1h-1z"></path><path fill="#FF7410" d="M6 4h6v1h-6zm-2 1h7v1h-7zm8 0h1v1h-1zm-11 1h12v1h-12zm0 1h2v5h-2zm10 0h2v4h-2zm0 4h1v1h-1zm-10 1h9v1h-9zm1 1h5v1h-5z"></path><path fill="#BDB7BC" d="M2 5h1v1h-1z"></path><path fill="#857D81" d="M11 5h1v1h-1zm-11 3h1v2h-1zm13 0h1v2h-1z"></path><path fill="#07101A" d="M3 7h8v1h-8zm0 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-6 2h6v1h-6zm-1 1h8v1h-8z"></path><path fill="#ECFFFE" d="M4 8h1v1h-1zm4 0h1v1h-1z"></path><path fill="#36D6DE" d="M5 8h1v1h-1zm4 0h1v1h-1zm-5 1h2v1h-2zm4 0h2v1h-2z"></path><path fill="#4F494C" d="M0 10h1v1h-1zm13 0h1v1h-1z"></path><path fill="#C065D0" d="M3 10h1v1h-1zm7 0h1v1h-1z"></path><path fill="#C8530E" d="M12 11h1v1h-1zm-2 1h3v1h-3zm-3 1h5v1h-5z"></path></svg></span><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#BDB7BC" d="M5 2h1v1h-1z"></path><path fill="#857D81" d="M8 2h1v1h-1zm-2 1h1v1h-1zm-6 5h1v1h-1zm13 0h1v1h-1z"></path><path fill="#4F494C" d="M7 3h1v1h-1zm-7 6h1v1h-1zm13 0h1v1h-1z"></path><path fill="#CDAAF5" d="M5 4h1v1h-1zm-2 1h1v1h-1z"></path><path fill="#9457DC" d="M6 4h3v1h-3zm-2 1h7v1h-7zm-2 1h10v1h-10zm0 1h2v1h-2zm8 0h2v1h-2zm-9 1h2v3h-2zm10 0h2v3h-2zm-9 3h2v1h-2zm8 0h2v1h-2zm-9 1h9v1h-9zm1 1h5v1h-5z"></path><path fill="#07101A" d="M4 7h6v1h-6zm-1 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-6 2h6v1h-6zm0 1h1v1h-1zm5 0h1v1h-1z"></path><path fill="#ECFFFE" d="M4 8h1v1h-1zm4 0h1v1h-1z"></path><path fill="#36D6DE" d="M5 8h1v1h-1zm4 0h1v1h-1zm-5 1h2v1h-2zm4 0h2v1h-2z"></path><path fill="#C065D0" d="M3 10h1v1h-1zm7 0h1v1h-1z"></path><path fill="#5DE2DF" d="M5 11h4v1h-4z"></path><path fill="#5E2BA8" d="M10 12h3v1h-3zm-3 1h5v1h-5z"></path></svg></span><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#CDAAF5" d="M6 2h1v1h-1z"></path><path fill="#9457DC" d="M7 2h1v1h-1z"></path><path fill="#857D81" d="M6 3h1v1h-1zm-5 5h1v2h-1zm11 0h1v2h-1z"></path><path fill="#4F494C" d="M7 3h1v1h-1zm-6 7h1v1h-1zm11 0h1v1h-1z"></path><path fill="#FFB566" d="M4 4h2v1h-2zm-1 1h1v1h-1z"></path><path fill="#FF7410" d="M6 4h4v1h-4zm-2 1h7v1h-7zm-2 1h10v1h-10zm0 1h2v1h-2zm8 0h2v1h-2zm-8 1h1v3h-1zm9 0h1v3h-1zm-9 3h2v1h-2zm8 0h2v1h-2zm-8 1h8v1h-8zm1 1h4v1h-4z"></path><path fill="#2A0D52" d="M4 7h6v1h-6zm-1 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-7 2h8v1h-8zm1 1h1v1h-1zm2 0h2v1h-2zm3 0h1v1h-1z"></path><path fill="#FFFFFF" d="M4 8h2v2h-2zm4 0h2v2h-2z"></path><path fill="#E9DDFB" d="M5 11h1v1h-1zm3 0h1v1h-1z"></path><path fill="#8F4FD6" d="M10 12h2v1h-2zm-3 1h4v1h-4z"></path></svg></span></span><span class="b-sent"><b>worker</b> is editing <span class="mono">src/math.ts</span></span></div><div style="opacity:.6;filter:blur(1.2px);transform:translateY(2px)"><div class="b-head"><svg class="ic amber" width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 7.4V3.3a.9.9 0 0 1 1.8 0v3.4M6.4 6.4V2.4a.9.9 0 0 1 1.8 0v4M8.2 6.6V3.3a.9.9 0 0 1 1.8 0v4.4M10 7.2a.9.9 0 0 1 1.8 0v1.6a4.4 4.4 0 0 1-4.4 4.4h-.5a3.9 3.9 0 0 1-3.3-1.8L2.3 9.2a.9.9 0 0 1 1.5-1l.8 1.1V7.4"></path></svg><span>Merge worker's work into main?</span></div><div class="b-who"><span class="crew" aria-hidden="true"><span class="hd askd"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#BDB7BC" d="M5 2h1v1h-1z"></path><path fill="#857D81" d="M8 2h1v1h-1zm-2 1h1v1h-1zm-6 5h1v1h-1zm13 0h1v1h-1z"></path><path fill="#4F494C" d="M7 3h1v1h-1zm-7 6h1v1h-1zm13 0h1v1h-1z"></path><path fill="#CDAAF5" d="M5 4h1v1h-1zm-2 1h1v1h-1z"></path><path fill="#9457DC" d="M6 4h3v1h-3zm-2 1h7v1h-7zm-2 1h10v1h-10zm0 1h2v1h-2zm8 0h2v1h-2zm-9 1h2v3h-2zm10 0h2v3h-2zm-9 3h2v1h-2zm8 0h2v1h-2zm-9 1h9v1h-9zm1 1h5v1h-5z"></path><path fill="#07101A" d="M4 7h6v1h-6zm-1 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-6 2h6v1h-6zm0 1h1v1h-1zm5 0h1v1h-1z"></path><path fill="#ECFFFE" d="M4 8h1v1h-1zm4 0h1v1h-1z"></path><path fill="#36D6DE" d="M5 8h1v1h-1zm4 0h1v1h-1zm-5 1h2v1h-2zm4 0h2v1h-2z"></path><path fill="#C065D0" d="M3 10h1v1h-1zm7 0h1v1h-1z"></path><path fill="#5DE2DF" d="M5 11h4v1h-4z"></path><path fill="#5E2BA8" d="M10 12h3v1h-3zm-3 1h5v1h-5z"></path></svg></span></span><span><b>worker</b> asked 18s ago · planner and reviewer wait on it</span><button class="b-exp" aria-label="Show the agents"><svg class="ic " width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 3l2.5 2.5L6.5 3"></path></svg></button></div><table class="files"><tbody><tr><td class="f">src/math.test.ts</td><td class="n add">+13</td><td class="n rem0">−0</td></tr><tr><td class="f">src/math.ts</td><td class="n add">+11</td><td class="n rem0">−0</td></tr></tbody></table><div class="b-bar"><button class="btn txt sm">View diff</button><span class="sp"></span><button class="btn ghost">Deny</button><button class="btn inv">Approve <span class="key">↩</span></button></div></div></div></div></div><div class="lab" style="left:868px;top:160px">300 ms · the ask</div><div class="pnl frame" style="left:868px;top:190px"><div class="card b ring"><div class="b-top"><span class="b-goal">Add a clamp(x, lo, hi) function to src/math.ts with a bun test for it in src/math.test.ts</span><span class="b-time">4:12</span></div><div class="b-head"><svg class="ic amber" width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 7.4V3.3a.9.9 0 0 1 1.8 0v3.4M6.4 6.4V2.4a.9.9 0 0 1 1.8 0v4M8.2 6.6V3.3a.9.9 0 0 1 1.8 0v4.4M10 7.2a.9.9 0 0 1 1.8 0v1.6a4.4 4.4 0 0 1-4.4 4.4h-.5a3.9 3.9 0 0 1-3.3-1.8L2.3 9.2a.9.9 0 0 1 1.5-1l.8 1.1V7.4"></path></svg><span>Merge worker's work into main?</span></div><div class="b-who"><span class="crew" aria-hidden="true"><span class="hd askd"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#BDB7BC" d="M5 2h1v1h-1z"></path><path fill="#857D81" d="M8 2h1v1h-1zm-2 1h1v1h-1zm-6 5h1v1h-1zm13 0h1v1h-1z"></path><path fill="#4F494C" d="M7 3h1v1h-1zm-7 6h1v1h-1zm13 0h1v1h-1z"></path><path fill="#CDAAF5" d="M5 4h1v1h-1zm-2 1h1v1h-1z"></path><path fill="#9457DC" d="M6 4h3v1h-3zm-2 1h7v1h-7zm-2 1h10v1h-10zm0 1h2v1h-2zm8 0h2v1h-2zm-9 1h2v3h-2zm10 0h2v3h-2zm-9 3h2v1h-2zm8 0h2v1h-2zm-9 1h9v1h-9zm1 1h5v1h-5z"></path><path fill="#07101A" d="M4 7h6v1h-6zm-1 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-6 2h6v1h-6zm0 1h1v1h-1zm5 0h1v1h-1z"></path><path fill="#ECFFFE" d="M4 8h1v1h-1zm4 0h1v1h-1z"></path><path fill="#36D6DE" d="M5 8h1v1h-1zm4 0h1v1h-1zm-5 1h2v1h-2zm4 0h2v1h-2z"></path><path fill="#C065D0" d="M3 10h1v1h-1zm7 0h1v1h-1z"></path><path fill="#5DE2DF" d="M5 11h4v1h-4z"></path><path fill="#5E2BA8" d="M10 12h3v1h-3zm-3 1h5v1h-5z"></path></svg></span></span><span><b>worker</b> asked 18s ago · planner and reviewer wait on it</span><button class="b-exp" aria-label="Show the agents"><svg class="ic " width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 3l2.5 2.5L6.5 3"></path></svg></button></div><table class="files"><tbody><tr><td class="f">src/math.test.ts</td><td class="n add">+13</td><td class="n rem0">−0</td></tr><tr><td class="f">src/math.ts</td><td class="n add">+11</td><td class="n rem0">−0</td></tr></tbody></table><div class="b-bar"><button class="btn txt sm">View diff</button><span class="sp"></span><button class="btn ghost">Deny</button><button class="btn inv">Approve <span class="key">↩</span></button></div></div></div><div class="lab" style="left:1272px;top:160px">after ↩ · folds back</div><div class="pnl frame" style="left:1272px;top:190px"><div class="card b"><div class="b-top"><span class="b-title">Add a clamp(x, lo, hi) function to src/math.ts with a bun test for it in src/math.test.ts</span><span class="b-time">4:31</span></div><div class="b-line"><span class="crew" aria-hidden="true"><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#9457DC" d="M4 2h1v1h-1zm2 0h2v1h-2zm3 0h1v1h-1zm-5 1h6v1h-6z"></path><path fill="#FFB566" d="M2 4h4v1h-4zm-1 1h1v1h-1zm2 0h1v1h-1z"></path><path fill="#FF7410" d="M6 4h6v1h-6zm-2 1h7v1h-7zm8 0h1v1h-1zm-11 1h12v1h-12zm0 1h2v5h-2zm10 0h2v4h-2zm0 4h1v1h-1zm-10 1h9v1h-9zm1 1h5v1h-5z"></path><path fill="#BDB7BC" d="M2 5h1v1h-1z"></path><path fill="#857D81" d="M11 5h1v1h-1zm-11 3h1v2h-1zm13 0h1v2h-1z"></path><path fill="#07101A" d="M3 7h8v1h-8zm0 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-6 2h6v1h-6zm-1 1h8v1h-8z"></path><path fill="#ECFFFE" d="M4 8h1v1h-1zm4 0h1v1h-1z"></path><path fill="#36D6DE" d="M5 8h1v1h-1zm4 0h1v1h-1zm-5 1h2v1h-2zm4 0h2v1h-2z"></path><path fill="#4F494C" d="M0 10h1v1h-1zm13 0h1v1h-1z"></path><path fill="#C065D0" d="M3 10h1v1h-1zm7 0h1v1h-1z"></path><path fill="#C8530E" d="M12 11h1v1h-1zm-2 1h3v1h-3zm-3 1h5v1h-5z"></path></svg></span><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#BDB7BC" d="M5 2h1v1h-1z"></path><path fill="#857D81" d="M8 2h1v1h-1zm-2 1h1v1h-1zm-6 5h1v1h-1zm13 0h1v1h-1z"></path><path fill="#4F494C" d="M7 3h1v1h-1zm-7 6h1v1h-1zm13 0h1v1h-1z"></path><path fill="#CDAAF5" d="M5 4h1v1h-1zm-2 1h1v1h-1z"></path><path fill="#9457DC" d="M6 4h3v1h-3zm-2 1h7v1h-7zm-2 1h10v1h-10zm0 1h2v1h-2zm8 0h2v1h-2zm-9 1h2v3h-2zm10 0h2v3h-2zm-9 3h2v1h-2zm8 0h2v1h-2zm-9 1h9v1h-9zm1 1h5v1h-5z"></path><path fill="#07101A" d="M4 7h6v1h-6zm-1 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-6 2h6v1h-6zm0 1h1v1h-1zm5 0h1v1h-1z"></path><path fill="#ECFFFE" d="M4 8h1v1h-1zm4 0h1v1h-1z"></path><path fill="#36D6DE" d="M5 8h1v1h-1zm4 0h1v1h-1zm-5 1h2v1h-2zm4 0h2v1h-2z"></path><path fill="#C065D0" d="M3 10h1v1h-1zm7 0h1v1h-1z"></path><path fill="#5DE2DF" d="M5 11h4v1h-4z"></path><path fill="#5E2BA8" d="M10 12h3v1h-3zm-3 1h5v1h-5z"></path></svg></span><span class="hd "><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" aria-hidden="true"><path fill="#CDAAF5" d="M6 2h1v1h-1z"></path><path fill="#9457DC" d="M7 2h1v1h-1z"></path><path fill="#857D81" d="M6 3h1v1h-1zm-5 5h1v2h-1zm11 0h1v2h-1z"></path><path fill="#4F494C" d="M7 3h1v1h-1zm-6 7h1v1h-1zm11 0h1v1h-1z"></path><path fill="#FFB566" d="M4 4h2v1h-2zm-1 1h1v1h-1z"></path><path fill="#FF7410" d="M6 4h4v1h-4zm-2 1h7v1h-7zm-2 1h10v1h-10zm0 1h2v1h-2zm8 0h2v1h-2zm-8 1h1v3h-1zm9 0h1v3h-1zm-9 3h2v1h-2zm8 0h2v1h-2zm-8 1h8v1h-8zm1 1h4v1h-4z"></path><path fill="#2A0D52" d="M4 7h6v1h-6zm-1 1h1v2h-1zm3 0h2v2h-2zm4 0h1v2h-1zm-7 2h8v1h-8zm1 1h1v1h-1zm2 0h2v1h-2zm3 0h1v1h-1z"></path><path fill="#FFFFFF" d="M4 8h2v2h-2zm4 0h2v2h-2z"></path><path fill="#E9DDFB" d="M5 11h1v1h-1zm3 0h1v1h-1z"></path><path fill="#8F4FD6" d="M10 12h2v1h-2zm-3 1h4v1h-4z"></path></svg></span></span><span class="b-sent"><b>reviewer</b> is reading 2 files</span><button class="b-exp" aria-label="Show the agents"><svg class="ic " width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 3l2.5 2.5L6.5 3"></path></svg></button></div></div></div><table class="tbl" style="left:1700px;top:160px;width:840px"><thead><tr><th>What</th><th>Why</th><th>Curve, timing</th><th>Interrupted</th><th>Reduce Motion</th></tr></thead><tbody><tr><td>Unfold to the ask (a failure, a pause)</td><td>Attention arrives; the card becomes the question</td><td>Height <code>spring(0.35, 1.0)</code>; the sentence becomes the headline: opacity + blur 2 → 0 pt, 180 ms <code>(0.23, 1, 0.32, 1)</code></td><td>A second ask mid-unfold: the headline crossfades again, the height retargets</td><td>No spring, no blur: one 150 ms ease-out</td></tr><tr><td>Sentence ticker</td><td>Frequent</td><td>150 ms ease-out + 1.5 pt blur; at most one change per 1.5 s; held while the pointer is on the card</td><td>Latest wins</td><td>Crossfade</td></tr><tr><td>A head joins the crew</td><td>A spawn is news, but small</td><td>From 6 pt right + fade, 200 ms <code>(0.23, 1, 0.32, 1)</code>; siblings shift <code>spring(0.30, 1.0)</code>; 40 ms apart, at most 4 steps</td><td>Retargets</td><td>Fade only</td></tr><tr><td>Fold after deciding</td><td>Done with you</td><td><code>spring(0.28, 1.0)</code>: faster than the unfold; the sentence fades back in</td><td>Denied or failed: it unfolds again</td><td>150 ms ease-out</td></tr><tr><td>Show / hide the agents</td><td>Occasional, by choice</td><td>Rows <code>spring(0.30, 1.0)</code> with the chevron's turn; from the keyboard: none</td><td>Retargets</td><td>150 ms ease-out</td></tr><tr><td>Elapsed time</td><td>Live number</td><td>No animation; tabular digits so nothing shifts</td><td></td><td></td></tr><tr><td>Press</td><td>Feedback</td><td>Scale 0.97, 120 ms ease-out (PressFeedback); a click on Approve / Deny gets one trackpad tick</td><td>n/a</td><td>Opacity 0.75</td></tr></tbody></table></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2600,"height":640}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

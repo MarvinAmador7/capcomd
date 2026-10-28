@@ -14,9 +14,9 @@ A macOS menu bar app that shows capcomd runs ("projects") and lets you approve, 
 
 - **HIG glass, variant A.** Dark vibrant material (`.popover`/`.hudWindow` style), 16 pt panel radius, hairline separators, grouping by space before borders.
 - **One accent.** System blue `#0A84FF` marks the current/running thing, focus, primary buttons and send. Nothing else is blue.
-- **Amber only for approvals.** `#FFB020` hand.raised; a card waiting for approval gets a faint amber tint (fill `.08`, 0.5 pt stroke `.35`). Never a solid tile.
+- **Amber only for approvals.** `#FFB020` hand.raised; a card waiting for approval gets a 1 pt amber ring at 60 % (`design/active-card`). Never a solid tile.
 - **Red only for failures/retries.** `#FF6961`.
-- **No counts, no progress text.** No "3/7", no "42%", no status tallies. Allowed numbers: the approval badge on the menu bar icon (pending approvals), durations ("Done in 4m"), and the plain counts the approved designs use: a finished row's folders ("· 3 repos") and an activity line's targets ("Reading 4 files").
+- **No progress tallies.** No "3/7", no "42%". Allowed numbers: the approval badge on the menu bar icon (pending approvals), durations ("Done in 4m") and a card's elapsed time, the crew count past five heads ("+5"), a run's API cost, a merge's files and lines (+24 −0), and the plain counts the approved designs use: a finished row's folders ("· 3 repos") and an activity line's targets ("Reading 4 files").
 - **Finished steps show no status icon.** Status icons exist only for running, failed, queued and waiting.
 - **Plain-language step text**, sentence case, past tense for done ("Read the ids/v1 schema"), progressive for now ("Writing parquet shards to R2").
 - **No gradient text, no rainbow colors.** Icon tint is secondary grey unless state demands otherwise.
@@ -60,22 +60,21 @@ Resume after reconnect with `--since-seq <last seq>`.
 
 # 4. Screens and states
 
-## 4.1 Main panel and project cards — `v5-a-final.png`, `tree-card-v3.png`
+## 4.1 Main panel and project cards — `active-card/Main.dc.html` (cards), `v5-a-final.png` (panel)
 
 - Top: "Start a project…" field (`.in`: 36 pt, radius 9, white 7 %, `+` and placeholder at white 45/40 %, `⌘K` hint in a 0.5 pt outlined tag). The panel opens with nothing focused; ⌘K or a click focuses it (white 10 % fill, 0.5 pt white 18 % stroke, 3.5 pt blue 28 % ring). Return starts a run on the goal (`POST /v1/runs`, Idempotency-Key per goal, reused when retrying after a network failure); a daemon without a default repository gets one folder pick (remembered). Esc clears, then leaves the field. A quiet line under it says "Started…" or the daemon's refusal. Section label "Active".
-- **Project card:** title (`goal`, 14 pt semibold), folder chips (the distinct folders its agents work in, up to 3 then `+n`; G1), a hairline, then each run's agent tree (§4.4). Runs are grouped by project id. Run ids never appear on the card. Running cards first, by most recent event.
+- **Project card** (direction B, `design/active-card/card-spec.md`): folded, the goal (13 pt semibold) and elapsed time, then the crew's heads and one sentence ("worker is editing 2 files"); an approval, a failed agent or a usage-limit pause unfolds it into a headline, who it concerns, the evidence and a bar of controls. The chevron shows each active run's agent tree (§4.4, 24 pt rows). Runs are grouped by project id. Run ids never appear on the card. Running cards first, by most recent event.
 - **Active means work in progress.** A run is active while the daemon says `running`, `paused` or `starting`, or any of its agents hasn't ended. A run that never spawned an agent (`new`) counts for its first 5 minutes. Lifecycle `completed`/`failed`/`cancelled` win; a snapshot `idle` run is judged by its agents (any failed → failed, any cancelled → stopped, else done). A card nests only its active runs: finished and failed runs leave it.
-- **Finished projects** (no active run) leave the Active cards and collapse to one line under them, newest first, at most three (`.done`): title (13 pt, white 70 %, indented 8 pt past the cards' text, tail-truncated) and how its latest run ended, right-aligned (12 pt, white 40 %): "Done in 4m · 3 repos", "Failed after 12m", "Stopped after 30s". The duration runs from the run's creation to its terminal transition (else its agents' last change); the folder count is omitted when unknown. Click opens that run. With nothing active, "Nothing running" sits under the section label.
+- **Finished projects** (no active run) leave the Active cards for the Recent list, newest first, at most three. The newest shows its outcome (card-spec.md: "Merged into main", the duration, the goal, then files and lines, checks and API cost, or the failing line); the others are one row each: the goal and how its latest run ended ("Done in 4m · 3 repos", "Failed after 12m", "Stopped after 30s"). The duration runs from the run's creation to its terminal transition (else its agents' last change); the folder count is omitted when unknown. Click (or ⌘1–⌘3) opens that run. With nothing active, "Nothing running" sits under the section label.
 - No footer: the panel ends with its last card or Recent row.
 - Menu bar icon: capcomd mark; amber dot + number when approvals are pending.
 - **Cards are goals.** The daemon's `projectId` is a hash of the repository, so runs group by repository *and* goal: each goal started from the composer (or by the CLI, or another agent) is its own card, reruns of a goal share one, and a run whose goal hasn't arrived joins its repository's newest card.
 - **Live, always.** Every feed reconnects from its cursor after a clean close, a 5xx or a transport error (backoff to 5 s), ending only on 401/404; up to 16 run feeds are followed, active runs first. While the daemon feed can't connect, a quiet line under the composer says "Can't reach capcomd. Reconnecting…" (a spinner, the hint colour, never red), and what's below is the last state the daemon sent. At launch the token is read off the main thread (macOS may be asking for Keychain access: the panel says "Waiting for Keychain access…"); `CAPCOMD_TOKEN` in the environment wins, for development.
 
-## 4.2 Approval card — `v5-a-final.png`, `tree-card-v3.png`
+## 4.2 Approval — `active-card/Main.dc.html`, `active-card/card-spec.md`
 
-- Lives inline under the waiting node (`.apx`, 2 pt right of its name column, 2 pt above / 8 pt below). An approval whose agent isn't in the tree sits under the run's tree.
-- Order: **question first** ("Merge backfill into main?", 12 pt medium, white), then the branch/command line in 12 pt mono at 60 % (`fix/backfill → main`), then **Deny** (white 10 % fill) / **Approve** (`#0A84FF` fill) full-width pair: 27 pt high, radius 7, 12.5 pt medium, 8 pt apart. Fixed fills, so Approve stays blue when the app isn't active. Once decided the buttons give way to "Approved by …".
-- No timer, no footer, no "since". Waiting node shows amber hand.raised in its status column.
+- On a card it is the unfolded card's body (card-spec.md): the question as a 15 pt headline ("Merge worker's work into main?", worded from the merge's fields), who asked and when, who waits on it, the files with +/− (or the branch line from an older daemon), then a bar docked to the card: View diff · **Deny** (0.5 pt outline) · **Approve ↩** (inverted fill: near-white in dark, near-black in light, so it reads with any accent). Return approves while the card has focus; Esc never denies. Once decided the buttons give way to "Approved by … · merging".
+- In the run drill-down it sits at the top with the same files and buttons. The waiting node shows amber hand.raised in its status column.
 
 ## 4.3 Run drill-down — `view-activity.png`, `view-trace.png`, `activity-collapse.png`, `drill-collapsed.png`, `long-follow-iconsA.png`, `long-scrolled-iconsA.png`, `drill-a2-log-iconsA.png`, `drill-a2-files-iconsA.png`
 
@@ -217,7 +216,10 @@ UI motion animates **transform and opacity only**, eases out, and finishes **und
 | Drill-down / thread push | slide 100 % horizontal, 0.25 s; back reverses |
 | Activity ⇄ Trace, Log ⇄ Files | crossfade 0.15 s; height snaps |
 | Timeline collapse | 0.25 s: rows fade out, icons slide into the strip (12 ms stagger, capped so the move ends under 300 ms); height snaps |
-| Approval appears / card tint | fade + 4 pt rise 0.2 s; card tint crossfades 0.2 s; one gentle amber icon fade-in (no pulse loop) |
+| Active card unfolds / folds (ask, failure, pause) | height `spring(0.35, 1.0)` in, `spring(0.28, 1.0)` back; content crossfades with a 2 pt blur, 0.18 s; the ring crossfades with it; Reduce Motion: one 0.15 s ease-out, no blur (card-spec.md) |
+| Card sentence changes | crossfade 0.15 s with a 1.5 pt blur, at most once per 1.5 s, held under the pointer |
+| A head joins a card's crew | from 6 pt right + fade, 0.2 s, 40 ms apart; siblings spring (0.30, 1.0) |
+| Approval appears (drill-down) | fade + 4 pt rise 0.2 s; one gentle amber icon fade-in (no pulse loop) |
 | Tool / thinking expand | content fades in 0.15 s, chevron rotates 90° in 0.15 s |
 | Streaming text | per-block fade-in 0.12 s, no typewriter |
 | Follow / Jump to now | scroll 0.25 s; pill fades 0.15 s |
@@ -227,7 +229,7 @@ UI motion animates **transform and opacity only**, eases out, and finishes **und
 
 # 8. Accessibility
 
-- **VoiceOver:** every icon has a label from its plain-language step text + state ("Writing parquet shards to R2, running"). Tree rows: "Worker d3ce, ids/v1, running, level 3". Approval: "Merge backfill into main? fix/backfill to main. Approve, Deny". Strip cells announce the same as their rows.
+- **VoiceOver:** every icon has a label from its plain-language step text + state ("Writing parquet shards to R2, running"). Tree rows: "Worker d3ce, ids/v1, running, level 3". Active card: one element saying the goal, how long it has run and its state ("Approval needed: Merge worker's work into main?. planner and reviewer wait on it. 2 files, 24 lines added, 0 removed"), with Approve, Deny and View diff as actions. Strip cells announce the same as their rows.
 - **Keyboard:** ⌥Space summons; Tab/arrows move through cards and rows; Return opens; ⌘[ back; ⌘1/⌘2 switch Activity/Trace (Thread/Trace); ⌘\\ collapses timeline; Esc closes popovers then panel.
 - **Contrast:** primary and secondary text meet 4.5:1 on the glass; tertiary used only for non-essential labels. Increase Contrast → solid backgrounds, hairlines at 0.25. State is never color-only (icon shape differs per status).
 - Dynamic Type: honor the macOS text-size setting where possible; layouts allow two-line titles.
