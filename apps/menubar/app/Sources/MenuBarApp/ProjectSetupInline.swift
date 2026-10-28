@@ -7,31 +7,6 @@ import CapcomdStore
 // picked folder that isn't a set-up capcomd project swaps the tool row for its next steps, inside the composer card.
 // ProjectSetupFlow (CapcomdStore) decides what shows; these views draw its SetupScreen.
 
-/// The inline setup's calls beyond inspect and set up. capcomd's store doesn't make them yet, so Initialize Git and
-/// Publish to GitHub stay hidden (as for an older capcomd) and "Keep .capcomd/ out of git" is disabled.
-///
-/// TODO(store): when CapcomdStore has the project git routes, swap each body for the store call beside it:
-///   gitSupported, gitignoreSupported → `store.projectGitSupported`
-///   publishState → `store.projectPublish` (`ProjectPublishState`: idle, loadingOptions, ready(ProjectPublishOptions),
-///                  publishing, refused(message:field:), failed); then make SetupPublishState / SetupPublishOptions /
-///                  SetupPublishAccount / SetupBlockedFile typealiases of the store's types (same cases and fields)
-///   initGit → `await store.initGit(path:)`, returning the failure sentence it leaves (if any)
-///   loadPublishOptions → `await store.loadPublishOptions(path:)`
-///   publish → `await store.publishProject(path:owner:name:visibility:)`
-///   setUp → `store.setUpProject(path:mode:target:check:agents:budgetUsd:gitignore:)` (pass `gitignore`)
-@MainActor struct SetupActions: ProjectGitActions {
-  let store: CapcomdStore
-  var gitSupported: Bool { false }
-  var gitignoreSupported: Bool { false }
-  var publishState: SetupPublishState { .idle }
-  func initGit(path: String) async -> String? { "Update capcomd to start a repository here." }
-  func loadPublishOptions(path: String) async {}
-  func publish(path: String, owner: String, name: String, visibility: String) async {}
-  func setUp(path: String, mode: String, target: String, check: String, agents: [String], budgetUsd: Double?, gitignore: Bool) async {
-    await store.setUpProject(path: path, mode: mode, target: target, check: check, agents: agents, budgetUsd: budgetUsd)
-  }
-}
-
 extension AppModel {
   /// The picked folder's next steps for the composer card, or nil (the tool row shows).
   func setupScreen(goal: String) -> SetupScreen? { _ = revision; return setup.screen(goal: goal, sandbox: startSandbox?.name) }
@@ -47,7 +22,8 @@ extension AppModel {
     get { _ = revision; return store.prefs.gitignoreCapcomd }
     set { store.prefs.gitignoreCapcomd = newValue; bump() }
   }
-  var gitignoreSupported: Bool { _ = revision; return setup.actions.gitignoreSupported }
+  /// The daemon applies it (`projects.git`).
+  var gitignoreSupported: Bool { _ = revision; return store.projectGitSupported }
 
   /// A button on the card. Set Up (and Start) answers how it ended, for the composer's focus.
   func setupAction(_ a: SetupAction, goal: String) async -> SetupOutcome {

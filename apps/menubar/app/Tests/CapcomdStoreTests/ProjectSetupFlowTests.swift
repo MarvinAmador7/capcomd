@@ -2,41 +2,6 @@ import XCTest
 import Foundation
 @testable import CapcomdStore
 
-/// Initialize Git, Publish to GitHub and .gitignore as the store will offer them, scripted per test.
-@MainActor
-final class FakeGitActions: ProjectGitActions {
-  let store: CapcomdStore
-  var gitSupported = true
-  var gitignoreSupported = true
-  var publishState: SetupPublishState = .idle
-  var options = SetupPublishOptions(ghReady: true, accounts: [SetupPublishAccount(login: "marvin", kind: "user"), SetupPublishAccount(login: "acme", kind: "org")],
-                                    suggestedName: "app", files: 24)
-  /// Runs as Initialize Git / Publish happen (the daemon's folder changes).
-  var onInit: (() -> Void)?
-  var onPublish: (() -> Void)?
-  var initFails: String?
-  /// The next publish is refused or fails with this.
-  var publishAnswer: SetupPublishState?
-  /// Runs before the setup reaches the store (to cancel while it's on its way).
-  var beforeSetUp: (() -> Void)?
-  var inits: [String] = []
-  var publishes: [(path: String, owner: String, name: String, visibility: String)] = []
-  var setUps: [(budget: Double?, gitignore: Bool, check: String)] = []
-  init(store: CapcomdStore) { self.store = store }
-  func initGit(path: String) async -> String? { inits.append(path); onInit?(); return initFails }
-  func loadPublishOptions(path: String) async { publishState = .ready(options) }
-  func publish(path: String, owner: String, name: String, visibility: String) async {
-    publishes.append((path, owner, name, visibility))
-    if let a = publishAnswer { publishState = a; publishAnswer = nil; return }
-    onPublish?(); publishState = .idle
-  }
-  func setUp(path: String, mode: String, target: String, check: String, agents: [String], budgetUsd: Double?, gitignore: Bool) async {
-    setUps.append((budgetUsd, gitignore, check))
-    beforeSetUp?()
-    await store.setUpProject(path: path, mode: mode, target: target, check: check, agents: agents, budgetUsd: budgetUsd)
-  }
-}
-
 /// The composer's inline project setup (design/setup): which section, rows and buttons each folder gets, what Set Up
 /// and Set Up and Start do, and that Cancel leaves new runs where they were.
 @MainActor
@@ -48,7 +13,7 @@ final class ProjectSetupFlowTests: XCTestCase {
                       ghReady: true, branches: ["develop", "main", "release/2.0"], suggestedCheck: "bun run test", suggestedMode: "pr", agents: [claude, codex])
   }
 
-  struct Rig { let daemon: FakeProjectDaemon; let store: CapcomdStore; let actions: FakeGitActions; let flow: ProjectSetupFlow; let prefs: InMemoryPreferences }
+  struct Rig { let daemon: FakeProjectDaemon; let store: CapcomdStore; let flow: ProjectSetupFlow; let prefs: InMemoryPreferences }
   func rig(_ inspections: [ProjectInspection] = [], previous: String? = "/Users/me/src/old", caps: Set<String>? = nil) async -> Rig {
     let d = FakeProjectDaemon()
     if let caps { d.caps = caps }
@@ -57,8 +22,7 @@ final class ProjectSetupFlowTests: XCTestCase {
     prefs.set(previous, forKey: "startRepo")
     let s = CapcomdStore(daemonInfo: d, prefs: prefs)
     await s.refreshDaemonInfo()
-    let a = FakeGitActions(store: s)
-    return Rig(daemon: d, store: s, actions: a, flow: ProjectSetupFlow(store: s, actions: a), prefs: prefs)
+    return Rig(daemon: d, store: s, flow: ProjectSetupFlow(store: s), prefs: prefs)
   }
 
   // MARK: picking a folder
@@ -140,8 +104,8 @@ final class ProjectSetupFlowTests: XCTestCase {
     XCTAssertEqual(started.first?.goal, "Add a dark mode toggle to Settings")
     XCTAssertEqual(started.first?.repo, "/Users/me/src/my-app")   // set up first: the run goes to the new project
     XCTAssertEqual(started.first?.setUps, 1)
-    XCTAssertEqual(r.daemon.setups.first?.request, ProjectSetupRequest(path: ready.path, mode: "pr", target: "main", check: "bun run test", agents: ["claude"],
-                                                                       expectRepo: "https://github.com/acme/my-app.git"))   // the daemon's suggested check
+    XCTAssertEqual(r.daemon.setups.first?.request, ProjectSetupRequest(path: ready.path, mode: "pr", target: "main", agents: ["claude"],
+                                                                       expectRepo: "https://github.com/acme/my-app.git"))   // no check: the daemon's suggestion
     XCTAssertFalse(r.flow.isOpen)
     XCTAssertEqual(r.store.projectSetup, .idle)
   }
@@ -181,7 +145,8 @@ final class ProjectSetupFlowTests: XCTestCase {
   func testCancelledWhileSettingUpStillGoesBack() async {
     let r = await rig()
     await r.flow.pick(ready.path)
-    r.actions.beforeSetUp = { r.flow.cancel() }
+    // Cancel while the setup is on its way to the daemon.
+    r.store.onChange = { if case .saving = r.store.projectSetup { r.flow.cancel() } }
     var starts = 0
     let outcome = await r.flow.submit(goal: "Ship it") { _ in starts += 1; return true }
     XCTAssertEqual(outcome, .showing)
@@ -304,7 +269,6 @@ final class ProjectSetupFlowTests: XCTestCase {
     // The cap goes with the setup (new runs go to Cloud here); empty is no limit.
     r.flow.setBudget("$ 12.50")
     _ = await r.flow.submit(goal: "") { _ in true }
-    XCTAssertEqual(r.actions.setUps.last?.budget, 12.5)
     XCTAssertEqual(r.daemon.setups.last?.request.budgetUsd, 12.5)
     XCTAssertEqual(SetupAnswers(target: "main", mode: "pr", agents: [], budget: "").budgetValue, .none)
     XCTAssertEqual(SetupAnswers(target: "main", mode: "pr", agents: [], budget: "0").budgetValue, .invalid)
@@ -321,57 +285,78 @@ final class ProjectSetupFlowTests: XCTestCase {
     XCTAssertFalse(s.primary!.enabled)
   }
 
-  func testKeepCapcomdOutOfGitGoesWithTheSetupWhenCapcomdTakesIt() async {
+  func testSetUpSendsNoCheckAndKeepsCapcomdOutOfGitWhenAsked() async {
     let r = await rig()
     XCTAssertFalse(r.store.prefs.gitignoreCapcomd)   // off by default
-    r.store.prefs.gitignoreCapcomd = true
-    XCTAssertEqual(r.prefs.string(forKey: "gitignoreCapcomd"), "1")
     await r.flow.pick(ready.path)
     _ = await r.flow.submit(goal: "") { _ in true }
-    XCTAssertEqual(r.actions.setUps.last?.gitignore, true)
-    XCTAssertEqual(r.actions.setUps.last?.check, "bun run test")
-    let older = await rig()
-    older.actions.gitignoreSupported = false
+    XCTAssertNil(r.daemon.setups.last?.request.check)   // the daemon keeps the project's check or uses its suggestion
+    XCTAssertEqual(r.daemon.setups.last?.request.gitignore, false)
+    let on = await rig()
+    on.store.prefs.gitignoreCapcomd = true
+    XCTAssertEqual(on.prefs.string(forKey: "gitignoreCapcomd"), "1")
+    await on.flow.pick(ready.path)
+    _ = await on.flow.submit(goal: "") { _ in true }
+    XCTAssertEqual(on.daemon.setups.last?.request.gitignore, true)
+    let body = try! JSONSerialization.jsonObject(with: ProjectWire.body(on.daemon.setups.last!.request)) as! [String: Any]
+    XCTAssertEqual(body["gitignore"] as? Bool, true)
+    XCTAssertNil(body["check"])
+    // A capcomd without projects.git: no gitignore, and the check it needs (its suggestion).
+    let older = await rig(caps: [Capability.runsOptions, Capability.runsOptionsRepo, Capability.projectsSetup])
     older.store.prefs.gitignoreCapcomd = true
     await older.flow.pick(ready.path)
     _ = await older.flow.submit(goal: "") { _ in true }
-    XCTAssertEqual(older.actions.setUps.last?.gitignore, false)
+    XCTAssertEqual(older.daemon.setups.last?.request.gitignore, false)
+    XCTAssertEqual(older.daemon.setups.last?.request.check, "bun run test")
   }
 
   // MARK: folders that need something first
 
-  func testNotAGitCheckoutOffersInitializeGitThenPublish() async {
-    let path = "/Users/me/Downloads"
-    let notGit = ProjectInspection(path: path, agents: [claude, codex], problems: [ProjectProblem(code: "not_git", message: "~/Downloads isn't a git checkout. Choose your repository's folder, or clone it first.")])
-    let noOrigin = ProjectInspection(path: path, root: path, name: "Downloads", agents: [claude, codex],
-                                     problems: [ProjectProblem(code: "no_origin", message: "~/Downloads has no origin remote.")])
+  func testNotAGitCheckoutOffersInitializeGitThenThePublishForm() async {
+    let path = "/Users/me/Downloads/my-app"
+    let notGit = ProjectInspection(path: path, agents: [claude, codex], problems: [ProjectProblem(code: "not_git", message: "~/Downloads/my-app isn't a git checkout. Choose your repository's folder, or clone it first.")])
     let r = await rig([notGit])
     await r.flow.pick(path)
     var s = r.flow.screen(goal: "", sandbox: nil)!
     XCTAssertEqual(s.phase, .attention)
-    XCTAssertEqual(s.header, "Downloads isn't a git checkout.")
+    XCTAssertEqual(s.header, "my-app isn't a git checkout.")
     XCTAssertEqual(s.callout, [SetupSpan("Initialize Git to start a repository in this folder, or choose your repository's folder.")])
     XCTAssertTrue(s.chooseAnother); XCTAssertFalse(s.cancel)
     XCTAssertEqual(s.primary, SetupButton("Initialize Git", .initializeGit))
-    r.actions.onInit = { r.daemon.inspections[path] = noOrigin }
+    var during: SetupButton?
+    r.store.onChange = { if r.store.initializingGit { during = r.flow.screen(goal: "", sandbox: nil)?.primary } }
     await r.flow.initializeGit()
-    XCTAssertEqual(r.actions.inits, [path])
+    XCTAssertEqual(during, SetupButton("Initializing…", .initializeGit, enabled: false, busy: true))
+    XCTAssertEqual(r.daemon.gitInits, [path])
     s = r.flow.screen(goal: "", sandbox: nil)!
     XCTAssertEqual(s.phase, .publish)
-    XCTAssertEqual(s.header, "Downloads isn't on GitHub yet.")
-    XCTAssertEqual(s.rows.map(\.row), [.account("marvin", accounts: r.actions.options.accounts), .name("app", valid: true), .visibility("private")])
-    XCTAssertEqual(s.callout?.map(\.text).joined(), "Creates github.com/marvin/app, commits the folder's 24 files as the first commit, and pushes main.")
-    XCTAssertEqual(s.callout?.filter(\.mono).map(\.text), ["github.com/marvin/app", "main"])
+    XCTAssertEqual(s.header, "my-app isn't on GitHub yet.")
+    XCTAssertEqual(s.rows.map(\.row), [.account("marvin", accounts: r.daemon.options.accounts), .name("my-app", valid: true), .visibility("private")])
+    XCTAssertEqual(s.callout?.map(\.text).joined(), "Creates github.com/marvin/my-app, commits the folder's 24 files as the first commit, and pushes main.")
+    XCTAssertEqual(s.callout?.filter(\.mono).map(\.text), ["github.com/marvin/my-app", "main"])
+    XCTAssertNil(s.notice)
     XCTAssertEqual(s.primary, SetupButton("Publish to GitHub", .publish))
     XCTAssertTrue(s.chooseAnother)
+  }
+
+  func testInitializeGitRefusedSaysWhy() async {
+    let path = "/Users/me/Downloads/my-app"
+    let notGit = ProjectInspection(path: path, problems: [ProjectProblem(code: "not_git", message: "not a checkout")])
+    let r = await rig([notGit])
+    r.daemon.initAnswers = [ProjectSetupRefused.invalid("~/Downloads/my-app holds capcomd's settings, so it can't be a project.", field: "path")]
+    await r.flow.pick(path)
+    await r.flow.initializeGit()
+    let s = r.flow.screen(goal: "", sandbox: nil)!
+    XCTAssertEqual(s.phase, .attention)
+    XCTAssertEqual(s.notice, SetupNote("~/Downloads/my-app holds capcomd's settings, so it can't be a project.", warn: true))
+    XCTAssertEqual(s.primary?.title, "Initialize Git")
   }
 
   func testWithoutTheGitRoutesTheDaemonsSentenceAndAnotherFolder() async {
     let path = "/Users/me/Downloads"
     let notGit = ProjectInspection(path: path, problems: [ProjectProblem(code: "not_git", message: "~/Downloads isn't a git checkout. Choose your repository's folder, or clone it first.")])
     let noOrigin = ProjectInspection(path: "/Users/me/src/x", root: "/Users/me/src/x", name: "x", problems: [ProjectProblem(code: "no_origin", message: "~/src/x has no origin remote.")])
-    let r = await rig([notGit, noOrigin])
-    r.actions.gitSupported = false
+    let r = await rig([notGit, noOrigin], caps: [Capability.runsOptions, Capability.runsOptionsRepo, Capability.projectsSetup])
     await r.flow.pick(path)
     var s = r.flow.screen(goal: "", sandbox: nil)!
     XCTAssertEqual(s.callout, [SetupSpan("~/Downloads isn't a git checkout. Choose your repository's folder, or clone it first.")])
@@ -380,6 +365,7 @@ final class ProjectSetupFlowTests: XCTestCase {
     s = r.flow.screen(goal: "", sandbox: nil)!
     XCTAssertEqual(s.phase, .attention)
     XCTAssertEqual(s.header, "x isn't on GitHub yet.")
+    XCTAssertEqual(s.callout, [SetupSpan("~/src/x has no origin remote.")])
     XCTAssertNil(s.primary)
   }
 
@@ -415,57 +401,118 @@ final class ProjectSetupFlowTests: XCTestCase {
 
   // MARK: publishing
 
-  func testPublishLocksTheRowsThenTheUsualSetupWithTheNewRepository() async {
-    let path = "/Users/me/src/my-app"
-    let noOrigin = ProjectInspection(path: path, root: path, name: "my-app", agents: [claude, codex], problems: [ProjectProblem(code: "no_origin", message: "no origin")])
-    var published = ready; published.github = "marvin/my-app"; published.repo = "https://github.com/marvin/my-app.git"
-    let r = await rig()
-    r.daemon.inspections[path] = noOrigin
-    r.actions.options.suggestedName = "my-app"
-    await r.flow.pick(path)
-    r.flow.setOwner("acme"); r.flow.setVisibility("public")
-    XCTAssertEqual(r.flow.screen(goal: "", sandbox: nil)!.callout?.map(\.text).joined(), "Creates github.com/acme/my-app, commits the folder's 24 files as the first commit, and pushes main.")
-    r.flow.setOwner("marvin"); r.flow.setVisibility("private")
-    // Publishing: locked rows, the line says what's happening, one button.
-    r.actions.publishState = .publishing
-    var s = r.flow.screen(goal: "", sandbox: nil)!
-    XCTAssertTrue(s.locked)
-    XCTAssertEqual(s.callout?.map(\.text).joined(), "Pushing main to github.com/marvin/my-app…")
-    XCTAssertEqual(s.primary, SetupButton("Publishing…", .publish, enabled: false, busy: true))
-    XCTAssertFalse(s.chooseAnother)
-    r.actions.publishState = .ready(r.actions.options)
-    r.actions.onPublish = { r.daemon.inspections[path] = published }
-    await r.flow.publish()
-    XCTAssertEqual(r.actions.publishes.first?.owner, "marvin")
-    XCTAssertEqual(r.actions.publishes.first?.visibility, "private")
-    s = r.flow.screen(goal: "", sandbox: nil)!
-    XCTAssertEqual(s.phase, .form)
-    XCTAssertEqual(s.rows.first?.row, .repository("marvin/my-app"))
-    XCTAssertEqual(s.rows.first?.note, SetupNote("Published just now, private."))
-    XCTAssertEqual(s.primary?.title, "Set Up")
+  // MARK: publishing
+
+  let noOriginPath = "/Users/me/src/my-app"
+  var noOrigin: ProjectInspection {
+    ProjectInspection(path: noOriginPath, root: noOriginPath, name: "my-app", agents: [claude, codex], problems: [ProjectProblem(code: "no_origin", message: "no origin")])
   }
 
-  func testPublishNeedsTheGitHubCLIAndSaysWhatItRefused() async {
-    let path = "/Users/me/src/my-app"
-    let noOrigin = ProjectInspection(path: path, root: path, name: "my-app", problems: [ProjectProblem(code: "no_origin", message: "no origin")])
-    let r = await rig()
-    r.daemon.inspections[path] = noOrigin
-    r.actions.options.ghReady = false
-    await r.flow.pick(path)
+  func testPublishLocksTheRowsThenTheUsualSetupWithTheNewRepository() async {
+    let r = await rig([noOrigin])
+    await r.flow.pick(noOriginPath)
+    r.flow.setOwner("acme"); r.flow.setVisibility("public")
+    XCTAssertEqual(r.flow.screen(goal: "", sandbox: nil)!.callout?.map(\.text).joined(), "Creates github.com/acme/my-app, commits the folder's 24 files as the first commit, and pushes main.")
+    // Publishing: locked rows, the line says what's happening, one button.
+    var during: SetupScreen?
+    r.store.onChange = { if case .publishing = r.store.projectPublish { during = r.flow.screen(goal: "", sandbox: nil) } }
+    await r.flow.publish()
+    XCTAssertEqual(during?.locked, true)
+    XCTAssertEqual(during?.callout?.map(\.text).joined(), "Pushing main to github.com/acme/my-app…")
+    XCTAssertEqual(during?.primary, SetupButton("Publishing…", .publish, enabled: false, busy: true))
+    XCTAssertEqual(during?.chooseAnother, false)
+    XCTAssertEqual(r.daemon.publishes, [[noOriginPath, "acme", "my-app", "public"]])
+    // Published: straight into the usual setup, the new repository filled in.
+    let s = r.flow.screen(goal: "", sandbox: nil)!
+    XCTAssertEqual(s.phase, .form)
+    XCTAssertEqual(s.rows.first?.row, .repository("acme/my-app"))
+    XCTAssertEqual(s.rows.first?.note, SetupNote("Published just now, public."))
+    XCTAssertEqual(s.primary?.title, "Set Up")
+    XCTAssertEqual(r.store.prefs.startRepo, "/Users/me/src/old")   // not set up yet
+    _ = await r.flow.submit(goal: "") { _ in true }
+    XCTAssertEqual(r.store.prefs.startRepo, noOriginPath)
+  }
+
+  func testAPrivatePublishSaysSoAndACheckoutWithCommitsPushesItsBranch() async {
+    let r = await rig([noOrigin])
+    r.daemon.options.hasCommits = true; r.daemon.options.branch = "trunk"
+    await r.flow.pick(noOriginPath)
+    XCTAssertEqual(r.flow.screen(goal: "", sandbox: nil)!.callout?.map(\.text).joined(), "Creates github.com/marvin/my-app and pushes trunk.")
+    await r.flow.publish()
+    XCTAssertEqual(r.flow.screen(goal: "", sandbox: nil)!.rows.first?.note, SetupNote("Published just now, private."))
+  }
+
+  func testATakenNameShowsUnderName() async {
+    let r = await rig([noOrigin])
+    r.daemon.publishAnswers = [ProjectSetupRefused.invalid("marvin/my-app already exists on GitHub. Pick another name.", field: "name")]
+    await r.flow.pick(noOriginPath)
+    await r.flow.publish()
+    var s = r.flow.screen(goal: "", sandbox: nil)!
+    XCTAssertEqual(s.phase, .publish)
+    XCTAssertEqual(s.rows.first { $0.id == "name" }?.note, SetupNote("marvin/my-app already exists on GitHub. Pick another name.", warn: true))
+    XCTAssertEqual(s.rows.map(\.row).first, .account("marvin", accounts: r.daemon.options.accounts))   // the values stay
+    XCTAssertNil(s.notice)
+    r.flow.setName("bad name")
+    s = r.flow.screen(goal: "", sandbox: nil)!
+    XCTAssertNil(s.rows.first { $0.id == "name" }?.note)
+    XCTAssertEqual(s.rows.first { $0.id == "name" }?.row, .name("bad name", valid: false))
+    XCTAssertFalse(s.primary!.enabled)
+    r.flow.setName("my-app-2")
+    await r.flow.publish()
+    XCTAssertEqual(r.daemon.publishes.last, [noOriginPath, "marvin", "my-app-2", "private"])
+    XCTAssertEqual(r.flow.screen(goal: "", sandbox: nil)?.phase, .form)
+  }
+
+  func testLikelySecretsAreSaidUnderTheCalloutAndRefusalsWithoutARowToo() async {
+    let r = await rig([noOrigin])
+    r.daemon.options.files = 25
+    r.daemon.options.blocked = [ProjectBlockedFile(path: ".env", reason: "an environment file, which usually holds secrets")]
+    await r.flow.pick(noOriginPath)
+    var s = r.flow.screen(goal: "", sandbox: nil)!
+    XCTAssertEqual(s.callout?.map(\.text).joined(), "Creates github.com/marvin/my-app, commits the folder's 25 files as the first commit, and pushes main.")
+    XCTAssertEqual(s.notice, SetupNote(".env looks like it holds secrets, and the first commit would publish it. Add it to .gitignore, then publish.", warn: true))
+    XCTAssertFalse(s.primary!.enabled)
+    // The daemon's own refusal (files, identity) shows in the same place.
+    r.daemon.options.blocked = []
+    await r.flow.refresh()
+    XCTAssertTrue(r.flow.screen(goal: "", sandbox: nil)!.primary!.enabled)
+    let identity = "git doesn't know who you are, so it can't make the first commit. Set your name and email, then publish again."
+    r.daemon.publishAnswers = [ProjectSetupRefused.invalid(identity, field: "identity")]
+    await r.flow.publish()
+    s = r.flow.screen(goal: "", sandbox: nil)!
+    XCTAssertEqual(s.notice, SetupNote(identity, warn: true))
+    XCTAssertTrue(s.rows.allSatisfy { $0.note == nil })
+  }
+
+  func testPublishNeedsTheGitHubCLI() async {
+    let r = await rig([noOrigin])
+    r.daemon.options = ProjectPublishOptions(ghReady: false, suggestedName: "my-app", files: 24)
+    await r.flow.pick(noOriginPath)
     var s = r.flow.screen(goal: "", sandbox: nil)!
     XCTAssertEqual(s.callout, [SetupSpan("Publishing needs the GitHub CLI logged in on this Mac.")])
     XCTAssertEqual(s.primary, SetupButton("Log In to GitHub…", .logInToGitHub))
     XCTAssertTrue(s.rows.isEmpty); XCTAssertTrue(s.chooseAnother)
-    r.actions.options.ghReady = true
+    // Logged in in Terminal, back in the panel.
+    r.daemon.options = ProjectPublishOptions(ghReady: true, accounts: [ProjectPublishAccount(login: "marvin")], suggestedName: "my-app", files: 24)
     await r.flow.refresh()
     XCTAssertEqual(r.flow.screen(goal: "", sandbox: nil)!.primary?.title, "Publish to GitHub")
-    r.actions.publishAnswer = .refused(message: "acme/app already exists on GitHub. Pick another name.", field: "name")
+    // The daemon finds it logged out after all: log in again.
+    r.daemon.publishAnswers = [ProjectSetupRefused.invalid("Publishing needs the GitHub CLI logged in on this Mac (run `gh auth login` in Terminal), then publish again.", field: "gh")]
     await r.flow.publish()
     s = r.flow.screen(goal: "", sandbox: nil)!
-    XCTAssertEqual(s.rows.first { $0.id == "name" }?.note, SetupNote("acme/app already exists on GitHub. Pick another name.", warn: true))
-    r.flow.setName("bad name")
-    XCTAssertFalse(r.flow.screen(goal: "", sandbox: nil)!.primary!.enabled)
-    XCTAssertNil(r.flow.screen(goal: "", sandbox: nil)!.rows.first { $0.id == "name" }?.note)
+    XCTAssertEqual(s.primary, SetupButton("Log In to GitHub…", .logInToGitHub))
+    await r.flow.refresh()
+    XCTAssertEqual(r.flow.screen(goal: "", sandbox: nil)!.primary?.title, "Publish to GitHub")
+  }
+
+  func testPublishOptionsThatCantBeReadOfferTryAgain() async {
+    let r = await rig([noOrigin])
+    r.daemon.optionsAnswers = [URLError(.timedOut)]
+    await r.flow.pick(noOriginPath)
+    let s = r.flow.screen(goal: "", sandbox: nil)!
+    XCTAssertEqual(s.phase, .publish)
+    XCTAssertEqual(s.notice, SetupNote("Couldn't read this folder's publish options just now. Try again.", warn: true))
+    XCTAssertEqual(s.primary, SetupButton("Try Again", .tryAgain))
   }
 
   func testShortRepository() {

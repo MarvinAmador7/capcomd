@@ -3,7 +3,7 @@
 Status: **approved on the design canvas; built.** The boards are `setup/Inline*.dc.html` (HTML with inline CSS, the panel
 at 380 pt) and they win wherever this text and they differ. The earlier window boards (`SetupWindow`, `SetupComposer`,
 `SetupAttention`) were **not** approved and aren't in the repo: there is no setup window. Swift:
-`app/Sources/MenuBarApp/ProjectSetupInline.swift` (views, the `SetupActions` adapter), `StartProjectField.swift` (where
+`app/Sources/MenuBarApp/ProjectSetupInline.swift` (views), `StartProjectField.swift` (where
 it sits), `Theme.Setup`; the logic and what each state shows: `app/Sources/CapcomdStore/ProjectSetupFlow.swift`
 (`ProjectSetupFlow`, `SetupScreen`), tested in `Tests/CapcomdStoreTests/ProjectSetupFlowTests.swift`.
 
@@ -51,8 +51,16 @@ composer's usual red line.
 
 Not on the boards, so kept minimal: the "can't be set up" and "couldn't be checked" states; "Log in to Claude Code or Codex
 in Settings › Accounts first." (orange, under Agents) when no agent is logged in anywhere; "An amount in USD over 0, or
-empty for no limit." under a spend cap that isn't one; "Initializing…" on the primary while git starts; files the daemon
-won't publish listed at the end of the publish callout ("Leaves out `.env` (reason).").
+empty for no limit." under a spend cap that isn't one; "Initializing…" on the primary while git starts; "Try Again" when
+the publish options can't be read.
+
+Publish refusals (`projectPublish` `.refused(message, field)`): `owner` under Account, `name` under Name (a taken name),
+`visibility` under Visibility; `files` (likely secrets, too many files, none), `identity` (git has no name and email),
+`path` and none in orange under the callout; `gh` turns the card back into Log In to GitHub…. Before trying, a first
+commit the daemon would refuse (`canPublish` false: `blocked` files, more than 2000 files, none) says why in the same
+place, in the daemon's words (".env looks like it holds secrets, and the first commit would publish it. Add it to
+.gitignore, then publish."), and Publish to GitHub is disabled. The options stay through a refusal
+(`projectPublishOptions`), so the values don't move.
 
 ## 3. Rows and copy
 
@@ -89,22 +97,22 @@ spinner 11 pt.
 | Step | Call | Notes |
 |---|---|---|
 | Look at the folder | `store.inspectProject(path:)` → `projectInspect` | `configured` and nothing blocking: becomes `prefs.startRepo` at once. `.failed("Update capcomd…")` (no `projects.setup`): the folder is taken as before |
-| Set Up | `setUpProject(path:mode:target:check: suggestedCheck, agents:budgetUsd:)` → `projectSetup` | `.saving` → "Setting Up…"; `.refused(message, field)` → under the row; `.done` → the store sets `prefs.startRepo` and reads run options; a 409 inspects again |
-| Initialize Git | `store.initGit(path:)` | then inspect again (→ `no_origin`) |
-| Publish options | `store.loadPublishOptions(path:)` → `projectPublish` `.ready(ProjectPublishOptions)` | `ghReady`, `accounts {login, kind}`, `suggestedName`, `hasCommits`, `files`, `blocked {path, reason}` |
-| Publish | `store.publishProject(path:owner:name:visibility:)` → `.publishing`, `.refused(message, field)`, `.failed` | then inspect again: the usual setup with "Published just now, private." |
+| Set Up | `setUpProject(path:mode:target:agents:budgetUsd:gitignore:)` (no check: the daemon keeps the project's or uses its suggestion) → `projectSetup` | `.saving` → "Setting Up…"; `.refused(message, field)` → under the row; `.done` → the store sets `prefs.startRepo` and reads run options; a 409 inspects again |
+| Initialize Git | `store.initGit(path:)` (`initializingGit` → "Initializing…") | the store has the folder as it is now (→ `no_origin`); a refusal is `projectPublish` `.refused` / `.failed`, shown over the buttons |
+| Publish options | `store.loadPublishOptions(path:)` → `projectPublish` `.ready(ProjectPublishOptions)` | `ghReady`, `accounts {login, kind}`, `suggestedName`, `hasCommits`, `branch`, `files`, `blocked {path, reason}`, `canPublish` |
+| Publish | `store.publishProject(path:owner:name:visibility:)` → `.publishing`, `.refused(message, field)`, `.failed` | the store has the checkout on GitHub: the usual setup with "Published just now, private." (or "public.") |
 | Keep `.capcomd/` out of git | `setUpProject(…, gitignore:)` | Settings › General › New projects (`capcomd.gitignoreCapcomd`, off by default) |
 
-Initialize Git, publishing and `gitignore` come with the store's project git routes (`store.projectGitSupported`). Until
-this app has them, `SetupActions` (ProjectSetupInline.swift) says they're unavailable: the not-a-checkout and no-origin
-states show the daemon's sentence with Choose Another Folder… only, and the General switch is disabled ("Update capcomd
-to use this."). The swap is one place: each `SetupActions` member names its store call.
+Initialize Git, publishing and `gitignore` need capability `projects.git` (`store.projectGitSupported`). With an older
+capcomd the not-a-checkout and no-origin states show the daemon's sentence with Choose Another Folder… only, the setup
+sends the suggested check, and the General switch is disabled ("Update capcomd to use this.").
 
 Terminal hand-offs: **Log In…** / **Log In to GitHub…** run `gh auth login`; **Open in Terminal** runs
 `capcomd setup project` in the picked folder. Coming back to the panel looks at the folder again (a project set up in
 Terminal becomes where runs go).
 
-Mock daemon: `PROJECTS=ready|configured|notgit|notgithub|nogh|apikey|refuse|old` (`client/mock/projects.ts`).
+Mock daemon: `PROJECTS=ready|configured|notgit|notgithub|nogh|apikey|refuse|old|noorigin|nogh-publish|secrets|taken`
+(`client/mock/projects.ts`).
 
 ## 6. Settings › General › New projects (`settings/Main.dc.html`, `GeneralLight.dc.html`)
 

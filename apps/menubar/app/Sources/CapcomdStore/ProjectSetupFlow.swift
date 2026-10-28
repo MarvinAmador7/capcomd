@@ -5,61 +5,6 @@ import Foundation
 // (pick → inspect → set up, or Initialize Git → Publish to GitHub → set up) and `SetupScreen` says what the card shows,
 // so the view only draws. Platform-neutral, like the rest of the store.
 
-// MARK: Initialize Git, Publish to GitHub and .gitignore (the app's adapter)
-
-/// What publishing a folder to GitHub would do (`ProjectPublishOptions` in the store once it has the routes).
-public struct SetupPublishOptions: Sendable, Hashable {
-  /// `gh` is logged in on the daemon's machine: it can create repositories.
-  public var ghReady: Bool
-  /// You first, then the organizations you can create repositories in.
-  public var accounts: [SetupPublishAccount]
-  public var suggestedName: String
-  /// The checkout has commits already: publishing pushes them instead of committing the folder.
-  public var hasCommits: Bool
-  /// How many files the first commit holds.
-  public var files: Int
-  /// Files the daemon won't publish, with its reason.
-  public var blocked: [SetupBlockedFile]
-  public init(ghReady: Bool, accounts: [SetupPublishAccount] = [], suggestedName: String = "", hasCommits: Bool = false, files: Int = 0, blocked: [SetupBlockedFile] = []) {
-    self.ghReady = ghReady; self.accounts = accounts; self.suggestedName = suggestedName; self.hasCommits = hasCommits; self.files = files; self.blocked = blocked
-  }
-}
-public struct SetupPublishAccount: Sendable, Hashable, Identifiable {
-  public var login: String
-  /// "user" or "org".
-  public var kind: String
-  public var id: String { login }
-  public var isOrganization: Bool { kind == "org" || kind == "organization" }
-  public init(login: String, kind: String) { self.login = login; self.kind = kind }
-}
-public struct SetupBlockedFile: Sendable, Hashable {
-  public var path: String; public var reason: String
-  public init(path: String, reason: String) { self.path = path; self.reason = reason }
-}
-/// Publishing, as the store will report it (`ProjectPublishState`).
-public enum SetupPublishState: Sendable, Hashable {
-  case idle, loadingOptions, ready(SetupPublishOptions), publishing
-  /// The daemon said no: its sentence and the field it is about (owner, name, visibility).
-  case refused(message: String, field: String?)
-  case failed(String)
-}
-
-/// The calls the inline setup needs beyond inspect and set up. The app implements it (`SetupActions`); until the store
-/// has the routes it says they are unavailable, and the card leaves out Initialize Git and Publish to GitHub as it
-/// does for an older capcomd.
-@MainActor public protocol ProjectGitActions {
-  /// The daemon can initialize git and publish to GitHub.
-  var gitSupported: Bool { get }
-  /// The daemon takes "keep .capcomd/ out of git" with a setup.
-  var gitignoreSupported: Bool { get }
-  var publishState: SetupPublishState { get }
-  /// Starts a repository in the folder; nil when it worked, else the sentence to show.
-  func initGit(path: String) async -> String?
-  func loadPublishOptions(path: String) async
-  func publish(path: String, owner: String, name: String, visibility: String) async
-  func setUp(path: String, mode: String, target: String, check: String, agents: [String], budgetUsd: Double?, gitignore: Bool) async
-}
-
 extension UIPreferences {
   /// Settings › General › New projects: add `.capcomd/` to a project's .gitignore when the app sets it up. Off by
   /// default (commit it, so everyone on the project shares the setup).
@@ -100,7 +45,7 @@ public enum SetupRow: Sendable, Hashable {
   case agents([SetupAgentChip])
   /// The field's text (USD); `valid`: empty or an amount over 0.
   case spendCap(String, valid: Bool)
-  case account(String, accounts: [SetupPublishAccount])
+  case account(String, accounts: [ProjectPublishAccount])
   case name(String, valid: Bool)
   /// "private" or "public".
   case visibility(String)
@@ -191,7 +136,7 @@ public struct PublishAnswers: Sendable, Hashable {
   /// "private" or "public".
   public var visibility: String
   public init(owner: String, name: String, visibility: String = "private") { self.owner = owner; self.name = name; self.visibility = visibility }
-  public init(_ o: SetupPublishOptions) {
+  public init(_ o: ProjectPublishOptions) {
     self.init(owner: (o.accounts.first { !$0.isOrganization } ?? o.accounts.first)?.login ?? "", name: o.suggestedName)
   }
   /// A name GitHub takes: letters, digits, ".", "_" and "-".
@@ -228,19 +173,20 @@ public final class ProjectSetupFlow {
     var refusal: (message: String, field: String?)?
     /// Published from here: "Published just now, private." under Repository.
     var published: String?
-    var initializing = false
     var initFailed: String?
     /// The answers the person changed: a newer inspection keeps those and takes its own suggestions for the rest.
     var touched: Set<String> = []
   }
   let store: CapcomdStore
-  public let actions: ProjectGitActions
   var session: Session?
   var nextId = 0
   /// Something the card shows changed (the store's own changes come through its `onChange`).
   public var onChange: (() -> Void)?
 
-  public init(store: CapcomdStore, actions: ProjectGitActions) { self.store = store; self.actions = actions }
+  public init(store: CapcomdStore) { self.store = store }
+  /// Initialize Git, Publish to GitHub and "Keep .capcomd/ out of git" need `projects.git`; without it the card shows the
+  /// daemon's sentence for those folders, with Choose Another Folder… only.
+  public var gitSupported: Bool { store.projectGitSupported }
 
   /// A folder is being looked at or set up.
   public var isOpen: Bool { session != nil }
@@ -258,7 +204,6 @@ public final class ProjectSetupFlow {
     nextId += 1
     let id = nextId
     session = Session(id: id, path: path, previousRepo: session?.previousRepo ?? store.prefs.startRepo)
-    lastOptions = nil
     store.clearStart()
     changed()
     await store.inspectProject(path: path)
@@ -322,15 +267,16 @@ public final class ProjectSetupFlow {
 
   // MARK: actions
 
-  /// Set Up, or Set Up and Start when a goal is typed: sets the folder up with the answers (and the check the daemon
-  /// suggests), then starts the run on `goal` with `start`. A refusal stays on the card under its row.
+  /// Set Up, or Set Up and Start when a goal is typed: sets the folder up with the answers (no check: the daemon keeps
+  /// the project's or uses its suggestion), then starts the run on `goal` with `start`. A refusal stays on the card under
+  /// its row.
   public func submit(goal: String, start: (String) async -> Bool) async -> SetupOutcome {
     guard let s = session, let i = s.inspection, let a = s.answers, primaryEnabled(i, a, sandbox: nil) else { return .showing }
     let budget: Double?
     if spendCapShown(i, a, sandbox: store.startSandbox?.name), case .amount(let v) = a.budgetValue { budget = v } else { budget = nil }
     changed()
-    await actions.setUp(path: s.path, mode: a.mode, target: a.target, check: i.suggestedCheck, agents: a.agents, budgetUsd: budget,
-                        gitignore: actions.gitignoreSupported && store.prefs.gitignoreCapcomd)
+    await store.setUpProject(path: s.path, mode: a.mode, target: a.target, agents: a.agents, budgetUsd: budget,
+                             gitignore: store.projectGitSupported && store.prefs.gitignoreCapcomd)
     guard session?.id == s.id else {
       // Cancelled while it was on its way: it may have been set up, but new runs go back to the previous project.
       if case .done = store.projectSetup { store.prefs.startRepo = s.previousRepo; store.resetProjectSetup(); await store.refreshRunOptions() }
@@ -354,15 +300,16 @@ public final class ProjectSetupFlow {
 
   /// Initialize Git: then the folder is a checkout with no origin, and publishing comes next.
   public func initializeGit() async {
-    guard let s = session, actions.gitSupported, !s.initializing else { return }
-    session?.initializing = true; session?.initFailed = nil; changed()
-    let failed = await actions.initGit(path: s.path)
+    guard let s = session, gitSupported, !store.initializingGit else { return }
+    session?.initFailed = nil; changed()
+    await store.initGit(path: s.path)
     guard session?.id == s.id else { return }
-    session?.initializing = false
-    session?.initFailed = failed
-    await store.inspectProject(path: s.path)
-    guard session?.id == s.id else { return }
-    if case .loaded(let i) = store.projectInspect { await take(i) }
+    switch store.projectPublish {
+    case .refused(let m, _), .failed(let m): session?.initFailed = m
+    default: break
+    }
+    // The store has the folder as it is now (a checkout without origin), or looked again after a 409.
+    if case .loaded(let i) = store.projectInspect, i.path == s.path { await take(i) }
     changed()
   }
 
@@ -370,24 +317,27 @@ public final class ProjectSetupFlow {
   public func publish() async {
     guard let s = session, let p = s.publish, p.nameValid, !p.owner.isEmpty, !isPublishing else { return }
     session?.refusal = nil; changed()
-    await actions.publish(path: s.path, owner: p.owner, name: p.name, visibility: p.visibility)
+    await store.publishProject(path: s.path, owner: p.owner, name: p.name, visibility: p.visibility)
     guard session?.id == s.id else { return }
-    switch actions.publishState {
-    case .refused(let m, let f): session?.refusal = (m, f); changed(); return
+    switch store.projectPublish {
+    case .refused(let m, let f):
+      session?.refusal = (m, f)
+      // A 409 about the folder (it has an origin now): the store looked again; show it as it is.
+      if f == "path", case .loaded(let i) = store.projectInspect, i.path == s.path, i.github != nil { await take(i) }
+      changed(); return
     case .failed(let m): session?.refusal = (m, nil); changed(); return
     default: break
     }
+    // Published: the store has the checkout as it is now (on GitHub), ready for the usual setup.
     session?.published = p.visibility
-    await store.inspectProject(path: s.path)
-    guard session?.id == s.id else { return }
-    if case .loaded(let i) = store.projectInspect { await take(i) }
+    if case .loaded(let i) = store.projectInspect, i.path == s.path { await take(i) }
     changed()
   }
 
   // MARK: helpers
 
   var isSaving: Bool { if case .saving = store.projectSetup { return true }; return false }
-  var isPublishing: Bool { if case .publishing = actions.publishState { return true }; return false }
+  var isPublishing: Bool { if case .publishing = store.projectPublish { return true }; return false }
 
   /// Takes a newer inspection of the folder: answers that still apply stay.
   private func sync(_ i: ProjectInspection) {
@@ -408,14 +358,16 @@ public final class ProjectSetupFlow {
   /// Takes the inspection, then reads what publishing would do when the folder has no origin yet.
   private func take(_ i: ProjectInspection) async {
     sync(i)
-    if Self.problem(i) == ProjectProblem.noOrigin, actions.gitSupported { await loadPublish(i.path) }
+    if Self.problem(i) == ProjectProblem.noOrigin, gitSupported { await loadPublish(i.path) }
   }
   private func loadPublish(_ path: String) async {
     guard session?.path == path else { return }
-    await actions.loadPublishOptions(path: path)
+    await store.loadPublishOptions(path: path)
     guard session?.path == path else { return }
-    if case .ready(let o) = actions.publishState, session?.publish == nil || !(o.accounts.contains { $0.login == session?.publish?.owner }) {
-      session?.publish = PublishAnswers(o)
+    if case .ready(let o) = store.projectPublish {
+      if session?.publish == nil || !(o.accounts.contains { $0.login == session?.publish?.owner }) { session?.publish = PublishAnswers(o) }
+      // Read again (back from Terminal): what the last publish said no to may be fixed now.
+      if let f = session?.refusal?.field, ["gh", "files", "identity", "owner"].contains(f) { session?.refusal = nil }
     }
     changed()
   }
@@ -474,11 +426,12 @@ public final class ProjectSetupFlow {
     switch Self.problem(i) {
     case nil: return form(i, s, name: name, goal: goal, sandbox: sandbox)
     case ProjectProblem.notGit:
-      if actions.gitSupported {
+      if gitSupported {
+        let busy = store.initializingGit
         return SetupScreen(phase: .attention, name: name, header: "\(name) isn't a git checkout.",
                            callout: [SetupSpan("Initialize Git to start a repository in this folder, or choose your repository's folder.")],
                            notice: s.initFailed.map { SetupNote($0, warn: true) }, chooseAnother: true,
-                           primary: SetupButton(s.initializing ? "Initializing…" : "Initialize Git", .initializeGit, enabled: !s.initializing, busy: s.initializing))
+                           primary: SetupButton(busy ? "Initializing…" : "Initialize Git", .initializeGit, enabled: !busy, busy: busy))
       }
       return SetupScreen(phase: .attention, name: name, header: "\(name) isn't a git checkout.", callout: [SetupSpan(i.problems[0].message)], chooseAnother: true)
     case ProjectProblem.notGitHub:
@@ -490,7 +443,7 @@ public final class ProjectSetupFlow {
       return SetupScreen(phase: .attention, name: name, header: "\(name) isn't on GitHub.", callout: callout, chooseAnother: true,
                          primary: SetupButton("Open in Terminal", .openInTerminal))
     case ProjectProblem.noOrigin:
-      if actions.gitSupported { return publishScreen(i, s, name: name) }
+      if gitSupported { return publishScreen(i, s, name: name) }
       return SetupScreen(phase: .attention, name: name, header: "\(name) isn't on GitHub yet.", callout: [SetupSpan(i.problems[0].message)], chooseAnother: true)
     default:
       return SetupScreen(phase: .attention, name: name, header: "\(name) can't be set up.", callout: [SetupSpan(i.problems[0].message)], chooseAnother: true)
@@ -529,51 +482,65 @@ public final class ProjectSetupFlow {
 
   private func publishScreen(_ i: ProjectInspection, _ s: Session, name: String) -> SetupScreen {
     let header = "\(name) isn't on GitHub yet."
-    switch actions.publishState {
-    case .idle, .loadingOptions:
-      return SetupScreen(phase: .publish, name: name, header: header, chooseAnother: true,
-                         primary: SetupButton("Publish to GitHub", .publish, enabled: false, busy: true))
-    case .ready(let o) where !o.ghReady:
+    let refusal = s.refusal
+    // The options last read: the store keeps them through a refusal and while publishing, so the rows stay put.
+    guard let o = store.projectPublishOptions, o.root == nil || o.root == i.root || o.root == i.path else {
+      switch store.projectPublish {
+      case .refused(let m, _), .failed(let m):
+        return SetupScreen(phase: .publish, name: name, header: header, notice: SetupNote(m, warn: true), chooseAnother: true,
+                           primary: SetupButton("Try Again", .tryAgain))
+      default:
+        return SetupScreen(phase: .publish, name: name, header: header, chooseAnother: true,
+                           primary: SetupButton("Publish to GitHub", .publish, enabled: false, busy: true))
+      }
+    }
+    // The GitHub CLI is logged out (or the daemon just said so): log in first, then publish.
+    if !o.ghReady || refusal?.field == "gh" {
       return SetupScreen(phase: .publish, name: name, header: header, callout: [SetupSpan("Publishing needs the GitHub CLI logged in on this Mac.")],
                          chooseAnother: true, primary: SetupButton("Log In to GitHub…", .logInToGitHub))
-    default: break
     }
-    let options: SetupPublishOptions? = { if case .ready(let o) = actions.publishState { return o }; return nil }() ?? lastOptions
-    if let options { lastOptions = options }
-    let p = s.publish ?? options.map(PublishAnswers.init) ?? PublishAnswers(owner: "", name: name)
-    let note: (String) -> SetupNote? = { f in s.refusal.flatMap { $0.field == f ? SetupNote($0.message, warn: true) : nil } }
+    let p = s.publish ?? PublishAnswers(o)
+    let note: (String) -> SetupNote? = { f in refusal.flatMap { $0.field == f ? SetupNote($0.message, warn: true) : nil } }
     let rows = [
-      SetupRowItem(row: .account(p.owner, accounts: options?.accounts ?? []), note: note("owner")),
+      SetupRowItem(row: .account(p.owner, accounts: o.accounts), note: note("owner")),
       SetupRowItem(row: .name(p.name, valid: p.nameValid), note: note("name")),
       SetupRowItem(row: .visibility(p.visibility), note: note("visibility")),
     ]
-    let repo = "github.com/\(p.owner)/\(p.name)", branch = i.defaultBranch
+    let repo = "github.com/\(p.owner)/\(p.name)", branch = o.branch
     let publishing = isPublishing
-    var callout: [SetupSpan]
+    let callout: [SetupSpan]
     if publishing {
       callout = [SetupSpan("Pushing "), SetupSpan(branch, mono: true), SetupSpan(" to "), SetupSpan(repo, mono: true), SetupSpan("…")]
-    } else if options?.hasCommits == true {
+    } else if o.hasCommits {
       callout = [SetupSpan("Creates "), SetupSpan(repo, mono: true), SetupSpan(" and pushes "), SetupSpan(branch, mono: true), SetupSpan(".")]
     } else {
-      let n = options?.files ?? 0
-      callout = [SetupSpan("Creates "), SetupSpan(repo, mono: true), SetupSpan(", commits the folder's \(n) \(n == 1 ? "file" : "files") as the first commit, and pushes "),
+      callout = [SetupSpan("Creates "), SetupSpan(repo, mono: true), SetupSpan(", commits the folder's \(o.files) \(o.files == 1 ? "file" : "files") as the first commit, and pushes "),
                  SetupSpan(branch, mono: true), SetupSpan(".")]
     }
-    let blocked = options?.blocked ?? []
-    if !publishing, !blocked.isEmpty {
-      callout.append(SetupSpan(" Leaves out "))
-      for (n, b) in blocked.prefix(3).enumerated() { callout.append(SetupSpan(b.path, mono: true)); callout.append(SetupSpan(" (\(b.reason))" + (n < min(blocked.count, 3) - 1 ? ", " : ""))) }
-      callout.append(SetupSpan(blocked.count > 3 ? " and \(blocked.count - 3) more." : "."))
-    }
-    let shown: Set<String> = ["owner", "name", "visibility"]
-    let general = s.refusal.flatMap { r in r.field.map { shown.contains($0) ? nil : SetupNote(r.message, warn: true) } ?? SetupNote(r.message, warn: true) }
+    // What the daemon said no to that has no row (files, identity, the folder), else what it would refuse before trying.
+    let rowFields: Set<String> = ["owner", "name", "visibility"]
+    let general = refusal.flatMap { r in r.field.map { rowFields.contains($0) ? nil : SetupNote(r.message, warn: true) } ?? SetupNote(r.message, warn: true) }
+      ?? Self.firstCommitProblem(o, name: name).map { SetupNote($0, warn: true) }
     let primary = publishing ? SetupButton("Publishing…", .publish, enabled: false, busy: true)
-      : SetupButton("Publish to GitHub", .publish, enabled: p.nameValid && !p.owner.isEmpty)
+      : SetupButton("Publish to GitHub", .publish, enabled: o.canPublish && p.nameValid && !p.owner.isEmpty)
     return SetupScreen(phase: .publish, name: name, header: header, callout: callout, rows: rows, locked: publishing, notice: general,
                        chooseAnother: !publishing, primary: primary)
   }
-  /// The options last read, so the rows stay put while publishing.
-  var lastOptions: SetupPublishOptions?
+
+  /// Why the daemon would refuse the first commit (`canPublish` false), in its words: likely secrets, too many files, none.
+  static func firstCommitProblem(_ o: ProjectPublishOptions, name: String) -> String? {
+    guard !o.hasCommits else { return nil }
+    if !o.blocked.isEmpty {
+      let one = o.blocked.count == 1
+      let names = o.blocked.prefix(5).map(\.path).joined(separator: ", ") + (o.blocked.count > 5 ? " and \(o.blocked.count - 5) more" : "")
+      return "\(names) \(one ? "looks like it holds" : "look like they hold") secrets, and the first commit would publish \(one ? "it" : "them"). Add \(one ? "it" : "them") to .gitignore, then publish."
+    }
+    if o.files > ProjectPublishOptions.maxFirstCommitFiles {
+      return "The first commit would hold \(o.files) files (more than \(ProjectPublishOptions.maxFirstCommitFiles)), which usually means dependencies or build output are in it. Add a .gitignore for them, then publish."
+    }
+    if o.files == 0 { return "\(name) has no files to commit yet. Add your project's files, then publish." }
+    return nil
+  }
 
   /// "https://gitlab.com/acme/docs-site.git" → "gitlab.com/acme/docs-site".
   public static func shortRepo(_ url: String?) -> String? {

@@ -37,13 +37,13 @@ final class AppModel {
 
   init(_ pair: (CapcomdStore, UnixSocketTransport), tokenMissing: Bool = false) {
     self.store = pair.0; self.transport = pair.1; self.tokenMissing = tokenMissing
-    self.setup = ProjectSetupFlow(store: pair.0, actions: SetupActions(store: pair.0))
+    self.setup = ProjectSetupFlow(store: pair.0)
     attach(store)
   }
 
   private func attach(_ s: CapcomdStore) {
     s.onChange = { [weak self] in self?.revision &+= 1 }
-    setup = ProjectSetupFlow(store: s, actions: SetupActions(store: s))
+    setup = ProjectSetupFlow(store: s)
     setup.onChange = { [weak self] in self?.revision &+= 1 }
     s.onNotify = { [weak self] n in
       guard let self else { return }

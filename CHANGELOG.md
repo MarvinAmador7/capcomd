@@ -10,11 +10,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   it needs next. A GitHub checkout shows its repository, the target branch, how changes land (pull requests, or pushes
   when the GitHub CLI isn't logged in, with **Log In…**), the agents that can work on it, and a spend cap when one of
   them would bill an API key where your runs go; edit any of them in place and press **Set Up**, or **Set Up and Start**
-  when you've already typed a goal. A folder that isn't a git checkout, or isn't on GitHub, says so with **Choose
-  Another Folder…** (and **Open in Terminal** for `capcomd setup project` on other hosts). **Cancel**, the chip's × or
-  Esc go back to the project you had; new runs never move until the folder is set up. Needs a capcomd with
-  `projects.setup`; with an older one, a picked folder is used as before. Settings › General has a new **Keep .capcomd/
-  out of git** switch (off by default) for projects you set up from now on; it turns on once capcomd can apply it.
+  when you've already typed a goal. A folder that isn't a git checkout offers **Initialize Git**; a checkout with no
+  remote offers **Publish to GitHub** (pick the account or organization, the name and Private / Public; it says first if
+  the first commit would include files that look like secrets), then goes straight into the setup. A checkout on
+  another host offers **Open in Terminal** for `capcomd setup project`, and any folder **Choose Another Folder…**.
+  **Cancel**, the chip's × or Esc go back to the project you had; new runs never move until the folder is set up.
+  Needs a capcomd with `projects.setup` (and `projects.git` for Initialize Git and publishing); with an older one, a
+  picked folder is used as before. Settings › General has a new **Keep .capcomd/ out of git** switch (off by default):
+  projects you set up from the app from then on get `.capcomd/` added to their .gitignore.
 - Harness API: take a plain folder all the way to a GitHub project from the menu bar app (capability `projects.git`).
   `POST /v1/projects/git-init` starts a git repository (`git init -b main`, no commit) in a folder that isn't in one
   (never your home folder, a folder that holds it, or capcomd's own settings). `GET /v1/projects/publish-options`
