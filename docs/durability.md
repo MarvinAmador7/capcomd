@@ -41,9 +41,35 @@ Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.t
   - *Event log gap-free:* `seq` is contiguous from 1 per RunActor, and every lifecycle row's `seq` equals its last event.
 - **CI:** the deterministic kill points run on every PR; randomised runs are nightly.
 
-## Local-mode backup plan (inference; the local engine's backend is unverified, assumed file-based RocksDB/fs)
-1. Find the engine data dir (spike: inspect the `@rivetkit/engine-cli` config) and pin it with config, e.g. `~/.relay/engine`.
-2. **Consistent snapshot:** stop capcomd (or run `relay pause`, which drains actors) → `tar --zstd` the dir → restart. Do this nightly and before upgrades. If the engine supports online checkpoints, switch to those.
-3. **Logical export (backend-agnostic):** `relay export <runId>` calls a read-only action on each actor that dumps `lifecycle`, `lifecycle_events` and `outbox` as NDJSON. This is also the migration path to or from Rivet Cloud (ADR-009).
-4. Ship backups off the host (e.g. S3/R2 with rclone); keep 7 daily + 4 weekly.
-5. **Restore drill** (monthly, and in CI weekly on a sample): restore into a fresh dir, run the reconciler, then `checkInvariants()`.
+## Engine data, version guard and backups (implemented, `src/engine/data.ts`)
+- **Where:** every engine capcomd starts keeps its data under the capcomd home, one dir per port:
+  `<home>/engine/<port>/db` (`<home>` = `~/.capcomd` or `$CAPCOMD_HOME`; `CAPCOMD_ENGINE_DATA` overrides the dir).
+  `RIVETKIT_STORAGE_PATH=<home>/engine/<port>` sends rivetkit's own engine logs and runtime stamp to `.rivetkit/` there,
+  and `src/engine/engine-wrapper.sh` points the engine's `RIVET__FILE_SYSTEM__PATH` at `db/`. Nothing uses rivetkit's
+  shared `~/.rivetkit`, so another rivetkit project on the machine can't stamp capcomd's db (or the reverse).
+- **One-time copy (6420, default dir only):** when `<home>/engine/6420/db` is empty and `~/.rivetkit/var/engine/db`
+  exists, `capcomd serve` copies it into a temporary dir, checks file count and bytes against the source (before and
+  after), renames it into place and writes `migrated-from-rivetkit.json` (source, time, versions). The source is never
+  moved or changed: it is the backup of the pre-upgrade data. If any process has the source open (an engine still
+  running on it) serve refuses with a sentence and copies nothing. With the marker present it never copies again.
+- **Version guard:** Rivet's engine stamps its version into the db and refuses to open a db stamped by a newer engine
+  (`engine/packages/version-management`, "rolled back to a previous version"). capcomd records the version that last
+  opened each dir in `engine-version.json`. Before an engine of a different (or unrecorded) version opens it, serve
+  copies `db/` to `backups/<old version>-<UTC time>/` (newest 3 kept); if the recorded version is newer than the
+  engine it's about to start, serve refuses, naming both versions and the newest backup. A db that was just copied
+  from `~/.rivetkit` skips that backup: the untouched source is it.
+- **Restore:** stop capcomd, replace `db/` with a backup's contents, delete `engine-version.json` (the next start then
+  backs up what it finds and records its own version), start capcomd. `RIVET__RUNTIME__ALLOW_VERSION_ROLLBACK` is not
+  used: Rivet treats a downgrade as a restore from backup.
+- **Verified (2026-10-27):** a db written by capcomd on rivetkit 2.3.27 and copied this way opens on 2.3.31 with its
+  runs and agents intact. After any engine restart (2.3.27 → 2.3.27 too) the first actor call can take ~20 s and
+  fail with `internal_error`; the next one works (docs/upstream/rivetkit-cold-restart.md).
+
+## Off-host backup plan (not implemented)
+1. **Consistent snapshot:** stop capcomd → `tar --zstd` `<home>/engine/<port>/db` → restart. Do this nightly. If the
+   engine supports online checkpoints, switch to those.
+2. **Logical export (backend-agnostic):** `capcomd export <runId>` calls a read-only action on each actor that dumps
+   `lifecycle` and `lifecycle_events` as NDJSON. This is also the migration path to or from Rivet Cloud (ADR-009).
+3. Ship backups off the host (e.g. S3/R2 with rclone); keep 7 daily + 4 weekly.
+4. **Restore drill** (monthly, and in CI weekly on a sample): restore into a fresh dir, run the reconciler, then
+   `checkInvariants()`.

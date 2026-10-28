@@ -21,7 +21,8 @@ export async function releasePort(port = 6420): Promise<void> {
 export async function wipeEngineData(opts: EngineOpts = {}): Promise<void> {
   await releasePort(opts.port ?? 6420);
   const { rm } = await import("fs/promises");
-  const dir = opts.dataDir ?? `${(await import("os")).homedir()}/.rivetkit/var/engine`;
+  // `capcomd serve`'s own default (src/engine/data.ts): capcomd's home, never rivetkit's ~/.rivetkit.
+  const dir = opts.dataDir ?? (await import("../../src/engine/data")).engineDataDir(opts.port ?? 6420);
   await rm(dir, { recursive: true, force: true });
 }
 

@@ -26,6 +26,14 @@ logs, driver pids), `.traces/` (spans) and `.capcomd/agents.json`. An installed 
 per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_QUOTA_LEDGER`, `CAPCOMD_TRACE_DIR`,
 `CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`, `CAPCOMD_MACHINES_LEDGER`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
 
+The Rivet engine's data is always under the capcomd home (`~/.capcomd`, or `$CAPCOMD_HOME`), checkout or not, one
+directory per port (`src/engine/data.ts`; `CAPCOMD_ENGINE_DATA` names another): `engine/<port>/db` (RocksDB),
+`engine.pid`, `engine-version.json` (the engine version that last opened it), `backups/<version>-<UTC>/` (taken
+before a different engine version opens it; newest 3), `.rivetkit/` (rivetkit's engine logs and runtime stamp,
+via `RIVETKIT_STORAGE_PATH`) and, on 6420, `migrated-from-rivetkit.json` (the one-time copy from `~/.rivetkit`).
+Nothing reads or writes `~/.rivetkit`. When you run a daemon by hand, give it `CAPCOMD_ENGINE_DATA` and its own
+`--port`/`CAPCOMD_ENDPOINT`; `capcomd serve` on 6420 with no override is the user's real data.
+
 Persisted settings (`capcomd setup` writes them): `~/.capcomd/config.json` and the nearest `.capcomd/config.json` from
 the current directory are environment defaults, applied by `src/cli/apply-config.ts` before anything else loads
 (a real env var wins; the boxd key comes from the OS keychain). `bun test` preloads `tests/helpers/isolate-config.ts`
