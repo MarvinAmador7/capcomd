@@ -1,8 +1,9 @@
 "use client";
 
 // The bot playground: everything the avatar engine can draw, as a game. Pull a bot from an id and a role, change any
-// of its 14 parts, keep a crew (localStorage, optional), download SVG or PNG, share a link that redraws it exactly.
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+// of its 14 parts (one part at a time), keep a crew (localStorage, optional), download SVG or PNG, share a link that
+// redraws it exactly.
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CATALOG, MOODS, botGrid, botTraits, gridSvg, rng, withOverrides, type Mood } from "@/lib/vendor/bot-avatar.js";
 import { SITE } from "@/lib/site";
 import {
@@ -11,16 +12,27 @@ import {
 } from "@/lib/playground";
 
 const STORE = "capcomd.bots.crew.v1";
+const KEYS = "capcomd.bots.keys.v1";
 const CREW_MAX = 12;
-const SIZES: Array<[Size, string]> = [["full", "Full body"], ["small", "Head and shoulders"], ["xs", "Head"]];
+const SIZES: Array<[Size, string]> = [["full", "Body"], ["small", "Bust"], ["xs", "Head"]];
+const SIZE_NAME: Record<Size, string> = { full: "full body", small: "head and shoulders", xs: "head" };
 const MOOD_LABEL: Record<Mood, string> = { happy: "Happy", sleepy: "Sleepy", oops: "Oops", love: "Love" };
+/** The 14 parts, grouped as you'd look at a bot. Order of the engine's slots is kept within each group. */
+const GROUPS: Array<[string, PartSlot[]]> = [
+  ["Head", ["head", "antenna", "accessory", "ears"]],
+  ["Face", ["screen", "eyes", "mouth", "blush"]],
+  ["Body", ["torso", "plate", "pose", "legs"]],
+  ["Style", ["palette", "dither"]],
+];
+const ORDER: PartSlot[] = GROUPS.flatMap(([, s]) => s);
+/** Body parts are previewed on the whole bot, head and face parts on head and shoulders, where they're bigger. */
+const PREVIEW: Record<PartSlot, Size> = Object.fromEntries(PART_SLOTS.map((s) => [s, ["torso", "plate", "pose", "legs", "dither"].includes(s) ? "full" : "small"])) as Record<PartSlot, Size>;
 // The app's run-finished confetti (Theme.Moments in apps/menubar): 26 squares of 2 or 3 points in these colours.
 const CONFETTI = ["#FF7A10", "#9457DC", "#5EE6FF", "#F7A3DA"];
-const KEYS = "capcomd.bots.keys.v1";
 
-const svgOf = (t: BotTraits, size: Size, label?: string) =>
-  gridSvg(botGrid(t, size), label ? { label } : { label: "", decorative: true }).replace(/ width="\d+" height="\d+"/, "");
+const svgOf = (t: BotTraits, size: Size) => gridSvg(botGrid(t, size), { label: "", decorative: true }).replace(/ width="\d+" height="\d+"/, "");
 const fmt = (n: number) => n.toLocaleString("en-US");
+const reduced = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function readCrew(): string[] {
   try {
@@ -35,6 +47,7 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
   const [t, setT] = useState<BotTraits>(() => botTraits(initialSeed, "worker"));
   const [size, setSize] = useState<Size>("full");
   const [seedText, setSeedText] = useState(initialSeed);
+  const [slot, setSlot] = useState<PartSlot>("head");
   const [pulls, setPulls] = useState(0);
   const [cheer, setCheer] = useState(false);
   const [crew, setCrew] = useState<string[]>([]);
@@ -44,6 +57,7 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
   const [canShare, setCanShare] = useState(false);
   const [origin, setOrigin] = useState("");
   const [keys, setKeys] = useState(true);
+  const [pop, setPop] = useState<string | null>(null);
   const loaded = useRef(false);
   const flashTimer = useRef<number | undefined>(undefined);
   const cheerTimer = useRef<number | undefined>(undefined);
@@ -57,7 +71,10 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
     setOrigin(`${location.origin}${location.pathname}`);
     try { setKeys(localStorage.getItem(KEYS) !== "off"); } catch { /* default on */ }
     loaded.current = true;
-    return () => { window.clearTimeout(flashTimer.current); window.clearTimeout(cheerTimer.current); };
+    // A link pasted into this tab's address bar (only the hash changes) redraws too.
+    const onHash = () => { const sh = decode(location.hash); if (sh) { setT(sh.traits); setSize(sh.size); setSeedText(sh.traits.seed); setCheer(false); } };
+    window.addEventListener("hashchange", onHash);
+    return () => { window.removeEventListener("hashchange", onHash); window.clearTimeout(flashTimer.current); window.clearTimeout(cheerTimer.current); };
   }, []);
   const code = useMemo(() => encode(t, size), [t, size]);
   useEffect(() => { if (loaded.current) history.replaceState(null, "", `#${code}`); }, [code]);
@@ -71,22 +88,20 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
   }, []);
   const save = useCallback(() => {
     const c = encode(t, size);
-    setCrew((cur) => {
-      if (cur.includes(c)) { flash(`${t.name} is already in your crew.`); return cur; }
-      if (cur.length >= CREW_MAX) { flash(`Your crew is full (${CREW_MAX}). Remove one first.`); return cur; }
-      const next = [...cur, c]; writeCrew(next); flash(`${t.name} joined your crew.`); return next;
-    });
-  }, [t, size]);
+    if (crew.includes(c)) { flash(`${t.name} is already in your crew.`); return; }
+    if (crew.length >= CREW_MAX) { flash(`Your crew is full (${CREW_MAX}). Remove one first.`); return; }
+    const next = [...crew, c]; setCrew(next); writeCrew(next); flash(`${t.name} joined your crew.`);
+  }, [t, size, crew]);
   const copy = useCallback(async () => {
-    try { await navigator.clipboard.writeText(link); flash("Link copied."); } catch { flash("Select the link and copy it."); }
+    try { await navigator.clipboard.writeText(link); flash("Link copied."); } catch { flash("Open Share and copy the link from there."); }
   }, [link]);
   const savePng = useCallback(async () => {
-    download(await botPng(t, size, scale, bg), `${fileName(t)}-${size}@${scale}x.png`);
-    flash(`Saved ${fileName(t)}-${size}@${scale}x.png`);
+    const name = `${fileName(t)}-${size}@${scale}x.png`;
+    download(await botPng(t, size, scale, bg), name); flash(`Saved ${name}`);
   }, [t, size, scale, bg]);
   const saveSvg = () => {
-    download(new Blob([gridSvg(botGrid(t, size), { scale, label: describe(t) })], { type: "image/svg+xml" }), `${fileName(t)}-${size}.svg`);
-    flash(`Saved ${fileName(t)}-${size}.svg`);
+    const name = `${fileName(t)}-${size}.svg`;
+    download(new Blob([gridSvg(botGrid(t, size), { scale, label: describe(t) })], { type: "image/svg+xml" }), name); flash(`Saved ${name}`);
   };
   // The app's run-finished moment, as the app plays it: for about 2 s the bot cheers with a happy face, anyone
   // without a crown or flag in a party hat, over static confetti. It's a moment, not a trait: nothing is changed.
@@ -95,22 +110,40 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
     window.clearTimeout(cheerTimer.current);
     cheerTimer.current = window.setTimeout(() => setCheer(false), 2200);
   };
+  const viaKey = useRef(false);
+  const stepPart = useCallback((d: number) => { viaKey.current = !!document.activeElement?.closest(".pg__panel"); setSlot((s) => ORDER[(ORDER.indexOf(s) + d + ORDER.length) % ORDER.length]!); }, []);
+  // After [ or ], focus the newly selected part tab (if focus was in the editor), so arrows keep working and
+  // screen readers announce the part.
+  useEffect(() => {
+    if (!viaKey.current) return;
+    viaKey.current = false;
+    document.querySelector<HTMLInputElement>(`input[name="part"][value="${slot}"]`)?.focus();
+  }, [slot]);
 
-  // Single-key shortcuts (R pull, S save, C copy link, D download PNG), outside text fields only, and off with the
-  // switch below (WCAG 2.1.4).
+  // Single-key shortcuts (R pull, S save, C copy link, D download PNG, [ and ] previous / next part), outside text
+  // fields only, and off with the switch at the bottom (WCAG 2.1.4).
   useEffect(() => {
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement;
-      if (el.closest("input, textarea, select, [contenteditable]")) return;
+      if (el.closest("input[type=text], input:not([type]), textarea, select, [contenteditable]")) return;
       const k = e.key.toLowerCase();
-      if (k === "r") { e.preventDefault(); pull(); } else if (k === "s") { e.preventDefault(); save(); }
-      else if (k === "c") { e.preventDefault(); void copy(); } else if (k === "d") { e.preventDefault(); void savePng(); }
+      const act: Record<string, () => void> = { r: pull, s: save, c: () => void copy(), d: () => void savePng(), "[": () => stepPart(-1), "]": () => stepPart(1), ",": () => stepPart(-1), ".": () => stepPart(1) };
+      if (act[k] && !e.shiftKey) { e.preventDefault(); act[k](); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [keys, pull, save, copy, savePng]);
+  }, [keys, pull, save, copy, savePng, stepPart]);
+  // One popover at a time; Escape or a click elsewhere closes it, and focus goes back to its button.
+  useEffect(() => {
+    if (!pop) return;
+    const onDown = (e: PointerEvent) => { if (!(e.target as Element).closest(".pg__popwrap")) setPop(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { document.getElementById(`btn-${pop}`)?.focus(); setPop(null); } };
+    document.addEventListener("pointerdown", onDown); document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [pop]);
+  const toggle = (name: string) => setPop((cur) => (cur === name ? null : name));
   const setShortcuts = (on: boolean) => { setKeys(on); try { localStorage.setItem(KEYS, on ? "on" : "off"); } catch { /* this visit only */ } };
 
   const p = odds(t);
@@ -126,15 +159,15 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
     const r = rng(t.seed, "confetti");
     return Array.from({ length: 26 }, () => ({ x: (r() % 10000) / 100, y: (r() % 10000) / 143, s: r() % 2 === 0 ? 0.7 : 1, c: CONFETTI[r() % CONFETTI.length]! }));
   }, [cheer, t.seed]);
-  const crewTraits = useMemo(() => crew.map((code) => ({ code, bot: decode(code)! })), [crew]);
-  const deferred = useDeferredValue(t);
+  const crewBots = useMemo(() => crew.map((c) => ({ code: c, bot: decode(c)! })), [crew]);
+  const mood = (Object.keys(MOODS) as Mood[]).find((m) => t.eyes === MOODS[m].eyes && t.mouth === MOODS[m].mouth);
+  const sizePx = CATALOG.frames[size].w;
 
   return (
     <>
-      <section className="pg" aria-labelledby="pg-stage-title">
-        <h2 className="sr" id="pg-stage-title">Your bot</h2>
+      <section className="pg" aria-label="Bot playground">
         <div className="pg__stage">
-          <div className="pg__slot">
+          <div className="pg__slot" data-load style={{ ["--d" as string]: "120ms" }}>
             <span className="floor" aria-hidden="true" />
             {confetti.length > 0 && (
               <svg className="pg__confetti" viewBox="0 0 100 70" preserveAspectRatio="none" aria-hidden="true" shapeRendering="crispEdges">
@@ -142,132 +175,175 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
               </svg>
             )}
             <div key={pulls} className={`pg__bot pg__bot--${size}`} role="img" aria-label={`${t.name}, ${t.role}${cheer ? ", cheering" : ""}`} aria-describedby="pg-desc" dangerouslySetInnerHTML={{ __html: big }} />
+            <p className="pg__tag" aria-hidden="true"><b>{t.name}</b> <span>{t.role}</span></p>
           </div>
           <div className="pg__id">
-            <p className="pg__name">{t.name}</p>
+            <h2 className="pg__name">{t.name}</h2>
             <p className="pg__meta"><span>{t.role}</span> <code>{t.seed}</code></p>
           </div>
-          <div className="pg__actions">
-            <button type="button" className="button" onClick={pull} aria-keyshortcuts="R">Pull a bot <kbd>R</kbd></button>
-            <button type="button" className="button button--ghost" onClick={save} aria-keyshortcuts="S">Add to crew <kbd>S</kbd></button>
-            <button type="button" className="button button--ghost" onClick={doCheer}>Cheer</button>
-          </div>
-          <p className="pg__odds">
+          <p className="pg__odds" data-load style={{ ["--d" as string]: "220ms" }}>
             {p > 0
-              ? <>Odds of an id drawing exactly this {t.role}: <b>1 in {fmt(Math.round(1 / p))}</b>. One of {fmt(counts[t.role])} possible {t.role}s.</>
-              : <>Made by hand: no id draws this as a {t.role}. One of {fmt(counts[t.role])} possible {t.role}s, plus yours.</>}
+              ? <>1 in {fmt(Math.round(1 / p))} ids draw exactly this {t.role}, of {fmt(counts[t.role])} possible.</>
+              : <>Made by hand: no id draws this {t.role}. {fmt(counts[t.role])} {t.role}s are possible, plus yours.</>}
           </p>
-          <p className="pg__desc" id="pg-desc">{desc}</p>
+          <p className="sr" id="pg-desc">{desc}</p>
+          <div className="pg__bar" data-load style={{ ["--d" as string]: "260ms" }} role="group" aria-label="Bot actions" data-ui>
+            <button type="button" className="pg__act" onClick={doCheer}>Cheer</button>
+            <button type="button" className="pg__act" onClick={save} aria-keyshortcuts="S">Add to crew <kbd aria-hidden="true">S</kbd></button>
+            <Pop label="Download" kbd="D" open={pop === "download"} onToggle={() => toggle("download")}>
+              <Group legend="Backdrop">
+                {([["none", "None"], ["floor", "Floor"], ["paper", "Paper"]] as const).map(([v, l]) => <Seg key={v} name="bg" checked={bg === v} onChange={() => setBg(v)}>{l}</Seg>)}
+              </Group>
+              <label className="pg__field pg__field--inline">
+                <span>Scale</span>
+                <select value={scale} onChange={(e) => setScale(Number(e.target.value))}>
+                  {Array.from({ length: 16 }, (_, i) => i + 1).map((s) => <option key={s} value={s}>{s}× · {sizePx * s} px</option>)}
+                </select>
+              </label>
+              <div className="pg__row2">
+                <button type="button" className="pg__btn pg__btn--primary" onClick={() => void savePng()} aria-keyshortcuts="D">PNG</button>
+                <button type="button" className="pg__btn" onClick={saveSvg}>SVG</button>
+              </div>
+              <p className="pg__hint">The {SIZE_NAME[size]}, {sizePx * scale}×{sizePx * scale} px, each cell a crisp {scale}×{scale} square. SVGs are transparent.</p>
+            </Pop>
+            <Pop label="Share" kbd="C" open={pop === "share"} onToggle={() => toggle("share")}>
+              <label className="pg__field">
+                <span>Link to this bot</span>
+                <input type="text" readOnly value={link} onFocus={(e) => e.currentTarget.select()} />
+              </label>
+              <div className="pg__row2">
+                <button type="button" className="pg__btn pg__btn--primary" onClick={() => void copy()} aria-keyshortcuts="C">Copy link</button>
+                {canShare && <button type="button" className="pg__btn" onClick={() => void navigator.share({ title: `${t.name}, a capcomd bot`, url: link }).catch(() => {})}>Share…</button>}
+              </div>
+              <p className="pg__hint">The link holds the id, the role, every part and the size, so it redraws exactly this bot.</p>
+            </Pop>
+          </div>
+          <p className="pg__brand">{SITE.brand}</p>
         </div>
 
-        <form className="pg__panel" onSubmit={(e) => e.preventDefault()} aria-label="Bot controls">
-          <div className="pg__row">
-            <label className="pg__field" data-ui>
+        <form className="pg__panel" data-ui data-load style={{ ["--d" as string]: "180ms" }} onSubmit={(e) => e.preventDefault()} aria-label="Bot editor">
+          <div className="pg__pull">
+            <label className="pg__field pg__field--grow" data-ui>
               <span>Agent id or any text</span>
               <input type="text" value={seedText} maxLength={64} spellCheck={false} autoComplete="off"
-                onChange={(e) => { setSeedText(e.target.value); if (e.target.value.trim()) change(botTraits(e.target.value.trim(), t.role)); }}
-                aria-describedby="pg-seed-note" />
+                onChange={(e) => { setSeedText(e.target.value); if (e.target.value.trim()) change(botTraits(e.target.value.trim(), t.role)); }} />
             </label>
-              <span className="pg__note" id="pg-seed-note">Same id, same bot. Typing an agent's id draws its bot; in a crew, a sibling that would look like another gets a variant.</span>
+            <button type="button" className="button pg__pullbtn" onClick={pull} aria-keyshortcuts="R">Pull</button>
           </div>
-          <Group legend="Role" note="Changes the odds: planners wear the crown, leads the flag.">
-            {ROLES.map((r) => (
-              <Seg key={r} name="role" checked={t.role === r} onChange={() => change(botTraits(t.seed, r))}>{r}</Seg>
+          <div className="pg__trio">
+            <Group legend="Role" wide>
+              {ROLES.map((r) => <Seg key={r} name="role" checked={t.role === r} onChange={() => change(botTraits(t.seed, r))}>{r}</Seg>)}
+            </Group>
+            <Group legend="Size">
+              {SIZES.map(([s, l]) => <Seg key={s} name="size" checked={size === s} onChange={() => setSize(s)}>{l}</Seg>)}
+            </Group>
+            <Group legend="Mood">
+              {(Object.keys(MOODS) as Mood[]).map((m) => (
+                <button key={m} type="button" className="pg__chip" aria-pressed={mood === m}
+                  onClick={() => change(setPart(setPart(t, "eyes", MOODS[m].eyes), "mouth", MOODS[m].mouth))}>{MOOD_LABEL[m]}</button>
+              ))}
+            </Group>
+          </div>
+
+          <fieldset className="pg__picker">
+            <legend>Part <span className="pg__keyhint" aria-hidden="true"><kbd>[</kbd> <kbd>]</kbd></span></legend>
+            {GROUPS.map(([g, slots]) => (
+              <div key={g} className="pg__pgroup" role="group" aria-label={g}>
+                <span className="pg__gname" aria-hidden="true">{g}</span>
+                {slots.map((s) => (
+                  <label key={s} className="pg__ptab">
+                    <input type="radio" name="part" value={s} checked={slot === s} onChange={() => setSlot(s)} />
+                    <span><b>{SLOT_LABEL[s]}</b><span className="sr">: </span><i>{partOf(s, t[s]).label.replace(/ \(.*\)$/, "")}</i></span>
+                  </label>
+                ))}
+              </div>
             ))}
-          </Group>
-          <Group legend="Size">
-            {SIZES.map(([s, l]) => <Seg key={s} name="size" checked={size === s} onChange={() => setSize(s)}>{l}</Seg>)}
-          </Group>
-          <Group legend="Mood" note="Sets the eyes and the mouth.">
-            {(Object.keys(MOODS) as Mood[]).map((m) => (
-              <button key={m} type="button" className="pg__chip" aria-pressed={t.eyes === MOODS[m].eyes && t.mouth === MOODS[m].mouth}
-                onClick={() => change(setPart(setPart(t, "eyes", MOODS[m].eyes), "mouth", MOODS[m].mouth))}>{MOOD_LABEL[m]}</button>
-            ))}
-          </Group>
-          <p className="pg__note pg__legend-note">Each tile previews the part on this bot. A lighter tile means picking it changes another part too, to keep the bot valid.</p>
-          {PART_SLOTS.map((slot) => <Parts key={slot} slot={slot} t={deferred} current={t[slot]} onPick={(id) => change(setPart(t, slot, id))} />)}
+          </fieldset>
+
+          <Options slot={slot} t={t} onPick={(id) => change(setPart(t, slot, id))} />
         </form>
       </section>
 
-      <section className="pg-take" aria-labelledby="pg-take-title">
-        <h2 className="big" id="pg-take-title" data-reveal><span>Take it</span> <span>with you.</span></h2>
-        <div className="pg-take__grid">
-          <div className="pg-take__box" data-reveal>
-            <h3>Download</h3>
-            <Group legend="Backdrop for PNG">
-              {([["none", "Transparent"], ["floor", "Dither floor"], ["paper", "Paper"]] as const).map(([v, l]) => <Seg key={v} name="bg" checked={bg === v} onChange={() => setBg(v)}>{l}</Seg>)}
-            </Group>
-            <label className="pg__field pg__field--inline" data-ui>
-              <span>Scale</span>
-              <select value={scale} onChange={(e) => setScale(Number(e.target.value))}>
-                {Array.from({ length: 16 }, (_, i) => i + 1).map((s) => { const w = CATALOG.frames[size].w * s; return <option key={s} value={s}>{s}× ({w}×{w} px)</option>; })}
-              </select>
-            </label>
-            <div className="pg__actions">
-              <button type="button" className="button" onClick={() => void savePng()} aria-keyshortcuts="D">PNG <kbd>D</kbd></button>
-              <button type="button" className="button button--ghost" onClick={saveSvg}>SVG</button>
-            </div>
-            <p className="pg__hint">Pixel-perfect: each cell becomes a {scale}×{scale} square, never smoothed. SVGs are transparent and scale crisply.</p>
-          </div>
-          <div className="pg-take__box" data-reveal>
-            <h3>Share</h3>
-            <label className="pg__field" data-ui>
-              <span>Link to this bot</span>
-              <input type="text" readOnly value={link} onFocus={(e) => e.currentTarget.select()} />
-            </label>
-            <div className="pg__actions">
-              <button type="button" className="button" onClick={() => void copy()} aria-keyshortcuts="C">Copy link <kbd>C</kbd></button>
-              {canShare && <button type="button" className="button button--ghost" onClick={() => void navigator.share({ title: `${t.name}, a capcomd bot`, url: link }).catch(() => {})}>Share…</button>}
-            </div>
-            <p className="pg__hint">The link holds the id, the role, every part and the size, so it redraws exactly this bot.</p>
-          </div>
-        </div>
-      </section>
-
-      <p className="pg__brand">{SITE.brand}</p>
       <section className="pg-crew" aria-labelledby="pg-crew-title">
         <div className="pg-crew__head">
-          <h2 className="big" id="pg-crew-title" data-reveal><span>Your crew.</span></h2>
-          <p>{crewTraits.length ? `${crewTraits.length} of ${CREW_MAX}. Kept in this browser only.` : `Add up to ${CREW_MAX} bots. They stay in this browser.`}</p>
-        </div>
-        {crewTraits.length > 0 ? (
-          <>
-            <ul className="pg-crew__list">
-              {crewTraits.map(({ code: key, bot: { traits: c, size: cs } }) => (
-                <li key={key}>
-                  <button type="button" className="pg-crew__bot" onClick={() => { setT(c); setSize(cs); setSeedText(c.seed); setCheer(false); setPulls((n) => n + 1); window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }}
-                    aria-label={`Open ${c.name}, ${c.role}`}>
-                    <span className="floor" aria-hidden="true" />
-                    <span className="pg-crew__svg" dangerouslySetInnerHTML={{ __html: svgOf(c, "full") }} />
-                  </button>
-                  <span className="pg-crew__name">{c.name}<small>{c.role}</small></span>
-                  <button type="button" className="pg-crew__x" aria-label={`Remove ${c.name} from your crew`}
-                    onClick={() => setCrew((cur) => { const next = cur.filter((x) => x !== key); writeCrew(next); return next; })}>×</button>
-                </li>
-              ))}
-            </ul>
-            <div className="pg__actions">
-              <button type="button" className="button" onClick={async () => { download(await crewPng(crewTraits.map((x) => x.bot.traits)), "capcomd-crew.png"); flash("Saved capcomd-crew.png"); }}>Crew as one PNG</button>
-              <button type="button" className="button button--ghost" onClick={() => { setCrew([]); writeCrew([]); }}>Clear crew</button>
+          <h2 className="pg-crew__title" id="pg-crew-title">Your crew</h2>
+          <p>{crewBots.length ? `${crewBots.length} of ${CREW_MAX}, kept in this browser.` : <>Empty. Pull a bot you like and press <kbd>S</kbd>.</>}</p>
+          {crewBots.length > 0 && (
+            <div className="pg__row2">
+              <button type="button" className="pg__btn" onClick={async () => { download(await crewPng(crewBots.map((x) => x.bot.traits)), "capcomd-crew.png"); flash("Saved capcomd-crew.png"); }}>Crew as one PNG</button>
+              <button type="button" className="pg__btn" onClick={() => { setCrew([]); writeCrew([]); }}>Clear</button>
             </div>
-          </>
-        ) : <p className="pg-crew__empty">Your crew is empty. Pull a bot you like and press <kbd>S</kbd>.</p>}
+          )}
+        </div>
+        {crewBots.length > 0 && (
+          <ul className="pg-crew__list">
+            {crewBots.map(({ code: key, bot: { traits: c, size: cs } }) => (
+              <li key={key}>
+                <button type="button" className="pg-crew__bot" aria-label={`Open ${c.name}, ${c.role}`}
+                  onClick={() => { setT(c); setSize(cs); setSeedText(c.seed); setCheer(false); setPulls((n) => n + 1); window.scrollTo({ top: 0, behavior: reduced() ? "auto" : "smooth" }); }}>
+                  <span className="floor" aria-hidden="true" />
+                  <span className="pg-crew__svg" dangerouslySetInnerHTML={{ __html: svgOf(c, "full") }} />
+                </button>
+                <span className="pg-crew__name">{c.name}</span>
+                <button type="button" className="pg-crew__x" aria-label={`Remove ${c.name} from your crew`}
+                  onClick={() => setCrew((cur) => { const next = cur.filter((x) => x !== key); writeCrew(next); return next; })}>×</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="pg__keys">
+          <label className="pg__switch"><input type="checkbox" checked={keys} onChange={(e) => setShortcuts(e.target.checked)} /> <span>Single-key shortcuts</span></label>
+          <p><kbd>R</kbd> pull · <kbd>[</kbd> <kbd>]</kbd> or <kbd>,</kbd> <kbd>.</kbd> part · <kbd>S</kbd> add to crew · <kbd>C</kbd> copy link · <kbd>D</kbd> PNG</p>
+        </div>
       </section>
 
       <p className="pg__status" role="status" aria-live="polite">{status}</p>
-      <div className="pg__keys">
-        <label className="pg__switch"><input type="checkbox" checked={keys} onChange={(e) => setShortcuts(e.target.checked)} /> <span>Single-key shortcuts</span></label>
-        <p><kbd>R</kbd> pull · <kbd>S</kbd> add to crew · <kbd>C</kbd> copy link · <kbd>D</kbd> download PNG</p>
-      </div>
     </>
   );
 }
 
-function Group({ legend, note, children }: { legend: string; note?: string; children: ReactNode }) {
+/** The options for one part: every part the catalog has for the slot, previewed on this bot. */
+function Options({ slot, t, onPick }: { slot: PartSlot; t: BotTraits; onPick: (id: string) => void }) {
+  const parts = CATALOG.slots[slot];
+  const thumbs = useMemo(() => parts.map((p) => svgOf(p.id === t[slot] ? t : safe(t, slot, p.id), PREVIEW[slot])), [parts, slot, t]);
   return (
-    <fieldset className="pg__group">
+    <fieldset className="pg__options">
+      <legend>{SLOT_LABEL[slot]}<span className="sr">, now:</span><span aria-hidden="true"> · </span><span className="pg__current">{partOf(slot, t[slot]).label}</span></legend>
+      <div className="pg__grid" data-ui>
+        {parts.map((p, i) => {
+          const ok = fits(t, slot, p.id);
+          return (
+            <label key={p.id} className={`pg__part${ok ? "" : " pg__part--moves"}`}>
+              <input type="radio" name={`opt-${slot}`} checked={t[slot] === p.id} onChange={() => onPick(p.id)} />
+              <span className="pg__thumb" dangerouslySetInnerHTML={{ __html: thumbs[i]! }} />
+              <span className="pg__plabel">{p.label.replace(/ \(.*\)$/, "")}{ok ? "" : <span className="sr"> (another part changes too)</span>}</span>
+            </label>
+          );
+        })}
+      </div>
+      <p className="pg__swap"><span className="pg__swapmark" aria-hidden="true" /> Dimmed: picking it changes another part too, to keep the bot valid.</p>
+    </fieldset>
+  );
+}
+const safe = (t: BotTraits, slot: PartSlot, id: string) => { try { return setPart(t, slot, id); } catch { return t; } };
+
+/** A small popover: a disclosure button and its panel (open state, Escape and outside clicks live in Playground). */
+function Pop({ label, kbd, open, onToggle, children }: { label: string; kbd: string; open: boolean; onToggle: () => void; children: ReactNode }) {
+  const id = label.toLowerCase();
+  return (
+    <div className="pg__popwrap" onBlur={(e) => { if (open && !e.currentTarget.contains(e.relatedTarget as Node | null)) onToggle(); }}>
+      <button type="button" id={`btn-${id}`} className="pg__act" aria-expanded={open} aria-controls={`pop-${id}`} onClick={onToggle}>
+        {label} <kbd aria-hidden="true" title={`${kbd}: ${label === "Download" ? "download a PNG" : "copy the link"}`}>{kbd}</kbd> <svg className="pg__caret" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </button>
+      <div className="pg__pop" id={`pop-${id}`} role="group" aria-label={`${label} options`} hidden={!open}>{children}</div>
+    </div>
+  );
+}
+
+function Group({ legend, wide, children }: { legend: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <fieldset className={`pg__group${wide ? " pg__group--wide" : ""}`}>
       <legend>{legend}</legend>
-      {note && <p className="pg__note">{note}</p>}
       <div className="pg__seg" data-ui>{children}</div>
     </fieldset>
   );
@@ -281,31 +357,3 @@ function Seg({ name, checked, onChange, children }: { name: string; checked: boo
     </label>
   );
 }
-
-/** One slot: every part in the catalog, each previewed on this bot. A part that clashes still works: another part gives way. */
-function Parts({ slot, t, current, onPick }: { slot: PartSlot; t: BotTraits; current: string; onPick: (id: string) => void }) {
-  const parts = CATALOG.slots[slot];
-  const thumbs = useMemo(() => parts.map((p) => {
-    const preview = p.id === t[slot] ? t : setPartSafe(t, slot, p.id);
-    return svgOf(preview, slot === "legs" || slot === "pose" || slot === "torso" || slot === "plate" || slot === "dither" ? "full" : "small");
-  }), [parts, slot, t]);
-  return (
-    <fieldset className="pg__group pg__parts">
-      <legend>{SLOT_LABEL[slot]} <span className="pg__current"><span className="sr">, now: </span>{partOf(slot, current).label}</span></legend>
-      <div className="pg__grid" data-ui>
-        {parts.map((p, i) => {
-          const ok = fits(t, slot, p.id);
-          return (
-            <label key={p.id} className={`pg__part${ok ? "" : " pg__part--moves"}`} title={ok ? p.label : `${p.label} (another part gives way)`}>
-              <input type="radio" name={`part-${slot}`} checked={current === p.id} onChange={() => onPick(p.id)} />
-              <span className="pg__thumb" dangerouslySetInnerHTML={{ __html: thumbs[i]! }} />
-              <span className="pg__plabel">{p.label}{ok ? "" : <span className="sr"> (another part gives way)</span>}</span>
-            </label>
-          );
-        })}
-      </div>
-    </fieldset>
-  );
-}
-
-const setPartSafe = (t: BotTraits, slot: PartSlot, id: string) => { try { return setPart(t, slot, id); } catch { return t; } };
