@@ -357,7 +357,7 @@ export async function hermesStep(p: Prompter, v: Values, cwd = process.cwd(), ma
   if (!cfg.ok) return { step: "hermes", ok: false, detail: `can't read ${H.tilde(h.config)}: ${cfg.error}; left it as it is`, hint: "Fix the file (Hermes can't read it either), then run `capcomd setup agent` again." };
   // The project this checkout is: its .capcomd/config.json (not capcomd's own config).
   const projPath = projectConfigPath(cwd);
-  const project = projPath && resolve(projPath) !== resolve(userConfigPath()) ? dirname(dirname(projPath)) : null;
+  const project = projPath ? dirname(dirname(projPath)) : null;
   const perProject = v["hermes-entry-per-project"] === true;
   if (perProject && !project) return { step: "hermes", ok: false, detail: "--hermes-entry-per-project needs a project here", hint: "Run it in your repository's checkout (after `capcomd setup project`)." };
   const notes: string[] = [];

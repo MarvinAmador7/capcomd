@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a project's settings are looked for from the current folder up to your home folder and no further, even when
+  `HOME` points somewhere else (a test or an agent's scratch home); capcomd's own `~/.capcomd/config.json` was read as
+  a project's `.capcomd/config.json` then, so its sandbox and repository settings applied where they shouldn't.
 - Experimental, off by default: with `CAPCOMD_AGENT_WORKFLOW=1` set for both the engine (`capcomd serve`) and the CLI,
   each agent is driven by a durable workflow inside the engine instead of a `capcomd agent-drive` process: it carries on
   by itself after the engine restarts (no `await` needed to kick it), a usage-limit pause wakes at its reset from the
