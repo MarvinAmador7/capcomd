@@ -1,9 +1,9 @@
 // Persisted settings: `capcomd setup` writes them, every command reads them. They are defaults for the
 // environment, applied when the CLI starts: a real environment variable always wins, then the project's
 // .capcomd/config.json (found from the current directory upward), then ~/.capcomd/config.json.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
-import { homedir } from "os";
+import { homedir, userInfo } from "os";
 import { capcomdHome } from "../utils/home";
 
 export interface CapcomdConfig {
@@ -45,13 +45,20 @@ export interface ProjectEntry { name: string; path: string }
 type Source = Record<string, string | undefined>;
 export const userConfigPath = (source: Source = process.env) => join(capcomdHome(source), "config.json");
 
-/** The nearest .capcomd/config.json from `cwd` upward (stops at the home directory or the filesystem root). */
-export function projectConfigPath(cwd = process.cwd()): string | null {
-  const home = resolve(homedir());
+const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
+
+/**
+ * The nearest .capcomd/config.json from `cwd` upward. Stops at $HOME and at the account's own home folder (a scratch
+ * HOME must not let the walk reach the real ~/.capcomd), or the filesystem root; capcomd's user config (this one's, or
+ * the account's) is never a project's.
+ */
+export function projectConfigPath(cwd = process.cwd(), env: Source = process.env): string | null {
+  const homes = new Set([env.HOME || homedir(), userInfo().homedir].map(real));
+  const userConfigs = new Set([userConfigPath(env), ...[...homes].map((h) => join(h, ".capcomd", "config.json"))].map(real));
   for (let d = resolve(cwd); ; d = dirname(d)) {
     const p = join(d, ".capcomd", "config.json");
-    if (existsSync(p)) return p;
-    if (d === home || dirname(d) === d) return null;
+    if (existsSync(p) && !userConfigs.has(real(p))) return p;
+    if (homes.has(real(d)) || dirname(d) === d) return null;
   }
 }
 
@@ -87,7 +94,7 @@ export interface Applied { user: string | null; project: string | null; keys: st
 export function applyConfig(env: Source = process.env, cwd = process.cwd(), keychain: () => string | null = defaultKeychain): Applied {
   const userPath = userConfigPath(env);
   const user = readConfig(userPath);
-  const projectPath = projectConfigPath(cwd);
+  const projectPath = projectConfigPath(cwd, env);
   const project = readConfig(projectPath);
   const keys: string[] = [];
   for (const [k, v] of Object.entries({ ...(user.env ?? {}), ...(project.env ?? {}) })) {
@@ -114,7 +121,7 @@ export function runDefaults(cwd = process.cwd()): NonNullable<CapcomdConfig["run
 /** The driver policy: the project's settings over the user's. */
 export function driverPolicy(cwd = process.cwd(), env: Source = process.env): NonNullable<CapcomdConfig["driver"]> {
   if (env.CAPCOMD_NO_CONFIG) return {};
-  return { ...(readConfig(userConfigPath(env)).driver ?? {}), ...(readConfig(projectConfigPath(cwd)).driver ?? {}) };
+  return { ...(readConfig(userConfigPath(env)).driver ?? {}), ...(readConfig(projectConfigPath(cwd, env)).driver ?? {}) };
 }
 
 function defaultKeychain(): string | null {

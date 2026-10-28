@@ -3,8 +3,8 @@
 // the user's repositories instead of one entry pinned to a folder. `capcomd setup agent` adds the checkout it runs in.
 // A project is a checkout with a .capcomd/config.json (its gates, driver policy and agent profiles).
 import { existsSync, realpathSync } from "fs";
-import { homedir, userInfo } from "os";
-import { basename, dirname, join, resolve } from "path";
+import { homedir } from "os";
+import { basename, dirname, resolve } from "path";
 import { projectConfigPath, readConfig, userConfigPath, writeConfig, type ProjectEntry } from "./store";
 
 type Source = Record<string, string | undefined>;
@@ -24,10 +24,8 @@ export function readProjects(env: Source = process.env): Projects {
 
 /** The checkout that holds the nearest .capcomd/config.json from `cwd` (never capcomd's own user config), or null. */
 export function projectDirOf(cwd: string, env: Source = process.env): string | null {
-  const f = projectConfigPath(cwd);
-  // capcomd's own user config is not a project: this one's, nor the account's (when HOME points elsewhere).
-  if (!f || samePath(f, userConfigPath(env)) || samePath(f, join(userInfo().homedir, ".capcomd", "config.json"))) return null;
-  return dirname(dirname(f));
+  const f = projectConfigPath(cwd, env);   // never capcomd's user config
+  return f ? dirname(dirname(f)) : null;
 }
 
 /** A project's name: its configured one, else its folder's name. */
