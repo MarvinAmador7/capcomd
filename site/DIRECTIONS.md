@@ -230,6 +230,79 @@ Sample content in B2, to confirm: the "my-app" folder chip, "Add rate limiting t
 Recent, the times on the cards (0:12, 2:05, 2:58, 3:41), the files and counts on the approval, and the menu bar
 date and time.
 
+## B3 · B2, rewritten for engineers who run agents
+
+![B3, desktop](directions/b3/shots/desktop-1440-fold.png)
+
+Owner's note on B2: the copy talked down ("you decide what lands"). B3 keeps B2's design system and the hero
+sentence "PUT A [crew] ON IT.", and rewrites everything else to be spec-first: mechanisms, flags and limits, with
+no reassurance lines. `directions/b3/` (B2 is unchanged).
+
+Sections, in order:
+
+1. **Hero.** The lead says what it is and what it guarantees: "durable orchestration for swarms of coding agents.
+   Your coding agent drives it: Claude Code and Codex agents run in parallel, each in its own VM on its own branch,
+   and only the exact commit that passed your checks and a reviewer agent merges, once." The note gives the facts:
+   MIT, 0.6, one executable for macOS and Linux, arm64 and x64.
+2. **Spawn, await, verify, merge** (the run). The intro covers durability: Rivet actors, idempotent recorded
+   transitions, exactly-once merge, the chaos suite. It also defines who the orchestrator is: your agent, an agent
+   in a VM allowed to delegate, or you. The five stages explain the mechanics with the real flags (`run new` gates
+   from the project, `spawn --key`, `verify --ref` in a credential-less checks VM, the read-only reviewer with "no
+   verdict is a fail", `merge --require` as a compare-and-swap, and parking a merge on a protected target for
+   approval).
+3. **One agent, one VM, one branch** (sandboxes). The provider interface, a boxd vs Docker table (runs, isolation,
+   snapshots, secrets, egress, its name in the app) taken from docs/providers.md, then credentials, checkpoints
+   (`refs/capcomd/checkpoints/<agent>`: every 10 min, after each commit, at each quarter of a budget) and
+   `spawn --continue`.
+4. **How agents talk** (messaging). Down: `send` (Claude reads it at its next step; Codex can't while it runs).
+   Up: `handoff`, `inbox`, `result`. Shared: the task board with leases and epochs, kv with compare-and-swap,
+   `events --follow`. Fenced: other agents' text is data. **Not yet:** a leaf gets the board, kv and inbox only
+   when it may spawn, and siblings' messages go through the parent. Sibling messaging within one parent and a
+   coordinate grant for leaves are on ROADMAP §3, and the page says only that. The figure is the hero's crew
+   around the board.
+5. **Seven patterns, one set of primitives.** The primitives in one sentence, then the seven patterns from the
+   orchestration skill, each with what it does and when to use it, plus report agents. Beside them, the README's
+   live run as a fact box (3 of 3, 7 agents, 13 VMs, 228 s, $0 billed, about $0.37 at API prices).
+6. **Limits are carved down the tree** (a plum band). Delegation (narrow-only, refused rather than clamped,
+   backpressure), budgets (dollars, turns and wall time, spend reported every 5 s, rollups including the
+   API-equivalent cost of subscription work, grant), gates (operator-owned, no self-approval), and defaults
+   (unrestricted unless a profile says otherwise, stuck notices, usage-limit pauses).
+7. **Drive it from your agent.** The README's integration table with each row's honest status (Codex not yet
+   tried; Hermes not yet driven live), observability (`tui`, `logs --follow`, `tree`, the menu bar app: macOS only,
+   built from source), the install lines from the README, and the 0.x status line.
+
+Sources, re-checked: README ("What you get", "VMs come from a sandbox provider", "A real run", "Connecting your
+agent", "Core concepts", "Safety model", "Integrations"), STATUS.md (checkpoints, live spend every 5 s, quota
+pause), docs/providers.md (the boxd vs Docker table), plugins/capcomd/skills/capcomd-orchestration/SKILL.md
+(primitives, patterns, `send` semantics, fencing, fan-out sizing), docs/durability.md, ROADMAP.md §3 ("Leaf agents
+can't coordinate"). docs/patterns.md is a low-confidence reconstruction, so the patterns come from the skill.
+
+```
+ROUND 2 (B3)
+Seen in one second: "Put a [crew] on it."; scrolling, a spec sheet: mechanics, sandboxes, messaging, patterns.
+Idea (one sentence): the same crew stands in the headline, works the run, and sits around the task board.
+Live thing: Draw another (the whole page's crew), the Ask composer, the five stages.
+Layout words by section: hero=sentence with slot / run=accordion / sandboxes=spec table + three facts /
+  talk=figure + definition list / patterns=list + sticky fact box / limits=colour band in four columns /
+  drive=table + terminal window
+Scores: design 7 · usability 8 · creativity 8 · content 9 → overall 8.0 (capped at 6.0 by few-pictures)
+Caps applied: fewer than four real pictures (design ≤ 6.5); a FAIL still reported (overall ≤ 6.0)
+Top three problems:
+1. Two pictures on a ten-screen page; the full build wants real captures of `capcomd tui` and the app (question 5).
+2. Long: ten screens on desktop. If the owner wants it shorter, Limits can merge into Sandboxes.
+3. The seven pattern rows are dense; the full build could open each into a small diagram.
+```
+
+Checks: `inspect.mjs` at 1440, 768 and 390 with `--allow font-count`: 1 FAIL (`few-pictures`); WARNs
+`card-rows` (the pattern list's alternating rows), `size-count` (12 sizes, the spec tables and the fact box add
+two), `no-footage`, and a 504 px `blank-gap` at 390 (the space before the footer). `lint.mjs`: 0 findings.
+
+Screenshots (`directions/b3/shots/`): `desktop-1440-fold.png`, `desktop-1440-full.png`,
+`desktop-1440-stage-verify.png`, `desktop-1440-stage-merge.png`, `desktop-1440-stage-ask-typed.png`,
+`desktop-1440-sandboxes.png`, `desktop-1440-talk.png`, `desktop-1440-patterns.png`, `desktop-1440-limits.png`,
+`desktop-1440-drive.png`; phone `phone-390-fold.png`, `phone-390-full.png`, `phone-390-stage-merge.png`,
+`phone-390-sandboxes.png`, `phone-390-talk.png`, `phone-390-patterns.png`.
+
 ## Recommendation
 
 **B, with A's run section.** B is the one only capcomd could have: the bots are the product's most ownable asset,
