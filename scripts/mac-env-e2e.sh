@@ -3,7 +3,7 @@
 # Marvin's subscriptions. Steps: validate → env build (no VM if up to date) → auth login if missing
 # (interactive: open the printed URL / enter the code) → auth status → doctor → mac-e2e with a
 # claude and a codex subscription profile → timing table.
-# Needs only BOXD_API_KEY (+ bun, gh logged in). ANTHROPIC_API_KEY / OPENAI_API_KEY are unset here.
+# Needs only a boxd key (BOXD_API_KEY or the keychain one capcomd keeps) (+ bun, gh logged in). ANTHROPIC_API_KEY / OPENAI_API_KEY are unset here.
 #   CAPCOMD_ENV_E2E_AGENTS  providers to run (default "claude codex")
 #   CAPCOMD_E2E_CODEX_SANDBOX codex --sandbox for the e2e profile (default workspace-write)
 # Each run creates one private GitHub repo (like mac-e2e.sh); delete them afterwards (printed).
@@ -15,7 +15,6 @@ die() { echo "mac-env-e2e: $*" >&2; exit 1; }
 ms() { bun -e 'console.log(Date.now())'; }
 
 echo "######## 0. validate (before any VM boots)"
-[ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
 command -v bun >/dev/null || die "bun not on PATH"
 command -v gh >/dev/null || die "gh not installed"
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
