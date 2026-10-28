@@ -3,7 +3,7 @@
 # CAPCOMD_AGENT = an agent profile name (capcomd agents list) or claude-code (default) | codex.
 # CAPCOMD_ENV=image forces the default boxd image; otherwise workers boot from the env snapshot,
 # or from the auth profile snapshot for subscription logins.
-# Needs: bun, gh (logged in as MarvinAmador7), BOXD_API_KEY. API keys only for auth=apikey agents.
+# Needs: bun, gh (logged in as MarvinAmador7), a boxd key (BOXD_API_KEY or the keychain one capcomd keeps). API keys only for auth=apikey agents.
 # Secrets are read from env only and never echoed (no `set -x`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -29,7 +29,6 @@ LOG="$WORK/capcomd-run.ndjson"
 # Every exit (including early aborts) prints one CAPCOMD_TIMING line with the reason, so the
 # mac-env-e2e table can say why an agent did not run.
 die() { echo "mac-e2e: $*" >&2; REASON="$*" AGENT="$AGENT" bun -e 'console.log("CAPCOMD_TIMING " + JSON.stringify({ agent: process.env.AGENT, rc: 1, reason: process.env.REASON }))' 2>/dev/null || true; exit 1; }
-[ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
 if [ "$AUTH" = apikey ] && [ "${CAPCOMD_CREDENTIALS:-auto}" != secret ]; then [ -n "${!KEYVAR:-}" ] || die "$KEYVAR is not set (agent $AGENT uses auth=apikey)"; fi
 # (subscription / inferred auth is checked by preflight below: exactly one credential per agent.)
 command -v bun >/dev/null || die "bun not on PATH (try: export PATH=\$HOME/.bun/bin:\$PATH)"

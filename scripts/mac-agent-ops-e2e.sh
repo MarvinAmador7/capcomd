@@ -5,7 +5,7 @@
 #   2. --continue: a worker stopped at its timeout keeps its work on its branch; `spawn --continue` starts a new
 #      agent from that branch, which finishes the job.
 #   3. isolation: a process in an agent VM can't mint boxd org credentials from the machine's metadata service.
-# Needs: bun, gh (logged in), BOXD_API_KEY, a working claude login (capcomd auth status). No verify or merge: the
+# Needs: bun, gh (logged in), a boxd key (BOXD_API_KEY or the keychain one capcomd keeps), a working claude login (capcomd auth status). No verify or merge: the
 # checks read the agents' branches. The GitHub repo is kept (the delete command is printed). From a git worktree,
 # point CAPCOMD_AUTH_LEDGER and CAPCOMD_ENV_LEDGER at the main checkout's .relay/ files (that's where logins live).
 # Ends with `E2E PASS` or `E2E FAIL: <reasons>`.
@@ -18,7 +18,6 @@ REPO="$OWNER/capcomd-agent-ops-$TS"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/capcomd-agent-ops.XXXXXX")"
 T0=$(date +%s)
 die() { echo "mac-agent-ops-e2e: $*" >&2; echo "artifacts: $WORK"; exit 1; }
-[ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
 command -v gh >/dev/null || die "gh not installed"
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
 [ -d node_modules ] || bun install

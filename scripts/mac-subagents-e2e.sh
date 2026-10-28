@@ -154,7 +154,8 @@ gh pr list -R "$REPO" --state all --json number,title,state,url -q '.[] | "   #\
 MERGED=$(gh pr list -R "$REPO" --state merged --base integration --json number -q 'length' 2>/dev/null || echo 0)
 echo "== 7b. checkpoints (pushed while the workers ran; deleted once their work merged)"
 CKPTS=$($C events "$RUN" --json 2>/dev/null | grep -c '"AGENT_CHECKPOINT"' || true)
-MERGED_IDS=$(gh pr list -R "$REPO" --state merged --base integration --json title -q '.[].title' | grep -o 'agt-[a-z0-9]*' | sort -u)
+# The agent id is in the PR's branch name (capcomd/<run>/<agt>); titles are the task text.
+MERGED_IDS=$(gh pr list -R "$REPO" --state merged --base integration --json headRefName -q '.[].headRefName' | grep -o 'agt-[a-z0-9]*' | sort -u || true)
 LEFT=0
 for ref in $(git ls-remote "https://github.com/$REPO.git" 'refs/capcomd/checkpoints/*' | awk '{print $2}'); do
   echo "   left: $ref"; echo "$MERGED_IDS" | grep -qx "${ref##*/}" && LEFT=$((LEFT + 1))
