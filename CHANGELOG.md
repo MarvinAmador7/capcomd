@@ -7,8 +7,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 - Menu bar app: the folder picker (**+ › Choose Project Folder…**, and Choose… in Settings › Runs) opens in front of
   other apps' windows and keeps the folder you pick; it could open behind the app you were using, and the first click
-  in it closed it with no folder. The menu bar panel closes while you choose; open it again to see what the folder
-  needs.
+  in it closed it with no folder. After you pick a folder the menu bar panel opens again on what the folder needs.
 - Menu bar app: set a project up right in the composer. Pick a folder with **+ › Choose Project Folder…**: a capcomd
   project is used at once as before; any other folder gets an orange dot on its chip and, in place of the tool row, what
   it needs next. A GitHub checkout shows its repository, the target branch, how changes land (pull requests, or pushes

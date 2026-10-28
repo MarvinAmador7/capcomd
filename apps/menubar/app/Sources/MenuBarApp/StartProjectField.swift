@@ -256,30 +256,57 @@ struct StartProjectField: View {
 enum ProjectFolderPicker {
   /// An accessory app can't become the active app on current macOS (see SettingsWindow), and an Open panel whose app
   /// can't become active is cancelled by the first click in it: no folder came back. So, as Settings does, the app is
-  /// a regular app while the panel is up and an accessory again after. The menu bar panel closes first (it would stay
-  /// on top); the composer shows what the picked folder needs the next time it opens.
+  /// a regular app while the panel is up and an accessory after (never .prohibited again, which hides every window).
+  /// The Open panel sits above the menu bar panel's level so the panel can't cover its buttons; the menu bar panel
+  /// closes at the first click in the Open panel and opens again after a pick, on what the folder needs.
   @MainActor static func choose(prompt: String = "capcomd has no default repository. Choose the project's checkout.") async -> String? {
-    MenuBarPanel.close()
     let p = NSOpenPanel()
     p.canChooseDirectories = true; p.canChooseFiles = false; p.allowsMultipleSelection = false
     p.prompt = "Use This Project"; p.message = prompt
-    p.level = .floating   // above the frontmost app's windows even before the app is active
+    p.level = NSWindow.Level(NSWindow.Level.popUpMenu.rawValue + 1)   // above other apps' windows and the menu bar panel
     // Not just .accessory: a bare debug build starts as .prohibited, which can't become active either.
     let policy = NSApp.activationPolicy()
     if policy != .regular { NSApp.setActivationPolicy(.regular) }
     NSApp.activate()
+    let fromMenuBar = MenuBarPanel.isOpen
     let path: String? = await withCheckedContinuation { done in
       p.begin { r in done.resume(returning: r == .OK ? p.url?.path : nil) }
       p.makeKeyAndOrderFront(nil)
     }
-    if policy != .regular && !SettingsWindow.isOpen { NSApp.setActivationPolicy(policy) }
+    // The first click in the Open panel closed the menu bar panel: open it again on the picked folder's next steps.
+    if fromMenuBar && path != nil { MenuBarPanel.open() }
+    if policy != .regular && !SettingsWindow.isOpen { NSApp.setActivationPolicy(.accessory) }
     return path
   }
 }
 
-/// The MenuBarExtra's panel (its window class is SwiftUI's MenuBarExtraWindow), closed as a click outside it would.
+/// The MenuBarExtra's panel (its window class is SwiftUI's MenuBarExtraWindow).
 enum MenuBarPanel {
+  @MainActor static var isOpen: Bool { NSApp.windows.contains { $0.isVisible && isPanel($0) } }
+  /// Closed as a click outside it would.
   @MainActor static func close() { for w in NSApp.windows where w.isVisible && isPanel(w) { w.close() } }
+
+  /// Opens the panel as a click on the menu bar item does. SwiftUI has no API for it. On macOS 27 a window-style
+  /// MenuBarExtra is presented through AppKit's (SPI) expanded interface session and its status button has no
+  /// target or action, so a simulated click does nothing: begin the session, as MenuBarExtraAccess does
+  /// (github.com/orchetect/MenuBarExtraAccess, MIT). The begin call drops a timestamp older than the last session's
+  /// end, so it gets the largest one. Before macOS 27 the button's own action opens it.
+  @MainActor static func open() {
+    guard !isOpen, let item = statusItem else { return }
+    let begin = NSSelectorFromString("_beginExpandedInterfaceSession:"), delegate = NSSelectorFromString("expandedInterfaceDelegate")
+    if item.responds(to: begin), item.responds(to: delegate), item.perform(delegate)?.takeUnretainedValue() != nil,
+       let imp = item.method(for: begin) {
+      typealias Begin = @convention(c) (NSStatusItem, Selector, TimeInterval) -> Void
+      unsafeBitCast(imp, to: Begin.self)(item, begin, .greatestFiniteMagnitude)
+    } else {
+      item.button?.performClick(nil)
+    }
+  }
+  /// The status item behind the menu bar icon (a private key of its NSStatusBarWindow).
+  @MainActor private static var statusItem: NSStatusItem? {
+    NSApp.windows.lazy.filter { String(describing: type(of: $0)).contains("NSStatusBarWindow") }
+      .compactMap { $0.value(forKey: "statusItem") as? NSStatusItem }.first
+  }
   private static func isPanel(_ w: NSWindow) -> Bool { String(describing: type(of: w)).contains("MenuBarExtra") }
 }
 
