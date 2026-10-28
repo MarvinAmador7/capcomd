@@ -69,8 +69,10 @@ public struct ActiveCard: Sendable, Hashable {
 /// A finished project's outcome (the newest Recent row, unfolded): how its latest run ended, then what landed.
 public struct CardOutcome: Sendable, Hashable {
   public var runId: String
-  /// "Merged into main", or "Done", "Failed", "Stopped".
+  /// "Merged into main", "Merge denied", "Merge failed", or "Done", "Failed", "Stopped".
   public var head: String
+  /// Its work was up for merging and didn't land (denied or failed, nothing merged): the files are what it proposed.
+  public var notMerged = false
   public var durationMs: Int?
   public var crew: [ActiveCard.Member]
   /// From the run's files (GET …/files) once read: how many files and lines.
@@ -128,14 +130,18 @@ extension CapcomdStore {
     let names = memberNames(run.id)
     let agents = run.agents.values.sorted(by: Self.spawnOrder)
     let merged = agents.last { $0.merge?.state == "merged" }?.merge
+    // Nothing landed but a merge was denied (or failed): say so, not "Done".
+    let unmerged = merged == nil ? agents.compactMap(\.merge?.state).first { $0 == "denied" } ?? agents.compactMap(\.merge?.state).first { $0 == "failed" } : nil
     let verb: String = switch run.outcome { case .failed: "Failed"; case .stopped: "Stopped"; default: "Done" }
-    let head = run.outcome == .done && merged != nil ? "Merged into \(merged!.target ?? "the target")" : verb
+    let head = run.outcome != .done ? verb
+      : merged.map { "Merged into \($0.target ?? "the target")" } ?? unmerged.map { $0 == "denied" ? "Merge denied" : "Merge failed" } ?? verb
     let took = run.startedAtMs.flatMap { s in run.endedAtMs.flatMap { e in e >= s ? e - s : nil } }
     let checked = agents.compactMap(\.checks)
     let cost = agents.compactMap(\.costUsd).reduce(0, +)
     var out = CardOutcome(runId: run.id, head: head, durationMs: took,
                           crew: agents.prefix(ActiveCard.crewShown).map { ActiveCard.Member(runId: run.id, agentId: $0.id, name: names[$0.id] ?? $0.displayName) },
                           checksPassed: checked.isEmpty ? nil : checked.allSatisfy(\.passed), costUsd: cost > 0 ? cost : nil)
+    out.notMerged = unmerged != nil
     // No files (nothing pushed, or nothing the mirror could read) says nothing rather than "0 files".
     if case .loaded(let f)? = files[run.id], f.total > 0 {
       out.files = f.total

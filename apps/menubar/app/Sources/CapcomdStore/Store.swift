@@ -440,6 +440,11 @@ public final class CapcomdStore {
         case "merge.approved": (.running, "Merge approved")
         default: (.failed, "Merge denied")
       }
+      // How the agent's merge ended, as its result says once it's re-read (a denial comes after the agent finished).
+      if let agentId, let state = ["merge.succeeded": "merged", "merge.failed": "failed", "merge.denied": "denied"][e.type] {
+        let target = d["target"]?.string ?? runs[runId]?.agents[agentId]?.merge?.target
+        runs[runId]?.agents[agentId]?.merge = MergeOutcome(state: state, target: target)
+      }
       let line = Self.branchLine(kind: "merge", subject: d)
       upsertStep(runId: runId, Step(id: "merge:\(key)", seq: e.seq, epochMs: e.epochMs, agentId: agentId, kind: .git, phase: .ship,
                                     text: line.map { "\(text) \($0)" } ?? text, detail: d["reason"]?.string.map(UntrustedText.init), status: st))

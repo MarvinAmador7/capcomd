@@ -562,7 +562,8 @@ struct OutcomeRow: View {
         Image(systemName: "xmark.circle").foregroundStyle(Theme.Ask.red)
         Text(verbatim: f.firstLine).font(Theme.Ask.errFont).foregroundStyle(Theme.Ask.text2).lineLimit(1).truncationMode(.tail)
       } else {
-        if o.checksPassed == true { Image(systemName: "checkmark").foregroundStyle(Theme.Ask.green) }
+        // The ✓ reads as "landed": not on work whose merge was denied or failed.
+        if o.checksPassed == true, !o.notMerged { Image(systemName: "checkmark").foregroundStyle(Theme.Ask.green) }
         if let n = o.files {
           Text(verbatim: "\(n) \(n == 1 ? "file" : "files")").foregroundStyle(Theme.Ask.text2)
           if let a = o.added { Text(verbatim: "+\(a)").foregroundStyle(a > 0 ? Theme.Ask.green : Theme.Ask.text3).monospacedDigit() }

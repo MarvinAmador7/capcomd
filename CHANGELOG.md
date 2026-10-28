@@ -30,8 +30,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   lines added and removed, and **View diff**, **Deny** and **Approve ↩** (Return approves while the card has focus; Esc
   never denies). A failed agent opens the card to the lines that say why, with **Open thread** and **Hide**; agents
   stopped at a usage limit say when they pick up again, with **Resume now**. The chevron shows the agent tree. The
-  newest finished run tops the Recent list with how it ended: "Merged into main", files and lines, whether its checks
-  passed, and what it cost when API spend was billed. The cards also read in light mode.
+  newest finished run tops the Recent list with how it ended: "Merged into main" (or "Merge denied" when you denied
+  it), files and lines, whether its checks passed, and what it cost when API spend was billed. The cards also read in
+  light mode.
 - Harness API: a merge waiting for approval now says what it would land. `approval.requested` and `snapshot.approvals`
   carry `subject.files` (path, status, lines added and removed; the 20 biggest changes), `subject.filesTotal`,
   `subject.added` and `subject.removed`, read when the merge was parked; snapshot approvals also carry `requestedAt`.
