@@ -7,6 +7,8 @@
 # The GitHub repo is NOT deleted (inspect it; the delete command is printed at the end).
 # Needs: bun, gh (logged in), a boxd key (BOXD_API_KEY, or the one `capcomd setup` keeps in the keychain),
 # working claude + codex logins (capcomd auth status).
+# CAPCOMD_E2E_RESTART=1: once a worker is running, SIGKILL the engine (serve, its engine host and rivet-engine) and
+# start it again on the same data and port; the run must still pass (agents resume on their own).
 # Override profiles with CAPCOMD_PLANNER_SPEC / CAPCOMD_CLAUDE_WORKER_SPEC / CAPCOMD_CODEX_WORKER_SPEC /
 # CAPCOMD_REVIEWER_SPEC (JSON). Every verify is also reviewed by the read-only `reviewer` profile.
 set -euo pipefail
@@ -77,12 +79,17 @@ echo "   https://github.com/$REPO  (target branch: integration)"
 
 echo "== 2. engine on :$PORT"
 # Engine data in the run's work dir, not ~/.capcomd/engine/<port> (one per test port, never removed).
-CAPCOMD_ENGINE_DATA="$WORK/engine" CAPCOMD_HARNESS_SOCKET="$WORK/harness.sock" bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
-ENGINE_PID=$!
+start_engine() {
+  CAPCOMD_ENGINE_DATA="$WORK/engine" CAPCOMD_HARNESS_SOCKET="$WORK/harness.sock" bun src/cli/index.ts serve --port "$PORT" >> "$WORK/engine.log" 2>&1 &
+  ENGINE_PID=$!
+  bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
+  kill -0 "$ENGINE_PID" 2>/dev/null || die "engine exited: $(tail -3 "$WORK/engine.log")"
+}
+# Every process under serve (its engine host, rivet-engine, …), deepest first.
+tree_pids() { local p c; for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done; echo "$1"; }
 cleanup() { pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
-bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
-kill -0 "$ENGINE_PID" 2>/dev/null || die "engine exited: $(tail -3 "$WORK/engine.log")"
+start_engine
 
 C="bun src/cli/index.ts"
 # CAPCOMD_E2E_VIA=run: the same goal through `capcomd run --planner planner`, which creates the run from the project's
@@ -124,6 +131,24 @@ echo "== 3. planner (run $RUN)"
 T_RUN0=$(date +%s)
 ROOT=$($C spawn "$RUN" --profile planner --task "$GOAL" --key planner --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).agentId)')
 echo "   planner $ROOT"
+if [ "${CAPCOMD_E2E_RESTART:-}" = 1 ]; then
+  # Wait (up to 10 min) for a worker to be running, give it a few seconds of work, then crash the engine.
+  for _ in $(seq 1 120); do
+    $C tree "$RUN" --json 2>/dev/null | grep -q '"profile":"[a-z]*-worker"[^}]*"status":"running"' && break
+    $C tree "$RUN" 2>/dev/null | grep -qE '\[(claude|codex)-worker\] running' && break
+    sleep 5
+  done
+  sleep 8
+  echo "== 3b. engine SIGKILLed while workers run; restarted on the same data"
+  $C tree "$RUN" 2>/dev/null | sed 's/^/   before | /' | head -8
+  KILLED=$(tree_pids "$ENGINE_PID"); EP=$(cat "$WORK/engine/engine.pid" 2>/dev/null || true)
+  kill -9 $KILLED $EP 2>/dev/null || true
+  for _ in $(seq 1 60); do lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 || break; sleep 1; done
+  T_KILL=$(date +%s)
+  start_engine
+  echo "   engine back after $(( $(date +%s) - T_KILL ))s (pid $ENGINE_PID)"
+  RESTARTED=1
+fi
 ( while kill -0 "$ENGINE_PID" 2>/dev/null; do sleep 20; $C tree "$RUN" 2>/dev/null | sed 's/^/   | /' | head -12; done ) &
 WATCH=$!
 set +e
@@ -184,5 +209,6 @@ FAILS=""
 [ "$VMS" = clean ] || FAILS="$FAILS vms=$VMS"
 [ "${CKPTS:-0}" -ge 1 ] || FAILS="$FAILS checkpoints=0"
 [ "$LEFT" = 0 ] || FAILS="$FAILS checkpoint-refs-left=$LEFT"
+[ "${CAPCOMD_E2E_RESTART:-}" != 1 ] || [ "${RESTARTED:-}" = 1 ] || FAILS="$FAILS restart=not-done"
 if [ -n "$FAILS" ]; then echo "E2E FAIL:$FAILS"; exit 1; fi
 echo "E2E PASS: planner done, 3/3 reviewed and merged, integration suite green, checkpoints pushed and cleaned up, no VMs left"
