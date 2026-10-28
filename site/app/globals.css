@@ -944,14 +944,14 @@ html:not(.js) .stage__title { display: block; }
 @layer components {
   .agents { position: relative; margin: 0 0 16px; }
   .agents.is-waiting { visibility: hidden; }
-  .agents__row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .agents__row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
   .agents__lbl { margin-right: 6px; font-size: var(--text-body); }
-  .agents__btn { all: unset; box-sizing: border-box; position: relative; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 10px; background: var(--color-ink); color: var(--color-paper); cursor: pointer; transition: transform 140ms var(--ease-out), background-color 160ms ease, color 160ms ease; }
-  .agents__btn svg { width: 24px; height: 24px; fill: currentColor; }
-  .agents__btn:hover { background: var(--color-plum); }
+  .agents__btn { all: unset; box-sizing: border-box; position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; color: var(--color-ink); cursor: pointer; transition: transform 140ms var(--ease-out), color 160ms ease; }
+  .agents__btn svg { width: 30px; height: 30px; fill: currentColor; }
+  .agents__btn:hover { color: var(--color-plum); }
   .agents__btn:active { transform: scale(0.96); }
   .agents__btn:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 2px; }
-  .agents__btn.is-done { background: var(--color-accent); color: var(--color-ink); }
+  .agents__btn.is-done { color: var(--color-link); }
   .agents__btn::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; translate: -50% 4px; padding: 5px 8px; border-radius: 6px; background: var(--color-ink); color: var(--color-paper); font: 500 12px/1 var(--font-ui); white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 140ms ease, translate 160ms var(--ease-out); }
   .agents__btn:hover::after, .agents__btn:focus-visible::after { opacity: 1; translate: -50% 0; }
   .agents__status { position: absolute; z-index: 5; left: 0; top: calc(100% + 10px); width: min(440px, 100%); margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--color-ink); color: var(--color-paper); font: 400 14px/1.45 var(--font-ui); }

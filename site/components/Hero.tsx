@@ -27,7 +27,6 @@ export function Hero() {
         </div>
         <div className="hero__do" data-load style={delay(620)}>
           <a className="button" href={SITE.repo}>OSS Project</a>
-          <a className="text" href={`${SITE.repo}#readme`}>Read the README</a>
         </div>
       </div>
     </header>
