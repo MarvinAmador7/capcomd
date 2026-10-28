@@ -16,6 +16,7 @@ export interface Catalog {
   constants: Record<string, string>;
   slots: Record<PartSlot, Part[]>;
   names: string[];
+  bayer4: number[][];
 }
 export interface BotTraits {
   format: "bot/1"; seed: string; role: Role; name: string;
@@ -48,5 +49,6 @@ export function normalizeRole(role?: string | null): Role;
 export function countCombinations(role: Role): number;
 export function botName(seed: string): string;
 export function h32(s: string): number;
+export function tone(lx: number, ly: number, w: number, h: number, x: number, y: number, style: "flat" | "checker" | "bayer" | "scan", bayer: number[][]): 0 | 1 | 2;
 export function rng(seed: string, stream: string): () => number;
 export function markSvg(rows: string[], o?: { scale?: number; color?: string; label?: string }): string;

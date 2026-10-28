@@ -606,13 +606,18 @@ html:not(.js) .stage__title { display: block; }
   .pg__pgroup { display: grid; grid-template-columns: 44px repeat(4, minmax(0, 1fr)); gap: 4px; align-items: stretch; }
   .pg__gname { align-self: center; font-size: 12px; color: #4A4257; }
   .pg__ptab { position: relative; }
-  .pg__ptab span { display: grid; height: 100%; padding: 5px 8px; border-radius: 8px; background: rgba(20,11,34,0.05); transition: background-color 150ms ease; }
+  .pg__ptab > span { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 8px; align-content: center; height: 100%; padding: 5px 8px 5px 6px; border-radius: 8px; background: rgba(20,11,34,0.05); transition: background-color 150ms ease; }
+  .pg__picon { grid-row: 1 / span 2; align-self: center; width: 28px; height: 28px; border-radius: 6px; overflow: hidden; background: var(--color-plum); }
+  .pg__picon svg { display: block; width: 28px; height: 28px; image-rendering: pixelated; }
+  .pg__ptab input:checked + span .pg__picon { box-shadow: 0 0 0 1.5px rgba(255,255,255,0.55); } /* taste-skill-ignore: the icon's edge on the dark selected tile */
+  .pg__ptab b, .pg__ptab i { min-width: 0; grid-column: 2; }
   .pg__ptab b { font-size: 12.5px; font-weight: 600; }
   .pg__ptab i { font-style: normal; font-size: 12px; color: #4A4257; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pg__ptab:hover span { background: rgba(20,11,34,0.09); }
   .pg__ptab input:checked + span { background: var(--color-ink); color: #fff; }
   .pg__ptab input:checked + span i { color: #DCD3EA; }
   .pg__ptab input:focus-visible + span { outline: 3px solid var(--color-ink); outline-offset: 2px; }
+  .pg__ptab b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* The options for the selected part: a fixed box (no layout shift between parts) that scrolls inside if needed. */
   .pg__options { flex: 1 1 auto; min-height: 120px; display: flex; flex-direction: column; border: 0; margin: 0; padding: 0; }
@@ -703,7 +708,9 @@ html:not(.js) .stage__title { display: block; }
     .pg__pgroup { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .pg__gname { grid-column: 1 / -1; }
     .pg__ptab i { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-    .pg__ptab span { padding: 7px 4px; text-align: center; }
+    .pg__ptab > span { grid-template-columns: 1fr; grid-template-rows: auto auto; justify-items: center; row-gap: 3px; padding: 5px 2px; text-align: center; }
+    .pg__picon { grid-row: 1; }
+    .pg__ptab b { grid-column: 1; max-width: 100%; }
     .pg__grid { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); max-height: none; overflow: visible; }
     .pg__pop { width: min(320px, calc(100vw - 32px)); }
     .pg__bar { display: grid; grid-template-columns: 1fr 1fr; }
@@ -715,7 +722,6 @@ html:not(.js) .stage__title { display: block; }
 }
 
 @media (max-width: 360px) {
-  .pg__ptab b { font-size: 12px; }
-  .pg__ptab span { padding: 6px 2px; }
+  .pg__ptab b { font-size: 11.5px; }
   .pg__opt span, .pg__chip { font-size: 12px; padding: 6px 2px; }
 }

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { CATALOG, MOODS, botGrid, botTraits, gridSvg, rng, withOverrides, type Mood } from "@/lib/vendor/bot-avatar.js";
 import { SITE } from "@/lib/site";
 import {
-  PART_SLOTS, ROLES, SLOT_LABEL, botPng, crewPng, decode, describe, download, encode, fileName, fits, odds, partOf,
+  PART_SLOTS, ROLES, SLOT_LABEL, botPng, partIcon, crewPng, decode, describe, download, encode, fileName, fits, odds, partOf,
   randomSeed, setPart, type Backdrop, type BotTraits, type PartSlot, type Role, type Size,
 } from "@/lib/playground";
 
@@ -160,6 +160,8 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
     return Array.from({ length: 26 }, () => ({ x: (r() % 10000) / 100, y: (r() % 10000) / 143, s: r() % 2 === 0 ? 0.7 : 1, c: CONFETTI[r() % CONFETTI.length]! }));
   }, [cheer, t.seed]);
   const crewBots = useMemo(() => crew.map((c) => ({ code: c, bot: decode(c)! })), [crew]);
+  // One engine-drawn icon per part, redrawn as the bot changes (about 15 ms for all 14).
+  const icons = useMemo(() => Object.fromEntries(PART_SLOTS.map((sl) => [sl, partIcon(t, sl)])) as Record<PartSlot, string>, [t]);
   const mood = (Object.keys(MOODS) as Mood[]).find((m) => t.eyes === MOODS[m].eyes && t.mouth === MOODS[m].mouth);
   const sizePx = CATALOG.frames[size].w;
 
@@ -253,7 +255,7 @@ export function Playground({ initialSeed, counts }: { initialSeed: string; count
                 {slots.map((s) => (
                   <label key={s} className="pg__ptab">
                     <input type="radio" name="part" value={s} checked={slot === s} onChange={() => setSlot(s)} />
-                    <span><b>{SLOT_LABEL[s]}</b><span className="sr">: </span><i>{partOf(s, t[s]).label.replace(/ \(.*\)$/, "")}</i></span>
+                    <span><span className="pg__picon" aria-hidden="true" dangerouslySetInnerHTML={{ __html: icons[s] }} /><b>{SLOT_LABEL[s]}</b><span className="sr">: </span><i>{partOf(s, t[s]).label.replace(/ \(.*\)$/, "")}</i></span>
                   </label>
                 ))}
               </div>
