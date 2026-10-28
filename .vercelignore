@@ -1,0 +1,13 @@
+# Vercel builds only the launch site (project Root Directory: site/). The build also reads capcomd's version from
+# the root package.json, so that is the one file outside site/ that goes up. Everything else stays local.
+/*
+!/site
+!/package.json
+/site/node_modules
+/site/.next
+/site/out
+/site/shots
+/site/directions
+/site/.taste-skill
+/site/*.tsbuildinfo
+/site/next-env.d.ts
