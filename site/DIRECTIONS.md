@@ -254,19 +254,28 @@ Sections, in order:
    snapshots, secrets, egress, its name in the app) taken from docs/providers.md, then credentials, checkpoints
    (`refs/capcomd/checkpoints/<agent>`: every 10 min, after each commit, at each quarter of a budget) and
    `spawn --continue`.
-4. **How agents talk** (messaging). Down: `send` (Claude reads it at its next step; Codex can't while it runs).
-   Up: `handoff`, `inbox`, `result`. Shared: the task board with leases and epochs, kv with compare-and-swap,
-   `events --follow`. Fenced: other agents' text is data. **Not yet:** a leaf gets the board, kv and inbox only
-   when it may spawn, and siblings' messages go through the parent. Sibling messaging within one parent and a
-   coordinate grant for leaves are on ROADMAP §3, and the page says only that. The figure is the hero's crew
-   around the board.
-5. **Seven patterns, one set of primitives.** The primitives in one sentence, then the seven patterns from the
+4. **Roles are profiles. Trees are policy.** (Revised after the owner's note that there are more roles than
+   planner and worker.) A role is any named profile in `.capcomd/agents.json` (docs/agents.md, schema
+   `capcomd.agents/v1`): provider, login, model, tools, sandbox, egress, limits, and `children`. The section shows
+   this as a real tree, with one bot per role from the same crew seed: your agent (the orchestrator) → planner →
+   a lead (a sub-planner) with a worker and a codex-worker → a worker with its reviewer → a triage report agent.
+   *lead* and *triage* are labelled as examples of profiles you define; the rest is what `capcomd setup project`
+   writes (src/config/project-setup.ts), shown next to the tree as the agents.json file in a window: `worker`,
+   `codex-worker`, a read-only `reviewer` (Read, Glob, Grep, LS, git diff/log/show, cat, ls, plus the check
+   command) and a `planner` that may spawn only the workers. Checks aren't shown as a role, because they aren't
+   an agent. Below the tree, "How they talk": down (`send`; Claude reads it at its next step, Codex can't while it
+   runs), up (`handoff`, `inbox`, `result`), shared (task board, kv, events), fenced, and **not yet** (sibling
+   messaging within one parent is on ROADMAP §3; nothing more is claimed).
+5. **What breaks at scale. What holds it.** (A plum band that replaces the earlier "Limits" band.) Seven
+   problems, each paired with its mechanism: success without proof → checks plus a reviewer, no self-approval;
+   collisions → VM and branch per agent, verify against the latest target, serial exactly-once merges;
+   delegation risk → ceilings that only narrow, capability tokens, fenced text, carved budgets; long runs →
+   durable actors, checkpoints, continue, usage-limit pause; stuck agents → idle, spinning and failing notices
+   with an optional stop; visibility → tree, waterfall, timelines, event log, cost rollups including subscription
+   work; leftover machines → every VM destroyed (13 of 13 in the live run).
+6. **Seven patterns, one set of primitives.** The primitives in one sentence, then the seven patterns from the
    orchestration skill, each with what it does and when to use it, plus report agents. Beside them, the README's
    live run as a fact box (3 of 3, 7 agents, 13 VMs, 228 s, $0 billed, about $0.37 at API prices).
-6. **Limits are carved down the tree** (a plum band). Delegation (narrow-only, refused rather than clamped,
-   backpressure), budgets (dollars, turns and wall time, spend reported every 5 s, rollups including the
-   API-equivalent cost of subscription work, grant), gates (operator-owned, no self-approval), and defaults
-   (unrestricted unless a profile says otherwise, stuck notices, usage-limit pauses).
 7. **Drive it from your agent.** The README's integration table with each row's honest status (Codex not yet
    tried; Hermes not yet driven live), observability (`tui`, `logs --follow`, `tree`, the menu bar app: macOS only,
    built from source), the install lines from the README, and the 0.x status line.
@@ -283,8 +292,8 @@ Seen in one second: "Put a [crew] on it."; scrolling, a spec sheet: mechanics, s
 Idea (one sentence): the same crew stands in the headline, works the run, and sits around the task board.
 Live thing: Draw another (the whole page's crew), the Ask composer, the five stages.
 Layout words by section: hero=sentence with slot / run=accordion / sandboxes=spec table + three facts /
-  talk=figure + definition list / patterns=list + sticky fact box / limits=colour band in four columns /
-  drive=table + terminal window
+  roles=tree figure + profiles file + five-column list / scale=colour band, problem and mechanism pairs /
+  patterns=list + sticky fact box / drive=table + terminal window
 Scores: design 7 · usability 8 · creativity 8 · content 9 → overall 8.0 (capped at 6.0 by few-pictures)
 Caps applied: fewer than four real pictures (design ≤ 6.5); a FAIL still reported (overall ≤ 6.0)
 Top three problems:
@@ -293,15 +302,20 @@ Top three problems:
 3. The seven pattern rows are dense; the full build could open each into a small diagram.
 ```
 
-Checks: `inspect.mjs` at 1440, 768 and 390 with `--allow font-count`: 1 FAIL (`few-pictures`); WARNs
-`card-rows` (the pattern list's alternating rows), `size-count` (12 sizes, the spec tables and the fact box add
-two), `no-footage`, and a 504 px `blank-gap` at 390 (the space before the footer). `lint.mjs`: 0 findings.
+Checks (after the roles and at-scale revision): `inspect.mjs` at 1440, 768 and 390 with `--allow font-count`:
+FAIL `few-pictures` (3 interface fragments, no captures yet), and FAIL `blank-gap` at 390. That second one is a
+limit of the inspector: it walks at most 12 screens to trigger scroll reveals, and the phone page is about 15
+screens long, so the last sections are still unrevealed when it measures them. The headless full-page shot
+(`phone-390-full.png`) shows them all. WARNs: `card-rows` (the pattern list's alternating rows), `size-count`
+(the tree, the JSON window and the fact box add sizes; to consolidate in the full build), `no-footage`.
+`lint.mjs`: 0 findings.
 
 Screenshots (`directions/b3/shots/`): `desktop-1440-fold.png`, `desktop-1440-full.png`,
 `desktop-1440-stage-verify.png`, `desktop-1440-stage-merge.png`, `desktop-1440-stage-ask-typed.png`,
-`desktop-1440-sandboxes.png`, `desktop-1440-talk.png`, `desktop-1440-patterns.png`, `desktop-1440-limits.png`,
-`desktop-1440-drive.png`; phone `phone-390-fold.png`, `phone-390-full.png`, `phone-390-stage-merge.png`,
-`phone-390-sandboxes.png`, `phone-390-talk.png`, `phone-390-patterns.png`.
+`desktop-1440-sandboxes.png`, `desktop-1440-roles.png`, `desktop-1440-roles-tree.png`,
+`desktop-1440-roles-messaging.png`, `desktop-1440-scale.png`, `desktop-1440-patterns.png`, `desktop-1440-drive.png`;
+phone `phone-390-fold.png`, `phone-390-full.png`, `phone-390-stage-merge.png`, `phone-390-sandboxes.png`,
+`phone-390-roles.png`, `phone-390-roles-file.png`, `phone-390-scale.png`, `phone-390-patterns.png`.
 
 ## Recommendation
 
