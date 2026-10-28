@@ -16,7 +16,7 @@ capcomd plugin (MCP tools and skills; verified live from Claude Code), the skill
 | Area | State | Verified by |
 |---|---|---|
 | Lifecycle actors and state machines (run, task, lease, worker) | Built | `tests/machines`, chaos killpoints |
-| Crash safety: outbox, epochs, exactly-once merge | Built | `tests/chaos` (named killpoints and seeded runs), `chaos:fast` |
+| Crash safety: idempotency keys, epochs, exactly-once merge | Built | `tests/chaos` (named killpoints and seeded runs), `chaos:fast` |
 | Primitives (ADR-016): `run new`, `spawn`, `await`, `wait-any`, `cancel`, `tree`, task board with fenced leases, versioned kv, `events --follow` | Built | `tests/primitives`, chaos `board.*` / `kv.*` killpoints |
 | `verify` (checks on the ref merged with the latest target) and `merge --require` (only the verified commit lands; merge re-runs the same checks) | Built | `tests/primitives/verify-merge.test.ts` |
 | Operator-named checks: `run new --checks-set name='cmd'`, pinned per child with `spawn --check NAME` | Built | `tests/scenarios/named-checks.test.ts` |

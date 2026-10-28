@@ -5,6 +5,25 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Experimental, off by default: with `CAPCOMD_AGENT_WORKFLOW=1` set for both the engine (`capcomd serve`) and the CLI,
+  each agent is driven by a durable workflow inside the engine instead of a `capcomd agent-drive` process: it carries on
+  by itself after the engine restarts (no `await` needed to kick it), a usage-limit pause wakes at its reset from the
+  engine, and `capcomd await` waits for change events instead of polling. Without the variable nothing changes.
+  Design and limits: docs/adr-022-agent-lifecycle-workflow.md.
+- capcomd's engine data now lives in capcomd's own folder: `~/.capcomd/engine/<port>/db` (or `$CAPCOMD_HOME/engine/<port>/db`)
+  for every port, the default 6420 included, instead of rivetkit's shared `~/.rivetkit`, which any other project
+  using Rivet on your Mac also writes (a newer one could stamp the database so capcomd's engine refused to start).
+  capcomd no longer reads or writes `~/.rivetkit` at all; rivetkit's own engine logs go to
+  `~/.capcomd/engine/<port>/.rivetkit/`. The first time the new version starts on 6420 it copies your existing data
+  from `~/.rivetkit/var/engine/db` once (it never moves or deletes it: you can remove the old folder yourself once
+  you're happy), checks the copy and prints one line saying so; if an engine is still running on the old folder it
+  refuses with a sentence saying to stop it first. capcomd also records which engine version last opened its data
+  (`engine-version.json`): before a different version opens it, it copies the database to
+  `~/.capcomd/engine/<port>/backups/<old version>-<UTC time>/` (the newest three are kept; restore by putting its
+  `db/` and `engine-version.json` back), it refuses to start on data a newer engine already opened, naming both
+  versions and the newest backup, and when the engine doesn't come up it prints the engine's own last log lines.
+  The engine is Rivet 2.3.31 (from 2.3.27), which keeps scheduled wake-ups (lease expiry, machine reaping, quota
+  resets) across engine restarts.
 - Menu bar app: Active cards are redesigned. While nothing needs you a card is one line: the agents' faces, who is
   doing what ("worker is editing 2 files") and how long the run has been going. When an approval waits, the card
   opens to the question ("Merge worker's work into main?"), who asked and who is waiting on it, the files it lands with

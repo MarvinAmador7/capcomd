@@ -24,6 +24,7 @@ import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/t
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
 import { startDriver } from "./drivers";
+import { agentWorkflowOn } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 export { startDriver };
@@ -251,7 +252,7 @@ export async function spawnAgent(o: SpawnOpts) {
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
   }).catch(asRelay);
-  if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) startDriver(o.runId, agentId);
+  if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
 }
 
@@ -311,8 +312,11 @@ function noticeView(a: ScopeAgent) {
 /** A paused agent whose reset time has passed runs again (its next epoch). True when it was woken. */
 async function wakeIfDue(runId: string, a: ScopeAgent): Promise<boolean> {
   if (a.status !== "paused" || !a.pausedUntil || a.pausedUntil > Date.now()) return false;
+  // ADR-022: its own workflow wakes it at the reset; a look past the reset only wakes that workflow (in case the
+  // engine hasn't yet), it doesn't resume the agent itself.
+  if (agentWorkflowOn()) { await startDriver(runId, a.agentId); return false; }
   const r = await client().scope.getOrCreate([runId]).resume({ agentId: a.agentId, by: "reset" });
-  if (r.changed) startDriver(runId, a.agentId);
+  if (r.changed) await startDriver(runId, a.agentId);
   return r.changed;
 }
 
@@ -323,7 +327,7 @@ export async function peekAgents(runId: string, ids: string[]) {
   for (const id of ids) {
     const a = await getAgentOrThrow(runId, id);
     if (a.status === "paused") { if (await wakeIfDue(runId, a)) kickedAt.set(id, Date.now()); out.push(a); continue; }
-    if (!TERMINAL_AGENT.has(a.status) && (!a.driver || a.driverUntil < Date.now()) && (kickedAt.get(id) ?? 0) < Date.now() - LEASE_MS) { startDriver(runId, id); kickedAt.set(id, Date.now()); }
+    if (!TERMINAL_AGENT.has(a.status) && (!a.driver || a.driverUntil < Date.now()) && (kickedAt.get(id) ?? 0) < Date.now() - LEASE_MS) { await startDriver(runId, id); kickedAt.set(id, Date.now()); }
     out.push(a);
   }
   return out;
@@ -513,117 +517,238 @@ async function resultOf(runId: string, agentId: string): Promise<Record<string, 
 /** "paused by the operator", naming the API client when one asked (client:<id>). */
 const pausedBy = (by: string) => `${stoppedAt("paused")}${by === "operator" ? "" : ` (${by})`}`;
 
-async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`, seen: EngineSeen = {}): Promise<ScopeAgent> {
-  const c = client();
-  const s = c.scope.getOrCreate([runId]);
-  const claim = await s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(asRelay);
-  seen.instance = (claim as { instance?: string }).instance ?? null;
-  if (!claim.ok) return claim.agent;
-  const a = claim.agent;
+/** How this agent runs: its profile ref for a real agent, else undefined (the fake or a scripted one). */
+const execOf = (a: ScopeAgent) => { const mode = env("SPAWN_EXEC"); return mode === "fake" || mode === "script" ? undefined : (a.ref ?? undefined); };
+
+/**
+ * Before an agent gets a VM: the operator's pause asked while nothing ran it, a missing env snapshot (thrown: never
+ * retried), and its login's usage limit (ADR-019 §6: wait for the reset, don't run). Returns the paused agent, or null
+ * to go on.
+ */
+async function preflightDrive(runId: string, agentId: string, s: any, a: ScopeAgent): Promise<ScopeAgent | null> {
   // The operator asked to pause it while no driver ran it: pause it now, before a VM is made.
   if (a.pauseRequested) return (await s.pause({ agentId, until: 0, result: { limit: "paused", by: a.pauseRequested, error: `${pausedBy(a.pauseRequested)}; it runs on \`capcomd resume\`` } })).agent;
-  const hb = setInterval(() => { s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(() => {}); }, Math.max(500, LEASE_MS / 3));
-  const w = workerOf(runId, agentId, a.epoch);
-  const epoch = a.epoch;
-  const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   // Test/eval knob: run the fake agent while profiles still govern policy (no real CLI/repo).
   // The CLI is launched with the profile's own caps only: the engine enforces the agent's budget from its live spend,
   // so a grant (ADR-019 §4) raises it while it runs.
-  const mode = env("SPAWN_EXEC");
-  const exec = mode === "fake" || mode === "script" ? undefined : (a.ref ?? undefined);
+  const exec = execOf(a);
   // Fail fast (no retries, no driverless "running"): a real agent on boxd needs the env snapshot.
   const envProblem = exec ? envSnapshotProblem((a.spec as any)?.provider, await (await import("../providers/run-sandbox")).runSandboxEnv(runId)) : null;
-  if (envProblem) { clearInterval(hb); throw new EnvSnapshotMissing(envProblem); }
+  if (envProblem) throw new EnvSnapshotMissing(envProblem);
   // ADR-019 §6: the login this agent spends from is out of quota (another agent hit it): wait for the reset, don't run.
   const login = exec ? loginOf(a.spec) : null;
   const waitUntil = login ? quotaUntil(login) : 0;
-  if (waitUntil) {
-    clearInterval(hb);
-    return (await s.pause({ agentId, until: waitUntil, result: { limit: "quota", login, resetAt: waitUntil, error: `waiting for ${login}'s usage limit to reset (${new Date(waitUntil).toISOString()})` } })).agent;
+  if (waitUntil) return (await s.pause({ agentId, until: waitUntil, result: { limit: "quota", login, resetAt: waitUntil, error: `waiting for ${login}'s usage limit to reset (${new Date(waitUntil).toISOString()})` } })).agent;
+  return null;
+}
+
+/** The agent's VM, provisioned (idempotent by its name) and assigned its task. True when it was cancelled meanwhile. */
+async function ensureWorker(runId: string, a: ScopeAgent, w: any): Promise<boolean> {
+  const agentId = a.agentId, epoch = a.epoch, exec = execOf(a);
+  const s = client().scope.getOrCreate([runId]);
+  let wk = await w.getWorker({ workerId: agentId });
+  if (!wk || wk.state === "provisioning" || wk.state === "failed") {
+    await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}) });
+    wk = await w.getWorker({ workerId: agentId });
   }
+  if ((await s.getAgent({ agentId }))?.status === "cancelled") { await w.drainWorker({ workerId: agentId }); return true; }
+  if (wk?.state === "idle") await w.assignTask({ workerId: agentId, taskId: taskLabelOf(a, agentId), epoch });
+  return false;
+}
+
+/** What one run of an agent came to: its push (as the worker recorded it), or an end it reached itself. JSON only. */
+export type AttemptOutcome = { kind: "pushed"; pushed: any; vmRpc: boolean } | { kind: "ended" };
+
+/**
+ * One run of the agent on its VM: a scripted agent's script, a handoff, then the push (the runner for a real agent).
+ * `push` is the worker's pushBranch: an action call from a driver process, the worker's own code from its workflow.
+ */
+export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (params: Record<string, unknown>) => Promise<any> = (p) => w.pushBranch(p)): Promise<AttemptOutcome> {
+  const agentId = a.agentId, epoch = a.epoch, exec = execOf(a), mode = env("SPAWN_EXEC");
+  const s = client().scope.getOrCreate([runId]);
+  const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   const branch = `capcomd/${runId}/${agentId}`;
   // The commit's Capcomd-Task trailer names the task: the contract's planTask when set (the
   // hierarchical recipe, so landings match the legacy `<run>/<task>` key), else the agent id.
   const taskLabel = taskLabelOf(a, agentId);
+  // ADR-017: scripted fake agents run now (with in-VM capcomd on a local spool).
+  let fakeFile: { path?: string; content?: string } = {};
+  if (mode === "script") {
+    const done = await s.getAgent({ agentId });
+    const r0 = await resultOf(runId, agentId);
+    if (!r0.summary || !done?.result) {
+      killpoint("spawn.script.before");
+      const { exitCode } = await runScripted(runId, a);
+      if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return { kind: "ended" }; }
+      if (exitCode !== 0) throw new ScriptFailed(`scripted agent exited ${exitCode}`, exitCode);
+    }
+    const r = await resultOf(runId, agentId);
+    const f = (r.data as any)?.file;
+    if (f && typeof f.path === "string") fakeFile = { path: f.path, content: String(f.content ?? "") };
+  }
+  // Handoff: my result is my successor's. Await it before finishing (finishing would reap it).
+  const ho = await s.kvGet({ k: `handoff/${agentId}` }).catch(() => null);
+  if (ho && !ho.deleted && (ho.value as any)?.to) {
+    const to = String((ho.value as any).to);
+    const [succ] = (await awaitAgents(runId, [to])).agents as any[];
+    await w.drainWorker({ workerId: agentId }).catch(() => {});
+    const st = succ.status === "done" ? "done" : "failed";
+    await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
+    return { kind: "ended" };
+  }
+  const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
+  const review = reviewOf(a);
+  const report = (a.contract as any)?.report === true;
+  const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
+  // Children branch from the run's target (a staging branch) when the operator set one.
+  const target = await runTarget(runId);
+  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
+  const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
+  return { kind: "pushed", pushed, vmRpc: !!vmRpc };
+}
+
+/** After a push: charge it, release the VM, then finish the agent (or pause it at a usage limit or the operator's ask). */
+async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<AttemptOutcome, { kind: "pushed" }>): Promise<ScopeAgent> {
+  const c = client();
+  const agentId = a.agentId, exec = execOf(a), mode = env("SPAWN_EXEC");
+  const s = c.scope.getOrCreate([runId]);
+  const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
+  const login = exec ? loginOf(a.spec) : null;
+  const branch = `capcomd/${runId}/${agentId}`;
+  const review = reviewOf(a);
+  const report = (a.contract as any)?.report === true;
+  const pushed = out.pushed;
+  const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
+  const costUsd = Number(rec.costUsd ?? 0);
+  let spent: Budget = { usd: costUsd, turns: Number(rec.turns ?? 0), wallSeconds: Number(rec.wallSeconds ?? 0) };
+  // Scripted fake agents simulate spend (result data.spent) so rollups and budget limits are testable.
+  if (mode === "script") { const d: any = (await resultOf(runId, agentId)).data; if (d?.spent) spent = { ...spent, ...parseBudgetLoose(d.spent) }; }
+  if (costUsd > 0 && !pushed.already) await c.run.getOrCreate([runId]).chargeBudget({ runId, chargeId: `${agentId}-agent`, amount: costUsd });
+  await w.taskDone({ workerId: agentId });
+  await w.drainWorker({ workerId: agentId });
+  if (await cancelled()) return (await s.getAgent({ agentId }))!;
+  // ADR-019 §6: the provider's usage limit is a pause, not a failure. Its login waits for the reset too.
+  if (rec.limit === "quota") {
+    const until = Number(rec.resetAt) || Date.now() + quotaRetryMs();
+    if (login) recordQuota(login, { until, at: Date.now(), runId, agentId });
+    const p = await s.pause({ agentId, until, spent, result: { limit: "quota", login, resetAt: Number(rec.resetAt) || null, error: `${stoppedAt("quota")}; it resumes at ${new Date(until).toISOString()} (or on \`capcomd resume\`)${pushed.sha ? `, from its work on ${branch}` : ""}`, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds } });
+    return p.agent;
+  }
+  // The operator's pause: stopped with its work kept, it waits for `resume` (no reset time).
+  if (rec.limit === "paused") {
+    const by = (await s.getAgent({ agentId }))?.pauseRequested ?? "operator";
+    const p = await s.pause({ agentId, until: 0, spent, result: { limit: "paused", by, error: `${pausedBy(by)}; it runs on \`capcomd resume\`${pushed.sha ? `, from its work on ${branch}` : ""}`, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds } });
+    return p.agent;
+  }
+  const declared = await resultOf(runId, agentId);
+  const verdictOf = review ? { verdict: parseVerdict(declared.data, rec.resultText) } : {};
+  // Report mode: the agent's final message is its result (a scripted one declares its summary itself).
+  const reportText = report && typeof rec.resultText === "string" ? rec.resultText.slice(0, 8000) : null;
+  // Stopped at a limit: the agent failed, but its work so far is on its branch for a continuation (not retried).
+  const limit = typeof rec.limit === "string" ? rec.limit : null;
+  const limitOf = limit ? { limit, error: `${stoppedAt(limit)}; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
+  const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
+  const fin = await s.finish({ agentId, status: limit ? "failed" : "done", spent, result: { ...declared, ...verdictOf, ...reportOf, ...limitOf, verification: null, branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
+  return fin.agent;
+}
+
+async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`, seen: EngineSeen = {}): Promise<ScopeAgent> {
+  const s = client().scope.getOrCreate([runId]);
+  const claim = await s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(asRelay);
+  seen.instance = (claim as { instance?: string }).instance ?? null;
+  if (!claim.ok) return claim.agent;
+  const a = claim.agent;
+  const paused = await preflightDrive(runId, agentId, s, a);
+  if (paused) return paused;
+  const hb = setInterval(() => { s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(() => {}); }, Math.max(500, LEASE_MS / 3));
+  const w = workerOf(runId, agentId, a.epoch);
+  const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   try {
-    let wk = await w.getWorker({ workerId: agentId });
-    if (!wk || wk.state === "provisioning" || wk.state === "failed") {
-      await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}) });
-      wk = await w.getWorker({ workerId: agentId });
-    }
-    if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
-    if (wk?.state === "idle") await w.assignTask({ workerId: agentId, taskId: taskLabel, epoch });
-    // ADR-017: scripted fake agents run now (with in-VM capcomd on a local spool).
-    let fakeFile: { path?: string; content?: string } = {};
-    if (mode === "script") {
-      const done = await s.getAgent({ agentId });
-      const r0 = await resultOf(runId, agentId);
-      if (!r0.summary || !done?.result) {
-        killpoint("spawn.script.before");
-        const { exitCode } = await runScripted(runId, a);
-        if (await cancelled()) { await w.drainWorker({ workerId: agentId }); return (await s.getAgent({ agentId }))!; }
-        if (exitCode !== 0) throw new ScriptFailed(`scripted agent exited ${exitCode}`, exitCode);
-      }
-      const r = await resultOf(runId, agentId);
-      const f = (r.data as any)?.file;
-      if (f && typeof f.path === "string") fakeFile = { path: f.path, content: String(f.content ?? "") };
-    }
-    // Handoff: my result is my successor's. Await it before finishing (finishing would reap it).
-    const ho = await s.kvGet({ k: `handoff/${agentId}` }).catch(() => null);
-    if (ho && !ho.deleted && (ho.value as any)?.to) {
-      const to = String((ho.value as any).to);
-      const [succ] = (await awaitAgents(runId, [to])).agents as any[];
-      await w.drainWorker({ workerId: agentId }).catch(() => {});
-      const st = succ.status === "done" ? "done" : "failed";
-      const fin = await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
-      return fin.agent;
-    }
-    const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
-    const review = reviewOf(a);
-    const report = (a.contract as any)?.report === true;
-    const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
-    // Children branch from the run's target (a staging branch) when the operator set one.
-    const target = await runTarget(runId);
-    const push = () => w.pushBranch({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
-    const pushed: any = vmRpc ? await vmRpc.run(push) : await push();
-    const rec = pushed.recorded ?? pushed; // a replayed push reports what the first push recorded
-    const costUsd = Number(rec.costUsd ?? 0);
-    let spent: Budget = { usd: costUsd, turns: Number(rec.turns ?? 0), wallSeconds: Number(rec.wallSeconds ?? 0) };
-    // Scripted fake agents simulate spend (result data.spent) so rollups and budget limits are testable.
-    if (mode === "script") { const d: any = (await resultOf(runId, agentId)).data; if (d?.spent) spent = { ...spent, ...parseBudgetLoose(d.spent) }; }
-    if (costUsd > 0 && !pushed.already) await c.run.getOrCreate([runId]).chargeBudget({ runId, chargeId: `${agentId}-agent`, amount: costUsd });
-    await w.taskDone({ workerId: agentId });
-    await w.drainWorker({ workerId: agentId });
-    if (await cancelled()) return (await s.getAgent({ agentId }))!;
-    // ADR-019 §6: the provider's usage limit is a pause, not a failure. Its login waits for the reset too.
-    if (rec.limit === "quota") {
-      const until = Number(rec.resetAt) || Date.now() + quotaRetryMs();
-      if (login) recordQuota(login, { until, at: Date.now(), runId, agentId });
-      const p = await s.pause({ agentId, until, spent, result: { limit: "quota", login, resetAt: Number(rec.resetAt) || null, error: `${stoppedAt("quota")}; it resumes at ${new Date(until).toISOString()} (or on \`capcomd resume\`)${pushed.sha ? `, from its work on ${branch}` : ""}`, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds } });
-      return p.agent;
-    }
-    // The operator's pause: stopped with its work kept, it waits for `resume` (no reset time).
-    if (rec.limit === "paused") {
-      const by = (await s.getAgent({ agentId }))?.pauseRequested ?? "operator";
-      const p = await s.pause({ agentId, until: 0, spent, result: { limit: "paused", by, error: `${pausedBy(by)}; it runs on \`capcomd resume\`${pushed.sha ? `, from its work on ${branch}` : ""}`, branch: pushed.sha ? branch : null, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds } });
-      return p.agent;
-    }
-    const declared = await resultOf(runId, agentId);
-    const verdictOf = review ? { verdict: parseVerdict(declared.data, rec.resultText) } : {};
-    // Report mode: the agent's final message is its result (a scripted one declares its summary itself).
-    const reportText = report && typeof rec.resultText === "string" ? rec.resultText.slice(0, 8000) : null;
-    // Stopped at a limit: the agent failed, but its work so far is on its branch for a continuation (not retried).
-    const limit = typeof rec.limit === "string" ? rec.limit : null;
-    const limitOf = limit ? { limit, error: `${stoppedAt(limit)}; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
-    const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
-    const fin = await s.finish({ agentId, status: limit ? "failed" : "done", spent, result: { ...declared, ...verdictOf, ...reportOf, ...limitOf, verification: null, branch: review || report || (!pushed.sha && vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
-    return fin.agent;
+    if (await ensureWorker(runId, a, w)) return (await s.getAgent({ agentId }))!;
+    const out = await runAttempt(runId, a, w);
+    if (out.kind === "ended") return (await s.getAgent({ agentId }))!;
+    return await settlePushed(runId, a, w, out);
   } catch (e) {
     if (await cancelled().catch(() => false)) { await w.drainWorker({ workerId: agentId }).catch(() => {}); return (await s.getAgent({ agentId }))!; }
     throw e;
   } finally {
     clearInterval(hb);
   }
+}
+
+// ── ADR-022 (CAPCOMD_AGENT_WORKFLOW=1): the same steps, called from the worker actor's workflow ──────────────────────
+
+/** Claim the agent for the workflow and make the driver's checks. "end": nothing to do (finished, paused, cancelled,
+ *  or driven by a live driver); "paused": paused before it ran (its usage reset, or 0). */
+export async function prepareDrive(runId: string, agentId: string, driver: string, ttlMs: number): Promise<{ kind: "go"; startedAt: number } | { kind: "end" } | { kind: "paused"; until: number }> {
+  const s = client().scope.getOrCreate([runId]);
+  const claim = await s.claimDriver({ agentId, driver, ttlMs }).catch(asRelay);
+  if (!claim.ok) return { kind: "end" };
+  const paused = await preflightDrive(runId, agentId, s, claim.agent);
+  return paused ? { kind: "paused", until: Number(paused.pausedUntil ?? 0) } : { kind: "go", startedAt: Date.now() };
+}
+
+/** The workflow's ensure-machine step. */
+export async function ensureMachine(runId: string, agentId: string, epoch: number): Promise<{ kind: "ok" } | { kind: "ended" }> {
+  const a = await getAgentOrThrow(runId, agentId);
+  if (TERMINAL_AGENT.has(a.status)) return { kind: "ended" };
+  return (await ensureWorker(runId, a, workerOf(runId, agentId, epoch))) ? { kind: "ended" } : { kind: "ok" };
+}
+
+/** The workflow's settle step after a run that came to an outcome. Returns the agent as it ends (paused included). */
+export async function settleAttempt(runId: string, agentId: string, epoch: number, out: AttemptOutcome): Promise<ScopeAgent> {
+  const a = await getAgentOrThrow(runId, agentId);
+  const w = workerOf(runId, agentId, epoch);
+  if (out.kind === "ended" || TERMINAL_AGENT.has(a.status)) return settleEnded(runId, agentId, epoch);
+  return settlePushed(runId, a, w, out);
+}
+
+/** Ended without a push (cancelled, or a handoff finished it): release its VM when it was cancelled. */
+export async function settleEnded(runId: string, agentId: string, epoch: number): Promise<ScopeAgent> {
+  const a = await getAgentOrThrow(runId, agentId);
+  if (a.status === "cancelled") await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  return getAgentOrThrow(runId, agentId);
+}
+
+/** Record one failed attempt (DRIVE_FAILED) and say whether to try again: the driver's rules (3 attempts, N identical
+ *  failures in a row, never for a final kind). */
+export async function recordDriveFailure(runId: string, agentId: string, driver: string, attempt: number, err: { kind: string; message: string; final: boolean } | null, maxAttempts: number): Promise<{ retry: boolean }> {
+  if (!err) return { retry: false };
+  const s = client().scope.getOrCreate([runId]);
+  const df = await s.driveFailed({ agentId, kind: err.kind, message: err.message, attempt, driver }).catch(() => null);
+  const maxSame = Number(env("DRIVE_MAX_FAILURES") ?? 3);
+  return { retry: !err.final && attempt < maxAttempts && !(df && df.consecutive >= maxSame) };
+}
+
+/**
+ * The agent.run span the driver opens around a drive, for an agent the workflow drove (one per agent that ended, as the
+ * driver's: a paused attempt's is dropped), written to the run's trace (its CAPCOMD_TRACE_DIR at `run new`).
+ */
+export async function recordAgentRunSpan(runId: string, agentId: string, startedAt: number): Promise<void> {
+  const a = await getAgentOrThrow(runId, agentId);
+  if (!TERMINAL_AGENT.has(a.status) || env("TRACE") === "off") return;
+  const { traceIdForRun, tracePath, traceDir } = await import("../utils/tracing-simple");
+  const span = {
+    traceId: traceIdForRun(runId), spanId: agentSpanId(runId, agentId), parentSpanId: a.parent ? agentSpanId(runId, a.parent) : rootSpanIdForRun(runId),
+    name: "agent.run", startTime: startedAt, endTime: Date.now(), events: [], status: { code: 1 },
+    attributes: { "relay.run_id": runId, "agent.id": agentId, "agent.parent": a.parent ?? null, "relay.agent_id": agentId, "relay.parent_agent_id": a.parent ?? null, "agent.profile": a.profile ?? null, "agent.depth": a.depth ?? 0, "agent.driver": "workflow" } as Record<string, any>,
+  };
+  stampSpent(span, a);
+  try {
+    const dir = (await runTraceDir(runId).catch(() => undefined)) ?? traceDir();
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(tracePath(runId, dir), JSON.stringify(span) + "\n");
+  } catch { /* tracing must never break the run */ }
+}
+
+/** The agent failed for good: its result says why (a cancel meanwhile wins: its VM is released). */
+export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number }): Promise<ScopeAgent> {
+  const a = await getAgentOrThrow(runId, agentId);
+  if (a.status === "cancelled") return settleEnded(runId, agentId, epoch);
+  if (TERMINAL_AGENT.has(a.status)) return a;
+  const res = await resultOf(runId, agentId);
+  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}) } });
+  return fin.agent;
 }
 
 function parseBudgetLoose(v: unknown): Budget { try { return parseBudget(v); } catch { return {}; } }
@@ -662,6 +787,10 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
   const done = new Map<string, ScopeAgent>();
   const latest = new Map<string, ScopeAgent>();
   const noticeAt = new Map<string, number>();
+  // ADR-022: with the agent workflow, wait for the scope's "agents changed" event instead of polling every POLL_MS
+  // (a slow poll stays as the fallback: an event missed while reconnecting, a kick that's due).
+  const feed = agentWorkflowOn() ? changeFeed(runId) : null;
+  try {
   for (let poll = 0; ; poll++) {
     const noticed: ScopeAgent[] = [];
     for (const id of ids) {
@@ -672,7 +801,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       // A paused agent wakes at its reset time; until then nothing drives it.
       if (a.status === "paused") { if (await wakeIfDue(runId, a)) kicked.set(id, Date.now()); continue; }
       const stale = !a.driver || a.driverUntil < Date.now();
-      if (stale && (kicked.get(id) ?? 0) < Date.now() - LEASE_MS) { startDriver(runId, id); kicked.set(id, Date.now()); }
+      if (stale && (kicked.get(id) ?? 0) < Date.now() - LEASE_MS) { await startDriver(runId, id); kicked.set(id, Date.now()); }
       const at = a.notice?.at ?? 0;
       if (opts.notices && poll > 0 && at && at !== noticeAt.get(id)) noticed.push(a);
       noticeAt.set(id, at);
@@ -681,8 +810,33 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     if (done.size === ids.length) return { agents: ids.map((i) => view(done.get(i)!)) };
     if (noticed.length) return { notices: noticed.map((a) => ({ agentId: a.agentId, ...a.notice! })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)) };
     if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })) };
-    await sleep(POLL_MS);
+    if (feed) await feed.wait(Math.min(EVENT_FALLBACK_MS, Math.max(0, deadline - Date.now()) + 1)); else await sleep(POLL_MS);
   }
+  } finally { feed?.close(); }
+}
+
+const EVENT_FALLBACK_MS = Number(env("AWAIT_FALLBACK_MS") ?? 5000);
+
+/**
+ * The scope's `agentsChanged` events (ADR-022) as a wait: resolves at the next event, or after `ms`. An event that
+ * came while nobody waited makes the next wait return at once, so none is lost between a look and the wait.
+ */
+function changeFeed(runId: string): { wait: (ms: number) => Promise<void>; close: () => void } | null {
+  try {
+    const conn: any = client().scope.getOrCreate([runId]).connect();
+    let dirty = false;
+    let wake: (() => void) | null = null;
+    conn.on("agentsChanged", () => { if (wake) { const w = wake; wake = null; w(); } else dirty = true; });
+    conn.onError?.(() => {});
+    return {
+      wait: (ms) => new Promise<void>((resolve) => {
+        if (dirty) { dirty = false; resolve(); return; }
+        const t = setTimeout(() => { wake = null; resolve(); }, ms);
+        wake = () => { clearTimeout(t); resolve(); };
+      }),
+      close: () => { try { void conn.dispose?.(); } catch {} },
+    };
+  } catch { return null; }
 }
 
 /**
@@ -747,7 +901,7 @@ export async function resumeAgents(runId: string, agentId?: string, by = "operat
     const login = loginOf(a.spec);
     if (login) clearQuota(login);
     const r = await s.resume({ agentId: a.agentId, by });
-    if (r.changed) { resumed.push(a.agentId); startDriver(runId, a.agentId); }
+    if (r.changed) { resumed.push(a.agentId); await startDriver(runId, a.agentId); }
   }
   return { runId, resumed };
 }

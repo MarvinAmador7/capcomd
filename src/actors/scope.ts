@@ -16,6 +16,16 @@ import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { startDriver } from "../primitives/drivers";
+import { agentWorkflowOn } from "../utils/agent-workflow-flag";
+
+/**
+ * ADR-022: with the agent workflow, tell connected awaiters that agents changed (status, notice), so they look again
+ * instead of polling. Nothing is sent with the flag off.
+ */
+function agentsChanged(c: any): void {
+  if (!agentWorkflowOn()) return;
+  try { c.broadcast("agentsChanged", { at: Date.now() }); } catch { /* no connections: nothing to tell */ }
+}
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import type { AttachedSkill } from "../agents/skills";
@@ -460,6 +470,7 @@ export const scopeActor = actor({
         if (a.parent) await putItemTx(tx, a.parent, handoffOf(a.parent, params.agentId, params.status, params.result));
       }, { name: "scopeFinish" });
       const orphans = await reapOrphans(c, { ...a, status: params.status });
+      agentsChanged(c);
       return { changed: true, orphans, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
 
@@ -484,6 +495,7 @@ export const scopeActor = actor({
         await tx.execute("UPDATE agents_v2 SET notice = ?, updated_at = ? WHERE agent_id = ?", n ? JSON.stringify(n) : null, Date.now(), params.agentId);
         await addEvent(tx, n ? "AGENT_NOTICE" : "AGENT_NOTICE_CLEARED", params.agentId, n ? { ...n } : { kind: a.notice?.kind ?? null }, `notice-${params.agentId}-${n?.at ?? `clear-${Date.now()}`}`);
       }, { name: "scopeNotice" });
+      agentsChanged(c);
       return { changed: true };
     },
 
@@ -501,8 +513,11 @@ export const scopeActor = actor({
           params.until, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, "AGENT_PAUSED", params.agentId, { result: params.result, until: params.until || null }, `pause-${params.agentId}-e${a.epoch}`);
       }, { name: "scopePause" });
-      // Wake at the reset even when nobody awaits it (the engine host starts its driver).
+      // Wake at the reset even when nobody awaits it (the engine host starts its driver). With the agent workflow
+      // (ADR-022) the paused epoch's own workflow sleeps until then and wakes it; this alarm stays as the backstop
+      // (a pause from a driver, a workflow that died): wakeDue only resumes a pause that is still this one.
       if (params.until > 0) await c.schedule.at(params.until, "wakeDue", { agentId: params.agentId, epoch: a.epoch });
+      agentsChanged(c);
       return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
 
@@ -530,12 +545,15 @@ export const scopeActor = actor({
           }
         }, { name: "scopeRequestPause" });
       }
+      if (paused.length) agentsChanged(c);
       return { paused, pausing, affected: order.map((a) => a.agentId) };
     },
 
     /** A paused agent runs again as its next epoch (a new worker and VM, continuing on its branch). */
     async resume(c, params: { agentId: string; by?: string }) {
-      return resumeAgent(c, params.agentId, params.by);
+      const r = await resumeAgent(c, params.agentId, params.by);
+      if (r.changed) agentsChanged(c);
+      return r;
     },
 
     /**
@@ -548,7 +566,7 @@ export const scopeActor = actor({
       const a = rowToAgent(r[0]);
       if (a.status !== "paused" || a.epoch !== params.epoch || !a.pausedUntil || a.pausedUntil > Date.now() + 1000) return { woken: false };
       const res = await resumeAgent(c, params.agentId, "reset");
-      if (res.changed) startDriver(a.runId, a.agentId);
+      if (res.changed) { agentsChanged(c); await startDriver(a.runId, a.agentId); }
       return { woken: res.changed };
     },
 
@@ -797,6 +815,7 @@ export const scopeActor = actor({
         cancelled.push(a.agentId);
         if (++i === 1) killpoint("scope.cancel.mid");
       }
+      if (cancelled.length) agentsChanged(c);
       return { cancelled, affected: order.map((a) => a.agentId) };
     },
 

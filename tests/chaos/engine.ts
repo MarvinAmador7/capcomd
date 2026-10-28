@@ -1,7 +1,7 @@
 import { env as envVar } from "../../src/utils/env";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { createRequire } from "module";
-import { homedir } from "os";
+import { engineDataDir } from "../../src/engine/data";
 import { join } from "path";
 import { openSync, readFileSync, readdirSync, readlinkSync } from "fs";
 import { privateHarnessSocket } from "../helpers/harness-socket";
@@ -135,7 +135,7 @@ export function tailFile(path: string, max = 2000): string {
 export interface EngineOpts {
   /** Guard port. The engine also binds port+1 (api-peer) and port+10 (metrics). */
   port?: number;
-  /** Isolated engine data dir (fast mode). Default: rivetkit's ~/.rivetkit/var/engine. */
+  /** Isolated engine data dir (fast mode). Default: serve's own, <capcomd home>/engine/<port> (src/engine/data.ts). */
   dataDir?: string;
   /** Real git merges: a bare repo under dataDir/git (direct mode, target `trunk`). Needs dataDir. */
   repo?: boolean;
@@ -319,7 +319,7 @@ export class Engine {
     // (e.g. the rivetkit napi .node / rivet-engine binary), and treating those as "locks"
     // made stop() SIGKILL every other parallel worker's runner and engine.
     // Trailing slash: "/w1" must not prefix-match "/w10".."/w15" (fast attempt 2, run 1).
-    const root = `${(this.opts.dataDir ?? `${homedir()}/.rivetkit/var`).replace(/\/$/, "")}/`;
+    const root = `${(this.opts.dataDir ?? engineDataDir(this.port)).replace(/\/$/, "")}/`;
     this.dataFiles = [...files].filter((path) => path.startsWith(root));
   }
 

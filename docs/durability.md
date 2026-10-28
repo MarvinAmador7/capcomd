@@ -4,7 +4,7 @@
 2026-10-17. Builds on ADR-002 (event log), ADR-008 (lifecycles), rivet-sqlite.md, boxd.md, ADR-009. Claims about Rivet and boxd cite those docs; the expected behaviour below is **our design (inference)** and must be proven by the suite.
 
 ## Ground rules (design)
-- Every state change = one `c.db.transaction` writing {lifecycle row, event row with UNIQUE idem_key, outbox rows}. Side effects only run from the outbox, after commit, and must be idempotent. [rivet-sqlite.md]
+- Every state change = one `c.db.transaction` writing {lifecycle row, event row with UNIQUE idem_key}. **There is no outbox** (removed 2026-10-27: its rows were written and then marked dispatched without anything running them). A side effect runs where the transition happens (an action, a driver, or with `CAPCOMD_AGENT_WORKFLOW=1` a step of the agent's workflow, ADR-022), before or after its commit. The external effects carry idempotency keys (next line), so a crash between the effect and the commit repeats the effect harmlessly. A transition's own event key makes a repeated transition a no-op only where the key is stable (an epoch, a VM id); a few keys still embed a timestamp (drain, destroy, task done, verify), and there the XState `can()` guard is what stops a repeat.
 - External effects carry idempotency keys: VM name `relay-<run8>-<worker>-e<epoch>` (boxd), git push = `--force-with-lease` to a task branch, merge = compare-and-swap on the green-branch SHA, budget = `charge_id` UNIQUE.
 - Leases carry an epoch; every worker result is guarded by `epochMatches`.
 - Every VM has a boxd `deleteAfter` TTL [boxd.md].
@@ -12,7 +12,7 @@
 ## Failure matrix
 | Failure | Expected behaviour | Recovery |
 |---|---|---|
-| Orchestrator process crash (local CLI/engine or runner) | Committed transactions survive; uncommitted ones are lost and their events never existed. Actors restart on the next request or alarm [Rivet docs]. | `onWake` re-dispatches undelivered outbox rows. In-flight model calls are lost and re-issued from the last committed state (cost: one duplicate model call). |
+| Orchestrator process crash (local CLI/engine or runner) | Committed transactions survive; uncommitted ones are lost and their events never existed. Actors restart on the next request or alarm [Rivet docs]. | Nothing is re-dispatched on wake: the caller that was running the step (a driver or an await's kick) runs it again, and its idempotency key makes a repeat a no-op. In-flight model calls are lost and re-issued from the last committed state (cost: one duplicate model call). |
 | Host reboot (local mode) | Same as a crash. The engine data dir survives on disk. | Restart `capcomd`; actors resume. Workers on boxd keep running until the lease expires. |
 | Disk loss (local mode) | **Data loss back to the last backup.** | Restore the engine data dir from backup (below). Run the reconciler: list boxd VMs and remote task branches, mark unknown work `failed`, and reap the VMs. (On Rivet Cloud, if adopted later, storage is Rivet's replicated hot tier [rivet-sqlite.md].) |
 | Worker VM death | The heartbeat stops, the lease expires, and the task returns to `pending` with epoch+1. Late results from the old epoch are rejected. | WorkerActor destroys or reaps the VM; a new VM is created under the new idem name. |
@@ -20,7 +20,7 @@
 | Rivet outage (Cloud, deferred) / local engine down | The CLI can't reach actors, but worker VMs keep running and pushing branches. No merges happen. | When Rivet is back, actors wake, process the queued heartbeats and results, and expire stale leases. |
 | Network partition (orchestrator ↔ VM) | The worker can't report; the lease expires; a new epoch is assigned elsewhere. The old worker may still push. | Pushes go to `task/<id>/e<epoch>`; only the current epoch's branch is considered. The merge CAS prevents a stale merge. |
 | Lease expiry | `LEASE_EXPIRED` → task back to `pending` (or `failed` once over the retry budget). Worker → draining → VM destroyed. | Automatic. |
-| Duplicate delivery (action retry, client retry, outbox re-dispatch) | The UNIQUE idem_key insert fails and the transaction rolls back, so the call is treated as "already applied" and returns the stored result. | Automatic. |
+| Duplicate delivery (action retry, client retry, a driver's or workflow's re-run) | The transition sees its idem_key already in the event log and returns without writing (the UNIQUE index backs that up), so the call is treated as "already applied". | Automatic. |
 
 ## Crash-test suite
 Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.ts`.
@@ -31,7 +31,7 @@ Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.t
   3. `merge.after_cas.before_event` and `merge.before_cas`: expect no double merge; the reconciler detects the green SHA already containing the task commit and records `merged` once.
   4. `push.mid` (the fake git remote drops the connection) and `push.after.before_event`: expect the push retried under the same branch and lease.
   5. `vm.create.after_request.before_record`: expect `ensure()` to find the VM by name, so exactly one VM exists.
-  6. `lease.expire.mid`, `budget.charge.mid`, `outbox.dispatch.after_send.before_ack`.
+  6. `lease.expire.mid`, `budget.charge.mid`. (`outbox.dispatch.after_send.before_ack` went with the outbox; its slot in the seeded list is now `merge.lock.acquired`.)
 - **Randomised mode:** 200 runs with a random kill point and random hit count, seeded and reproducible. Each failure prints its seed.
 - **Invariants** (checked after every run by `checkInvariants()`):
   - *No double merge:* each task id appears at most once in `merged` events, and git history has one merge commit per task.
@@ -41,9 +41,38 @@ Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.t
   - *Event log gap-free:* `seq` is contiguous from 1 per RunActor, and every lifecycle row's `seq` equals its last event.
 - **CI:** the deterministic kill points run on every PR; randomised runs are nightly.
 
-## Local-mode backup plan (inference; the local engine's backend is unverified, assumed file-based RocksDB/fs)
-1. Find the engine data dir (spike: inspect the `@rivetkit/engine-cli` config) and pin it with config, e.g. `~/.relay/engine`.
-2. **Consistent snapshot:** stop capcomd (or run `relay pause`, which drains actors) → `tar --zstd` the dir → restart. Do this nightly and before upgrades. If the engine supports online checkpoints, switch to those.
-3. **Logical export (backend-agnostic):** `relay export <runId>` calls a read-only action on each actor that dumps `lifecycle`, `lifecycle_events` and `outbox` as NDJSON. This is also the migration path to or from Rivet Cloud (ADR-009).
-4. Ship backups off the host (e.g. S3/R2 with rclone); keep 7 daily + 4 weekly.
-5. **Restore drill** (monthly, and in CI weekly on a sample): restore into a fresh dir, run the reconciler, then `checkInvariants()`.
+## Engine data, version guard and backups (implemented, `src/engine/data.ts`)
+- **Where:** every engine capcomd starts keeps its data under the capcomd home, one dir per port:
+  `<home>/engine/<port>/db` (`<home>` = `~/.capcomd` or `$CAPCOMD_HOME`; `CAPCOMD_ENGINE_DATA` overrides the dir).
+  `RIVETKIT_STORAGE_PATH=<home>/engine/<port>` sends rivetkit's own engine logs and runtime stamp to `.rivetkit/` there,
+  and `src/engine/engine-wrapper.sh` points the engine's `RIVET__FILE_SYSTEM__PATH` at `db/`. Nothing uses rivetkit's
+  shared `~/.rivetkit`, so another rivetkit project on the machine can't stamp capcomd's db (or the reverse).
+- **One-time copy (6420, default dir only):** when `<home>/engine/6420/db` is empty and `~/.rivetkit/var/engine/db`
+  exists, `capcomd serve` copies it into a temporary dir, checks that nothing opened the source meanwhile and the copy's
+  file count and bytes against it, renames it into place and writes `migrated-from-rivetkit.json` (source, time, versions). The source is never
+  moved or changed. If any process has the source open (an engine still running on it), or lsof can't tell, serve
+  refuses with a sentence and copies nothing; it checks again after the copy, before the rename. With the marker
+  present it never copies again. `~/.rivetkit` is shared by every rivetkit project: if capcomd never ran on it, what
+  was copied is another project's data; delete `<home>/engine/6420` (and its marker) and start again.
+- **Version guard:** Rivet's engine stamps its version into the db and refuses to open a db stamped by a newer engine
+  (`engine/packages/version-management`, "rolled back to a previous version"). Once an engine answers on a dir, serve
+  records the version it reports on `/health` in `engine-version.json` (so the record never names an engine that
+  didn't open it). Before an engine of a different (or unrecorded, e.g. the copy from `~/.rivetkit`) version opens it,
+  serve copies `db/` and its record to `backups/<old version>-<UTC time>/{db,engine-version.json}` (newest 3 kept;
+  not again while that backup is newer than the record, i.e. an engine that never came up); if the recorded version
+  is newer than the engine it's about to start, serve refuses, naming both versions and the newest backup. When the
+  engine doesn't come up, serve prints the last lines of its stderr log (`.rivetkit/var/logs/rivet-engine/`).
+- **Restore:** stop capcomd, replace `db/` and `engine-version.json` with the backup's, start capcomd.
+  `RIVET__RUNTIME__ALLOW_VERSION_ROLLBACK` is not used: Rivet treats a downgrade as a restore from backup.
+- **Verified (2026-10-27):** a db written by capcomd on rivetkit 2.3.27 and copied this way opens on 2.3.31 with its
+  runs and agents intact. After any engine restart (2.3.27 → 2.3.27 too) the first actor call can take ~20 s and
+  fail with `internal_error`; the next one works (docs/upstream/rivetkit-cold-restart.md).
+
+## Off-host backup plan (not implemented)
+1. **Consistent snapshot:** stop capcomd → `tar --zstd` `<home>/engine/<port>/db` → restart. Do this nightly. If the
+   engine supports online checkpoints, switch to those.
+2. **Logical export (backend-agnostic):** `capcomd export <runId>` calls a read-only action on each actor that dumps
+   `lifecycle` and `lifecycle_events` as NDJSON. This is also the migration path to or from Rivet Cloud (ADR-009).
+3. Ship backups off the host (e.g. S3/R2 with rclone); keep 7 daily + 4 weekly.
+4. **Restore drill** (monthly, and in CI weekly on a sample): restore into a fresh dir, run the reconciler, then
+   `checkInvariants()`.

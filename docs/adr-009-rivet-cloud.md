@@ -22,7 +22,7 @@ Workers already run remotely on boxd (ADR-005 amendment 2). Marvin was leaning t
 
 ## What it means for us [Inference]
 - **Our code runs in a container we supply,** so Bun is fine (`FROM oven/bun`). There's no need for `bun build --compile`, which sidesteps the napi embedding failure (rivet-sqlite.md).
-- **Calling boxd from actors:** this is outbound gRPC from Rivet Compute to `boxd.sh:9443`. Put `BOXD_API_KEY` in the deployment's env/secrets. Long boxd calls must not block actions beyond 60 s: use `waitUntil` or the outbox with schedule-based polling. Serverless mode may sleep instances, so all progress lives in `c.db` and alarms (already the design).
+- **Calling boxd from actors:** this is outbound gRPC from Rivet Compute to `boxd.sh:9443`. Put `BOXD_API_KEY` in the deployment's env/secrets. Long boxd calls must not block actions beyond 60 s: use `waitUntil`, schedule-based polling, or workflow steps (ADR-022). Serverless mode may sleep instances, so all progress lives in `c.db` and alarms (already the design).
 - **Region placement:** the CLI creates the RunActor, so it lands near Marvin in Costa Rica. boxd regions are undocumented, so actor ↔ VM latency is unknown until measured.
 - **Cost per run (rough):** 6 actor kinds, a ~2 h run, ~30 awake actors → about 60 actor-hours ≈ $0.003, plus compute (mostly idle-awaiting) ~0.1 vCPU × 2 h × 30 ≈ $0.71, plus writes (~50k → $0.05). This is negligible next to boxd VMs (~€0.1/h each) and model tokens. **Verify in the spike.**
 - **Lock-in is low-to-moderate:** the same rivetkit code runs locally, self-hosted or on Cloud. Only the endpoint changes.

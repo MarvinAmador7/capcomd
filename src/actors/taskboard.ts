@@ -11,8 +11,6 @@ import {
   setupLifecycleTables,
   transitionLifecycle,
   getLifecycle,
-  getUndispatchedOutbox,
-  markOutboxDispatched,
 } from "../utils/lifecycle";
 import { killpoint } from "../utils/killpoint";
 
@@ -47,8 +45,7 @@ export const taskBoardActor = actor({
           snapshot.value as string,
           snapshot.context,
           { type: "CREATED" },
-          `task-${taskId}-created`,
-          []
+          `task-${taskId}-created`
         );
       }, { name: "createTask" });
 
@@ -114,17 +111,7 @@ export const taskBoardActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `task-${taskId}-lease-${event.epoch}`,
-          [
-            {
-              type: "taskEvent",
-              params: {
-                runId: taskContext.runId,
-                taskId,
-                event: { type: "LEASE_GRANTED", taskId, epoch: event.epoch, workerId },
-              },
-            },
-          ]
+          `task-${taskId}-lease-${event.epoch}`
         );
 
         await transitionLifecycle(
@@ -134,17 +121,7 @@ export const taskBoardActor = actor({
           newLeaseSnapshot.value as string,
           newLeaseSnapshot.context,
           leaseEvent,
-          `lease-${leaseId}-grant-${newLeaseSnapshot.context.epoch}`,
-          [
-            {
-              type: "leaseEvent",
-              params: {
-                runId: taskContext.runId,
-                leaseId,
-                event: { type: "LEASE_GRANTED", leaseId, epoch: newLeaseSnapshot.context.epoch, workerId },
-              },
-            },
-          ]
+          `lease-${leaseId}-grant-${newLeaseSnapshot.context.epoch}`
         );
       }, { name: "grantLease" });
 
@@ -194,8 +171,7 @@ export const taskBoardActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `lease-${leaseId}-hb-${epoch}-${Date.now()}`,
-          []
+          `lease-${leaseId}-hb-${epoch}-${Date.now()}`
         );
       }, { name: "heartbeat" });
 
@@ -243,8 +219,7 @@ export const taskBoardActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `task-${taskId}-worker-started-${epoch}`,
-          []
+          `task-${taskId}-worker-started-${epoch}`
         );
       }, { name: "workerStarted" });
 
@@ -289,8 +264,7 @@ export const taskBoardActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `task-${taskId}-handoff-${epoch}`,
-          []
+          `task-${taskId}-handoff-${epoch}`
         );
       }, { name: "handoffTask" });
 
@@ -332,8 +306,7 @@ export const taskBoardActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `task-${taskId}-verify-start-${Date.now()}`,
-          []
+          `task-${taskId}-verify-start-${Date.now()}`
         );
       }, { name: "startVerify" });
 
@@ -387,8 +360,7 @@ export const taskBoardActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `task-${taskId}-verify-${Date.now()}`,
-          []
+          `task-${taskId}-verify-${Date.now()}`
         );
       }, { name: "verifyComplete" });
 
@@ -425,8 +397,7 @@ export const taskBoardActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `task-${taskId}-expired-${Date.now()}`,
-          []
+          `task-${taskId}-expired-${Date.now()}`
         );
       }, { name: "expireLease" });
     },
@@ -446,7 +417,7 @@ export const taskBoardActor = actor({
       await c.db.transaction(async (tx: RawAccess) => {
         await transitionLifecycle(
           tx, taskId, "task", next.value as string, next.context, event,
-          `task-${taskId}-approved`, []
+          `task-${taskId}-approved`
         );
       }, { name: "approveTask" });
       return { taskId, ok: true as const, already: false, state: next.value as string };
@@ -462,7 +433,7 @@ export const taskBoardActor = actor({
       if (!snapshot.can(event)) throw new Error(`Task ${params.taskId} cannot accept MERGED from state ${taskLife.state}`);
       const [next] = transition(taskMachine, snapshot, event);
       await c.db.transaction(async (tx: RawAccess) => {
-        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-merged`, []);
+        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-merged`);
       }, { name: "mergeComplete" });
       return { taskId: params.taskId, state: next.value as string, already: false };
     },
@@ -478,7 +449,7 @@ export const taskBoardActor = actor({
       if (!snapshot.can(event)) return { taskId: params.taskId, state: taskLife.state, changed: false };
       const [next] = transition(taskMachine, snapshot, event);
       await c.db.transaction(async (tx: RawAccess) => {
-        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-conflict-e${params.epoch}`, []);
+        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-conflict-e${params.epoch}`);
       }, { name: "mergeConflict" });
       return { taskId: params.taskId, state: next.value as string, changed: true };
     },
@@ -491,7 +462,7 @@ export const taskBoardActor = actor({
       if (!snapshot.can(event)) return { taskId: params.taskId, state: taskLife.state, changed: false };
       const [next] = transition(taskMachine, snapshot, event);
       await c.db.transaction(async (tx: RawAccess) => {
-        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-cancel`, []);
+        await transitionLifecycle(tx, params.taskId, "task", next.value as string, next.context, event, `task-${params.taskId}-cancel`);
       }, { name: "cancelTask" });
       return { taskId: params.taskId, state: next.value as string, changed: true };
     },
@@ -532,14 +503,6 @@ export const taskBoardActor = actor({
       }));
     },
 
-    async flushOutbox(c, _params: Record<string, never>) {
-      const pending = await getUndispatchedOutbox(c.db);
-      for (const row of pending) {
-        await markOutboxDispatched(c.db, row.id);
-      }
-      return { flushed: pending.length };
-    },
-
     async listEventSeqs(c, _params: Record<string, never>) {
       const rows = await c.db.execute(
         "SELECT entity_id, seq FROM lifecycle_events ORDER BY entity_id, seq"
@@ -550,15 +513,4 @@ export const taskBoardActor = actor({
       }));
     },
   }),
-
-  async onWake(c) {
-    try {
-      const pending = await getUndispatchedOutbox(c.db);
-      for (const row of pending) {
-        await markOutboxDispatched(c.db, row.id);
-      }
-    } catch (error) {
-      console.error("[taskBoard.onWake] Error:", error);
-    }
-  },
 });
