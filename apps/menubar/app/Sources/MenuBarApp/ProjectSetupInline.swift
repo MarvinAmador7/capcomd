@@ -14,7 +14,7 @@ extension AppModel {
   var setupShowing: Bool { _ = revision; return setup.screen(goal: "", sandbox: nil).map { $0.phase != .loading } ?? false }
   /// The + menu's Choose Project Folder…, and Choose Another Folder… on the card.
   func chooseProjectFolder() {
-    if let f = ProjectFolderPicker.choose(prompt: "Choose the project's folder.") { Task { await setup.pick(f) } }
+    Task { if let f = await ProjectFolderPicker.choose(prompt: "Choose the project's folder.") { await setup.pick(f) } }
   }
   func cancelSetup() { setup.cancel() }
   /// Settings › General › New projects.
