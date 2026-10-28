@@ -10,7 +10,8 @@
 //   SETTINGS=mixed SANDBOXES=changed|unavailable|noactions …          deleting machines (409, 503, a phase 2 daemon)
 //   PROJECTS=ready|configured|notgit|noorigin|nogh-publish|secrets|taken|notgithub|nogh|apikey|refuse|old …   setting a folder up as a project, starting its repository and publishing it (projects.ts)
 //
-// Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
+// Scenes: card-running | card-ask | card-stopped | card-finished | card-long | cards (the Active card, design/active-card),
+// panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
 // store's rebuild picks up repo/key (scope chips, suffixes) without a run stream; lifecycle feeds re-send the same
 // state per run. Folders ride in `Agent.workspace` / `agent.spawned.data.workspace` (harness #46).
@@ -31,8 +32,12 @@ const SETTINGS = process.env.SETTINGS ? settingsScene(process.env.SETTINGS) : nu
 const PROJECTS = process.env.PROJECTS ? projectsScene(process.env.PROJECTS) : null;
 const NOW = Date.now(), min = 60_000, iso = (ms: number) => new Date(ms).toISOString();
 
-type AgentSpec = { id: string; parent?: string; profile: string; provider?: "claude" | "codex"; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number };
-type ApprovalSpec = { id: string; agentId: string; question: string; ref: string; target: string };
+type AgentSpec = { id: string; parent?: string; profile: string; provider?: "claude" | "codex"; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number;
+  /** Agent.result (cost, a usage limit, an error, verification, merge): what the Active card reads (design/active-card). */
+  result?: Record<string, unknown> };
+type ApprovalSpec = { id: string; agentId: string; question: string; ref: string; target: string;
+  /** subject.files / filesTotal / added / removed (a parked merge's diff), and how long ago it was asked. */
+  files?: Array<{ path: string; status: string; added: number | null; removed: number | null }>; askedAgo?: number };
 type SpanSpec = { id: string; parent?: string; name: string; from: number; took: number; error?: boolean; attrs?: Record<string, unknown> };   // from/took: seconds after the run started
 type FileSpec = { path: string; status: string; added: number | null; removed: number | null; agentId: string };
 type RunSpec = { id: string; projectId: string; goal: string; state: string; startedAgo: number; lastAgo: number; agents: AgentSpec[]; approvals?: ApprovalSpec[];
@@ -110,6 +115,63 @@ const scenes: Record<string, RunSpec[]> = {
       agents: [{ id: "agt-f5", profile: "planner", status: "done", ago: 300 * min }] },
   ],
 };
+// Active card, direction B (design/active-card): one scene per board state, and `cards` with all of them for the store's
+// live-mock test. CARD scenes: card-running (three runs folded), card-ask (the screenshot case: worker asks to merge
+// with its files), card-stopped (a usage-limit pause and a failed worker), card-finished (a merged run's outcome with
+// files, checks and cost), card-long (ten agents).
+const GOAL1 = "Add a clamp(x, lo, hi) function to src/math.ts with a bun test for it in src/math.test.ts";
+const clampFiles = [{ path: "src/math.test.ts", status: "added", added: 13, removed: 0 }, { path: "src/math.ts", status: "modified", added: 11, removed: 0 }];
+const clamp = (state: "running" | "ask" | "paused" | "done"): RunSpec => ({
+  id: "run-cl01", projectId: "prj-e2e", goal: GOAL1, state: state === "done" ? "completed" : "running", startedAgo: state === "paused" ? 9.8 * min : state === "done" ? 7 * min : 4.2 * min, lastAgo: state === "done" ? 0.8 * min : 0.05 * min,
+  agents: [
+    { id: "agt-cl-pl", profile: "planner", provider: "claude", status: state === "paused" ? "paused" : state === "done" ? "done" : "running", repo: "capcomd-e2e-20261027", activity: state === "done" ? "Merged 1 branch" : "Waiting on 2 agents", kind: "spawn", ago: 4 * min,
+      result: state === "paused" ? { limit: "quota", resetAt: NOW + 38 * min, costUsd: 0 } : state === "done" ? { summary: "clamp added with tests", costUsd: 0.12 } : undefined },
+    { id: "agt-cl-wk", parent: "agt-cl-pl", profile: "worker", provider: "claude", status: state === "running" ? "running" : "done", repo: "capcomd-e2e-20261027", key: "task-clamp",
+      activity: state === "running" ? "Editing 2 files" : "Edited 2 files", kind: "edit", ago: 0.1 * min,
+      result: state === "running" ? undefined : { summary: "added clamp and its test", costUsd: 0.21, verification: { id: "vfy-1", pass: true, checks: { passed: true, status: "verified" } },
+        ...(state === "done" ? { merge: { id: "mrg-1", target: "main", state: "merged", sha: "9f2c1e0" } } : {}) } },
+    { id: "agt-cl-rv", parent: "agt-cl-pl", profile: "critic", provider: "claude", status: state === "paused" ? "paused" : state === "done" ? "done" : "pending", ago: 3.9 * min,
+      result: state === "paused" ? { limit: "quota", resetAt: NOW + 38 * min } : state === "done" ? { summary: "looks right", costUsd: 0.08 } : undefined },
+  ],
+  approvals: state === "ask" ? [{ id: "apr-cl1", agentId: "agt-cl-wk", question: "Merge this agent's work into main?", ref: "capcomd/run-cl01/agt-cl-wk", target: "main", files: clampFiles, askedAgo: 0.3 * min }] : [],
+  files: state === "done" ? clampFiles.map((f) => ({ ...f, agentId: "agt-cl-wk" })) : undefined,
+});
+const proration = (state: "running" | "failed"): RunSpec => ({
+  id: "run-pr02", projectId: "prj-billing2", goal: "Fix proration rounding in billing", state: "running", startedAgo: state === "failed" ? 7.3 * min : 2.1 * min, lastAgo: 0.2 * min,
+  agents: [
+    { id: "agt-pr-pl", profile: "planner", provider: "claude", status: "running", repo: "relay", activity: "Splitting the work across relay and addriva", kind: "plan", ago: 2 * min },
+    { id: "agt-pr-w1", parent: "agt-pr-pl", profile: "worker", provider: "codex", status: state === "failed" ? "failed" : "running", repo: "relay", key: "task-prorate", activity: state === "failed" ? "Ran the tests" : "Reading the proration module", kind: "test", ago: 1.5 * min,
+      result: state === "failed" ? { error: "bun test exited 1", costUsd: 0.09, verification: { id: "vfy-2", pass: false, checks: { passed: false, status: "failed", reason: "tests failed (exit 1)", excerpt: "(fail) rounds half up\nExpected: 10.33\nReceived: 10.34" } } } : undefined },
+    { id: "agt-pr-w2", parent: "agt-pr-pl", profile: "worker", provider: "codex", status: state === "failed" ? "done" : "pending", repo: "addriva", key: "task-ledger", ago: 1.4 * min },
+  ],
+});
+const matchkey = (): RunSpec => ({
+  id: "run-mk40", projectId: "prj-matchkey2", goal: "Migrate matchkey to v3.2", state: "running", startedAgo: 18.7 * min, lastAgo: 0.05 * min,
+  agents: [
+    { id: "agt-m-pl", profile: "planner", status: "running", activity: "Waiting on 3 agents", kind: "spawn", ago: 18 * min },
+    { id: "agt-m-w1", parent: "agt-m-pl", profile: "worker", status: "done", repo: "matchkey", key: "task-7a10", ago: 17 * min },
+    { id: "agt-m-l1", parent: "agt-m-pl", profile: "lead", status: "running", repo: "ids/v1", key: "task-1b2c", activity: "Reviewing 3 workers", kind: "spawn", ago: 16 * min },
+    { id: "agt-m-w2", parent: "agt-m-l1", profile: "worker", status: "running", repo: "ids/v1", key: "task-d3ce", activity: "Editing keys.ts", kind: "edit", ago: 0.02 * min },
+    { id: "agt-m-w3", parent: "agt-m-l1", profile: "worker", status: "done", repo: "ids/v1", key: "task-4423", ago: 12 * min },
+    { id: "agt-m-w4", parent: "agt-m-l1", profile: "worker", status: "pending", repo: "ids/v1", key: "task-9b1f", ago: 11 * min },
+    { id: "agt-m-l2", parent: "agt-m-pl", profile: "lead", status: "running", repo: "addriva", key: "task-2c3d", activity: "Waiting on 2 agents", kind: "spawn", ago: 15 * min },
+    { id: "agt-m-w5", parent: "agt-m-l2", profile: "worker", provider: "codex", status: "running", repo: "addriva", key: "task-61ac", activity: "Reading api/schema.ts", kind: "read", ago: 0.5 * min },
+    { id: "agt-m-w6", parent: "agt-m-l2", profile: "worker", status: "pending", repo: "addriva", key: "task-0e7d", ago: 10 * min },
+    { id: "agt-m-cr", parent: "agt-m-pl", profile: "critic", provider: "codex", status: "pending", repo: "addriva", key: "task-c0de", ago: 9 * min },
+  ],
+});
+const older = (): RunSpec => ({ id: "run-av02", projectId: "prj-addriva2", goal: "Launch Addriva Verify docs", state: "completed", startedAgo: 40 * min, lastAgo: 36 * min,
+  agents: [{ id: "agt-av-pl", profile: "planner", status: "done", repo: "addriva", ago: 40 * min }] });
+scenes["card-running"] = [clamp("running"), proration("running"), matchkey(), older()];
+scenes["card-ask"] = [clamp("ask"), proration("running")];
+scenes["card-stopped"] = [clamp("paused"), proration("failed")];
+scenes["card-finished"] = [proration("running"), clamp("done"), older()];
+scenes["card-long"] = [matchkey()];
+scenes["cards"] = [{ ...clamp("ask") }, proration("failed"), { ...matchkey() }, { ...clamp("paused"), id: "run-cl02", projectId: "prj-e2e2",
+  agents: clamp("paused").agents.map((a) => ({ ...a, id: a.id.replace("cl-", "cl2-"), parent: a.parent?.replace("cl-", "cl2-") })) },
+  { ...clamp("done"), id: "run-cl03", projectId: "prj-e2e3", goal: "Ship the clamp helper",
+    agents: clamp("done").agents.map((a) => ({ ...a, id: a.id.replace("cl-", "cl3-"), parent: a.parent?.replace("cl-", "cl3-") })),
+    files: clampFiles.map((f) => ({ ...f, agentId: "agt-cl3-wk" })) }];
 const runs = scenes[SCENARIO];
 if (!runs) { console.error(`unknown SCENARIO ${SCENARIO}; one of ${Object.keys(scenes).join(", ")}`); process.exit(2); }
 
@@ -129,8 +191,8 @@ for (const r of runs) {
   env(r, "run.created", r.id, null, NOW - r.startedAgo, { runId: r.id, budget: {}, label: null, goal: r.goal });
   for (const a of r.agents) env(r, "agent.spawned", a.id, a.id, NOW - a.ago, { parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile,
     budget: {}, limits: {}, agent: specOf(a), task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a) });
-  for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - r.lastAgo, { approvalId: p.id, kind: "merge", question: p.question,
-    requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target }, expiresAt: null });
+  for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - (p.askedAgo ?? r.lastAgo), { approvalId: p.id, kind: "merge", question: p.question,
+    requestedBy: { agentId: p.agentId, runId: r.id }, subject: subjectOf(p), expiresAt: null });
   env(r, "run.started", r.id, null, NOW - r.lastAgo, { cause: "started" });   // bumps lastEventMs to the run's recency
   const end = { completed: "run.completed", failed: "run.failed", cancelled: "run.cancelled" }[r.state];
   if (end) env(r, end, r.id, null, NOW - r.lastAgo, { cause: r.state });
@@ -141,16 +203,22 @@ function workspaceOf(a: AgentSpec) {
   const [repo, ...rest] = a.repo.split("/");
   return { repo: `/src/${repo}`, path: rest.length ? a.repo : null, label: a.repo };
 }
+/** A merge approval's subject: target and ref, plus the parked merge's diff when the scene has one. */
+function subjectOf(p: ApprovalSpec) {
+  if (!p.files) return { ref: p.ref, target: p.target };
+  return { ref: p.ref, target: p.target, files: p.files, filesTotal: p.files.length,
+    added: p.files.reduce((n, f) => n + (f.added ?? 0), 0), removed: p.files.reduce((n, f) => n + (f.removed ?? 0), 0) };
+}
 function depthOf(r: RunSpec, a: AgentSpec): number { let d = 0, p = a.parent; while (p) { d++; p = r.agents.find(x => x.id === p)?.parent; } return d; }
 const HEAD = seq;
 
 const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, repo: null, createdAt: iso(NOW - r.startedAgo) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
   text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
-  task: a.task ?? null, taskAttachment: null, result: null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago),
+  task: a.task ?? null, taskAttachment: null, result: a.result ?? null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago),
   provider: providerOf(a), model: specOf(a).model });
 const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind: "merge", status: decided.has(p.id) ? decided.get(p.id).status : "pending",
-  question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target } });
+  question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: subjectOf(p), expiresAt: null, requestedAt: iso(NOW - (p.askedAgo ?? r.lastAgo)) });
 const decided = new Map<string, any>();
 
 // Agent threads: the lead's, plus the steer that opens it (snapshot.threads).

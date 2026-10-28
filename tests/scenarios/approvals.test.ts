@@ -2,7 +2,9 @@
 // not refused; the operator approves (it lands, same gate) or denies it. A per-run staging target
 // (`run new --target T --target-from BASE`) is created on demand; children branch from it and land on it.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { world, spawnRoot, waitAll, types, inOrder, WORKER, type World } from "./harness";
+import { world, spawnRoot, waitAll, types, inOrder, trajectory, agentsOf, WORKER, type World } from "./harness";
+import { rivetSource } from "../../src/api/rivet-source";
+import { approvalIdFor } from "../../src/api/source";
 
 let w: World;
 let worker: string;
@@ -53,6 +55,15 @@ test("protected target: the agent's merge is parked; approve lands it, deny fail
   expect(st.pendingApprovals.map((p: any) => p.taskId).sort()).toEqual([ma, mb].sort());
   expect(st.pendingApprovals[0]).toMatchObject({ kind: "merge", targetBranch: "trunk" });
   expect(await filesOn("trunk")).not.toContain("src/a.txt");
+  // Each parked merge carries the files its branch changes (the approval card's subject.files), read when it was parked.
+  const parked = (await trajectory(w, run)).filter((e: any) => e.type === "MERGE_AWAITING_APPROVAL");
+  const parkA = parked.find((e: any) => e.data.id === ma)!;
+  expect(parkA.data.diff).toMatchObject({ filesTotal: 1, removed: 0, files: [{ path: "src/a.txt", status: "added", removed: 0 }] });
+  expect(parkA.data.diff.added).toBeGreaterThan(0);
+  const pending = await rivetSource().approvals(run);
+  const apA = pending.find((p) => p.approvalId === approvalIdFor(run, ma))!;
+  expect(apA.subject).toMatchObject({ target: "trunk", filesTotal: 1, files: [{ path: "src/a.txt" }] });
+  expect(Date.parse(apA.requestedAt!)).toBeGreaterThan(0);
 
   const ok = await w.cj(["approve", run, ma, "--by", "reviewer@ops"]);
   expect(ok.code).toBe(0);
@@ -67,4 +78,8 @@ test("protected target: the agent's merge is parked; approve lands it, deny fail
   expect(await filesOn("trunk")).not.toContain("src/b.txt");
   expect((await w.cj(["status", run])).j.run.pendingApprovals).toEqual([]);
   expect(inOrder(await types(w, run), ["MERGE_AWAITING_APPROVAL", "MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGED", "MERGE_DENIED"])).toBe(true);
+  // The workers' results say how their merges ended (the app's finished card reads "Merged into trunk").
+  const byMerge = Object.fromEntries((await agentsOf(run)).filter((a: any) => a.result?.merge).map((a: any) => [a.result.merge.id, a.result.merge]));
+  expect(byMerge[ma]).toMatchObject({ target: "trunk", state: "merged", sha: expect.any(String) });
+  expect(byMerge[mb]).toMatchObject({ target: "trunk", state: "denied" });
 }, 120_000);

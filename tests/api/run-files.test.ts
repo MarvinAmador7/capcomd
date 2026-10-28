@@ -3,9 +3,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RunFiles } from "../../src/api/contract";
+import { APPROVAL_FILES_MAX, RunFiles } from "../../src/api/contract";
 import { addClient, loadClients } from "../../src/api/clients";
-import { FilesMirror, parseDiff, runFiles, useMirror, workTips } from "../../src/api/run-files";
+import { approvalDiff, FilesMirror, parseDiff, runFiles, summarizeDiff, useMirror, workTips } from "../../src/api/run-files";
 import { harnessApp } from "../../src/api/server";
 import { memorySource, type RawEvent } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
@@ -162,6 +162,34 @@ describe("runFiles", () => {
 		try {
 			expect(await m.diff(tips, "main")).toEqual(first);
 		} finally { renameSync(moved, remote); }
+	});
+});
+
+describe("approvalDiff (a parked merge's subject.files)", () => {
+	test("the verified commit against where its branch left the target: biggest change first, totals over every file", async () => {
+		const d = await approvalDiff({ ...repo, workdir: join(root, "mirror-approval") }, { agentId: "a1", sha: a1, branch: "capcomd/run-1/a1" });
+		expect(d).toEqual({
+			files: [
+				{ path: "a.txt", status: "modified", added: 2, removed: 1 },
+				{ path: "new.ts", status: "added", added: 1, removed: 0 },
+				{ path: "logo.bin", status: "modified", added: null, removed: null },
+				{ path: "renamed.txt", status: "renamed", added: 0, removed: 0 },
+			],
+			filesTotal: 4, added: 3, removed: 1,
+		});
+	});
+	test("no commit, an unsafe branch name or an unreadable remote: no diff, never an error", async () => {
+		expect(await approvalDiff(repo, { agentId: "a1", sha: null, branch: "capcomd/run-1/a1" })).toBeNull();
+		expect(await approvalDiff(repo, { agentId: "a1", sha: a1, branch: "--upload-pack=evil" })).toBeNull();
+		const gone = { remote: join(root, "no-such.git"), target: "main", workdir: join(root, "mirror-gone") };
+		expect(await approvalDiff(gone, { agentId: "a1", sha: "b".repeat(40), branch: "x" })).toBeNull();
+	});
+	test("at most APPROVAL_FILES_MAX files; the totals still count them all", () => {
+		const many = Array.from({ length: APPROVAL_FILES_MAX + 5 }, (_, i) => ({ path: `f${String(i).padStart(2, "0")}.ts`, oldPath: null, status: "modified" as const, added: i, removed: 1 }));
+		const d = summarizeDiff(many);
+		expect(d.files).toHaveLength(APPROVAL_FILES_MAX);
+		expect(d.files[0]!.path).toBe(`f${APPROVAL_FILES_MAX + 4}.ts`);
+		expect(d).toMatchObject({ filesTotal: APPROVAL_FILES_MAX + 5, added: many.reduce((n, f) => n + f.added, 0), removed: APPROVAL_FILES_MAX + 5 });
 	});
 });
 

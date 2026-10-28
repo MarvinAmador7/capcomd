@@ -292,6 +292,22 @@ final class AppModel {
     return find(tree(runId)).map { flat($0.children) } ?? []
   }
 
+  // The Active card (direction B: CapcomdStore/ActiveCard.swift, ActiveCardView.swift).
+  func card(_ p: Project) -> ActiveCard { _ = revision; return store.activeCard(p) }
+  func outcome(_ p: Project) -> CardOutcome? { _ = revision; return store.outcome(p) }
+  /// Unfold reasons the user put away ("failed:agt-…" via Hide): the card stays folded until another reason unfolds it.
+  var hiddenReasons: Set<String> = []
+  /// Cards whose agent tree is showing (by project id).
+  var treeShown: Set<String> = []
+  /// View diff: the run's drill-down with its Files tab.
+  func viewDiff(runId: String) { store.prefs.detailTab = .files; revision &+= 1; open(run: runId) }
+  /// The outcome's files and lines (GET …/files), read once per finished run.
+  @ObservationIgnored private var outcomeFilesAsked: Set<String> = []
+  func loadOutcomeFiles(_ runId: String) {
+    guard outcomeFilesAsked.insert(runId).inserted else { return }
+    Task { await store.refreshFiles(runId) }
+  }
+
   func open(run id: String) { store.openRun(id); path = [.run(id)] }
   func back() { if !path.isEmpty { path.removeLast() }; if path.isEmpty { store.closeRun() } }
   func decide(_ id: String, _ d: ApprovalDecision) { Task { _ = await store.decide(id, d) } }
