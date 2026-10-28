@@ -1,9 +1,9 @@
-import { HeroCrew, RedrawButton, RunId } from "./crew";
+import { HeroCrew } from "./crew";
 import { Win, delay } from "./marks";
 import { Nav } from "./Nav";
 import { SITE } from "@/lib/site";
 
-export function Hero({ version }: { version: string }) {
+export function Hero() {
   return (
     <header className="hero">
       <Nav />
@@ -24,7 +24,7 @@ export function Hero({ version }: { version: string }) {
           <a className="text" href={SITE.repo}>Read the README</a>
         </div>
         <div className="hero__note" data-load style={delay(620)}>
-          <p className="m-0">Crew drawn from <RunId />; every agent&apos;s bot is seeded by its id. <RedrawButton /><a href="/bots/">Make your own</a>. MIT. Early release, {version}. One executable for macOS and Linux, arm64 and x64.</p>
+          <p className="m-0">Open source. One executable for macOS and Linux.</p>
           <Win title="zsh" label="Install with Homebrew"><code tabIndex={0}>brew install MarvinAmador7/tap/capcomd</code></Win>
         </div>
       </div>

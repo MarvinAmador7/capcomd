@@ -34,7 +34,6 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 | `lib/site.ts` | The site's origin (`https://capcomd.vercel.app`, one value), the title, the description, and the licence line. |
 | `lib/crew.ts`, `lib/marks.ts` | The crew's roles and default seed (`run_7e9410`, what the static HTML is drawn with), the wordmark, the menu bar mark. |
 | `lib/vendor/bot-avatar.js` | packages/bot-avatar, bundled as one ESM file by `bun run vendor` (with hand-written types beside it). |
-| `lib/version.ts` | capcomd's version for "Early release, 0.6", read from the repo's root `package.json` at build time. |
 | `public/fonts/OFL-*.txt` | The fonts' licences, linked from the footer. |
 | `scripts/` | The vendoring script and the preview server (Bun). |
 | `CONTENT.md` | Where every claim comes from, and the sample content to confirm. |
@@ -43,8 +42,7 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 
 ## Notes
 
-Run every command from `site/`: `lib/version.ts` reads `../package.json` and `next.config.ts` roots Turbopack
-at the current folder, both relative to it.
+Run every command from `site/`: `next.config.ts` roots Turbopack at the current folder.
 
 ## Deploying on Vercel
 
@@ -58,7 +56,7 @@ Project settings (Vercel → New Project → import the capcomd repository):
 |---|---|
 | Framework preset | Next.js |
 | Root Directory | `site` |
-| Include files outside the root directory in the Build Step | On (the default). The build reads capcomd's version from the repo's root `package.json`. |
+| Include files outside the root directory in the Build Step | On (the default). |
 | Install command | `bun install --frozen-lockfile` (Vercel picks Bun from `site/bun.lock`; npm also works with `npm install`, but then there's no lockfile pinning) |
 | Build command | `bun run build` (the default `next build` works too) |
 | Output directory | Leave the default |

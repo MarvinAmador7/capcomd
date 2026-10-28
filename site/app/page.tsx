@@ -8,13 +8,12 @@ import { Reveals } from "@/components/Reveals";
 import { RoleTree } from "@/components/RoleTree";
 import { Run } from "@/components/Run";
 import { Sandboxes } from "@/components/Sandboxes";
-import { VERSION } from "@/lib/version";
 
 export default function Home() {
   return (
     <CrewProvider>
       <a className="skip" href="#main">Skip to content</a>
-      <Hero version={VERSION} />
+      <Hero />
       <main id="main" tabIndex={-1}>
         <Run />
         <Sandboxes />

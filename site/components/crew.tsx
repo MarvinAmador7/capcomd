@@ -66,17 +66,6 @@ export function AgentSuffix({ i }: { i: number }) {
   return <>{crewSuffix(seed, i)}</>;
 }
 
-export function RunId() {
-  const { seed } = useCrew();
-  return <code>{seed}</code>;
-}
-
-/** "Draw another": only shown once the page script runs (it does nothing without it). */
-export function RedrawButton() {
-  const { redraw, hydrated } = useCrew();
-  if (!hydrated) return null;
-  return <><button type="button" className="redraw" onClick={redraw}>Draw another</button>. </>;
-}
 
 /** The goal, as each later stage's panel titles the run. */
 export function GoalTitle() {
