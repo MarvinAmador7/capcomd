@@ -61,6 +61,15 @@ With `CAPCOMD_AGENT_WORKFLOW=1` (it must be set for the engine host and the CLI 
 The driver code is shared, not copied: `driveOnce` was split into `preflightDrive`, `ensureWorker`, `runAttempt` and
 `settlePushed` (`ops.ts`), which both the driver process (flag off) and the workflow's steps call.
 
+6. **The driver's settings travel with the agent** (2026-10-28). A driver process read its settings from the CLI that
+   started it; the workflow runs in the engine host, whose env is another's. So `spawn` records the spawner's drive
+   settings on the agent (`agents_v2.drive_env`): how it runs (`CAPCOMD_SPAWN_EXEC`), scripted agents' scripts and
+   spool knobs (`CAPCOMD_SCRIPT_*`), the agents file its children's profiles resolve from (`CAPCOMD_AGENTS_FILE`, as
+   that shell resolved it), the driver's timings and test killpoints. It's an allowlist (`src/utils/env.ts`): never a
+   secret (no `*_KEY`, token, credential) and no state path. Each workflow step and the run it starts apply them over
+   the host's env through an `AsyncLocalStorage` (`withDriveEnv`), so `env()` reads them for that agent only, and what
+   the agent spawns from its VM inherits them. Recorded with the flag off too (harmless, and a mixed rollout works).
+
 ### What moves to Rivet with the flag on
 
 | Today | With the flag |
@@ -120,19 +129,26 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
   detected per actor, not per process; `start` is sent before it's remembered; final prepare failures are recorded as
   DRIVE_FAILED like the driver's; the watch waits on the run's `attempt` message instead of a 1 s poll (an hour's agent
   writes ~720 loop entries instead of ~7200); the lease is claimed once, not renewed.
-- **Where driver-side settings are read.** The driver process read its environment from the CLI that started it; the
-  workflow reads the engine host's. Production settings live in config both read, but test knobs set only for one CLI
-  call (`CAPCOMD_SCRIPT_<PROFILE>` for a scripted agent) don't reach the engine: `run-planner.test.ts` fails with the
-  flag on for this reason (its planner script is passed to `capcomd run` only).
-- **Faster start shifts test timing.** `observability.test.ts` "activity line" expects to see the planner's "Waiting
-  for sub-agents" arrive as a live frame; with the flag on it is already in the stream's opening snapshot (the activity
-  is recorded as before), so the test's live-frame assertion fails.
+- **Where driver-side settings are read** (fixed, decision 6): they travel with the agent. Settings outside the
+  allowlist are the engine host's, as they always were for the worker's own actions (`CAPCOMD_REPO`, sandbox, keys).
+- **Workflow-engine argument checks.** A queue wait's timeout must be an integer (a 4000 ms lease / 3 failed the whole
+  workflow with "Not an integer"); timeouts and `sleepUntil` targets are rounded.
+
+### Chaos counterparts with the flag on
+
+The primitives chaos cases that killed a driver process have no driver to kill with the flag on; each kills the engine
+host instead, mid-step, and checks the same property (`tests/chaos/primitives.ts`):
+
+| Case | Flag off | Flag on |
+|---|---|---|
+| `driver.kill:0` | the scenario SIGKILLs the agent's driver mid-push; the takeover waits, the push runs once | killpoint `workflow.watch.running` kills the engine host while the slowed push is in flight; after the restart the lost run runs once more (2 push attempts), the push lands once, the agent finishes once |
+| `vm.rpc.spawn.before_reply:0`, `vm.rpc.await.before:0` | the parent's driver dies inside a VM's RPC | the same driver killpoint fires in the engine host, where the spool pump now runs: the engine dies, the scripted "VM" outlives it, the restarted workflow re-attaches and answers the RPC once (2 children, no duplicates) |
 
 ## Criteria to make it the default (S3, not now)
 
-1. The scenario suites, `tests/agents` and the chaos fast gate pass with the flag on, twice in a row, with no new flake:
-   the harnesses give the engine the driver-side knobs (`CAPCOMD_SPAWN_EXEC`, `CAPCOMD_SCRIPT_*`), or spawn records
-   them with the agent, and the driver-process killpoints get workflow equivalents (kill the engine mid-step).
+1. Met on 2026-10-28 (numbers under Results): the scenario suites, `tests/agents`, `test:fast` and the chaos fast
+   gate (named killpoints and primitives) pass with the flag on as with it off. Still to do: a second clean run in a
+   row on a quiet machine, and the remaining items below.
 2. The live end-to-end (`scripts/mac-subagents-e2e.sh`, boxd + Claude + Codex) passes with the flag on; a daemon
    restart mid-run of a real agent recovers.
 3. A workflow-shape change is shipped once with `getVersion` against in-flight agents (upgrade drill).

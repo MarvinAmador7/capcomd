@@ -133,6 +133,8 @@ function rowToAgent(r: any) {
     workspace: r.workspace ? (JSON.parse(r.workspace as string) as AgentWorkspace) : null,
     /** Who asked this running agent to pause (`requestPause`): its runner stops it, keeps its work and pauses it. */
     pauseRequested: (r.pause_requested as string | null) ?? null,
+    /** ADR-022: how it is driven (CAPCOMD_SPAWN_EXEC, CAPCOMD_SCRIPT_*, driver timings), as its spawner's env had it. */
+    driveEnv: r.drive_env ? (JSON.parse(r.drive_env as string) as Record<string, string>) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -283,6 +285,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "activity", "TEXT");
       await addColumn(database, "agents_v2", "workspace", "TEXT");
       await addColumn(database, "agents_v2", "pause_requested", "TEXT");
+      await addColumn(database, "agents_v2", "drive_env", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -362,6 +365,8 @@ export const scopeActor = actor({
         runId: string; agentId: string; key?: string; paramsHash: string; parent?: string | null;
         profile: string | null; ref: string | null; spec: Record<string, unknown> | null;
         task: string; contract?: Record<string, unknown> | null; budget?: Budget; operator?: boolean; grant?: Grant; review?: boolean;
+        /** ADR-022: the spawner's drive settings (not part of the params hash: a retry from another shell is the same spawn). */
+        driveEnv?: Record<string, string>;
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -415,12 +420,13 @@ export const scopeActor = actor({
         try { if (repoKv.length) runRepo = envVar("REPO", JSON.parse(repoKv[0]!.v as string) ?? {}); } catch { /* unreadable: fall back */ }
         const workspace = workspaceOf(runRepo ?? envVar("REPO"));
         await tx.execute(
-          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace, drive_env)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?, ?)`,
           params.agentId, params.runId, params.parent ?? null, d.depth, params.profile, params.ref,
           params.spec ? JSON.stringify(params.spec) : null, JSON.stringify(d.limits), params.task,
           params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now,
-          workspace ? JSON.stringify(workspace) : null
+          workspace ? JSON.stringify(workspace) : null,
+          params.driveEnv && Object.keys(params.driveEnv).length ? JSON.stringify(params.driveEnv) : null
         );
         killpoint("scope.spawn.mid");
         // Same redaction path as message bodies: the row keeps the raw task for the worker; event + attachment are redacted.

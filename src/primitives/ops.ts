@@ -9,7 +9,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from "path";
 import { client, assertEngine, cancelRun } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
+import { agentsFilePath, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
@@ -18,7 +18,7 @@ import type { ScopeAgent } from "../actors/scope";
 import type { AttachedSkill } from "../agents/skills";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
-import { env } from "../utils/env";
+import { captureDriveEnv, env } from "../utils/env";
 import { parseVerdict, reviewBrief } from "./review";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
@@ -32,8 +32,10 @@ export { startDriver };
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
 const workerOf = (runId: string, agentId: string, epoch = 1) => client().worker.getOrCreate(epoch > 1 ? [runId, agentId, `e${epoch}`] : [runId, agentId]);
 
-const LEASE_MS = Number(env("DRIVER_LEASE_MS") ?? 15_000);
-const POLL_MS = Number(env("AWAIT_POLL_MS") ?? 300);
+// Read when used, not at load: with the agent workflow (ADR-022) an engine host drives agents spawned with different
+// settings (withDriveEnv), and a driver process reads the same values either way.
+const leaseMs = () => Number(env("DRIVER_LEASE_MS") ?? 15_000);
+const pollMs = () => Number(env("AWAIT_POLL_MS") ?? 300);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Map an actor UserError (code) onto the CLI's error envelope. */
@@ -251,6 +253,9 @@ export async function spawnAgent(o: SpawnOpts) {
     profile: resolved.name, ref: ref ?? resolved.name, spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
+    // ADR-022: how this shell (or the parent's driver) drives agents travels with the agent, for the engine to use.
+    // The agents file the driver would have resolved its children's profiles from (this shell's, or the project's).
+    driveEnv: { ...captureDriveEnv(), CAPCOMD_AGENTS_FILE: agentsFilePath() },
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
@@ -327,7 +332,7 @@ export async function peekAgents(runId: string, ids: string[]) {
   for (const id of ids) {
     const a = await getAgentOrThrow(runId, id);
     if (a.status === "paused") { if (await wakeIfDue(runId, a)) kickedAt.set(id, Date.now()); out.push(a); continue; }
-    if (!TERMINAL_AGENT.has(a.status) && (!a.driver || a.driverUntil < Date.now()) && (kickedAt.get(id) ?? 0) < Date.now() - LEASE_MS) { await startDriver(runId, id); kickedAt.set(id, Date.now()); }
+    if (!TERMINAL_AGENT.has(a.status) && (!a.driver || a.driverUntil < Date.now()) && (kickedAt.get(id) ?? 0) < Date.now() - leaseMs()) { await startDriver(runId, id); kickedAt.set(id, Date.now()); }
     out.push(a);
   }
   return out;
@@ -432,7 +437,7 @@ async function engineOutage(s: any, agentId: string, driver: string, seen: Engin
       // Bounded: a call to an engine that is still starting can hang.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const c: any = await Promise.race([
-        s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }),
+        s.claimDriver({ agentId, driver, ttlMs: leaseMs() }),
         new Promise((_, no) => { timer = setTimeout(() => no(new Error("engine probe timed out")), 15_000); }),
       ]).finally(() => clearTimeout(timer));
       const now = c?.instance ?? null;
@@ -654,13 +659,13 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
 
 async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`, seen: EngineSeen = {}): Promise<ScopeAgent> {
   const s = client().scope.getOrCreate([runId]);
-  const claim = await s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(asRelay);
+  const claim = await s.claimDriver({ agentId, driver, ttlMs: leaseMs() }).catch(asRelay);
   seen.instance = (claim as { instance?: string }).instance ?? null;
   if (!claim.ok) return claim.agent;
   const a = claim.agent;
   const paused = await preflightDrive(runId, agentId, s, a);
   if (paused) return paused;
-  const hb = setInterval(() => { s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(() => {}); }, Math.max(500, LEASE_MS / 3));
+  const hb = setInterval(() => { s.claimDriver({ agentId, driver, ttlMs: leaseMs() }).catch(() => {}); }, Math.max(500, leaseMs() / 3));
   const w = workerOf(runId, agentId, a.epoch);
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   try {
@@ -787,7 +792,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
   const done = new Map<string, ScopeAgent>();
   const latest = new Map<string, ScopeAgent>();
   const noticeAt = new Map<string, number>();
-  // ADR-022: with the agent workflow, wait for the scope's "agents changed" event instead of polling every POLL_MS
+  // ADR-022: with the agent workflow, wait for the scope's "agents changed" event instead of polling every pollMs()
   // (a slow poll stays as the fallback: an event missed while reconnecting, a kick that's due).
   const feed = agentWorkflowOn() ? changeFeed(runId) : null;
   try {
@@ -801,7 +806,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       // A paused agent wakes at its reset time; until then nothing drives it.
       if (a.status === "paused") { if (await wakeIfDue(runId, a)) kicked.set(id, Date.now()); continue; }
       const stale = !a.driver || a.driverUntil < Date.now();
-      if (stale && (kicked.get(id) ?? 0) < Date.now() - LEASE_MS) { await startDriver(runId, id); kicked.set(id, Date.now()); }
+      if (stale && (kicked.get(id) ?? 0) < Date.now() - leaseMs()) { await startDriver(runId, id); kicked.set(id, Date.now()); }
       const at = a.notice?.at ?? 0;
       if (opts.notices && poll > 0 && at && at !== noticeAt.get(id)) noticed.push(a);
       noticeAt.set(id, at);
@@ -810,12 +815,12 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     if (done.size === ids.length) return { agents: ids.map((i) => view(done.get(i)!)) };
     if (noticed.length) return { notices: noticed.map((a) => ({ agentId: a.agentId, ...a.notice! })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)) };
     if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })) };
-    if (feed) await feed.wait(Math.min(EVENT_FALLBACK_MS, Math.max(0, deadline - Date.now()) + 1)); else await sleep(POLL_MS);
+    if (feed) await feed.wait(Math.min(eventFallbackMs(), Math.max(0, deadline - Date.now()) + 1)); else await sleep(pollMs());
   }
   } finally { feed?.close(); }
 }
 
-const EVENT_FALLBACK_MS = Number(env("AWAIT_FALLBACK_MS") ?? 5000);
+const eventFallbackMs = () => Number(env("AWAIT_FALLBACK_MS") ?? 5000);
 
 /**
  * The scope's `agentsChanged` events (ADR-022) as a wait: resolves at the next event, or after `ms`. An event that
