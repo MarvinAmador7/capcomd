@@ -254,18 +254,35 @@ struct StartProjectField: View {
 
 /// Asks for a project checkout (a folder `capcomd setup project` ran in) when the daemon has no default repository.
 enum ProjectFolderPicker {
-  @MainActor static func choose(prompt: String = "capcomd has no default repository. Choose the project's checkout.") -> String? {
+  /// An accessory app can't become the active app on current macOS (see SettingsWindow), and an Open panel whose app
+  /// can't become active is cancelled by the first click in it: no folder came back. So, as Settings does, the app is
+  /// a regular app while the panel is up and an accessory again after. The menu bar panel closes first (it would stay
+  /// on top); the composer shows what the picked folder needs the next time it opens.
+  @MainActor static func choose(prompt: String = "capcomd has no default repository. Choose the project's checkout.") async -> String? {
+    MenuBarPanel.close()
     let p = NSOpenPanel()
     p.canChooseDirectories = true; p.canChooseFiles = false; p.allowsMultipleSelection = false
     p.prompt = "Use This Project"; p.message = prompt
-    // A menu bar app isn't active, and macOS 14+ may decline activate(ignoringOtherApps:): the panel then opened
-    // behind the frontmost app's windows. Float it and bring it forward so the picker is always on top.
+    p.level = .floating   // above the frontmost app's windows even before the app is active
+    // Not just .accessory: a bare debug build starts as .prohibited, which can't become active either.
+    let policy = NSApp.activationPolicy()
+    if policy != .regular { NSApp.setActivationPolicy(.regular) }
     NSApp.activate()
-    p.level = .floating
-    p.orderFrontRegardless()
-    return p.runModal() == .OK ? p.url?.path : nil
+    let path: String? = await withCheckedContinuation { done in
+      p.begin { r in done.resume(returning: r == .OK ? p.url?.path : nil) }
+      p.makeKeyAndOrderFront(nil)
+    }
+    if policy != .regular && !SettingsWindow.isOpen { NSApp.setActivationPolicy(policy) }
+    return path
   }
 }
+
+/// The MenuBarExtra's panel (its window class is SwiftUI's MenuBarExtraWindow), closed as a click outside it would.
+enum MenuBarPanel {
+  @MainActor static func close() { for w in NSApp.windows where w.isVisible && isPanel(w) { w.close() } }
+  private static func isPanel(_ w: NSWindow) -> Bool { String(describing: type(of: w)).contains("MenuBarExtra") }
+}
+
 /// Composer board: the 20 pt composer card (glass on macOS 26+), its inner hairline and the soft blue focus ring.
 struct ComposerCard: View {
   let focused: Bool

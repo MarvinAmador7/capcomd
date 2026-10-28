@@ -224,7 +224,7 @@ final class AppModel {
   func startRun(_ goal: String) async -> Bool {
     var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
     var state = await store.startRun(goal: goal, choice)
-    if case .needsRepo = state, let folder = ProjectFolderPicker.choose() {
+    if case .needsRepo = state, let folder = await ProjectFolderPicker.choose() {
       // A folder that isn't set up yet shows its next steps in the composer (the goal stays: Set Up and Start). A set-up
       // one takes the run, with the project's own drivers (the daemon's, without a project, may have had none to offer).
       guard await setup.pick(folder) else { return false }
