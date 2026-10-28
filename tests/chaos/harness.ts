@@ -127,6 +127,7 @@ export function randomKillpoint(seed: number): {
     "vm.create.after_request.before_record",
     "lease.expire.mid",
     "budget.charge.mid",
+    // No longer in the code (there is no outbox): kept so the other seeds keep their killpoints; its seeds run unkilled.
     "outbox.dispatch.after_send.before_ack",
   ];
 

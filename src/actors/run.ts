@@ -9,8 +9,6 @@ import {
   setupLifecycleTables,
   transitionLifecycle,
   getLifecycle,
-  getUndispatchedOutbox,
-  markOutboxDispatched,
 } from "../utils/lifecycle";
 import { killpoint } from "../utils/killpoint";
 
@@ -63,8 +61,7 @@ export const runActor = actor({
           snapshot.value as string,
           snapshot.context,
           { type: "CREATED" },
-          `run-${runId}-created`,
-          []
+          `run-${runId}-created`
         );
       }, { name: "createRun" });
 
@@ -111,8 +108,7 @@ export const runActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `run-${runId}-plan-ready`,
-          []
+          `run-${runId}-plan-ready`
         );
       }, { name: "planReady" });
 
@@ -145,8 +141,7 @@ export const runActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `run-${runId}-all-terminal`,
-          []
+          `run-${runId}-all-terminal`
         );
       }, { name: "allTasksTerminal" });
     },
@@ -177,8 +172,7 @@ export const runActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `run-${runId}-judge-pass`,
-          []
+          `run-${runId}-judge-pass`
         );
       }, { name: "judgePass" });
     },
@@ -212,8 +206,7 @@ export const runActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `run-${runId}-judge-fail`,
-          []
+          `run-${runId}-judge-fail`
         );
       }, { name: "judgeFail" });
     },
@@ -228,7 +221,7 @@ export const runActor = actor({
       if (!snap.can(event)) return { state: runLife.state };
       const [next] = transition(runMachine, snap, event);
       await c.db.transaction(async (tx: RawAccess) => {
-        await transitionLifecycle(tx, runId, "run", next.value as string, next.context, event, `run-${runId}-config-fail`, []);
+        await transitionLifecycle(tx, runId, "run", next.value as string, next.context, event, `run-${runId}-config-fail`);
       }, { name: "configFail" });
       return { state: next.value as string };
     },
@@ -259,8 +252,7 @@ export const runActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `run-${runId}-cancel`,
-          []
+          `run-${runId}-cancel`
         );
       }, { name: "cancel" });
     },
@@ -367,111 +359,5 @@ export const runActor = actor({
         seq: Number(row.seq),
       }));
     },
-
-    async taskEvent(c, params: { runId: string; taskId: string; event: any }) {
-      const { runId, taskId, event } = params;
-      
-      const idemKey = `run-${runId}-task-${taskId}-${event.type}-${Date.now()}`;
-      
-      await c.db.transaction(async (tx: RawAccess) => {
-        const existing = await tx.execute(
-          "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
-          idemKey
-        );
-        
-        if (existing.length > 0) return;
-        
-        const rows = await tx.execute(
-          "SELECT seq FROM lifecycle WHERE entity_id = ?",
-          runId
-        );
-        
-        const seq = rows.length > 0 && rows[0] ? Number(rows[0].seq) + 1 : 1;
-        
-        await tx.execute(
-          `INSERT INTO lifecycle_events (entity_id, seq, event, idem_key, at, trace_id, span_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          runId, seq, JSON.stringify(event), idemKey, Date.now(), null, null
-        );
-        
-        await tx.execute(
-          "UPDATE lifecycle SET seq = ? WHERE entity_id = ?",
-          seq, runId
-        );
-      }, { name: "taskEvent" });
-    },
-
-    async leaseEvent(c, params: { runId: string; leaseId: string; event: any }) {
-      const { runId, leaseId, event } = params;
-      
-      const idemKey = `run-${runId}-lease-${leaseId}-${event.type}-${Date.now()}`;
-      
-      await c.db.transaction(async (tx: RawAccess) => {
-        const existing = await tx.execute(
-          "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
-          idemKey
-        );
-        
-        if (existing.length > 0) return;
-        
-        const rows = await tx.execute(
-          "SELECT seq FROM lifecycle WHERE entity_id = ?",
-          runId
-        );
-        
-        const seq = rows.length > 0 && rows[0] ? Number(rows[0].seq) + 1 : 1;
-        
-        await tx.execute(
-          `INSERT INTO lifecycle_events (entity_id, seq, event, idem_key, at, trace_id, span_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          runId, seq, JSON.stringify(event), idemKey, Date.now(), null, null
-        );
-        
-        await tx.execute(
-          "UPDATE lifecycle SET seq = ? WHERE entity_id = ?",
-          seq, runId
-        );
-      }, { name: "leaseEvent" });
-    },
-
-    async workerEvent(c, params: { runId: string; workerId: string; event: any }) {
-      const { runId, workerId, event } = params;
-      
-      const idemKey = `run-${runId}-worker-${workerId}-${event.type}-${Date.now()}`;
-      
-      await c.db.transaction(async (tx: RawAccess) => {
-        const existing = await tx.execute(
-          "SELECT idem_key FROM lifecycle_events WHERE idem_key = ?",
-          idemKey
-        );
-        
-        if (existing.length > 0) return;
-        
-        const rows = await tx.execute(
-          "SELECT seq FROM lifecycle WHERE entity_id = ?",
-          runId
-        );
-        
-        const seq = rows.length > 0 && rows[0] ? Number(rows[0].seq) + 1 : 1;
-        
-        await tx.execute(
-          `INSERT INTO lifecycle_events (entity_id, seq, event, idem_key, at, trace_id, span_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          runId, seq, JSON.stringify(event), idemKey, Date.now(), null, null
-        );
-        
-        await tx.execute(
-          "UPDATE lifecycle SET seq = ? WHERE entity_id = ?",
-          seq, runId
-        );
-      }, { name: "workerEvent" });
-    },
   }),
-
-  async onWake(c) {
-    const pending = await getUndispatchedOutbox(c.db);
-    for (const row of pending) {
-      await markOutboxDispatched(c.db, row.id);
-    }
-  },
 });

@@ -12,8 +12,6 @@ import {
   setupLifecycleTables,
   transitionLifecycle,
   getLifecycle,
-  getUndispatchedOutbox,
-  markOutboxDispatched,
 } from "../utils/lifecycle";
 import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
@@ -152,8 +150,7 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
           drainSnapshot.value as string,
           drainSnapshot.context,
           drainEvent,
-          `worker-${workerId}-drain-${Date.now()}`,
-          []
+          `worker-${workerId}-drain-${Date.now()}`
         );
       }, { name: "drain" });
 
@@ -184,8 +181,7 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
             destroySnapshot.value as string,
             destroySnapshot.context,
             destroyEvent,
-            `worker-${workerId}-destroyed-${Date.now()}`,
-            []
+            `worker-${workerId}-destroyed-${Date.now()}`
           );
         }, { name: "vmDestroyed" });
       }
@@ -258,17 +254,7 @@ export const workerActor = actor({
             snapshot.value as string,
             snapshot.context,
             { type: "PROVISIONING", ...(setup.record ? { agent: setup.record } : {}) },
-            `worker-${workerId}-provisioning`,
-            [
-              {
-                type: "workerEvent",
-                params: {
-                  runId,
-                  workerId,
-                  event: { type: "WORKER_PROVISIONING", workerId },
-                },
-              },
-            ]
+            `worker-${workerId}-provisioning`
           );
         }, { name: "provisionWorker" });
       }
@@ -322,8 +308,7 @@ export const workerActor = actor({
             newSnapshot.value as string,
             newSnapshot.context,
             event,
-            `worker-${workerId}-ready-${vmId}`,
-            []
+            `worker-${workerId}-ready-${vmId}`
           );
         }, { name: "vmReady" });
 
@@ -353,8 +338,7 @@ export const workerActor = actor({
             newSnapshot.value as string,
             newSnapshot.context,
             event,
-            `worker-${workerId}-failed`,
-            []
+            `worker-${workerId}-failed`
           );
         }, { name: "vmFailed" });
 
@@ -406,8 +390,7 @@ export const workerActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `worker-${workerId}-assign-${taskId}-${epoch}`,
-          []
+          `worker-${workerId}-assign-${taskId}-${epoch}`
         );
       }, { name: "assignTask" });
 
@@ -627,8 +610,7 @@ export const workerActor = actor({
           workerLife.state,
           { ...workerContext, vmId },
           { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}), ...(adopted ? { adopted: true } : {}), ...(setup.record ? { agent: setup.record } : {}) },
-          idemKey,
-          []
+          idemKey
         );
         await tx.execute("UPDATE push_locks SET state = 'done', sha = ?, adopted = ?, until = 0, updated_at = ? WHERE idem_key = ?", sha || null, adopted ? 1 : 0, Date.now(), idemKey);
       }, { name: "pushBranch" });
@@ -644,14 +626,6 @@ export const workerActor = actor({
       } finally {
         clearInterval(renew);
       }
-    },
-
-    async flushOutbox(c, _params: Record<string, never>) {
-      const pending = await getUndispatchedOutbox(c.db);
-      for (const row of pending) {
-        await markOutboxDispatched(c.db, row.id);
-      }
-      return { flushed: pending.length };
     },
 
     async listEventSeqs(c, _params: Record<string, never>) {
@@ -690,8 +664,7 @@ export const workerActor = actor({
           newSnapshot.value as string,
           newSnapshot.context,
           event,
-          `worker-${workerId}-done-${Date.now()}`,
-          []
+          `worker-${workerId}-done-${Date.now()}`
         );
       }, { name: "taskDone" });
     },
@@ -736,11 +709,4 @@ export const workerActor = actor({
       };
     },
   }),
-
-  async onWake(c) {
-    const pending = await getUndispatchedOutbox(c.db);
-    for (const row of pending) {
-      await markOutboxDispatched(c.db, row.id);
-    }
-  },
 });

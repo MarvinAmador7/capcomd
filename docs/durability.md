@@ -4,7 +4,7 @@
 2026-10-17. Builds on ADR-002 (event log), ADR-008 (lifecycles), rivet-sqlite.md, boxd.md, ADR-009. Claims about Rivet and boxd cite those docs; the expected behaviour below is **our design (inference)** and must be proven by the suite.
 
 ## Ground rules (design)
-- Every state change = one `c.db.transaction` writing {lifecycle row, event row with UNIQUE idem_key, outbox rows}. Side effects only run from the outbox, after commit, and must be idempotent. [rivet-sqlite.md]
+- Every state change = one `c.db.transaction` writing {lifecycle row, event row with UNIQUE idem_key}. **There is no outbox** (removed 2026-10-27: its rows were written and then marked dispatched without anything running them). A side effect runs where the transition happens (an action or a driver), before or after its commit, and is made safe to repeat by its own idempotency key (below); a crash between the effect and the commit repeats the effect, which the key turns into a no-op.
 - External effects carry idempotency keys: VM name `relay-<run8>-<worker>-e<epoch>` (boxd), git push = `--force-with-lease` to a task branch, merge = compare-and-swap on the green-branch SHA, budget = `charge_id` UNIQUE.
 - Leases carry an epoch; every worker result is guarded by `epochMatches`.
 - Every VM has a boxd `deleteAfter` TTL [boxd.md].
@@ -12,7 +12,7 @@
 ## Failure matrix
 | Failure | Expected behaviour | Recovery |
 |---|---|---|
-| Orchestrator process crash (local CLI/engine or runner) | Committed transactions survive; uncommitted ones are lost and their events never existed. Actors restart on the next request or alarm [Rivet docs]. | `onWake` re-dispatches undelivered outbox rows. In-flight model calls are lost and re-issued from the last committed state (cost: one duplicate model call). |
+| Orchestrator process crash (local CLI/engine or runner) | Committed transactions survive; uncommitted ones are lost and their events never existed. Actors restart on the next request or alarm [Rivet docs]. | Nothing is re-dispatched on wake: the caller that was running the step (a driver or an await's kick) runs it again, and its idempotency key makes a repeat a no-op. In-flight model calls are lost and re-issued from the last committed state (cost: one duplicate model call). |
 | Host reboot (local mode) | Same as a crash. The engine data dir survives on disk. | Restart `capcomd`; actors resume. Workers on boxd keep running until the lease expires. |
 | Disk loss (local mode) | **Data loss back to the last backup.** | Restore the engine data dir from backup (below). Run the reconciler: list boxd VMs and remote task branches, mark unknown work `failed`, and reap the VMs. (On Rivet Cloud, if adopted later, storage is Rivet's replicated hot tier [rivet-sqlite.md].) |
 | Worker VM death | The heartbeat stops, the lease expires, and the task returns to `pending` with epoch+1. Late results from the old epoch are rejected. | WorkerActor destroys or reaps the VM; a new VM is created under the new idem name. |
@@ -20,7 +20,7 @@
 | Rivet outage (Cloud, deferred) / local engine down | The CLI can't reach actors, but worker VMs keep running and pushing branches. No merges happen. | When Rivet is back, actors wake, process the queued heartbeats and results, and expire stale leases. |
 | Network partition (orchestrator ↔ VM) | The worker can't report; the lease expires; a new epoch is assigned elsewhere. The old worker may still push. | Pushes go to `task/<id>/e<epoch>`; only the current epoch's branch is considered. The merge CAS prevents a stale merge. |
 | Lease expiry | `LEASE_EXPIRED` → task back to `pending` (or `failed` once over the retry budget). Worker → draining → VM destroyed. | Automatic. |
-| Duplicate delivery (action retry, client retry, outbox re-dispatch) | The UNIQUE idem_key insert fails and the transaction rolls back, so the call is treated as "already applied" and returns the stored result. | Automatic. |
+| Duplicate delivery (action retry, client retry, a driver's or workflow's re-run) | The UNIQUE idem_key insert fails and the transaction rolls back, so the call is treated as "already applied" and returns the stored result. | Automatic. |
 
 ## Crash-test suite
 Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.ts`.
@@ -31,7 +31,7 @@ Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.t
   3. `merge.after_cas.before_event` and `merge.before_cas`: expect no double merge; the reconciler detects the green SHA already containing the task commit and records `merged` once.
   4. `push.mid` (the fake git remote drops the connection) and `push.after.before_event`: expect the push retried under the same branch and lease.
   5. `vm.create.after_request.before_record`: expect `ensure()` to find the VM by name, so exactly one VM exists.
-  6. `lease.expire.mid`, `budget.charge.mid`, `outbox.dispatch.after_send.before_ack`.
+  6. `lease.expire.mid`, `budget.charge.mid`. (`outbox.dispatch.after_send.before_ack` is gone with the outbox; the seeded list keeps its name so other seeds keep their killpoints.)
 - **Randomised mode:** 200 runs with a random kill point and random hit count, seeded and reproducible. Each failure prints its seed.
 - **Invariants** (checked after every run by `checkInvariants()`):
   - *No double merge:* each task id appears at most once in `merged` events, and git history has one merge commit per task.

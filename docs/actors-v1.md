@@ -10,7 +10,7 @@
 - **JudgeActor**: judges run outcome.
 
 ## 2. Crash/resume and idempotency (recalled)
-Rivet facts relied on [Doc, verified earlier]: durable `c.state` with a 1 s save throttle; `c.db` SQLite; `c.schedule.after/at` (failed one-shot schedules are not retried); `actionTimeout` default 60 s; `onWake`, `keepAwake`, `waitUntil`; queue messages are not redelivered if processing fails; workflows via `@rivet-dev/workflows`; local endpoint :6420; tests via `setupTest`. Hence: idempotency keys on every message, outbox re-dispatch on wake, no reliance on queue redelivery.
+Rivet facts relied on [Doc, verified earlier]: durable `c.state` with a 1 s save throttle; `c.db` SQLite; `c.schedule.after/at` (failed one-shot schedules are not retried); `actionTimeout` default 60 s; `onWake`, `keepAwake`, `waitUntil`; queue messages are not redelivered if processing fails; workflows via `@rivet-dev/workflows`; local endpoint :6420; tests via `setupTest`. Hence: idempotency keys on every message, no reliance on queue redelivery. (An outbox re-dispatched on wake was planned; it never had a consumer and was removed on 2026-10-27, see durability.md.)
 
 Lifecycle state (task, lease, worker, run) is governed by **ADR-008**: XState v5 pure transitions, persisted atomically with the triggering event in actor SQLite. WorkerActor provisions VMs through `SandboxProvider` (boxd first, see boxd.md).
 

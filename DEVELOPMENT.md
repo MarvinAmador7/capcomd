@@ -153,7 +153,6 @@ Named killpoints:
 - `vm.create.after_request.before_record` - Kill during VM creation
 - `lease.expire.mid` - Kill during lease expiry
 - `budget.charge.mid` - Kill during budget charge
-- `outbox.dispatch.after_send.before_ack` - Kill during outbox dispatch
 
 ## Cutting a release
 

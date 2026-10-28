@@ -12,7 +12,7 @@ relay coordinates tasks, leases, workers and runs across crashes (actors-v1.md, 
 - Persist `{state, context, version}` **together with the triggering event, atomically**, in actor SQLite (`c.db`):
   - `lifecycle(entity_id, machine, version, state, context, seq)`
   - `lifecycle_events(entity_id, seq, event, idem_key UNIQUE, at)`
-  - `outbox(...)`: actions returned by `transition` are written as outbox rows and dispatched after commit; re-dispatched on `onWake`.
+  - ~~`outbox(...)`: actions returned by `transition` are written as outbox rows and dispatched after commit; re-dispatched on `onWake`.~~ Removed 2026-10-27: no row ever had a consumer (they were marked dispatched without running). Side effects run where the transition happens, each with its own idempotency key (docs/durability.md).
 - Rehydrate with `machine.resolveState(persisted)`.
 
 ## Guards

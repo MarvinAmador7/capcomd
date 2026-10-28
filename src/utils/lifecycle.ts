@@ -21,15 +21,6 @@ export interface EventRow {
   span_id?: string;
 }
 
-export interface OutboxRow {
-  id: number;
-  entity_id: string;
-  action: string;
-  payload: string;
-  created_at: number;
-  dispatched_at?: number;
-}
-
 export async function setupLifecycleTables(db: RawAccess): Promise<void> {
   await db.execute(`
     CREATE TABLE IF NOT EXISTS lifecycle (
@@ -54,23 +45,8 @@ export async function setupLifecycleTables(db: RawAccess): Promise<void> {
       PRIMARY KEY (entity_id, seq)
     )
   `);
-
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS outbox (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      entity_id TEXT NOT NULL,
-      action TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      dispatched_at INTEGER
-    )
-  `);
-
-  await db.execute(`
-    CREATE INDEX IF NOT EXISTS idx_outbox_dispatched 
-    ON outbox(dispatched_at) 
-    WHERE dispatched_at IS NULL
-  `);
+  // No outbox: a transition's side effects run where it happens, each with its own idempotency key
+  // (docs/durability.md). Actors created before keep an unused `outbox` table.
 }
 
 async function transitionLifecycleInner(
@@ -81,7 +57,6 @@ async function transitionLifecycleInner(
   newContext: any,
   event: any,
   idemKey: string,
-  actions: Array<{ type: string; params?: any }>,
   traceMetadata?: { traceId: string; spanId: string }
 ): Promise<void> {
   const now = Date.now();
@@ -126,14 +101,6 @@ async function transitionLifecycleInner(
       entityId, machine, 1, newState, JSON.stringify(newContext), seq
     );
   }
-
-  for (const action of actions) {
-    await tx.execute(
-      `INSERT INTO outbox (entity_id, action, payload, created_at)
-       VALUES (?, ?, ?, ?)`,
-      entityId, action.type, JSON.stringify(action.params || {}), now
-    );
-  }
 }
 
 export async function getLifecycle(
@@ -160,37 +127,6 @@ export async function getLifecycle(
   };
 }
 
-export async function getUndispatchedOutbox(
-  db: RawAccess,
-  entityId?: string
-): Promise<OutboxRow[]> {
-  const rows = entityId
-    ? await db.execute(
-        "SELECT * FROM outbox WHERE dispatched_at IS NULL AND entity_id = ? ORDER BY id",
-        entityId
-      )
-    : await db.execute(
-        "SELECT * FROM outbox WHERE dispatched_at IS NULL ORDER BY id"
-      );
-
-  return rows.map((row) => ({
-    id: row.id as number,
-    entity_id: row.entity_id as string,
-    action: row.action as string,
-    payload: row.payload as string,
-    created_at: row.created_at as number,
-    dispatched_at: row.dispatched_at as number | undefined,
-  }));
-}
-
-export async function markOutboxDispatched(
-  db: RawAccess,
-  id: number
-): Promise<void> {
-  killpoint("outbox.dispatch.after_send.before_ack");
-  await db.execute("UPDATE outbox SET dispatched_at = ? WHERE id = ?", Date.now(), id);
-}
-
 export async function transitionLifecycle(
   tx: RawAccess,
   entityId: string,
@@ -199,7 +135,6 @@ export async function transitionLifecycle(
   newContext: any,
   event: any,
   idemKey: string,
-  actions: Array<{ type: string; params?: any }>,
   traceMetadata?: { traceId: string; spanId: string }
 ): Promise<void> {
   const prev = await tx.execute("SELECT state, version FROM lifecycle WHERE entity_id = ?", entityId);
@@ -209,7 +144,7 @@ export async function transitionLifecycle(
   recordStateTransition(span, from, newState, String(event?.type ?? "unknown"), version);
   const meta = traceMetadata ?? (activeSpan() ? { traceId: span.traceId, spanId: span.spanId } : undefined);
   try {
-    await transitionLifecycleInner(tx, entityId, machine, newState, newContext, event, idemKey, actions, meta);
+    await transitionLifecycleInner(tx, entityId, machine, newState, newContext, event, idemKey, meta);
     span.status.code = 1;
   } catch (error) {
     span.status = { code: 2, message: error instanceof Error ? error.message : String(error) };

@@ -254,7 +254,6 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
     emit("worker.ready", { workerId, state: worker?.state ?? "unknown" }, `✓ Worker ${workerId} ready (${worker?.state ?? "unknown"})`);
 
     await runHandle.chargeBudget({ runId, chargeId: `${runId}-worker`, amount: 0.01 });
-    await workerHandle.flushOutbox({});
 
     emit("tasks.executing", {}, "\n→ Executing tasks...");
     const mergeCfg = loadMergeConfig();
@@ -368,8 +367,6 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
       }
       if (task && !TERMINAL_TASK.has(task.state)) throw new Error(`Task ${taskId} did not settle (state ${task.state})`);
     }
-
-    await taskBoardHandle.flushOutbox({});
 
     current = await runHandle.getRun({ runId });
     if (current?.state === "cancelled") {
