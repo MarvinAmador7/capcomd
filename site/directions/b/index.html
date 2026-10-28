@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>capcomd: put a crew on it</title>
+<meta name="description" content="Durable orchestration for swarms of coding agents, driven by your agent.">
+<script>document.documentElement.classList.add('js')</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #ECEBEF;            /* a cool paper: the bots bring the colour */
+  --surface: #E1DFE6;
+  --ink: #140B22;           /* the bots' ink outline, lifted to text */
+  --muted: #4A4257;
+  --accent: #FF7410;
+  --accent-ink: #140B22;
+  --plum: #2B0E57;
+
+  --font-display: "Bebas Neue", "Arial Narrow", sans-serif;
+  --font-text: "EB Garamond", Georgia, serif;
+  --step-small: clamp(0.875rem, 0.84rem + 0.15vw, 0.9375rem);
+  --step-body: clamp(1.125rem, 1.05rem + 0.3vw, 1.3125rem);
+  --step-lead: clamp(1.375rem, 1.2rem + 0.8vw, 1.875rem);
+  --margin: 32px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.76, 0, 0.24, 1);
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 var(--step-body)/1.45 var(--font-text); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+svg { display: block; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+code { font: 500 0.82em/1.4 ui-monospace, "SF Mono", Menlo, monospace; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+
+.nav { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; align-items: center; padding: 24px var(--margin); }
+.nav__mark { grid-column: 1 / span 2; width: 128px; color: var(--ink); }
+.nav__links { grid-column: 8 / span 3; display: flex; gap: 28px; font-size: var(--step-small); }
+.nav__links a { text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 0.2em; transition: text-decoration-color 180ms ease; }
+.nav__links a:hover { text-decoration-color: currentColor; }
+.button { justify-self: end; grid-column: 11 / span 2; display: inline-flex; align-items: center; height: 46px; padding: 0 20px; background: var(--ink); color: var(--bg); font: 400 24px/1 var(--font-display); letter-spacing: 0.02em; text-decoration: none; transition: transform 140ms var(--ease-out), background-color 180ms ease, color 180ms ease; }
+.button:hover { background: var(--accent); color: var(--accent-ink); }
+.button:active { transform: scale(0.97); }
+
+/* Hero: the sentence is the layout; the crew stands where the word would be. */
+.hero { min-height: 100svh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto; }
+.sentence { align-self: center; margin: 0; padding: 0 var(--margin); font: 400 clamp(5rem, 15.2vw, 18rem)/0.84 var(--font-display); letter-spacing: -0.012em; text-transform: uppercase; white-space: nowrap; }
+.sentence .w { display: inline-block; }
+.slot { position: relative; display: inline-block; width: 2.5em; height: 0.74em; vertical-align: -0.02em; margin: 0 0.06em; background: var(--plum); border-radius: 0.07em; overflow: clip; }
+.slot__floor { position: absolute; left: 0; right: 0; bottom: 0; height: 22%; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Crect width='4' height='4' fill='%2347208A'/%3E%3Crect x='4' y='4' width='4' height='4' fill='%2347208A'/%3E%3C/svg%3E"); }
+.slot__crew { position: absolute; inset: 6% 4% 4%; display: grid; grid-template-columns: repeat(4, 1fr); align-items: end; gap: 2%; }
+.slot__crew span svg { width: 100%; height: auto; }
+.slot__word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.hero__foot { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; padding: 0 var(--margin) 40px; align-items: end; }
+.hero__lead { grid-column: 1 / span 6; margin: 0; font-size: var(--step-lead); line-height: 1.3; max-width: 34ch; }
+.hero__do { grid-column: 1 / span 6; display: flex; gap: 24px; align-items: center; margin-top: 4px; }
+.hero__do a.text { font-size: var(--step-body); text-underline-offset: 0.2em; }
+.hero__note { grid-column: 8 / span 5; grid-row: 1 / span 2; align-self: end; margin: 0; min-width: 0; font-size: var(--step-body); color: var(--ink); line-height: 1.45; }
+.hero__note code { color: var(--ink); }
+.hero__note button { all: unset; cursor: pointer; color: var(--ink); text-decoration: underline; text-underline-offset: 0.2em; }
+.cmd { display: block; max-width: 100%; margin-top: 16px; background: var(--surface); color: var(--ink); padding: 12px 14px; white-space: nowrap; overflow-x: auto; font-size: 13.5px; }
+
+/* Ask for the outcome: the headline you can type. */
+.ask { padding: 200px var(--margin) 180px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 0 24px; }
+.ask h2 { grid-column: 1 / -1; margin: 0; font: 400 clamp(4rem, 9vw, 9.5rem)/0.86 var(--font-display); text-transform: uppercase; }
+.goal { grid-column: 1 / -1; display: flex; align-items: baseline; }
+.goal textarea { all: unset; display: block; width: 100%; field-sizing: content; resize: none; overflow: hidden; font: 400 clamp(4rem, 9vw, 9.5rem)/0.92 var(--font-display); text-transform: uppercase; color: #C8530E; caret-color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.goal textarea:focus-visible { outline: none; }
+.goal:focus-within { box-shadow: 0 0.06em 0 0 var(--ink); } /* taste-skill-ignore: focus underline for the typed headline */
+.answer { grid-column: 1 / span 6; margin-top: 56px; }
+.examples { grid-column: 8 / span 5; margin-top: 56px; display: grid; align-content: start; gap: 6px; }
+.examples h3 { margin: 0 0 10px; font: 400 var(--step-lead)/1.2 var(--font-text); }
+.examples button { all: unset; cursor: pointer; font: italic 400 var(--step-lead)/1.3 var(--font-text); color: var(--muted); padding: 4px 0; transition: color 180ms ease, transform 140ms var(--ease-out); }
+.examples button:hover, .examples button[aria-pressed="true"] { color: var(--ink); }
+.examples button:active { transform: scale(0.98); }
+.examples p { margin: 28px 0 0; font-size: var(--step-body); color: var(--ink); max-width: 40ch; }
+
+/* The run, at true interface size, after the menu bar app's card (apps/menubar/design/active-card). */
+.card { width: 100%; max-width: 560px; background: #1C1B21; color: #F2F2F7; border-radius: 12px; overflow: clip; font: 400 13px/1.35 -apple-system, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif; }
+.card__in { padding: 14px 14px 12px; }
+.card__top { display: flex; justify-content: space-between; gap: 12px; }
+.card__goal { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card__time { font: 11.5px ui-monospace, "SF Mono", Menlo, monospace; color: rgba(242,242,247,0.57); font-variant-numeric: tabular-nums; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.crew { display: flex; margin-top: 10px; }
+.crew .head { width: 22px; height: 22px; border-radius: 6px; background: #2C2B33; display: grid; place-items: center; box-shadow: 0 0 0 1.5px #1C1B21; margin-right: -4px; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.crew .head svg { width: 14px; height: 14px; }
+.rows { margin-top: 12px; }
+.row { display: grid; grid-template-columns: 22px 92px 1fr; gap: 8px; align-items: start; padding: 6px 0; }
+.row + .row { box-shadow: 0 -0.5px 0 rgba(255,255,255,0.1); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.row .mark { width: 16px; height: 16px; margin-top: 1px; display: grid; place-items: center; }
+.row .mark svg { width: 14px; height: 14px; }
+.row b { font-weight: 500; }
+.row span { color: rgba(242,242,247,0.72); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #30D158; }
+.dot--run { background: transparent; box-shadow: inset 0 0 0 2px #0A84FF; width: 12px; height: 12px; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.q { padding: 12px 14px 0; font-size: 15px; font-weight: 600; letter-spacing: -0.015em; }
+.bar { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.22); padding: 10px 14px; margin-top: 12px; }
+.bar .diff { margin-right: auto; color: rgba(242,242,247,0.68); font-weight: 500; font-size: 12px; }
+.btn { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; font-weight: 500; line-height: 1; }
+.btn--deny { box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.22); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.btn--ok { background: #F2F2F7; color: #1D1D1F; font-weight: 600; min-width: 112px; display: inline-flex; gap: 8px; justify-content: center; align-items: center; }
+.btn--ok kbd { font-size: 10.5px; font-weight: 600; line-height: 15px; font-family: inherit; background: rgba(0,0,0,0.12); border-radius: 4px; padding: 0 3px; }
+.card__foot { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 10px 14px 12px; font-size: 11.5px; color: rgba(242,242,247,0.62); }
+
+footer { padding: 0 var(--margin) 32px; font-size: var(--step-small); color: var(--muted); display: flex; justify-content: space-between; gap: 24px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .js .sentence .w { transform: translateY(18px); opacity: 0; animation: rise 800ms var(--ease-expo) forwards; animation-delay: calc(var(--i) * 90ms + 120ms); }
+  .js .slot { clip-path: inset(0 100% 0 0); animation: open 1000ms var(--ease-in-out) 220ms forwards; }
+  .js .slot__crew span { transform: translateY(30%); opacity: 0; animation: rise 520ms var(--ease-out) forwards; animation-delay: calc(820ms + var(--k) * 70ms); }
+  .js [data-load] { opacity: 0; transform: translateY(12px); animation: rise 520ms var(--ease-out) forwards; animation-delay: var(--d); }
+  .js [data-reveal] { opacity: 0; transform: translateY(24px); transition: opacity 700ms var(--ease-out), transform 900ms var(--ease-out); transition-delay: var(--d, 0ms); }
+  .js [data-reveal].is-in { opacity: 1; transform: none; }
+  .crew .head { transition: transform 200ms var(--ease-out); }
+  .crew .head.is-new { animation: join 200ms var(--ease-out); }
+}
+@keyframes rise { to { opacity: 1; transform: none; } }
+@keyframes open { to { clip-path: inset(0); } }
+@keyframes join { from { opacity: 0; transform: translateX(6px); } }
+
+@media (max-width: 760px) {
+  :root { --margin: 16px; }
+  .nav { grid-template-columns: 1fr auto; padding: 16px var(--margin); }
+  .nav__links { display: none; }
+  .nav__mark { width: 108px; grid-column: auto; }
+  .button { grid-column: auto; height: 40px; font-size: 21px; padding: 0 14px; }
+  .hero { min-height: auto; }
+  .sentence { white-space: normal; font-size: 19vw; line-height: 0.86; padding-top: 9vh; padding-bottom: 32px; }
+  .hero__foot { display: block; padding-bottom: 32px; }
+  .hero__lead { font-size: 1.25rem; }
+  .hero__do { margin-top: 20px; }
+  .hero__note { margin-top: 28px; }
+  .ask { display: block; padding: 120px var(--margin) 96px; }
+  .ask h2 { font-size: 15.5vw; }
+  .goal textarea { font-size: 13vw; }
+  .answer { margin-top: 28px; }
+  .examples { margin-top: 40px; }
+  .examples button { font-size: 1.25rem; }
+  footer { flex-direction: column; }
+}
+.sentence br.phone { display: none; }
+@media (max-width: 760px) { .sentence br.phone { display: inline; } .nav .button { grid-column: auto; } }
+</style>
+</head>
+<body>
+<header class="hero">
+  <nav class="nav" aria-label="Main">
+    <a class="nav__mark" href="#" data-wordmark aria-label="capcomd home">capcomd</a>
+    <div class="nav__links"><a href="#ask">How it works</a><a href="https://github.com/MarvinAmador7/capcomd">GitHub</a></div>
+    <a class="button" href="#install">Install</a>
+  </nav>
+
+  <h1 class="sentence"><span class="w" style="--i:0">Put a</span> <span class="slot"><span class="slot__word">crew</span><span class="slot__floor" aria-hidden="true"></span><span class="slot__crew" aria-hidden="true" id="crew"></span></span><br class="phone"> <span class="w" style="--i:1">on it.</span></h1>
+
+  <div class="hero__foot">
+    <p class="hero__lead" data-load style="--d:420ms">capcomd lets your coding agent spawn a team of Claude Code and Codex agents in parallel, each in its own VM and branch, and land only the work that passed your checks and another agent's review.</p>
+    <div class="hero__do" data-load style="--d:500ms" id="install">
+      <a class="button" style="grid-column:auto" href="https://github.com/MarvinAmador7/capcomd#quickstart">Install capcomd</a>
+      <a class="text" href="https://github.com/MarvinAmador7/capcomd">Read the README</a>
+    </div>
+    <p class="hero__note" data-load style="--d:620ms">This crew was drawn just now from <code id="runid">run_…</code>. <button type="button" id="redraw">Draw another</button>. capcomd gives every agent its own pixel bot, drawn from its id: same id, same bot, forever. Free and open source (MIT), an early 0.6 release.
+      <code class="cmd">brew install MarvinAmador7/tap/capcomd</code></p>
+  </div>
+</header>
+
+<main>
+  <section class="ask" id="ask" aria-labelledby="ask-title">
+    <h2 id="ask-title" data-reveal>Use capcomd to</h2>
+    <label class="goal" data-reveal style="--d:80ms"><span class="slot__word">Your goal</span><textarea id="goal" rows="2" spellcheck="false" autocomplete="off" maxlength="60">fix the failing tests in src/</textarea></label>
+
+    <div class="answer" data-reveal style="--d:160ms">
+      <div class="card" data-ui aria-live="polite">
+        <div class="card__in">
+          <div class="card__top"><span class="card__goal" id="card-goal">Fix the failing tests in src/</span><span class="card__time">3:48</span></div>
+          <div class="crew" id="heads"></div>
+          <div class="rows">
+            <div class="row"><span class="mark" data-k="0"></span><b>planner</b><span>split the work and spawned 3 workers, each in its own VM and branch</span></div>
+            <div class="row"><span class="mark" data-k="1"></span><b>workers</b><span>worked in parallel, each committing on its own branch</span></div>
+            <div class="row"><span class="mark"><span class="dot"></span></span><b>checks</b><span><code>unit</code> passed on each branch merged with the latest main, in a throwaway VM</span></div>
+            <div class="row"><span class="mark" data-k="4"></span><b>reviewer</b><span>read each change against the acceptance criteria: pass</span></div>
+          </div>
+        </div>
+        <div class="q">Merge worker's work into main?</div>
+        <div class="bar"><span class="diff">View diff</span><span class="btn btn--deny">Deny</span><span class="btn btn--ok">Approve <kbd>↩</kbd></span></div>
+        <div class="card__foot"><span>7 agents</span><span>13 VMs, all cleaned up</span><span>3:48 end to end</span><span>about $0.37 at API prices</span></div>
+      </div>
+    </div>
+
+    <div class="examples" data-reveal style="--d:240ms">
+      <h3>Or ask for</h3>
+      <button type="button" aria-pressed="true">fix the failing tests in src/</button>
+      <button type="button" aria-pressed="false">add rate limiting to the API</button>
+      <button type="button" aria-pressed="false">fix the off-by-one in src/pager.ts</button>
+      <p>The run's shape and figures are the README's live end-to-end run: a planner, three workers and a reviewer for each change, all three merged. The faces are drawn from your words here; in a real run, from each agent's id.</p>
+    </div>
+  </section>
+</main>
+<footer><span>capcomd · MIT · comp B, art direction only</span><span>Bots drawn live by packages/bot-avatar</span></footer>
+
+<script type="module">
+import { mountBrand, botSvg, botTeam } from "../shared/brand.js";
+mountBrand();
+
+// The hero crew: a fresh run id on every visit, a planner and three agents drawn from it.
+const crewEl = document.getElementById('crew'), runEl = document.getElementById('runid');
+const roles = ['planner', 'worker', 'worker', 'critic'];
+function drawCrew(id) {
+  const team = botTeam(roles.map((role, i) => ({ seed: `${id}/${i}`, role })));
+  crewEl.innerHTML = team.map((t, i) => `<span style="--k:${i}">${botSvg({ seed: `${id}/${i}`, role: roles[i], size: 'full', traits: t, decorative: true, pose: i === 0 ? 'wave' : undefined })}</span>`).join('');
+  crewEl.querySelectorAll('svg').forEach((s) => { s.removeAttribute('width'); s.removeAttribute('height'); });
+  runEl.textContent = id;
+}
+const rid = () => 'run_' + Array.from(crypto.getRandomValues(new Uint8Array(3)), (b) => b.toString(16).padStart(2, '0')).join(''); // taste-skill-ignore: hex run id
+drawCrew(new URLSearchParams(location.hash.slice(1)).get('run') || rid());
+document.getElementById('redraw').addEventListener('click', () => drawCrew(rid()));
+
+// The headline you can type: the card answers with a crew drawn from the words.
+const input = document.getElementById('goal'), goalEl = document.getElementById('card-goal'), heads = document.getElementById('heads');
+const crewRoles = ['planner', 'worker', 'worker', 'worker', 'critic'];
+let last = [];
+function answer() {
+  const g = input.value.trim() || 'fix the failing tests in src/';
+  goalEl.textContent = g.charAt(0).toUpperCase() + g.slice(1);
+  const team = botTeam(crewRoles.map((role, i) => ({ seed: `${g}/${i}`, role })));
+  const svgs = team.map((t, i) => botSvg({ seed: `${g}/${i}`, role: crewRoles[i], size: 'xs', traits: t, decorative: true }));
+  heads.innerHTML = svgs.map((s, i) => `<span class="head${last[i] !== s ? ' is-new' : ''}">${s}</span>`).join('');
+  document.querySelectorAll('.row .mark[data-k]').forEach((m) => { m.innerHTML = svgs[+m.dataset.k]; });
+  last = svgs;
+}
+input.addEventListener('input', answer);
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+document.querySelectorAll('.examples button').forEach((b) => b.addEventListener('click', () => {
+  input.value = b.textContent; answer();
+  document.querySelectorAll('.examples button').forEach((o) => o.setAttribute('aria-pressed', o === b));
+}));
+answer();
+
+const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { e.target.classList.add('is-in'); io.unobserve(e.target); } }, { rootMargin: '0px 0px -12% 0px', threshold: 0.1 });
+document.querySelectorAll('[data-reveal]').forEach((el) => io.observe(el));
+</script>
+</body>
+</html>

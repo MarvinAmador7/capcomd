@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>capcomd: you decide what lands</title>
+<meta name="description" content="Durable orchestration for swarms of coding agents, driven by your agent.">
+<script>document.documentElement.classList.add('js')</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Stack+Sans+Headline:wght@300;400&family=Stack+Sans+Text:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #150D24;            /* the brand's deep purple, taken down to a wall */
+  --stage: #21153A;
+  --ink: #F3F0F8;
+  --muted: #BDB3D0;
+  --accent: #FF7410;
+  --accent-ink: #150D24;
+
+  --font-display: "Stack Sans Headline", system-ui, sans-serif;
+  --font-text: "Stack Sans Text", system-ui, sans-serif;
+  --step-small: clamp(0.875rem, 0.85rem + 0.1vw, 0.9375rem);
+  --step-body: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);
+  --step-head: clamp(1.75rem, 1.4rem + 1vw, 2.25rem);
+  --step-display: clamp(2.6rem, 1rem + 3.9vw, 4.6rem);
+  --margin: 32px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ui: -apple-system, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 var(--step-body)/1.5 var(--font-text); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+svg { display: block; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+.nav { display: flex; justify-content: space-between; align-items: center; padding: 28px var(--margin); }
+.nav__mark { width: 112px; color: var(--ink); }
+.nav__right { display: flex; align-items: center; gap: 28px; font-size: var(--step-small); }
+.nav__right a.text { text-decoration: none; transition: color 180ms ease; }
+.nav__right a.text:hover { color: var(--accent); }
+.button { display: inline-flex; align-items: center; height: 40px; padding: 0 18px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font: 500 15px/1 var(--font-text); text-decoration: none; transition: transform 140ms var(--ease-out), background-color 180ms ease; }
+.button:hover { background: #FF8A33; }
+.button:active { transform: scale(0.97); }
+
+/* Hero: two doors on a dark wall, one for your agent and one for you. */
+.hero { padding: 7vh var(--margin) 120px; text-align: center; }
+.hero h1 { margin: 0 auto; font: 300 var(--step-display)/1.05 var(--font-display); letter-spacing: -0.022em; }
+.hero h1 span { display: block; }
+.hero__lead { max-width: 60ch; margin: 28px auto 0; color: var(--ink); }
+.doors { display: flex; justify-content: center; gap: 80px; margin-top: 64px; text-align: left; }
+.door { width: 380px; margin: 0; text-decoration: none; transition: opacity 220ms ease; }
+.doors:hover .door:not(:hover), .doors:focus-within .door:not(:focus-visible):not(:hover) { opacity: 0.55; }
+.door__pic { aspect-ratio: 3 / 4; overflow: clip; background: #0D0817; position: relative; }
+.door__name { display: block; margin-top: 18px; font: 400 22px/1.2 var(--font-display); letter-spacing: -0.01em; }
+.door__line { display: block; margin-top: 4px; font-size: 16px; color: var(--muted); max-width: 36ch; }
+
+/* Door 1: your agent's terminal. */
+.term { display: block; position: absolute; inset: 0; padding: 22px 20px; font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: #D9D3E6; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.term .you { color: #F3F0F8; }
+.term .you::before { content: "> "; color: var(--accent); }
+.term .call { display: grid; grid-template-columns: 14px 128px 1fr; margin-top: 2px; }
+.term .call i { font-style: normal; color: #30D158; }
+.term .call b { font-weight: 500; color: #CDAAF5; }
+.term .call span { color: #A79DBB; }
+.term p { margin: 0 0 14px; }
+.term .done { margin-top: 14px; color: #F3F0F8; }
+.term .done::before { content: "● "; color: #F3F0F8; }
+
+/* Door 2 and the stage: the menu bar panel, after apps/menubar/design (active-card, brand). */
+.panel { width: 360px; background: #23222A; color: #F2F2F7; border-radius: 14px; font: 400 13px/1.35 var(--ui); overflow: clip; text-align: left; }
+.panel__in { padding: 10px; }
+.bar-top { display: flex; justify-content: flex-end; gap: 14px; align-items: center; height: 30px; padding: 0 14px; font: 500 13px/1 var(--ui); color: #F2F2F7; background: #0D0817; }
+.bar-top .mark { display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,0.14); border-radius: 5px; padding: 2px 6px; }
+.bar-top .mark svg { width: 16px; height: 16px; }
+.composer { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; background: rgba(255,255,255,0.07); border-radius: 9px; color: rgba(242,242,247,0.55); font-size: 14px; }
+.composer.is-typed { color: #F2F2F7; }
+.composer kbd { margin-left: auto; font: 500 11px/1 var(--ui); padding: 3px 5px; border-radius: 4px; box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.25); color: rgba(242,242,247,0.6); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.label { margin: 14px 4px 8px; font-size: 12px; font-weight: 600; color: rgba(242,242,247,0.6); }
+.card { background: rgba(255,255,255,0.06); border-radius: 11px; overflow: clip; }
+.card.is-asking { box-shadow: inset 0 0 0 1px rgba(255,176,32,0.6); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.card__in { padding: 12px; }
+.card__top { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: rgba(242,242,247,0.68); }
+.card__top .t { font: 11.5px var(--ui); font-variant-numeric: tabular-nums; color: rgba(242,242,247,0.57); }
+.card__title { font-size: 13px; font-weight: 600; color: #F2F2F7; }
+.sentence { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: rgba(242,242,247,0.68); }
+.sentence b { color: #F2F2F7; font-weight: 500; }
+.heads { display: flex; }
+.head { width: 18px; height: 18px; border-radius: 5px; background: #3A3942; display: grid; place-items: center; box-shadow: 0 0 0 1.5px #2C2B33; margin-right: -4px; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.head svg { width: 14px; height: 14px; }
+.heads + * { margin-left: 4px; }
+.tree { margin-top: 10px; }
+.tr { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center; height: 24px; font-size: 13px; }
+.tr .ic svg { width: 14px; height: 14px; }
+.tr.l2 { padding-left: 18px; } .tr.l3 { padding-left: 36px; }
+.tr .sub { color: rgba(242,242,247,0.55); font-size: 12px; margin-left: 6px; }
+.tr .st { font-size: 12px; color: rgba(242,242,247,0.6); display: flex; align-items: center; gap: 6px; }
+.ring { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 2px #0A84FF; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.ring.on { box-shadow: inset 0 0 0 2px #0A84FF, inset 0 0 0 4px #23222A, inset 0 0 0 6px #0A84FF; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.okmark { color: #30D158; font-weight: 600; }
+.clock { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px rgba(242,242,247,0.5); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.q { margin-top: 9px; display: flex; gap: 7px; align-items: center; font-size: 15px; font-weight: 600; letter-spacing: -0.015em; }
+.q .hand { color: #FFB020; }
+.who { display: flex; gap: 6px; align-items: center; margin-top: 5px; font-size: 11.5px; color: rgba(242,242,247,0.68); }
+.who b { color: #F2F2F7; font-weight: 500; }
+.files { display: block; margin-top: 10px; font: 11.5px/20px ui-monospace, "SF Mono", Menlo, monospace; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.files div { display: grid; grid-template-columns: 1fr 36px 36px; }
+.files div + div { box-shadow: 0 -0.5px 0 rgba(255,255,255,0.12); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.files .add { color: #30D158; text-align: right; } .files .del { color: rgba(242,242,247,0.57); text-align: right; }
+.cbar { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 10px 12px; margin-top: 12px; }
+.cbar .diff { margin-right: auto; color: rgba(242,242,247,0.68); font-weight: 500; font-size: 12px; }
+.btn { height: 28px; padding: 0 12px; border-radius: 7px; font: 500 12.5px/28px var(--ui); }
+.btn--deny { box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.2); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.btn--ok { background: #F2F2F7; color: #1D1D1F; font-weight: 600; min-width: 112px; display: inline-flex; gap: 8px; justify-content: center; align-items: center; }
+.btn--ok kbd { font: 600 10.5px/15px var(--ui); background: rgba(0,0,0,0.12); border-radius: 4px; padding: 0 3px; }
+.recent { display: flex; justify-content: space-between; padding: 12px 6px 4px; font-size: 13px; color: rgba(242,242,247,0.85); }
+.recent span:last-child { color: rgba(242,242,247,0.55); }
+.pfoot { display: flex; justify-content: space-between; padding: 11px 14px; font-size: 13px; box-shadow: 0 -0.5px 0 rgba(255,255,255,0.12); color: #F2F2F7; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.pfoot span:last-child { color: rgba(242,242,247,0.55); }
+.meet { display: grid; justify-items: center; padding: 6px 0 2px; }
+.meet .boss { width: 64px; } .meet .boss svg, .meet .kid svg { width: 100%; height: auto; }
+.meet .row { display: flex; justify-content: space-between; width: 100%; padding: 0 6px; margin-top: 10px; }
+.meet .kid { width: 32px; text-align: center; font-size: 11.5px; color: rgba(242,242,247,0.85); }
+.meet .kid small { display: block; color: rgba(242,242,247,0.55); font-size: 11px; }
+.meet .trace { width: 76%; height: 10px; margin-top: 4px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='2'%3E%3Crect width='2' height='2' fill='%23FF7410'/%3E%3C/svg%3E") repeat-x top; }
+.status { margin-top: 10px; display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: rgba(242,242,247,0.75); }
+
+/* From ask to merge: pinned fragment, changing state. */
+.story { display: grid; grid-template-columns: repeat(12, 1fr); gap: 0 24px; padding: 80px var(--margin) 120px; }
+.story__text { grid-column: 2 / span 4; grid-row: 1; }
+.story__text h2 { margin: 0 0 24px; font: 400 var(--step-head)/1.15 var(--font-display); letter-spacing: -0.015em; }
+.beat { min-height: 78vh; display: flex; flex-direction: column; justify-content: center; }
+.beat:first-of-type { min-height: 64vh; justify-content: flex-start; padding-top: 8vh; }
+.beat h3 { margin: 0; font: 300 clamp(1.75rem, 1.2rem + 1.2vw, 2.25rem)/1.15 var(--font-display); letter-spacing: -0.018em; color: var(--muted); transition: color 240ms ease; }
+.beat p { margin: 12px 0 0; max-width: 38ch; color: var(--muted); font-size: 17px; transition: color 240ms ease; }
+.beat.is-active h3, .beat.is-active p { color: var(--ink); }
+.story__stage { grid-column: 7 / span 6; grid-row: 1; position: relative; }
+.stage { position: sticky; top: 14vh; height: 600px; background: var(--stage); display: grid; place-items: center; }
+.state { grid-area: 1 / 1; opacity: 0; filter: blur(2px); transition: opacity 180ms cubic-bezier(0.23, 1, 0.32, 1), filter 180ms cubic-bezier(0.23, 1, 0.32, 1); }
+.state.is-on { opacity: 1; filter: none; }
+
+footer { padding: 30px var(--margin); display: grid; grid-template-columns: 1fr auto 1fr; font-size: var(--step-small); color: var(--muted); }
+footer span:last-child { text-align: right; }
+
+@media (prefers-reduced-motion: reduce) { .state { transition: opacity 150ms ease-out; filter: none; } }
+@media (max-width: 860px) {
+  :root { --margin: 16px; }
+  .nav { padding: 18px var(--margin); }
+  .nav__right a.text { display: none; }
+  .hero { padding: 40px var(--margin) 64px; text-align: left; }
+  .hero h1 { font-size: 6.9vw; }
+  .hero__lead { font-size: 17px; margin: 20px 0 0; text-align: left; max-width: none; }
+  .beat p { max-width: none; }
+  .doors { gap: 12px; margin-top: 40px; }
+  .door { width: calc(50% - 6px); }
+  .door__pic { aspect-ratio: 3 / 4; }
+  .door__pic > * { transform: scale(var(--s, 0.46)); transform-origin: top left; }
+  .door__pic > *, .door__pic .panel { position: absolute; inset: auto; left: 0; top: 0; width: 380px !important; height: 507px !important; }
+  .door__name { font-size: 17px; margin-top: 12px; }
+  .door__line { font-size: 15px; }
+  .story { display: block; padding: 48px var(--margin) 64px; }
+  .story__stage { display: none; }
+  .beat__pic { margin-top: 20px; background: var(--stage); display: grid; place-items: center; padding: 20px 0; overflow: clip; }
+  .beat__pic .state { opacity: 1; filter: none; }
+  .story__text h2 { margin-top: 24px; font-size: 1.6rem; }
+  .beat, .beat:first-of-type { min-height: 0; padding: 0 0 72px; justify-content: flex-start; }
+  .beat h3 { font-size: 1.5rem; }
+  footer { grid-template-columns: 1fr; gap: 6px; }
+  footer span:last-child { text-align: left; }
+}
+</style>
+</head>
+<body>
+<nav class="nav" aria-label="Main">
+  <a class="nav__mark" href="#" data-wordmark aria-label="capcomd home">capcomd</a>
+  <div class="nav__right"><a class="text" href="https://github.com/MarvinAmador7/capcomd">GitHub</a><a class="button" href="https://github.com/MarvinAmador7/capcomd#quickstart">Install</a></div>
+</nav>
+
+<header class="hero">
+  <h1><span>Your agent runs the crew.</span><span>You decide what lands.</span></h1>
+  <p class="hero__lead">capcomd is durable orchestration for swarms of coding agents. Your agent spawns them in parallel, each in its own VM and branch, and only work that passed your checks and another agent's review is merged.</p>
+
+  <div class="doors">
+    <a class="door" href="#story">
+      <div class="door__pic" data-ui>
+        <samp class="term" aria-label="A coding agent's session driving capcomd">
+          <p class="you">Use capcomd to fix the failing tests in src/: one worker per file, each verified and reviewed, then merged.</p>
+          <div class="call"><i>●</i><b>capcomd run_new</b><span>checks: unit · reviewer</span></div>
+          <div class="call"><i>●</i><b>capcomd spawn</b><span>worker · parser.ts</span></div>
+          <div class="call"><i>●</i><b>capcomd spawn</b><span>worker · pager.ts</span></div>
+          <div class="call"><i>●</i><b>capcomd spawn</b><span>worker · math.ts</span></div>
+          <div class="call"><i>●</i><b>capcomd await</b><span>3 finished</span></div>
+          <div class="call"><i>●</i><b>capcomd verify</b><span>unit passed, review passed ×3</span></div>
+          <div class="call"><i>●</i><b>capcomd merge</b><span>3 merged into main</span></div>
+          <p class="done">All three tests pass on main. Each fix was checked in a fresh VM and reviewed by another agent before it merged.</p>
+        </samp>
+      </div>
+      <span class="door__name">For your agent</span>
+      <span class="door__line">A plugin for Claude Code and Codex, an MCP server, and a CLI with a stable JSON contract.</span>
+    </a>
+    <a class="door" href="#story">
+      <div class="door__pic" data-ui>
+        <div class="panel" aria-label="The capcomd menu bar app with an approval waiting" style="width:100%;height:100%;border-radius:0">
+          <div class="bar-top"><span class="mark"><span data-mark></span>1</span><span>Wed Oct 28</span><span>9:41</span></div>
+          <div class="panel__in">
+            <div class="composer"><span>+</span><span>Start a project…</span><kbd>⌘K</kbd></div>
+            <div class="label">Active</div>
+            <div class="card is-asking">
+              <div class="card__in">
+                <div class="card__top"><span>Fix the failing tests in src/</span><span class="t">3:41</span></div>
+                <div class="q"><span class="hand"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><g fill="#FFB020"><rect x="3" y="3" width="2" height="7" rx="1"/><rect x="5.5" y="1.5" width="2" height="8" rx="1"/><rect x="8" y="2.5" width="2" height="7" rx="1"/><rect x="10.3" y="4.5" width="1.8" height="6" rx="0.9"/><rect x="3" y="7" width="9" height="6" rx="3"/><rect x="0.6" y="6.4" width="2" height="4.6" rx="1" transform="rotate(-30 1.6 8.7)"/></g></svg></span>Merge worker's work into main?</div>
+                <div class="who"><span class="head" data-bot="agt_30557" data-role="worker" data-size="xs" data-decorative="true"></span><span><b>worker</b> asked 18s ago · planner waits on it</span></div>
+                <code class="files"><div><span>src/parser.ts</span><span class="add">+11</span><span class="del">−2</span></div><div><span>src/parser.test.ts</span><span class="add">+6</span><span class="del">−0</span></div></code>
+              </div>
+              <div class="cbar"><span class="diff">View diff</span><span class="btn btn--deny">Deny</span><span class="btn btn--ok">Approve <kbd>↩</kbd></span></div>
+            </div>
+            <div class="recent"><span>Add rate limiting to the API</span><span>Done in 6m</span></div>
+          </div>
+        </div>
+      </div>
+      <span class="door__name">For you</span>
+      <span class="door__line">A macOS menu bar app to watch, approve and steer runs. Built from source for now.</span>
+    </a>
+  </div>
+</header>
+
+<main>
+  <section class="story" id="story" aria-labelledby="story-title">
+    <div class="story__stage">
+      <div class="stage" aria-hidden="true">
+        <!-- Ask -->
+        <div class="state is-on" data-state="0" data-ui><div class="panel"><div class="panel__in">
+          <div class="composer is-typed"><span>+</span><span>Fix the failing tests in src/: one worker per file</span></div>
+          <div class="label">Active</div>
+          <div class="card"><div class="card__in"><div class="meet">
+            <span class="boss" data-bot="agt_1eef0" data-role="planner" data-mood="sleepy" data-decorative="true"></span>
+            <div class="status">Nothing running. Describe a goal and a planner picks it up.</div></div></div></div>
+        </div><div class="pfoot"><span>Open capcomd</span><span>Summon ⌥Space</span></div></div></div>
+        <!-- Swarm: meet your team -->
+        <div class="state" data-state="1" data-ui><div class="panel"><div class="panel__in">
+          <div class="composer"><span>+</span><span>Start a project…</span><kbd>⌘K</kbd></div>
+          <div class="label">Active</div>
+          <div class="card"><div class="card__in">
+            <div class="card__top"><span class="card__title">Fix the failing tests in src/</span><span class="t">0:12</span></div>
+            <div class="meet">
+              <span class="boss" data-team="s" data-bot="agt_1eef0" data-role="planner" data-pose="wave" data-decorative="true"></span>
+              <div class="trace"></div>
+              <div class="row">
+                <span class="kid"><span data-team="s" data-bot="agt_30557" data-role="worker" data-decorative="true"></span>worker<small>parser</small></span>
+                <span class="kid"><span data-team="s" data-bot="agt_19223" data-role="worker" data-decorative="true"></span>worker<small>pager</small></span>
+                <span class="kid"><span data-team="s" data-bot="agt_20ddf" data-role="worker" data-decorative="true"></span>worker<small>math</small></span>
+                <span class="kid"><span data-team="s" data-bot="agt_53225" data-role="critic" data-decorative="true"></span>reviewer<small>read-only</small></span>
+              </div>
+            </div>
+            <div class="status"><span class="ring"></span>planner is splitting the work across 3 files</div>
+          </div></div>
+        </div><div class="pfoot"><span>Open capcomd</span><span>Summon ⌥Space</span></div></div></div>
+        <!-- Verify -->
+        <div class="state" data-state="2" data-ui><div class="panel"><div class="panel__in">
+          <div class="composer"><span>+</span><span>Start a project…</span><kbd>⌘K</kbd></div>
+          <div class="label">Active</div>
+          <div class="card"><div class="card__in">
+            <div class="card__top"><span class="card__title">Fix the failing tests in src/</span><span class="t">2:05</span></div>
+            <div class="tree">
+              <div class="tr"><span class="ic" data-bot="agt_1eef0" data-role="planner" data-size="xs" data-decorative="true"></span><span>planner</span><span class="st"><span class="ring on"></span></span></div>
+              <div class="tr l2"><span class="ic" data-bot="agt_30557" data-role="worker" data-size="xs" data-decorative="true"></span><span>worker<span class="sub">parser</span></span><span class="st"><span class="okmark"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#30D158" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span> unit passed</span></div>
+              <div class="tr l2"><span class="ic" data-bot="agt_19223" data-role="worker" data-size="xs" data-decorative="true"></span><span>worker<span class="sub">pager</span></span><span class="st"><span class="ring on"></span> unit running</span></div>
+              <div class="tr l2"><span class="ic" data-bot="agt_20ddf" data-role="worker" data-size="xs" data-decorative="true"></span><span>worker<span class="sub">math</span></span><span class="st"><span class="clock"></span> queued</span></div>
+            </div>
+            <div class="status">Checks run in a throwaway VM on the branch merged with the latest main.</div>
+          </div></div>
+        </div><div class="pfoot"><span>Open capcomd</span><span>Summon ⌥Space</span></div></div></div>
+        <!-- Review -->
+        <div class="state" data-state="3" data-ui><div class="panel"><div class="panel__in">
+          <div class="composer"><span>+</span><span>Start a project…</span><kbd>⌘K</kbd></div>
+          <div class="label">Active</div>
+          <div class="card"><div class="card__in">
+            <div class="card__top"><span class="card__title">Fix the failing tests in src/</span><span class="t">2:58</span></div>
+            <div class="tree">
+              <div class="tr"><span class="ic" data-bot="agt_1eef0" data-role="planner" data-size="xs" data-decorative="true"></span><span>planner</span><span class="st"><span class="ring on"></span></span></div>
+              <div class="tr l2"><span class="ic" data-bot="agt_30557" data-role="worker" data-size="xs" data-decorative="true"></span><span>worker<span class="sub">parser</span></span><span class="st"><span class="okmark"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#30D158" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span> unit passed</span></div>
+              <div class="tr l3"><span class="ic" data-bot="agt_53225" data-role="critic" data-size="xs" data-decorative="true"></span><span>reviewer</span><span class="st"><span class="okmark"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#30D158" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span> pass</span></div>
+              <div class="tr l2"><span class="ic" data-bot="agt_19223" data-role="worker" data-size="xs" data-decorative="true"></span><span>worker<span class="sub">pager</span></span><span class="st"><span class="okmark"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#30D158" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span> unit passed</span></div>
+              <div class="tr l3"><span class="ic" data-bot="agt_34335" data-role="critic" data-size="xs" data-decorative="true"></span><span>reviewer</span><span class="st"><span class="ring on"></span> reading</span></div>
+            </div>
+            <div class="status">A read-only reviewer reads each change. No verdict is a fail.</div>
+          </div></div>
+        </div><div class="pfoot"><span>Open capcomd</span><span>Summon ⌥Space</span></div></div></div>
+        <!-- Merge -->
+        <div class="state" data-state="4" data-ui><div class="panel"><div class="panel__in">
+          <div class="composer"><span>+</span><span>Start a project…</span><kbd>⌘K</kbd></div>
+          <div class="label">Active</div>
+          <div class="card is-asking">
+            <div class="card__in">
+              <div class="card__top"><span>Fix the failing tests in src/</span><span class="t">3:41</span></div>
+              <div class="q"><span class="hand"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><g fill="#FFB020"><rect x="3" y="3" width="2" height="7" rx="1"/><rect x="5.5" y="1.5" width="2" height="8" rx="1"/><rect x="8" y="2.5" width="2" height="7" rx="1"/><rect x="10.3" y="4.5" width="1.8" height="6" rx="0.9"/><rect x="3" y="7" width="9" height="6" rx="3"/><rect x="0.6" y="6.4" width="2" height="4.6" rx="1" transform="rotate(-30 1.6 8.7)"/></g></svg></span>Merge worker's work into main?</div>
+              <div class="who"><span class="head" data-bot="agt_30557" data-role="worker" data-size="xs" data-decorative="true"></span><span><b>worker</b> asked 18s ago · planner waits on it</span></div>
+              <code class="files"><div><span>src/parser.ts</span><span class="add">+11</span><span class="del">−2</span></div><div><span>src/parser.test.ts</span><span class="add">+6</span><span class="del">−0</span></div></code>
+            </div>
+            <div class="cbar"><span class="diff">View diff</span><span class="btn btn--deny">Deny</span><span class="btn btn--ok">Approve <kbd>↩</kbd></span></div>
+          </div>
+        </div><div class="pfoot"><span>Open capcomd</span><span>Summon ⌥Space</span></div></div></div>
+      </div>
+    </div>
+
+    <div class="story__text">
+      <h2 id="story-title">From ask to merge</h2>
+      <div class="beat is-active" data-beat="0"><h3>You ask for the outcome.</h3><p>Tell your coding agent, or type the goal into the menu bar. You don't run orchestration commands by hand.</p></div>
+      <div class="beat" data-beat="1"><h3>Your agent spawns the crew.</h3><p>A planner splits the work. Claude Code and Codex agents run in parallel, each in its own VM, on its own branch.</p></div>
+      <div class="beat" data-beat="2"><h3>Your checks run on every branch.</h3><p>Merged with the latest target, in a throwaway VM. Agents pick a check by name and can never write their own.</p></div>
+      <div class="beat" data-beat="3"><h3>Another agent reviews it.</h3><p>A read-only reviewer reads each change against the acceptance criteria. Checks and review must both pass.</p></div>
+      <div class="beat" data-beat="4"><h3>You approve. It lands once.</h3><p>Only the exact commit that passed merges, exactly once. Merges into protected branches wait for you.</p></div>
+    </div>
+  </section>
+</main>
+<footer><span>capcomd, MIT</span><span>comp C, art direction only</span><span>Early release 0.6</span></footer>
+
+<script type="module">
+import { mountBrand } from "../shared/brand.js";
+import { markSvg, MENU_BAR_MARK } from "../shared/bot-avatar.js";
+mountBrand();
+document.querySelectorAll('[data-mark]').forEach((el) => { el.innerHTML = markSvg(MENU_BAR_MARK, { color: '#F2F2F7' }); });
+// The stage follows the statement nearest the middle of the screen.
+const beats = [...document.querySelectorAll('.beat')], states = [...document.querySelectorAll('.state')];
+function show(i) {
+  beats.forEach((b, k) => b.classList.toggle('is-active', k === i));
+  states.forEach((s, k) => s.classList.toggle('is-on', k === i));
+}
+const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) show(+e.target.dataset.beat); }, { rootMargin: '-45% 0px -45% 0px' });
+const phone = matchMedia('(max-width: 860px)').matches;
+// Phone and tablet: the doors show the true-size fragments scaled to fit.
+new ResizeObserver((es) => es.forEach((e) => e.target.style.setProperty('--s', (e.contentRect.width / 380).toFixed(3)))).observe(document.querySelector('.door__pic'));
+document.querySelectorAll('.door__pic').forEach((d, i) => { if (i) new ResizeObserver((es) => es.forEach((e) => e.target.style.setProperty('--s', (e.contentRect.width / 380).toFixed(3)))).observe(d); });
+if (!phone) beats.forEach((b) => io.observe(b));
+if (phone) beats.forEach((b, k) => { const d = document.createElement('div'); d.className = 'beat__pic'; d.setAttribute('aria-hidden', 'true'); d.append(states[k].cloneNode(true)); b.append(d); b.classList.add('is-active'); });
+const want = new URLSearchParams(location.hash.slice(1)).get('state');
+if (want) show(+want);
+</script>
+</body>
+</html>

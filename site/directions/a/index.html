@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>capcomd: send in the swarm</title>
+<meta name="description" content="Durable orchestration for swarms of coding agents, driven by your agent.">
+<script>document.documentElement.classList.add('js')</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Brand palette (apps/menubar/design/brand/README.md), mapped onto roles. */
+  --bg: #050409;            /* the brand sheets sit on black */
+  --ink: #F3F1F6;
+  --muted: #B9B0C6;
+  --accent: #FF7410;        /* orange base: the action and the parent bot */
+  --accent-ink: #120A1F;
+  --plum-0: #12062A; --plum-1: #2B0E57; --plum-2: #47208A; --plum-3: #6B3DBA; --plum-4: #9457DC; --plum-5: #CDAAF5;
+  --line-ink: #120A1F;
+
+  --font-display: "Jersey 10", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --step-small: clamp(0.8125rem, 0.79rem + 0.1vw, 0.875rem);
+  --step-body: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);
+  --step-lead: clamp(1.25rem, 1.1rem + 0.7vw, 1.625rem);
+  --step-head: clamp(2rem, 1.2rem + 2.6vw, 3.5rem);
+  --step-display: clamp(6rem, 1rem + 12.4vw, 13.5rem);
+
+  --margin: 24px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.76, 0, 0.24, 1);
+  --t-press: 140ms; --t-hover: 180ms;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 var(--step-body)/1.5 var(--font-text); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+img, svg { display: block; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+code { font: 500 0.92em/1.4 ui-monospace, "SF Mono", Menlo, monospace; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Navigation: wordmark, three links, one action. */
+.nav { position: relative; z-index: 3; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 20px var(--margin); }
+.nav__mark { color: var(--accent); width: 132px; text-decoration: none; }
+.nav__links { display: flex; gap: 32px; font-size: var(--step-small); font-weight: 500; }
+.nav__links a { text-decoration: none; color: var(--ink); transition: color var(--t-hover) ease; }
+.nav__links a:hover { color: var(--accent); }
+.nav__cta { justify-self: end; }
+.button { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 18px; background: var(--accent); color: var(--accent-ink); font: 400 26px/1 var(--font-display); text-transform: uppercase; text-decoration: none; letter-spacing: 0.01em; border: 0; cursor: pointer; transition: transform var(--t-press) var(--ease-out), background-color var(--t-hover) ease; }
+.button:hover { background: #FF8A33; }
+.button:active { transform: scale(0.97); }
+
+/* Hero: shouted headline, the parent bot rising under it. */
+.hero { position: relative; min-height: 100svh; overflow: clip; display: grid; grid-template-rows: auto auto 1fr; }
+.hero__title { margin: 3vh 0 0; text-align: center; font: 400 var(--step-display)/0.84 var(--font-display); letter-spacing: -0.01em; text-transform: uppercase; position: relative; z-index: 2; }
+.lines .line { display: block; overflow: hidden; padding-bottom: 0.06em; margin-bottom: -0.06em; }
+.lines [data-line] { display: block; }
+.hero__stage { position: relative; display: grid; grid-template-columns: 1fr minmax(300px, 27vw) 1fr; gap: 0 48px; padding: 0 var(--margin); align-items: start; margin-top: 28px; }
+.hero__lead { max-width: 30ch; font-size: var(--step-body); line-height: 1.5; margin: 0; padding-top: 8px; }
+.hero__lead strong { font-weight: 600; }
+.hero__fact { justify-self: end; max-width: 30ch; margin: 0; padding-top: 8px; display: grid; gap: 14px; }
+.hero__fact p { margin: 0; }
+.hero__fact .cmd { display: block; background: #15111E; padding: 12px 14px; font-size: 14px; color: var(--ink); overflow-x: auto; white-space: nowrap; }
+.portrait { position: relative; aspect-ratio: 3 / 4; background: var(--plum-1); overflow: clip; }
+.portrait__dither { position: absolute; left: 0; right: 0; bottom: 0; height: 34%; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Crect width='4' height='4' fill='%2347208A'/%3E%3Crect x='4' y='4' width='4' height='4' fill='%2347208A'/%3E%3C/svg%3E"); image-rendering: pixelated; }
+.portrait__dither::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 24px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='8' shape-rendering='crispEdges'%3E%3Crect width='4' height='4' fill='%232B0E57'/%3E%3Crect x='8' y='4' width='4' height='4' fill='%232B0E57'/%3E%3Crect x='4' y='0' width='4' height='4' fill='%232B0E57'/%3E%3C/svg%3E"); }
+.portrait__bot { position: absolute; left: 50%; bottom: 6%; width: 86%; transform: translateX(-50%); }
+.portrait__bot svg { width: 100%; height: auto; }
+.portrait__tag { position: absolute; left: 16px; top: 12px; font: 400 28px/1 var(--font-display); color: var(--plum-5); text-transform: uppercase; }
+.portrait__tag b { color: var(--accent); font-weight: 400; }
+.crewline { position: absolute; right: 12px; top: 10px; display: flex; gap: 2px; }
+.crewline span { width: 34px; }
+.crewline svg { width: 100%; height: auto; }
+
+/* How a run plays out: accordion of tinted panels. */
+.run { padding: 160px var(--margin) 160px; }
+.run__intro { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; align-items: end; }
+.run__intro h2 { grid-column: 1 / span 6; margin: 0; font: 400 clamp(3rem, 1.6rem + 4vw, 6rem)/0.9 var(--font-display); text-transform: uppercase; }
+.run__intro p { grid-column: 7 / span 5; margin: 0; font-size: var(--step-lead); line-height: 1.45; }
+.stages { display: flex; height: 560px; margin-top: 64px; }
+.stage { --bgc: var(--plum-1); --fg: var(--ink); position: relative; flex: 1 1 0; min-width: 0; background: var(--bgc); color: var(--fg); overflow: clip; transition: flex-grow 450ms var(--ease-in-out); }
+.stage[aria-expanded="true"], .stage.is-open { flex-grow: 7.2; }
+.stage:nth-child(1) { --bgc: var(--plum-0); }
+.stage:nth-child(2) { --bgc: var(--plum-1); }
+.stage:nth-child(3) { --bgc: var(--plum-2); }
+.stage:nth-child(4) { --bgc: var(--plum-3); }
+.stage:nth-child(5) { --bgc: var(--plum-5); --fg: var(--line-ink); }
+.stage__tab { all: unset; position: absolute; inset: 0; cursor: pointer; z-index: 2; }
+.stage__tab:focus-visible { outline: 3px solid var(--accent); outline-offset: -6px; }
+.stage__name { position: absolute; left: 24px; bottom: 24px; transform-origin: left bottom; transform: rotate(-90deg) translate(0, 100%); font: 400 40px/1 var(--font-display); text-transform: uppercase; white-space: nowrap; transition: opacity 200ms ease; }
+.stage.is-open .stage__name { opacity: 0; }
+.stage__body h3 { pointer-events: none; }
+.stage__body { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 32px; padding: 32px; opacity: 0; visibility: hidden; transition: opacity 260ms ease 120ms, visibility 0s linear 380ms; }
+.stage.is-open .stage__body { opacity: 1; visibility: visible; transition: opacity 320ms var(--ease-out) 200ms, visibility 0s; }
+.stage.is-open .stage__tab { pointer-events: none; }
+.stage__text { display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+.stage__text h3 { margin: 0; font: 400 72px/0.9 var(--font-display); text-transform: uppercase; }
+.stage__text p { margin: 0; max-width: 36ch; font-size: 18px; line-height: 1.5; }
+.stage__pic { position: relative; min-width: 0; display: grid; place-items: center; }
+
+/* Pictures inside the stages. */
+.swarm { position: relative; width: 100%; max-width: 500px; aspect-ratio: 1; }
+.swarm svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; }
+.swarm .b { position: absolute; width: 23%; }
+.swarm .b svg { width: 100%; height: auto; }
+.swarm .b--p { width: 30%; left: 35%; top: 2%; }
+.swarm .b--1 { left: 2%; top: 60%; } .swarm .b--2 { left: 38.5%; top: 64%; } .swarm .b--3 { left: 75%; top: 60%; }
+.swarm figcaption { position: absolute; left: 0; right: 0; bottom: -4px; display: flex; justify-content: space-between; font-size: 14px; color: var(--plum-5); }
+.swarm .vm { position: absolute; font: 400 18px/1 var(--font-display); color: var(--plum-5); text-transform: uppercase; }
+
+.ask { width: 100%; max-width: 420px; background: #0B0712; padding: 18px 18px 16px; font-size: 15px; line-height: 1.5; }
+.ask .who { display: flex; align-items: center; gap: 10px; font-weight: 600; margin-bottom: 8px; color: var(--muted); font-size: 14px; }
+.check { width: 100%; max-width: 420px; background: #160A30; padding: 16px; font-size: 15px; }
+.check__row { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 10px; padding: 9px 0; }
+.check__row + .check__row { box-shadow: 0 -1px 0 rgba(205,170,245,0.14); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.ok { color: #30D158; font-weight: 600; }
+.review { display: grid; grid-template-columns: 120px 1fr; gap: 20px; align-items: center; width: 100%; max-width: 440px; }
+.review .b svg { width: 100%; height: auto; }
+.verdict { background: #1A0B38; padding: 14px 16px; font-size: 15px; }
+.verdict b { display: block; font: 400 30px/1 var(--font-display); color: #7CF29A; text-transform: uppercase; margin-bottom: 6px; }
+
+/* The approval card, built after the menu bar app's (apps/menubar/design/active-card). */
+.card { width: 100%; max-width: 400px; background: #1E1E22; color: #F2F2F7; border-radius: 11px; overflow: clip; font: 400 13px/1.35 -apple-system, "SF Pro Text", "Geist", system-ui, sans-serif; }
+.card__in { padding: 12px; }
+.card__goal { display: flex; justify-content: space-between; color: rgba(242,242,247,0.68); font-size: 12px; }
+.card__goal span:last-child { font-variant-numeric: tabular-nums; }
+.card__q { margin: 9px 0 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; display: flex; gap: 7px; align-items: center; }
+.card__who { display: flex; gap: 6px; align-items: center; margin-top: 5px; font-size: 11.5px; color: rgba(242,242,247,0.68); }
+.card__who b { color: #F2F2F7; font-weight: 500; }
+.head { width: 18px; height: 18px; border-radius: 5px; background: rgba(255,255,255,0.1); display: grid; place-items: center; }
+.head svg { width: 14px; height: 14px; }
+.files { margin-top: 10px; font: 11.5px/20px ui-monospace, "SF Mono", Menlo, monospace; } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.files div { display: grid; grid-template-columns: 1fr 36px 36px; }
+.files div + div { box-shadow: 0 -0.5px 0 rgba(255,255,255,0.12); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.files .add { color: #30D158; text-align: right; } .files .del { color: rgba(242,242,247,0.57); text-align: right; }
+.card__bar { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 10px 12px; margin-top: 12px; }
+.card__bar .diff { margin-right: auto; color: rgba(242,242,247,0.68); font-weight: 500; font-size: 12px; }
+.btn { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; font-weight: 500; line-height: 1; }
+.btn--deny { box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.2); } /* taste-skill-ignore: interface fragment, the menu bar app's own marks */
+.btn--ok { background: #F2F2F7; color: #1D1D1F; font-weight: 600; min-width: 112px; display: inline-flex; gap: 8px; justify-content: center; align-items: center; }
+.btn--ok kbd { font-size: 10.5px; font-weight: 600; line-height: 15px; font-family: inherit; background: rgba(0,0,0,0.12); border-radius: 4px; padding: 0 3px; }
+.merge-pic { display: grid; gap: 18px; justify-items: center; width: 100%; }
+.cheer { display: flex; gap: 6px; width: 70%; max-width: 300px; }
+.cheer span { flex: 1; } .cheer svg { width: 100%; height: auto; }
+
+footer { padding: 0 var(--margin) 32px; font-size: var(--step-small); color: var(--muted); display: flex; justify-content: space-between; }
+
+/* Motion: the masked headline is the one loud move; the parent bot rises after it. */
+@media (prefers-reduced-motion: no-preference) {
+  .js .hero [data-line] { transform: translateY(105%); animation: line-up 900ms var(--ease-expo) forwards; animation-delay: calc(var(--i) * 110ms + 150ms); }
+  .js .hero [data-load] { opacity: 0; transform: translateY(14px); animation: rise 520ms var(--ease-out) forwards; animation-delay: var(--d); }
+  .js .portrait { clip-path: inset(100% 0 0 0); animation: open 1000ms var(--ease-in-out) 260ms forwards; }
+  .js .portrait__bot { animation: bob 2.4s steps(2, jump-none) 1.4s infinite alternate; }
+  .stage.is-open .swarm .b { animation: join 420ms var(--ease-out) both; animation-delay: calc(240ms + var(--k, 0) * 70ms); }
+  .stage.is-open .swarm .wires { animation: fade-in 500ms ease 200ms both; }
+  .stage.is-open .check__row, .stage.is-open .review > *, .stage.is-open .merge-pic > *, .stage.is-open .ask { animation: join 420ms var(--ease-out) both; animation-delay: calc(260ms + var(--k, 0) * 70ms); }
+  .js [data-reveal] { opacity: 0; transform: translateY(24px); transition: opacity 700ms var(--ease-out), transform 900ms var(--ease-out); transition-delay: var(--d, 0ms); }
+  .js [data-reveal].is-in { opacity: 1; transform: none; }
+}
+@keyframes line-up { to { transform: none; } }
+@keyframes join { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes rise { to { opacity: 1; transform: none; } }
+@keyframes open { to { clip-path: inset(0); } }
+@keyframes bob { from { transform: translate(-50%, 0); } to { transform: translate(-50%, -6px); } }
+
+/* Tablet: the sentence and the facts stack beside the portrait. */
+@media (max-width: 1100px) and (min-width: 761px) {
+  .hero { min-height: auto; }
+  .hero__stage { grid-template-columns: 1fr minmax(260px, 38vw); gap: 32px 40px; }
+  .portrait { grid-column: 2; grid-row: 1 / span 2; }
+  .hero__lead { grid-column: 1; grid-row: 1; max-width: 40ch; }
+  .hero__fact { grid-column: 1; grid-row: 2; justify-self: start; max-width: 40ch; }
+  .run__intro p { grid-column: 7 / span 6; font-size: var(--step-body); }
+}
+/* Phone: its own composition. */
+@media (max-width: 760px) {
+  :root { --margin: 16px; --step-display: 17vw; }
+  .nav { grid-template-columns: 1fr auto; padding: 14px var(--margin); }
+  .nav__links { display: none; }
+  .nav__mark { width: 112px; }
+  .button { height: 40px; font-size: 22px; padding: 0 14px; }
+  .hero { min-height: auto; }
+  .hero__title { margin-top: 24px; font-size: 26vw; }
+  .hero__stage { grid-template-columns: 1fr; padding: 0 var(--margin); margin-top: 20px; gap: 0; }
+  .hero__lead { order: 1; padding: 0; margin: 0 0 32px; max-width: none; }
+  .portrait { order: 2; width: 72%; justify-self: center; }
+  .hero__fact { order: 3; justify-self: stretch; max-width: none; margin-top: 48px; padding: 0; position: relative; z-index: 2; }
+  .run { padding: 120px var(--margin) 96px; }
+  .run__intro { display: block; }
+  .run__intro p { margin-top: 16px; font-size: var(--step-body); }
+  .stages { flex-direction: column; height: auto; margin-top: 40px; }
+  .stage { flex: none; }
+  .stage__tab { position: relative; display: block; height: 64px; }
+  .stage__name { position: absolute; left: 16px; bottom: auto; top: 16px; transform: none; font-size: 34px; }
+  .stage.is-open .stage__name { opacity: 1; }
+  .stage__body { position: static; display: none; grid-template-columns: 1fr; padding: 0 16px 24px; opacity: 1; visibility: visible; }
+  .stage.is-open .stage__body { display: grid; }
+  .stage.is-open .stage__tab { pointer-events: auto; }
+  .stage__text h3 { display: none; }
+  .stage__text p { font-size: 17px; }
+  .swarm { max-width: 320px; margin: 0 auto; }
+  footer { flex-direction: column; gap: 6px; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .stage:not(.is-open):hover { filter: brightness(1.18); }
+}
+</style>
+</head>
+<body>
+<header class="hero">
+  <nav class="nav" aria-label="Main">
+    <a class="nav__mark" href="#" data-wordmark aria-label="capcomd home">capcomd</a>
+    <div class="nav__links">
+      <a href="#run">How it works</a>
+      <a href="https://github.com/MarvinAmador7/capcomd#safety-model">Safety</a>
+      <a href="https://github.com/MarvinAmador7/capcomd">GitHub</a>
+    </div>
+    <a class="button nav__cta" href="#install">Install</a>
+  </nav>
+
+  <h1 class="hero__title lines" aria-label="Send in the swarm">
+    <span class="line"><span data-line style="--i:0">Send in</span></span>
+    <span class="line"><span data-line style="--i:1">the swarm</span></span>
+  </h1>
+
+  <div class="hero__stage">
+    <p class="hero__lead" data-load style="--d:520ms"><strong>capcomd</strong> turns your coding agent into the orchestrator. It spawns a team of Claude Code and Codex agents in parallel, each in its own VM and branch, and lands only work that passed your checks and another agent's review.</p>
+    <figure class="portrait" aria-label="The parent bot, a planner, with its crew">
+      <div class="portrait__dither" aria-hidden="true"></div>
+      <span class="portrait__tag" aria-hidden="true">Planner <b>Servo</b></span>
+      <span class="portrait__bot" data-bot="agt_1eef0" data-role="planner" data-pose="wave" data-mood="happy" data-label="Servo, a planner bot, waving"></span>
+    </figure>
+    <div class="hero__fact" data-load style="--d:600ms" id="install">
+      <p>Free and open source under MIT. An early release (0.6): expect changes between minor versions.</p>
+      <code class="cmd">brew install MarvinAmador7/tap/capcomd</code>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="run" id="run" aria-labelledby="run-title">
+    <div class="run__intro">
+      <h2 id="run-title" data-reveal>How a run plays out</h2>
+      <p data-reveal style="--d:80ms">You ask once, in plain words. Your agent plays the rest with capcomd's moves: spawn, await, verify, merge. Your gates decide what lands.</p>
+    </div>
+
+    <div class="stages" data-reveal style="--d:160ms">
+      <article class="stage">
+        <button class="stage__tab" aria-expanded="false" aria-controls="s-ask"><span class="stage__name">Ask</span></button>
+        <div class="stage__body" id="s-ask">
+          <div class="stage__text"><h3>Ask</h3><p>Tell your coding agent the outcome you want. You don't run orchestration commands by hand.</p></div>
+          <div class="stage__pic">
+            <div class="ask" data-ui>
+              <div class="who">You, to your agent</div>
+              Use capcomd to fix the failing tests in <code>src/</code>: one worker per file, each verified and reviewed, then merged.
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="stage is-open">
+        <button class="stage__tab" aria-expanded="true" aria-controls="s-swarm"><span class="stage__name">Swarm</span></button>
+        <div class="stage__body" id="s-swarm">
+          <div class="stage__text"><h3>Swarm</h3><p>Your agent splits the work and spawns Claude Code and Codex agents that run in parallel, each in its own isolated VM on its own branch. They can't touch each other's work, or your machine.</p></div>
+          <div class="stage__pic">
+            <figure class="swarm" aria-label="A planner bot connected to three worker bots">
+              <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" shape-rendering="crispEdges">
+                <g fill="#FF7410">
+                  <rect x="49.4" y="40" width="1.2" height="1.2"/><rect x="49.4" y="43" width="1.2" height="1.2"/><rect x="49.4" y="46" width="1.2" height="1.2"/>
+                </g>
+                <g fill="#FF7410" id="trace"></g>
+              </svg>
+              <span class="b b--p" data-team="swarm" data-bot="agt_1eef0" data-role="planner" data-decorative="true"></span>
+              <span style="--k:1" class="b b--1" data-team="swarm" data-bot="agt_30557" data-role="worker" data-decorative="true"></span>
+              <span style="--k:2" class="b b--2" data-team="swarm" data-bot="agt_19223" data-role="worker" data-decorative="true"></span>
+              <span style="--k:3" class="b b--3" data-team="swarm" data-bot="agt_20ddf" data-role="worker" data-decorative="true"></span>
+              <figcaption><span>parser.ts</span><span>pager.ts</span><span>math.ts</span></figcaption>
+            </figure>
+          </div>
+        </div>
+      </article>
+
+      <article class="stage">
+        <button class="stage__tab" aria-expanded="false" aria-controls="s-verify"><span class="stage__name">Verify</span></button>
+        <div class="stage__body" id="s-verify">
+          <div class="stage__text"><h3>Verify</h3><p>Checks you named run on each branch merged with the latest target, in a throwaway VM. Agents pick a check by name; they can never write their own.</p></div>
+          <div class="stage__pic">
+            <div class="check" data-ui>
+              <div class="check__row"><span class="head" data-bot="agt_30557" data-role="worker" data-size="xs" data-decorative="true"></span><span>parser.ts · <code>unit</code></span><span class="ok">passed</span></div>
+              <div class="check__row"><span class="head" data-bot="agt_19223" data-role="worker" data-size="xs" data-decorative="true"></span><span>pager.ts · <code>unit</code></span><span class="ok">passed</span></div>
+              <div class="check__row"><span class="head" data-bot="agt_20ddf" data-role="worker" data-size="xs" data-decorative="true"></span><span>math.ts · <code>unit</code></span><span class="ok">passed</span></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="stage">
+        <button class="stage__tab" aria-expanded="false" aria-controls="s-review"><span class="stage__name">Review</span></button>
+        <div class="stage__body" id="s-review">
+          <div class="stage__text"><h3>Review</h3><p>A separate, read-only reviewer agent reads each change against the acceptance criteria. Checks and review must both pass; a missing or garbled verdict is a fail.</p></div>
+          <div class="stage__pic">
+            <div class="review">
+              <span class="b" data-bot="agt_53225" data-role="critic" data-decorative="true"></span>
+              <div class="verdict" data-ui><b>Pass</b>The fix matches the failing test and changes nothing else.</div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="stage">
+        <button class="stage__tab" aria-expanded="false" aria-controls="s-merge"><span class="stage__name">Merge</span></button>
+        <div class="stage__body" id="s-merge">
+          <div class="stage__text"><h3>Merge</h3><p>Only the exact commit that passed lands, and every merge happens exactly once. Merges into protected branches wait for you.</p></div>
+          <div class="stage__pic">
+            <div class="merge-pic">
+              <div class="card" data-ui aria-label="An approval in the capcomd menu bar app">
+                <div class="card__in">
+                  <div class="card__goal"><span>Fix the failing tests in src/</span><span>3:41</span></div>
+                  <p class="card__q">Merge worker's work into main?</p>
+                  <div class="card__who"><span class="head" data-bot="agt_30557" data-role="worker" data-size="xs" data-decorative="true"></span><span><b>worker</b> asked 18s ago · planner waits on it</span></div>
+                  <div class="files">
+                    <div><span>src/parser.ts</span><span class="add">+11</span><span class="del">−2</span></div>
+                    <div><span>src/parser.test.ts</span><span class="add">+6</span><span class="del">−0</span></div>
+                  </div>
+                </div>
+                <div class="card__bar"><span class="diff">View diff</span><span class="btn btn--deny">Deny</span><span class="btn btn--ok">Approve <kbd>↩</kbd></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+    </div>
+  </section>
+</main>
+<footer><span>capcomd · MIT · comp A, art direction only</span><span>Every agent's bot is drawn from its id by packages/bot-avatar</span></footer>
+
+<script type="module">
+import { mountBrand } from "../shared/brand.js";
+mountBrand();
+// Accordion: one stage open at a time.
+const stages = [...document.querySelectorAll('.stage')];
+const open = (s) => stages.forEach((o) => { const on = o === s; o.classList.toggle('is-open', on); o.querySelector('.stage__tab').setAttribute('aria-expanded', on); });
+stages.forEach((s) => s.querySelector('.stage__tab').addEventListener('click', () => open(s)));
+// #open=merge opens a stage on load (for sharing and for the comp's screenshots).
+const want = new URLSearchParams(location.hash.slice(1)).get('open');
+if (want) { const s = stages.find((x) => x.querySelector('h3').textContent.toLowerCase() === want); if (s) open(s); }
+// Dotted pixel traces from the planner to its workers, like the brand's orchestration board.
+const tr = document.getElementById('trace');
+if (tr) { let h = ''; const dot = (x, y) => h += `<rect x="${x}" y="${y}" width="1.2" height="1.2"/>`;
+  for (let x = 13; x <= 86.5; x += 3) dot(x, 48.4);
+  for (const [x, y1] of [[13, 58], [49.4, 62], [86, 58]]) for (let y = 51.4; y <= y1; y += 3) dot(x, y);
+  tr.innerHTML = h; }
+const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { e.target.classList.add('is-in'); io.unobserve(e.target); } }, { rootMargin: '0px 0px -12% 0px', threshold: 0.1 });
+document.querySelectorAll('[data-reveal]').forEach((el) => io.observe(el));
+</script>
+</body>
+</html>
