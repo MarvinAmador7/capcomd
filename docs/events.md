@@ -2155,6 +2155,67 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `project.configured`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The checkout's root (absolute)"
+    },
+    "name": {
+      "type": "string",
+      "description": "Its name in capcomd's projects"
+    },
+    "mode": {
+      "type": "string",
+      "description": "pr or direct"
+    },
+    "target": {
+      "type": "string",
+      "description": "The target branch"
+    },
+    "check": {
+      "type": "string",
+      "description": "The check command (\"\" for none), as the user typed it"
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "claude and/or codex"
+    },
+    "budgetUsd": {
+      "description": "The spend cap per run in USD; null for none",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that set it up (cli-…)"
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "mode",
+    "target",
+    "check",
+    "agents",
+    "budgetUsd",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability projects.setup. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client set a folder up as a capcomd project with POST /v1/projects and something changed (its settings, its profiles or capcomd's project list). `entity` is project:<name>; the envelope text is daemon-written (\"Set up app (~/src/app): pull requests into main, with Claude Code and Codex.\"). Never a secret"
+}
+```
+
 ## `sandbox.resource_deleted`
 
 ```json

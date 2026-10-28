@@ -38,6 +38,8 @@ public enum Capability {
   public static let sandboxesResources = "sandboxes.resources"
   /// `POST …/resources/{id}/actions/{action}` (phase 3).
   public static let sandboxesActions = "sandboxes.actions"
+  /// `GET /v1/projects/inspect` and `POST /v1/projects`: set a folder up as a capcomd project from the app.
+  public static let projectsSetup = "projects.setup"
 }
 
 extension CapcomdStore {

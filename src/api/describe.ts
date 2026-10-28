@@ -59,6 +59,7 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "sandbox.settings_changed": return "A place's setting was changed.";
 		case "sandbox.resource_action": return "A machine was acted on from capcomd.";
 		case "sandbox.resource_deleted": return "A machine was deleted.";
+		case "project.configured": return "A project was set up.";
 		default: return type.replace(/[._]/g, " ") + ".";
 	}
 }

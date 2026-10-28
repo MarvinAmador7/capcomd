@@ -13,6 +13,7 @@ import { LISTED_PROVIDERS } from "../providers/registry";
 import { sandboxSurface, type ActionOutcome, type MachineOwner, type RecordedMachine, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
 import type { VmInfo } from "../providers/sandbox";
 import { memorySettingsStore, type SettingsStore } from "../providers/settings";
+import { inspectProject, setUpProject, type ProjectDeps, type ProjectInspection, type ProjectSetupInput, type SetupOutcome } from "./projects";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
@@ -87,6 +88,10 @@ export interface HarnessSource {
 	control(runId: string, action: RunAction, by: string, agentId?: string): Promise<ControlResult>;
 	/** Send `to` a message from the operator, with skills to read with it; idempotent by `key`. */
 	send(runId: string, to: string, body: string, key: string, skills?: AttachedSkill[]): Promise<{ seq: number; note: string | null }>;
+	/** GET /v1/projects/inspect (capability projects.setup): a folder's facts and what blocks setting it up. Writes nothing. */
+	inspectProject(path: string): Promise<ProjectInspection>;
+	/** POST /v1/projects, the body's shape already checked: checks it against the folder, writes the project, lists it. */
+	setUpProject(input: ProjectSetupInput): Promise<SetupOutcome>;
 }
 export type RunAction = "pause" | "resume" | "cancel";
 export type ControlResult = { changed: string[]; pending: string[]; noop: string | null };
@@ -160,6 +165,10 @@ export function memorySource(seed: Partial<{
 	settings: SettingsStore;
 	/** An orphan's Delete (`provider.destroy`). Default: records it in `destroyed` and drops the machine from `machines`. */
 	destroy: (name: ListedProvider, vmId: string) => Promise<void>;
+	/** Project setup (GET /v1/projects/inspect, POST /v1/projects) reads and writes real folders: the environment whose
+	 *  CAPCOMD_HOME holds the project list (default process.env), whether `gh` is logged in (default no), the logins
+	 *  (default `logins`). */
+	projects: Partial<ProjectDeps>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
@@ -234,6 +243,7 @@ export function memorySource(seed: Partial<{
 		return out;
 	};
 	controlOf = control;
+	const projectDeps: ProjectDeps = { env: process.env, logins: loginsOf, ghReady: async () => false, ...seed.projects };
 	return {
 		version: "test",
 		decided,
@@ -291,6 +301,8 @@ export function memorySource(seed: Partial<{
 			return run;
 		},
 		repo: async (r) => seed.repos?.[r] ?? null,
+		inspectProject: (path) => inspectProject(path, projectDeps),
+		setUpProject: (input) => setUpProject(input, projectDeps),
 	};
 }
 export type { Decision };

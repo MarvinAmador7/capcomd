@@ -301,3 +301,24 @@ extension DaemonInfoFetching {
   public func updateSandboxSettings(_ name: String, values: [String: String], rev: String) async throws -> SandboxDetail { throw DetailUnavailable.unsupported }
   public func resourceAction(sandbox: String, id: String, action: String, idempotencyKey: String) async throws -> ResourceActionResult { throw DetailUnavailable.unsupported }
 }
+
+/// `GET /v1/projects/inspect` and `POST /v1/projects` (capability `projects.setup`): set up a folder the person picked as
+/// a capcomd project, without Terminal. Inspect needs the `read` scope; setting up needs `configure`.
+public protocol ProjectSettingUp: Sendable {
+  /// What the form needs for `path` (an absolute folder on the daemon's machine) and what blocks it (`problems`); writes
+  /// nothing. `DetailUnavailable.unsupported` on daemons without the route.
+  func inspectProject(path: String) async throws -> ProjectInspection
+  /// Writes the project's settings and profiles, as `capcomd setup project` does. Throws `ProjectSetupRefused` when the
+  /// daemon says no; any other error is a transport failure (safe to retry with the same key).
+  func setUpProject(_ request: ProjectSetupRequest, idempotencyKey: String) async throws -> ProjectSetupResult
+}
+
+/// `POST /v1/projects` said no.
+public enum ProjectSetupRefused: Error, Sendable, Hashable {
+  /// 403 `forbidden`: this app's token lacks the `configure` scope.
+  case forbidden
+  /// 422 `invalid`: the daemon's sentence, and the form field it is about (path, mode, target, check, agents, budgetUsd).
+  case invalid(String, field: String?)
+  /// 409 `conflict`: the folder changed since it was inspected (its origin is `repo` now), or the key was reused.
+  case conflict(String, repo: String?)
+}

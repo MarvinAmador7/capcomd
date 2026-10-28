@@ -60,14 +60,21 @@ export function readConfig(path: string | null): CapcomdConfig {
   try { const v = JSON.parse(readFileSync(path, "utf8")); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 }
 
-/** Merge `patch` into the config at `path` (env maps merge key by key). */
-export function writeConfig(path: string, patch: CapcomdConfig): CapcomdConfig {
-  const cur = readConfig(path);
+/** `patch` merged into `cur` as writeConfig does it (env and run merge key by key; other keys are replaced). */
+export function mergeConfig(cur: CapcomdConfig, patch: CapcomdConfig): CapcomdConfig {
   const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) } };
   if (!Object.keys(next.env!).length) delete next.env;
   if (!Object.keys(next.run!).length) delete next.run;
+  return next;
+}
+/** A config file's bytes. */
+export const configText = (c: CapcomdConfig) => JSON.stringify(c, null, 2) + "\n";
+
+/** Merge `patch` into the config at `path` (env maps merge key by key). */
+export function writeConfig(path: string, patch: CapcomdConfig): CapcomdConfig {
+  const next = mergeConfig(readConfig(path), patch);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  writeFileSync(path, configText(next), { mode: 0o600 });
   return next;
 }
 

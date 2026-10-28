@@ -342,5 +342,13 @@ export function rivetSource(): HarnessSource {
 			const r = await sendToAgent(runId, { to, from: "operator", body, key, ...(skills?.length ? { skills } : {}) });
 			return { seq: r.seq, note: r.note };
 		},
+		inspectProject: async (path) => { const P = await import("./projects"); return P.inspectProject(path, await projectDeps()); },
+		setUpProject: async (input) => { const P = await import("./projects"); return P.setUpProject(input, await projectDeps()); },
 	};
+}
+
+/** Project setup runs in the daemon's own environment, with its logins and its `gh`. */
+async function projectDeps(): Promise<import("./projects").ProjectDeps> {
+	const P = await import("./projects");
+	return { env: process.env, logins: async () => (await import("./settings")).logins(), ghReady: () => P.ghReady() };
 }

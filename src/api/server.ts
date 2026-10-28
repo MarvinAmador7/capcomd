@@ -5,7 +5,7 @@
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, ProjectSetupBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
@@ -69,7 +69,12 @@ export function harnessApp(o: ServerOptions) {
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
 	const router = {
 		health: os.health.handler(() => ({ ok: true as const, api: "harness.v1" as const, version: src.version, capabilities: [...CAPABILITY_NAMES] })),
-		projects: { list: os.projects.list.handler(() => src.projects()) },
+		projects: {
+			list: os.projects.list.handler(() => src.projects()),
+			inspect: os.projects.inspect.handler(({ input }) => src.inspectProject(input.path)),
+			// Served natively below (Idempotency-Key, the configure scope): this handler is never reached.
+			setup: os.projects.setup.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+		},
 		runs: {
 			list: os.runs.list.handler(() => src.runs()),
 			get: os.runs.get.handler(async ({ input }) => (await src.runs()).find((r) => r.id === input.runId) ?? (() => { throw nf(input.runId); })()),
@@ -159,8 +164,10 @@ export function harnessApp(o: ServerOptions) {
 		if (c.req.method === "GET" && c.req.path === "/v1/health") return next();
 		const cl = authenticate(c.req.header("authorization"), clients());
 		if (!cl) return err(c, 401, "unauthorized", "missing or unknown bearer token (create one with `capcomd clients add`)");
-		// PATCH changes settings (capability sandboxes.settings): the configure scope, which steering a run doesn't give.
-		const need: ClientScope = c.req.method === "GET" ? "read" : c.req.method === "PATCH" ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
+		// PATCH changes settings (capability sandboxes.settings) and POST /v1/projects sets a folder up (projects.setup): the
+		// configure scope, which steering a run doesn't give.
+		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && c.req.path === "/v1/projects");
+		const need: ClientScope = c.req.method === "GET" ? "read" : configures ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
 		if (!cl.scopes.includes(need)) return err(c, 403, "forbidden", `token lacks the ${need} scope`);
 		c.set("client", cl);
 		return next();
@@ -412,6 +419,31 @@ export function harnessApp(o: ServerOptions) {
 				state.recordDaemonEvent(resourceDeletedEvent(name, id, "action"));
 			}
 			return { status: 200, body: { resource: r.resource, changed: r.changed } };
+		});
+	});
+
+	// POST /v1/projects (capability projects.setup; the configure scope, checked above): set a folder up as a project. The
+	// write-route Idempotency-Key rules: a replay answers the first 200 and writes nothing again; only a 200 is kept. A
+	// setup that changed something is audited on the daemon stream (project.configured).
+	app.post("/v1/projects", async (c) => {
+		const parsed = ProjectSetupBody.safeParse(await c.req.json().catch(() => undefined));
+		if (!parsed.success) {
+			const i = parsed.error.issues[0];
+			const field = typeof i?.path[0] === "string" ? i.path[0] : undefined;
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {path, mode, target, check, agents, budgetUsd?, expect?}", field ? { field } : {});
+		}
+		const b = parsed.data;
+		return idempotent(c, ["projects.setup", b.path, b.mode, b.target, b.check, b.agents, b.budgetUsd ?? null, b.expect ? (b.expect.repo ?? null) : "-"], async (client) => {
+			const r = await src.setUpProject(b);
+			if (!r.ok) {
+				const { ok: _, status, ...body } = r;
+				return { status, body };
+			}
+			if (r.changed) state.recordDaemonEvent({
+				type: "project.configured", entity: `project:${r.project.name}`,
+				text: r.event.text, data: { path: r.project.root, name: r.project.name, ...r.event.data, clientId: client.clientId },
+			});
+			return { status: 200, body: { project: r.project, changed: r.changed } };
 		});
 	});
 

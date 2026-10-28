@@ -26,9 +26,11 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
 	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "invalid", "internal", "unavailable"])
-		.describe("conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read. unavailable (503, capability sandboxes.actions): a provider didn't answer during an action. Treat a code you don't know as a generic error"),
+		.describe("conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action. Treat a code you don't know as a generic error"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
+	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd)"),
+	problem: z.string().optional().describe("422 invalid from POST /v1/projects: the inspect problem code that blocks the folder (not_git, home, no_origin, not_github, not_found)"),
 });
 export const ERROR_STATUSES = [401, 404, 409, 422] as const;
 
@@ -253,6 +255,16 @@ export const EventData = {
 		}).nullable().describe("Who used the machine when the action ran: the agent that was cancelled (ids and role only, never its task); null for a machine left behind"),
 		clientId: z.string().describe("The API client that acted (cli-…)"),
 	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client's action on a machine (POST /v1/sandboxes/{name}/resources/{id}/actions/{action}) changed something. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Cloud: Delete on machine relay-…: cancelled worker agt-41 of run-8kq2.\"). A Delete is followed by sandbox.resource_deleted with cause action"),
+	"project.configured": z.looseObject({
+		path: z.string().describe("The checkout's root (absolute)"),
+		name: z.string().describe("Its name in capcomd's projects"),
+		mode: z.string().describe("pr or direct"),
+		target: z.string().describe("The target branch"),
+		check: z.string().describe("The check command (\"\" for none), as the user typed it"),
+		agents: z.array(z.string()).describe("claude and/or codex"),
+		budgetUsd: z.number().nullable().describe("The spend cap per run in USD; null for none"),
+		clientId: z.string().describe("The API client that set it up (cli-…)"),
+	}).describe("Capability projects.setup. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client set a folder up as a capcomd project with POST /v1/projects and something changed (its settings, its profiles or capcomd's project list). `entity` is project:<name>; the envelope text is daemon-written (\"Set up app (~/src/app): pull requests into main, with Claude Code and Codex.\"). Never a secret"),
 	"sandbox.resource_deleted": z.looseObject({
 		sandbox: z.string().describe("The place (a listed provider's name)"),
 		resourceId: z.string().describe("The machine's id"),
@@ -319,6 +331,7 @@ export const CAPABILITIES = {
 	"sandboxes.resources": "GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one",
 	"sandboxes.settings": "PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned",
 	"sandboxes.actions": "POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream",
+	"projects.setup": "GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -533,11 +546,82 @@ export const ACTION_DOC = "Capability sandboxes.actions. Act on one machine; tod
 	"`Idempotency-Key` (8-200 chars, required: 422 `invalid` without it) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay, nothing deleted twice); the same key on another machine or action: 409 `idempotency_conflict`. Only a 200 is kept: after an error, a retry looks again.";
 export const RESOURCE_DOC = "Capability sandboxes.resources. One machine (as in …/resources, from the same cached list) and `terminalCommand`, the command that opens a shell in it. 404 `not_found` when capcomd doesn't list it at this place (only ids with capcomd's prefix are ever looked up).";
 
+/** GET /v1/projects/inspect, POST /v1/projects (capability projects.setup): set up a folder as a capcomd project. */
+export const SetupAgentName = z.enum(["claude", "codex"]);
+export const ProjectSettings = z.object({
+	repo: z.string().nullable().describe("CAPCOMD_REPO: the repository agents work on"),
+	mode: z.string().nullable().describe("pr (a pull request merged by capcomd) or direct (pushed to the target)"),
+	target: z.string().nullable().describe("The branch work merges into"),
+	check: z.string().describe("The check every change must pass (`run.checks.unit`); \"\" for none"),
+	agents: z.array(z.string()).describe("The agents it has workers for: claude and/or codex"),
+	budgetUsd: z.number().nullable().describe("The spend cap per run in USD (driver.maxRunBudget); null for none"),
+});
+export const ProjectProblemCode = z.enum(["not_found", "not_git", "home", "no_origin", "not_github"]);
+export const ProjectProblem = z.object({
+	code: z.string().describe(`What blocks setting it up: ${ProjectProblemCode.options.join(", ")} (not_found: no such folder; not_git: not a git checkout; home: the home folder, where capcomd keeps its own settings; no_origin: no origin remote; not_github: origin isn't on GitHub, so it's for \`capcomd setup project\` in Terminal). Treat an unknown code as a problem you show by its message`),
+	message: z.string().describe("A sentence for the person, written by the daemon (trusted), e.g. \"~/notes isn't a git checkout. Choose your repository's folder, or clone it first.\""),
+});
+export const ProjectAgentInfo = z.object({
+	provider: SetupAgentName,
+	label: z.string().describe("\"Claude Code\" or \"Codex\""),
+	loggedIn: z.boolean().describe("It has a login in at least one place (GET /v1/logins)"),
+	auth: z.enum(["subscription", "apikey"]).describe("How its profiles would log in: subscription (a plan login, or none yet) or apikey (only an API key: it bills per use, so setup asks for a spend cap)"),
+	places: z.array(z.object({ sandbox: z.string(), loggedIn: z.boolean(), how: z.enum(["plan", "api_key"]).nullable() })).describe("Its login in each place, as GET /v1/logins"),
+});
+export const ProjectInspect = z.object({
+	path: z.string().describe("The path as given"),
+	root: z.string().nullable().describe("The git checkout it is in (its top level, symlinks resolved): a folder inside a checkout resolves to the checkout. null when it isn't in one"),
+	name: z.string().nullable().describe("Its name in capcomd's projects (the one setup would give it when it isn't listed yet); null without a root"),
+	configured: z.boolean().describe("Already a capcomd project: its .capcomd/config.json names a repository"),
+	values: ProjectSettings.nullable().describe("When configured: what it has now (to prefill the form); else null"),
+	repo: z.string().nullable().describe("origin as an https URL (the repository setup uses; never one the client sends); null without origin"),
+	github: z.string().nullable().describe("owner/name when origin is on GitHub; else null"),
+	ghReady: z.boolean().describe("`gh auth status` succeeds on the daemon's machine: pull requests (mode pr) can be opened and merged. false when it fails or origin isn't on GitHub"),
+	defaultBranch: z.string().describe("origin's default branch as the local refs know it (origin/HEAD), else main: the target to suggest"),
+	branches: z.array(z.string()).describe("origin's branches from the local refs (no fetch), the default one included"),
+	suggestedCheck: z.string().describe("The check `capcomd setup project` would suggest (package.json's test script: `bun run test`, `npm test`); \"\" for none"),
+	suggestedMode: z.enum(["pr", "direct"]).describe("pr when ghReady, else direct (as the wizard suggests)"),
+	suggestedAgents: z.array(SetupAgentName).describe("The agents with a login (claude when neither has one)"),
+	agents: z.array(ProjectAgentInfo).describe("claude, then codex"),
+	budgetAsked: z.boolean().describe("One of suggestedAgents would bill an API key, so the form asks for a spend cap per run. For another choice: any chosen agent whose `auth` is apikey"),
+	problems: z.array(ProjectProblem).describe("What blocks setting it up; empty when it can be set up. POST /v1/projects refuses with the first one's message"),
+});
+export const PROJECTS_INSPECT_DOC = "Capability projects.setup. What the app needs to set up a folder as a capcomd project, without writing anything: the git checkout it is in, its origin (the repository setup uses), branches from the local refs, the check to suggest, whether pull requests can be opened (`gh auth status` on the daemon's machine, asked at most every 30 s), and the agents with how each would log in (from GET /v1/logins). " +
+	"Needs the `read` scope. Local reads only (git refs, files, the login ledgers): no fetch, no network. A folder that can't be set up is still 200, with `problems`. 422 `invalid` for a relative path.";
+export const ProjectSetupBody = z.object({
+	path: z.string().min(1).max(4096).refine((p) => p.startsWith("/"), "path must be an absolute path").describe("The folder (as inspected): a checkout, or a folder inside one"),
+	mode: z.enum(["pr", "direct"]).describe("pr: verified work lands as a pull request capcomd merges (needs `ghReady`); direct: pushed to the target branch"),
+	target: BranchName.describe("The branch work merges into, e.g. main (merges into protected branches wait for an approval)"),
+	check: z.string().max(2000).refine((c) => !/[\n\r\u0000]/.test(c), "check is one line").describe("The command every change must pass, e.g. `bun run test`; \"\" for none (an existing check is kept)"),
+	agents: z.array(SetupAgentName).min(1).max(2).describe("claude, codex or both (each once): a worker profile per agent; the reviewer and planner use Claude Code when it's chosen"),
+	budgetUsd: z.number().positive().optional().describe("A spend cap per run in USD, only when `budgetAsked` for these agents (one bills an API key); omitted: no limit"),
+	expect: z.object({ repo: z.string().nullable().optional().describe("The `repo` inspect returned") }).optional().describe("What the form was filled from: when the folder's origin isn't `expect.repo` any more, 409 `conflict` and nothing is written. Send it"),
+});
+export const ProjectSetupResult = z.object({
+	project: z.object({
+		path: z.string().describe("The path as given"),
+		root: z.string().describe("The checkout that was set up: POST /v1/runs and GET /v1/run-options take it as `repo`"),
+		name: z.string().describe("Its name in capcomd's projects"),
+		configured: z.literal(true),
+		values: ProjectSettings,
+	}),
+	changed: z.boolean().describe("Something changed: its settings, a profile added, or the folder added to capcomd's projects. A setup that changed nothing is still 200"),
+});
+export const PROJECTS_SETUP_DOC = "Capability projects.setup. Set a folder up as a capcomd project, as `capcomd setup project` does with the same answers: <checkout>/.capcomd/config.json (repository, merge mode, target, the check, the reviewer; a spend cap when asked), merged into what's there, and <checkout>/.capcomd/agents.json (a worker per agent, a read-only reviewer, a planner that may spawn the workers), keeping profiles that exist; then the folder joins capcomd's projects. Both files are written atomically, and only inside the checkout. " +
+	"The repository is always the checkout's origin (GET /v1/projects/inspect `repo`), never a URL from the client; only GitHub checkouts. Needs the `configure` scope (403 `forbidden` without it), like changing a place's settings. " +
+	"Everything is checked again: 422 `invalid` with the daemon's sentence and `field` (path, mode, target, check, agents, budgetUsd) for a folder inspect reports a problem for (`problem` is its code), pull requests without `ghReady`, a target that isn't a branch name, an unknown or repeated agent, a budget when none is asked (or not over 0), or a .capcomd that leads out of the checkout (a symlink). 409 `conflict` when origin isn't `expect.repo` (the body carries `repo`, the origin now). " +
+	"Audited: a durable project.configured event on the `daemon` stream when something changed. " +
+	"`Idempotency-Key` (8-200 chars, required) is scoped to the calling client and kept 24h: same key + same body: 200 with the first result (replay, nothing written again); same key + another body: 409 `idempotency_conflict`. Only a 200 is kept. Afterwards GET /v1/run-options?repo=<root> answers for the project.";
+
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
 		.output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string(), capabilities: z.array(z.string()).optional().describe(`Features this daemon has: ${CAPABILITIES_DOC} This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty`) })),
 	projects: {
 		list: oc.route({ method: "GET", path: "/v1/projects" }).output(z.array(Project)),
+		inspect: oc.route({ method: "GET", path: "/v1/projects/inspect", description: PROJECTS_INSPECT_DOC })
+			.input(z.object({ path: z.string().min(1).max(4096).refine((p) => p.startsWith("/"), "path must be an absolute path").describe("Absolute path of a folder on the daemon's machine") })).output(ProjectInspect),
+		setup: oc.route({ method: "POST", path: "/v1/projects", inputStructure: "detailed", description: PROJECTS_SETUP_DOC })
+			.input(z.object({ headers: IdempotencyHeaders, body: ProjectSetupBody })).output(ProjectSetupResult),
 	},
 	runs: {
 		list: oc.route({ method: "GET", path: "/v1/runs" }).output(z.array(Run)),

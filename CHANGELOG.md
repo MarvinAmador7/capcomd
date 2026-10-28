@@ -5,6 +5,22 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Harness API: set a folder up as a capcomd project without Terminal (capability `projects.setup`), so the menu bar
+  app can offer it for a folder you pick. `GET /v1/projects/inspect?path=` (read scope, writes nothing) says what a
+  setup form needs: the git checkout the folder is in, its origin (the repository a project always uses), its branches
+  as your local refs know them, the check `capcomd setup project` would suggest, whether pull requests work (`gh` is
+  logged in), and which of Claude Code and Codex have a login and whether one would bill an API key (then a spend cap
+  per run is asked). What blocks a folder comes back as `problems`, each with a code and a sentence to show: `not_git`,
+  `home` (your home folder, where capcomd keeps its own settings), `no_origin`, `not_github` (the app sets up GitHub
+  checkouts; others still work with `capcomd setup project` in Terminal) and `not_found`. `POST /v1/projects` (the
+  `configure` scope, an `Idempotency-Key`) takes the answers (`mode` pr or direct, `target`, `check`, `agents`, and
+  `budgetUsd` when asked), checks them again, writes the same `.capcomd/config.json` and `.capcomd/agents.json`
+  `capcomd setup project` writes for the same answers (merged into what's there, keeping your profiles), and adds the
+  folder to capcomd's projects; new runs can then use it (`repo` in `POST /v1/runs` and `GET /v1/run-options`). A
+  refusal is 422 with the reason and the field it's about; if the folder's origin changed since it was inspected
+  (send `expect.repo`), it's 409 and nothing is written; capcomd won't write through a `.capcomd` that's a symlink out
+  of the checkout. Each setup that changed something is recorded on the daemon stream as `project.configured`.
+  Setting up needs a token with the `configure` scope, as changing a place's settings does.
 - Fix: a place's Machines list (and Delete) could show another capcomd's machines as "left behind". A boxd org lists
   every member's machines, and a second capcomd on the same Mac (another checkout, a test daemon) sees the same Docker
   containers, so a teammate's working agent could read "Delete this machine? No agent is using it." and Delete would

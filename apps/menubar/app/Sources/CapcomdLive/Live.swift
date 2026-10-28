@@ -317,3 +317,37 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
     }
   }
 }
+
+/// `GET /v1/projects/inspect` and `POST /v1/projects` (capability `projects.setup`), on the daemon adapter so the store
+/// picks them up from it.
+extension LiveDaemonInfo: ProjectSettingUp {
+  /// 200 even for a folder that can't be set up (its `problems` say why); 404 means a daemon without the route.
+  public func inspectProject(path: String) async throws -> ProjectInspection {
+    let q = path.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~/"))) ?? path
+    let (status, data) = try await transport.get("/v1/projects/inspect?path=\(q)")
+    switch status {
+    case 200:
+      do { return try ProjectWire.inspection(data) } catch { throw DetailUnavailable.failed("unexpected response") }
+    case 401: throw Unauthorized()
+    case 404: throw DetailUnavailable.unsupported
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+  /// 200 `{project, changed}`; 403 the token lacks `configure`; 422 `invalid` with the daemon's sentence and `field`;
+  /// 409 `conflict` (the folder's origin changed: `repo` is the one now) or `idempotency_conflict`.
+  public func setUpProject(_ request: ProjectSetupRequest, idempotencyKey: String) async throws -> ProjectSetupResult {
+    let (status, data) = try await transport.post("/v1/projects", headers: [("Idempotency-Key", idempotencyKey)], json: try ProjectWire.body(request))
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let message = (obj?["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    switch status {
+    case 200:
+      do { return try ProjectWire.result(data) } catch { throw DetailUnavailable.failed("unexpected response") }
+    case 401: throw Unauthorized()
+    case 403: throw ProjectSetupRefused.forbidden
+    case 404: throw DetailUnavailable.unsupported
+    case 409: throw ProjectSetupRefused.conflict(message ?? "This folder changed since you looked at it. Look again.", repo: obj?["repo"] as? String)
+    case 422: throw ProjectSetupRefused.invalid(message ?? "capcomd won't set this folder up as asked.", field: obj?["field"] as? String)
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
