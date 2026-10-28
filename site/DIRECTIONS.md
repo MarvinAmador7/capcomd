@@ -150,6 +150,86 @@ Top three problems:
 3. Inactive statements in the story are the second ink, so the page reads grey between beats (desktop-1440-story-*).
 ```
 
+## B2 · B, iterated (the owner's pick)
+
+![B2, desktop](directions/b2/shots/desktop-1440-fold.png)
+
+The owner picked B and asked for one iteration: A's five-stage accordion, C's framing ("durable orchestration";
+"your agent runs the crew, you decide what lands"), and some Apple and macOS elements, while keeping B's
+New York press character. The comp is `directions/b2/` (A, B and C are unchanged).
+
+- **What stays from B.** The poster sentence "PUT A [crew] ON IT." in Bebas Neue, EB Garamond for the text, the
+  cool newsprint ground, B's grid, and the crew in the slot, drawn from a new run id on every visit with
+  **Draw another**.
+- **One crew for the whole page.** The run id that draws the hero's crew also draws everyone in the run below:
+  the hero's planner and three workers are the ones in Swarm, Verify and Merge. Reviewers are drawn from the same id
+  as agents of their own. Drawing another crew redraws the whole page. That follows the engine: bots come from
+  agent ids.
+- **The run is A's accordion, set in B's type.** There are five stages: Ask, Swarm, Verify, Review and Merge.
+  Closed stages are plum colour blocks, darkest to lightest, carrying on from the hero slot's plum. Each shows a
+  Bebas name and the face of the agent who acts in that stage. An open stage turns into a light page with a
+  Bebas heading and a Garamond paragraph, and its picture is a true-size menu bar panel. The crew joins one by
+  one, 70 ms apart.
+- **The typed goal: kept, but moved into the Ask stage.** It no longer has a section of its own. Next to the
+  accordion it would have told the same story twice. Inside Ask, the goal is typed into the app's own composer
+  (chips, Local or VM switch, driver chip, send). Whatever you type becomes the run's title on the Swarm, Verify,
+  Review and Merge panels, so the accordion plays out your goal. The README's three prompts are offered as
+  examples. The faces stay tied to the run id, not to your words, because that's how the engine works.
+- **The copy uses C's framing.** The lead reads "capcomd is durable orchestration for swarms of coding agents.
+  Your agent runs the crew … You decide what lands." The run section's heading is "YOUR AGENT RUNS THE CREW. /
+  YOU DECIDE WHAT LANDS." (the second line in the brand's orange). Below it are two paragraphs: one on
+  durability, and one on the Mac app, which says that the app is macOS only and built from source for now, and
+  that capcomd itself runs on macOS and Linux.
+
+What the page takes from macOS, and why: a magazine running a feature on a Mac app. The page stays in print
+(serif, poster capitals, square colour blocks), and the Mac shows up only where the product does:
+
+| From macOS | Where | Why |
+|---|---|---|
+| The menu bar panel at true size (380 pt wide, 26 pt continuous corners, dark vibrant popover material with a 0.5 pt hairline), the composer card at 20 pt, the folded and unfolded Active cards, the tree rows, status rings, the amber ring on a card that asks, Approve as the inverted fill with ↩, Deny as regular glass | The picture in every open stage | They follow the app's approved rules (`apps/menubar/SPEC.md` "Composer and container v2", "Apple craft"; `design/active-card/card-spec.md`), so the site shows the product as it is. Glass is used only for controls; content and bots never sit on glass. |
+| A menu bar strip with the app's bot mark (`MENU_BAR_MARK`), a date and a time, over a plum "desktop" with the slot's dithered floor | Above each panel | It puts the panel where it lives. The desktop is the brand's own plum, not a system wallpaper. |
+| Keycaps (⌘K, ⌘1, ↩) and the Return-approves / Esc-never-denies rule | Composer, Recent row, Approve, Merge copy | That is how the app behaves (CHANGELOG), and on a Mac page it reads as craft. |
+| A small window with the three window controls around the install line | Hero note | The first native touch on the page, kept generic: titled "zsh", with no app names. |
+| Disclosure behaviour | The accordion | One stage open at a time. Arrow keys, Home and End move between stages; Enter or Space opens one. On a phone it becomes a disclosure list with chevrons that turn when a row opens. Stages open on the iOS sheet curve (`cubic-bezier(0.32, 0.72, 0, 1)`), and panels settle with a 0.98 → 1 pop. |
+| The system font inside the panels (`-apple-system`, so SF Pro on a Mac and the platform's UI font elsewhere) | Interface fragments only | The page itself stays in Bebas Neue and EB Garamond. SF Pro isn't licensed for the web, so it isn't loaded: Macs draw it from the system. |
+
+No Apple logos, product names used as branding, or system wallpapers; "macOS" appears only as a fact
+(what the app runs on).
+
+```
+ROUND 3 (B2)
+Seen in one second: "Put a [crew] on it." over a press page; below, a run told in five colour blocks with a Mac panel.
+Idea (one sentence): one crew, drawn fresh for each visit, stands in the headline and then works through the run.
+Live thing: Draw another (the whole page's crew), the Ask composer whose goal titles the run, the five stages.
+Layout words by section: hero=sentence with an inline slot / run=accordion of colour blocks opening to a feature page
+Scores: design 7 · usability 8 · creativity 8.5 · content 8 → overall 7.9 (capped at 6.0 by the inspector's few-pictures FAIL)
+Caps applied: fewer than four real pictures (design ≤ 6.5); a FAIL still reported (overall ≤ 6.0)
+Top three problems:
+1. Only the open stage's panel counts as a picture; the full build needs captures of the real app (question 5).
+2. The plum desktop under each panel is tall and mostly empty below the panel at 1440 (desktop-1440-stage-*).
+   That's realistic for a menu bar popover, but a shorter stage (about 520 px) or a second window would fill it.
+3. The hero still has B's tall band between the sentence and the lead at 1440 (desktop-1440-fold).
+```
+
+Checks: `inspect.mjs` at 1440, 768 and 390 with `--allow font-count` (the panels use the system UI font): 1 FAIL
+(`few-pictures`, the same comp-scope rule as before), WARNs `no-footage` and `size-count` at 768. `lint.mjs`: 0
+findings. Glass (`backdrop-filter`) appears only on the panel material inside `data-ui` fragments.
+
+Screenshots (`directions/b2/shots/`):
+
+| | Files |
+|---|---|
+| Desktop 1440 | `desktop-1440-fold.png`, `desktop-1440-full.png`, `desktop-1440-fold-another-crew.png` |
+| Stages open | `desktop-1440-stage-ask.png`, `-swarm`, `-verify`, `-review`, `-merge` |
+| Typed goal | `desktop-1440-stage-ask-typed.png`, `desktop-1440-stage-merge-typed.png` ("Add a dark mode toggle to Settings" carried into the approval) |
+| Phone 390 | `phone-390-fold.png`, `phone-390-full.png`, `phone-390-stage-ask.png`, `phone-390-stage-merge.png` |
+
+Hash options: `b2/#run=run_7e9410` (a given crew), `&open=merge` (a stage), `&goal=…` (a typed goal).
+
+Sample content in B2, to confirm: the "my-app" folder chip, "Add rate limiting to the API · Merged into main" in
+Recent, the times on the cards (0:12, 2:05, 2:58, 3:41), the files and counts on the approval, and the menu bar
+date and time.
+
 ## Recommendation
 
 **B, with A's run section.** B is the one only capcomd could have: the bots are the product's most ownable asset,
@@ -210,7 +290,7 @@ system monospace; interface fragments use the system UI font (SF Pro on a Mac), 
 
 ## Questions for the owner
 
-1. Which direction (or which mix)?
+1. ~~Which direction?~~ Answered: B, iterated as B2.
 2. The domain, and where the site is hosted (and whether it lives in this repo under `site/` or its own).
 3. The sections you want beyond the hero and the run: install and setup, the safety model, the menu bar app,
    providers (boxd, Docker), the agents it works with, docs, the roadmap and status, contributing.
