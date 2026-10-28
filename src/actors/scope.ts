@@ -19,11 +19,10 @@ import { startDriver } from "../primitives/drivers";
 import { agentWorkflowOn } from "../utils/agent-workflow-flag";
 
 /**
- * ADR-022: with the agent workflow, tell connected awaiters that agents changed (status, notice), so they look again
- * instead of polling. Nothing is sent with the flag off.
+ * ADR-022: tell connected awaiters that agents changed (status, notice), so they look again instead of polling. (With
+ * CAPCOMD_AGENT_WORKFLOW=0 nobody listens: awaits poll.)
  */
 function agentsChanged(c: any): void {
-  if (!agentWorkflowOn()) return;
   try { c.broadcast("agentsChanged", { at: Date.now() }); } catch { /* no connections: nothing to tell */ }
 }
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";

@@ -1,6 +1,7 @@
-// ADR-022 (spike, behind CAPCOMD_AGENT_WORKFLOW=1): one agent's lifecycle as a Rivet workflow inside its worker actor.
+// ADR-022: one agent's lifecycle as a Rivet workflow inside its worker actor (the default; CAPCOMD_AGENT_WORKFLOW=0 on
+// the engine host brings back `capcomd agent-drive` processes for one release).
 //
-// With the flag on, nothing runs `capcomd agent-drive`: starting an agent (spawn, resume, an await's kick) sends a
+// Nothing runs `capcomd agent-drive`: starting an agent (spawn, resume, an await's kick) sends a
 // `start` message to the worker actor of its current epoch, whose workflow then drives it to an end:
 //
 //   wait-start → prepare (claim with a long lease, operator pause, env snapshot, login quota)
@@ -30,8 +31,9 @@ export interface StartAgent { runId: string; agentId: string; epoch: number }
 
 /**
  * How long the watch waits for the run's `attempt` message before it looks anyway. The run sends it when it ends (a
- * cancel or the operator's pause ends it too), and the worker sends it to itself when it wakes with a run in flight
- * (onWake: a restarted daemon), so this only bounds the rare case nothing tells it. Every look writes workflow history
+ * cancel or the operator's pause ends it too), so this bounds only what nothing tells it: a run lost with its engine
+ * host. After a daemon restart the worker sleeps until this wait's deadline (its alarm), so a lost run is found and
+ * run again within one watch interval of the restart. Every look writes workflow history
  * and its engine storage (ADR-022 "Measurements": at 5 s, four times the driver path's writes; at 60 s, about the
  * same), hence a long default. An integer: the workflow engine refuses a fractional timeout.
  */
@@ -51,14 +53,7 @@ export const STARTS_SQL = "CREATE TABLE IF NOT EXISTS agent_workflow_start (id I
 export function agentWorkflowParts() {
   return {
     queues: { start: queue<StartAgent>(), attempt: queue<{ n: number }>() },
-    run: workflow(agentLifecycle),
-    // A worker that wakes with a run recorded as in flight (the daemon restarted under it) wakes its watch at once, so
-    // the lost run is found and run again now, not at the watch's timeout.
-    async onWake(c: any) {
-      await c.db.execute(ATTEMPTS_SQL).catch(() => {});
-      const running: any[] = await c.db.execute("SELECT attempt FROM agent_attempts WHERE state = 'running'").catch(() => []);
-      for (const r of running) await c.queue.send("attempt", { n: Number(r.attempt) }).catch(() => {});
-    },
+    run: workflow(agentLifecycle)
   };
 }
 
@@ -189,7 +184,8 @@ async function poll(c: any, p: StartAgent, n: number): Promise<Poll> {
  * the latest), and mark an entry the new code no longer makes with `ctx.removed(name, kind)`. LIFECYCLE gates the
  * top level; DRIVE gates one iteration of the drive loop (each iteration resolves its own).
  */
-// Test only (workflow-upgrade.test.ts): the upgrade drill's "next version". "1": shape 2 behind the gates; "ungated":
+// Test only (workflow-upgrade.test.ts): the upgrade drill's "next version". Remove it (and its branches) with the
+// first real shape bump, which the drill then exercises instead. "1": shape 2 behind the gates; "ungated":
 // shape 2 for everyone, as a change made without the rule would be (the drill's control: it must diverge).
 const DRILL = () => env("WORKFLOW_DRILL");
 const LIFECYCLE_SHAPE = () => (DRILL() ? 2 : 1);
@@ -288,12 +284,13 @@ async function agentLifecycle(ctx: any): Promise<void> {
   });
   if (prep.value.kind === "fail") await step("attempt-failed", async () => (await ops()).recordDriveFailure(p.runId, p.agentId, driver, 1, prep.value.error, MAX_ATTEMPTS));
 
-  const settled = await step("settle", async () => {
+  const settled = await step("settle", async (c) => {
     const o = await ops();
     const a = outcome.state === "done" ? await o.settleAttempt(p.runId, p.agentId, p.epoch, outcome.outcome as any)
       : outcome.state === "failed" ? await o.finishFailed(p.runId, p.agentId, p.epoch, outcome.error)
       : await o.settleEnded(p.runId, p.agentId, p.epoch);
     await o.recordAgentRunSpan(p.runId, p.agentId, startedAt).catch(() => {});
+    looks.delete(c.actorId);
     return { status: a.status, pausedUntil: a.pausedUntil ?? null };
   }, { timeout: 10 * 60_000 });
   if (!settled.ok) return giveUp(failureOf(settled));

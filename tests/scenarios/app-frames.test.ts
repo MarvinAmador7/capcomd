@@ -88,7 +88,11 @@ capcomd await $id >/dev/null || exit 1
 v=$(capcomd verify --ref $id --key v-a)
 m=$(capcomd merge --ref $id --require "$(echo "$v" | $S/jget id)" --key m-a)
 capcomd kv put "mrg-a" "$($S/json id=$(echo "$m" | $S/jget id))" >/dev/null
+# A child it leaves running when it finishes: reaped (agent.reaped).
+capcomd spawn --profile worker --task "left running" --key orphan --budget turns=10 --children.maxChildren=0 --contract "$($S/json script="SLEEP=30 $W")" >/dev/null
 capcomd result --summary "planned a" >/dev/null`);
+  // An agent whose script fails: drive.failed and agent.failed, with the failure's payload.
+  const failing = `EXIT=3 ${worker}`;
   const run = await newRun(w);
   const live = readStream(w, run);
   const full = readStream(w, run, "full");
@@ -98,8 +102,11 @@ capcomd result --summary "planned a" >/dev/null`);
   const later = (await w.cj(["spawn", run, "--profile", "worker", "--task", "write b", "--key", "b", "--no-start", "--contract", JSON.stringify({ script: worker })])).j.agentId as string;
   expect((await w.cj(["pause", run, later])).code).toBe(0);
   expect((await w.cj(["resume", run, later])).code).toBe(0);
-  expect((await waitAll(w, run, [root, later])).agents.map((a: any) => a.status)).toEqual(["done", "done"]);
-  const child = ((await w.cj(["tree", run])).j.tree[0].children[0]?.agentId) as string;
+  const broken = (await w.cj(["spawn", run, "--profile", "worker", "--task", "fail", "--key", "f", "--contract", JSON.stringify({ script: failing })])).j.agentId as string;
+  expect((await waitAll(w, run, [root, later, broken])).agents.map((a: any) => a.status)).toEqual(["done", "done", "failed"]);
+  const kids = ((await w.cj(["tree", run])).j.tree.find((n: any) => n.agentId === root).children) as any[];
+  const child = kids.find((k: any) => k.status === "done")?.agentId as string;
+  const orphan = kids.find((k: any) => k.status === "cancelled")?.agentId as string;
   const ma = (await w.cj(["kv", "get", run, "mrg-a"])).j.value.id as string;
   expect((await w.cj(["approve", run, ma, "--by", "frames@test"])).j).toMatchObject({ state: "merged" });
   await Bun.sleep(3000);
@@ -111,7 +118,7 @@ capcomd result --summary "planned a" >/dev/null`);
   await Bun.sleep(2500);
   await after.stop();
   await afterFull.stop();
-  const roles = { [root]: "planner", [child]: "worker", [later]: "paused-then-resumed" };
+  const roles = { [root]: "planner", [child]: "worker", [later]: "paused-then-resumed", [broken]: "failing", [orphan]: "orphan" };
   const out = { live: shapeOf(live.frames, roles), full: shapeOf(full.frames, roles), after: shapeOf(after.frames, roles), afterFull: shapeOf(afterFull.frames, roles) };
   await w.stop(); w = null;
   return out;
@@ -124,7 +131,7 @@ test("the app's frames are the same whether the engine's workflow or agent-drive
   console.log(`  frame types (both ways): ${Object.keys(on.live.types).sort().join(", ")}`);
   console.log(`  full-stream types: ${Object.keys(on.full.types).sort().join(", ")}`);
   console.log(`  snapshot frames: ${Object.keys(on.after.snapshot).sort().join(", ")} | full: ${Object.keys(on.afterFull.snapshot).sort().join(", ")}`);
-  for (const t of ["agent.spawned", "agent.done", "agent.paused", "agent.resumed", "approval.requested", "approval.decided"]) {
+  for (const t of ["agent.spawned", "agent.done", "agent.failed", "agent.reaped", "agent.paused", "agent.resumed", "approval.requested", "approval.decided"]) {
     expect({ t, on: !!on.live.types[t] }).toEqual({ t, on: true });
   }
   const diff = (a: Record<string, string[]>, b: Record<string, string[]>) =>
@@ -132,7 +139,7 @@ test("the app's frames are the same whether the engine's workflow or agent-drive
   const d = [...diff(on.live.types, off.live.types).map((x) => `type ${x}`), ...diff(on.live.statusSeq, off.live.statusSeq).map((x) => `status ${x}`),
     ...diff(on.after.snapshot, off.after.snapshot).map((x) => `snapshot ${x}`), ...diff(on.after.types, off.after.types).map((x) => `snapshot-replay ${x}`),
     ...diff(on.full.types, off.full.types).map((x) => `full ${x}`), ...diff(on.full.statusSeq, off.full.statusSeq).map((x) => `full-status ${x}`),
-    ...diff(on.afterFull.snapshot, off.afterFull.snapshot).map((x) => `full-snapshot ${x}`)];
+    ...diff(on.afterFull.snapshot, off.afterFull.snapshot).map((x) => `full-snapshot ${x}`), ...diff(on.afterFull.types, off.afterFull.types).map((x) => `full-replay ${x}`)];
   if (d.length) console.log(d.join("\n"));
   expect(d).toEqual([]);
 }, 600_000);

@@ -103,9 +103,10 @@ test("restart mid-agent: the workflow resumes by itself, runs the attempt again 
   const back = Date.now();
 
   const a = await untilStatus(run, agent, "done", 150_000);
-  // The worker wakes its watch itself when it comes back with a run in flight (onWake), not at the 60 s watch timeout.
+  // With the default watch (60 s): the worker wakes at its watch's deadline and runs the lost attempt again, so the
+  // agent is done within one watch interval (plus the run itself) of the engine coming back.
   console.log(`  done ${Math.round((Date.now() - back) / 1000)}s after the engine came back`);
-  expect(Date.now() - back).toBeLessThan(55_000);
+  expect(Date.now() - back).toBeLessThan(100_000);
   expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
   const events = (await cj(["events", run])).stdout;
   expect(events).toContain('"AGENT_DONE"');

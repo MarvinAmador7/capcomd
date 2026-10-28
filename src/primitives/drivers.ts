@@ -14,7 +14,7 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
  */
 export async function startDriver(runId: string, agentId: string): Promise<void> {
   if (env("NO_DRIVER") === "1") return;
-  if (await engineDrivesAgents(runId).catch(() => true)) return startAgentWorkflow(runId, agentId);
+  if (await engineDrivesAgents(runId)) return startAgentWorkflow(runId, agentId);
   spawnDriver(runId, agentId);
 }
 

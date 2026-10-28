@@ -135,10 +135,12 @@ is `rivet-engine`; the worker's history is its `_rivet_wf_kv` rows (worker actio
 - **Grows with writes, not reclaimed while idle:** the engine's data folder (~33 KB per look: every history flush is
   an actor SQLite commit the engine stores) and, while writing, `rivet-engine`'s memory (it fell back from 303 to 185
   MB once idle). The driver path writes too (a lease renewal every 5 s). So the watch writes rarely: its default went
-  from LEASE/3 (5 s) to 60 s, which brings 12 agents to about the driver path's writes. Nothing waits on it: the run
-  sends `attempt` when it ends, and a worker that wakes with a run in flight (a restarted daemon) sends it to itself
-  (`onWake`), so a lost run is found at once (the restart scenario: done 25 s after the engine came back, with the 60 s
-  default). `CAPCOMD_AGENT_WORKFLOW_POLL_MS` overrides it. Compacting the engine's storage is Rivet's (residual).
+  from LEASE/3 (5 s) to 60 s, which brings 12 agents to about the driver path's writes. The run sends `attempt`
+  when it ends, so only a run lost with its engine host waits for it: after a daemon restart the worker sleeps until
+  its watch's deadline (an alarm), then finds the run lost and runs it again, so recovery takes at most one watch
+  interval (the restart scenario asserts < 100 s with the default; it was 25 s). An `onWake` nudge was tried and
+  dropped: the engine doesn't wake a worker on restart before its alarm, so `onWake` ran no sooner than the deadline.
+  `CAPCOMD_AGENT_WORKFLOW_POLL_MS` overrides it. Compacting the engine's storage is Rivet's (residual).
 
 ## Changing the workflow (the rule; since 2026-10-28)
 
@@ -151,9 +153,16 @@ answer is recorded, so a replay gets the same one.
 
 - **Any change to the names, kinds or order of workflow entries** (a step, sleep, queue wait, loop, try) bumps the
   version of the scope it's in: `LIFECYCLE_SHAPE` for the top level, `DRIVE_SHAPE` for an iteration of the drive loop.
-- **Branch on the returned version**: code for older versions stays until no agent can still be on it (one release
-  after the change, then remove it with the next bump). New entries go in the new branch only.
-- **An entry the new code no longer makes** is marked `await ctx.removed(name, kind)` where it used to be.
+  The gates sit right after `wait-start` and at the very start of each iteration, so neither `wait-start` nor the
+  gates themselves can ever change.
+- **Branch on the returned version**: the old entries stay in the old branch, so nothing has to be marked removed.
+  Code for older versions stays until no agent can still be on it (one release after the change; then remove it with
+  the next bump). New entries go in the new branch only.
+- **`ctx.removed(name, kind)`** is only for dropping an entry from a shared path without a branch, and it writes a
+  placeholder for every new instance (every iteration, inside the loop) forever: prefer a branch. A timed queue wait is
+  two entries (`name:count`, a message, and `name:deadline`, a sleep): both need it. A loop can't be removed.
+- **The drive loop's state (`Drive`) is history** the next iteration reads: after an upgrade, iteration k may replay
+  under version 1 and k+1 run version 2 on that state, so new state fields must be optional.
 - **Never** rename or reorder an entry in place, change a step's output shape that later code reads without a
   version check, or nest a loop in a loop (or a try block).
 - **Changing what a step does inside** (its body, not its name or output) needs no bump: completed steps aren't re-run,
@@ -164,8 +173,11 @@ The drill (`workflow-upgrade.test.ts`, test-only `CAPCOMD_WORKFLOW_DRILL`): agen
 engine host dies; it comes back with shape 2 (a new top-level step, and in every drive-loop iteration a new step plus
 the watch's `attempt-wait`/`poll` entries renamed). With the gates, A replays its shape-1 history, never runs the new
 top-level step, finishes, and nothing diverges; agent B, started after the upgrade, runs shape 2. The control makes the
-same change without the gates (`=ungated`): A runs the shape-2 step it never started with and its workflow diverges
-from its history (`HistoryDivergedError`), so it would never finish. Both pass (2026-10-28).
+same change without the gates (`=ungated`): A runs the shape-2 step it never started with (asserted), and when the
+restart caught it mid-iteration its workflow also diverged from its history (`HistoryDivergedError`, so it would
+never finish; seen in one of two runs, logged, not asserted). Both pass (2026-10-28). The drill exercises a recorded
+version 1 meeting version 2, the path every future change takes; the "no version recorded yet" path (agents in flight
+under the one-day pre-gate spike code) resolves to 1 by rivetkit's rule and isn't drilled.
 
 ## Failure modes
 
@@ -213,8 +225,9 @@ host instead, mid-step, and checks the same property (`tests/chaos/primitives.ts
 
 ### Who decides: the engine (since 2026-10-28)
 
-The engine host's setting decides how agents are driven: it's what its worker actors run. A CLI (or MCP server, or the
-harness API) asks the engine once (`scope.driveMode`) and follows it: it starts an agent's workflow or spawns an
+The engine host's setting decides how agents are driven: it's what its worker actors run. The engine host uses its own
+setting; anything else (a CLI, the MCP server) asks the engine (`scope.driveMode`, again after a minute, so a
+long-lived process follows an engine restarted with the other setting) and follows it: it starts an agent's workflow or spawns an
 `agent-drive` process as the engine does, waits with events or polling to match, and when its own
 `CAPCOMD_AGENT_WORKFLOW` says otherwise prints one line saying the engine's mode applies
 (`tests/subagents/workflow-mode.test.ts`, both directions). An engine too old to answer is treated as driver-path.
@@ -228,7 +241,11 @@ harness API) asks the engine once (`scope.driveMode`) and follows it: it starts 
    measurements are under Measurements. Still to do live: the Docker (Local) goal and a daemon restart while a real
    agent is mid-run.
 3. Met: the upgrade drill passes, and the version gates are in the workflow.
-4. Met: the menu bar's frames are the same both ways (`tests/scenarios/app-frames.test.ts`), and `agent.run` spans
-   too (`tests/cli/json.test.ts`, `tests/scenarios/contract.test.ts`).
+4. Met: the menu bar's frames are the same both ways (`tests/scenarios/app-frames.test.ts`: frame types, their data
+   keys, each agent's status order and the snapshot frames' fields, on the lifecycle feed and the full stream; not
+   values). Covered there: spawn, start, done, failed with `drive.failed`, reaped, operator pause/resume, approvals,
+   verify/merge, steps, activity. Not there: the usage-limit pause (both ways in `tests/subagents/limits.test.ts`) and
+   thread items/checkpoints (the runner writes them, the same code both ways). `agent.run` spans:
+   `tests/cli/json.test.ts`, `tests/scenarios/contract.test.ts`.
 5. Next release: remove `agent-drive`, `driveAgent`/`engineOutage`, the process-side lease heartbeat and the
    `CAPCOMD_AGENT_WORKFLOW=0` path; keep `claimDriver` as the workflow's liveness lease and `wakeDue` as the backstop.

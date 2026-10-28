@@ -681,7 +681,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   }
 }
 
-// ── ADR-022 (CAPCOMD_AGENT_WORKFLOW=1): the same steps, called from the worker actor's workflow ──────────────────────
+// ── ADR-022 (the default; not with CAPCOMD_AGENT_WORKFLOW=0): the same steps, called from the worker actor's workflow ──
 
 /** Claim the agent for the workflow and make the driver's checks. "end": nothing to do (finished, paused, cancelled,
  *  or driven by a live driver); "paused": paused before it ran (its usage reset, or 0). */
@@ -794,7 +794,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
   const noticeAt = new Map<string, number>();
   // ADR-022: with the agent workflow, wait for the scope's "agents changed" event instead of polling every pollMs()
   // (a slow poll stays as the fallback: an event missed while reconnecting, a kick that's due).
-  const feed = (await engineDrivesAgents(runId).catch(() => false)) ? changeFeed(runId) : null;
+  const feed = (await engineDrivesAgents(runId)) ? changeFeed(runId) : null;
   try {
   for (let poll = 0; ; poll++) {
     const noticed: ScopeAgent[] = [];
