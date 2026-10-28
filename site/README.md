@@ -52,6 +52,5 @@ no host is chosen yet.
 
 ## Note for the repo
 
-The root `tsconfig.json` has no `include`, so the root `bun run typecheck` (plain `tsc --noEmit`) also reads
-`site/`. It fails there, because it lacks the site's path aliases and React types. Adding `"site"` to the root
-`exclude` fixes it. That change isn't made here.
+The root `tsconfig.json` excludes `site/`: the site has its own `tsconfig.json` and `bun run typecheck`, and the root
+one would fail on it (it lacks the site's path aliases and React types).
