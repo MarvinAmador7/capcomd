@@ -60,6 +60,8 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "sandbox.resource_action": return "A machine was acted on from capcomd.";
 		case "sandbox.resource_deleted": return "A machine was deleted.";
 		case "project.configured": return "A project was set up.";
+		case "project.git_initialized": return "A git repository was started in a folder.";
+		case "project.published": return "A project was published to GitHub.";
 		default: return type.replace(/[._]/g, " ") + ".";
 	}
 }

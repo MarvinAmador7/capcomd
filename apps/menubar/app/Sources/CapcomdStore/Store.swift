@@ -75,6 +75,13 @@ public final class CapcomdStore {
   public internal(set) var projectInspect: ProjectInspectState = .idle
   public internal(set) var projectSetup: ProjectSetupState = .idle
   var pendingSetupKey: (request: ProjectSetupRequest, key: String)?
+  /// Publishing the inspected checkout to GitHub (`projects.git`; Projects.swift): its options loading, ready, on their
+  /// way, or how it ended. Starting a repository (`initGit`) reports a refusal or failure here too.
+  public internal(set) var projectPublish: ProjectPublishState = .idle
+  /// The last publish options read (kept while publishing and after a refusal, so the form keeps its values).
+  public internal(set) var projectPublishOptions: ProjectPublishOptions?
+  /// `initGit` is on its way.
+  public internal(set) var initializingGit = false
 
   let subscriber: StreamSubscribing?
   let decider: ApprovalDeciding?

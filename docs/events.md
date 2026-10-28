@@ -2196,6 +2196,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "null"
       ]
     },
+    "gitignored": {
+      "description": "`.capcomd/` was added to the checkout's .gitignore (the body asked for `gitignore`)",
+      "type": "boolean"
+    },
     "clientId": {
       "type": "string",
       "description": "The API client that set it up (cli-…)"
@@ -2213,6 +2217,99 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   ],
   "additionalProperties": {},
   "description": "Capability projects.setup. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client set a folder up as a capcomd project with POST /v1/projects and something changed (its settings, its profiles or capcomd's project list). `entity` is project:<name>; the envelope text is daemon-written (\"Set up app (~/src/app): pull requests into main, with Claude Code and Codex.\"). Never a secret"
+}
+```
+
+## `project.git_initialized`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The folder (absolute), now a checkout's root"
+    },
+    "name": {
+      "type": "string",
+      "description": "The name capcomd would give the project"
+    },
+    "branch": {
+      "type": "string",
+      "description": "The branch it starts on (main)"
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that asked (cli-…)"
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "branch",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client started a git repository in a folder with POST /v1/projects/git-init (`git init -b main`, no commit). `entity` is project:<name>; the envelope text is daemon-written (\"Started a git repository in my-app (~/src/my-app), on branch main.\")"
+}
+```
+
+## `project.published`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The checkout's root (absolute)"
+    },
+    "name": {
+      "type": "string",
+      "description": "The name capcomd would give the project"
+    },
+    "owner": {
+      "type": "string",
+      "description": "The GitHub account or organization it was created in"
+    },
+    "repo": {
+      "type": "string",
+      "description": "owner/name on GitHub"
+    },
+    "visibility": {
+      "type": "string",
+      "description": "private or public"
+    },
+    "firstCommit": {
+      "type": "boolean",
+      "description": "capcomd made the first commit (the folder had none)"
+    },
+    "files": {
+      "description": "How many files that first commit holds; null when the checkout had commits already",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that published it (cli-…)"
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "owner",
+    "repo",
+    "visibility",
+    "firstCommit",
+    "files",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client published a checkout without origin to GitHub with POST /v1/projects/publish (the repository was created, added as origin and pushed). `entity` is project:<name>; the envelope text is daemon-written (\"Published my-app (~/src/my-app) to github.com/marvin/my-app, private, with a first commit of 24 files.\"). Names and counts only: never file names or contents"
 }
 ```
 

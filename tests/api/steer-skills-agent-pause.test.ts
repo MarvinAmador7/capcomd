@@ -64,7 +64,7 @@ describe("health capabilities", () => {
 	test("health lists the features a client can detect, with no token", async () => {
 		const { app } = setup();
 		const h = await (await app.request("/v1/health")).json() as any;
-		expect(h.capabilities).toEqual(["run.controls", "agents.messages", "steer.skills", "agent.pause", "runs.options", "runs.options.repo", "runs.options.sandbox", "agent.steps", "logins", "environments", "service", "sandboxes", "sandboxes.resources", "sandboxes.settings", "sandboxes.actions", "projects.setup"]);
+		expect(h.capabilities).toEqual(["run.controls", "agents.messages", "steer.skills", "agent.pause", "runs.options", "runs.options.repo", "runs.options.sandbox", "agent.steps", "logins", "environments", "service", "sandboxes", "sandboxes.resources", "sandboxes.settings", "sandboxes.actions", "projects.setup", "projects.git"]);
 		expect(h.capabilities).toEqual(CAPABILITY_NAMES);
 	});
 });

@@ -4,7 +4,7 @@ import Foundation
 
 /// A daemon that sets projects up (capability `projects.setup`), scripted per test.
 final class FakeProjectDaemon: DaemonInfoFetching, ProjectSettingUp, @unchecked Sendable {
-  var caps: Set<String> = [Capability.runsOptions, Capability.runsOptionsRepo, Capability.projectsSetup]
+  var caps: Set<String> = [Capability.runsOptions, Capability.runsOptionsRepo, Capability.projectsSetup, Capability.projectsGit]
   var inspections: [String: ProjectInspection] = [:]
   /// Answers for the next inspects, in order (an error to throw, or nil to answer); none left: answer.
   var inspectAnswers: [Error?] = []
@@ -15,6 +15,13 @@ final class FakeProjectDaemon: DaemonInfoFetching, ProjectSettingUp, @unchecked 
   /// Answers for the next setups, in order (an error to throw, or nil to set it up); none left: set it up.
   var setupAnswers: [Error?] = []
   var runOptionsAsked: [String?] = []
+  // projects.git
+  var gitInits: [String] = []
+  var initAnswers: [Error?] = []
+  var options = ProjectPublishOptions(ghReady: true, accounts: [ProjectPublishAccount(login: "marvin"), ProjectPublishAccount(login: "acme", kind: "org")], suggestedName: "my-app", files: 24)
+  var optionsAnswers: [Error?] = []
+  var publishes: [[String]] = []
+  var publishAnswers: [Error?] = []
   func capabilities() async throws -> Set<String> { caps }
   func health() async throws -> DaemonHealth { DaemonHealth(version: "0.7.0", capabilities: caps) }
   func skills() async throws -> [SkillInfo] { [] }
@@ -33,8 +40,26 @@ final class FakeProjectDaemon: DaemonInfoFetching, ProjectSettingUp, @unchecked 
     if !setupAnswers.isEmpty, let e = setupAnswers.removeFirst() { throw e }
     let root = inspections[request.path]?.root ?? request.path
     return ProjectSetupResult(project: .init(path: request.path, root: root, name: "app",
-                                             values: ProjectSettings(repo: "https://github.com/acme/app.git", mode: request.mode, target: request.target, check: request.check, agents: request.agents, budgetUsd: request.budgetUsd)),
+                                             values: ProjectSettings(repo: "https://github.com/acme/app.git", mode: request.mode, target: request.target, check: request.check ?? "", agents: request.agents, budgetUsd: request.budgetUsd)),
                               changed: true)
+  }
+  func initGit(path: String) async throws -> ProjectInspection {
+    gitInits.append(path)
+    if !initAnswers.isEmpty, let e = initAnswers.removeFirst() { throw e }
+    let i = ProjectInspection(path: path, root: path, name: "my-app", problems: [ProjectProblem(code: "no_origin", message: "\(path) has no origin remote.")])
+    inspections[path] = i
+    return i
+  }
+  func publishOptions(path: String) async throws -> ProjectPublishOptions {
+    if !optionsAnswers.isEmpty, let e = optionsAnswers.removeFirst() { throw e }
+    return options
+  }
+  func publishProject(path: String, owner: String, name: String, visibility: String) async throws -> ProjectInspection {
+    publishes.append([path, owner, name, visibility])
+    if !publishAnswers.isEmpty, let e = publishAnswers.removeFirst() { throw e }
+    let i = ProjectInspection(path: path, root: path, name: "my-app", repo: "https://github.com/\(owner)/\(name).git", github: "\(owner)/\(name)", ghReady: true, branches: ["main"], suggestedMode: "pr")
+    inspections[path] = i
+    return i
   }
 }
 

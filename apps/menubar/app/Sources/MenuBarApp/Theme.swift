@@ -439,6 +439,49 @@ enum Theme {
     static let rowTitle = Font.system(size: 13.5, weight: .medium), rowSub = Font.system(size: 12)
     static let rowSubText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55), rowHover = Color.white.opacity(0.07)
   }
+  /// The composer's inline project setup (design/setup/Inline*.dc.html): a picked folder's next steps in the card.
+  enum Setup {
+    static let orange = Color(red: 1, green: 0x9F / 255, blue: 0x0A / 255)                  // #ff9f0a: the dot, what needs doing
+    static let dot: CGFloat = 7
+    static let divider = Color.white.opacity(0.10), top: CGFloat = 10, inset: CGFloat = 2   // .next: hairline, 10 pt above
+    static let headerGap: CGFloat = 8, headerFont = Font.system(size: 12.5, weight: .medium)
+    static let headerText = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
+    // Rows (.r): an 84 pt label column, values on the right, 0.07 hairlines between them.
+    static let rowsTop: CGFloat = 8, rowHeight: CGFloat = 32, rowPaddingV: CGFloat = 3, rowGap: CGFloat = 10
+    static let rowDivider = Color.white.opacity(0.07)
+    static let labelWidth: CGFloat = 84, labelFont = Font.system(size: 12)
+    static let labelText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55)
+    static let valueFont = Font.system(size: 12.5), valueText = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255), valueGap: CGFloat = 6
+    static let githubMark: CGFloat = 13
+    // Notes under a row (.rn) and the callout (.callout).
+    static let noteFont = Font.system(size: 11), noteLineSpacing: CGFloat = 1.5, noteGap: CGFloat = 8, noteBottom: CGFloat = 8
+    static let noteText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.5)
+    static let calloutTop: CGFloat = 8, calloutFont = Font.system(size: 12.5), calloutLineSpacing: CGFloat = 3     // line-height 1.45
+    static let calloutText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.7)
+    static let monoFont = Font.system(size: 11, design: .monospaced)
+    // Values that edit in place: menus (.pop) and fields (.fld).
+    static let controlHeight: CGFloat = 22, controlRadius: CGFloat = 6
+    static let popFill = Color.white.opacity(0.10), popGap: CGFloat = 5, popLeading: CGFloat = 8, popTrailing: CGFloat = 5
+    static let popChevron = Font.system(size: 8, weight: .semibold)
+    static let fieldFont = Font.system(size: 12, design: .monospaced), fieldPadding: CGFloat = 7, prefixGap: CGFloat = 4
+    static let fieldFill = Color.black.opacity(0.25), fieldStroke = Color.white.opacity(0.16)
+    static let errorRing: CGFloat = 2.5, errorRingOpacity: Double = 0.25
+    static let capWidth: CGFloat = 76, nameWidth: CGFloat = 150
+    // Agent chips (.ag).
+    static let agentHeight: CGFloat = 24, agentLeading: CGFloat = 7, agentTrailing: CGFloat = 9, agentGap: CGFloat = 5, agentMark: CGFloat = 12
+    static let agentFont = Font.system(size: 12), agentText = Color.white.opacity(0.7)
+    static let agentFill = Color.white.opacity(0.04), agentStroke = Color.white.opacity(0.14)
+    static let agentOnFill = Theme.accent.opacity(0.18), agentOnStroke = Theme.accent.opacity(0.55)
+    static let agentDisabledOpacity: Double = 0.45
+    // Buttons (.acts .b): 27 pt, 7 pt corners; Cancel is text only; Log In… is the 20 pt mini.
+    static let actionsTop: CGFloat = 12, actionGap: CGFloat = 8
+    static let buttonHeight: CGFloat = 27, buttonRadius: CGFloat = 7, buttonPadding: CGFloat = 12, quietPadding: CGFloat = 6
+    static let buttonFont = Font.system(size: 12.5, weight: .medium), buttonFill = Color.white.opacity(0.10)
+    static let quietText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.7)
+    static let offOpacity: Double = 0.55, lockedOpacity: Double = 0.5
+    static let spinner: CGFloat = 11, spinnerGap: CGFloat = 6
+    static let miniHeight: CGFloat = 20, miniRadius: CGFloat = 5, miniPadding: CGFloat = 8, miniFont = Font.system(size: 11.5)
+  }
   /// Identity moments (design/brand/moments.png): meet your team, run finished.
   /// The provider mark (ProviderMark.swift): 11 pt in tree rows, a badge disc on bots of 24 pt and up.
   enum Provider {

@@ -214,7 +214,7 @@ extension TerminalLauncher {
     return s.isEmpty ? "settings" : s
   }
 
-  private static func script(name: String, _ body: String) -> Bool {
+  static func script(name: String, _ body: String) -> Bool {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("capcomd-\(safeName(name)).command")
     do {
       try "#!/bin/zsh -l\n\(body)\n".write(to: url, atomically: true, encoding: .utf8)

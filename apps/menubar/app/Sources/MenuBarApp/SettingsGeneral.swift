@@ -40,6 +40,21 @@ struct GeneralPane: View {
       }
 
       Section {
+        Toggle(isOn: Binding(get: { model.gitignoreCapcomd }, set: { model.gitignoreCapcomd = $0 })) {
+          Text("Keep .capcomd/ out of git")
+          Text("Adds ") + Text(verbatim: ".capcomd/").font(Theme.Settings.footMono) + Text(" to the project's .gitignore when you set it up. Off: commit it, so everyone who works on the project shares the setup.")
+        }
+        .toggleStyle(.switch)
+        .disabled(!model.gitignoreSupported)
+        .accessibilityLabel("Keep .capcomd out of git")
+      } header: {
+        Text("New projects")
+      } footer: {
+        // Until capcomd takes it with a setup, the switch is off and says so.
+        Foot(verbatim: model.gitignoreSupported ? "Applies to projects you set up from now on." : "Applies to projects you set up from now on. Update capcomd to use this.")
+      }
+
+      Section {
         Toggle(isOn: Binding(get: { model.notifyApprovals }, set: { model.notifyApprovals = $0 })) {
           Text("Approval requests")
           Text("Approve or deny a merge from the notification.")
