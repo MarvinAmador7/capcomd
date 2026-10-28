@@ -1,0 +1,10 @@
+{
+  "name": "capcomd-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build.ts",
+    "preview": "bun build.ts && bun preview.ts",
+    "images": "bun build.ts --tools && bun tools/render.ts && bun build.ts"
+  }
+}

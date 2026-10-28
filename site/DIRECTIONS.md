@@ -1,5 +1,10 @@
 # capcomd launch site: three art directions
 
+> **Built.** The owner approved B3, and the site is built from it in `site/src` → `site/dist` (see
+> [README.md](README.md)). Claim sources and sample content are kept in [CONTENT.md](CONTENT.md). The comps below
+> are the record of how it got there.
+
+
 Stage 1 of the launch site: three ways the site could look, each with a working comp of the hero and the section
 where a run plays out (ask, swarm, verify, review, merge), at 1440 and 390 pixels. Pick one before the full site is
 built; nothing here is the real site yet.
