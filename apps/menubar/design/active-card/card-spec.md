@@ -19,7 +19,7 @@ Priority, highest first: **ask › failed › paused › working**. Every state 
 | Ask | an approval waits for the run | hand mark, the question | the asker's head, "worker asked 18s ago · planner and reviewer wait on it" | the files with +/−, or the branch line from an older daemon | View diff · Deny · Approve ↩ |
 | Failed | an agent of an active run failed | ✕ mark, "worker's checks failed" or "worker failed" | the agent's head, "worker · its checks didn't pass" / "· stopped with an error" | the failing lines (mono box) | Hide · Open thread |
 | Paused | agents stopped at a provider's usage limit (`result.limit == "quota"`) | pause mark, "Paused at Claude's usage limit" | their heads, "planner and reviewer pick up again at 15:40" (or "when the limit resets") | none | "Nothing to do unless it's urgent" · Resume now |
-| Outcome | the newest finished project (top of Recent) | crew heads, "Merged into main" (or Done, Failed, Stopped), duration | the goal | ✓ 2 files +24 −0 · checks passed · $0.41, or ✕ and the failing line | none (⌘1 opens it) |
+| Outcome | the newest finished project (top of Recent) | crew heads, "Merged into main" (or Merge denied, Merge failed, Done, Failed, Stopped), duration | the goal | ✓ 2 files +24 −0 · checks passed · $0.41, or ✕ and the failing line | none (⌘1 opens it) |
 
 An ask can't be put away. Hide folds a failure back to the sentence until another reason unfolds the card (the
 reason is remembered: `ask:<approvalId>`, `failed:<agentId>`, `paused:<runId>:<agentIds>`). The chevron shows or
@@ -38,8 +38,9 @@ hides the agent tree (24 pt rows; approvals stay in the card body, not under the
 - Files: up to 4 rows, biggest change first (the daemon's order), then "and n more files". Binary files show a dash.
 - Failure line: a failed check's excerpt (the lines of the check output that name the failure), else how the checks
   failed, else the agent's error. At most 3 lines.
-- Outcome: "Merged into <target>" when an agent's merge landed and the run completed; cost only when API spend was
-  billed; files only when the run changed some.
+- Outcome: "Merged into <target>" when an agent's merge landed and the run completed; "Merge denied" (or "Merge failed")
+  when nothing landed and a merge was denied (or failed), and then no leading ✓: the files are what it proposed; cost
+  only when API spend was billed; files only when the run changed some.
 - Times: elapsed and duration as a clock ("4:12", "1:02:09"); "asked 18s ago" with `shortDuration`; "at 15:40" in
   the user's locale.
 

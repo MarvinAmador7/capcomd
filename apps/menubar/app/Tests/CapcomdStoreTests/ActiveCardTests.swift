@@ -161,6 +161,54 @@ final class ActiveCardTests: XCTestCase {
     XCTAssertNil(o.failure)
   }
 
+  func testADeniedMergeSaysSoAndDropsTheCheckmark() {
+    // As the daemon reports it on connect: the worker's result records the denial.
+    let s = store { _, ev in
+      ev("agent.done", "wk", ["result": .object(["verification": .object(["pass": .bool(true)]),
+                                                 "merge": .object(["id": .string("mrg-1"), "target": .string("main"), "state": .string("denied")])])], 0)
+      ev("agent.done", "rv", ["result": .object([:])], 0); ev("agent.done", "pl", ["result": .object([:])], 0)
+      ev("run.completed", nil, [:], 96_000)
+    }
+    let o = try! XCTUnwrap(s.outcome(s.projects[0]))
+    XCTAssertEqual(o.head, "Merge denied")
+    XCTAssertTrue(o.notMerged)
+    XCTAssertEqual(o.checksPassed, true)
+
+    // Live: the denial arrives after the worker finished (its result had no merge yet).
+    let live = store { _, ev in
+      ev("agent.done", "wk", ["result": .object(["verification": .object(["pass": .bool(true)])])], 0)
+      ev("agent.done", "rv", ["result": .object([:])], 0); ev("agent.done", "pl", ["result": .object([:])], 0)
+      ev("run.completed", nil, [:], 96_000)
+      ev("merge.denied", "wk", ["id": .string("mrg-1"), "merged": .bool(false), "status": .string("denied")], 120_000)
+    }
+    let l = try! XCTUnwrap(live.outcome(live.projects[0]))
+    XCTAssertEqual(l.head, "Merge denied")
+    XCTAssertTrue(l.notMerged)
+
+    // A merge that landed later still wins over an earlier denial.
+    let landed = store { _, ev in
+      ev("agent.done", "wk", ["result": .object(["merge": .object(["state": .string("denied"), "target": .string("main")])])], 0)
+      ev("agent.done", "rv", ["result": .object(["merge": .object(["state": .string("merged"), "target": .string("main")])])], 0)
+      ev("agent.done", "pl", ["result": .object([:])], 0)
+      ev("run.completed", nil, [:], 96_000)
+    }
+    let m = try! XCTUnwrap(landed.outcome(landed.projects[0]))
+    XCTAssertEqual(m.head, "Merged into main")
+    XCTAssertFalse(m.notMerged)
+  }
+
+  func testAFailedMergeSaysSo() {
+    let s = store { _, ev in
+      ev("agent.done", "wk", ["result": .object([:])], 0)
+      ev("merge.failed", "wk", ["id": .string("mrg-1"), "target": .string("main"), "reason": .string("conflict")], 10)
+      ev("agent.done", "rv", ["result": .object([:])], 0); ev("agent.done", "pl", ["result": .object([:])], 0)
+      ev("run.completed", nil, [:], 96_000)
+    }
+    let o = try! XCTUnwrap(s.outcome(s.projects[0]))
+    XCTAssertEqual(o.head, "Merge failed")
+    XCTAssertTrue(o.notMerged)
+  }
+
   func testAFailedRunsOutcomeSaysWhyAndASubscriptionRunHasNoCost() {
     let s = store { _, ev in
       ev("agent.failed", "wk", ["result": .object(["error": .string("exit code 1"), "billing": .string("subscription"), "costUsd": .number(0)])], 0)
