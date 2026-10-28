@@ -24,7 +24,7 @@ import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/t
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
 import { startDriver } from "./drivers";
-import { agentWorkflowOn } from "../utils/agent-workflow-flag";
+import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 export { startDriver };
@@ -319,7 +319,7 @@ async function wakeIfDue(runId: string, a: ScopeAgent): Promise<boolean> {
   if (a.status !== "paused" || !a.pausedUntil || a.pausedUntil > Date.now()) return false;
   // ADR-022: its own workflow wakes it at the reset; a look past the reset only wakes that workflow (in case the
   // engine hasn't yet), it doesn't resume the agent itself.
-  if (agentWorkflowOn()) { await startDriver(runId, a.agentId); return false; }
+  if (await engineDrivesAgents(runId)) { await startDriver(runId, a.agentId); return false; }
   const r = await client().scope.getOrCreate([runId]).resume({ agentId: a.agentId, by: "reset" });
   if (r.changed) await startDriver(runId, a.agentId);
   return r.changed;
@@ -794,7 +794,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
   const noticeAt = new Map<string, number>();
   // ADR-022: with the agent workflow, wait for the scope's "agents changed" event instead of polling every pollMs()
   // (a slow poll stays as the fallback: an event missed while reconnecting, a kick that's due).
-  const feed = agentWorkflowOn() ? changeFeed(runId) : null;
+  const feed = (await engineDrivesAgents(runId).catch(() => false)) ? changeFeed(runId) : null;
   try {
   for (let poll = 0; ; poll++) {
     const noticed: ScopeAgent[] = [];

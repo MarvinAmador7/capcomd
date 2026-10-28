@@ -555,6 +555,9 @@ export const scopeActor = actor({
       return { paused, pausing, affected: order.map((a) => a.agentId) };
     },
 
+    /** ADR-022: how this engine drives agents (its host's CAPCOMD_AGENT_WORKFLOW): the CLI follows it. */
+    async driveMode(_c) { return { agentWorkflow: agentWorkflowOn() }; },
+
     /** A paused agent runs again as its next epoch (a new worker and VM, continuing on its branch). */
     async resume(c, params: { agentId: string; by?: string }) {
       const r = await resumeAgent(c, params.agentId, params.by);

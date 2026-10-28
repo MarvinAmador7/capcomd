@@ -11,7 +11,7 @@ import { seedRepo, wipeEngineData } from "./survive";
 
 // "driver.kill:0" = no engine kill: the scenario kills the driver process mid-push (engine push is slowed).
 // push.after.before_event runs with a repo: the remote branch exists when the takeover runs, so it must adopt it.
-// With CAPCOMD_AGENT_WORKFLOW=1 (ADR-022) there are no driver processes; each driver case kills the engine host instead,
+// With the agent workflow (ADR-022, the default; CAPCOMD_AGENT_WORKFLOW=0 is the driver path) there are no driver processes; each driver case kills the engine host instead,
 // mid-step, and proves the same recovery: "driver.kill:0" dies at workflow.watch.running while the slowed push is in
 // flight (the run is re-run once after the restart, the push lands once, the agent finishes once); "vm.rpc.*:0" fire
 // in the engine host, where the agent's spool pump now runs (the scripted "VM" outlives it, its RPC is answered once).
@@ -54,7 +54,7 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
   const vm = kp.startsWith("vm.");
   const vmDriver = kp.startsWith("vm.rpc.");
   const driverKill = kp.startsWith("driver.kill") || vmDriver;
-  const workflow = process.env.CAPCOMD_AGENT_WORKFLOW === "1";
+  const workflow = process.env.CAPCOMD_AGENT_WORKFLOW !== "0";
   // With the workflow, the driver's death is the engine host's: restart and resume like any engine kill.
   const engineKill = !driverKill || workflow;
   const adopt = kp.startsWith("push.after.before_event");

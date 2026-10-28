@@ -104,7 +104,7 @@ if (mode === "driverkill") {
   // Kill the detached driver while its push is in flight (the engine keeps running the push). With the agent workflow
   // (ADR-022) there is no driver: the engine host itself dies mid-step (killpoint workflow.watch.running) and the
   // harness restarts it, so this only awaits.
-  const workflow = process.env.CAPCOMD_AGENT_WORKFLOW === "1";
+  const workflow = process.env.CAPCOMD_AGENT_WORKFLOW !== "0";
   const { readFileSync } = await import("fs");
   const { join } = await import("path");
   const { stateDir } = await import("../../src/utils/home");

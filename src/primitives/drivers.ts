@@ -4,16 +4,17 @@ import { join } from "path";
 import { env } from "../utils/env";
 import { stateDir } from "../utils/home";
 import { selfArgv } from "../utils/self";
-import { agentWorkflowOn } from "../utils/agent-workflow-flag";
+import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 
 /**
- * Start (or kick) what drives one agent. Today: a detached `capcomd agent-drive` process (logs in .relay/drivers/).
- * With CAPCOMD_AGENT_WORKFLOW=1 (ADR-022): the workflow of the worker actor of its current epoch, by a `start` message
- * (idempotent: a second start only wakes that actor, which resumes its workflow if a restart left it asleep).
+ * Start (or kick) what drives one agent, as the engine does it (ADR-022): the workflow of the worker actor of its
+ * current epoch, by a `start` message (idempotent: a second start only wakes that actor, which resumes its workflow if
+ * a restart left it asleep); or, for an engine started with CAPCOMD_AGENT_WORKFLOW=0, a detached
+ * `capcomd agent-drive` process (logs in <state>/drivers/).
  */
 export async function startDriver(runId: string, agentId: string): Promise<void> {
   if (env("NO_DRIVER") === "1") return;
-  if (agentWorkflowOn()) return startAgentWorkflow(runId, agentId);
+  if (await engineDrivesAgents(runId).catch(() => true)) return startAgentWorkflow(runId, agentId);
   spawnDriver(runId, agentId);
 }
 

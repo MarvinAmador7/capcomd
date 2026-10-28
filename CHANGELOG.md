@@ -8,13 +8,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fix: a project's settings are looked for from the current folder up to your home folder and no further, even when
   `HOME` points somewhere else (a test or an agent's scratch home); capcomd's own `~/.capcomd/config.json` was read as
   a project's `.capcomd/config.json` then, so its sandbox and repository settings applied where they shouldn't.
-- Experimental, off by default: with `CAPCOMD_AGENT_WORKFLOW=1` set for both the engine (`capcomd serve`) and the CLI,
-  each agent is driven by a durable workflow inside the engine instead of a `capcomd agent-drive` process: it carries on
-  by itself after the engine restarts (no `await` needed to kick it), a usage-limit pause wakes at its reset from the
-  engine, and `capcomd await` waits for change events instead of polling. The settings that change how an agent is
-  driven (`CAPCOMD_SPAWN_EXEC`, scripted agents' `CAPCOMD_SCRIPT_*`, the agents file) are taken from the shell that
-  spawned it, as a driver process took them, not from the engine's environment. Without the variable nothing changes.
-  Design and limits: docs/adr-022-agent-lifecycle-workflow.md.
+- Agents are now driven by the engine itself: each agent runs as a durable workflow inside `capcomd serve` instead of a
+  separate `capcomd agent-drive` process per agent. An agent carries on by itself when the engine restarts (nothing has
+  to `await` it to get it going again), a usage-limit pause wakes at its reset from the engine, `capcomd await` waits
+  for change events instead of polling, and a dozen running agents no longer cost a dozen extra processes. The settings
+  that change how an agent runs (`CAPCOMD_SPAWN_EXEC`, scripted agents' `CAPCOMD_SCRIPT_*`, the agents file) are taken
+  from the shell that spawned it, as before. If something goes wrong, start the engine with
+  `CAPCOMD_AGENT_WORKFLOW=0` to get the old per-agent processes back (this escape hatch is kept for one release);
+  set it where `capcomd serve` (or the background service) runs: every command follows the engine's mode and says so
+  if its own setting differs. Design and limits: docs/adr-022-agent-lifecycle-workflow.md.
 - capcomd's engine data now lives in capcomd's own folder: `~/.capcomd/engine/<port>/db` (or `$CAPCOMD_HOME/engine/<port>/db`)
   for every port, the default 6420 included, instead of rivetkit's shared `~/.rivetkit`, which any other project
   using Rivet on your Mac also writes (a newer one could stamp the database so capcomd's engine refused to start).
