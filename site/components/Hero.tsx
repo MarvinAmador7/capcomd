@@ -17,7 +17,7 @@ export function Hero() {
 
       <div className="hero__foot">
         <p className="hero__lead" data-load style={delay(420)}>
-          <b>capcomd</b> is durable orchestration for swarms of coding agents. Your coding agent drives it: Claude Code and Codex agents run in parallel, each in its own VM on its own branch, and only the exact commit that passed your checks and a reviewer agent merges, once.
+          <b>capcomd</b> is a durable orchestration CLI and MCP server for swarms of coding agents running on cloud VMs.
         </p>
         <div className="hero__do" data-load style={delay(500)} id="install">
           <a className="button" href={`${SITE.repo}#quickstart`}>Install capcomd</a>
