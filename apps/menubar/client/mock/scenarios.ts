@@ -8,7 +8,7 @@
 //   SETTINGS=mixed SANDBOXES=machines|stale|empty|unsafe|nores|off …     place details and machines (settings.ts)
 //   SETTINGS=mixed SANDBOXES=readonly|envlocked|noconfigure|conflict|owners …   changing settings, capcomd's own machines
 //   SETTINGS=mixed SANDBOXES=changed|unavailable|noactions …          deleting machines (409, 503, a phase 2 daemon)
-//   PROJECTS=ready|configured|notgit|notgithub|nogh|apikey|refuse|old …   setting a folder up as a project (projects.ts)
+//   PROJECTS=ready|configured|notgit|noorigin|nogh-publish|secrets|taken|notgithub|nogh|apikey|refuse|old …   setting a folder up as a project, starting its repository and publishing it (projects.ts)
 //
 // Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the

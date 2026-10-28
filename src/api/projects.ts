@@ -4,10 +4,10 @@
 // checks every answer again and writes what `capcomd setup project` writes, through the same code
 // (src/config/project-setup.ts), then adds the folder to capcomd's projects. Only GitHub checkouts: the repository is
 // always the checkout's origin, never a URL the client sends.
-import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	githubRepoOf, gitRoot, httpsRemote, isUserConfigDir, originHead, originUrl, planProject, budgetCap, projectValues, ProjectWriteError,
 	remoteBranches, suggestCheck, writeProject, type ProjectValues,
@@ -33,9 +33,16 @@ export interface ProjectInspection {
 	repo: string | null; github: string | null; ghReady: boolean; defaultBranch: string; branches: string[]; suggestedCheck: string;
 	suggestedMode: "pr" | "direct"; suggestedAgents: SetupAgent[]; agents: ProjectAgent[]; budgetAsked: boolean; problems: ProjectProblem[];
 }
-export interface ProjectSetupInput { path: string; mode: "pr" | "direct"; target: string; check: string; agents: SetupAgent[]; budgetUsd?: number; expect?: { repo?: string | null } }
+export interface ProjectSetupInput {
+	path: string; mode: "pr" | "direct"; target: string;
+	/** Omitted: the project's current check when it's set up, else inspect's suggestedCheck ("" for none). */
+	check?: string;
+	agents: SetupAgent[]; budgetUsd?: number; expect?: { repo?: string | null };
+	/** Make sure the checkout's .gitignore ignores .capcomd/ (appended once; nothing when git already ignores it). */
+	gitignore?: boolean;
+}
 export type SetupOutcome =
-	| { ok: true; project: { path: string; root: string; name: string; configured: true; values: ProjectValues }; changed: boolean; event: { text: string; data: { mode: string; target: string; check: string; agents: SetupAgent[]; budgetUsd: number | null } } }
+	| { ok: true; project: { path: string; root: string; name: string; configured: true; values: ProjectValues }; changed: boolean; event: { text: string; data: { mode: string; target: string; check: string; agents: SetupAgent[]; budgetUsd: number | null; gitignored: boolean } } }
 	| { ok: false; status: 409 | 422; code: "conflict" | "invalid"; message: string; field?: string; problem?: ProblemCode; repo?: string | null };
 
 export interface ProjectDeps {
@@ -47,9 +54,9 @@ export interface ProjectDeps {
 	ghReady: () => Promise<boolean>;
 }
 
-const tilde = (p: string, env: Env) => { const h = resolve(env.HOME ?? homedir()); return p === h ? "~" : p.startsWith(`${h}/`) ? `~${p.slice(h.length)}` : p; };
+export const tilde = (p: string, env: Env) => { const h = resolve(env.HOME ?? homedir()); return p === h ? "~" : p.startsWith(`${h}/`) ? `~${p.slice(h.length)}` : p; };
 /** The home directory: capcomd's own settings live there, so it's never a project. */
-const isHome = (p: string, env: Env) => samePath(p, env.HOME ?? homedir()) || samePath(p, userInfo().homedir) || isUserConfigDir(p, env);
+export const isHome = (p: string, env: Env) => samePath(p, env.HOME ?? homedir()) || samePath(p, userInfo().homedir) || isUserConfigDir(p, env);
 
 /** How each agent would log in (a plan login anywhere wins, as GET /v1/logins says), and where it has a login. */
 function agentsFrom(logins: LoginState[]): ProjectAgent[] {
@@ -123,21 +130,52 @@ export async function setUpProject(input: ProjectSetupInput, deps: ProjectDeps):
 	if (input.budgetUsd !== undefined && !asked) return bad("None of these agents bills an API key, so there's no spend to cap: leave the budget out.", "budgetUsd");
 	if (input.budgetUsd !== undefined && !(Number.isFinite(input.budgetUsd) && input.budgetUsd > 0)) return bad("The spend cap is an amount in USD over 0, or none for no limit.", "budgetUsd");
 	const authOf = (a: string) => i.agents.find((x) => x.provider === a)?.auth ?? "subscription";
-	const plan = planProject({ dir: root, repo: i.repo!, mode: input.mode, target: input.target, check: input.check, agents, authOf, cap: input.budgetUsd !== undefined ? budgetCap(input.budgetUsd) : null });
-	let w;
-	try { w = writeProject(plan, { strict: true }); } catch (e) {
+	// No check sent: keep the one the project has, else the one inspect suggests (possibly none).
+	const check = input.check ?? (i.values ? i.values.check : i.suggestedCheck);
+	const plan = planProject({ dir: root, repo: i.repo!, mode: input.mode, target: input.target, check, agents, authOf, cap: input.budgetUsd !== undefined ? budgetCap(input.budgetUsd) : null });
+	let w, ignored = false;
+	try {
+		if (input.gitignore) checkGitignore(root);
+		w = writeProject(plan, { strict: true });
+		if (input.gitignore) ignored = ignoreCapcomd(root);
+	} catch (e) {
 		if (e instanceof ProjectWriteError) return bad(e.message, "path");
 		throw e;
 	}
 	const listed = addProject(root, deps.env);
 	return {
 		ok: true, project: { path: input.path, root, name: listed.project.name, configured: true, values: projectValues(root)! },
-		changed: w.configChanged || w.made.length > 0 || listed.added,
+		changed: w.configChanged || w.made.length > 0 || listed.added || ignored,
 		event: {
 			text: configuredText({ name: listed.project.name, root, mode: input.mode, target: input.target, agents }, deps.env),
-			data: { mode: input.mode, target: input.target, check: input.check, agents, budgetUsd: input.budgetUsd ?? null },
+			data: { mode: input.mode, target: input.target, check, agents, budgetUsd: input.budgetUsd ?? null, gitignored: ignored },
 		},
 	};
+}
+
+// ---- .capcomd/ in the checkout's .gitignore (POST /v1/projects `gitignore`) ----
+const CAPCOMD_IGNORE = ".capcomd/";
+/** The checkout's .gitignore, if it exists, must be a file inside the checkout (no symlink out of it). */
+function checkGitignore(root: string) {
+	const f = join(root, ".gitignore");
+	let st;
+	try { st = lstatSync(f); } catch { return; }
+	let real: string;
+	try { real = realpathSync(f); } catch { real = ""; }
+	const top = realpathSync(root);
+	if (!real || (real !== join(top, ".gitignore") && !real.startsWith(`${top}/`)))
+		throw new ProjectWriteError(`${f} leads outside the checkout (a symlink), so capcomd won't add .capcomd/ to it. Remove the link, or leave .gitignore as it is.`);
+	if (!st.isSymbolicLink() && !st.isFile()) throw new ProjectWriteError(`${f} isn't a file, so capcomd can't add .capcomd/ to it.`);
+}
+/** git already ignores `.capcomd/` in `root` (any .gitignore, info/exclude or the global excludes file). */
+export const capcomdIgnored = (root: string) => spawnSync("git", ["check-ignore", "-q", ".capcomd/config.json"], { cwd: root, timeout: 10_000 }).status === 0;
+/** Append `.capcomd/` to the checkout's .gitignore (created when missing) unless git ignores it already. True when written. */
+export function ignoreCapcomd(root: string): boolean {
+	if (capcomdIgnored(root)) return false;
+	const f = join(root, ".gitignore");
+	const cur = existsSync(f) ? readFileSync(f, "utf8") : "";
+	writeFileSync(f, `${cur}${cur && !cur.endsWith("\n") ? "\n" : ""}${CAPCOMD_IGNORE}\n`);
+	return true;
 }
 
 /** The audit line on the daemon stream (project.configured): trusted fields only (a project name, a branch name, labels). */

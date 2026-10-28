@@ -6,7 +6,8 @@
 //         GET /v1/logins, /v1/environments, /v1/service, /v1/run-options and their capabilities in /v1/health; and
 //         (SANDBOXES=<scene>, settings.ts) GET /v1/sandboxes[/{name}[/resources[/{id}]]], PATCH
 //         /v1/sandboxes/{name}/settings and POST /v1/sandboxes/{name}/resources/{id}/actions/delete. With PROJECTS=<scene>
-//         (projects.ts): GET /v1/projects/inspect and POST /v1/projects, capability projects.setup, and run-options?repo=
+//         (projects.ts): GET /v1/projects/inspect and POST /v1/projects (capability projects.setup), git-init, publish-options and
+//         publish (projects.git), and run-options?repo=
 //         refusing a folder that isn't set up.
 // SSE frames per contract: `id: <seq>` / `event: <type>` / `data: <envelope>`; `event: stream.reset` {snapshotSeq, reason}
 //   then snapshot.run / agents / approvals / steps / threads / snapshot.end {snapshotSeq}, then live from snapshotSeq+1;
