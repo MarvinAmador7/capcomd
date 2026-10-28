@@ -3,8 +3,25 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build.ts",
-    "preview": "bun build.ts && bun preview.ts",
-    "images": "bun build.ts --tools && bun tools/render.ts && bun build.ts"
+    "vendor": "bun scripts/vendor-bot-avatar.ts",
+    "dev": "next dev --port 4173",
+    "build": "next build",
+    "preview": "bun scripts/preview.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "16.4.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "server-only": "0.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "postcss": "8.5.32",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2"
   }
 }

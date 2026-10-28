@@ -1,5 +1,0 @@
-{
-  "//": "TODO(owner): set url to the site's real origin once the domain is decided (no trailing slash). It is used for canonical, Open Graph and sitemap URLs only.",
-  "url": "https://capcomd.example",
-  "description": "Durable orchestration for swarms of coding agents: one VM and branch per agent, operator-owned checks and a reviewer agent, exactly-once merges of the commit that passed."
-}

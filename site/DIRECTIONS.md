@@ -1,7 +1,7 @@
 # capcomd launch site: three art directions
 
-> **Built.** The owner approved B3, and the site is built from it in `site/src` → `site/dist` (see
-> [README.md](README.md)). Claim sources and sample content are kept in [CONTENT.md](CONTENT.md). The comps below
+> **Built.** The owner approved B3, and the site is built from it as a Next.js + Tailwind CSS app exported to static
+> files (see [README.md](README.md)). Claim sources and sample content are kept in [CONTENT.md](CONTENT.md). The comps below
 > are the record of how it got there.
 
 

@@ -37,9 +37,9 @@ illustrations, not captures, and they show the menu bar app as it is on `main` (
 
 ## Open decisions (defaults used)
 
-- The domain: `site.config.json` → `url` is the placeholder `https://capcomd.example`. Canonical, Open Graph and
-  sitemap URLs use it.
-- Hosting: none chosen. `dist/` is a plain static folder.
+- The domain: `lib/site.ts` → `SITE_URL` is the placeholder `https://capcomd.example`. Canonical, Open Graph,
+  robots and sitemap URLs use it.
+- Hosting: none chosen. `out/` (the Next.js static export) is a plain static folder.
 - Footage: none recorded. The rebuilt panels are the product imagery.
 - The name: the site doesn't explain what CAPCOM means.
 - Bot names: not used. Agents are named by role, plus a short suffix in the panels, as in the app's tree.
