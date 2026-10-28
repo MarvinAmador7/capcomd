@@ -131,24 +131,28 @@ public struct ProjectSetupRequest: Encodable, Sendable, Hashable {
   /// "pr" or "direct".
   public var mode: String
   public var target: String
-  /// "" for none.
-  public var check: String
+  /// "" for none; nil: not sent, so the daemon uses the project's current check, else the one it suggests (`projects.git`).
+  public var check: String?
   public var agents: [String]
   /// Only when the form asked for a cap (`budgetAsked(for: agents)`); nil: no limit.
   public var budgetUsd: Double?
   public var expectRepo: String?
-  public init(path: String, mode: String, target: String, check: String, agents: [String], budgetUsd: Double? = nil, expectRepo: String? = nil) {
+  /// Make sure git ignores `.capcomd/` in the checkout (`projects.git`); sent only when true.
+  public var gitignore: Bool
+  public init(path: String, mode: String, target: String, check: String? = nil, agents: [String], budgetUsd: Double? = nil, expectRepo: String? = nil, gitignore: Bool = false) {
     self.path = path; self.mode = mode; self.target = target; self.check = check; self.agents = agents; self.budgetUsd = budgetUsd; self.expectRepo = expectRepo
+    self.gitignore = gitignore
   }
-  enum CodingKeys: String, CodingKey { case path, mode, target, check, agents, budgetUsd, expect }
+  enum CodingKeys: String, CodingKey { case path, mode, target, check, agents, budgetUsd, expect, gitignore }
   struct Expect: Encodable { var repo: String?
     func encode(to encoder: Encoder) throws { var c = encoder.container(keyedBy: K.self); try c.encode(repo, forKey: .repo) }
     enum K: String, CodingKey { case repo } }
   public func encode(to encoder: Encoder) throws {
     var c = encoder.container(keyedBy: CodingKeys.self)
     try c.encode(path, forKey: .path); try c.encode(mode, forKey: .mode); try c.encode(target, forKey: .target)
-    try c.encode(check, forKey: .check); try c.encode(agents, forKey: .agents)
+    try c.encodeIfPresent(check, forKey: .check); try c.encode(agents, forKey: .agents)
     try c.encodeIfPresent(budgetUsd, forKey: .budgetUsd)
+    if gitignore { try c.encode(true, forKey: .gitignore) }
     // Only what the form was filled from: without an inspection there is nothing to compare, so no `expect`.
     if let expectRepo { try c.encode(Expect(repo: expectRepo), forKey: .expect) }
   }
@@ -172,10 +176,88 @@ public struct ProjectSetupResult: Decodable, Sendable, Hashable {
   public init(project: Project, changed: Bool) { self.project = project; self.changed = changed }
 }
 
+/// One account a repository can be created as (`GET /v1/projects/publish-options` `accounts`).
+public struct ProjectPublishAccount: Decodable, Sendable, Hashable, Identifiable {
+  public var login: String
+  /// "user" (the GitHub CLI's login) or "org" (an organization it belongs to).
+  public var kind: String
+  public var id: String { login }
+  public var isOrganization: Bool { kind == "org" }
+  public init(login: String, kind: String = "user") { self.login = login; self.kind = kind }
+}
+
+/// A file the first commit would publish that looks like it holds a secret.
+public struct ProjectBlockedFile: Decodable, Sendable, Hashable, Identifiable {
+  /// Relative to the checkout.
+  public var path: String
+  /// The daemon's words, e.g. "an environment file, which usually holds secrets".
+  public var reason: String
+  public var id: String { path }
+  public init(path: String, reason: String) { self.path = path; self.reason = reason }
+}
+
+/// `GET /v1/projects/publish-options`: what the publish form needs for a checkout without origin.
+public struct ProjectPublishOptions: Decodable, Sendable, Hashable {
+  /// The GitHub CLI is logged in on the daemon's machine; false: publishing is refused (show how to log in).
+  public var ghReady: Bool
+  /// The gh user first, then its organizations; empty without `ghReady`.
+  public var accounts: [ProjectPublishAccount]
+  /// The folder's name as GitHub takes it.
+  public var suggestedName: String
+  /// false: publishing makes the first commit of `files` files.
+  public var hasCommits: Bool
+  /// What publishing puts on GitHub: the first commit's files, or HEAD's when there are commits.
+  public var files: Int
+  /// Likely secrets among them: without commits, publishing is refused while any is listed.
+  public var blocked: [ProjectBlockedFile]
+  /// The branch that is pushed.
+  public var branch: String
+  public var root: String?
+  /// Publishing can go ahead as far as the daemon can tell before trying.
+  public var canPublish: Bool { ghReady && !accounts.isEmpty && (hasCommits || (blocked.isEmpty && files > 0 && files <= Self.maxFirstCommitFiles)) }
+  /// The most files a first commit may hold (the daemon refuses more: add a .gitignore).
+  public static let maxFirstCommitFiles = 2000
+  public init(ghReady: Bool, accounts: [ProjectPublishAccount] = [], suggestedName: String, hasCommits: Bool = false, files: Int = 0,
+              blocked: [ProjectBlockedFile] = [], branch: String = "main", root: String? = nil) {
+    self.ghReady = ghReady; self.accounts = accounts; self.suggestedName = suggestedName; self.hasCommits = hasCommits; self.files = files
+    self.blocked = blocked; self.branch = branch; self.root = root
+  }
+  enum CodingKeys: String, CodingKey { case ghReady, accounts, suggestedName, hasCommits, files, blocked, branch, root }
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    ghReady = try c.decodeIfPresent(Bool.self, forKey: .ghReady) ?? false
+    accounts = try c.decodeIfPresent(Lossy<ProjectPublishAccount>.self, forKey: .accounts)?.items ?? []
+    suggestedName = try c.decodeIfPresent(String.self, forKey: .suggestedName) ?? ""
+    hasCommits = try c.decodeIfPresent(Bool.self, forKey: .hasCommits) ?? false
+    files = try c.decodeIfPresent(Int.self, forKey: .files) ?? 0
+    blocked = try c.decodeIfPresent(Lossy<ProjectBlockedFile>.self, forKey: .blocked)?.items ?? []
+    branch = try c.decodeIfPresent(String.self, forKey: .branch) ?? "main"
+    root = try c.decodeIfPresent(String.self, forKey: .root)
+  }
+}
+
 public enum ProjectWire {
   public static func inspection(_ data: Data) throws -> ProjectInspection { try JSONDecoder().decode(ProjectInspection.self, from: data) }
   public static func result(_ data: Data) throws -> ProjectSetupResult { try JSONDecoder().decode(ProjectSetupResult.self, from: data) }
   public static func body(_ r: ProjectSetupRequest) throws -> Data { try JSONEncoder().encode(r) }
+  public static func publishOptions(_ data: Data) throws -> ProjectPublishOptions { try JSONDecoder().decode(ProjectPublishOptions.self, from: data) }
+  public static func gitInitBody(path: String) throws -> Data { try JSONSerialization.data(withJSONObject: ["path": path], options: [.sortedKeys]) }
+  public static func publishBody(path: String, owner: String, name: String, visibility: String) throws -> Data {
+    try JSONSerialization.data(withJSONObject: ["path": path, "owner": owner, "name": name, "visibility": visibility], options: [.sortedKeys])
+  }
+}
+
+/// Publishing the inspected checkout to GitHub (and starting its repository: `initGit` reports refusals here too).
+public enum ProjectPublishState: Sendable, Hashable {
+  case idle
+  case loadingOptions
+  case ready(ProjectPublishOptions)
+  case publishing
+  /// The daemon said no: its sentence, and the field it is about when it says (owner, name, visibility, files, identity,
+  /// gh, path).
+  case refused(message: String, field: String?)
+  /// It didn't happen (capcomd unreachable or too old, the GitHub CLI failed): the sentence to show.
+  case failed(String)
 }
 
 /// The folder the window shows.
@@ -223,19 +305,111 @@ extension CapcomdStore {
     projectInspect = next; changed()
   }
 
+  /// The daemon can start a folder's repository and publish it to GitHub (`projects.git`).
+  public var projectGitSupported: Bool { capabilities.contains(Capability.projectsGit) }
+  public static let projectGitNeedsUpdate = "Update capcomd to publish projects from here."
+
+  /// Starts a git repository in the inspected folder (`POST /v1/projects/git-init`, for a folder inspect said isn't a
+  /// checkout). `initializingGit` while on its way; then `projectInspect` is `.loaded` with the folder as it is now (its
+  /// problem is no_origin: publish it next), or `projectPublish` says why not (`.refused` with the daemon's sentence and
+  /// field, or `.failed`).
+  public func initGit(path: String) async {
+    await ensureCapabilities()
+    guard let projectSetter, projectGitSupported else { projectPublish = .failed(Self.projectGitNeedsUpdate); changed(); return }
+    if configureDenied { projectPublish = .refused(message: Self.projectSetupNeedsConfigure, field: nil); changed(); return }
+    if initializingGit { return }
+    initializingGit = true; projectPublish = .idle; projectSetup = .idle; changed()
+    do {
+      let i = try await projectSetter.initGit(path: path)
+      initializingGit = false
+      projectInspect = .loaded(i); changed()
+    } catch {
+      initializingGit = false
+      await gitRefused(error, path: path, unreachable: Self.projectsUnreachable)
+    }
+  }
+
+  /// Reads what the publish form needs (`GET /v1/projects/publish-options`): `.loadingOptions`, then `.ready(options)`
+  /// (also kept in `projectPublishOptions`), or `.refused` / `.failed` with a sentence.
+  public func loadPublishOptions(path: String) async {
+    await ensureCapabilities()
+    guard let projectSetter, projectGitSupported else { projectPublish = .failed(Self.projectGitNeedsUpdate); changed(); return }
+    projectPublish = .loadingOptions; changed()
+    do {
+      let o = try await projectSetter.publishOptions(path: path)
+      guard case .loadingOptions = projectPublish else { return }   // published or reset meanwhile
+      projectPublishOptions = o; projectPublish = .ready(o); changed()
+    } catch {
+      guard case .loadingOptions = projectPublish else { return }
+      await gitRefused(error, path: path, unreachable: "Couldn't read this folder's publish options just now. Try again.")
+    }
+  }
+
+  /// Publishes the inspected checkout to GitHub (`POST /v1/projects/publish`; `visibility` "private" or "public"):
+  /// `.publishing`, then `projectInspect` is `.loaded` with the checkout as it is now (`github` set: set it up next) and
+  /// `projectPublish` is `.idle`; or `.refused` with the daemon's sentence and field (`name` when it is taken, `files`
+  /// for likely secrets or too many files, `identity`, `gh`, `owner`), or `.failed` (the GitHub CLI failed, capcomd
+  /// unreachable). A 409 without a field (it has an origin now) inspects the folder again.
+  public func publishProject(path: String, owner: String, name: String, visibility: String) async {
+    await ensureCapabilities()
+    guard let projectSetter, projectGitSupported else { projectPublish = .failed(Self.projectGitNeedsUpdate); changed(); return }
+    if configureDenied { projectPublish = .refused(message: Self.projectSetupNeedsConfigure, field: nil); changed(); return }
+    if case .publishing = projectPublish { return }
+    projectPublish = .publishing; changed()
+    do {
+      let i = try await projectSetter.publishProject(path: path, owner: owner, name: name, visibility: visibility)
+      projectPublish = .idle; projectPublishOptions = nil; projectSetup = .idle
+      projectInspect = .loaded(i); changed()
+    } catch {
+      await gitRefused(error, path: path, unreachable: Self.projectsUnreachable)
+    }
+  }
+
+  /// A git-init / publish error as `projectPublish`.
+  func gitRefused(_ error: Error, path: String, unreachable: String) async {
+    switch error {
+    case ProjectSetupRefused.forbidden:
+      configureDenied = true; projectPublish = .refused(message: Self.projectSetupNeedsConfigure, field: nil)
+    case ProjectSetupRefused.invalid(let message, let field):
+      projectPublish = .refused(message: message, field: field)
+    case ProjectSetupRefused.conflict(let message, _):
+      // The folder changed since it was inspected (a checkout now, an origin now): show it as it is.
+      let refusal = ProjectPublishState.refused(message: message, field: "path")
+      projectPublish = refusal; changed()
+      await inspectProject(path: path)
+      projectPublish = refusal
+    case is Unauthorized:
+      unauthorized = true; projectPublish = .failed(Self.tokenRejected)
+    case DetailUnavailable.unsupported:
+      projectPublish = .failed(Self.projectGitNeedsUpdate)
+    case let m as MessageRefused:
+      projectPublish = .failed(m.message)
+    default:
+      projectPublish = .failed(unreachable)
+    }
+    changed()
+  }
+
   /// Sets the inspected folder up (`POST /v1/projects`) with the form's answers; `expectRepo` is the inspected origin.
   /// `.saving`, then `.done` (new runs go to the project: `prefs.startRepo` becomes its root and the run options are
   /// read for it) or `.refused` with the daemon's sentence and field. A 409 (the folder changed) inspects it again. A
   /// token without `configure`: "Reset your token in Settings to set up projects." A retry of the same answers after a
   /// lost answer reuses its Idempotency-Key, so it is set up once.
-  public func setUpProject(path: String, mode: String, target: String, check: String, agents: [String], budgetUsd: Double? = nil) async {
+  /// `check` nil: not sent (the project's current check, else the one the daemon suggests; needs `projects.git`).
+  /// `gitignore`: make sure git ignores `.capcomd/` in the checkout (`projects.git`).
+  public func setUpProject(path: String, mode: String, target: String, check: String? = nil, agents: [String], budgetUsd: Double? = nil, gitignore: Bool = false) async {
     await ensureCapabilities()
     guard let projectSetter, projectSetupSupported else { projectSetup = .refused(message: Self.projectSetupNeedsUpdate, field: nil); changed(); return }
     if configureDenied { projectSetup = .refused(message: Self.projectSetupNeedsConfigure, field: nil); changed(); return }
     if case .saving = projectSetup { return }
-    var expect: String?
-    if case .loaded(let i) = projectInspect, i.path == path || i.root == path { expect = i.repo }
-    let request = ProjectSetupRequest(path: path, mode: mode, target: target, check: check, agents: agents, budgetUsd: budgetUsd, expectRepo: expect)
+    var expect: String?, check = check
+    if case .loaded(let i) = projectInspect, i.path == path || i.root == path {
+      expect = i.repo
+      // A daemon from before projects.git needs a check: the one it would have used.
+      if check == nil, !projectGitSupported { check = i.values?.check ?? i.suggestedCheck }
+    }
+    if check == nil, !projectGitSupported { check = "" }
+    let request = ProjectSetupRequest(path: path, mode: mode, target: target, check: check, agents: agents, budgetUsd: budgetUsd, expectRepo: expect, gitignore: gitignore)
     let key = pendingSetupKey.flatMap { $0.request == request ? $0.key : nil } ?? makeKey()
     pendingSetupKey = (request, key)
     projectSetup = .saving; changed()
@@ -268,7 +442,11 @@ extension CapcomdStore {
   }
 
   /// Back to no folder (the window closed).
-  public func resetProjectSetup() { projectInspect = .idle; projectSetup = .idle; pendingSetupKey = nil; changed() }
+  public func resetProjectSetup() {
+    projectInspect = .idle; projectSetup = .idle; pendingSetupKey = nil
+    projectPublish = .idle; projectPublishOptions = nil
+    changed()
+  }
 
   /// Capabilities come with the first daemon read; a window opened before it asks for them itself.
   func ensureCapabilities() async {

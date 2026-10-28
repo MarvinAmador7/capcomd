@@ -39,7 +39,7 @@ a{color:#4ea1ff}a:hover{color:#7cb9ff}
 .dot{width:8px;height:8px;border-radius:50%;flex:none}
 </style>
 </helmet>
-<div class="win" style="width: 620px; height: 700px; background: #1e1e1f; display: flex; flex-direction: column; overflow: hidden">
+<div class="win" style="width: 620px; height: 820px; background: #1e1e1f; display: flex; flex-direction: column; overflow: hidden">
   <div class="bar">
     <div class="lights" aria-hidden="true">
       <span class="light" style="background: #ff5f57"></span>
@@ -100,6 +100,17 @@ a{color:#4ea1ff}a:hover{color:#7cb9ff}
     </div>
 
     <div class="sec">
+      <div class="sh">New projects</div>
+      <div class="grp">
+        <div class="row">
+          <div class="lbl">Keep .capcomd/ out of git<span class="sub">Adds <span class="mono">.capcomd/</span> to the project’s .gitignore when you set it up. Off: commit it, so everyone who works on the project shares the setup.</span></div>
+          <button class="tog" role="switch" aria-checked="false" aria-label="Keep .capcomd out of git"><span class="knob"></span></button>
+        </div>
+      </div>
+      <div class="foot">Applies to projects you set up from now on.</div>
+    </div>
+
+    <div class="sec">
       <div class="sh">Notifications</div>
       <div class="grp">
         <div class="row">
@@ -116,7 +127,7 @@ a{color:#4ea1ff}a:hover{color:#7cb9ff}
   </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":620,"height":700}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":620,"height":820}}'>
 class Component extends DCLogic {
 renderVals() {
 return {};

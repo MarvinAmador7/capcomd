@@ -1117,7 +1117,9 @@ async function verifyOnce(o: VerifyOpts) {
     ...(review ? { review, judge: { profile: review.profile, passed: review.passed, feedback: (review.error ?? review.reasons.join("; ")).slice(0, 1000) } } : {}),
   };
   const fin = opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
-  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status }, ...(review ? { review: { passed: review.passed, agentId: review.agentId } } : {}) } } }).catch(() => {});
+  // A failed check says how on the agent's result too, with the lines of its output that name the failure (the app's card).
+  const failedChecks = out.status === "failed" ? { reason: String(out.reason ?? "").slice(0, 300), excerpt: checkExcerpt("output" in out ? String(out.output ?? "") : "") } : {};
+  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status, ...failedChecks }, ...(review ? { review: { passed: review.passed, agentId: review.agentId } } : {}) } } }).catch(() => {});
   return fin;
 }
 
@@ -1154,7 +1156,11 @@ export async function mergeRef(o: MergeOpts) {
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
   const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
-  if (needsApproval) return opView(await s.parkOp({ opId: mrgId, reason: `target ${target} is protected` }));
+  if (needsApproval) {
+    // The person deciding sees what lands: the files the verified commit changes (best effort, never blocks the park).
+    const diff = await (await import("../api/run-files")).approvalDiff({ remote: cfg!.remote, target, workdir: cfg!.workdir }, { agentId, sha: expectSha ?? null, branch }).catch(() => null);
+    return opView(await s.parkOp({ opId: mrgId, reason: `target ${target} is protected`, ...(diff ? { diff } : {}) }));
+  }
   return executeMerge(o.runId, st.op);
 }
 
@@ -1182,7 +1188,19 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   const result = merged
     ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}), ...(out.targetBefore ? { targetBefore: out.targetBefore } : {}) }
     : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}) };
-  return opView(await s.finishOp({ opId: op.id, state: merged ? "merged" : "failed", result }));
+  const fin = opView(await s.finishOp({ opId: op.id, state: merged ? "merged" : "failed", result }));
+  if (d.agentId) await s.annotateResult({ agentId: d.agentId, patch: { merge: { id: op.id, target: d.target, state: merged ? "merged" : "failed", ...(merged ? { sha: out.sha, ...(out.pr ? { pr: out.pr } : {}) } : { status: out.status }) } } }).catch(() => {});
+  return fin;
+}
+
+/** The last lines of a check's output that name the failure ("expected …", "1 fail"), at most 3 of 160 characters, or else
+ *  its last 3 lines. Untrusted: it is the checked code's own output. */
+export function checkExcerpt(output: string): string | null {
+  // eslint-disable-next-line no-control-regex
+  const lines = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim());
+  if (!lines.length) return null;
+  const named = lines.filter((l) => /\b(fail(s|ed|ure|ing)?|error|expected|received|assert(ion)?)\b|✗|×/i.test(l));
+  return (named.length ? named : lines).slice(-3).map((l) => (l.length > 160 ? `${l.slice(0, 159)}…` : l)).join("\n");
 }
 
 /**
@@ -1199,6 +1217,8 @@ export async function decideMerge(runId: string, mrgId: string, o: { approve: bo
   // Approved (now, or by an earlier call that crashed before merging): run it.
   if (o.approve && now.state === "running") return executeMerge(runId, now);
   if (!decided && now.state === "running") throw new RelayError("conflict", `${mrgId} is already merging`, "Wait for it, then check its state.");
+  if (decided && !o.approve && typeof op.data.agentId === "string")
+    await s.annotateResult({ agentId: op.data.agentId, patch: { merge: { id: mrgId, target: op.data.target ?? null, state: "denied" } } }).catch(() => {});
   return opView(now);
 }
 

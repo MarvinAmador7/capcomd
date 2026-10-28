@@ -6,7 +6,7 @@ import type { Agent, AgentStatus, Attachment, Decision, Environment, Login, Mess
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
-import type { RunRepo } from "./run-files";
+import type { ApprovalDiff, RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
 import type { ListedProvider } from "../providers/registry";
 import { LISTED_PROVIDERS } from "../providers/registry";
@@ -14,9 +14,10 @@ import { sandboxSurface, type ActionOutcome, type MachineOwner, type RecordedMac
 import type { VmInfo } from "../providers/sandbox";
 import { memorySettingsStore, type SettingsStore } from "../providers/settings";
 import { inspectProject, setUpProject, type ProjectDeps, type ProjectInspection, type ProjectSetupInput, type SetupOutcome } from "./projects";
+import { initGit, publishOptions, publishProject, type GitInitOutcome, type OptionsOutcome, type PublishInput, type PublishOutcome } from "./project-git";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
-export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
+export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
 type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
@@ -92,6 +93,12 @@ export interface HarnessSource {
 	inspectProject(path: string): Promise<ProjectInspection>;
 	/** POST /v1/projects, the body's shape already checked: checks it against the folder, writes the project, lists it. */
 	setUpProject(input: ProjectSetupInput): Promise<SetupOutcome>;
+	/** POST /v1/projects/git-init (capability projects.git): `git init -b main` in a folder that isn't a checkout. */
+	initGit(path: string): Promise<GitInitOutcome>;
+	/** GET /v1/projects/publish-options: accounts, a name and the first commit's files for a checkout without origin. */
+	publishOptions(path: string): Promise<OptionsOutcome>;
+	/** POST /v1/projects/publish, the body's shape already checked: the first commit if needed, then `gh repo create … --push`. */
+	publishProject(input: PublishInput): Promise<PublishOutcome>;
 }
 export type RunAction = "pause" | "resume" | "cancel";
 export type ControlResult = { changed: string[]; pending: string[]; noop: string | null };
@@ -121,12 +128,15 @@ export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
  * A parked merge's question and subject. The merge's `ref` is often just the agent's id (`capcomd_merge ref: agt-…`),
  * which made "Merge agt-mvqa… into main?": name the work as the agent's, and give the branch it pushed as the subject's ref.
  */
-export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown }): { question: string; subject: { target: string | null; ref: string | null } } {
+export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown }): { question: string; subject: { target: string | null; ref: string | null } & Partial<ApprovalDiff> } {
 	const ref = typeof d.ref === "string" ? d.ref : null, branch = typeof d.branch === "string" ? d.branch : null;
 	const target = typeof d.target === "string" ? d.target : null;
 	const byAgent = ref !== null && /^agt-/.test(ref);
 	const what = byAgent ? "this agent's work" : (ref ?? branch ?? "this work");
-	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref } };
+	// The files the branch changes, as read when the merge was parked (op data / the park event's `diff`).
+	const diff = d.diff && typeof d.diff === "object" && Array.isArray((d.diff as ApprovalDiff).files) ? (d.diff as ApprovalDiff) : null;
+	const files = diff ? { files: diff.files, filesTotal: diff.filesTotal, added: diff.added, removed: diff.removed } : {};
+	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref, ...files } };
 }
 
 export const approvalIdFor = (runId: string, opId: string) => `apr-${Buffer.from(`${runId}\u0000${opId}`).toString("hex")}`;
@@ -166,8 +176,8 @@ export function memorySource(seed: Partial<{
 	/** An orphan's Delete (`provider.destroy`). Default: records it in `destroyed` and drops the machine from `machines`. */
 	destroy: (name: ListedProvider, vmId: string) => Promise<void>;
 	/** Project setup (GET /v1/projects/inspect, POST /v1/projects) reads and writes real folders: the environment whose
-	 *  CAPCOMD_HOME holds the project list (default process.env), whether `gh` is logged in (default no), the logins
-	 *  (default `logins`). */
+	 *  CAPCOMD_HOME holds the project list (default process.env; CAPCOMD_GH_CLI in it names the gh that publishes), whether
+	 *  `gh` is logged in (default no), the logins (default `logins`). */
 	projects: Partial<ProjectDeps>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
@@ -303,6 +313,9 @@ export function memorySource(seed: Partial<{
 		repo: async (r) => seed.repos?.[r] ?? null,
 		inspectProject: (path) => inspectProject(path, projectDeps),
 		setUpProject: (input) => setUpProject(input, projectDeps),
+		initGit: (path) => initGit(path, projectDeps),
+		publishOptions: (path) => publishOptions(path, projectDeps),
+		publishProject: (input) => publishProject(input, projectDeps),
 	};
 }
 export type { Decision };

@@ -75,6 +75,13 @@ public final class CapcomdStore {
   public internal(set) var projectInspect: ProjectInspectState = .idle
   public internal(set) var projectSetup: ProjectSetupState = .idle
   var pendingSetupKey: (request: ProjectSetupRequest, key: String)?
+  /// Publishing the inspected checkout to GitHub (`projects.git`; Projects.swift): its options loading, ready, on their
+  /// way, or how it ended. Starting a repository (`initGit`) reports a refusal or failure here too.
+  public internal(set) var projectPublish: ProjectPublishState = .idle
+  /// The last publish options read (kept while publishing and after a refusal, so the form keeps its values).
+  public internal(set) var projectPublishOptions: ProjectPublishOptions?
+  /// `initGit` is on its way.
+  public internal(set) var initializingGit = false
 
   let subscriber: StreamSubscribing?
   let decider: ApprovalDeciding?
@@ -324,6 +331,8 @@ public final class CapcomdStore {
       ag.activityKind = a.activity?.kind
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
       ag.provider = Provider(wire: a.provider) ?? old?.provider; ag.model = a.model ?? old?.model
+      ag.activityAtMs = epochMs(iso: a.activity?.at) ?? old?.activityAtMs
+      ag.read(result: a.result)
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
     }
@@ -332,8 +341,8 @@ public final class CapcomdStore {
     for m in b.messages { appendMessage(m) }
     for a in b.approvals where a.status == "pending" {
       let rid = a.requestedBy?.runId ?? (scope.hasPrefix("run-") ? scope : nil)
-      approvals[a.approvalId] = PendingApproval(id: a.approvalId, runId: rid, agentId: a.requestedBy?.agentId, kind: a.kind,
-                                                question: UntrustedText(a.question), branchLine: Self.branchLine(kind: a.kind, subject: a.subject ?? [:]))
+      approvals[a.approvalId] = PendingApproval(id: a.approvalId, runId: rid, agentId: a.requestedBy?.agentId, kind: a.kind, question: a.question,
+                                                subject: a.subject ?? [:], requestedAtMs: epochMs(iso: a.requestedAt))
       approvalSeq[a.approvalId] = snapshotSeq
     }
     lastSeq[scope] = snapshotSeq
@@ -383,14 +392,22 @@ public final class CapcomdStore {
       runs[runId]?.agents[id] = a
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
                                     phase: Self.phase(a.kind), text: a.displayName, detail: a.task, status: .queued))
-    case "agent.started", "agent.resumed": setStatus(runId, agentId, .running, e)
     case "agent.status_changed", "agent.status": setStatus(runId, agentId, AgentStatus(wire: d["status"]?.string), e)
     case "agent.done":
       setStatus(runId, agentId, .done, e)
       if let runId, let agentId, let sum = d["result"]?["summary"]?.string { runs[runId]?.agents[agentId]?.resultSummary = UntrustedText(sum) }
-    case "agent.failed", "drive.failed": setStatus(runId, agentId, .failed, e)
+      readResult(runId, agentId, d)
+    case "agent.failed", "drive.failed": setStatus(runId, agentId, .failed, e); readResult(runId, agentId, d)
     case "agent.cancelled", "agent.reaped": setStatus(runId, agentId, .cancelled, e)
-    case "agent.paused": setStatus(runId, agentId, .paused, e)
+    case "agent.paused":
+      setStatus(runId, agentId, .paused, e); readResult(runId, agentId, d)
+      // A usage limit resumes by itself at `until` (the result's resetAt may be unknown).
+      if let runId, let agentId, d["result"]?["limit"]?.string == "quota", runs[runId]?.agents[agentId]?.resetAtMs == nil, let u = d["until"]?.int {
+        runs[runId]?.agents[agentId]?.resetAtMs = u
+      }
+    case "agent.resumed", "agent.started":
+      setStatus(runId, agentId, .running, e)
+      if let runId, let agentId { runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil }
     case "agent.thread_item_changed": applyThreadFrame(runId: runId, agentId: agentId, d)
     case "agent.step":
       // One finished step of an agent (capability agent.steps): "Read 4 files", then "Edited a file", in order. Keyed
@@ -405,6 +422,7 @@ public final class CapcomdStore {
       guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
       runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string
       runs[runId]?.agents[agentId]?.activityKind = d["activity"]?["kind"]?.string
+      runs[runId]?.agents[agentId]?.activityAtMs = epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs
       if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
     case "verify.started", "verify.passed", "verify.failed":
       guard let runId else { return }
@@ -432,7 +450,7 @@ public final class CapcomdStore {
       let kind = d["kind"]?.string ?? "custom"
       let q = d["question"]?.string ?? d["summary"]?.string ?? "Approve \(kind)?"
       var subject: [String: JSONValue] = [:]; if case .object(let o)? = d["subject"] { subject = o }
-      approvals[id] = PendingApproval(id: id, runId: rid, agentId: aid, kind: kind, question: UntrustedText(q), branchLine: Self.branchLine(kind: kind, subject: subject))
+      approvals[id] = PendingApproval(id: id, runId: rid, agentId: aid, kind: kind, question: q, subject: subject, requestedAtMs: e.epochMs)
       approvalSeq[id] = e.seq
       if let rid { upsertStep(runId: rid, Step(id: "approval:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: aid, kind: .approval, phase: .ship,
                                                text: "Waiting for approval", detail: UntrustedText(q), status: .waiting)) }
@@ -478,6 +496,8 @@ public final class CapcomdStore {
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
         old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs; old.repo = a.workspace?.label ?? old.repo
         old.provider = Provider(wire: a.provider) ?? old.provider; old.model = a.model ?? old.model
+        old.activityAtMs = epochMs(iso: a.activity?.at) ?? old.activityAtMs
+        old.read(result: a.result)
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
@@ -485,12 +505,13 @@ public final class CapcomdStore {
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
         ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
         ag.provider = Provider(wire: a.provider); ag.model = a.model
+        ag.activityAtMs = epochMs(iso: a.activity?.at); ag.read(result: a.result)
         runs[a.runId]?.agents[a.id] = ag
       }
     }
     for a in b.approvals where a.status == "pending" && approvals[a.approvalId] == nil {
       approvals[a.approvalId] = PendingApproval(id: a.approvalId, runId: a.requestedBy?.runId ?? runId, agentId: a.requestedBy?.agentId, kind: a.kind,
-                                                question: UntrustedText(a.question), branchLine: Self.branchLine(kind: a.kind, subject: a.subject ?? [:]))
+                                                question: a.question, subject: a.subject ?? [:], requestedAtMs: epochMs(iso: a.requestedAt))
       approvalSeq[a.approvalId] = approvalSeq[a.approvalId] ?? snapshotSeq
     }
     lastSeq[key] = snapshotSeq
@@ -503,6 +524,11 @@ public final class CapcomdStore {
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == "agent:\(agentId)" }) {
       runs[runId]?.steps[i].status = Self.stepStatus(s); runs[runId]?.steps[i].epochMs = e.epochMs
     }
+  }
+  /// agent.done / failed / paused carry the agent's `result`: its cost, limit, error, checks and merge.
+  func readResult(_ runId: String?, _ agentId: String?, _ d: [String: JSONValue]) {
+    guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
+    runs[runId]?.agents[agentId]?.read(result: d["result"])
   }
   func upsertStep(runId: String, _ s: Step) {
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == s.id }) { runs[runId]?.steps[i] = s } else { runs[runId]?.steps.append(s) }

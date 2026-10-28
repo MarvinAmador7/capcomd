@@ -311,13 +311,33 @@ public protocol ProjectSettingUp: Sendable {
   /// Writes the project's settings and profiles, as `capcomd setup project` does. Throws `ProjectSetupRefused` when the
   /// daemon says no; any other error is a transport failure (safe to retry with the same key).
   func setUpProject(_ request: ProjectSetupRequest, idempotencyKey: String) async throws -> ProjectSetupResult
+  /// `POST /v1/projects/git-init` (capability `projects.git`): `git init -b main` in a folder inspect reported as
+  /// not_git; the folder as inspect sees it now. Throws `ProjectSetupRefused` when the daemon says no.
+  func initGit(path: String) async throws -> ProjectInspection
+  /// `GET /v1/projects/publish-options`: who the repository can be created as, a name, and what the first commit would
+  /// hold, for a checkout without origin. Throws `ProjectSetupRefused` for another folder.
+  func publishOptions(path: String) async throws -> ProjectPublishOptions
+  /// `POST /v1/projects/publish`: the first commit when there is none, then the GitHub repository created and pushed
+  /// (`visibility` "private" or "public"); the checkout as inspect sees it now (`github` set). Throws
+  /// `ProjectSetupRefused` (`.invalid` with field `name` when the name is taken) or `MessageRefused` when the GitHub CLI
+  /// failed.
+  func publishProject(path: String, owner: String, name: String, visibility: String) async throws -> ProjectInspection
+}
+
+extension ProjectSettingUp {
+  /// Daemons and ports from before `projects.git`.
+  public func initGit(path: String) async throws -> ProjectInspection { throw DetailUnavailable.unsupported }
+  public func publishOptions(path: String) async throws -> ProjectPublishOptions { throw DetailUnavailable.unsupported }
+  public func publishProject(path: String, owner: String, name: String, visibility: String) async throws -> ProjectInspection { throw DetailUnavailable.unsupported }
 }
 
 /// `POST /v1/projects` said no.
 public enum ProjectSetupRefused: Error, Sendable, Hashable {
   /// 403 `forbidden`: this app's token lacks the `configure` scope.
   case forbidden
-  /// 422 `invalid`: the daemon's sentence, and the form field it is about (path, mode, target, check, agents, budgetUsd).
+  /// 422 `invalid`: the daemon's sentence, and the form field it is about (path, mode, target, check, agents, budgetUsd;
+  /// for git-init and publish also owner, name, visibility, files, identity, gh). A 409 that names a field (publish: the
+  /// repository name is taken) arrives as this too.
   case invalid(String, field: String?)
   /// 409 `conflict`: the folder changed since it was inspected (its origin is `repo` now), or the key was reused.
   case conflict(String, repo: String?)

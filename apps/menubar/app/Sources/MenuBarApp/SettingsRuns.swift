@@ -53,7 +53,7 @@ struct RunsPane: View {
   private var projectRow: some View {
     Picker(selection: Binding(get: { model.startRepo ?? "" }, set: { v in
       if v == Self.chooseFolder {
-        if let f = ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f }
+        Task { if let f = await ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f } }
       } else {
         model.startRepo = v.isEmpty ? nil : v
       }

@@ -363,7 +363,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "boolean"
         },
         "limit": {},
-        "verification": {}
+        "verification": {
+          "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+        },
+        "merge": {
+          "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+        }
       },
       "additionalProperties": {},
       "x-untrusted": true,
@@ -458,7 +463,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "boolean"
         },
         "limit": {},
-        "verification": {}
+        "verification": {
+          "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+        },
+        "merge": {
+          "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+        }
       },
       "additionalProperties": {},
       "x-untrusted": true,
@@ -1052,6 +1062,61 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       ],
       "x-untrusted": true,
       "description": "Agent-written text: render as plain text, never markdown, links or actions"
+    },
+    "diff": {
+      "description": "The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "status": {
+                "type": "string"
+              },
+              "added": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "removed": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "status",
+              "added",
+              "removed"
+            ]
+          }
+        },
+        "filesTotal": {
+          "type": "number"
+        },
+        "added": {
+          "type": "number"
+        },
+        "removed": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "files",
+        "filesTotal",
+        "added",
+        "removed"
+      ]
     }
   },
   "required": [
@@ -1497,11 +1562,93 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "subject": {
       "type": "object",
-      "propertyNames": {
-        "type": "string"
+      "properties": {
+        "target": {
+          "description": "merge: the branch it lands on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref": {
+          "description": "merge: the branch (or ref) being merged",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "files": {
+          "description": "merge: the files the branch changes, `git diff --numstat` of the verified commit against where its branch left the target, the 20 with the most changed lines first (then by path). Absent when the daemon couldn't read the diff (no repository, the remote unreachable) or on a daemon that predates it",
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "modified",
+                  "deleted",
+                  "renamed",
+                  "copied",
+                  "typechange",
+                  "unknown"
+                ]
+              },
+              "added": {
+                "description": "Lines added; null for a binary file",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "removed": {
+                "description": "Lines removed; null for a binary file",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "path",
+              "status",
+              "added",
+              "removed"
+            ]
+          }
+        },
+        "filesTotal": {
+          "description": "merge: how many files the branch changes (files lists at most the first ones)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "added": {
+          "description": "merge: lines added across all its files (binary files not counted)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "removed": {
+          "description": "merge: lines removed across all its files (binary files not counted)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
       },
       "additionalProperties": {},
-      "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+      "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
     },
     "expiresAt": {
       "type": [
@@ -2196,6 +2343,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "null"
       ]
     },
+    "gitignored": {
+      "description": "`.capcomd/` was added to the checkout's .gitignore (the body asked for `gitignore`)",
+      "type": "boolean"
+    },
     "clientId": {
       "type": "string",
       "description": "The API client that set it up (cli-…)"
@@ -2213,6 +2364,99 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   ],
   "additionalProperties": {},
   "description": "Capability projects.setup. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client set a folder up as a capcomd project with POST /v1/projects and something changed (its settings, its profiles or capcomd's project list). `entity` is project:<name>; the envelope text is daemon-written (\"Set up app (~/src/app): pull requests into main, with Claude Code and Codex.\"). Never a secret"
+}
+```
+
+## `project.git_initialized`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The folder (absolute), now a checkout's root"
+    },
+    "name": {
+      "type": "string",
+      "description": "The name capcomd would give the project"
+    },
+    "branch": {
+      "type": "string",
+      "description": "The branch it starts on (main)"
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that asked (cli-…)"
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "branch",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client started a git repository in a folder with POST /v1/projects/git-init (`git init -b main`, no commit). `entity` is project:<name>; the envelope text is daemon-written (\"Started a git repository in my-app (~/src/my-app), on branch main.\")"
+}
+```
+
+## `project.published`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The checkout's root (absolute)"
+    },
+    "name": {
+      "type": "string",
+      "description": "The name capcomd would give the project"
+    },
+    "owner": {
+      "type": "string",
+      "description": "The GitHub account or organization it was created in"
+    },
+    "repo": {
+      "type": "string",
+      "description": "owner/name on GitHub"
+    },
+    "visibility": {
+      "type": "string",
+      "description": "private or public"
+    },
+    "firstCommit": {
+      "type": "boolean",
+      "description": "capcomd made the first commit (the folder had none)"
+    },
+    "files": {
+      "description": "How many files that first commit holds; null when the checkout had commits already",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that published it (cli-…)"
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "owner",
+    "repo",
+    "visibility",
+    "firstCommit",
+    "files",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client published a checkout without origin to GitHub with POST /v1/projects/publish (the repository was created, added as origin and pushed). `entity` is project:<name>; the envelope text is daemon-written (\"Published my-app (~/src/my-app) to github.com/marvin/my-app, private, with a first commit of 24 files.\"). Names and counts only: never file names or contents"
 }
 ```
 
@@ -2571,7 +2815,12 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                 "type": "boolean"
               },
               "limit": {},
-              "verification": {}
+              "verification": {
+                "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+              },
+              "merge": {
+                "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+              }
             },
             "additionalProperties": {},
             "x-untrusted": true,
@@ -2741,11 +2990,108 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           },
           "subject": {
             "type": "object",
-            "propertyNames": {
-              "type": "string"
+            "properties": {
+              "target": {
+                "description": "merge: the branch it lands on",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ref": {
+                "description": "merge: the branch (or ref) being merged",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "files": {
+                "description": "merge: the files the branch changes, `git diff --numstat` of the verified commit against where its branch left the target, the 20 with the most changed lines first (then by path). Absent when the daemon couldn't read the diff (no repository, the remote unreachable) or on a daemon that predates it",
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "added",
+                        "modified",
+                        "deleted",
+                        "renamed",
+                        "copied",
+                        "typechange",
+                        "unknown"
+                      ]
+                    },
+                    "added": {
+                      "description": "Lines added; null for a binary file",
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "removed": {
+                      "description": "Lines removed; null for a binary file",
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "status",
+                    "added",
+                    "removed"
+                  ]
+                }
+              },
+              "filesTotal": {
+                "description": "merge: how many files the branch changes (files lists at most the first ones)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "added": {
+                "description": "merge: lines added across all its files (binary files not counted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "removed": {
+                "description": "merge: lines removed across all its files (binary files not counted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
             },
             "additionalProperties": {},
-            "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+            "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+          },
+          "requestedAt": {
+            "description": "When it was asked (a merge: when it was parked); absent on daemons that predate it",
+            "type": [
+              "string",
+              "null"
+            ],
+            "allOf": [
+              {
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            ]
           }
         },
         "required": [

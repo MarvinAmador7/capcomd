@@ -350,4 +350,45 @@ extension LiveDaemonInfo: ProjectSettingUp {
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }
+
+  // Capability `projects.git`. The POSTs carry a fresh Idempotency-Key each: a retry after a lost answer finds the
+  // folder changed (a checkout now, an origin now), which the store shows by inspecting it again.
+
+  /// 200 the folder's inspect result; 403, 409 (already a checkout), 422 (`field` path) as `ProjectSetupRefused`.
+  public func initGit(path: String) async throws -> ProjectInspection {
+    let (status, data) = try await transport.post("/v1/projects/git-init", headers: [("Idempotency-Key", "menubar-git-\(UUID().uuidString.lowercased())")], json: try ProjectWire.gitInitBody(path: path))
+    if status == 200 { do { return try ProjectWire.inspection(data) } catch { throw DetailUnavailable.failed("unexpected response") } }
+    throw projectGitError(status, data, fallback: "capcomd won't start a repository in this folder.")
+  }
+  /// 200 the options; 409 (it has an origin) and 422 (another folder) as `ProjectSetupRefused`.
+  public func publishOptions(path: String) async throws -> ProjectPublishOptions {
+    let q = path.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~/"))) ?? path
+    let (status, data) = try await transport.get("/v1/projects/publish-options?path=\(q)")
+    if status == 200 { do { return try ProjectWire.publishOptions(data) } catch { throw DetailUnavailable.failed("unexpected response") } }
+    throw projectGitError(status, data, fallback: "capcomd can't publish this folder.")
+  }
+  /// 200 the checkout's inspect result (`github` set); 409 with `field` name (taken) as `.invalid`; 503 (the GitHub CLI
+  /// failed) as `MessageRefused` with the daemon's sentence.
+  public func publishProject(path: String, owner: String, name: String, visibility: String) async throws -> ProjectInspection {
+    let body = try ProjectWire.publishBody(path: path, owner: owner, name: name, visibility: visibility)
+    // It waits for the push: longer than other POSTs. If the answer is lost anyway, the daemon still finishes.
+    let (status, data) = try await transport.post("/v1/projects/publish", headers: [("Idempotency-Key", "menubar-publish-\(UUID().uuidString.lowercased())")], json: body, timeout: .seconds(180))
+    if status == 200 { do { return try ProjectWire.inspection(data) } catch { throw DetailUnavailable.failed("unexpected response") } }
+    throw projectGitError(status, data, fallback: "capcomd won't publish this folder as asked.")
+  }
+  private func projectGitError(_ status: Int, _ data: Data, fallback: String) -> Error {
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let message = (obj?["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    let field = obj?["field"] as? String
+    switch status {
+    case 401: return Unauthorized()
+    case 403: return ProjectSetupRefused.forbidden
+    case 404: return DetailUnavailable.unsupported
+    case 409 where field != nil: return ProjectSetupRefused.invalid(message ?? fallback, field: field)
+    case 409: return ProjectSetupRefused.conflict(message ?? "This folder changed since you looked at it. Look again.", repo: obj?["repo"] as? String)
+    case 422: return ProjectSetupRefused.invalid(message ?? fallback, field: field)
+    case 503: return MessageRefused(message ?? "The GitHub CLI couldn't publish this folder. Try again.")
+    default: return DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
 }

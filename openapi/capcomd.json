@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -186,7 +186,7 @@
                   "check": {
                     "type": "string",
                     "maxLength": 2000,
-                    "description": "The command every change must pass, e.g. `bun run test`; \"\" for none (an existing check is kept)"
+                    "description": "The command every change must pass, e.g. `bun run test`; \"\" for none (an existing check is kept). Omitted (capability projects.git): the project's current check when it's set up, else inspect's `suggestedCheck` (possibly none)"
                   },
                   "agents": {
                     "type": "array",
@@ -218,13 +218,16 @@
                       }
                     },
                     "description": "What the form was filled from: when the folder's origin isn't `expect.repo` any more, 409 `conflict` and nothing is written. Send it"
+                  },
+                  "gitignore": {
+                    "type": "boolean",
+                    "description": "Capability projects.git. true: make sure git ignores `.capcomd/` in the checkout (one line appended to its .gitignore, which is created when missing; nothing when git already ignores it). Default false"
                   }
                 },
                 "required": [
                   "path",
                   "mode",
                   "target",
-                  "check",
                   "agents"
                 ]
               }
@@ -691,6 +694,891 @@
           },
           "422": {
             "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/git-init": {
+      "post": {
+        "operationId": "projects.gitInit",
+        "description": "Capability projects.git. Start a git repository in a folder that isn't in one (`git init -b main`; no commit), so it can be published and set up. Only for a folder inspect reports as not_git, and never the home folder, a folder that holds it (/, /Users) or capcomd's own settings. Needs the `configure` scope (403 `forbidden` without it). Returns the folder's inspect result as it is now (its problem is no_origin). 422 `invalid` with `field` path (and `problem`) for any other folder; 409 `conflict` when it is already in a checkout. Audited: a durable project.git_initialized event on the `daemon` stream. `Idempotency-Key` (8-200 chars, required) as for POST /v1/projects: a replay answers the first 200 and runs nothing again.",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "The folder (absolute) inspect reported as not_git"
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "The path as given"
+                    },
+                    "root": {
+                      "description": "The git checkout it is in (its top level, symlinks resolved): a folder inside a checkout resolves to the checkout. null when it isn't in one",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "name": {
+                      "description": "Its name in capcomd's projects (the one setup would give it when it isn't listed yet); null without a root",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "configured": {
+                      "type": "boolean",
+                      "description": "Already a capcomd project: its .capcomd/config.json names a repository"
+                    },
+                    "values": {
+                      "description": "When configured: what it has now (to prefill the form); else null",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "repo": {
+                          "description": "CAPCOMD_REPO: the repository agents work on",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "mode": {
+                          "description": "pr (a pull request merged by capcomd) or direct (pushed to the target)",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "target": {
+                          "description": "The branch work merges into",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "check": {
+                          "type": "string",
+                          "description": "The check every change must pass (`run.checks.unit`); \"\" for none"
+                        },
+                        "agents": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "The agents it has workers for: claude and/or codex"
+                        },
+                        "budgetUsd": {
+                          "description": "The spend cap per run in USD (driver.maxRunBudget); null for none",
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "repo",
+                        "mode",
+                        "target",
+                        "check",
+                        "agents",
+                        "budgetUsd"
+                      ]
+                    },
+                    "repo": {
+                      "description": "origin as an https URL (the repository setup uses; never one the client sends); null without origin",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "github": {
+                      "description": "owner/name when origin is on GitHub; else null",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "ghReady": {
+                      "type": "boolean",
+                      "description": "`gh auth status` succeeds on the daemon's machine: pull requests (mode pr) can be opened and merged. false when it fails or origin isn't on GitHub"
+                    },
+                    "defaultBranch": {
+                      "type": "string",
+                      "description": "origin's default branch as the local refs know it (origin/HEAD), else main: the target to suggest"
+                    },
+                    "branches": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "origin's branches from the local refs (no fetch), the default one included"
+                    },
+                    "suggestedCheck": {
+                      "type": "string",
+                      "description": "The check `capcomd setup project` would suggest (package.json's test script: `bun run test`, `npm test`); \"\" for none"
+                    },
+                    "suggestedMode": {
+                      "enum": [
+                        "pr",
+                        "direct"
+                      ],
+                      "type": "string",
+                      "description": "pr when ghReady, else direct (as the wizard suggests)"
+                    },
+                    "suggestedAgents": {
+                      "type": "array",
+                      "items": {
+                        "enum": [
+                          "claude",
+                          "codex"
+                        ],
+                        "type": "string"
+                      },
+                      "description": "The agents with a login (claude when neither has one)"
+                    },
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "enum": [
+                              "claude",
+                              "codex"
+                            ],
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "\"Claude Code\" or \"Codex\""
+                          },
+                          "loggedIn": {
+                            "type": "boolean",
+                            "description": "It has a login in at least one place (GET /v1/logins)"
+                          },
+                          "auth": {
+                            "enum": [
+                              "subscription",
+                              "apikey"
+                            ],
+                            "type": "string",
+                            "description": "How its profiles would log in: subscription (a plan login, or none yet) or apikey (only an API key: it bills per use, so setup asks for a spend cap)"
+                          },
+                          "places": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sandbox": {
+                                  "type": "string"
+                                },
+                                "loggedIn": {
+                                  "type": "boolean"
+                                },
+                                "how": {
+                                  "enum": [
+                                    "plan",
+                                    "api_key",
+                                    null
+                                  ],
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "sandbox",
+                                "loggedIn",
+                                "how"
+                              ]
+                            },
+                            "description": "Its login in each place, as GET /v1/logins"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "label",
+                          "loggedIn",
+                          "auth",
+                          "places"
+                        ]
+                      },
+                      "description": "claude, then codex"
+                    },
+                    "budgetAsked": {
+                      "type": "boolean",
+                      "description": "One of suggestedAgents would bill an API key, so the form asks for a spend cap per run. For another choice: any chosen agent whose `auth` is apikey"
+                    },
+                    "problems": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "description": "What blocks setting it up: not_found, not_git, home, no_origin, not_github (not_found: no such folder; not_git: not a git checkout; home: the home folder, where capcomd keeps its own settings; no_origin: no origin remote; not_github: origin isn't on GitHub, so it's for `capcomd setup project` in Terminal). Treat an unknown code as a problem you show by its message"
+                          },
+                          "message": {
+                            "type": "string",
+                            "description": "A sentence for the person, written by the daemon (trusted), e.g. \"~/notes isn't a git checkout. Choose your repository's folder, or clone it first.\""
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message"
+                        ]
+                      },
+                      "description": "What blocks setting it up; empty when it can be set up. POST /v1/projects refuses with the first one's message"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "root",
+                    "name",
+                    "configured",
+                    "values",
+                    "repo",
+                    "github",
+                    "ghReady",
+                    "defaultBranch",
+                    "branches",
+                    "suggestedCheck",
+                    "suggestedMode",
+                    "suggestedAgents",
+                    "agents",
+                    "budgetAsked",
+                    "problems"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): the token lacks the configure scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/publish-options": {
+      "get": {
+        "operationId": "projects.publishOptions",
+        "description": "Capability projects.git. What the publish form needs for a checkout without origin (inspect's no_origin): whether the GitHub CLI is logged in, the accounts to publish as, a name, and what the first commit would hold. Needs the `read` scope; writes nothing; no network except `gh api` for the accounts. 422 `invalid` (`field` path, `problem` its code) for a folder inspect reports another problem for; 409 `conflict` for a checkout that already has an origin.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "description": "Absolute path of the checkout (or a folder inside it)"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "The path as given"
+                    },
+                    "root": {
+                      "type": "string",
+                      "description": "The checkout that would be published"
+                    },
+                    "ghReady": {
+                      "type": "boolean",
+                      "description": "The GitHub CLI is logged in on the daemon's machine (`gh auth status`, asked at most every 30 s). false: publishing is refused; show the person how to log in"
+                    },
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "login": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "user",
+                              "org"
+                            ],
+                            "type": "string",
+                            "description": "user: the gh login; org: an organization it belongs to"
+                          }
+                        },
+                        "required": [
+                          "login",
+                          "kind"
+                        ]
+                      },
+                      "description": "Who the repository can be created as: the gh user first, then its organizations (`gh api`, asked at most every 30 s); empty when ghReady is false or GitHub didn't answer"
+                    },
+                    "suggestedName": {
+                      "type": "string",
+                      "description": "The folder's name made a valid GitHub repository name (other characters become -)"
+                    },
+                    "hasCommits": {
+                      "type": "boolean",
+                      "description": "The checkout has commits: publishing pushes them as they are. false: publishing makes the first commit (\"Initial commit\") of the files counted in `files`"
+                    },
+                    "branch": {
+                      "type": "string",
+                      "description": "The branch that is pushed (the checkout's current one)"
+                    },
+                    "files": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "What publishing puts on GitHub: without commits, the files the first commit would hold (tracked, and untracked files that aren't ignored: `git add -A`); with commits, the files in HEAD"
+                    },
+                    "blocked": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "description": "Relative to the root"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "description": "Why it looks secret, e.g. \"an environment file, which usually holds secrets\""
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "reason"
+                        ]
+                      },
+                      "description": "Files among `files` that look like they hold secrets (by name: .env and .env.* except .env.example/.env.sample/.env.template, *.pem, *.key, *.p12, *.pfx, SSH private keys id_rsa/id_dsa/id_ecdsa/id_ed25519, .netrc, .git-credentials, and an .npmrc with an auth token), at most 50. Without commits, publishing refuses while any is listed: add them to .gitignore. With commits, they're already committed and only listed"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "root",
+                    "ghReady",
+                    "accounts",
+                    "suggestedName",
+                    "hasCommits",
+                    "branch",
+                    "files",
+                    "blocked"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/publish": {
+      "post": {
+        "operationId": "projects.publish",
+        "description": "Capability projects.git. Publish a checkout without origin to GitHub: when it has no commits, `git add -A` (what .gitignore ignores stays out) and a first commit \"Initial commit\"; then `gh repo create <owner>/<name> --private|--public --source <root> --remote origin --push` on the daemon's machine, which creates the repository, adds it as origin and pushes the current branch. Can take a while (it waits for the push). Needs the `configure` scope (403 `forbidden` without it). Returns the checkout's inspect result as it is now (`github` set: it can be set up with POST /v1/projects). Refusals carry the daemon's sentence and `field`: 422 `invalid` for a folder that isn't a checkout without origin (path, with `problem`), the GitHub CLI not logged in (gh), an owner that isn't in `accounts` or a name GitHub doesn't take (owner, name); without commits: likely secrets among the files (files; the sentence names them and says to add them to .gitignore), more than 2000 files (files: add a .gitignore), no files, or no git user.name/email (identity). 409 `conflict` with `field` name when the repository already exists on GitHub, and without a field when the checkout already has an origin or is being published. 503 `unavailable` when the GitHub CLI fails otherwise (its first line in the sentence). A first commit that was made stays when the GitHub step fails: publishing again pushes it. Audited: a durable project.published event on the `daemon` stream (owner, name, visibility and a file count, never file names or contents). `Idempotency-Key` (8-200 chars, required) as for POST /v1/projects.",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "The checkout (as inspected), or a folder inside it"
+                  },
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "description": "A login from publish-options `accounts`"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "description": "The repository's name on GitHub (letters, digits, ., _ and -)"
+                  },
+                  "visibility": {
+                    "enum": [
+                      "private",
+                      "public"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "owner",
+                  "name",
+                  "visibility"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "The path as given"
+                    },
+                    "root": {
+                      "description": "The git checkout it is in (its top level, symlinks resolved): a folder inside a checkout resolves to the checkout. null when it isn't in one",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "name": {
+                      "description": "Its name in capcomd's projects (the one setup would give it when it isn't listed yet); null without a root",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "configured": {
+                      "type": "boolean",
+                      "description": "Already a capcomd project: its .capcomd/config.json names a repository"
+                    },
+                    "values": {
+                      "description": "When configured: what it has now (to prefill the form); else null",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "repo": {
+                          "description": "CAPCOMD_REPO: the repository agents work on",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "mode": {
+                          "description": "pr (a pull request merged by capcomd) or direct (pushed to the target)",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "target": {
+                          "description": "The branch work merges into",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "check": {
+                          "type": "string",
+                          "description": "The check every change must pass (`run.checks.unit`); \"\" for none"
+                        },
+                        "agents": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "The agents it has workers for: claude and/or codex"
+                        },
+                        "budgetUsd": {
+                          "description": "The spend cap per run in USD (driver.maxRunBudget); null for none",
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "repo",
+                        "mode",
+                        "target",
+                        "check",
+                        "agents",
+                        "budgetUsd"
+                      ]
+                    },
+                    "repo": {
+                      "description": "origin as an https URL (the repository setup uses; never one the client sends); null without origin",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "github": {
+                      "description": "owner/name when origin is on GitHub; else null",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "ghReady": {
+                      "type": "boolean",
+                      "description": "`gh auth status` succeeds on the daemon's machine: pull requests (mode pr) can be opened and merged. false when it fails or origin isn't on GitHub"
+                    },
+                    "defaultBranch": {
+                      "type": "string",
+                      "description": "origin's default branch as the local refs know it (origin/HEAD), else main: the target to suggest"
+                    },
+                    "branches": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "origin's branches from the local refs (no fetch), the default one included"
+                    },
+                    "suggestedCheck": {
+                      "type": "string",
+                      "description": "The check `capcomd setup project` would suggest (package.json's test script: `bun run test`, `npm test`); \"\" for none"
+                    },
+                    "suggestedMode": {
+                      "enum": [
+                        "pr",
+                        "direct"
+                      ],
+                      "type": "string",
+                      "description": "pr when ghReady, else direct (as the wizard suggests)"
+                    },
+                    "suggestedAgents": {
+                      "type": "array",
+                      "items": {
+                        "enum": [
+                          "claude",
+                          "codex"
+                        ],
+                        "type": "string"
+                      },
+                      "description": "The agents with a login (claude when neither has one)"
+                    },
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "enum": [
+                              "claude",
+                              "codex"
+                            ],
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "\"Claude Code\" or \"Codex\""
+                          },
+                          "loggedIn": {
+                            "type": "boolean",
+                            "description": "It has a login in at least one place (GET /v1/logins)"
+                          },
+                          "auth": {
+                            "enum": [
+                              "subscription",
+                              "apikey"
+                            ],
+                            "type": "string",
+                            "description": "How its profiles would log in: subscription (a plan login, or none yet) or apikey (only an API key: it bills per use, so setup asks for a spend cap)"
+                          },
+                          "places": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sandbox": {
+                                  "type": "string"
+                                },
+                                "loggedIn": {
+                                  "type": "boolean"
+                                },
+                                "how": {
+                                  "enum": [
+                                    "plan",
+                                    "api_key",
+                                    null
+                                  ],
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "sandbox",
+                                "loggedIn",
+                                "how"
+                              ]
+                            },
+                            "description": "Its login in each place, as GET /v1/logins"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "label",
+                          "loggedIn",
+                          "auth",
+                          "places"
+                        ]
+                      },
+                      "description": "claude, then codex"
+                    },
+                    "budgetAsked": {
+                      "type": "boolean",
+                      "description": "One of suggestedAgents would bill an API key, so the form asks for a spend cap per run. For another choice: any chosen agent whose `auth` is apikey"
+                    },
+                    "problems": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "description": "What blocks setting it up: not_found, not_git, home, no_origin, not_github (not_found: no such folder; not_git: not a git checkout; home: the home folder, where capcomd keeps its own settings; no_origin: no origin remote; not_github: origin isn't on GitHub, so it's for `capcomd setup project` in Terminal). Treat an unknown code as a problem you show by its message"
+                          },
+                          "message": {
+                            "type": "string",
+                            "description": "A sentence for the person, written by the daemon (trusted), e.g. \"~/notes isn't a git checkout. Choose your repository's folder, or clone it first.\""
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message"
+                        ]
+                      },
+                      "description": "What blocks setting it up; empty when it can be set up. POST /v1/projects refuses with the first one's message"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "root",
+                    "name",
+                    "configured",
+                    "values",
+                    "repo",
+                    "github",
+                    "ghReady",
+                    "defaultBranch",
+                    "branches",
+                    "suggestedCheck",
+                    "suggestedMode",
+                    "suggestedAgents",
+                    "agents",
+                    "budgetAsked",
+                    "problems"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): the token lacks the configure scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error (503 unavailable): the GitHub CLI couldn't create or push the repository",
             "content": {
               "application/json": {
                 "schema": {
@@ -2358,7 +3246,12 @@
                             "type": "boolean"
                           },
                           "limit": {},
-                          "verification": {}
+                          "verification": {
+                            "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+                          },
+                          "merge": {
+                            "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+                          }
                         },
                         "additionalProperties": {},
                         "description": "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions",
@@ -6580,7 +7473,7 @@
               "internal",
               "unavailable"
             ],
-            "description": "conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action. Treat a code you don't know as a generic error"
+            "description": "conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"
           },
           "message": {
             "type": "string"
@@ -6651,11 +7544,11 @@
             "additionalProperties": {}
           },
           "field": {
-            "description": "422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd)",
+            "description": "422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub",
             "type": "string"
           },
           "problem": {
-            "description": "422 invalid from POST /v1/projects: the inspect problem code that blocks the folder (not_git, home, no_origin, not_github, not_found)",
+            "description": "422 invalid from POST /v1/projects (and the projects.git routes): the inspect problem code that blocks the folder (not_git, home, no_origin, not_github, not_found)",
             "type": "string"
           }
         },
@@ -6994,7 +7887,12 @@
                 "type": "boolean"
               },
               "limit": {},
-              "verification": {}
+              "verification": {
+                "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+              },
+              "merge": {
+                "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+              }
             },
             "additionalProperties": {},
             "x-untrusted": true,
@@ -7084,7 +7982,12 @@
                 "type": "boolean"
               },
               "limit": {},
-              "verification": {}
+              "verification": {
+                "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+              },
+              "merge": {
+                "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+              }
             },
             "additionalProperties": {},
             "x-untrusted": true,
@@ -7573,6 +8476,61 @@
             ],
             "x-untrusted": true,
             "description": "Agent-written text: render as plain text, never markdown, links or actions"
+          },
+          "diff": {
+            "description": "The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read",
+            "type": "object",
+            "properties": {
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "added": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "removed": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "status",
+                    "added",
+                    "removed"
+                  ]
+                }
+              },
+              "filesTotal": {
+                "type": "number"
+              },
+              "added": {
+                "type": "number"
+              },
+              "removed": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "files",
+              "filesTotal",
+              "added",
+              "removed"
+            ]
           }
         },
         "required": [
@@ -7944,11 +8902,93 @@
           },
           "subject": {
             "type": "object",
-            "propertyNames": {
-              "type": "string"
+            "properties": {
+              "target": {
+                "description": "merge: the branch it lands on",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ref": {
+                "description": "merge: the branch (or ref) being merged",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "files": {
+                "description": "merge: the files the branch changes, `git diff --numstat` of the verified commit against where its branch left the target, the 20 with the most changed lines first (then by path). Absent when the daemon couldn't read the diff (no repository, the remote unreachable) or on a daemon that predates it",
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "added",
+                        "modified",
+                        "deleted",
+                        "renamed",
+                        "copied",
+                        "typechange",
+                        "unknown"
+                      ]
+                    },
+                    "added": {
+                      "description": "Lines added; null for a binary file",
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "removed": {
+                      "description": "Lines removed; null for a binary file",
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "status",
+                    "added",
+                    "removed"
+                  ]
+                }
+              },
+              "filesTotal": {
+                "description": "merge: how many files the branch changes (files lists at most the first ones)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "added": {
+                "description": "merge: lines added across all its files (binary files not counted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "removed": {
+                "description": "merge: lines removed across all its files (binary files not counted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
             },
             "additionalProperties": {},
-            "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+            "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
           },
           "expiresAt": {
             "type": [
@@ -8578,6 +9618,10 @@
               "null"
             ]
           },
+          "gitignored": {
+            "description": "`.capcomd/` was added to the checkout's .gitignore (the body asked for `gitignore`)",
+            "type": "boolean"
+          },
           "clientId": {
             "type": "string",
             "description": "The API client that set it up (cli-…)"
@@ -8596,6 +9640,89 @@
         "additionalProperties": {},
         "description": "Capability projects.setup. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client set a folder up as a capcomd project with POST /v1/projects and something changed (its settings, its profiles or capcomd's project list). `entity` is project:<name>; the envelope text is daemon-written (\"Set up app (~/src/app): pull requests into main, with Claude Code and Codex.\"). Never a secret",
         "x-event-type": "project.configured"
+      },
+      "ProjectGitInitializedData": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The folder (absolute), now a checkout's root"
+          },
+          "name": {
+            "type": "string",
+            "description": "The name capcomd would give the project"
+          },
+          "branch": {
+            "type": "string",
+            "description": "The branch it starts on (main)"
+          },
+          "clientId": {
+            "type": "string",
+            "description": "The API client that asked (cli-…)"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "branch",
+          "clientId"
+        ],
+        "additionalProperties": {},
+        "description": "Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client started a git repository in a folder with POST /v1/projects/git-init (`git init -b main`, no commit). `entity` is project:<name>; the envelope text is daemon-written (\"Started a git repository in my-app (~/src/my-app), on branch main.\")",
+        "x-event-type": "project.git_initialized"
+      },
+      "ProjectPublishedData": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The checkout's root (absolute)"
+          },
+          "name": {
+            "type": "string",
+            "description": "The name capcomd would give the project"
+          },
+          "owner": {
+            "type": "string",
+            "description": "The GitHub account or organization it was created in"
+          },
+          "repo": {
+            "type": "string",
+            "description": "owner/name on GitHub"
+          },
+          "visibility": {
+            "type": "string",
+            "description": "private or public"
+          },
+          "firstCommit": {
+            "type": "boolean",
+            "description": "capcomd made the first commit (the folder had none)"
+          },
+          "files": {
+            "description": "How many files that first commit holds; null when the checkout had commits already",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "clientId": {
+            "type": "string",
+            "description": "The API client that published it (cli-…)"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "owner",
+          "repo",
+          "visibility",
+          "firstCommit",
+          "files",
+          "clientId"
+        ],
+        "additionalProperties": {},
+        "description": "Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client published a checkout without origin to GitHub with POST /v1/projects/publish (the repository was created, added as origin and pushed). `entity` is project:<name>; the envelope text is daemon-written (\"Published my-app (~/src/my-app) to github.com/marvin/my-app, private, with a first commit of 24 files.\"). Names and counts only: never file names or contents",
+        "x-event-type": "project.published"
       },
       "SandboxResourceDeletedData": {
         "type": "object",
@@ -8898,7 +10025,12 @@
                       "type": "boolean"
                     },
                     "limit": {},
-                    "verification": {}
+                    "verification": {
+                      "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+                    },
+                    "merge": {
+                      "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+                    }
                   },
                   "additionalProperties": {},
                   "x-untrusted": true,
@@ -9058,11 +10190,102 @@
                 },
                 "subject": {
                   "type": "object",
-                  "propertyNames": {
-                    "type": "string"
+                  "properties": {
+                    "target": {
+                      "description": "merge: the branch it lands on",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "ref": {
+                      "description": "merge: the branch (or ref) being merged",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "files": {
+                      "description": "merge: the files the branch changes, `git diff --numstat` of the verified commit against where its branch left the target, the 20 with the most changed lines first (then by path). Absent when the daemon couldn't read the diff (no repository, the remote unreachable) or on a daemon that predates it",
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "x-untrusted": true,
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "added",
+                              "modified",
+                              "deleted",
+                              "renamed",
+                              "copied",
+                              "typechange",
+                              "unknown"
+                            ]
+                          },
+                          "added": {
+                            "description": "Lines added; null for a binary file",
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "removed": {
+                            "description": "Lines removed; null for a binary file",
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "status",
+                          "added",
+                          "removed"
+                        ]
+                      }
+                    },
+                    "filesTotal": {
+                      "description": "merge: how many files the branch changes (files lists at most the first ones)",
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "added": {
+                      "description": "merge: lines added across all its files (binary files not counted)",
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "removed": {
+                      "description": "merge: lines removed across all its files (binary files not counted)",
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
                   },
                   "additionalProperties": {},
-                  "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+                  "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+                },
+                "requestedAt": {
+                  "description": "When it was asked (a merge: when it was parked); absent on daemons that predate it",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time"
                 }
               },
               "required": [

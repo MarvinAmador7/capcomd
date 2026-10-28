@@ -24,6 +24,55 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   versions and the newest backup, and when the engine doesn't come up it prints the engine's own last log lines.
   The engine is Rivet 2.3.31 (from 2.3.27), which keeps scheduled wake-ups (lease expiry, machine reaping, quota
   resets) across engine restarts.
+- Menu bar app: Active cards are redesigned. While nothing needs you a card is one line: the agents' faces, who is
+  doing what ("worker is editing 2 files") and how long the run has been going. When an approval waits, the card
+  opens to the question ("Merge worker's work into main?"), who asked and who is waiting on it, the files it lands with
+  lines added and removed, and **View diff**, **Deny** and **Approve ↩** (Return approves while the card has focus; Esc
+  never denies). A failed agent opens the card to the lines that say why, with **Open thread** and **Hide**; agents
+  stopped at a usage limit say when they pick up again, with **Resume now**. The chevron shows the agent tree. The
+  newest finished run tops the Recent list with how it ended: "Merged into main", files and lines, whether its checks
+  passed, and what it cost when API spend was billed. The cards also read in light mode.
+- Harness API: a merge waiting for approval now says what it would land. `approval.requested` and `snapshot.approvals`
+  carry `subject.files` (path, status, lines added and removed; the 20 biggest changes), `subject.filesTotal`,
+  `subject.added` and `subject.removed`, read when the merge was parked; snapshot approvals also carry `requestedAt`.
+  An agent's `result` records how its merge ended (`merge`: target and merged, failed or denied) and, when its checks
+  failed, how (`verification.checks.reason`) and the lines of the check output that name the failure
+  (`verification.checks.excerpt`). `capcomd merge --json` of a parked merge includes the same `diff`.
+- Menu bar app: the folder picker (**+ › Choose Project Folder…**, and Choose… in Settings › Runs) opens in front of
+  other apps' windows and keeps the folder you pick; it could open behind the app you were using, and the first click
+  in it closed it with no folder. After you pick a folder the menu bar panel opens again on what the folder needs.
+- Menu bar app: set a project up right in the composer. Pick a folder with **+ › Choose Project Folder…**: a capcomd
+  project is used at once as before; any other folder gets an orange dot on its chip and, in place of the tool row, what
+  it needs next. A GitHub checkout shows its repository, the target branch, how changes land (pull requests, or pushes
+  when the GitHub CLI isn't logged in, with **Log In…**), the agents that can work on it, and a spend cap when one of
+  them would bill an API key where your runs go; edit any of them in place and press **Set Up**, or **Set Up and Start**
+  when you've already typed a goal. A folder that isn't a git checkout offers **Initialize Git**; a checkout with no
+  remote offers **Publish to GitHub** (pick the account or organization, the name and Private / Public; it says first if
+  the first commit would include files that look like secrets), then goes straight into the setup. A checkout on
+  another host offers **Open in Terminal** for `capcomd setup project`, and any folder **Choose Another Folder…**.
+  **Cancel**, the chip's × or Esc go back to the project you had; new runs never move until the folder is set up.
+  Needs a capcomd with `projects.setup` (and `projects.git` for Initialize Git and publishing); with an older one, a
+  picked folder is used as before. Settings › General has a new **Keep .capcomd/ out of git** switch (off by default):
+  projects you set up from the app from then on get `.capcomd/` added to their .gitignore.
+- Harness API: take a plain folder all the way to a GitHub project from the menu bar app (capability `projects.git`).
+  `POST /v1/projects/git-init` starts a git repository (`git init -b main`, no commit) in a folder that isn't in one
+  (never your home folder, a folder that holds it, or capcomd's own settings). `GET /v1/projects/publish-options`
+  (read scope) says, for a checkout with no origin, whether the GitHub CLI is logged in, the accounts you can publish
+  as (your GitHub login, then your organizations), a repository name from the folder's name, and how many files the
+  first commit would hold, listing any that look like secrets (`.env` and `.env.*` other than
+  `.env.example`/`.env.sample`/`.env.template`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, SSH private keys, `.netrc`,
+  `.git-credentials`, an `.npmrc` with an auth token). `POST /v1/projects/publish` makes the first commit ("Initial
+  commit", what `.gitignore` ignores stays out) when there is none and creates the repository, private or public,
+  with `gh repo create --source … --remote origin --push`. It refuses, with a sentence and the field it's about,
+  while the first commit would include likely secrets (add them to `.gitignore`) or more than 2000 files (add a
+  `.gitignore`), when git has no `user.name`/`user.email`, or when the GitHub CLI isn't logged in; a name that's
+  taken on GitHub is 409. Both POSTs need the `configure` scope and an `Idempotency-Key`, and are recorded on the
+  daemon stream as `project.git_initialized` and `project.published` (names and counts, never file names or
+  contents).
+- Harness API: `POST /v1/projects` no longer needs `check`: leave it out to keep the project's current check, or to
+  use the one `GET /v1/projects/inspect` suggests (possibly none). Send `gitignore: true` to have capcomd add
+  `.capcomd/` to the checkout's `.gitignore` (created if missing; nothing changes when git already ignores it).
+  `capcomd setup project` is unchanged.
 - Harness API: set a folder up as a capcomd project without Terminal (capability `projects.setup`), so the menu bar
   app can offer it for a folder you pick. `GET /v1/projects/inspect?path=` (read scope, writes nothing) says what a
   setup form needs: the git checkout the folder is in, its origin (the repository a project always uses), its branches

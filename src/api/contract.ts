@@ -26,11 +26,11 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
 	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "invalid", "internal", "unavailable"])
-		.describe("conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action. Treat a code you don't know as a generic error"),
+		.describe("conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
-	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd)"),
-	problem: z.string().optional().describe("422 invalid from POST /v1/projects: the inspect problem code that blocks the folder (not_git, home, no_origin, not_github, not_found)"),
+	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub"),
+	problem: z.string().optional().describe("422 invalid from POST /v1/projects (and the projects.git routes): the inspect problem code that blocks the folder (not_git, home, no_origin, not_github, not_found)"),
 });
 export const ERROR_STATUSES = [401, 404, 409, 422] as const;
 
@@ -182,14 +182,30 @@ export const Decision = z.looseObject({
 });
 
 const RequestedBy = z.object({ agentId: z.string().nullable(), runId: z.string() }).describe("Who asked; ancestors of agentId may decide within their budget cap");
-const ApprovalSubject = z.record(z.string(), z.unknown()).describe("Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
+/** A merge approval's changed files (subject.files): its branch against where it left the target, biggest change first. */
+export const APPROVAL_FILES_MAX = 20;
+const ApprovalFile = z.object({
+	path: UntrustedText,
+	status: FileStatus,
+	added: z.number().int().nonnegative().nullable().describe("Lines added; null for a binary file"),
+	removed: z.number().int().nonnegative().nullable().describe("Lines removed; null for a binary file"),
+});
+const ApprovalSubject = z.looseObject({
+	target: z.string().nullable().optional().describe("merge: the branch it lands on"),
+	ref: z.string().nullable().optional().describe("merge: the branch (or ref) being merged"),
+	files: z.array(ApprovalFile).max(APPROVAL_FILES_MAX).optional().describe(`merge: the files the branch changes, \`git diff --numstat\` of the verified commit against where its branch left the target, the ${APPROVAL_FILES_MAX} with the most changed lines first (then by path). Absent when the daemon couldn't read the diff (no repository, the remote unreachable) or on a daemon that predates it`),
+	filesTotal: z.number().int().nonnegative().optional().describe("merge: how many files the branch changes (files lists at most the first ones)"),
+	added: z.number().int().nonnegative().optional().describe("merge: lines added across all its files (binary files not counted)"),
+	removed: z.number().int().nonnegative().optional().describe("merge: lines removed across all its files (binary files not counted)"),
+}).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
 
 /** Frames on GET /v1/streams/{scope}/events besides ordinary events (SSE `event:` names). */
 export const StreamFrames = {
 	"stream.reset": z.looseObject({ snapshotSeq: z.number().int().nonnegative(), reason: z.enum(["compacted", "overflow"]) }),
 	"snapshot.run": z.looseObject({ run: z.lazy(() => Run) }),
 	"snapshot.agents": z.looseObject({ agents: z.array(z.lazy(() => Agent)) }),
-	"snapshot.approvals": z.looseObject({ approvals: z.array(z.looseObject({ approvalId: ApprovalId, kind: ApprovalKind, status: ApprovalStatus, question: UntrustedText, requestedBy: RequestedBy, subject: ApprovalSubject })) }),
+	"snapshot.approvals": z.looseObject({ approvals: z.array(z.looseObject({ approvalId: ApprovalId, kind: ApprovalKind, status: ApprovalStatus, question: UntrustedText, requestedBy: RequestedBy, subject: ApprovalSubject,
+		requestedAt: Timestamp.nullable().optional().describe("When it was asked (a merge: when it was parked); absent on daemons that predate it") })) }),
 	"snapshot.steps": z.looseObject({ steps: z.array(z.lazy(() => HarnessEvent)).describe("Recent durable events of the scope, oldest first (step history)") }),
 	"snapshot.threads": z.looseObject({ messages: z.array(z.lazy(() => Message)).describe("Recent thread messages, oldest first") }),
 	"snapshot.end": z.looseObject({ snapshotSeq: z.number().int().nonnegative() }),
@@ -263,8 +279,25 @@ export const EventData = {
 		check: z.string().describe("The check command (\"\" for none), as the user typed it"),
 		agents: z.array(z.string()).describe("claude and/or codex"),
 		budgetUsd: z.number().nullable().describe("The spend cap per run in USD; null for none"),
+		gitignored: z.boolean().optional().describe("`.capcomd/` was added to the checkout's .gitignore (the body asked for `gitignore`)"),
 		clientId: z.string().describe("The API client that set it up (cli-…)"),
 	}).describe("Capability projects.setup. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client set a folder up as a capcomd project with POST /v1/projects and something changed (its settings, its profiles or capcomd's project list). `entity` is project:<name>; the envelope text is daemon-written (\"Set up app (~/src/app): pull requests into main, with Claude Code and Codex.\"). Never a secret"),
+	"project.git_initialized": z.looseObject({
+		path: z.string().describe("The folder (absolute), now a checkout's root"),
+		name: z.string().describe("The name capcomd would give the project"),
+		branch: z.string().describe("The branch it starts on (main)"),
+		clientId: z.string().describe("The API client that asked (cli-…)"),
+	}).describe("Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client started a git repository in a folder with POST /v1/projects/git-init (`git init -b main`, no commit). `entity` is project:<name>; the envelope text is daemon-written (\"Started a git repository in my-app (~/src/my-app), on branch main.\")"),
+	"project.published": z.looseObject({
+		path: z.string().describe("The checkout's root (absolute)"),
+		name: z.string().describe("The name capcomd would give the project"),
+		owner: z.string().describe("The GitHub account or organization it was created in"),
+		repo: z.string().describe("owner/name on GitHub"),
+		visibility: z.string().describe("private or public"),
+		firstCommit: z.boolean().describe("capcomd made the first commit (the folder had none)"),
+		files: z.number().nullable().describe("How many files that first commit holds; null when the checkout had commits already"),
+		clientId: z.string().describe("The API client that published it (cli-…)"),
+	}).describe("Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client published a checkout without origin to GitHub with POST /v1/projects/publish (the repository was created, added as origin and pushed). `entity` is project:<name>; the envelope text is daemon-written (\"Published my-app (~/src/my-app) to github.com/marvin/my-app, private, with a first commit of 24 files.\"). Names and counts only: never file names or contents"),
 	"sandbox.resource_deleted": z.looseObject({
 		sandbox: z.string().describe("The place (a listed provider's name)"),
 		resourceId: z.string().describe("The machine's id"),
@@ -332,6 +365,7 @@ export const CAPABILITIES = {
 	"sandboxes.settings": "PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned",
 	"sandboxes.actions": "POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream",
 	"projects.setup": "GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream",
+	"projects.git": "POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -592,10 +626,11 @@ export const ProjectSetupBody = z.object({
 	path: z.string().min(1).max(4096).refine((p) => p.startsWith("/"), "path must be an absolute path").describe("The folder (as inspected): a checkout, or a folder inside one"),
 	mode: z.enum(["pr", "direct"]).describe("pr: verified work lands as a pull request capcomd merges (needs `ghReady`); direct: pushed to the target branch"),
 	target: BranchName.describe("The branch work merges into, e.g. main (merges into protected branches wait for an approval)"),
-	check: z.string().max(2000).refine((c) => !/[\n\r\u0000]/.test(c), "check is one line").describe("The command every change must pass, e.g. `bun run test`; \"\" for none (an existing check is kept)"),
+	check: z.string().max(2000).refine((c) => !/[\n\r\u0000]/.test(c), "check is one line").optional().describe("The command every change must pass, e.g. `bun run test`; \"\" for none (an existing check is kept). Omitted (capability projects.git): the project's current check when it's set up, else inspect's `suggestedCheck` (possibly none)"),
 	agents: z.array(SetupAgentName).min(1).max(2).describe("claude, codex or both (each once): a worker profile per agent; the reviewer and planner use Claude Code when it's chosen"),
 	budgetUsd: z.number().positive().optional().describe("A spend cap per run in USD, only when `budgetAsked` for these agents (one bills an API key); omitted: no limit"),
 	expect: z.object({ repo: z.string().nullable().optional().describe("The `repo` inspect returned") }).optional().describe("What the form was filled from: when the folder's origin isn't `expect.repo` any more, 409 `conflict` and nothing is written. Send it"),
+	gitignore: z.boolean().optional().describe("Capability projects.git. true: make sure git ignores `.capcomd/` in the checkout (one line appended to its .gitignore, which is created when missing; nothing when git already ignores it). Default false"),
 });
 export const ProjectSetupResult = z.object({
 	project: z.object({
@@ -613,6 +648,38 @@ export const PROJECTS_SETUP_DOC = "Capability projects.setup. Set a folder up as
 	"Audited: a durable project.configured event on the `daemon` stream when something changed. " +
 	"`Idempotency-Key` (8-200 chars, required) is scoped to the calling client and kept 24h: same key + same body: 200 with the first result (replay, nothing written again); same key + another body: 409 `idempotency_conflict`. Only a 200 is kept. Afterwards GET /v1/run-options?repo=<root> answers for the project.";
 
+/** POST /v1/projects/git-init, GET /v1/projects/publish-options, POST /v1/projects/publish (capability projects.git). */
+const AbsolutePath = z.string().min(1).max(4096).refine((p) => p.startsWith("/"), "path must be an absolute path");
+export const ProjectGitInitBody = z.object({ path: AbsolutePath.describe("The folder (absolute) inspect reported as not_git") });
+export const ProjectPublishOptions = z.object({
+	path: z.string().describe("The path as given"),
+	root: z.string().describe("The checkout that would be published"),
+	ghReady: z.boolean().describe("The GitHub CLI is logged in on the daemon's machine (`gh auth status`, asked at most every 30 s). false: publishing is refused; show the person how to log in"),
+	accounts: z.array(z.object({ login: z.string(), kind: z.enum(["user", "org"]).describe("user: the gh login; org: an organization it belongs to") }))
+		.describe("Who the repository can be created as: the gh user first, then its organizations (`gh api`, asked at most every 30 s); empty when ghReady is false or GitHub didn't answer"),
+	suggestedName: z.string().describe("The folder's name made a valid GitHub repository name (other characters become -)"),
+	hasCommits: z.boolean().describe("The checkout has commits: publishing pushes them as they are. false: publishing makes the first commit (\"Initial commit\") of the files counted in `files`"),
+	branch: z.string().describe("The branch that is pushed (the checkout's current one)"),
+	files: z.number().int().describe("What publishing puts on GitHub: without commits, the files the first commit would hold (tracked, and untracked files that aren't ignored: `git add -A`); with commits, the files in HEAD"),
+	blocked: z.array(z.object({ path: z.string().describe("Relative to the root"), reason: z.string().describe("Why it looks secret, e.g. \"an environment file, which usually holds secrets\"") }))
+		.describe("Files among `files` that look like they hold secrets (by name: .env and .env.* except .env.example/.env.sample/.env.template, *.pem, *.key, *.p12, *.pfx, SSH private keys id_rsa/id_dsa/id_ecdsa/id_ed25519, .netrc, .git-credentials, and an .npmrc with an auth token), at most 50. Without commits, publishing refuses while any is listed: add them to .gitignore. With commits, they're already committed and only listed"),
+});
+export const PUBLISH_OPTIONS_DOC = "Capability projects.git. What the publish form needs for a checkout without origin (inspect's no_origin): whether the GitHub CLI is logged in, the accounts to publish as, a name, and what the first commit would hold. Needs the `read` scope; writes nothing; no network except `gh api` for the accounts. " +
+	"422 `invalid` (`field` path, `problem` its code) for a folder inspect reports another problem for; 409 `conflict` for a checkout that already has an origin.";
+export const ProjectPublishBody = z.object({
+	path: AbsolutePath.describe("The checkout (as inspected), or a folder inside it"),
+	owner: z.string().min(1).max(100).describe("A login from publish-options `accounts`"),
+	name: z.string().min(1).max(100).describe("The repository's name on GitHub (letters, digits, ., _ and -)"),
+	visibility: z.enum(["private", "public"]),
+});
+export const PROJECTS_GIT_INIT_DOC = "Capability projects.git. Start a git repository in a folder that isn't in one (`git init -b main`; no commit), so it can be published and set up. Only for a folder inspect reports as not_git, and never the home folder, a folder that holds it (/, /Users) or capcomd's own settings. " +
+	"Needs the `configure` scope (403 `forbidden` without it). Returns the folder's inspect result as it is now (its problem is no_origin). 422 `invalid` with `field` path (and `problem`) for any other folder; 409 `conflict` when it is already in a checkout. " +
+	"Audited: a durable project.git_initialized event on the `daemon` stream. `Idempotency-Key` (8-200 chars, required) as for POST /v1/projects: a replay answers the first 200 and runs nothing again.";
+export const PROJECTS_PUBLISH_DOC = "Capability projects.git. Publish a checkout without origin to GitHub: when it has no commits, `git add -A` (what .gitignore ignores stays out) and a first commit \"Initial commit\"; then `gh repo create <owner>/<name> --private|--public --source <root> --remote origin --push` on the daemon's machine, which creates the repository, adds it as origin and pushes the current branch. Can take a while (it waits for the push). " +
+	"Needs the `configure` scope (403 `forbidden` without it). Returns the checkout's inspect result as it is now (`github` set: it can be set up with POST /v1/projects). " +
+	"Refusals carry the daemon's sentence and `field`: 422 `invalid` for a folder that isn't a checkout without origin (path, with `problem`), the GitHub CLI not logged in (gh), an owner that isn't in `accounts` or a name GitHub doesn't take (owner, name); without commits: likely secrets among the files (files; the sentence names them and says to add them to .gitignore), more than 2000 files (files: add a .gitignore), no files, or no git user.name/email (identity). 409 `conflict` with `field` name when the repository already exists on GitHub, and without a field when the checkout already has an origin or is being published. 503 `unavailable` when the GitHub CLI fails otherwise (its first line in the sentence). " +
+	"A first commit that was made stays when the GitHub step fails: publishing again pushes it. Audited: a durable project.published event on the `daemon` stream (owner, name, visibility and a file count, never file names or contents). `Idempotency-Key` (8-200 chars, required) as for POST /v1/projects.";
+
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
 		.output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string(), capabilities: z.array(z.string()).optional().describe(`Features this daemon has: ${CAPABILITIES_DOC} This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty`) })),
@@ -622,6 +689,12 @@ export const contract = {
 			.input(z.object({ path: z.string().min(1).max(4096).refine((p) => p.startsWith("/"), "path must be an absolute path").describe("Absolute path of a folder on the daemon's machine") })).output(ProjectInspect),
 		setup: oc.route({ method: "POST", path: "/v1/projects", inputStructure: "detailed", description: PROJECTS_SETUP_DOC })
 			.input(z.object({ headers: IdempotencyHeaders, body: ProjectSetupBody })).output(ProjectSetupResult),
+		gitInit: oc.route({ method: "POST", path: "/v1/projects/git-init", inputStructure: "detailed", description: PROJECTS_GIT_INIT_DOC })
+			.input(z.object({ headers: IdempotencyHeaders, body: ProjectGitInitBody })).output(ProjectInspect),
+		publishOptions: oc.route({ method: "GET", path: "/v1/projects/publish-options", description: PUBLISH_OPTIONS_DOC })
+			.input(z.object({ path: AbsolutePath.describe("Absolute path of the checkout (or a folder inside it)") })).output(ProjectPublishOptions),
+		publish: oc.route({ method: "POST", path: "/v1/projects/publish", inputStructure: "detailed", description: PROJECTS_PUBLISH_DOC })
+			.input(z.object({ headers: IdempotencyHeaders, body: ProjectPublishBody })).output(ProjectInspect),
 	},
 	runs: {
 		list: oc.route({ method: "GET", path: "/v1/runs" }).output(z.array(Run)),

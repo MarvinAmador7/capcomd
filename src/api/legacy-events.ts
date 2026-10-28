@@ -14,6 +14,11 @@ export const UntrustedText = z.string().meta({ "x-untrusted": true, description:
 
 const S = z.string(), N = z.number(), nS = z.string().nullable(), U = z.unknown(), T = UntrustedText, nT = UntrustedText.nullable();
 const task = { taskId: S, holder: S, epoch: N };
+/** A parked merge's diff: at most 20 files, biggest change first; totals count every file (binaries have null counts). */
+export const MergeDiff = z.object({
+	files: z.array(z.object({ path: T, status: S, added: N.nullable(), removed: N.nullable() })),
+	filesTotal: N, added: N, removed: N,
+});
 const budget = { add: U, budget: U, by: U };
 /** agent.done / agent.failed `result`. Every text field is agent-written. Unknown fields may appear (the agent's declared result bag). */
 export const AgentResult = z.looseObject({
@@ -33,7 +38,8 @@ export const AgentResult = z.looseObject({
 	exitCode: N.optional(),
 	adopted: z.boolean().optional(),
 	limit: U.optional(),
-	verification: U.optional(),
+	verification: U.optional().describe("Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"),
+	merge: U.optional().describe("Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"),
 }).meta({ "x-untrusted": true, description: "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions" });
 const finish = { result: AgentResult, spent: U, budget: U };
 /** Which AI provider an agent runs on (harness.v1 Agent.provider, agent.spawned agent.provider). */
@@ -99,7 +105,7 @@ export const LegacyEventShapes = {
 	"merge.started": { id: S },
 	"merge.succeeded": { id: S },
 	"merge.failed": { id: S },
-	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional() },
+	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read") },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
 	"task.added": { taskId: S, title: T, after: z.array(S).optional() },

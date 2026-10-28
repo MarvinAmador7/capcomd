@@ -293,7 +293,7 @@ export function rivetSource(): HarnessSource {
 			return ops.map((op): PendingApproval => {
 				const text = mergeApprovalText(op.data);
 				return { approvalId: approvalIdFor(runId, op.id), kind: "merge", status: "pending", question: text.question,
-					requestedBy: { agentId: (op.data.agentId as string) ?? null, runId }, subject: text.subject, expiresAt: null };
+					requestedBy: { agentId: (op.data.agentId as string) ?? null, runId }, subject: text.subject, expiresAt: null, requestedAt: isoTs(op.updatedAt) };
 			});
 		},
 		approval: async (approvalId) => {
@@ -344,6 +344,9 @@ export function rivetSource(): HarnessSource {
 		},
 		inspectProject: async (path) => { const P = await import("./projects"); return P.inspectProject(path, await projectDeps()); },
 		setUpProject: async (input) => { const P = await import("./projects"); return P.setUpProject(input, await projectDeps()); },
+		initGit: async (path) => { const G = await import("./project-git"); return G.initGit(path, await projectDeps()); },
+		publishOptions: async (path) => { const G = await import("./project-git"); return G.publishOptions(path, await projectDeps()); },
+		publishProject: async (input) => { const G = await import("./project-git"); return G.publishProject(input, await projectDeps()); },
 	};
 }
 

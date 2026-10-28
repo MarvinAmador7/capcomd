@@ -16,6 +16,8 @@ struct StartProjectField: View {
     let state = model.startState
     let starting = state == .starting
     let ready = !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !starting
+    // A picked folder that isn't set up yet: its next steps take the tool row's place (design/setup).
+    let setup = model.setupScreen(goal: goal).flatMap { $0.phase == .loading ? nil : $0 }
     VStack(alignment: .leading, spacing: 0) {
       // Composer board: the panel's centrepiece. Context chips, large text, a tool row, the white send.
       VStack(alignment: .leading, spacing: Theme.Composer2.gap) {
@@ -34,11 +36,18 @@ struct StartProjectField: View {
           .focused($focused).disabled(starting)
           .onSubmit(submit)
           .onKeyPress(.escape) {
+            if model.setup.isOpen { model.cancelSetup(); return .handled }   // Esc cancels the setup, the goal stays
             if !goal.isEmpty { goal = ""; model.clearStart(); return .handled }
             focused = false; return .handled
           }
           .accessibilityLabel("Start a project")
-        toolRow(ready: ready, starting: starting)
+        Group {
+          if let setup {
+            InlineSetupSection(screen: setup, defaultKey: !focused, onPrimary: runPrimary).transition(.opacity)
+          } else {
+            toolRow(ready: ready, starting: starting)
+          }
+        }
           // Its natural width, measured on a hidden copy: the panel widens to fit rather than squeezing it.
           .background(alignment: .leading) {
             toolRow(ready: ready, starting: starting).fixedSize().hidden().allowsHitTesting(false).accessibilityHidden(true)
@@ -50,25 +59,44 @@ struct StartProjectField: View {
       .contentShape(Rectangle())
       .onTapGesture { focused = true }
       .background { keyboardOnly("k") { focused = true } }
+      .background {
+        // Esc cancels the setup while the field isn't focused too (it handles Esc itself when it is).
+        if model.setup.isOpen {
+          Button { model.cancelSetup() } label: { EmptyView() }.keyboardShortcut(.cancelAction).opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+        }
+      }
       .animation(Theme.Motion.fast, value: focused)
+      .animation(Theme.Motion.fast, value: setup == nil)
       // The panel opens with nothing focused (idle look, ⌘K hint); ⌘K or a click focuses the field.
       .defaultFocus($focused, false)
       // AppKit makes the first text field first responder whenever the panel window becomes key; undo that on open.
       .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
         DispatchQueue.main.async { if goal.isEmpty { focused = false; NSApp.keyWindow?.makeFirstResponder(nil) } }
+        // Back from Terminal (a GitHub CLI login, `capcomd setup project`): look at the folder again.
+        if model.setup.isOpen { Task { await model.setup.refresh() } }
       }
       line(state)
     }
     .task { await model.refreshDaemonInfo() }   // capabilities and drivers, for the driver chip
   }
 
-  /// Where the run goes: the remembered project checkout (× forgets it), else the daemon's default project.
+  /// Where the run goes: the remembered project checkout (× forgets it), else the daemon's default project. While a
+  /// picked folder is looked at or set up, that folder, with a spinner or the orange "not set up" dot; × cancels.
   @ViewBuilder private var folderChip: some View {
-    if let repo = model.startRepo {
+    if model.setup.isOpen, let path = model.setup.path {
+      let screen = model.setupScreen(goal: "")
+      Chip2(leading: AnyView(Image(systemName: "folder").font(.system(size: 11))), text: screen?.name ?? (path as NSString).lastPathComponent,
+            onRemove: { model.cancelSetup() },
+            trailing: AnyView(Group {
+              if screen?.phase == .loading { ProgressView().controlSize(.mini).frame(width: Theme.Setup.spinner, height: Theme.Setup.spinner).accessibilityLabel("Looking at the folder") }
+              else { SetupDot() }
+            }))
+        .help(path)
+    } else if let repo = model.startRepo {
       Chip2(icon: "folder", text: (repo as NSString).lastPathComponent, onRemove: { model.startRepo = nil })
         .help(repo)
     } else {
-      Button { if let f = ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f } } label: {
+      Button { model.chooseProjectFolder() } label: {
         Chip2(icon: "folder", text: "Default project", onRemove: nil)
       }
       .buttonStyle(.plain).help("capcomd's default project; click to choose a checkout")
@@ -170,7 +198,7 @@ struct StartProjectField: View {
 
   private var addMenu: some View {
     Menu {
-      Button("Choose Project Folder…") { if let f = ProjectFolderPicker.choose(prompt: "Choose the project's checkout.") { model.startRepo = f } }
+      Button("Choose Project Folder…") { model.chooseProjectFolder() }
       if model.startRepo != nil { Button("Use the Default Project") { model.startRepo = nil } }
       Divider()
       Button("Settings…") { SettingsWindow.open(openSettings) }
@@ -198,7 +226,26 @@ struct StartProjectField: View {
     }
   }
 
+  /// The card's primary (Set Up, Set Up and Start, Initialize Git, …). Set Up hands the field its focus back; Set Up and
+  /// Start clears it, as a started run does.
+  private func runPrimary(_ a: SetupAction) {
+    let g = goal
+    Task {
+      switch await model.setupAction(a, goal: g) {
+      case .setUp: focused = true
+      case .started: goal = ""; focused = false
+      case .startFailed, .showing: break
+      }
+    }
+  }
+
   private func submit() {
+    // Return while a folder's next steps show runs the card's primary when it's Set Up (or Set Up and Start).
+    if let p = model.setupScreen(goal: goal)?.primary {
+      if (p.action == .setUp || p.action == .setUpAndStart) && p.enabled && !p.busy { runPrimary(p.action) }
+      return
+    }
+    if model.setup.isOpen { return }   // still looking at the folder
     let g = goal
     guard !g.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     Task { if await model.startRun(g) { goal = ""; focused = false } }
@@ -207,14 +254,62 @@ struct StartProjectField: View {
 
 /// Asks for a project checkout (a folder `capcomd setup project` ran in) when the daemon has no default repository.
 enum ProjectFolderPicker {
-  @MainActor static func choose(prompt: String = "capcomd has no default repository. Choose the project's checkout.") -> String? {
+  /// An accessory app can't become the active app on current macOS (see SettingsWindow), and an Open panel whose app
+  /// can't become active is cancelled by the first click in it: no folder came back. So, as Settings does, the app is
+  /// a regular app while the panel is up and an accessory after (never .prohibited again, which hides every window).
+  /// The Open panel sits above the menu bar panel's level so the panel can't cover its buttons; the menu bar panel
+  /// closes at the first click in the Open panel and opens again after a pick, on what the folder needs.
+  @MainActor static func choose(prompt: String = "capcomd has no default repository. Choose the project's checkout.") async -> String? {
     let p = NSOpenPanel()
     p.canChooseDirectories = true; p.canChooseFiles = false; p.allowsMultipleSelection = false
     p.prompt = "Use This Project"; p.message = prompt
-    NSApp.activate(ignoringOtherApps: true)
-    return p.runModal() == .OK ? p.url?.path : nil
+    p.level = NSWindow.Level(NSWindow.Level.popUpMenu.rawValue + 1)   // above other apps' windows and the menu bar panel
+    // Not just .accessory: a bare debug build starts as .prohibited, which can't become active either.
+    let policy = NSApp.activationPolicy()
+    if policy != .regular { NSApp.setActivationPolicy(.regular) }
+    NSApp.activate()
+    let fromMenuBar = MenuBarPanel.isOpen
+    let path: String? = await withCheckedContinuation { done in
+      p.begin { r in done.resume(returning: r == .OK ? p.url?.path : nil) }
+      p.makeKeyAndOrderFront(nil)
+    }
+    // The first click in the Open panel closed the menu bar panel: open it again on the picked folder's next steps.
+    if fromMenuBar && path != nil { MenuBarPanel.open() }
+    if policy != .regular && !SettingsWindow.isOpen { NSApp.setActivationPolicy(.accessory) }
+    return path
   }
 }
+
+/// The MenuBarExtra's panel (its window class is SwiftUI's MenuBarExtraWindow).
+enum MenuBarPanel {
+  @MainActor static var isOpen: Bool { NSApp.windows.contains { $0.isVisible && isPanel($0) } }
+  /// Closed as a click outside it would.
+  @MainActor static func close() { for w in NSApp.windows where w.isVisible && isPanel(w) { w.close() } }
+
+  /// Opens the panel as a click on the menu bar item does. SwiftUI has no API for it. On macOS 27 a window-style
+  /// MenuBarExtra is presented through AppKit's (SPI) expanded interface session and its status button has no
+  /// target or action, so a simulated click does nothing: begin the session, as MenuBarExtraAccess does
+  /// (github.com/orchetect/MenuBarExtraAccess, MIT). The begin call drops a timestamp older than the last session's
+  /// end, so it gets the largest one. Before macOS 27 the button's own action opens it.
+  @MainActor static func open() {
+    guard !isOpen, let item = statusItem else { return }
+    let begin = NSSelectorFromString("_beginExpandedInterfaceSession:"), delegate = NSSelectorFromString("expandedInterfaceDelegate")
+    if item.responds(to: begin), item.responds(to: delegate), item.perform(delegate)?.takeUnretainedValue() != nil,
+       let imp = item.method(for: begin) {
+      typealias Begin = @convention(c) (NSStatusItem, Selector, TimeInterval) -> Void
+      unsafeBitCast(imp, to: Begin.self)(item, begin, .greatestFiniteMagnitude)
+    } else {
+      item.button?.performClick(nil)
+    }
+  }
+  /// The status item behind the menu bar icon (a private key of its NSStatusBarWindow).
+  @MainActor private static var statusItem: NSStatusItem? {
+    NSApp.windows.lazy.filter { String(describing: type(of: $0)).contains("NSStatusBarWindow") }
+      .compactMap { $0.value(forKey: "statusItem") as? NSStatusItem }.first
+  }
+  private static func isPanel(_ w: NSWindow) -> Bool { String(describing: type(of: w)).contains("MenuBarExtra") }
+}
+
 /// Composer board: the 20 pt composer card (glass on macOS 26+), its inner hairline and the soft blue focus ring.
 struct ComposerCard: View {
   let focused: Bool

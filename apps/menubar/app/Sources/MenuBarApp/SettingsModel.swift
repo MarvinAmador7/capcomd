@@ -214,7 +214,7 @@ extension TerminalLauncher {
     return s.isEmpty ? "settings" : s
   }
 
-  private static func script(name: String, _ body: String) -> Bool {
+  static func script(name: String, _ body: String) -> Bool {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("capcomd-\(safeName(name)).command")
     do {
       try "#!/bin/zsh -l\n\(body)\n".write(to: url, atomically: true, encoding: .utf8)
@@ -265,6 +265,8 @@ enum AppInfo {
 @MainActor enum SettingsWindow {
   private static var window: NSWindow?
   private static var closeObserver: NSObjectProtocol?
+  /// Settings is showing: the app stays a regular app until it closes.
+  static var isOpen: Bool { window?.isVisible == true }
 
   /// Settings… in the panel: close the panel (it would stay on top), become a regular app, open the window.
   static func open(_ openSettings: OpenSettingsAction) {
@@ -301,9 +303,7 @@ enum AppInfo {
     w.orderFrontRegardless()
   }
   /// The MenuBarExtra's panel (its window class is SwiftUI's MenuBarExtraWindow), not the detached thread readers.
-  private static func closePanel() {
-    for w in NSApp.windows where w.isVisible && String(describing: type(of: w)).contains("MenuBarExtra") { w.close() }
-  }
+  private static func closePanel() { MenuBarPanel.close() }
 
   /// The tallest a pane gets before it scrolls: the screen's visible height (no menu bar, no Dock) less the window's
   /// title and tab bar.

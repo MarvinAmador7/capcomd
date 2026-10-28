@@ -5,7 +5,7 @@
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, ProjectSetupBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
@@ -31,6 +31,8 @@ export function servedType(bytes: Uint8Array, hint: string | null): { type: stri
 	return { type: "application/octet-stream", inline: false };
 }
 const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "already_decided", 422: "invalid" };
+/** POST routes that need the configure scope (projects.setup, projects.git). */
+const CONFIGURE_POSTS = new Set(["/v1/projects", "/v1/projects/git-init", "/v1/projects/publish"]);
 const err = (c: Context, status: 401 | 403 | 404 | 409 | 422 | 503, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
 
 /** agent.activity_changed: at most one frame per agent per this many ms (ACTIVITY_DOC). */
@@ -74,6 +76,10 @@ export function harnessApp(o: ServerOptions) {
 			inspect: os.projects.inspect.handler(({ input }) => src.inspectProject(input.path)),
 			// Served natively below (Idempotency-Key, the configure scope): this handler is never reached.
 			setup: os.projects.setup.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			// Served natively below (refusals carry `field` and `problem`; the POSTs take an Idempotency-Key): never reached.
+			gitInit: os.projects.gitInit.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			publishOptions: os.projects.publishOptions.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			publish: os.projects.publish.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
 		runs: {
 			list: os.runs.list.handler(() => src.runs()),
@@ -164,9 +170,10 @@ export function harnessApp(o: ServerOptions) {
 		if (c.req.method === "GET" && c.req.path === "/v1/health") return next();
 		const cl = authenticate(c.req.header("authorization"), clients());
 		if (!cl) return err(c, 401, "unauthorized", "missing or unknown bearer token (create one with `capcomd clients add`)");
-		// PATCH changes settings (capability sandboxes.settings) and POST /v1/projects sets a folder up (projects.setup): the
-		// configure scope, which steering a run doesn't give.
-		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && c.req.path === "/v1/projects");
+		// PATCH changes settings (capability sandboxes.settings), POST /v1/projects sets a folder up (projects.setup) and
+		// …/git-init and …/publish start and publish its repository (projects.git): the configure scope, which steering a run
+		// doesn't give.
+		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && CONFIGURE_POSTS.has(c.req.path));
 		const need: ClientScope = c.req.method === "GET" ? "read" : configures ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
 		if (!cl.scopes.includes(need)) return err(c, 403, "forbidden", `token lacks the ${need} scope`);
 		c.set("client", cl);
@@ -430,10 +437,10 @@ export function harnessApp(o: ServerOptions) {
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
 			const field = typeof i?.path[0] === "string" ? i.path[0] : undefined;
-			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {path, mode, target, check, agents, budgetUsd?, expect?}", field ? { field } : {});
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {path, mode, target, check?, agents, budgetUsd?, expect?, gitignore?}", field ? { field } : {});
 		}
 		const b = parsed.data;
-		return idempotent(c, ["projects.setup", b.path, b.mode, b.target, b.check, b.agents, b.budgetUsd ?? null, b.expect ? (b.expect.repo ?? null) : "-"], async (client) => {
+		return idempotent(c, ["projects.setup", b.path, b.mode, b.target, b.check ?? null, b.agents, b.budgetUsd ?? null, b.expect ? (b.expect.repo ?? null) : "-", b.gitignore ?? false], async (client) => {
 			const r = await src.setUpProject(b);
 			if (!r.ok) {
 				const { ok: _, status, ...body } = r;
@@ -444,6 +451,48 @@ export function harnessApp(o: ServerOptions) {
 				text: r.event.text, data: { path: r.project.root, name: r.project.name, ...r.event.data, clientId: client.clientId },
 			});
 			return { status: 200, body: { project: r.project, changed: r.changed } };
+		});
+	});
+
+	// Capability projects.git: start a folder's repository and publish it to GitHub, so it can then be set up (above). The
+	// POSTs follow the write-route Idempotency-Key rules and are audited on the daemon stream; refusals carry the daemon's
+	// sentence, the field it's about and the inspect problem code.
+	const bodyOf = async <T>(c: Context, schema: { safeParse(v: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ path: PropertyKey[]; message: string }> } } }, shape: string) => {
+		const parsed = schema.safeParse(await c.req.json().catch(() => undefined));
+		if (parsed.success) return { body: parsed.data };
+		const i = parsed.error.issues[0];
+		const field = typeof i?.path[0] === "string" ? i.path[0] : undefined;
+		return { refused: err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : `body must be a JSON object ${shape}`, field ? { field } : {}) };
+	};
+	const refusal = (r: { status: number; code: string; message: string; field?: string; problem?: string }): Outcome =>
+		({ status: r.status, body: { code: r.code, message: r.message, ...(r.field ? { field: r.field } : {}), ...(r.problem ? { problem: r.problem } : {}) } });
+	app.post("/v1/projects/git-init", async (c) => {
+		const p = await bodyOf(c, ProjectGitInitBody, "{path}");
+		if (!p.body) return p.refused!;
+		const b = p.body;
+		return idempotent(c, ["projects.gitInit", b.path], async (client) => {
+			const r = await src.initGit(b.path);
+			if (!r.ok) return refusal(r);
+			state.recordDaemonEvent({ type: "project.git_initialized", entity: r.event.entity, text: r.event.text, data: { ...r.event.data, clientId: client.clientId } });
+			return { status: 200, body: r.inspection };
+		});
+	});
+	app.get("/v1/projects/publish-options", async (c) => {
+		const path = c.req.query("path") ?? "";
+		if (!path.startsWith("/") || path.length > 4096) return err(c, 422, "invalid", "path: path must be an absolute path", { field: "path" });
+		const r = await src.publishOptions(path);
+		if (!r.ok) { const o = refusal(r); return c.json(o.body, o.status as 422); }
+		return c.json(r.options);
+	});
+	app.post("/v1/projects/publish", async (c) => {
+		const p = await bodyOf(c, ProjectPublishBody, "{path, owner, name, visibility}");
+		if (!p.body) return p.refused!;
+		const b = p.body;
+		return idempotent(c, ["projects.publish", b.path, b.owner, b.name, b.visibility], async (client) => {
+			const r = await src.publishProject(b);
+			if (!r.ok) return refusal(r);
+			state.recordDaemonEvent({ type: "project.published", entity: r.event.entity, text: r.event.text, data: { ...r.event.data, clientId: client.clientId } });
+			return { status: 200, body: r.inspection };
 		});
 	});
 
