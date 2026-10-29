@@ -38,6 +38,7 @@ export CAPCOMD_MERGE_TARGET=main
 export CAPCOMD_WORKDIR="$WORK/merge"
 export CAPCOMD_TRACE_DIR="$WORK/traces"
 export CAPCOMD_RPC_KEY_FILE="$WORK/rpc.key"
+export CAPCOMD_RUNS_INDEX="$WORK/runs.jsonl"   # out of the user's run list (see mac-subagents-e2e.sh)
 PORT=$(bun -e 'const { testPort } = await import("./tests/helpers/engine.ts"); console.log(await testPort())') || die "no free engine port"
 export CAPCOMD_ENDPOINT="http://127.0.0.1:$PORT"
 C="bun src/cli/index.ts"

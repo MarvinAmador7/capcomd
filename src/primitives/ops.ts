@@ -6,8 +6,8 @@ import { resolveEnvSnapshot } from "../env/resolve";
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
-import { client, assertEngine, cancelRun } from "../core/relay";
+import { dirname, join, resolve } from "path";
+import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { agentsFilePath, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
@@ -173,10 +173,13 @@ export async function runNew(o: RunNewOpts) {
   return { runId, created: res.created, budget: res.budget };
 }
 
-/** Runs this machine created, newest last (one JSON line each), so a later session can find them: `capcomd_runs`. */
-export const runsIndexPath = () => join(stateDir(), "runs.jsonl");
+/**
+ * Runs this machine created, newest last (one JSON line each), so a later session can find them: `capcomd_runs`, and the
+ * daemon's run list. CAPCOMD_RUNS_INDEX names another file (the live e2e scripts keep their runs out of the user's list).
+ */
+export const runsIndexPath = () => env("RUNS_INDEX") || join(stateDir(), "runs.jsonl");
 function recordRun(r: { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }) {
-  try { mkdirSync(stateDir(), { recursive: true }); appendFileSync(runsIndexPath(), JSON.stringify(r) + "\n"); } catch { /* an index, not state */ }
+  try { const p = runsIndexPath(); mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, JSON.stringify(r) + "\n"); } catch { /* an index, not state */ }
 }
 export function recentRuns(limit = 20): Array<{ runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }> {
   if (!existsSync(runsIndexPath())) return [];
@@ -1229,7 +1232,8 @@ export async function decideMerge(runId: string, mrgId: string, o: { approve: bo
 
 /** Merges parked for approval in a run, oldest first. */
 export async function pendingMerges(runId: string) {
-  const ops = (await client().scope.getOrCreate([runId]).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as import("../actors/scope").ScopeOp[];
+  // A read: a run without a scope on this engine has none pending (never create its scope to ask).
+  const ops = (await existingActor("scope", [runId]).then((s) => s?.listOps({ state: "awaiting_approval", kind: "merge" }) ?? []).catch(() => [])) as import("../actors/scope").ScopeOp[];
   return ops.map((op) => ({ taskId: op.id, kind: "merge" as const, targetBranch: (op.data.target as string) ?? null, since: new Date(op.updatedAt).toISOString(), ref: op.data.ref as string }));
 }
 
