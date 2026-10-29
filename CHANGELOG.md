@@ -13,6 +13,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - The live end-to-end scripts (`scripts/mac-subagents-e2e.sh`, `scripts/mac-agent-ops-e2e.sh`) keep their runs out of
   your run list, so the menu bar no longer shows them. They write their own index in the run's work folder and still
   use your logins, environments, boxd key and settings. To do the same, set `CAPCOMD_RUNS_INDEX` to a file of your own.
+- `capcomd serve` now opens the harness API only once its actors can answer, waiting at most 30 s. Before, the menu
+  bar's first requests after a restart could arrive before the actors were up and fail with warnings in the engine log.
 - Fix: a project's settings are looked for from the current folder up to your home folder and no further, even when
   `HOME` points somewhere else (a test or an agent's scratch home); capcomd's own `~/.capcomd/config.json` was read as
   a project's `.capcomd/config.json` then, so its sandbox and repository settings applied where they shouldn't.

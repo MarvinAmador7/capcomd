@@ -216,6 +216,11 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     if (up && ++misses >= 10) { console.error(`capcomd serve: engine on :${port} stopped answering; exiting`); process.exit(1); }
   }, 2000);
 
+  // Open the API once capcomd's actors can answer (rivetkit's envoy has registered with the engine; registry.start()
+  // doesn't wait for it): a client that connects right after a restart, like the menu bar, would otherwise exhaust the
+  // engine's wake retries on every run it reads. Bounded by rivetkit (30 s); the API opens either way.
+  await registry.startAndWait().catch((e: Error) => console.error(`capcomd serve: actors not ready yet (${e.message}); opening the harness API anyway`));
+
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {
     const { harnessApp } = await import("../../api/server");
