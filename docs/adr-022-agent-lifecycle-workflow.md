@@ -110,6 +110,20 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
 
   `tests/chaos/subprocess.test.ts` (flag off, legacy run path, private ports, with a repo as chaos:fast runs it): the 11
   named killpoints 11/11 plus its unit case, 50/50 seeds (63 min).
+- With the workflow as the default (2026-10-28, branch feat/agent-workflow-default, after its review; fresh
+  `CAPCOMD_HOME` per run, other agents' tests on the machine):
+
+  | | default (workflow) | `CAPCOMD_AGENT_WORKFLOW=0` |
+  |---|---|---|
+  | contract check, typecheck | green | green |
+  | `test:fast` | 679/679 | 679/679 |
+  | `tests/agents` | 58/58 | 58/58 |
+  | `test:scenarios` (with the upgrade drill, the mode test and the app-frames diff) | 115/115 | 115/115 |
+  | chaos:fast named killpoints / primitives | 11/11, 14/14 | 11/11, 14/14 |
+  | `tests/chaos` killpoints, harness-fix, seed35, seed36 | 4, 1, 3, 2 pass | 4, 1, 3, 2 pass |
+  | `tests/chaos/subprocess.test.ts` (11 named, 50 seeds) | 11/11, 50/50 | 11/11, 50/50 |
+  | Swift (menu bar app, client; their mock daemon) | 35, 9 tests pass | – |
+
 - The two harness-stream tests (agent-provider, observability "activity line") that failed in earlier runs failed only
   with a long-lived scratch `CAPCOMD_HOME` (850 runs in `runs.jsonl`, 137 machine records): opening a run's stream took
   over their 5 s read window. With a fresh home they pass both ways. Worth a look on its own (a stream's first frames
