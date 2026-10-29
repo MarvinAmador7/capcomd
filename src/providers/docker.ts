@@ -11,7 +11,7 @@ import type { SnapshotInfo } from "../env/platform";
 import type { InteractiveSession } from "../auth/interactive";
 import { stateDir } from "../utils/home";
 import { noGitCredentials, type GitCredentialHook } from "./boxd";
-import { SandboxConfigError, SandboxError, SandboxNotFoundError, SandboxTimeoutError } from "./boxd-errors";
+import { SandboxConfigError, SandboxError, SandboxNotFoundError, SandboxNotReadyError, SandboxUnavailableError } from "./boxd-errors";
 import { reportMachineDeleted } from "./machine-audit";
 import { MACHINE_PREFIX, type ExecResult, type SandboxProvider, type VmId, type VmInfo, type VmSpec } from "./sandbox";
 
@@ -39,6 +39,9 @@ export function dockerBin(source: Record<string, string | undefined> = process.e
   for (const p of [join(homedir(), ".orbstack/bin/docker"), "/usr/local/bin/docker", "/Applications/Docker.app/Contents/Resources/bin/docker"]) if (existsSync(p)) return p;
   return "docker";
 }
+
+/** Docker's daemon isn't answering (stopped, restarting): an outage capcomd waits out, not a broken sandbox. */
+const DAEMON_DOWN = /Cannot connect to the Docker daemon|Is the docker daemon running|error during connect|docker daemon/i;
 
 const nameFor = (idemKey: string, prefix: string) => `${prefix}${createHash("sha256").update(idemKey).digest("hex").slice(0, 16)}`;
 
@@ -86,7 +89,7 @@ export class DockerProvider implements SandboxProvider {
   private err(stderr: string, what: string, id?: string): SandboxError {
     const msg = `docker ${what}: ${stderr.trim().slice(-500)}`;
     if (/No such container|No such object|is not running/i.test(stderr)) return new SandboxNotFoundError(msg, id);
-    if (/Cannot connect to the Docker daemon|docker daemon|error during connect/i.test(stderr)) return new SandboxConfigError(`${msg}. Start Docker (or OrbStack) and retry.`);
+    if (DAEMON_DOWN.test(stderr)) return new SandboxUnavailableError(`${msg}. Start Docker (or OrbStack); capcomd waits for it a while.`, id);
     return new SandboxError(msg, id);
   }
 
@@ -130,8 +133,8 @@ export class DockerProvider implements SandboxProvider {
     for (;;) {
       const r = await this.docker(["exec", id, "true"]);
       if (r.code === 0) return;
-      if (/No such container/i.test(r.stderr)) throw this.err(r.stderr, "exec", id);
-      if (Date.now() > until) throw new SandboxTimeoutError(`container ${id} not ready within ${timeoutMs}ms`, id);
+      if (/No such container/i.test(r.stderr) || DAEMON_DOWN.test(r.stderr)) throw this.err(r.stderr, "exec", id);
+      if (Date.now() > until) throw new SandboxNotReadyError(`container ${id} not ready within ${timeoutMs}ms`, id);
       await Bun.sleep(250);
     }
   }
@@ -146,7 +149,7 @@ export class DockerProvider implements SandboxProvider {
     const timed = opts?.timeoutMs ? ["timeout", "-k", "5", String(Math.max(1, Math.ceil(opts.timeoutMs / 1000))), ...cmd] : cmd;
     const args = ["exec", ...(opts?.cwd ? ["-w", opts.cwd] : []), ...Object.keys(env).flatMap((k) => ["-e", k]), id, ...timed];
     const r = await this.docker(args, { env, ...(opts?.timeoutMs ? { timeoutMs: opts.timeoutMs + 15_000 } : {}) });
-    if (r.code !== 0 && /No such container|is not running/i.test(r.stderr) && r.stdout.length === 0) throw this.err(r.stderr, "exec", id);
+    if (r.code !== 0 && (/No such container|is not running/i.test(r.stderr) || DAEMON_DOWN.test(r.stderr)) && r.stdout.length === 0) throw this.err(r.stderr, "exec", id);
     return { code: r.code, stdout: new TextDecoder().decode(r.stdout), stderr: r.stderr };
   }
 
@@ -184,6 +187,12 @@ export class DockerProvider implements SandboxProvider {
       const at = l[name!];
       return { id: name!, name: name!, state: state ?? "unknown", createdAt: dockerTime(created), deleteAt: typeof at === "number" ? at : null };
     }).filter((v) => v.name.startsWith(prefix));
+  }
+
+  /** Does Docker's daemon answer? (A container that is gone is an answer too.) */
+  async probe(id?: VmId): Promise<void> {
+    const r = await this.docker(id ? ["inspect", "-f", "{{.State.Status}}", id] : ["version", "--format", "{{.Server.Version}}"], { timeoutMs: 30_000 });
+    if (r.code !== 0 && (DAEMON_DOWN.test(r.stderr) || r.code === 124)) throw new SandboxUnavailableError(`docker didn't answer: ${r.stderr.trim().slice(-300)}`, id);
   }
 
   async extendTtl(id: VmId, seconds: number): Promise<void> {

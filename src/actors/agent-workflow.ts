@@ -78,9 +78,11 @@ export async function workflowStats(c: any): Promise<{ rows: number; bytes: numb
   return { looks: looks.get(c.actorId) ?? 0, rows: Number(h?.n ?? 0), bytes: Number(h?.b ?? 0), dbBytes: Number(Object.values(pc ?? {})[0] ?? 0) * Number(Object.values(ps ?? {})[0] ?? 0) };
 }
 
-/** What a failed attempt was, as stored (the driver's classification: some failures are never retried). */
-interface AttemptError { kind: string; message: string; exitCode?: number; final: boolean }
-type Drive = { phase: "ensure" | "start" | "watch" | "failed"; n: number; error?: AttemptError };
+/** What a failed attempt was, as stored (the driver's classification: some failures are never retried). `transient`:
+ *  the sandbox provider didn't answer (an outage): tried again without counting against the attempts. */
+interface AttemptError { kind: string; message: string; exitCode?: number; final: boolean; transient?: boolean }
+/** `outages`: attempts so far that failed only because the provider didn't answer (not counted as attempts). */
+type Drive = { phase: "ensure" | "start" | "watch" | "failed"; n: number; error?: AttemptError; outages?: number };
 type Poll = { state: "running" } | { state: "lost" } | { state: "done"; outcome: unknown } | { state: "failed"; error: AttemptError } | { state: "ended" };
 /** Runs alive in this process, by actor and attempt: a row "running" without one here was lost with its process or actor. */
 const liveRuns = new Map<string, Promise<void>>();
@@ -95,12 +97,14 @@ async function classify(e: unknown): Promise<AttemptError> {
 }
 async function classifyOrThrow(e: unknown): Promise<AttemptError> {
   const { ScriptFailed } = await import("../subagents/driver");
-  const { isBoxdAuthError } = await import("../providers/boxd-errors");
+  const { isBoxdAuthError, isSandboxUnreachable, isTransientSandboxError } = await import("../providers/boxd-errors");
   const { EnvSnapshotMissing } = await ops();
   const kind = String((e as any)?.code ?? (e as any)?.kind ?? (e as Error)?.name ?? "error");
   const message = redactShapes(String((e as Error)?.message ?? e)).slice(0, 2000);
-  const final = isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || kind === "sandbox_auth";
-  return { kind, message, final, ...(e instanceof ScriptFailed ? { exitCode: e.exitCode } : {}) };
+  // The provider didn't answer for the whole outage window: the waiting is over, another attempt would wait again.
+  const final = isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || kind === "sandbox_auth" || isSandboxUnreachable(e);
+  const transient = !final && isTransientSandboxError(e);
+  return { kind, message, final, ...(transient ? { transient: true } : {}), ...(e instanceof ScriptFailed ? { exitCode: e.exitCode } : {}) };
 }
 
 /**
@@ -240,7 +244,8 @@ async function agentLifecycle(ctx: any): Promise<void> {
       // The upgrade drill's version 2 of an iteration: one more (no-op) step before each phase, and the watch's entries
       // renamed (an iteration that recorded "attempt-wait"/"poll" under shape 1 must replay those names).
       if (iterShape >= 2) await lstep("drill-iteration-v2", async () => ({ phase: st.phase }));
-      const failed = (r: any) => Loop.continue({ phase: "failed", n, error: { ...failureOf(r), final: false } });
+      const outages = st.outages ?? 0;
+      const failed = (r: any) => Loop.continue({ phase: "failed", n, outages, error: { ...failureOf(r), final: false } });
       if (st.phase === "ensure") {
         const r = await lstep("ensure-machine", async () => {
           try {
@@ -255,13 +260,13 @@ async function agentLifecycle(ctx: any): Promise<void> {
           }
         }, { timeout: 15 * 60_000, maxRetries: 3, retryBackoffBase: 2000, retryBackoffMax: 30_000 });
         if (!r.ok) return failed(r);
-        if (r.value.kind === "fail") return Loop.continue({ phase: "failed", n, error: r.value.error });
+        if (r.value.kind === "fail") return Loop.continue({ phase: "failed", n, outages, error: r.value.error });
         if (r.value.kind === "ended") return Loop.break({ state: "ended" } as Poll);
-        return Loop.continue({ phase: "start", n });
+        return Loop.continue({ phase: "start", n, outages });
       }
       if (st.phase === "start") {
         const r = await lstep("start-agent", (c) => startAttempt(c, p, n));
-        return r.ok ? Loop.continue({ phase: "watch", n }) : failed(r);
+        return r.ok ? Loop.continue({ phase: "watch", n, outages }) : failed(r);
       }
       if (st.phase === "watch") {
         // Woken by the run's `attempt` message when it ends; else it looks every WATCH_MS (a cancel, a lost run).
@@ -272,14 +277,15 @@ async function agentLifecycle(ctx: any): Promise<void> {
         if (v.state === "running") return Loop.continue(st);
         // The run is gone (the daemon or the actor went away under it): run it again, not a failure of the agent.
         if (v.state === "lost") { const s2 = await lstep("restart-agent", (c) => startAttempt(c, p, n)); return s2.ok ? Loop.continue(st) : failed(s2); }
-        if (v.state === "failed") return Loop.continue({ phase: "failed", n, error: v.error });
+        if (v.state === "failed") return Loop.continue({ phase: "failed", n, outages, error: v.error });
         return Loop.break(v);
       }
-      // A failed attempt: recorded (DRIVE_FAILED); tried again after a durable backoff, or the agent fails.
-      const again = await lstep("attempt-failed", async () => (await ops()).recordDriveFailure(p.runId, p.agentId, driver, n, st.error ?? null, MAX_ATTEMPTS));
+      // A failed attempt: recorded (DRIVE_FAILED); tried again after a durable backoff, or the agent fails. One the
+      // sandbox provider's outage caused isn't counted: the next attempt's machine calls wait for the provider.
+      const again = await lstep("attempt-failed", async () => (await ops()).recordDriveFailure(p.runId, p.agentId, driver, n, st.error ?? null, MAX_ATTEMPTS, { outages }));
       if (!again.ok || !again.value.retry) return Loop.break({ state: "failed", error: st.error! } as Poll);
-      await l.sleep("retry-backoff", 2000 * n);
-      return Loop.continue({ phase: "ensure", n: n + 1 });
+      await l.sleep("retry-backoff", 2000 * Math.min(n, 5));
+      return Loop.continue({ phase: "ensure", n: n + 1, outages: outages + (again.value.outage ? 1 : 0) });
     },
   });
   if (prep.value.kind === "fail") await step("attempt-failed", async () => (await ops()).recordDriveFailure(p.runId, p.agentId, driver, 1, prep.value.error, MAX_ATTEMPTS));

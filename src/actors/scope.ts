@@ -490,11 +490,13 @@ export const scopeActor = actor({
     },
 
     /** ADR-019 §2: the runner's stuck notice for a running agent (null: it no longer looks stuck). */
-    async notice(c, params: { agentId: string; notice: { kind: string; detail: string } | null }) {
+    /** `only` (with a null notice): clear only a notice of that kind (one raised by the same source). */
+    async notice(c, params: { agentId: string; notice: { kind: string; detail: string } | null; only?: string }) {
       const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
       const a = rowToAgent(r[0]);
       if (a.status !== "running" || (a.notice?.kind ?? null) === (params.notice?.kind ?? null)) return { changed: false };
+      if (!params.notice && params.only && a.notice?.kind !== params.only) return { changed: false };
       const n: AgentNotice | null = params.notice ? { kind: params.notice.kind, detail: params.notice.detail.slice(0, 300), at: Date.now() } : null;
       await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("UPDATE agents_v2 SET notice = ?, updated_at = ? WHERE agent_id = ?", n ? JSON.stringify(n) : null, Date.now(), params.agentId);

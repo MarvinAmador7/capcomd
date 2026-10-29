@@ -4,6 +4,7 @@ import { FakeModelClient } from "./models/fake";
 import { FakeProvider } from "./providers/fake";
 import { traceMethods } from "./utils/tracing-simple";
 import { sandboxName } from "./providers/registry";
+import { resilientProvider } from "./providers/resilient";
 
 interface Dependencies {
   model: ModelClient;
@@ -57,6 +58,11 @@ function tracedProvider(provider: SandboxProvider, name: string): SandboxProvide
 /** The provider CAPCOMD_SANDBOX names (src/providers/registry.ts); the in-memory fake by default. */
 export function providerFromEnv(env: Record<string, string | undefined> = process.env): SandboxProvider {
   const kind = sandboxName(env);
+  // Every provider rides out an outage of a few minutes (src/providers/resilient.ts).
+  return resilientProvider(rawProviderFromEnv(env, kind), { name: kind });
+}
+
+function rawProviderFromEnv(env: Record<string, string | undefined>, kind: ReturnType<typeof sandboxName>): SandboxProvider {
   if (kind === "boxd") {
     const { BoxdProvider } = require("./providers/boxd") as typeof import("./providers/boxd");
     // Agents push from the VM: give git network execs a short-lived GitHub credential (env of that exec only).
@@ -71,13 +77,15 @@ export function providerFromEnv(env: Record<string, string | undefined> = proces
     return new DockerProvider({ gitCredentials: githubGitCredentials() });
   }
   // Test sandbox: exec runs on this host (agent adapter e2e with a fake claude binary).
-  if (kind === "fake-host") return new FakeProvider({ hostExec: true });
-  return new FakeProvider(env.CAPCOMD_FAKE_ENSURE_ERROR === "auth" ? { failEnsure: "auth" } : {});
+  // Test knob: CAPCOMD_FAKE_OUTAGE_FILE holds an injected outage (FakeFault), read at every call.
+  const faultFile = env.CAPCOMD_FAKE_OUTAGE_FILE ? { faultFile: env.CAPCOMD_FAKE_OUTAGE_FILE } : {};
+  if (kind === "fake-host") return new FakeProvider({ hostExec: true, ...faultFile });
+  return new FakeProvider({ ...(env.CAPCOMD_FAKE_ENSURE_ERROR === "auth" ? { failEnsure: "auth" as const } : {}), ...faultFile });
 }
 
 export function initDependencies(config?: { model?: ModelClient; provider?: SandboxProvider }) {
   const model = config?.model || new FakeModelClient();
-  const provider = config?.provider || providerFromEnv();
+  const provider = resilientProvider(config?.provider || providerFromEnv());
   deps = {
     fakeWork: provider instanceof FakeProvider,
     model: tracedModel(model, model.constructor?.name === "FakeModelClient" ? "fake" : model.constructor?.name ?? "model"),
