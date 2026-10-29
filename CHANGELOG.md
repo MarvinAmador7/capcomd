@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.7.0-rc.1 (2026-10-29)
+
+Release candidate: agents driven by a durable workflow inside the engine (no process per agent) that ride out a
+sandbox provider outage, Rivet 2.3.31 with the engine's data under capcomd's home, and in the menu bar app: bots, run
+titles, threads, Settings and the sandbox surface (place details, idle lifetime, Delete for machines left behind).
+
 - The menu bar's Recent list shows each run by its title instead of "Done", with how it ended as an icon by its time
   (merged, done, merge denied, merge failed, failed, stopped; hover it, or ask VoiceOver, for the words). The title is
   the run's label when you (or the agent that started it, through `capcomd_run_new`) gave it one, else the title of
