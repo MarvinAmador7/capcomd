@@ -24,10 +24,36 @@ async function copy(text: string): Promise<boolean> {
   } catch { return false; }
 }
 
+type AgentId = (typeof AGENTS)[number]["id"];
+const PICK = "capcomd:pick-agent";
+
+/** An agent's name with its mark, as a button: picks that agent's tab in the install steps and brings it into view. */
+export function AgentPick({ id }: { id: AgentId }) {
+  const a = AGENTS.find((x) => x.id === id)!;
+  return (
+    <button type="button" className="pick" aria-label={`${a.name}: show how to add capcomd to it`}
+      onClick={() => {
+        dispatchEvent(new CustomEvent(PICK, { detail: id }));
+        const tab = document.querySelector<HTMLElement>(`.hero__install .flow__tab[data-agent="${id}"]`);
+        tab?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+        tab?.focus({ preventScroll: true });
+      }}>
+      <svg viewBox="0 0 24 24" fillRule="evenodd" aria-hidden="true" dangerouslySetInnerHTML={{ __html: AGENT_ICONS[id] }} />
+      {a.name}
+    </button>
+  );
+}
+
 /** The README's Quickstart as three rows, each with the exact command to copy and where to run it. Step 2 has a tab
  *  per agent. Without the script the Claude Code row is shown and every command can still be selected. */
 export function InstallFlow() {
-  const [agent, setAgent] = useState<(typeof AGENTS)[number]["id"]>("claude");
+  const [agent, setAgent] = useState<AgentId>("claude");
+  // The agent names in the hero's sentence pick a tab here (AgentPick).
+  useEffect(() => {
+    const on = (e: Event) => setAgent((e as CustomEvent<AgentId>).detail);
+    addEventListener(PICK, on);
+    return () => removeEventListener(PICK, on);
+  }, []);
   const a = AGENTS.find((x) => x.id === agent)!;
   return (
     <ol className="flow">
@@ -41,7 +67,7 @@ export function InstallFlow() {
           <div className="flow__tabs" role="radiogroup" aria-label="Your agent">
             {AGENTS.map((x, k) => (
               <button key={x.id} type="button" role="radio" aria-checked={agent === x.id} tabIndex={agent === x.id ? 0 : -1}
-                className={`flow__tab${agent === x.id ? " is-on" : ""}`} onClick={() => setAgent(x.id)}
+                className={`flow__tab${agent === x.id ? " is-on" : ""}`} data-agent={x.id} onClick={() => setAgent(x.id)}
                 onKeyDown={(e) => {
                   const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
                   if (!d) return;

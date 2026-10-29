@@ -1,4 +1,4 @@
-import { InstallFlow } from "./AgentInstall";
+import { AgentPick, InstallFlow } from "./AgentInstall";
 import { HeroCrew } from "./crew";
 import { delay } from "./marks";
 import { Nav } from "./Nav";
@@ -18,7 +18,10 @@ export function Hero() {
 
       <div className="hero__foot">
         <p className="hero__lead" data-load style={delay(420)}>
-          Your coding agent (Claude Code, Codex or Hermes) spawns a crew of agents, each in its own VM or container on its own branch. Only the commit that passed your checks and a reviewer agent lands, exactly once, even if the engine crashes mid-merge.
+          <b>capcomd</b> is a durable orchestration CLI and MCP server for swarms of coding agents, each in its own cloud VM or container.
+        </p>
+        <p className="hero__sub" data-load style={delay(460)}>
+          Your coding agent, <AgentPick id="claude" />, <AgentPick id="codex" /> or <AgentPick id="hermes" />, directs the crew, and the run picks up where it left off if the engine crashes.
         </p>
         <div className="hero__install" data-load style={delay(500)} id="install">
           <InstallFlow />
