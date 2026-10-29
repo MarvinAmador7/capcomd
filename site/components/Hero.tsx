@@ -28,7 +28,7 @@ export function Hero() {
           <AgentInstall />
           <a className="button hero__oss" href={SITE.repo}>View on GitHub</a>
         </div>
-        <p className="hero__fine" data-load style={delay(560)}>Open source. One executable for macOS and Linux. Claude Code is verified live; the Codex and Hermes setups are built.</p>
+        <p className="hero__fine" data-load style={delay(560)}>Open source. One executable for macOS and Linux.</p>
       </div>
     </header>
   );
