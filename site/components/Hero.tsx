@@ -27,7 +27,7 @@ export function Hero() {
           <a className="button hero__oss" href={SITE.repo}>View on GitHub</a>
         </div>
         <Steps className="hero__steps" />
-        <p className="hero__fine" data-load style={delay(560)}>Open source. One executable for macOS and Linux. Claude Code is verified live; the Codex and Hermes setups are built but not yet driven live.</p>
+        <p className="hero__fine" data-load style={delay(560)}>Open source. One executable for macOS and Linux. Claude Code is verified live; the Codex and Hermes setups are built.</p>
       </div>
     </header>
   );
