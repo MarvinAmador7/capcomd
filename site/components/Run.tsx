@@ -2,6 +2,7 @@
 // (rebuilt from apps/menubar/design at true size; illustrations, not captures).
 import type { ReactNode } from "react";
 import { AgentSuffix, Bot, GoalComposer, GoalTitle, TryGoals } from "./crew";
+import { Durable } from "./Durable";
 import { RunAccordion, type Stage } from "./RunAccordion";
 import { Check, Hand, MarkFace, MenuBar, delay, step } from "./marks";
 
@@ -132,8 +133,8 @@ export function Run() {
           <p data-reveal style={delay(140)}>The orchestrator is whoever calls the primitives: your agent through the plugin, MCP or the CLI; an agent in a VM that is allowed to delegate; or you. capcomd ships primitives, not a workflow. Agents keep working when the driver&apos;s session ends.</p>
         </div>
       </div>
-      <p className="stages__note" data-reveal style={delay(160)}>Pictured: the capcomd menu bar app as it is on <code>main</code> (macOS, built from source; not in a release yet), redrawn from its design files. Agent suffixes, times, files and the example runs are illustrations.</p>
       <RunAccordion stages={stages} initial="swarm" />
+      <Durable />
     </section>
   );
 }
