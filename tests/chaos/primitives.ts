@@ -11,7 +11,7 @@ import { seedRepo, wipeEngineData } from "./survive";
 
 // "driver.kill:0" = no engine kill: the scenario kills the driver process mid-push (engine push is slowed).
 // push.after.before_event runs with a repo: the remote branch exists when the takeover runs, so it must adopt it.
-// With CAPCOMD_AGENT_WORKFLOW=1 (ADR-022) there are no driver processes; each driver case kills the engine host instead,
+// With the agent workflow (ADR-022, the default; CAPCOMD_AGENT_WORKFLOW=0 is the driver path) there are no driver processes; each driver case kills the engine host instead,
 // mid-step, and proves the same recovery: "driver.kill:0" dies at workflow.watch.running while the slowed push is in
 // flight (the run is re-run once after the restart, the push lands once, the agent finishes once); "vm.rpc.*:0" fire
 // in the engine host, where the agent's spool pump now runs (the scripted "VM" outlives it, its RPC is answered once).
@@ -54,7 +54,7 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
   const vm = kp.startsWith("vm.");
   const vmDriver = kp.startsWith("vm.rpc.");
   const driverKill = kp.startsWith("driver.kill") || vmDriver;
-  const workflow = process.env.CAPCOMD_AGENT_WORKFLOW === "1";
+  const workflow = process.env.CAPCOMD_AGENT_WORKFLOW !== "0";
   // With the workflow, the driver's death is the engine host's: restart and resume like any engine kill.
   const engineKill = !driverKill || workflow;
   const adopt = kp.startsWith("push.after.before_event");
@@ -63,7 +63,8 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
   const mode = vm ? "subagent" : board ? "board" : kv ? "kv" : merge ? "merge" : driverKill || adopt ? "driverkill" : "tree";
   const opts: EngineOpts = { ...baseOpts, ...(adopt || merge ? { repo: true } : {}), ...(driverKill && !vm ? { env: { CAPCOMD_FAKE_PUSH_DELAY_MS: "4000" } } : {}) };
   const engine = new Engine(`prim-${tag}`, opts);
-  const extra: Record<string, string> = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: vm ? "script" : "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1" };
+  // The workflow looks at its run every second here (default 60 s): driver.kill's killpoint must fire during the push.
+  const extra: Record<string, string> = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: vm ? "script" : "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1", CAPCOMD_AGENT_WORKFLOW_POLL_MS: "1000" };
   if (vm) Object.assign(extra, {
     CAPCOMD_RPC_KEY: `chaos-${tag}`, CAPCOMD_SCRIPT_RPC_TIMEOUT_MS: "240000", CAPCOMD_SCRIPT_VM_DIR: mkdtempSync(join(tmpdir(), "capcomd-chaos-vms-")),
     ...(vmDriver ? { CAPCOMD_DRIVER_KILLPOINT: kp.slice(3).split(":")[0]!, CAPCOMD_DRIVER_KILLPOINT_MARKER: join(mkdtempSync(join(tmpdir(), "capcomd-chaos-dk-")), "fired") } : {}),

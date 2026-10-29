@@ -31,7 +31,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord } from "../agents/profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
-import { agentWorkflowOn, agentWorkflowParts, queueStart, type StartAgent } from "./agent-workflow";
+import { agentWorkflowOn, agentWorkflowParts, queueStart, workflowStats, type StartAgent } from "./agent-workflow";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
 
@@ -422,8 +422,8 @@ export async function pushBranchImpl(c: { db: any; key: string[]; client: () => 
   }
 }
 
-// ADR-022: with CAPCOMD_AGENT_WORKFLOW=1 (read when the engine host loads), an agent's worker also runs its lifecycle as
-// a workflow (`run`), started by one `start` message (`startAgent`). Off, the actor is exactly as before.
+// ADR-022: unless the engine host has CAPCOMD_AGENT_WORKFLOW=0 (read when it loads), an agent's worker also runs its
+// lifecycle as a workflow (`run`), started by one `start` message (`startAgent`). With =0 the actor is as before.
 const WORKFLOW = agentWorkflowOn();
 
 export const workerActor = actor({
@@ -714,6 +714,8 @@ export const workerActor = actor({
     ...(WORKFLOW ? {
       /** ADR-022: queue the `start` this worker's agent workflow waits for (idempotent). */
       async startAgent(c: any, params: StartAgent) { return queueStart(c, params); },
+      /** ADR-022: how much workflow history this worker holds (rows and bytes in its SQLite), and its database's size. */
+      async getWorkflowStats(c: any) { return workflowStats(c); },
     } : {}),
 
     async getWorker(c, params: { workerId: string }) {
