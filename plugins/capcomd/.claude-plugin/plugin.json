@@ -1,7 +1,7 @@
 {
   "name": "capcomd",
   "displayName": "capcomd",
-  "version": "0.6.0",
+  "version": "0.7.0-rc.1",
   "description": "Durable orchestration for swarms of coding agents: spawn Claude Code and Codex agents in isolated VMs, verify and review their work, merge only the tested commits.",
   "author": {
     "name": "Marvin Amador Campos",
