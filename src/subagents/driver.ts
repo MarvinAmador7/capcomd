@@ -17,6 +17,7 @@ import { activityReporter } from "../agents/activity";
 import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
 import type { SandboxProvider, VmId } from "../providers/sandbox";
+import { rawProvider } from "../providers/resilient";
 import { VM_RPC_DIR } from "./skill";
 
 
@@ -59,7 +60,9 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
 
 /** Real agent VM: pump while `work` runs (the worker actor's pushBranch). */
 export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: SandboxProvider, vmId: VmId, jsonl: string | undefined, work: () => Promise<T>): Promise<T> {
-  const p = pumpFor(runId, a, new VmSpool(provider, vmId, VM_RPC_DIR, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000));
+  // The pump has its own backoff and never ends the agent: it uses the provider as is (rawProvider), so a call during an
+  // outage fails and is tried again next tick instead of holding up the pump (and its stop) for the outage window.
+  const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, VM_RPC_DIR, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000));
   try { return await work(); } finally { await p.stop(); }
 }
 

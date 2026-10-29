@@ -4,7 +4,8 @@ import { redactShapes } from "../agents/redact";
 import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor, UserError } from "rivetkit";
-import { isBoxdAuthError } from "../providers/boxd-errors";
+import { isBoxdAuthError, isSandboxUnreachable, isTransientSandboxError, SandboxError } from "../providers/boxd-errors";
+import { backoffMs, minutes, withOutageListener, type Outage } from "../providers/resilient";
 import { db } from "rivetkit/db";
 import { workerMachine, type WorkerContext } from "../machines/worker";
 import { initialTransition, transition } from "xstate";
@@ -103,6 +104,32 @@ export function configError(e: unknown): UserError {
 }
 
 
+/** The notice an agent shows while it waits for its sandbox provider to answer again (cleared when it does). */
+export const OUTAGE_NOTICE = "sandbox_outage";
+/**
+ * While a provider call made for this agent waits out an outage (src/providers/resilient.ts), the agent shows it: a
+ * notice like the stuck ones (ADR-019 §2), cleared once the provider answers. Only for spawned agents (agt-…).
+ */
+function outageNotice(client: () => any, runId: string | undefined, agentId: string): (o: Outage | null) => void {
+  if (!runId || !agentId.startsWith("agt-")) return () => {};
+  const scope = () => client().scope.getOrCreate([runId]);
+  return (o) => {
+    const notice = o ? { kind: OUTAGE_NOTICE, detail: `the sandbox provider (${o.provider}) hasn't answered since ${new Date(o.since).toISOString().slice(11, 19)} UTC (${o.what}: ${o.error.slice(0, 120)}); waiting up to ${minutes(o.windowMs)} for it` } : null;
+    Promise.resolve().then(() => scope().notice({ agentId, notice, ...(o ? {} : { only: OUTAGE_NOTICE }) })).catch(() => {});
+  };
+}
+
+/** A sandbox error as one rivetkit passes on (plain errors are masked as "internal error"): its kind as the code. */
+function sandboxUserError(error: unknown): unknown {
+  if (error instanceof UserError || !(error instanceof SandboxError)) return error;
+  const retryable = isTransientSandboxError(error) || isSandboxUnreachable(error);
+  return new UserError(redactShapes(error.message).slice(0, 2000), { code: error.kind, metadata: { kind: error.kind, retryable } });
+}
+
+/** How often, and for how long, a destroy the provider didn't answer is tried again (the worker's own alarm). */
+const DRAIN_RETRIES = 60;
+const DRAIN_RETRY_MAX_MS = 5 * 60_000;
+
 /**
  * ADR-021 §3: this capcomd's record of the VM a worker is about to make (the machines ledger), written before
  * `provider.ensure` so the resources route knows the machine is capcomd's own; removed once the worker destroyed it.
@@ -121,9 +148,11 @@ function recordWorkerVm(c: any, o: { idemKey: string; sandbox: string | null | u
 
 // Shared by drainWorker, reap and the TTL alarm. Idempotent and resumable. `cause`: why the machine goes, for the
 // daemon's audit (sandbox.resource_deleted): its agent ended (run_ended), or its idle lifetime ran out.
-async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "idle_lifetime" = "run_ended") {
+// A destroy the provider didn't answer (an outage) doesn't fail the drain: the worker stays "draining" and its own alarm
+// (`retryDrain`) tries again with backoff until the machine is gone; the machines ledger keeps its record meanwhile.
+async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "idle_lifetime" = "run_ended", retry = 0): Promise<{ destroyed: boolean; retrying?: boolean }> {
       const workerLife = await getLifecycle(c.db, workerId);
-      if (!workerLife) return;
+      if (!workerLife) return { destroyed: false };
 
       const workerContext: WorkerContext & { sandbox?: string } = JSON.parse(workerLife.context);
       // The VM lives on the sandbox it was made on (the run's own, recorded at provisioning), else the daemon's.
@@ -137,7 +166,7 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
 
       // Resume a drain that crashed after DRAIN but before VM_DESTROYED.
       const resuming = workerLife.state === "draining";
-      if (!resuming && !workerSnapshot.can(drainEvent)) return;
+      if (!resuming && !workerSnapshot.can(drainEvent)) return { destroyed: workerLife.state === "destroyed" };
 
       const [drainSnapshot] = resuming
         ? [workerSnapshot]
@@ -156,7 +185,17 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
       }, { name: "drain" });
 
       if (workerContext.vmId) {
-        await provider.destroy(workerContext.vmId);
+        try {
+          await provider.destroy(workerContext.vmId);
+        } catch (e) {
+          if (!(isTransientSandboxError(e) || isSandboxUnreachable(e)) || !c.schedule) throw e;
+          if (retry >= DRAIN_RETRIES) {
+            console.error(`[worker] ${workerId}: gave up destroying ${workerContext.vmId} after ${retry} tries (${(e as Error)?.message ?? e}); its idle lifetime deletes it`);
+            return { destroyed: false };
+          }
+          await c.schedule.at(Date.now() + backoffMs(retry, 5000, DRAIN_RETRY_MAX_MS), "retryDrain", { workerId, cause, retry: retry + 1 });
+          return { destroyed: false, retrying: true };
+        }
         // Audit (ADR-021 §5): the machine by its name, as the resources route lists it.
         const idemKey = (workerContext as { idemKey?: unknown }).idemKey;
         let place: string | undefined = workerContext.sandbox;
@@ -186,6 +225,7 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
           );
         }, { name: "vmDestroyed" });
       }
+      return { destroyed: true };
 }
 
 export type PushBranchParams = {
@@ -214,6 +254,11 @@ export type PushBranchParams = {
  * calls it with the actor's db, key and client (`c` needs only those).
  */
 export async function pushBranchImpl(c: { db: any; key: string[]; client: () => any }, params: PushBranchParams) {
+  // A provider call that waits out an outage shows on the agent (its notice) while it waits.
+  return withOutageListener(outageNotice(() => c.client(), params.runId, params.workerId), () => pushBranchRun(c, params));
+}
+
+async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, params: PushBranchParams) {
   const { workerId, taskId, epoch, branch } = params;
   const idemKey = `worker-${workerId}-push-${taskId}-e${epoch}`;
   const already = await c.db.execute(
@@ -416,7 +461,8 @@ export async function pushBranchImpl(c: { db: any; key: string[]; client: () => 
     // rivetkit masks plain errors as "An internal error occurred": surface the (redacted) cause.
     if (error instanceof UserError) throw error;
     const kind = String((error as any)?.kind ?? (error as any)?.code ?? "push_failed");
-    throw new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind } });
+    const retryable = isTransientSandboxError(error) || isSandboxUnreachable(error);
+    throw new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind, ...(retryable ? { retryable: true } : {}) } });
   } finally {
     clearInterval(renew);
   }
@@ -460,6 +506,7 @@ export const workerActor = actor({
       }
     ) {
       const { workerId, runId, epoch } = params;
+      return withOutageListener(outageNotice(() => c.client(), runId, workerId), async () => {
       const { provider, sandbox } = await providerForRun(runId);
       const runSource = withSandbox(process.env, sandbox);
       // The run's idle machine lifetime (recorded at `run new`), else its place's current setting.
@@ -584,8 +631,9 @@ export const workerActor = actor({
 
         // Cross the actor boundary with a readable, typed error (plain errors are masked as "internal error").
         if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
-        throw error;
+        throw sandboxUserError(error);
       }
+      });
     },
 
     async assignTask(
@@ -683,7 +731,14 @@ export const workerActor = actor({
     },
 
     async drainWorker(c, params: { workerId: string }) {
-      await drainWorkerImpl(c, params.workerId);
+      return drainWorkerImpl(c, params.workerId);
+    },
+
+    /** The worker's own alarm: a drain whose destroy the provider didn't answer, tried again (see drainWorkerImpl). */
+    async retryDrain(c, params: { workerId: string; cause?: "run_ended" | "idle_lifetime"; retry: number }) {
+      const life = await getLifecycle(c.db, params.workerId);
+      if (!life || life.state !== "draining") return { destroyed: life?.state === "destroyed" };
+      return drainWorkerImpl(c, params.workerId, params.cause ?? "run_ended", params.retry);
     },
 
     /**

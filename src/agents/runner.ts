@@ -13,6 +13,8 @@ import { StuckWatch, type Stuck } from "./stuck";
 import { threadBuilder, type ItemDraft } from "../../packages/agent-thread/src/index";
 import type { ThreadAttachment } from "../actors/scope";
 import { withSkills, type AttachedSkill } from "./skills";
+import { isTransientSandboxError } from "../providers/boxd-errors";
+import { outageWindowMs, providerLabel, reportOutage, unreachable } from "../providers/resilient";
 
 /** Where an agent's checkpoints are pushed (ADR-019 §3); deleted once its work merges. */
 export const checkpointRef = (agentId: string) => `refs/capcomd/checkpoints/${agentId}`;
@@ -528,15 +530,39 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       const code = (exitPart ?? "").trim();
       if (code !== "") exitCode = Number(code);
     };
+    // While the sandbox provider doesn't answer (an outage), the agent keeps working in its VM: the runner keeps
+    // looking, for up to the outage window, instead of failing it (src/providers/resilient.ts).
+    let outageSince = 0;
     while (exitCode === null) {
       // The VM's delete deadline is a lease: renewed while the agent runs, so no fixed lifetime cuts long work short.
       if (provider.extendTtl && now() - renewedAt > TTL_RENEW_MS) {
         renewedAt = now();
         const ttl = opts.vmTtlSeconds ?? AGENT_VM_TTL_SECONDS;
-        await provider.extendTtl(vmId, ttl).then(() => opts.onRenew?.(ttl), () => {});
+        // A renewal the provider didn't answer is tried again in a minute (the deadline it moves is 15+ minutes away).
+        await provider.extendTtl(vmId, ttl).then(() => opts.onRenew?.(ttl), () => { renewedAt = now() - TTL_RENEW_MS + 60_000; });
       }
       await new Promise((res) => setTimeout(res, cfg.pollMs));
-      await drain(false);
+      const looked = Date.now();
+      try {
+        await drain(false);
+        if (outageSince) { outageSince = 0; reportOutage(null); addSpanEvent(span, "agent.sandbox_answered"); }
+      } catch (e) {
+        if (!isTransientSandboxError(e)) throw e;
+        const t = Date.now(), windowMs = outageWindowMs(), msg = r.text(String((e as Error)?.message ?? e)).slice(0, 300);
+        if (!outageSince) {
+          outageSince = looked;
+          addSpanEvent(span, "agent.sandbox_outage", { "agent.text": msg });
+          reportOutage({ since: looked, what: "exec", error: msg, windowMs, provider: providerLabel(provider) });
+        }
+        if (t - outageSince >= windowMs) throw unreachable(providerLabel(provider), "exec", t - outageSince, msg, vmId);
+        if (opts.isCancelled && (await opts.isCancelled().catch(() => false))) {
+          await kill();
+          addSpanEvent(span, "agent.cancelled");
+          throw new AgentError("cancelled", `${name} cancelled for ${key}`);
+        }
+        await new Promise((res) => setTimeout(res, Math.min(5000, Math.max(cfg.pollMs, windowMs / 20))));
+        continue;
+      }
       if (exitCode !== null) break;
       // The provider's usage limit: retrying now only hits it again, so stop and keep the work (the agent is paused).
       if (state.quota) {

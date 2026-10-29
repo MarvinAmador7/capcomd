@@ -12,6 +12,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   src/math.ts"), and it changes to the pull request's title once that lands. The goal shows under the title only when
   the title doesn't already say it; hover a cut title for all of it. Active cards and the run view use the same titles.
   The harness API's runs carry it as `title` and `titleSource`.
+- Fix: a sandbox provider outage of up to 10 minutes (boxd's API not answering, Docker's daemon restarting) no longer
+  fails running agents. They wait for their machine and carry on: an agent working in its VM keeps working, and the
+  agent shows a "sandbox_outage" notice while it waits, cleared once the provider answers. Calls that are safe to
+  repeat (looking up or creating a machine, uploads, renewals, deletes) are tried again with backoff; a command is never
+  run twice. An outage longer than that fails the agent with `errorKind: "sandbox_unreachable"` and `retryable: true`
+  in its result ("the sandbox provider (boxd) didn't answer for 10 min …"), so you can run it again once the provider
+  is back. Set `CAPCOMD_SANDBOX_OUTAGE_MS` where `capcomd serve` runs to wait longer or shorter. Permanent errors (a
+  rejected key, a machine that doesn't exist, a quota) still fail at once.
+- Fix: an agent that fails no longer leaves its machine running until its idle lifetime runs out: it is deleted when
+  the agent fails. A delete the provider doesn't answer is tried again, with backoff, until the machine is gone.
+- Docker not answering ("Cannot connect to the Docker daemon") is now treated as an outage capcomd waits out, as
+  above, instead of failing the agent at once.
 - Fix: listing runs no longer creates empty runs in the engine. When your run list (`state/runs.jsonl`) names a run
   this engine doesn't have, for example one a test engine on another port recorded, the menu bar, the harness API and
   `capcomd_runs` show it as "unknown" with no agents. Before, every listing (twice a second while the menu bar is open)

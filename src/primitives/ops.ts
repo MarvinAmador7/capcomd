@@ -1,4 +1,4 @@
-import { isBoxdAuthError } from "../providers/boxd-errors";
+import { isBoxdAuthError, isSandboxUnreachable, isTransientSandboxError } from "../providers/boxd-errors";
 import { redactShapes } from "../agents/redact";
 import { resolveEnvSnapshot } from "../env/resolve";
 // ADR-016 step 1: run new / spawn / await / wait-any / cancel, on top of the existing worker
@@ -423,6 +423,18 @@ export async function grantBudget(runId: string, o: { agentId?: string; add: Bud
   return { runId, ...r };
 }
 
+/**
+ * Attempts that failed only because the sandbox provider didn't answer (an outage) are run again without counting, at
+ * most this many times per drive: each one's machine calls wait for the provider (up to CAPCOMD_SANDBOX_OUTAGE_MS) and
+ * fail with sandbox_unreachable (final) when it stays down, so this only bounds a provider that keeps flapping.
+ */
+export const MAX_OUTAGE_RETRIES = 10;
+
+/** What a failed agent's result says about an outage that ended it (the error kind, and that running it again may work). */
+export function outageResult(e: unknown): Record<string, unknown> {
+  return isSandboxUnreachable(e) ? { errorKind: "sandbox_unreachable", retryable: true } : {};
+}
+
 /** The engine an attempt ran against: unset until its claim answered; null from an engine that doesn't say. */
 type EngineSeen = { instance?: string | null };
 
@@ -479,7 +491,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
     // How long one outage is waited out, and how many attempts it may cost without counting (a daemon that keeps
     // dying under the same attempt is a fault after all).
     const outageMs = Number(env("DRIVE_OUTAGE_MS") ?? 5 * 60_000);
-    let restarts = 0;
+    let restarts = 0, outages = 0, tries = 0;
     const seen: EngineSeen = {};
     for (let attempt = 1; attempt <= 3; attempt++) {
       delete seen.instance;
@@ -493,17 +505,26 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
         if (outage === "restarted" && ++restarts <= 20) { console.error(`[drive] the engine went away under attempt ${attempt}; running it again`); attempt--; continue; }
         // Every failed attempt is visible (DRIVE_FAILED, redacted) and counted across driver processes;
         // N identical failures in a row fail the agent instead of looping.
-        const df = await s.driveFailed({ agentId, kind, message: String((e as Error)?.message ?? e), attempt, driver }).catch(() => null);
+        const df = await s.driveFailed({ agentId, kind, message: String((e as Error)?.message ?? e), attempt: ++tries, driver }).catch(() => null);
+        // The sandbox provider didn't answer (an outage): not the agent failing. Run the attempt again without counting
+        // it; its machine calls wait for the provider (and fail with sandbox_unreachable, final, when it stays down).
+        if (!isSandboxUnreachable(e) && isTransientSandboxError(e) && ++outages <= MAX_OUTAGE_RETRIES) {
+          console.error(`[drive] the sandbox provider didn't answer under attempt ${attempt}; running it again`);
+          attempt--; await sleep(2000 * Math.min(outages, 5)); continue;
+        }
         if (df && df.consecutive >= maxSame) break;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
         // A limit (timeout, turns, budget) is a decision, not a fault: running the same task again hits it again.
         // So does a configuration problem (an unknown or invalid profile, no credentials): its message says what to fix.
-        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config") break;
+        // And a provider that didn't answer for the whole outage window: the agent waited that long already.
+        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || isSandboxUnreachable(e)) break;
         await sleep(2000 * attempt);
       }
     }
     const res = await resultOf(runId, agentId);
-    const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}) } });
+    const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
+    // A failed agent's machine goes too (its worker retries a destroy the provider didn't answer).
+    await workerOf(runId, agentId, fin.agent.epoch).drainWorker({ workerId: agentId }).catch(() => {});
     stampSpent(span, fin.agent);
     return fin.agent;
   }, { spanId: agentSpanId(runId, agentId), parentSpanId: me?.parent ? agentSpanId(runId, me.parent) : rootSpanIdForRun(runId) });
@@ -720,12 +741,15 @@ export async function settleEnded(runId: string, agentId: string, epoch: number)
 
 /** Record one failed attempt (DRIVE_FAILED) and say whether to try again: the driver's rules (3 attempts, N identical
  *  failures in a row, never for a final kind). */
-export async function recordDriveFailure(runId: string, agentId: string, driver: string, attempt: number, err: { kind: string; message: string; final: boolean } | null, maxAttempts: number): Promise<{ retry: boolean }> {
+export async function recordDriveFailure(runId: string, agentId: string, driver: string, attempt: number, err: { kind: string; message: string; final: boolean; transient?: boolean } | null, maxAttempts: number, o: { outages?: number } = {}): Promise<{ retry: boolean; outage?: boolean }> {
   if (!err) return { retry: false };
   const s = client().scope.getOrCreate([runId]);
   const df = await s.driveFailed({ agentId, kind: err.kind, message: err.message, attempt, driver }).catch(() => null);
+  // The sandbox provider's outage: run it again without counting (MAX_OUTAGE_RETRIES bounds a provider that flaps).
+  const outages = o.outages ?? 0;
+  if (err.transient && !err.final && outages < MAX_OUTAGE_RETRIES) return { retry: true, outage: true };
   const maxSame = Number(env("DRIVE_MAX_FAILURES") ?? 3);
-  return { retry: !err.final && attempt < maxAttempts && !(df && df.consecutive >= maxSame) };
+  return { retry: !err.final && attempt - outages < maxAttempts && !(df && df.consecutive >= maxSame) };
 }
 
 /**
@@ -750,12 +774,15 @@ export async function recordAgentRunSpan(runId: string, agentId: string, started
 }
 
 /** The agent failed for good: its result says why (a cancel meanwhile wins: its VM is released). */
-export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number }): Promise<ScopeAgent> {
+export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string }): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
   if (a.status === "cancelled") return settleEnded(runId, agentId, epoch);
-  if (TERMINAL_AGENT.has(a.status)) return a;
+  // Its machine goes once it has failed (here too when an earlier settle recorded the failure but stopped before this).
+  const drain = () => workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  if (TERMINAL_AGENT.has(a.status)) { if (a.status === "failed") await drain(); return a; }
   const res = await resultOf(runId, agentId);
-  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}) } });
+  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });
+  await drain();
   return fin.agent;
 }
 
