@@ -229,7 +229,10 @@ public struct Run: Sendable, Hashable, Identifiable {
     if Self.terminalStates.contains(state) { return false }
     return state == "running" || agents.values.contains { $0.status == .running }
   }
-  public var title: String { goal?.firstLine ?? label ?? id }
+  /// The daemon's title (snapshot `Run.title`), when it sends one: see `titled` for the one shown.
+  public var daemonTitle: RunTitle? = nil
+  /// What the run is called wherever it's listed (`titled`), never its id.
+  public var title: String { titled?.text ?? RunTitle.untitled }
 
   /// Where a run stands for the panel: still doing something (it stays in the Active list), or how it ended.
   public enum Outcome: Sendable, Hashable { case active, done, failed, stopped }
@@ -266,12 +269,15 @@ public struct Run: Sendable, Hashable, Identifiable {
   }
   /// For ordering: the latest thing known about it.
   public var recencyMs: Int { max(lastEventMs, endedAtMs ?? 0, startedAtMs ?? 0) }
-  /// How it ended, in words, once it has: "Done in 4m", "Failed after 12m", "Stopped after 30s" (no time when the start
-  /// or end isn't known). Nil while active.
+  /// How it ended, in words, once it has: "Done in 4m", "Failed after 12m", "Stopped after 30s", and for work up for
+  /// merging that didn't land, "Merge denied after 4m" (or "Merge failed"), as its outcome mark says (no time when the
+  /// start or end isn't known). Nil while active.
   public var endedHead: String? {
     guard !isActive else { return nil }
     let took = startedAtMs.flatMap { s in endedAtMs.flatMap { e in e >= s ? shortDuration(ms: e - s) : nil } }
-    let verb: (String, String) = switch outcome { case .failed: ("Failed", "after"); case .stopped: ("Stopped", "after"); default: ("Done", "in") }
+    let merges = Set(agents.values.compactMap(\.merge?.state))
+    let unmerged = merges.contains("merged") ? nil : merges.contains("denied") ? "Merge denied" : merges.contains("failed") ? "Merge failed" : nil
+    let verb: (String, String) = switch outcome { case .failed: ("Failed", "after"); case .stopped: ("Stopped", "after"); default: unmerged.map { ($0, "after") } ?? ("Done", "in") }
     return took.map { "\(verb.0) \(verb.1) \($0)" } ?? verb.0
   }
 }
@@ -287,10 +293,11 @@ public func shortDuration(ms: Int) -> String {
 
 public struct Project: Sendable, Hashable, Identifiable {
   public var id: String
-  /// Title = goal of its most recent run (contract has no project goal; gap G1).
+  /// The goal of its most recent run that has one (contract has no project goal; gap G1).
   public var goal: UntrustedText?
   public var runs: [Run]
-  public var title: String { goal.map { $0.firstLine.trimmingCharacters(in: .whitespaces) } ?? runs.first?.title ?? id }
+  /// Its newest titled run's title (`Run.titled`): a short name for the work, not the whole goal.
+  public var title: String { runs.lazy.compactMap(\.titled).first?.text ?? RunTitle.untitled }
   public var isRunning: Bool { runs.contains(where: \.isRunning) }
   public var lastEventMs: Int { runs.map(\.lastEventMs).max() ?? 0 }
   public var recencyMs: Int { runs.map(\.recencyMs).max() ?? 0 }

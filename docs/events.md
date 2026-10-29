@@ -2579,6 +2579,28 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "x-untrusted": true,
           "description": "Agent-written text: render as plain text, never markdown, links or actions"
         },
+        "title": {
+          "description": "Agent-written text: render as plain text, never markdown, links or actions",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "titleSource": {
+          "description": "Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "label",
+            "merge",
+            "goal",
+            "task",
+            null
+          ]
+        },
         "repo": {
           "description": "Repository the run works in (absolute path or remote URL)",
           "type": [
@@ -2607,6 +2629,8 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
         "label",
         "state",
         "goal",
+        "title",
+        "titleSource",
         "repo",
         "createdAt"
       ]

@@ -13,6 +13,7 @@ import { agentActivity, describeEvent } from "./describe";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { approvalIdFor, mergeApprovalText, parseApprovalId, projectIdOf, type HarnessSource, type PendingApproval } from "./source";
 import { startDetachedRun } from "./create-run";
+import { runTitle, type TitleAgent } from "./run-title";
 import { workspaceOf } from "./workspace";
 import { mirrorFor, workTips } from "./run-files";
 import { RUN_REPO_KV } from "../merge/run-config";
@@ -187,7 +188,8 @@ export function rivetSource(): HarnessSource {
 		const agents = s && meta ? await s.listAgents({}).catch(() => []) : [];
 		const live = (agents as Array<{ status: string }>).some((a) => a.status === "running" || a.status === "pending" || a.status === "paused");
 		// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
-		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal: meta?.goal ?? null, repo: r.repo, createdAt: isoTs(r.createdAt) };
+		const goal = meta?.goal ?? null;
+		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt) };
 	}));
 	const surface = sandboxSurface({
 		// The user config (~/.capcomd/config.json `sandboxes`); off with CAPCOMD_NO_CONFIG.
@@ -326,7 +328,7 @@ export function rivetSource(): HarnessSource {
 			const runId = generateRunId();
 			const { repo } = await startDetachedRun({ ...input, runId });
 			// What GET /v1/runs/{runId} shows once the run's process has registered it, but for the state.
-			return { id: runId, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, repo, createdAt: isoTs(Date.now()) };
+			return { id: runId, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, ...runTitle({ label: input.goal, goal: input.goal }), repo, createdAt: isoTs(Date.now()) };
 		},
 		// The repository verify and merge use for this run (its recorded settings, else the daemon's), and its target.
 		repo: async (runId) => {

@@ -8,6 +8,7 @@ import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 import { ACTIVITY_KINDS } from "../agents/activity";
 import { AgentWorkspace } from "./workspace";
+import { TITLE_MAX, TITLE_SOURCES } from "./run-title";
 import { SKILL_MAX_BYTES, SKILLS_PER_MESSAGE_MAX } from "../agents/skills";
 import { isListedProvider, LISTED_PROVIDERS, PROVIDER_LABEL } from "../providers/registry";
 import { IDLE_LIFETIME_CHOICES } from "./sandboxes";
@@ -43,6 +44,8 @@ export const Run = z.object({
 	label: z.string().nullable(),
 	state: z.string().describe("new, idle, running or unknown; failed or cancelled when the run ended without its agents ending it (a failed start, Stop on a run with no agent running: `run.ended`); starting in the runs.create response, before the run's process has registered it"),
 	goal: UntrustedText.nullable(),
+	title: UntrustedText.nullable().describe(`A short name for the work, to show where a run is listed (a list row, a notification): one line, about ${TITLE_MAX} characters at most (longer text is cut where a clause ends, else at a word with "…"). Changes while the run goes on when a better one arrives (see titleSource); null when the run has no label, goal or task yet. Older daemons don't send it: use the goal's first line`),
+	titleSource: z.enum(TITLE_SOURCES).nullable().describe("Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added"),
 	repo: z.string().nullable().describe("Repository the run works in (absolute path or remote URL)"),
 	createdAt: Timestamp.nullable(),
 });

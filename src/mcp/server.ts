@@ -138,7 +138,7 @@ export function buildServer(): McpServer {
     description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Returns runId and the gates.",
     inputSchema: {
       budget: z.string().optional().describe('Budget, e.g. "usd=5,turns=200,wallSeconds=3600"; omit for none'),
-      label: z.string().optional().describe("What the run is for"),
+      label: z.string().optional().describe("What the run is for, as a short title the way you'd title a pull request (\"Add multiply to src/math.ts\"): the capcomd app names the run by it"),
       target: z.string().optional().describe("A staging branch to land on instead of the project's target (not a protected branch)"),
       targetFrom: z.string().optional().describe("Create target from this branch, e.g. main"),
       key, project,

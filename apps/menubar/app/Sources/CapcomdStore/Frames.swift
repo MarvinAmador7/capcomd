@@ -52,6 +52,9 @@ public enum StreamFrame: Sendable, Hashable {
 
 public struct SnapshotRun: Codable, Sendable, Hashable {
   public var id: String; public var projectId: String?; public var label: String?; public var state: String; public var goal: String?
+  /// The daemon's title for the run (`Run.title`, untrusted) and where it came from (`titleSource`); older daemons
+  /// send neither.
+  public var title: String?; public var titleSource: String?
   /// When the run was created: a finished run's start when its run.created isn't replayed.
   public var createdAt: String?
 }
