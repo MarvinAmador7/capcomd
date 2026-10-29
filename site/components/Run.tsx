@@ -129,8 +129,8 @@ export function Run() {
       <div className="run__intro">
         <h2 id="run-title" data-reveal><span>Spawn, await,</span> <span>verify, merge.</span></h2>
         <div className="cols">
-          <p data-reveal style={delay(80)}>A run is a set of durable actors on Rivet. Every step is an idempotent, recorded transition: a crashed orchestrator, engine or agent driver resumes where it stopped, a retried call never acts twice, a merge happens exactly once. A chaos suite kills the process at named points, and at random, to prove it.</p>
-          <p data-reveal style={delay(140)}>The orchestrator is whoever calls the primitives: your agent through the plugin, MCP or the CLI; an agent in a VM that is allowed to delegate; or you. capcomd ships primitives, not a workflow. Agents keep working when the driver&apos;s session ends.</p>
+          <p data-reveal style={delay(80)}>Your coding agent runs the whole thing with five calls: <code>run new</code> sets the gates, <code>spawn</code> starts an agent in its own VM and branch, <code>await</code> waits on it, <code>verify</code> runs your checks (and a reviewer, if the run has one), and <code>merge</code> lands the commit that passed.</p>
+          <p data-reveal style={delay(140)}>Primitives, not a workflow. The driver can be your agent (through the plugin, MCP or the CLI), an agent in a VM that may delegate, or you. Agents keep working when the driver&apos;s session ends.</p>
         </div>
       </div>
       <RunAccordion stages={stages} initial="swarm" />
