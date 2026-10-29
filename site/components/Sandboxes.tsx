@@ -74,7 +74,6 @@ function Bay() {
           );
         })}
       </svg>
-      <figcaption>Three workers, each in its own VM on its own branch. Checks run in a separate throwaway VM, and only a commit that passed is merged; protected branches wait for your approval.<span className="bay__more"> Below, the git graph: the third worker is still going, and its last checkpoint sits off its branch, on <code>refs/capcomd/checkpoints/&lt;agent&gt;</code>.</span></figcaption>
     </figure>
   );
 }
@@ -85,8 +84,8 @@ export function Sandboxes() {
     <section className="sec" id="sandboxes" aria-labelledby="sb-title">
       <h2 className="big" id="sb-title" data-reveal><span>One agent, one VM,</span> <span>one branch.</span></h2>
       <div className="two">
-        <p data-reveal>VMs come through one sandbox provider interface: create from a snapshot, exec, upload and download, egress allowlist, checkpoint and snapshot, suspend and resume, destroy. Orchestration, durability and the gates sit above it. boxd was the first provider; Docker joined in 0.6.</p>
-        <p data-reveal style={delay(60)}>Inside its VM an agent is unrestricted by default: every tool, open network. A profile narrows its tools, sandbox and egress. Writing a provider is documented in <code>docs/providers.md</code>.</p>
+        <p data-reveal>VMs come through one sandbox provider interface: create from a snapshot, exec, upload and download, egress allowlist, checkpoint and snapshot, suspend and resume, destroy. Orchestration, durability and the gates sit above it.</p>
+        <p data-reveal style={delay(60)}>Inside its VM an agent is unrestricted by default: every tool, open network. A profile narrows its tools, sandbox and egress.</p>
       </div>
       <Bay />
       <div className="runs" data-reveal style={delay(120)}>

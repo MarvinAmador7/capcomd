@@ -906,8 +906,6 @@ html:not(.js) .stage__title { display: block; }
   .bay__ckpt path { fill: none; stroke: var(--color-accent-light); stroke-width: 1.5; stroke-dasharray: 3 3; }
   .bay__ckpt circle { fill: var(--color-desk); stroke: var(--color-accent-light); stroke-width: 2; }
   .bay__lbl { font: 500 11px/1 var(--font-ui); fill: var(--color-on-dark-soft); }
-  .bay figcaption { margin: 14px 10px 0; max-width: 92ch; font: 400 15px/1.45 var(--font-ui); color: var(--color-on-dark-soft); }
-  .bay figcaption code { color: var(--color-on-dark); }
 
   @media (min-width: 761px) and (prefers-reduced-motion: no-preference) {
     .reveal .bay .bay__vm { opacity: 0; transform: translateY(16px); transition: opacity 600ms var(--ease-out), transform 800ms var(--ease-out); transition-delay: calc(200ms + var(--k) * 90ms); }
@@ -926,7 +924,7 @@ html:not(.js) .stage__title { display: block; }
   }
   @media (max-width: 1100px) {
     .bay__row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 0; }
-    .bay__git, .bay__more { display: none; }
+    .bay__git { display: none; }
   }
   @media (max-width: 760px) {
     .bay { margin-top: 48px; padding: 16px 6px 16px; border-radius: 12px; }
