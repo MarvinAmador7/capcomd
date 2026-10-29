@@ -9,7 +9,7 @@ const ASK = "Set up capcomd for this repository.";
 const AGENTS = [
   { id: "claude", name: "Claude Code", prompt: "›", copy: "/plugin install capcomd --marketplace MarvinAmador7/capcomd", where: <>Type it in Claude Code. It adds capcomd&apos;s MCP tools and its orchestration and setup skills.</> },
   { id: "codex", name: "Codex", prompt: "$", copy: "codex plugin marketplace add MarvinAmador7/capcomd", where: <>Run it in a terminal, then install capcomd from <code>/plugins</code> in Codex.</> },
-  { id: "hermes", name: "Hermes", prompt: "$", copy: "capcomd setup agent", where: <>Run it in your repository. It adds capcomd&apos;s MCP server and skills to Hermes.</> },
+  { id: "hermes", name: "Hermes", prompt: "$", copy: "capcomd setup agent", where: <>Run it in your repository, after installing the CLI. It adds capcomd&apos;s MCP server and skills to Hermes.</> },
 ] as const;
 
 async function copy(text: string): Promise<boolean> {
@@ -31,16 +31,43 @@ const PICK = "capcomd:pick-agent";
 export function AgentPick({ id }: { id: AgentId }) {
   const a = AGENTS.find((x) => x.id === id)!;
   return (
-    <button type="button" className="pick" aria-label={`${a.name}: show how to add capcomd to it`}
+    <button type="button" className="pick" aria-label={`${a.name}: go to its install command`}
       onClick={() => {
         dispatchEvent(new CustomEvent(PICK, { detail: id }));
-        const tab = document.querySelector<HTMLElement>(`.hero__install .flow__tab[data-agent="${id}"]`);
+        const tab = document.querySelector<HTMLElement>(`.hero__install [data-agent="${id}"]`);
         tab?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
         tab?.focus({ preventScroll: true });
       }}>
       <svg viewBox="0 0 24 24" fillRule="evenodd" aria-hidden="true" dangerouslySetInnerHTML={{ __html: AGENT_ICONS[id] }} />
       {a.name}
     </button>
+  );
+}
+
+/** The hero's compact install row: one button per agent copies that agent's command and says what to do next. Until
+ *  the page script runs it keeps its space but stays invisible (no layout shift). */
+export function AgentInstall() {
+  const [ready, setReady] = useState(false);
+  const [done, setDone] = useState<{ id: AgentId; ok: boolean } | null>(null);
+  const timer = useRef(0);
+  useEffect(() => { setReady(true); return () => clearTimeout(timer.current); }, []);
+  const a = done && AGENTS.find((x) => x.id === done.id);
+  return (
+    <div className={`agents${ready ? "" : " is-waiting"}`} aria-hidden={ready ? undefined : true}>
+      <div className="agents__row">
+        <span className="agents__lbl">Or copy it for</span>
+        {AGENTS.map((x) => (
+          <button key={x.id} type="button" data-agent={x.id} className={`agents__btn${done?.id === x.id && done.ok ? " is-done" : ""}`} aria-label={`Copy the ${x.name} command`}
+            onClick={async () => { const ok = await copy(x.copy); setDone({ id: x.id, ok }); clearTimeout(timer.current); timer.current = window.setTimeout(() => setDone(null), 9000); }}>
+            <svg viewBox="0 0 24 24" fillRule="evenodd" aria-hidden="true" dangerouslySetInnerHTML={{ __html: AGENT_ICONS[x.id] }} />
+            <span>{x.name}</span>
+          </button>
+        ))}
+      </div>
+      <p className="agents__status" role="status">
+        {a ? <><b>{done!.ok ? `Copied for ${a.name}` : `Couldn't copy; for ${a.name}, use`}</b><code>{a.copy}</code>{done!.ok ? <span>{a.where} Then ask: &ldquo;{ASK}&rdquo;</span> : null}</> : null}
+      </p>
+    </div>
   );
 }
 
