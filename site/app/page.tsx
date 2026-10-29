@@ -1,6 +1,6 @@
 import { AtScale } from "@/components/AtScale";
+import { BotsCta } from "@/components/BotsCta";
 import { CrewProvider } from "@/components/crew";
-import { Drive } from "@/components/Drive";
 import { Footer } from "@/components/Footer";
 import { Hero } from "@/components/Hero";
 import { Patterns } from "@/components/Patterns";
@@ -20,7 +20,7 @@ export default function Home() {
         <RoleTree />
         <AtScale />
         <Patterns />
-        <Drive />
+        <BotsCta />
       </main>
       <Footer />
       <Reveals />
