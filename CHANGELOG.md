@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: listing runs no longer creates empty runs in the engine. When your run list (`state/runs.jsonl`) names a run
+  this engine doesn't have, for example one a test engine on another port recorded, the menu bar, the harness API and
+  `capcomd_runs` show it as "unknown" with no agents. Before, every listing (twice a second while the menu bar is open)
+  quietly created an empty run in the engine for it. Reading such a run's agents, events, thread or approvals no
+  longer stalls for seconds either.
 - Fix: a project's settings are looked for from the current folder up to your home folder and no further, even when
   `HOME` points somewhere else (a test or an agent's scratch home); capcomd's own `~/.capcomd/config.json` was read as
   a project's `.capcomd/config.json` then, so its sandbox and repository settings applied where they shouldn't.

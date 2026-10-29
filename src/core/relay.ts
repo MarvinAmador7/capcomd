@@ -20,6 +20,31 @@ export function client() {
   return createClient<Registry>({ endpoint: endpoint() });
 }
 
+/** The engine's "no such actor" (a `get` on a key it never had). */
+export const isActorNotFound = (e: unknown): boolean => {
+  const x = e as { group?: unknown; code?: unknown } | null;
+  return x?.group === "actor" && x?.code === "not_found";
+};
+type ActorKind = "scope" | "run" | "worker";
+type Client = ReturnType<typeof client>;
+/** Actors this process has seen exist, by engine (capcomd never destroys a scope, run or worker): looked up once each. */
+const actorsSeen = new Set<string>();
+/**
+ * An actor's handle only when it already exists, else null; it never creates one. Reads go through this: the runs
+ * index can list runs this engine never had (another engine's), and a read with getOrCreate left an empty actor behind
+ * for each (the menu bar's daemon stream lists every run twice a second). The check is one engine lookup: the calls of
+ * a plain `get` handle retry not_found for ~2.4 s, logging every retry. Throws when the engine can't say.
+ */
+export async function existingActor<K extends ActorKind>(kind: K, key: string[]): Promise<ReturnType<Client[K]["getOrCreate"]> | null> {
+  const handle = (client()[kind] as any).get(key);
+  const id = [endpoint(), kind, ...key].join("\u0000");
+  if (!actorsSeen.has(id)) {
+    try { await handle.resolve(); } catch (e) { if (isActorNotFound(e)) return null; throw e; }
+    actorsSeen.add(id);
+  }
+  return handle;
+}
+
 export async function assertEngine(): Promise<void> {
   try {
     await fetch(endpoint() + "/", { signal: AbortSignal.timeout(2000) });

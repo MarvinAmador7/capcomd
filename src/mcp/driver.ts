@@ -3,7 +3,7 @@
 // human's: checks, the reviewer and protected branches come from the project's config, approvals for protected
 // branches are a person's by default, and nothing widens a profile. Agents' text reaches the driver fenced.
 import { RelayError } from "../core/errors";
-import { client } from "../core/relay";
+import { client, existingActor } from "../core/relay";
 import * as O from "../primitives/ops";
 import * as S from "../primitives/state";
 import { parseBudget, TERMINAL_AGENT, type Budget } from "../primitives/policy";
@@ -66,10 +66,10 @@ export async function runs(a: { limit?: number; project?: { name: string; path: 
   // Each run's project: the checkout it was started in (the runs index records the directory).
   const all = O.recentRuns(a.project ? 500 : limit).map((r) => { const dir = r.cwd ? P.projectDirOf(r.cwd) : null; return { ...r, dir, project: dir ? P.projectNameOf(dir) : null }; });
   const rows = (a.project ? all.filter((r) => r.dir && P.samePath(r.dir, a.project!.path)) : all).slice(0, limit).map(({ dir: _d, ...r }) => r);
-  const c = client();
   const out = [];
   for (const r of rows) {
-    const agents = await c.scope.getOrCreate([r.runId]).listAgents({}).catch(() => null);
+    // A listed run whose scope this engine doesn't have (another engine's) lists no agents: never create one.
+    const agents = await existingActor("scope", [r.runId]).then((s) => s?.listAgents({}) ?? null).catch(() => null);
     const counts: Record<string, number> = {};
     for (const x of agents ?? []) counts[x.status] = (counts[x.status] ?? 0) + 1;
     out.push({ ...r, agents: counts, pendingApprovals: (await O.pendingMerges(r.runId)).map((m) => m.taskId) });

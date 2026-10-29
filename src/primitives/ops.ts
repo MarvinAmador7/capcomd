@@ -7,7 +7,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
-import { client, assertEngine, cancelRun } from "../core/relay";
+import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { agentsFilePath, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
@@ -1229,7 +1229,8 @@ export async function decideMerge(runId: string, mrgId: string, o: { approve: bo
 
 /** Merges parked for approval in a run, oldest first. */
 export async function pendingMerges(runId: string) {
-  const ops = (await client().scope.getOrCreate([runId]).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as import("../actors/scope").ScopeOp[];
+  // A read: a run without a scope on this engine has none pending (never create its scope to ask).
+  const ops = (await existingActor("scope", [runId]).then((s) => s?.listOps({ state: "awaiting_approval", kind: "merge" }) ?? []).catch(() => [])) as import("../actors/scope").ScopeOp[];
   return ops.map((op) => ({ taskId: op.id, kind: "merge" as const, targetBranch: (op.data.target as string) ?? null, since: new Date(op.updatedAt).toISOString(), ref: op.data.ref as string }));
 }
 
