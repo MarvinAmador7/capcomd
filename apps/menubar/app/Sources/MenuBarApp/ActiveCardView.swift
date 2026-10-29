@@ -464,7 +464,7 @@ struct DecisionButtons: View {
   private func decidedText(_ status: String, _ by: String?, _ already: Bool) -> String {
     let who = by.map { " by \($0)" } ?? ""
     if already { return "Already \(status)\(who)" }
-    return status == "approved" ? "Approved\(who) · merging" : status.prefix(1).uppercased() + status.dropFirst() + who
+    return status == "approved" ? "Approved\(who) · merging" : status.prefix(1).uppercased() + String(status.dropFirst()) + who
   }
 }
 

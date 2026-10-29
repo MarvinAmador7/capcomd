@@ -14,13 +14,20 @@ struct ControlSurface<S: Shape, F: ShapeStyle>: View {
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   var body: some View {
+    // Glass needs the macOS 26 SDK (Swift 6.2+); an older Xcode, like CI's macos-15 image, builds the fallback only.
+    #if compiler(>=6.2)
     if #available(macOS 26, *) {
       Color.clear.glassEffect(tint.map { Glass.regular.tint($0).interactive() } ?? Glass.regular.interactive(), in: shape)
-    } else if reduceTransparency {
-      shape.fill(Theme.Craft.solidControl)
     } else {
-      shape.fill(fallback)
+      flat
     }
+    #else
+    flat
+    #endif
+  }
+
+  @ViewBuilder private var flat: some View {
+    if reduceTransparency { shape.fill(Theme.Craft.solidControl) } else { shape.fill(fallback) }
   }
 }
 
