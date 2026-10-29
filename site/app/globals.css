@@ -72,7 +72,7 @@
 
 @layer components {
 /* On dark grounds the ring is the brand orange (5.9:1 on the plum). */
-.band :focus-visible, .roletree :focus-visible, .desk :focus-visible, .win :focus-visible, .stage:not(:nth-child(5)):not(.is-open) .stage__tab:focus-visible, .case :focus-visible { outline-color: var(--color-accent); }
+.band :focus-visible, .roletree :focus-visible, .desk :focus-visible, .win :focus-visible, .stage:not(:nth-child(5)):not(.is-open) .stage__tab:focus-visible { outline-color: var(--color-accent); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .nav { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; align-items: center; padding: 24px var(--spacing-gutter); }
@@ -294,7 +294,7 @@
 @media (max-width: 1100px) and (min-width: 761px) {
   .facts, .band__cols { grid-template-columns: repeat(2, 1fr); }
   .talk__fig { grid-column: 1 / span 12; max-width: 560px; } .talk__list { grid-column: 1 / span 12; }
-  .pt__list, .pt__plus { grid-column: 1 / span 12; } .case { grid-column: 1 / span 12; grid-row: auto; position: static; margin-top: 32px; }
+  .pt__list, .pt__plus { grid-column: 1 / span 12; }
   .dr__table, .dr__install { grid-column: 1 / span 12; }
   .two p, .two p + p { grid-column: span 6; }
 }
@@ -321,7 +321,6 @@
   .pt__list li { grid-template-columns: 1fr; padding: 16px 0; }
   .pt__list li { padding-left: 12px; padding-right: 12px; }
   .pt__list h3 { grid-row: auto; font-size: 30px; }
-  .case { position: static; margin-top: 32px; padding: 22px; }
 
   .dr__table th, .dr__table td { padding: 12px 10px; font-size: 16px; }
   .dr__install { margin-top: 32px; }
