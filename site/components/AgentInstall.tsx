@@ -34,17 +34,37 @@ export function AgentInstall() {
   return (
     <div className={`agents${ready ? "" : " is-waiting"}`} aria-hidden={ready ? undefined : true}>
       <div className="agents__row">
-        <span className="agents__lbl">Copy the install for</span>
+        <span className="agents__lbl">Or copy it for</span>
         {AGENTS.map((x) => (
-          <button key={x.id} type="button" className={`agents__btn${done?.id === x.id && done.ok ? " is-done" : ""}`} aria-label={`Copy the install command for ${x.name}`} data-tip={x.name}
+          <button key={x.id} type="button" className={`agents__btn${done?.id === x.id && done.ok ? " is-done" : ""}`} aria-label={`Copy the install command for ${x.name}`}
             onClick={async () => { const ok = await copy(x.copy); setDone({ id: x.id, ok }); clearTimeout(timer.current); timer.current = window.setTimeout(() => setDone(null), 9000); }}>
             <svg viewBox="0 0 24 24" fillRule="evenodd" aria-hidden="true" dangerouslySetInnerHTML={{ __html: AGENT_ICONS[x.id] }} />
+            <span>{x.name}</span>
           </button>
         ))}
       </div>
       <p className="agents__status" role="status">
         {a ? <><b>{done!.ok ? `Copied for ${a.name}` : `Couldn't copy; for ${a.name}, use`}</b><code>{a.copy}</code>{done!.ok ? <span>{a.next}</span> : null}</> : null}
       </p>
+    </div>
+  );
+}
+
+/** The install command on the page, with a Copy button (the text stays selectable without the script). */
+export function InstallCommand({ cmd }: { cmd: string }) {
+  const [done, setDone] = useState<boolean | null>(null);
+  const [ready, setReady] = useState(false);
+  const timer = useRef(0);
+  useEffect(() => { setReady(true); return () => clearTimeout(timer.current); }, []);
+  return (
+    <div className="cmd">
+      <code className="cmd__text"><span aria-hidden="true">$ </span>{cmd}</code>
+      {ready ? (
+        <button type="button" className="cmd__copy" aria-label={done ? "Copied the install command" : "Copy the install command"}
+          onClick={async () => { const ok = await copy(cmd); setDone(ok); clearTimeout(timer.current); timer.current = window.setTimeout(() => setDone(null), 2400); }}>
+          {done === null ? "Copy" : done ? "Copied" : "Select it"}
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -95,9 +95,6 @@
 .hero__foot { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; padding: 0 var(--spacing-gutter) 40px; align-items: end; }
 .hero__lead { grid-column: 1 / span 6; margin: 0; font-size: var(--text-lead); line-height: 1.3; max-width: 36ch; }
 .hero__lead b { font-weight: 500; }
-.hero__do { grid-column: 1 / span 6; display: flex; gap: 24px; align-items: center; margin-top: 28px; }
-.hero__do a.text { font-size: var(--text-body); text-underline-offset: 0.2em; }
-.hero__note { grid-column: 1 / span 6; max-width: 600px; margin: 28px 0 0; min-width: 0; font-size: var(--text-body); line-height: 1.45; }
 
 /* The install line in a small Mac window: the first native touch on the page. */
 .win { display: block; margin-top: 16px; border-radius: 10px; overflow: clip; background: var(--color-window); color: var(--color-app-text); font: 400 13px/1.35 var(--font-ui); box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.14); } /* taste-skill-ignore: interface fragment, window chrome */
@@ -416,7 +413,7 @@
   .stage__title { font-size: 72px; }
   .stage__text p { font-size: 18px; }
   .run__intro .cols p, .run__intro .cols p + p { grid-column: span 6; }
-  .nav__links { grid-column: 4 / span 6; gap: 20px; }
+  .nav__links { grid-column: 1 / -1; grid-row: 2; gap: 22px; }
 }
 /* Phone: the stages become a disclosure list, set in the page's own type. */
 @media (max-width: 760px) {
@@ -428,8 +425,6 @@
   .sentence { white-space: normal; font-size: 19vw; line-height: 0.86; padding-top: 9vh; padding-bottom: 32px; }
   .hero__foot { display: block; padding-bottom: 32px; }
   .hero__lead { font-size: 1.25rem; }
-  .hero__do { margin-top: 24px; }
-  .hero__note { margin-top: 24px; }
   .run { padding: 112px var(--spacing-gutter) 88px; }
   .run__intro { display: block; }
   .run__intro h2 { font-size: 9.6vw; }
@@ -482,7 +477,6 @@ html:not(.js) .try span, html:not(.js) .try button { display: none; }
 }
 @media (max-width: 360px) {
   .sentence { font-size: 18vw; }
-  .hero__do { flex-wrap: wrap; }
   .button, .nav .button { font-size: 19px; padding: 0 12px; }
 }
 
@@ -513,7 +507,6 @@ html:not(.js) .try span, html:not(.js) .try button { display: none; }
   .hero { min-height: auto; }
   .sentence { font-size: 14.4vw; padding-top: 14vh; padding-bottom: 14vh; }
 }
-.hero__do a.text { white-space: nowrap; }
 
 .scroll { overflow-x: auto; }
 .win code:focus-visible { outline-offset: -3px; }
@@ -938,24 +931,24 @@ html:not(.js) .stage__title { display: block; }
 
 /* The hero's install buttons: one per coding agent, each copies the README's step 1 for it. */
 @layer components {
-  .agents { position: relative; margin: 0 0 16px; }
+  .agents { position: relative; margin: 0; }
   .agents.is-waiting { visibility: hidden; }
   .agents__row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-  .agents__lbl { margin-right: 6px; font-size: var(--text-body); }
-  .agents__btn { all: unset; box-sizing: border-box; position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; color: var(--color-ink); cursor: pointer; transition: transform 140ms var(--ease-out), color 160ms ease; }
-  .agents__btn svg { width: 30px; height: 30px; fill: currentColor; }
+  .agents__lbl { margin-right: 4px; font-size: var(--text-body); }
+  .agents__btn { all: unset; box-sizing: border-box; position: relative; display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 8px; border-radius: 8px; color: var(--color-ink); font: 600 15px/1 var(--font-ui); white-space: nowrap; cursor: pointer; transition: transform 140ms var(--ease-out), color 160ms ease; }
+  .agents__btn svg { flex: none; width: 24px; height: 24px; fill: currentColor; }
+  .agents__btn span { text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 4px; transition: text-decoration-color 160ms ease; }
+  .agents__btn:hover span { text-decoration-color: currentColor; }
   .agents__btn:hover { color: var(--color-plum); }
   .agents__btn:active { transform: scale(0.96); }
   .agents__btn:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 2px; }
   .agents__btn.is-done { color: var(--color-link); }
-  .agents__btn::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; translate: -50% 4px; padding: 5px 8px; border-radius: 6px; background: var(--color-ink); color: var(--color-paper); font: 500 12px/1 var(--font-ui); white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 140ms ease, translate 160ms var(--ease-out); }
-  .agents__btn:hover::after, .agents__btn:focus-visible::after { opacity: 1; translate: -50% 0; }
   .agents__status { position: absolute; z-index: 5; left: 0; top: calc(100% + 10px); width: min(440px, 100%); margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--color-ink); color: var(--color-paper); font: 400 14px/1.45 var(--font-ui); }
   .agents__status:empty { display: none; }
   .agents__status b { display: block; font-weight: 600; }
   .agents__status code { display: block; margin: 6px 0; color: var(--color-accent-light); overflow-wrap: anywhere; }
   .agents__status span code { display: inline; margin: 0; }
-  @media (prefers-reduced-motion: reduce) { .agents__btn, .agents__btn::after { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .agents__btn, .agents__btn span { transition: none; } }
 }
 
 /* Sandboxes: what agents run on, by provider. */
@@ -983,8 +976,6 @@ html:not(.js) .stage__title { display: block; }
     .runs__list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 }
-
-.hero__fine { margin: 10px 0 0; font-size: var(--text-small); color: var(--color-muted); }
 
 /* Built on Rivet: the durability story beside one chaos case, replayed. */
 @layer components {
@@ -1041,3 +1032,30 @@ html:not(.js) .stage__title { display: block; }
     .crash__log { padding: 14px 12px 4px; }
   }
 }
+
+/* The hero's install bar: brew, the agent buttons and the project link, one row under the lead. */
+.hero__install { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 20px 40px; margin-top: 36px; }
+.hero__install .button.hero__oss { grid-column: auto; justify-self: end; }
+.hero__fine { grid-column: 1 / -1; margin: 12px 0 0; font-size: var(--text-small); color: var(--color-muted); }
+@media (max-width: 1100px) {
+  .hero__lead { grid-column: 1 / -1; }
+  .hero__install { grid-template-columns: minmax(0, 1fr); gap: 18px; margin-top: 28px; }
+  .hero__install .button.hero__oss { justify-self: start; }
+  .hero__fine { margin-top: 14px; }
+}
+@media (max-width: 760px) {
+  .agents__row { row-gap: 2px; }
+  .agents__lbl { flex-basis: 100%; }
+  .agents__btn { padding: 0 6px; margin-left: -6px; }
+  .agents__btn + .agents__btn { margin-left: 4px; }
+}
+
+/* The install command, set on the page: a flat tone step, square like the buttons. */
+.cmd { display: flex; align-items: center; min-width: 0; height: 46px; padding: 0 6px 0 16px; background: var(--color-surface); }
+.cmd__text { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 500 15px/46px var(--font-mono); color: var(--color-ink); scrollbar-width: none; } /* taste-skill-ignore: a literal command */
+.cmd__text span { color: var(--color-link); }
+.cmd__copy { all: unset; flex: none; cursor: pointer; padding: 0 12px; height: 34px; line-height: 34px; font: 400 20px/34px var(--font-display); letter-spacing: 0.02em; text-transform: uppercase; color: var(--color-ink); transition: color 160ms ease, transform 140ms var(--ease-out); }
+.cmd__copy:hover { color: var(--color-plum); }
+.cmd__copy:active { transform: scale(0.96); }
+.cmd__copy:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 0; }
+@media (max-width: 760px) { .cmd__text { font-size: 13px; } }

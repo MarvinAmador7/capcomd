@@ -1,6 +1,6 @@
-import { AgentInstall } from "./AgentInstall";
+import { AgentInstall, InstallCommand } from "./AgentInstall";
 import { HeroCrew } from "./crew";
-import { Win, delay } from "./marks";
+import { delay } from "./marks";
 import { Nav } from "./Nav";
 import { SITE } from "@/lib/site";
 
@@ -20,14 +20,12 @@ export function Hero() {
         <p className="hero__lead" data-load style={delay(420)}>
           <b>capcomd</b> is a durable orchestration CLI and MCP server for swarms of coding agents running on cloud VMs.
         </p>
-        <div className="hero__note" data-load style={delay(500)} id="install">
+        <div className="hero__install" data-load style={delay(500)} id="install">
+          <InstallCommand cmd="brew install MarvinAmador7/tap/capcomd" />
           <AgentInstall />
-          <Win title="zsh" label="Install with Homebrew"><code tabIndex={0}>brew install MarvinAmador7/tap/capcomd</code></Win>
-          <p className="hero__fine">Open source. One executable for macOS and Linux.</p>
+          <a className="button hero__oss" href={SITE.repo}>OSS Project</a>
         </div>
-        <div className="hero__do" data-load style={delay(620)}>
-          <a className="button" href={SITE.repo}>OSS Project</a>
-        </div>
+        <p className="hero__fine" data-load style={delay(560)}>Open source. One executable for macOS and Linux.</p>
       </div>
     </header>
   );
