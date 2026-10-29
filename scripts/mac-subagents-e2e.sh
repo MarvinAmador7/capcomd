@@ -48,6 +48,10 @@ export CAPCOMD_TEST_COMMAND="bun test"
 export CAPCOMD_WORKDIR="$WORK/merge"
 export CAPCOMD_TRACE_DIR="$WORK/traces"
 export CAPCOMD_RPC_KEY_FILE="$WORK/rpc.key"   # per-run token signing key (host only)
+# This run's index in the work dir, not the capcomd home's state/runs.jsonl: the user's own daemon (and the menu bar)
+# lists that file, and these runs live on this script's private engine. Logins, env snapshots, the boxd key and the
+# user config are still found where they always are (the capcomd home is unchanged).
+export CAPCOMD_RUNS_INDEX="$WORK/runs.jsonl"
 
 PORT=$(bun -e 'const { testPort } = await import("./tests/helpers/engine.ts"); console.log(await testPort())') || die "no free engine port"
 export CAPCOMD_ENDPOINT="http://127.0.0.1:$PORT"
