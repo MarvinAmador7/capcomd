@@ -43,9 +43,10 @@ jobs:
           (cd apps/tui && bun test)
 
       # ADR-017 regression gate: agentic scenarios (scripted agents driving in-VM capcomd), tokens, MCP, skill gating.
+      # About 18 minutes on a Mac and longer on this runner since the workflow, upgrade and restart drills joined it.
       - name: Sub-agent scenario suite (regression gate)
         run: bun run test:scenarios
-        timeout-minutes: 20
+        timeout-minutes: 40
 
   # The single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
   # no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that

@@ -64,10 +64,18 @@ test("a run in the index with no scope on this engine is listed as unknown, and 
 	const auth = { authorization: `Bearer ${token}` };
 	const res = await app.request("/v1/streams/daemon/events", { headers: auth });
 	const reader = res.body!.getReader();
-	let txt = "";
-	for (const end = Date.now() + 1500; Date.now() < end;) {
-		const x: any = await Promise.race([reader.read(), Bun.sleep(50).then(() => null)]);
-		if (x?.value) txt += new TextDecoder().decode(x.value);
+	// One read in flight at a time (a second read() while one is pending loses the chunk the first one gets). Read
+	// until the ghost run is listed (a slow CI runner can take seconds), then a few more ticks of polling.
+	let txt = "", pending: Promise<any> | null = null;
+	for (let end = Date.now() + 15_000; Date.now() < end;) {
+		pending ??= reader.read();
+		const x: any = await Promise.race([pending, Bun.sleep(100).then(() => null)]);
+		if (!x) continue;
+		pending = null;
+		if (x.done) break;
+		const seen = txt.includes(ghost);
+		txt += new TextDecoder().decode(x.value);
+		if (!seen && txt.includes(ghost)) end = Math.min(end, Date.now() + 600);
 	}
 	await reader.cancel().catch(() => {});
 	expect(txt).toContain(ghost);
