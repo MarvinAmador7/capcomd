@@ -40,7 +40,9 @@ const events = async (run: string, id: string) => ((await w.cj(["events", run]))
 
 test("(a) an outage shorter than the window: the agent waits for its machine, says so, and finishes; nothing is left", async () => {
   const run = await newRun(w);
-  outage({ ms: 1200 });
+  // Long enough to still be on when a slow runner's spawn makes its first provider call (1.2 s wasn't on CI), short of
+  // the 3 s window. The notice comes from the setup calls retrying.
+  outage({ ms: 2500 });
   const id = await spawnRoot(w, run, "worker", w.script("a", WORKER));
   const aw = await waitAll(w, run, [id], 60_000);
   expect(aw.agents[0].status).toBe("done");
