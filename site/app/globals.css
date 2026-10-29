@@ -355,17 +355,13 @@
 .win code.json { white-space: pre; overflow-x: auto; font-size: 12px; line-height: 1.55; }
 .win code.json::before { content: none; }
 .talk__title { margin: 96px 0 0; font: 400 clamp(2.5rem, 4vw, 4rem)/0.9 var(--font-display); text-transform: uppercase; }
-#roles .talk__list { display: grid; grid-template-columns: repeat(5, 1fr); gap: 24px 32px; margin-top: 32px; }
-#roles .talk__list > div + div { margin-top: 0; }
-#roles .talk__list dt { font-size: 34px; }
 .scale__list { list-style: none; margin: 56px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 56px; }
 .scale__list li { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 20px; padding: 26px 0; }
 .scale__list h3 { margin: 0; font: 400 34px/0.95 var(--font-display); text-transform: uppercase; color: var(--color-accent-light); }
 .scale__list p { margin: 0; }
 @media (max-width: 1100px) and (min-width: 761px) {
   .roletree, .roles__file { grid-column: 1 / span 12; }
-  #roles .talk__list { grid-template-columns: repeat(2, 1fr); }
-  .scale__list { grid-template-columns: 1fr; }
+    .scale__list { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
   .roles__grid { display: block; margin-top: 32px; }
@@ -379,9 +375,7 @@
   .roles__file { margin-top: 28px; }
   .win code.json { font-size: 12px; }
   .talk__title { margin-top: 56px; font-size: 11vw; }
-  #roles .talk__list { display: block; margin-top: 24px; }
-  #roles .talk__list > div + div { margin-top: 24px; }
-  .scale__list { grid-template-columns: 1fr; margin-top: 32px; }
+      .scale__list { grid-template-columns: 1fr; margin-top: 32px; }
   .scale__list li { grid-template-columns: 1fr; gap: 8px; }
   .scale__list h3 { font-size: 28px; }
 }
@@ -1058,3 +1052,55 @@ html:not(.js) .stage__title { display: block; }
 .cmd__copy:active { transform: scale(0.96); }
 .cmd__copy:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 0; }
 @media (max-width: 760px) { .cmd__text { font-size: 13px; } }
+
+/* How they talk: a small crew chain with the run's board, and the four channels beside it. */
+@layer components {
+  .talk { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; margin-top: 32px; align-items: start; }
+  .talk__fig2 { grid-column: 1 / span 7; margin: 0; padding: 20px; background: var(--color-desk); border-radius: 16px; }
+  .talk__canvas { position: relative; container-type: inline-size; aspect-ratio: 600 / 400; color: var(--color-on-dark); }
+  .talk__svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .talk__tree { fill: none; stroke: var(--color-accent); stroke-width: 3; stroke-dasharray: 3 5; opacity: 0.55; }
+  .talk__path { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1 1; opacity: 0; }
+  .talk__path.is-on { opacity: 1; animation: talk-draw 900ms var(--ease-out) both; }
+  @keyframes talk-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  .talk__path--down { stroke: var(--color-accent); }
+  .talk__path--up { stroke: var(--color-app-green); }
+  .talk__path--shared { stroke: var(--color-on-dark-soft); }
+  .talk__packet { fill: var(--color-accent-light); }
+  .talk__packet--up { fill: var(--color-app-green); }
+  .talk__node { position: absolute; display: flex; align-items: center; gap: 2cqw; }
+  .talk__bot, .talk__you { flex: none; width: 8cqw; height: 8cqw; }
+  .talk__bot svg { display: block; width: 100%; height: 100%; }
+  .talk__you { display: grid; place-items: center; border-radius: 1.6cqw; background: rgba(255,255,255,0.1); font: 600 3cqw/1 var(--font-ui); color: var(--color-accent-light); }
+  .talk__name b { display: block; font: 400 max(4.4cqw, 18px)/1 var(--font-display); text-transform: uppercase; }
+  .talk__name small { display: block; margin-top: 0.4cqw; font: 400 max(2.3cqw, 13px)/1.2 var(--font-ui); color: var(--color-on-dark-soft); }
+  .talk__tag, .talk__fence { padding: 0.6cqw 1.4cqw; border-radius: 99px; font: 600 max(2.2cqw, 13px)/1 var(--font-mono); opacity: 0; transition: opacity 240ms ease; white-space: nowrap; } /* taste-skill-ignore: command names */
+  .talk__tag.is-on, .talk__fence.is-on { opacity: 1; }
+  .talk__tag--down { background: var(--color-accent); color: var(--color-ink); }
+  .talk__tag--up { background: var(--color-app-green); color: var(--color-ink); }
+  .talk__fence { position: absolute; left: 10cqw; top: 100%; margin-top: 1.2cqw; font-family: var(--font-ui); font-weight: 500; background: rgba(255,255,255,0.12); color: var(--color-on-dark); }
+  .talk__board { position: absolute; display: grid; align-content: center; gap: 0.4cqw; padding: 2cqw 2.4cqw; border-radius: 1.6cqw; background: rgba(255,255,255,0.06); opacity: 0.72; transition: opacity 240ms ease; }
+  .talk__board.is-on { opacity: 1; background: rgba(255,255,255,0.1); }
+  .talk__board b { font: 400 max(3.6cqw, 15px)/1 var(--font-display); text-transform: uppercase; }
+  .talk__board small { margin-bottom: 1.4cqw; font: 400 max(2.2cqw, 13px)/1.2 var(--font-ui); color: var(--color-on-dark-soft); }
+  .talk__side { grid-column: 9 / span 4; }
+  .talk__chs { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; }
+  .talk__chs li { color: var(--color-muted); transition: color 200ms ease; }
+  .talk__chs li.is-on { color: var(--color-ink); }
+  .talk__chs button { all: unset; cursor: pointer; font: 400 34px/1 var(--font-display); text-transform: uppercase; color: inherit; border-radius: 4px; transition: color 160ms ease; }
+  .talk__chs li:not(.is-on) button:hover { color: var(--color-plum); }
+  .talk__chs button[aria-checked="true"] { color: var(--color-link); }
+  .talk__chs button:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 3px; }
+  .talk__chs p { margin: 4px 0 0; font-size: var(--text-body); }
+  .talk__notyet { margin: 24px 0 0; font-size: var(--text-small); color: var(--color-muted); }
+  @media (prefers-reduced-motion: reduce) { .talk__path.is-on { animation: none; } }
+  @media (max-width: 1100px) { .talk__fig2, .talk__side { grid-column: 1 / -1; } }
+  .talk__board--phone { display: none; }
+  @media (max-width: 760px) {
+    .talk__canvas .talk__board, .talk__path--shared, .talk__node--planner .talk__fence { display: none; }
+    .talk__board--phone { color: var(--color-on-dark); display: grid; position: static; grid-template-columns: auto 1fr; align-items: baseline; gap: 4px 12px; margin-top: 12px; padding: 12px 14px; border-radius: 10px; }
+    .talk__board--phone b { font-size: 20px; }
+    .talk__board--phone small { margin: 0; font-size: 14px; }
+  }
+  @media (max-width: 760px) { .talk { display: block; margin-top: 24px; } .talk__fig2 { padding: 12px; } .talk__side { margin-top: 24px; } .talk__chs button { font-size: 28px; } }
+}

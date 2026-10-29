@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Bot } from "./crew";
 import { Win, delay } from "./marks";
+import { Talk } from "./Talk";
 
 // The tree that the example agents.json beside it allows, drawn with the hero's crew. lead and triage are example
 // profiles added to what `capcomd setup project` writes (src/config/project-setup.ts); the file says so.
@@ -45,13 +46,6 @@ function Node({ crew, name, example, children, sub }: { crew: number; name: stri
   );
 }
 
-const TALK: Array<[string, ReactNode]> = [
-  ["Down", <><code>send</code>: the orchestrator or a parent messages a running agent. Claude reads it at its next step, within seconds; Codex can&apos;t read messages while it runs.</>],
-  ["Up", <><code>handoff</code> and <code>result</code>: a child reports to its parent with a summary, artifacts and data; the parent also sees its branch, commit and verification.</>],
-  ["Shared", <>The run&apos;s task board, with leases, epochs and ordering, and a kv blackboard written with compare-and-swap; the event stream carries both.</>],
-  ["Fenced", <>Anything another agent wrote arrives as untrusted data, never instructions. Authority comes only from the agent&apos;s capability token.</>],
-  ["Not yet", <>A leaf gets the board, kv and inbox only when it may spawn; siblings&apos; messages go through their parent. Sibling messaging within one parent is on the roadmap.</>],
-];
 
 export function RoleTree() {
   return (
@@ -91,9 +85,7 @@ export function RoleTree() {
         </div>
       </div>
       <h3 className="talk__title" id="talk" data-reveal>How they talk</h3>
-      <dl className="talk__list">
-        {TALK.map(([dt, dd], k) => <div key={dt} data-reveal style={delay(k * 60)}><dt>{dt}</dt><dd>{dd}</dd></div>)}
-      </dl>
+      <Talk />
     </section>
   );
 }
