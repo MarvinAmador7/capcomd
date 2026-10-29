@@ -1,13 +1,16 @@
 import type { ReactNode } from "react";
 
-// Each problem from README "Why", answered in one line. Durability has its own block ("Built on Rivet") above.
+// The problems that break agent swarms at scale, each answered in one line (owner-approved copy, 2026-10-29).
 const PAIRS: Array<[string, ReactNode]> = [
   ["Agents claim success", <>Your checks and a read-only reviewer decide; no agent merges its own work.</>],
-  ["Parallel agents collide", <>One VM and branch each; merges land one at a time, exactly once.</>],
-  ["Delegation multiplies risk", <>Limits only narrow down the tree, and budgets are carved from the parent&apos;s.</>],
-  ["Agents get stuck", <>Idle agents are flagged to their parent, their work checkpointed.</>],
+  ["Flat teams stall", <>A planner owns the goal and hands out tasks; each worker owns one, with limits that only narrow down the tree.</>],
+  ["Parallel agents collide", <>One sandbox and branch each; merges land one at a time, exactly once.</>],
+  ["Planners don't hear back", <>A parent awaits its children and wakes on their events, not on a poll.</>],
+  ["Agents run too long", <>Budgets in dollars, turns and time, carved from the parent&apos;s; idle agents are flagged, their work checkpointed.</>],
+  ["Crashes end long runs", <>Every agent is a durable workflow in the engine; the run picks up after a crash.</>],
+  ["Half-built environments", <>Each agent starts from a snapshot with the agent CLIs and your repo&apos;s dependencies baked in.</>],
   ["Nobody sees what happened", <>A live agent tree, timelines and costs per agent and subtree.</>],
-  ["Machines are left behind", <>Every VM is destroyed when its work is done, or reaped once idle.</>],
+  ["Machines are left behind", <>Every sandbox is destroyed when its work is done, or reaped once idle.</>],
 ];
 
 export function AtScale() {
