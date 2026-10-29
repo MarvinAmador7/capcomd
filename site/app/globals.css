@@ -1087,11 +1087,11 @@ html:not(.js) .stage__title { display: block; }
   .talk__board b { font: 400 max(3.6cqw, 15px)/1 var(--font-display); text-transform: uppercase; }
   .talk__board small { margin-bottom: 1.4cqw; font: 400 max(2.2cqw, 13px)/1.2 var(--font-ui); color: var(--color-on-dark-soft); }
   .talk__side { grid-column: 9 / span 4; }
-  .talk__chs { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; }
-  .talk__chs li { color: var(--color-muted); transition: color 200ms ease; }
-  .talk__chs li.is-on { color: var(--color-ink); }
+  .talk__chs { display: grid; gap: 18px; }
+  .talk__ch { color: var(--color-muted); transition: color 200ms ease; }
+  .talk__ch.is-on { color: var(--color-ink); }
   .talk__chs button { all: unset; cursor: pointer; font: 400 34px/1 var(--font-display); text-transform: uppercase; color: inherit; border-radius: 4px; transition: color 160ms ease; }
-  .talk__chs li:not(.is-on) button:hover { color: var(--color-plum); }
+  .talk__ch:not(.is-on) button:hover { color: var(--color-plum); }
   .talk__chs button[aria-checked="true"] { color: var(--color-link); }
   .talk__chs button:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 3px; }
   .talk__chs p { margin: 4px 0 0; font-size: var(--text-body); }

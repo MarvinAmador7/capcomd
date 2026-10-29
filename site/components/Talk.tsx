@@ -71,9 +71,9 @@ export function Talk() {
         </div>
       </figure>
       <div className="talk__side">
-        <ul className="talk__chs" role="radiogroup" aria-label="Channels">
+        <div className="talk__chs" role="radiogroup" aria-label="Channels">
           {CHANNELS.map((c, k) => (
-            <li key={c.id} className={ch === "all" || ch === c.id ? "is-on" : undefined}>
+            <div key={c.id} className={`talk__ch${ch === "all" || ch === c.id ? " is-on" : ""}`}>
               <button type="button" role="radio" aria-checked={ch === c.id} tabIndex={ch === c.id || (ch === "all" && k === 0) ? 0 : -1}
                 onClick={() => setCh(c.id)} onKeyDown={(e) => {
                   const d = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
@@ -81,12 +81,12 @@ export function Talk() {
                   e.preventDefault();
                   const n = CHANNELS[(k + d + CHANNELS.length) % CHANNELS.length]!;
                   setCh(n.id);
-                  (e.currentTarget.closest("ul")?.querySelectorAll("button")[CHANNELS.indexOf(n)] as HTMLButtonElement | undefined)?.focus();
+                  (e.currentTarget.closest(".talk__chs")?.querySelectorAll("button")[CHANNELS.indexOf(n)] as HTMLButtonElement | undefined)?.focus();
                 }}>{c.name}</button>
               <p>{c.text}</p>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
         <p className="talk__notyet">Not yet: siblings talk through their parent. Direct messages between siblings of one parent are on the roadmap.</p>
       </div>
     </div>
