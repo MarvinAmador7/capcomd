@@ -122,4 +122,10 @@ capcomd result --summary "ok"
   const agents = (await rivetSource().agents(run))!;
   // Its last step was `capcomd result`; once done, the line is in past tense.
   expect(agents.find((a) => a.id === root)!.activity).toMatchObject({ kind: "report", text: "Reported back" });
+  // Its step history (agent.step), from the same ops: one durable event per finished step, in order, the last one
+  // recorded when it ended. Await's polls are one step.
+  const evs = await (await app.request(`/v1/events?scope=${run}`, { headers: { authorization: `Bearer ${token}` } })).json() as any[];
+  const steps = evs.filter((e) => e.type === "agent.step" && e.agentId === root);
+  expect(steps.map((e) => [e.data.kind, e.data.n, e.text])).toEqual([["spawn", 1, "Started a sub-agent"], ["wait", 1, "Waited for sub-agents"], ["report", 1, "Reported back"]]);
+  expect(steps.at(-1).seq).toBeLessThan(evs.find((e) => e.type === "agent.done" && e.agentId === root).seq);
 }, 120_000);

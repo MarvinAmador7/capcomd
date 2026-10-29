@@ -22,12 +22,17 @@ import { VM_RPC_DIR } from "./skill";
 
 const NODE_BIN = Bun.which("node") ?? "node";
 
-function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number) {
+/**
+ * `steps`: also record its step history (agent.step) from these ops. Only for scripted agents, whose ops are all the
+ * daemon sees of them; a real agent's steps come from its own events (worker.ts), which include its capcomd calls.
+ */
+function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number, o: { steps?: boolean } = {}) {
   const s = client().scope.getOrCreate([runId]);
   const ttlMs = Number(env("TOKEN_TTL_MS") ?? 30 * 60_000);
   let jti: string | null = null;
   // The capcomd ops it calls (spawn, await, send, …) are what it is doing too (harness.v1 Agent.activity).
-  const activity = activityReporter((act) => s.setActivity({ agentId: a.agentId, activity: act }));
+  const activity = activityReporter((act) => s.setActivity({ agentId: a.agentId, activity: act }),
+    o.steps ? { onStep: (st) => s.recordStep({ agentId: a.agentId, ...st }) } : {});
   const pump = startPump({
     spool, intervalMs, refreshMs: Math.max(1000, ttlMs / 2),
     mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits), ttlMs }); jti = t.claims.jti; return t.token; },
@@ -42,9 +47,10 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
     onLog: (lines) => { s.appendLog({ agentId: a.agentId, stream: "agent", lines }).catch(() => {}); },
   });
   return {
-    stop: async () => {
+    /** `finished`: the agent ended by itself, so its last step is recorded (a cancelled one's is dropped). */
+    stop: async (f: { finished?: boolean } = {}) => {
       await pump.stop();
-      activity.stop();
+      if (f.finished) await activity.finish(); else activity.stop();
       // The agent is done with its token: revoke it so a copy left in the VM is dead now, not at exp.
       if (jti) await s.revokeToken({ jti, agentId: a.agentId, reason: `agent ${a.agentId} finished` }).catch(() => {});
     },
@@ -93,7 +99,8 @@ export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitC
   // The PATH below is minimal; node may live elsewhere on the host (Homebrew, nvm): link it in.
   if (NODE_BIN !== "node" && !existsSync(join(bin, "node"))) symlinkSync(NODE_BIN, join(bin, "node"));
   const s = client().scope.getOrCreate([runId]);
-  const p = pumpFor(runId, a, new LocalSpool(dir, [{ file: out, stream: "stdout" }, { file: err, stream: "stderr" }]), Number(env("SCRIPT_RPC_POLL_MS") ?? 100));
+  const p = pumpFor(runId, a, new LocalSpool(dir, [{ file: out, stream: "stdout" }, { file: err, stream: "stderr" }]), Number(env("SCRIPT_RPC_POLL_MS") ?? 100), { steps: true });
+  let cancelled = false;
   try {
     for (let i = 0; i < 100 && !(existsSync(join(dir, "token")) && statSync(join(dir, "token")).size); i++) await new Promise((r) => setTimeout(r, 20));
     let pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
@@ -115,10 +122,10 @@ export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitC
     for (;;) {
       if (existsSync(exitFile)) break;
       const cur = await s.getAgent({ agentId: a.agentId }).catch(() => null);
-      if (cur?.status === "cancelled") { try { process.kill(-pid, "SIGKILL"); } catch {} return { exitCode: 137 }; }
+      if (cur?.status === "cancelled") { cancelled = true; try { process.kill(-pid, "SIGKILL"); } catch {} return { exitCode: 137 }; }
       if (!alive(pid) && !existsSync(exitFile)) { await new Promise((r) => setTimeout(r, 300)); if (!existsSync(exitFile)) return { exitCode: 137 }; }
       await new Promise((r) => setTimeout(r, 150));
     }
     return { exitCode: Number(readFileSync(exitFile, "utf8").trim() || 1) };
-  } finally { await p.stop(); }
+  } finally { await p.stop({ finished: !cancelled }); }
 }

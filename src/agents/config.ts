@@ -5,10 +5,11 @@ export type AgentKind = "fake" | "claude-code" | "codex";
 export type RealAgent = Exclude<AgentKind, "fake">;
 
 /** CAPCOMD_AGENT=claude-code|codex selects a real worker; default (unset/"fake") keeps the local fake work. */
-export function agentFromEnv(source: Record<string, string | undefined> = process.env, profile?: string | null): AgentKind {
+// `pinned`: the spec recorded with the agent (profiles.ts pinnedAgent), which wins over a lookup by name.
+export function agentFromEnv(source: Record<string, string | undefined> = process.env, profile?: string | null, pinned?: unknown): AgentKind {
   // CAPCOMD_AGENT may be a provider kind or a profile name; else the agents file's default; else fake.
   const { resolveAgent } = require("./profiles") as typeof import("./profiles");
-  return resolveAgent(profile, source).kind;
+  return resolveAgent(profile, source, pinned).kind;
 }
 export const isRealAgent = (k: AgentKind): k is RealAgent => k !== "fake";
 
@@ -101,6 +102,8 @@ export interface AgentConfig {
   allowedTools?: string[];
   disallowedTools: string[];
   model?: string;
+  /** Reasoning effort (claude --effort, codex model_reasoning_effort); unset: the CLI's default. */
+  effort?: string;
   /** Working dir inside the VM (persistent disk, so a snapshot keeps installs and the dep template). */
   workdir: string;
   /** Override the agent binary (tests: fake claude/codex). When set, detect/install is skipped. */
@@ -147,11 +150,21 @@ export function claudeCostUsd(u: ClaudeUsage): number {
   return (u.input * p.in + u.cacheWrite * p.in * 1.25 + u.cacheRead * (p.cacheRead ?? p.in * 0.1) + u.output * p.out) / 1e6;
 }
 
+/** The reasoning effort an agent runs with: CAPCOMD_AGENT_EFFORT, else its profile's; undefined means the CLI's default. */
+export function agentEffort(spec: { effort?: string } | null | undefined, source: Record<string, string | undefined> = process.env): string | undefined {
+  return envVar("AGENT_EFFORT", source) ?? spec?.effort;
+}
+
+/** The model an agent runs with: CAPCOMD_AGENT_MODEL, else its profile's; undefined means the CLI's own default. */
+export function agentModel(spec: { model?: string } | null | undefined, source: Record<string, string | undefined> = process.env): string | undefined {
+  return envVar("AGENT_MODEL", source) ?? spec?.model;
+}
+
 const list = (v: string | undefined, d: string[]) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : d);
 
-export function loadAgentConfig(source: Record<string, string | undefined> = process.env, profileName?: string | null): AgentConfig {
+export function loadAgentConfig(source: Record<string, string | undefined> = process.env, profileName?: string | null, pinned?: unknown): AgentConfig {
   const { resolveAgent } = require("./profiles") as typeof import("./profiles");
-  const ra = resolveAgent(profileName, source);
+  const ra = resolveAgent(profileName, source, pinned);
   const spec = ra.spec;
   const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs, AGENT_STUCK_REPEATS: spec?.stuckRepeats, AGENT_NO_CHANGE_MS: spec?.noChangeAfterMs, AGENT_CHECKPOINT_MS: spec?.checkpointEveryMs };
   const opt = (name: string) => {
@@ -182,7 +195,8 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     pollMs: num("AGENT_POLL_MS", 2000),
     ...(envVar("AGENT_ALLOWED_TOOLS", source) !== undefined || spec?.allowedTools ? { allowedTools: list(envVar("AGENT_ALLOWED_TOOLS", source), spec?.allowedTools ?? []) } : {}),
     disallowedTools: list(envVar("AGENT_DISALLOWED_TOOLS", source), spec?.disallowedTools ?? []),
-    model: envVar("AGENT_MODEL", source) ?? spec?.model,
+    model: agentModel(spec, source),
+    effort: agentEffort(spec, source),
     profile: ra.name,
     systemPrompt: spec?.systemPrompt,
     appendSystemPrompt: spec?.appendSystemPrompt,

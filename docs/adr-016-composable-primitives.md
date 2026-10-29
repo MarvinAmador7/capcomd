@@ -43,7 +43,7 @@ Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token 
 - `capcomd cancel <runId> [agt] [--reason]`: cancels the subtree (pre-order) and destroys each agent's VM. Without `agt` it cancels the whole scope and the run. It is idempotent.
 - `capcomd tree <runId>`: the agent tree with budgets. `capcomd events <runId>` now includes `scope:*` events: RUN_NEW, AGENT_SPAWNED (with the effective spec, limits, budget and key), AGENT_STARTED, AGENT_DONE/FAILED, AGENT_CANCELLED.
 - **State:** a `scope` actor per run holds the agent tree, keys and the primitive event log. Spawn and each cancel are single transactions, so the limit checks and budget carve can't race.
-- **Execution:** each agent gets its own worker actor (`[runId, agentId]`), which does provision → assign → pushBranch (the same idempotent steps as `capcomd run`) → drain. A detached `capcomd agent-drive` process drives it, holding a renewable lease (`CAPCOMD_DRIVER_LEASE_MS`, default 15s). `await`/`wait-any` restart a driver whose lease has expired. Cancel is noticed at step boundaries and inside the agent poll.
+- **Execution:** each agent gets its own worker actor (`[runId, agentId]`), which does provision → assign → pushBranch (the same idempotent steps as `capcomd run`) → drain. Since 2026-10-28 the worker actor's own workflow drives it (ADR-022); before, and with `CAPCOMD_AGENT_WORKFLOW=0` on the engine for one release, a detached `capcomd agent-drive` process drove it, holding a renewable lease (`CAPCOMD_DRIVER_LEASE_MS`, default 15s). `await`/`wait-any` restart a driver whose lease has expired. Cancel is noticed at step boundaries and inside the agent poll.
 - **Policy:** `src/primitives/policy.ts` (pure).
   - Children limits are narrowed down the tree: depth−1, descendants−1, the allowed-profile list intersected.
   - maxChildren counts active children only.
@@ -88,7 +88,7 @@ Agents inside VMs get the same surface as a scoped tool (`capcomd` with a token 
 - **Charging:** agents are charged `{usd: costUsd, turns, wallSeconds}` (agent wall time). Subscription agents spend usd 0 and are charged turns + time.
 
 ### Future (ADR item)
-- Drive agents from the engine with actor schedules instead of host `capcomd agent-drive` processes. That removes the dependency on the orchestrating host and the lease takeover. The host driver is fine for now.
+- ~~Drive agents from the engine with actor schedules instead of host `capcomd agent-drive` processes.~~ Done: ADR-022 (a workflow per agent in its worker actor, the default since 2026-10-28).
 
 
 ## Step 2 as built: verify + merge --require
@@ -145,6 +145,6 @@ Both live in the run's scope actor (one SQLite transaction per write, engine clo
 
 **Parity eval** (`evals/recipe-parity/run.ts`) uses one engine and one bare repo per case. Cases: 3-task plan, explicit target, protected target with the approval flow driven through the CLI, and checks that fail. It compares the run outcome (state, judge, merged tasks, landed files, commits, failed attempts) and the CLI contract: status keys, states and tasks, `awaitingApproval`, `cancel` on a finished run, ledger event counts, stream event types, required trace spans, and the early-approve conflict. Trace rule (asserted, documented in docs/integration-agents.md): a `git.merge` span appears iff something merged; in a run that merges nothing there is none (the recipe verifies, then merges only a passing ref). Legacy's `git.merge` on a failed verify-and-merge attempt is not contract.
 
-**Chaos:** the killpoint gate's client is pinned to `--legacy`. `RECIPE_KILLPOINTS` reruns every actor and merge killpoint (except legacy-only `lease.expire.mid`) plus `board.claim.mid` and `scope.spawn.mid` on `--recipe`, with the same audit (one landing per plan task, ledger, budget, outbox).
+**Chaos:** the killpoint gate's client is pinned to `--legacy`. `RECIPE_KILLPOINTS` reruns every actor and merge killpoint (except legacy-only `lease.expire.mid`) plus `board.claim.mid` and `scope.spawn.mid` on `--recipe`, with the same audit (one landing per plan task, ledger, budget).
 
 **Later (perf):** the recipe uses one VM per agent (the isolation default), which is about 25–45% slower than legacy's single worker on fakes. A warm pool or VM reuse is a follow-up; nothing changes now.

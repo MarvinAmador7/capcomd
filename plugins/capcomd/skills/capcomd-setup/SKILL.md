@@ -31,6 +31,7 @@ That installs one self-contained executable (about 220 MB: the CLI and its engin
 `~/.capcomd/bin`; if that isn't on the user's PATH, the installer prints the line to add. Homebrew users can
 `brew install MarvinAmador7/tap/capcomd` instead. After installing, the
 plugin's tools load in a new session: ask the user to restart it (or reload plugins), then call `capcomd_setup`.
+In Hermes, `capcomd setup agent` (in the repository) adds the MCP server and these skills to it; then `/reload-mcp`.
 
 ## 3. The sandbox provider (boxd today)
 
@@ -40,6 +41,8 @@ for capcomd with the user's logged-in boxd CLI and keeps it in the OS keychain (
 - boxd CLI not installed: `curl -fsSL https://boxd.sh/downloads/install.sh | sh`.
 - Not logged in: **the user** runs `boxd auth login` (it opens a browser). Ask them to; don't try it yourself.
 - Several boxd orgs and none active: ask which one, then pass `--org <name>`.
+- Inside a boxd machine that isn't isolated (an agent like Hermes on its own VM): no key is needed; setup uses the
+  machine's own credentials and says so.
 
 Then run `capcomd setup accounts --yes --agents claude` (or `codex`, or `claude,codex`). It also builds the agent
 VM snapshot (a few minutes the first time) and checks each agent works from a VM.
@@ -69,8 +72,9 @@ none) and saves it as `driver.maxRunBudget`. Settings land in
 `.capcomd/config.json` (commit it, so the team shares the gates) and `~/.capcomd/config.json`.
 
 Optional, in `.capcomd/config.json`: `"driver": {"maxRunBudget": "usd=20,turns=400"}` caps each run you start;
-`"driver": {"approvals": "client-confirmed"}` lets you approve protected merges after the user confirms each
-call (by default only the user approves, with `capcomd approve`).
+`"driver": {"approvals": "elicit"}` lets `capcomd_approve` ask the user itself (a prompt capcomd writes, through
+your MCP client) and approve only on their accept (by default only the user approves, with `capcomd approve`;
+`capcomd setup agent --approvals elicit` sets it for Hermes). `client-confirmed` still works but isn't recommended.
 
 ## 6. The engine
 

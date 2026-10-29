@@ -5,8 +5,434 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: listing runs no longer creates empty runs in the engine. When your run list (`state/runs.jsonl`) names a run
+  this engine doesn't have, for example one a test engine on another port recorded, the menu bar, the harness API and
+  `capcomd_runs` show it as "unknown" with no agents. Before, every listing (twice a second while the menu bar is open)
+  quietly created an empty run in the engine for it. Reading such a run's agents, events, thread or approvals no
+  longer stalls for seconds either.
+- The live end-to-end scripts (`scripts/mac-subagents-e2e.sh`, `scripts/mac-agent-ops-e2e.sh`) keep their runs out of
+  your run list, so the menu bar no longer shows them. They write their own index in the run's work folder and still
+  use your logins, environments, boxd key and settings. To do the same, set `CAPCOMD_RUNS_INDEX` to a file of your own.
+- `capcomd serve` now opens the harness API only once its actors can answer, waiting at most 30 s. Before, the menu
+  bar's first requests after a restart could arrive before the actors were up and fail with warnings in the engine log.
+- Fix: a project's settings are looked for from the current folder up to your home folder and no further, even when
+  `HOME` points somewhere else (a test or an agent's scratch home); capcomd's own `~/.capcomd/config.json` was read as
+  a project's `.capcomd/config.json` then, so its sandbox and repository settings applied where they shouldn't.
+- Agents are now driven by the engine itself: each agent runs as a durable workflow inside `capcomd serve` instead of a
+  separate `capcomd agent-drive` process per agent. An agent carries on by itself when the engine restarts (nothing has
+  to `await` it to get it going again), a usage-limit pause wakes at its reset from the engine, `capcomd await` waits
+  for change events instead of polling, and a dozen running agents no longer cost a dozen extra processes. The settings
+  that change how an agent runs (`CAPCOMD_SPAWN_EXEC`, scripted agents' `CAPCOMD_SCRIPT_*`, the agents file) are taken
+  from the shell that spawned it, as before. If something goes wrong, start the engine with
+  `CAPCOMD_AGENT_WORKFLOW=0` to get the old per-agent processes back (this escape hatch is kept for one release);
+  set it where `capcomd serve` (or the background service) runs: every command follows the engine's mode and says so
+  if its own setting differs. Design and limits: docs/adr-022-agent-lifecycle-workflow.md.
+- capcomd's engine data now lives in capcomd's own folder: `~/.capcomd/engine/<port>/db` (or `$CAPCOMD_HOME/engine/<port>/db`)
+  for every port, the default 6420 included, instead of rivetkit's shared `~/.rivetkit`, which any other project
+  using Rivet on your Mac also writes (a newer one could stamp the database so capcomd's engine refused to start).
+  capcomd no longer reads or writes `~/.rivetkit` at all; rivetkit's own engine logs go to
+  `~/.capcomd/engine/<port>/.rivetkit/`. The first time the new version starts on 6420 it copies your existing data
+  from `~/.rivetkit/var/engine/db` once (it never moves or deletes it: you can remove the old folder yourself once
+  you're happy), checks the copy and prints one line saying so; if an engine is still running on the old folder it
+  refuses with a sentence saying to stop it first. capcomd also records which engine version last opened its data
+  (`engine-version.json`): before a different version opens it, it copies the database to
+  `~/.capcomd/engine/<port>/backups/<old version>-<UTC time>/` (the newest three are kept; restore by putting its
+  `db/` and `engine-version.json` back), it refuses to start on data a newer engine already opened, naming both
+  versions and the newest backup, and when the engine doesn't come up it prints the engine's own last log lines.
+  The engine is Rivet 2.3.31 (from 2.3.27), which keeps scheduled wake-ups (lease expiry, machine reaping, quota
+  resets) across engine restarts.
+- Menu bar app: Active cards are redesigned. While nothing needs you a card is one line: the agents' faces, who is
+  doing what ("worker is editing 2 files") and how long the run has been going. When an approval waits, the card
+  opens to the question ("Merge worker's work into main?"), who asked and who is waiting on it, the files it lands with
+  lines added and removed, and **View diff**, **Deny** and **Approve ↩** (Return approves while the card has focus; Esc
+  never denies). A failed agent opens the card to the lines that say why, with **Open thread** and **Hide**; agents
+  stopped at a usage limit say when they pick up again, with **Resume now**. The chevron shows the agent tree. The
+  newest finished run tops the Recent list with how it ended: "Merged into main" (or "Merge denied" when you denied
+  it), files and lines, whether its checks passed, and what it cost when API spend was billed. The cards also read in
+  light mode.
+- Harness API: a merge waiting for approval now says what it would land. `approval.requested` and `snapshot.approvals`
+  carry `subject.files` (path, status, lines added and removed; the 20 biggest changes), `subject.filesTotal`,
+  `subject.added` and `subject.removed`, read when the merge was parked; snapshot approvals also carry `requestedAt`.
+  An agent's `result` records how its merge ended (`merge`: target and merged, failed or denied) and, when its checks
+  failed, how (`verification.checks.reason`) and the lines of the check output that name the failure
+  (`verification.checks.excerpt`). `capcomd merge --json` of a parked merge includes the same `diff`.
+- Menu bar app: the folder picker (**+ › Choose Project Folder…**, and Choose… in Settings › Runs) opens in front of
+  other apps' windows and keeps the folder you pick; it could open behind the app you were using, and the first click
+  in it closed it with no folder. After you pick a folder the menu bar panel opens again on what the folder needs.
+- Menu bar app: set a project up right in the composer. Pick a folder with **+ › Choose Project Folder…**: a capcomd
+  project is used at once as before; any other folder gets an orange dot on its chip and, in place of the tool row, what
+  it needs next. A GitHub checkout shows its repository, the target branch, how changes land (pull requests, or pushes
+  when the GitHub CLI isn't logged in, with **Log In…**), the agents that can work on it, and a spend cap when one of
+  them would bill an API key where your runs go; edit any of them in place and press **Set Up**, or **Set Up and Start**
+  when you've already typed a goal. A folder that isn't a git checkout offers **Initialize Git**; a checkout with no
+  remote offers **Publish to GitHub** (pick the account or organization, the name and Private / Public; it says first if
+  the first commit would include files that look like secrets), then goes straight into the setup. A checkout on
+  another host offers **Open in Terminal** for `capcomd setup project`, and any folder **Choose Another Folder…**.
+  **Cancel**, the chip's × or Esc go back to the project you had; new runs never move until the folder is set up.
+  Needs a capcomd with `projects.setup` (and `projects.git` for Initialize Git and publishing); with an older one, a
+  picked folder is used as before. Settings › General has a new **Keep .capcomd/ out of git** switch (off by default):
+  projects you set up from the app from then on get `.capcomd/` added to their .gitignore.
+- Harness API: take a plain folder all the way to a GitHub project from the menu bar app (capability `projects.git`).
+  `POST /v1/projects/git-init` starts a git repository (`git init -b main`, no commit) in a folder that isn't in one
+  (never your home folder, a folder that holds it, or capcomd's own settings). `GET /v1/projects/publish-options`
+  (read scope) says, for a checkout with no origin, whether the GitHub CLI is logged in, the accounts you can publish
+  as (your GitHub login, then your organizations), a repository name from the folder's name, and how many files the
+  first commit would hold, listing any that look like secrets (`.env` and `.env.*` other than
+  `.env.example`/`.env.sample`/`.env.template`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, SSH private keys, `.netrc`,
+  `.git-credentials`, an `.npmrc` with an auth token). `POST /v1/projects/publish` makes the first commit ("Initial
+  commit", what `.gitignore` ignores stays out) when there is none and creates the repository, private or public,
+  with `gh repo create --source … --remote origin --push`. It refuses, with a sentence and the field it's about,
+  while the first commit would include likely secrets (add them to `.gitignore`) or more than 2000 files (add a
+  `.gitignore`), when git has no `user.name`/`user.email`, or when the GitHub CLI isn't logged in; a name that's
+  taken on GitHub is 409. Both POSTs need the `configure` scope and an `Idempotency-Key`, and are recorded on the
+  daemon stream as `project.git_initialized` and `project.published` (names and counts, never file names or
+  contents).
+- Harness API: `POST /v1/projects` no longer needs `check`: leave it out to keep the project's current check, or to
+  use the one `GET /v1/projects/inspect` suggests (possibly none). Send `gitignore: true` to have capcomd add
+  `.capcomd/` to the checkout's `.gitignore` (created if missing; nothing changes when git already ignores it).
+  `capcomd setup project` is unchanged.
+- Harness API: set a folder up as a capcomd project without Terminal (capability `projects.setup`), so the menu bar
+  app can offer it for a folder you pick. `GET /v1/projects/inspect?path=` (read scope, writes nothing) says what a
+  setup form needs: the git checkout the folder is in, its origin (the repository a project always uses), its branches
+  as your local refs know them, the check `capcomd setup project` would suggest, whether pull requests work (`gh` is
+  logged in), and which of Claude Code and Codex have a login and whether one would bill an API key (then a spend cap
+  per run is asked). What blocks a folder comes back as `problems`, each with a code and a sentence to show: `not_git`,
+  `home` (your home folder, where capcomd keeps its own settings), `no_origin`, `not_github` (the app sets up GitHub
+  checkouts; others still work with `capcomd setup project` in Terminal) and `not_found`. `POST /v1/projects` (the
+  `configure` scope, an `Idempotency-Key`) takes the answers (`mode` pr or direct, `target`, `check`, `agents`, and
+  `budgetUsd` when asked), checks them again, writes the same `.capcomd/config.json` and `.capcomd/agents.json`
+  `capcomd setup project` writes for the same answers (merged into what's there, keeping your profiles), and adds the
+  folder to capcomd's projects; new runs can then use it (`repo` in `POST /v1/runs` and `GET /v1/run-options`). A
+  refusal is 422 with the reason and the field it's about; if the folder's origin changed since it was inspected
+  (send `expect.repo`), it's 409 and nothing is written; capcomd won't write through a `.capcomd` that's a symlink out
+  of the checkout. Each setup that changed something is recorded on the daemon stream as `project.configured`.
+  Setting up needs a token with the `configure` scope, as changing a place's settings does.
+- Fix: a place's Machines list (and Delete) could show another capcomd's machines as "left behind". A boxd org lists
+  every member's machines, and a second capcomd on the same Mac (another checkout, a test daemon) sees the same Docker
+  containers, so a teammate's working agent could read "Delete this machine? No agent is using it." and Delete would
+  have destroyed it. The same happened to a live agent of an old run (beyond the 500 most recent). capcomd now keeps
+  its own record of every machine it creates (`~/.capcomd/state/machines/`, one file per machine, until the machine is
+  deleted), lists a machine nobody uses only when it's in that record, and asks a recorded machine's agent directly
+  before calling it left behind. Another capcomd's machines aren't listed at all, and deleting one by id is 404 without
+  asking the provider. When capcomd can't read its record, those machines show without a Delete button. Machines made
+  before this version aren't in the record: they no longer appear in the list (unless an agent is still using one) and
+  can't be deleted from the app; their idle lifetime deletes them.
+- Harness API: delete a machine (capability `sandboxes.actions`). `POST /v1/sandboxes/{name}/resources/{id}/actions/delete`
+  (steer scope, an `Idempotency-Key`, no body) deletes one of capcomd's machines at a place. For an agent's machine it
+  cancels that agent (and the agents it started) the way `capcomd cancel <run> <agent>` does, and the agent's machine
+  is deleted as it stops; a machine left behind is deleted at the provider; a machine running capcomd's own checks,
+  login or environment build can't be deleted (409). capcomd looks at the machine again just before it acts: if who
+  uses it changed since it was listed, nothing is deleted (409), and a machine that's already gone answers
+  `changed: false`. A provider that doesn't answer is a new 503 `unavailable`. Machines you can delete carry
+  `destructive: true` and a `confirm` question to ask first ("Delete worker's machine? This stops the worker on “…”.
+  Work since its last checkpoint is lost."). Every delete is recorded on the daemon stream as
+  `sandbox.resource_action` (who asked, and which agent was stopped) and `sandbox.resource_deleted`; machines capcomd
+  deletes by itself are recorded too, with why: `idle_lifetime` (Docker's 5-minute sweep, or a machine's own idle
+  lifetime) or `run_ended` (its agent finished, failed or was stopped). Deletes boxd makes on its own aren't seen.
+- Menu bar app: Delete… on a machine in a place's Details (with a capcomd that has `sandboxes.actions`), next to Open in
+  Terminal. It asks first with capcomd's question and a red Delete button; for a working agent it says that the agent
+  stops and its work since the last checkpoint is lost. If capcomd refuses (the machine changed, it's capcomd's own, the
+  provider didn't answer), its reason shows under the machine. Machines running capcomd's own jobs still have no
+  buttons.
+- Docker's sweep no longer counts a container it failed to remove as removed; it tries again next time.
+- Menu bar app: build it as a real Mac app. `apps/menubar/scripts/build-app.sh` makes
+  `apps/menubar/build/capcomd.app` (with its pixel bot icon and the repo's version), so Open at login and
+  notifications work and About shows the app's version. It's signed ad hoc, which means the Keychain asks again for
+  the app's token after every rebuild; set `CAPCOMD_SIGN_IDENTITY` to a code-signing identity of yours and "Always
+  Allow" lasts across rebuilds. `--debug` makes a debug build. See `apps/menubar/README.md`.
+- Harness API: change a place's settings (capability `sandboxes.settings`). `PATCH /v1/sandboxes/{name}/settings`
+  with `{values: {idleLifetime: "14400"}, rev}` sets how long an idle machine is kept before it's deleted: 15 minutes,
+  1 hour (the default), 4 hours or 12 hours, per place. It needs a token with the new `configure` scope
+  (`capcomd clients add <name> --scopes read,steer,approve,configure`); a stale `rev` is 409, a value that isn't one of
+  the choices is 422. The choice is kept in your user config (`~/.capcomd/config.json` `sandboxes.<name>.idleLifetime`)
+  and applies to runs started after it, no restart needed: each run keeps the lifetime it started with, and its agents'
+  machines (and their renewals while the agent works) use it. `CAPCOMD_SANDBOX_IDLE_SECONDS` in capcomd's environment
+  overrides it and makes the setting read-only. Each change is recorded as a `sandbox.settings_changed` event on the
+  daemon stream, with who made it.
+- Harness API: machines capcomd makes for its own jobs (a run's checks, `capcomd auth login`/`auth status`,
+  `capcomd env build`, `capcomd env doctor`) are listed under `GET /v1/sandboxes/{name}/resources` as running with an
+  owner of their kind (`check`, `login`, `env_build`, `doctor`) and a line saying what they do ("Checks for run-…",
+  "Logging in to Claude Code", "Building the agent environment"), not as left behind; they offer no actions. Resource
+  owners now carry `kind` and `label`, and `runId`/`agentId` are null when the machine isn't an agent's.
+- Menu bar app: "Delete idle machines after" in a place's Details can be changed (with a capcomd that has
+  `sandboxes.settings`). A token made before this release can't change it: the row says "Reset your token to change
+  these", and Reset… in Settings now makes a token that can. Machines running a run's checks, a login or an
+  environment build read as such ("checks · run-…") and are never shown as left behind.
+- Harness API: a place's details, for a settings screen that works for any provider (capability `sandboxes`).
+  `GET /v1/sandboxes` lists each place agents run (today Local · Docker and Cloud · boxd) with what it can do, whether
+  it's available and whether it's the default. `GET /v1/sandboxes/{name}` adds its settings and info rows as typed
+  fields the app renders as they come: "Delete idle machines after" (1 hour today; it can't be changed yet), Logins
+  (whether every login there is bound to its AI's API host) and Checkpoints ("After each commit and every 10
+  minutes"). Read scope, local reads only, never a credential.
+- Harness API: the machines capcomd's agents run on (capability `sandboxes.resources`).
+  `GET /v1/sandboxes/{name}/resources` lists them with the run, agent and task each belongs to, or `orphaned` for a
+  machine capcomd left behind, with when it was created and when it will be deleted; `…/resources/{id}` adds the
+  command that opens a shell in it. The provider is asked at most every 10 seconds; when it doesn't answer, you get
+  its last list marked `stale` with the reason.
+- `capcomd sandbox shell <runId> <agentId>` opens a shell in the machine an agent runs on (boxd VM or Docker
+  container), and `capcomd sandbox shell --sandbox docker|boxd --machine <id>` in a machine capcomd left behind. It
+  warns that you're inside an agent's sandbox, accepts only capcomd's own machines and uses your local credentials.
+- Harness API: `GET /v1/logins` entries carry `hostBound` and `boundTo` (the host a login is bound to, e.g.
+  api.anthropic.com), and `GET /v1/logins` and `GET /v1/environments` take `?sandbox=` for one place's rows.
+- Harness API: place names in `POST /v1/runs` `sandbox`, `GET /v1/run-options` and the Settings routes are now
+  plain strings checked against the places the daemon lists, and `drivers[].sandboxes` is a map keyed by place name.
+  The same values are sent and accepted; a client generated from `openapi/capcomd.json` sees a string and a map where
+  it saw an enum and a fixed object. A refused `driver`/`sandbox` pair now names boxd as "Cloud" (it said "VM").
+- Menu bar app: Settings › Runs has one section per kind of place, "Local" (a laptop) and "Cloud" (a cloud), as the
+  composer's Local / Cloud switch shows them; the provider's row in it
+  (Docker, boxd) shows **Default** or **Make Default**, and **Details…** (with a capcomd that describes its places).
+  Details… opens a sheet that shows whether the place can be used, its agent environment, the machines agents are running there right now (who
+  uses each one and for how long, and any machine left behind that no agent owns), how long an idle machine is kept
+  ("Delete idle machines after"), whether logins there are bound to their AI's API, and
+  when work is checkpointed. **Open in Terminal** opens a shell in a machine. If the provider can't be reached, the
+  last list stays with a note. Done or Esc closes it.
+- capcomd can ask you itself before a merge into a protected branch: set `"driver": {"approvals": "elicit"}` in a
+  project's `.capcomd/config.json` (or `capcomd setup agent --approvals elicit`). Your agent calls `capcomd_approve`
+  and capcomd sends its own prompt through the agent's MCP client (in Hermes: the terminal, or Allow / Deny buttons in
+  Telegram, Slack…) naming the project, repository, run, merge, target, the exact commit, the checks that passed and
+  the reviewer's verdict (fenced as data). Only your accept approves, and only if the branch still points at that
+  commit; decline, cancel or no answer within `driver.elicitTimeoutSeconds` (default 300) leaves the merge waiting,
+  and the tool says "No decision: the merge is still waiting. Don't retry; ask the user." A client that can't show
+  such a prompt is refused, as before. It's the recommended setting for Hermes; for Claude Code, whose hooks can answer
+  prompts, only with managed hooks (add `"claude-code"` to `driver.elicitClients`). `client-confirmed` still works but
+  is no longer recommended.
+- `capcomd_approve` is marked as needing a person (Claude Code asks before every call, even in bypass or auto mode)
+  and is no longer marked idempotent.
+- Hermes: one capcomd for all your projects. `capcomd setup agent` now writes a single `mcp_servers.capcomd` entry with
+  no `cwd` and adds the checkout you run it in to capcomd's project list (`projects` in `~/.capcomd/config.json`; the
+  first is the default, `--default-project` changes it). An entry an earlier version pinned to a folder is migrated:
+  the folder joins the list. MCP tools take an optional `project` (a name or a checkout's path; a run's tools default
+  to the run's project), results and approval prompts name the project, and the new `capcomd_projects` tool lists
+  them. `--hermes-entry-per-project` still writes a separate entry pinned to one checkout. In a terminal, setup now
+  asks who approves merges for Hermes: capcomd asking you in Hermes (`elicit`, recommended) or you with `capcomd
+  approve`; `--yes` alone changes nothing. The entry also gets `timeout: 360` when it has none, so a tool call
+  outlives the approval prompt.
+- Docs: Hermes recipes for a nightly run that stages but never merges into a protected branch, a morning digest with
+  no model, and narration with `/heartbeat` ([integration-agents.md](docs/integration-agents.md#recipes-no-new-code)).
+
+- Harness API: three read-only routes for a settings screen, each with its capability in `GET /v1/health`.
+  `GET /v1/logins` (`logins`) says, for Claude and Codex in each sandbox (docker, boxd), whether agents can log in,
+  how (a plan login or an API key), where the login is kept, and the `capcomd auth login … --sandbox …` command that
+  logs in there. `GET /v1/environments` (`environments`) gives each sandbox's agent environment: `ready`, `missing`,
+  `building` (a `capcomd env build` is running) or `failed` (the last build failed), with its tool versions, when it
+  was built and the `capcomd env build --sandbox …` command. `GET /v1/service` (`service`) says whether capcomd is
+  installed and loaded as a background service, with the install and uninstall commands. All three need the `read`
+  scope, only read local state (cheap to poll) and never include a credential.
+- `capcomd env build` now leaves a small status file next to the environment ledger while it runs, and records when a
+  build fails, so `GET /v1/environments` can report a build in progress or a failed one.
+- Menu bar app: a Settings window (⌘, or Settings… in the composer's + menu) with General, Accounts, Runs and About.
+  General shows whether capcomd is connected and its version, keeps capcomd running as a background service, opens
+  the app at login, turns the menu bar bot's faces on or off, and turns approval and finished-run notifications on or
+  off (finished runs now include runs that failed or were stopped). Accounts shows whether Claude and Codex are logged
+  in on Cloud and on Local, the boxd API key and this app's token, with Log In…, Set Up… and Reset… buttons that open
+  Terminal with the command ready; the row updates by itself when you're done. Runs sets what new runs start with
+  (project, driver, effort and where they run, the same default the composer's Local / Cloud switch changes) and shows
+  each place's agent environment, with Build… and Rebuild…. With an older capcomd, the rows it can't report are hidden
+  or say so.
+- Menu bar app: the token prompt named a command that doesn't exist (`capcomd token`); it now says to make a token
+  with `capcomd clients add menubar --scopes read,steer,approve`.
+
+- Runs on boxd machines are now called **Cloud** (they were "VM") in the menu bar app and in run options and their
+  messages (`GET /v1/run-options` `label`, e.g. "Not logged in to Claude Code for Cloud"). The sandbox's name stays
+  `boxd` (`--sandbox boxd`, `"sandbox": "boxd"`).
+- `capcomd setup agent` (and `capcomd setup`) now also sets up [Hermes](https://github.com/NousResearch/hermes-agent)
+  when it's installed: it registers `capcomd mcp` in Hermes's `config.yaml` (`mcp_servers.capcomd`, run in the
+  repository you set up, `trust: untrusted` so Hermes asks you before merging, cancelling or approving), denies
+  `capcomd approve` to Hermes's terminal, and installs the orchestration and setup skills in Hermes's skills
+  directory. The file is edited in place (your other servers, settings and comments stay; the old file is kept as
+  `config.yaml.capcomd.bak`), and re-running updates the entry instead of adding another. In a terminal it asks
+  whether Hermes may approve merges into protected branches after asking you (`--approvals client-confirmed`;
+  default: you approve with `capcomd approve`). `--no-hermes` skips it. `capcomd setup check` has a `hermes` line.
+  See docs/integration-agents.md#hermes.
+- Inside a boxd machine without a boxd API key (Hermes on its own VM, say), capcomd started by Hermes or as a
+  service now uses the machine's credentials too: `capcomd setup` records the machine in `~/.capcomd/config.json`
+  (`CAPCOMD_BOXD_MACHINE`). Before, those processes didn't see the machine's `BOXD_VM_*` variables and asked for
+  `BOXD_API_KEY`. If you set up capcomd on such a machine before, run `capcomd setup accounts` (or
+  `capcomd setup agent`) once more.
+
+- Agent threads no longer show "System: task_started" and "System: task_notification": Claude Code's notices that a
+  background task (such as a planner's `capcomd await`) started or ended. The command's row and the child's hand-back
+  already show both. Threads recorded before this keep them.
+- Menu bar app: when capcomd comes back after being unreachable, the app reads again what it offers, so the composer's
+  Local / Cloud switch and driver chip return. Opened while capcomd was down, the app used to lose them until restarted.
+- Menu bar app: the panel no longer jumps when it changes height. Folding a thread's task (or a thought, a command or a
+  diff) used to show the panel half the difference lower for a frame, so the header flashed down and back up; folds
+  now snap without animating, and the window follows the panel in the same frame.
+- Menu bar app: an agent's task at the top of its thread is folded by default ("› Task" and its first line, like a
+  thought); a click shows all of it, no longer cut at four lines.
+- Menu bar app: a reviewer's verdict in its thread shows as a card (a green or red seal, "Passed review" or "Didn't
+  pass review", then each reason) instead of raw JSON (`{"passed": true, "reasons": [...]}`), under any prose before it.
+  The reviewer's bot leads the card, cheering with a happy face when the work passes and making its "oops" face when
+  it doesn't.
+- Harness API: each agent's step history. Every time an agent finishes a step (read some files, edited, ran the
+  tests, started sub-agents…) the run's event log gets an `agent.step` event for that agent, in order, with
+  `{kind, n, startedAt, endedAt}` and a past-tense `text` ("Read 4 files", "Ran the tests"). They are durable: replayed
+  by `GET /v1/events?scope=<runId>` and delivered on the run stream, so a client can show what a finished agent did,
+  not only its last activity line. At most 500 per agent; a cancelled agent's unfinished last step is not recorded.
+  Clients detect it with the capability `agent.steps` in `GET /v1/health`.
+- Menu bar app: Activity shows each agent's steps in order ("[bot] Read 2 files", "[bot] Edited a file", "[bot] Ran
+  the tests") instead of only its latest line; a working agent's live line follows its history. Needs a capcomd with
+  `agent.step` events; older ones show one row per agent as before.
+- Menu bar app: shell commands and other tool calls show a terminal icon (`>_`) instead of a wrench, in threads and in
+  Activity; in a thread, every shell command does, since its row shows the command itself.
+- Menu bar app: every Activity row leads with the bot of the agent that did it ("[bot] Ran the tests"), with its name
+  and role as the tooltip; verify, merge and approval rows lead with the bot whose work they were. Steps of the run
+  itself keep their icon.
+- Menu bar app: the composer shows who can drive a run for the project you picked and where it runs. Claude logged in
+  for Cloud only shows as unavailable on Local, saying which command fixes it; a folder that isn't a capcomd project says
+  so. Before, it showed the daemon's own answer, so a run could be offered and then fail.
+- Menu bar app: a run that hasn't started its first step is headed "Starting…" (not its goal twice), and its Activity
+  says "Nothing has happened yet." instead of staying blank.
+- Agents' commits, and the pull requests capcomd opens for them, are titled with what the change does, cut at a word
+  ("In src/math.ts add and export function multiply(a: number, b: number)…"), instead of the agent's id followed by
+  the task cut mid-word ("agt-k825d4…: In src/math.ts add and export function multiply(a: number, b"). The task and
+  agent are still in the commit's `Capcomd-Task` trailer.
+- Fix: runs started from the menu bar app or `POST /v1/runs` for a project (`repo`) now use that project's agent
+  profiles (`.capcomd/agents.json` from `capcomd setup project`). Their planner used to fail about 5 seconds in with
+  "An internal error occurred", because the daemon looked the profile up in its own agents file. Every agent now runs
+  with the profile it was spawned with, including a planner whose provider `driver` swapped.
+- When an agent can't start because of its configuration (an unknown or invalid profile, missing credentials), its
+  result and its driver log now say what's wrong (e.g. `unknown agent profile "planner" …`) instead of "An internal
+  error occurred", and it fails at once instead of retrying three times.
+- `GET /v1/run-options?repo=<project checkout>` answers for a run of that project, with its own profiles (capability
+  `runs.options.repo`); a directory that isn't a capcomd project is 422 with the same message `POST /v1/runs` gives.
+  `POST /v1/runs` checks `effort` against the body's `repo` too.
+- `GET /v1/run-options` says, for each driver, whether it can run in each sandbox: `drivers[].sandboxes.docker` and
+  `.boxd`, with a reason naming the command that fixes it (capability `runs.options.sandbox`). Logins and agent
+  environments are per sandbox, so Claude logged in for boxd only shows as unavailable for Local. `POST /v1/runs` with
+  a `sandbox` the driver can't run in is now refused at once (422, with that reason) instead of failing later.
+- `capcomd env build`, `env status`, `auth login|status|logout` and `doctor` take `--sandbox docker|boxd` to work on
+  that sandbox instead of `CAPCOMD_SANDBOX`. The "no capcomd env snapshot" error names the sandbox and the exact
+  command (`capcomd env build --sandbox docker`), and no longer says "in the VM" for Docker.
+- A run that can't start is now refused with the reason, instead of showing as running forever with no agents. For
+  example, starting a run on Local (Docker) before its agent environment is built (`capcomd env build --sandbox docker`) now fails
+  right away: `capcomd run` exits with the error, and the menu bar app (`POST /v1/runs`) shows it. If the run's
+  planner still can't be started once the run is under way, the run ends as failed with that error as its reason
+  (in `capcomd status`, `GET /v1/runs` and the run's events) instead of staying "started".
+- Stop (`capcomd cancel <runId>`, the menu bar app's Stop) now ends a run that never got an agent running, such as one
+  whose start failed or whose agents were all stopped before they began. Before, it answered "nothing to cancel" and
+  the run stayed open. Only a run that has already ended answers "nothing to cancel" now.
+- Harness API: a run that ended without its agents ending it has a new `run.ended` event (`state` failed or
+  cancelled, with a `reason`); the lifecycle feed shows it as `run.failed` or `run.cancelled` with that `reason`. `GET /v1/runs` shows
+  such a run as `failed` or `cancelled`.
+
+- Agents no longer fail when the daemon restarts. Before, agents that were running when `capcomd serve` stopped or
+  restarted (a Ctrl-C, a service restart, an upgrade) ended as failed a few seconds later, with "An internal error
+  occurred" or a connection error as their result. Now each agent waits for the daemon to come back (up to 5 minutes,
+  `CAPCOMD_DRIVE_OUTAGE_MS`) and then runs its task again in its VM, without counting the interruption as a failure;
+  the run it had going there is stopped first, so two copies never work in one checkout. If the daemon stays down
+  longer, the agent stays running and the next `capcomd await` picks it up. The work done before the restart is not
+  kept: the task starts over.
+- Menu bar app: an approval that's still waiting keeps its project's card under Active, even after its agents have
+  finished; before, the card moved to Recent and took its Approve / Deny with it, while the menu bar still counted it.
+- Approvals for an agent's merge read "Merge this agent's work into main?" and name the branch, instead of the agent's
+  id ("Merge agt-mvqa… into main?").
+- Fix: a client on the daemon or project event stream (the menu bar app) could overload the engine until `capcomd
+  serve` gave up on it ("engine on :6420 stopped answering") when the daemon's state remembered runs its run list no
+  longer shows. Each such run is now checked once instead of twice a second, the stream never starts a new check
+  before the last one finished, and reading a run's events no longer creates an empty run on the engine.
+- Fix: `capcomd serve` now stops the Durable Streams services process (port 8642) when it exits, including when its
+  watchdog stops it. It used to keep running, hold the port so the next `capcomd serve` couldn't start its own, and
+  attach itself to that daemon's engine.
+- `capcomd serve` names the process holding a port it needs ("capcomd serve: :6421 is held by pid 4242 (rivet-engine)"),
+  and on the default port it also checks the services port (8642, or `RIVET_PORT`) before starting, instead of
+  starting an engine whose services then can't bind.
+- `capcomd serve` stops the engine together with anything the engine started, including after the engine died. When
+  its watchdog gives up on the engine, it now waits for the engine to stop before exiting and lists the harness API
+  requests that were still waiting for an answer.
+- Menu bar app: after the daemon restarts, its feeds reconnect at random, growing intervals (up to 5 s) instead of all
+  at once.
+- Menu bar app: an ended run's view is titled by how it ended ("Done in 7s", "Stopped after 32s") instead of its
+  last step.
+- Menu bar app: in a run's view, click an agent's row in Activity to read its thread; that's how you get back to
+  what each agent said once the run has ended.
+- An agent's log no longer fills with the same "pump error: VM … not found" line after it's paused or stopped;
+  the error shows once.
+- Menu bar app: the panel stays live. It used to stop updating after a while (a quiet connection was dropped, or the
+  daemon restarted) and kept showing old state; it now reconnects within a few seconds, and says "Can't reach capcomd. Reconnecting…" while the daemon is down. Runs started elsewhere (the
+  CLI, another agent) appear as they start, with their agents, even with many runs around; before, past about seven
+  runs, new ones showed no agents. An ended run's view no longer offers Pause and Stop. Agents you
+  stopped show a grey stop mark instead of a red failure, and agents in the Activity list show their bots. When several agents
+  changed files, each row in Files shows the bot of the agent that changed it.
+- Daemon: event streams are no longer cut after 10 seconds of quiet (the heartbeat comes every 15).
+- Trace: git steps are named after their command (push, clone, checkout) even when git gets options first; they read
+  "-c" before, and a push could show the remote instead of the branch. In the menu bar's Trace view, paused agents
+  show a pause mark instead of looking queued.
+- Menu bar app: each goal you start is now its own card. Before, every run in the same repository was folded into one
+  card, titled after whichever goal came first; reruns of the same goal still share a card. A paused agent now shows
+  a pause mark in the tree and its thread.
+- Menu bar app: the menu bar icon appears right away even while macOS is asking whether the app may read its token
+  from the Keychain (the panel says it's waiting); before, nothing showed until that prompt was answered. When no AI
+  can drive a run yet, its menu stays visible, dimmed, with the reason (for example "No planner profile").
+- Menu bar app: the send button is always white (its arrow dims while there's nothing to send), and the panel grows
+  wider when the controls under the goal need the room, instead of spilling past its edge.
+- Menu bar app: choose how a new project runs. Under the goal, a two-icon switch (laptop or cloud) picks where its
+  agents work (Docker on this Mac, or boxd VMs), and a Claude Code / Codex menu by the send button picks the AI that drives it as
+  its planner, and how hard it thinks: the bars on that menu show the reasoning effort, which you can change in the
+  same menu. Both apply to that run, and the app remembers your last picks. Needs a daemon that offers them.
+- Menu bar app: you can now see which AI each agent runs on. The agent tree shows the Claude or Codex mark on every
+  row (hover it for the model), and the agent's bot in the thread header, handoff cards and the team intro wears it
+  as a small badge. Needs a daemon that reports it; older daemons show no mark. Folder chips in the tree now line up
+  on finished agents too.
+- API: `POST /v1/runs` takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox`
+  (docker or boxd) to pick who drives a run, how hard it thinks and where it runs; `GET /v1/run-options` lists them,
+  each driver's effort levels and whether each is available (capability `runs.options`). Agents now also report their
+  `effort`. On the command line: `capcomd run <goal> --planner-provider claude|codex` runs the project's planner on
+  that provider (with the model and login of your profile for it, else the provider's defaults), `--planner-effort
+  LEVEL` sets its effort, and `--sandbox docker|boxd` runs that run's agents and checks there instead of on
+  `CAPCOMD_SANDBOX`. Profiles take `effort` too (`capcomd agents set NAME --effort high`; claude: low to max, codex:
+  minimal to high), and `CAPCOMD_AGENT_EFFORT` overrides it.
+- API: agents now report which AI provider (claude or codex) and model they run on, as `provider` and `model` on
+  each agent (GET /v1/runs/{runId}/agents and the stream's `snapshot.agents`). `provider` is null for a fake agent;
+  `model` is null when the provider's default model is used. The `agent` field of `agent.spawned` events now has a
+  documented shape (`kind`, `provider`, `model`, plus the profile's other settings).
+- Menu bar app: opening the @ mention or / skill list in a thread no longer blanks out the top of the conversation;
+  the list now floats over the thread.
+- Menu bar app: when you @ mention an agent in a message, it becomes a pill with the agent's bot and name, right
+  where you typed it ("ask [Bolt] to retry shard 3"). Delete removes it in one keystroke, and your sent message shows
+  the same pills instead of the raw handles. The back button in a run or thread is now round.
+- Menu bar app: every agent's bot now has a name, and inside a thread you talk to it by name. The header shows the
+  bot's name ("Bolt") with its role and project on one quiet line under it, the message box says "Tell Bolt…",
+  handoff cards lead with the bot's name, and you can @ mention an agent by its bot's name. The agent tree
+  keeps roles; hover a bot to see its name. VoiceOver reads both.
+- Menu bar app: a new look for the panel and for writing to agents. The panel has large rounded corners. Starting a
+  project is now a roomy box at the top: which project folder it goes to is a chip you can change or clear, you type
+  the goal in large text, and a round white button starts it. Writing to an agent works the same way, with the agent
+  shown as a chip with its bot and buttons for @ mentions and / skills. Finished projects show as "Recent" rows with
+  their bot, and ⌘1, ⌘2 and ⌘3 open the first three.
+- Menu bar app: the panel no longer has a footer bar; it ends with your projects. A run's Pause, Stop and Open in
+  terminal bar is unchanged.
+- Menu bar app: two small moments with the bots. When a run starts, its card first introduces the team for a few
+  seconds: the planner waves over the agents it spawns, each with its bot's name. When a run finishes successfully,
+  its card shows the team cheering for a couple of seconds, in party hats and confetti, before it becomes the finished
+  line. Failed or stopped runs don't celebrate; with Reduce Motion the team simply fades in.
+- Menu bar app: on macOS 26 and later the panel's controls (the project field, the message box, Back, Approve and
+  Deny, a run's Pause and Stop bar) use Liquid Glass; earlier macOS versions keep today's look. Approval notifications now show the
+  waiting agent's bot and have Approve and Deny buttons, so you can decide without opening the panel. Clicking Approve
+  or Deny gives a light trackpad tap. With Increase Contrast, cards get a clear border; with Reduce Transparency, the
+  panel is drawn solid.
+- Menu bar app: small finishing touches to match the bots. The agent tree's lines are dotted like circuit traces,
+  agents that are working have a soft glow behind their visor, a bot blinks when you point at it, the agent waiting
+  for your approval waves, a run that just finished gets a brief sparkle, and an empty panel shows the pixel CAPCOMD
+  logo. The line between a card's folders and its agents is gone. Nothing moves when Reduce Motion is on.
+- Menu bar app: every agent now has its own little pixel bot, in the agent tree, the thread header, handoff cards and
+  the @ mention list. The bot is the same every time for the same agent, and agents in one run look different from each
+  other. The menu bar icon is now a bot head whose face shows what is going on: sleepy when nothing runs, eyes open while
+  agents work, and a raised hand (next to the approval count) when something needs you.
+- Menu bar app: stop an agent from its thread. While it works, press Esc in the empty message field or click the stop
+  button; the thread says "Stopping lead…" until the agent has pushed its work and paused, then "lead is paused" with
+  Resume. Pausing an agent pauses the agents under it too; the rest of the run keeps going. Needs a capcomd daemon that
+  supports pausing one agent (it advertises `agent.pause`); with an older one the stop control stays hidden.
 - Menu bar app: in the run view, the Activity list and the collapsed step strip sit 4 pt closer to the step bar, as
   designed.
+- Menu bar app: an agent's thread now shows what it actually did, as it happens: its messages with headings, lists,
+  inline code, code blocks (lightly highlighted, with Copy) and tables; "Thought for 8s" lines that unfold into the
+  reasoning; one line per tool call with its duration that opens to show the arguments and result; file edits as a small
+  diff with the file's name and `+n −n`; and a card when a
+  child agent hands back, with its summary and artifacts, that opens the child's thread. Your messages sit between
+  them. Web links show where they really go and open in your browser; images the agent produced load from capcomd,
+  and images from the internet load only when you click them. Needs a capcomd daemon with agent threads; with an
+  older one the thread shows the same lines as before.
 - `capcomd serve` no longer takes over a harness socket another daemon is serving. Before, a second `serve` (or a
   test run) replaced `~/.capcomd/harness.sock`, and the running daemon's menu bar app and other harness.v1 clients
   lost it (connection refused) until that daemon was restarted. Now `serve` exits 1 with an error naming the socket and
@@ -55,6 +481,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   says so instead.
 - Menu bar app: the footer ("Open capcomd", "Summon ⌥Space") now sits on its own bar with a thin line above it, so
   projects scrolling underneath blur out instead of showing through the text.
+- Menu bar app: talk to an agent from its thread. Type in "Tell lead…" and press Return (⇧Return for a new line);
+  the message shows at once as your bubble and settles when capcomd confirms it, with Retry if it couldn't be sent.
+  Type `@` to mention an agent working under this one, and `/` to attach a skill when your capcomd supports it.
+  "lead is writing…" shows while the agent works. Needs a daemon with the agent messages route and a token with the
+  steer scope.
 - Menu bar app: start a run from the panel. Type a goal in "Start a project…" at the top (⌘K focuses it) and press
   Return; the new run shows up in the list. If capcomd has no default repository, the app asks once for the project's
   folder and remembers it. Needs a daemon with `POST /v1/runs` and a token with the steer scope.

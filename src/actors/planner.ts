@@ -7,6 +7,7 @@ import { db } from "rivetkit/db";
 import { setupLifecycleTables, getLifecycle } from "../utils/lifecycle";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";
+import { configError } from "./worker";
 
 export const plannerActor = actor({
   db: db({
@@ -22,6 +23,9 @@ export const plannerActor = actor({
         plannerId: string;
         runId: string;
         goal: string;
+        /** The spec the goal's `[agent:NAME]` resolved to where the run started (profiles.ts pinSpec): this process
+         *  (the daemon) need not see that project's agents file. Absent: resolved by name here. */
+        agentSpec?: Record<string, unknown> | null;
       }
     ) {
       const { plannerId, runId, goal } = params;
@@ -39,9 +43,12 @@ export const plannerActor = actor({
       // Real agent (claude-code): one goal becomes one task; the agent does its own decomposition.
       // `[agent:NAME] goal` selects an agent profile for the run's task.
       const directive = parseAgentDirective(goal);
-      if (isRealAgent(agentFromEnv(process.env, directive.agent))) {
-        // The effective resolved spec is recorded in the planner's event log context.
-        const tasks = [{ id: "task-1", goal: directive.goal, ...(directive.agent ? { agent: directive.agent } : {}), agentSpec: effectiveAgentRecord(directive.agent) }];
+      const pinned = directive.agent ? params.agentSpec : undefined;
+      let kind;
+      try { kind = agentFromEnv(process.env, directive.agent, pinned); } catch (e) { throw configError(e); }
+      if (isRealAgent(kind)) {
+        // The effective resolved spec is recorded in the planner's event log context; `spec` is what the worker runs.
+        const tasks = [{ id: "task-1", goal: directive.goal, ...(directive.agent ? { agent: directive.agent } : {}), agentSpec: effectiveAgentRecord(directive.agent, process.env, pinned), ...(pinned ? { spec: pinned } : {}) }];
         await c.db.execute(
           `INSERT INTO lifecycle (entity_id, machine, version, state, context, seq)
            VALUES (?, ?, ?, ?, ?, ?)

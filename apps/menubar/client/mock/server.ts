@@ -2,7 +2,13 @@
 // Contract: MarvinAmador7/capcomd PR #40 (lifecycle events) — openapi/capcomd.json, docs/events.md. Check with validate.ts.
 // Routes: GET /v1/health (no token), /v1/runs, /v1/runs/:runId, /v1/runs/:runId/agents, /v1/runs/:runId/lifecycle?after=
 //         (404 for an unknown run), /v1/events?scope&after, GET /v1/streams/:scope/events[?feed=lifecycle] (SSE),
-//         POST /v1/approvals/:approvalId/decision (Idempotency-Key required).
+//         POST /v1/approvals/:approvalId/decision (Idempotency-Key required). With SETTINGS=<scene> (settings.ts): also
+//         GET /v1/logins, /v1/environments, /v1/service, /v1/run-options and their capabilities in /v1/health; and
+//         (SANDBOXES=<scene>, settings.ts) GET /v1/sandboxes[/{name}[/resources[/{id}]]], PATCH
+//         /v1/sandboxes/{name}/settings and POST /v1/sandboxes/{name}/resources/{id}/actions/delete. With PROJECTS=<scene>
+//         (projects.ts): GET /v1/projects/inspect and POST /v1/projects (capability projects.setup), git-init, publish-options and
+//         publish (projects.git), and run-options?repo=
+//         refusing a folder that isn't set up.
 // SSE frames per contract: `id: <seq>` / `event: <type>` / `data: <envelope>`; `event: stream.reset` {snapshotSeq, reason}
 //   then snapshot.run / agents / approvals / steps / threads / snapshot.end {snapshotSeq}, then live from snapshotSeq+1;
 //   `: heartbeat` comment every HEARTBEAT_MS (default 15000).
@@ -18,8 +24,15 @@
 //   only the first frame of the seq-4 group (agent.started, no id) and drops. Conn #2 resumes from Last-Event-ID 2, so the whole
 //   seq-4 group is re-sent; the client must deliver run.started (and agent.started) exactly once. Then heartbeats only.
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
+import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
+import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/harness.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
+// SETTINGS=<scene> (settings.ts) adds the Settings routes, run-options and their capabilities; unset, none of them.
+const settings = process.env.SETTINGS ? settingsScene(process.env.SETTINGS) : null;
+// PROJECTS=<scene> (projects.ts): project setup from the app.
+const projects = process.env.PROJECTS ? projectsScene(process.env.PROJECTS) : null;
+const caps = [...(settings ? settingsCaps(settings) : []), ...(projects ? projectsCaps(projects) : [])];
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS ?? 15000);
 const RESET_AFTER = 12, DROP_AFTER = 22, COMPACTED_BELOW = 3, RUN = "run-demo", PRJ = "prj-demo", GOAL = "ship transport spike";
 const T0 = Date.UTC(2026, 9, 25, 6, 0, 0);
@@ -130,8 +143,17 @@ Bun.serve({
   idleTimeout: 0,
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
-    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-pr40" });
+    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: "mock-pr40", ...(settings || projects ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
+    if (projects) {
+      const r = projectsRoute(url, projects, req) ?? projectsRunOptionsRefusal(url, projects);
+      if (r) return r;
+    }
+    if (settings) {
+      const r = settingsRoute(p, settings, req);
+      if (r) return r;
+      if (p === "/v1/run-options") return Response.json(settingsRunOptions(settings));
+    }
     if (p === "/__log") return Response.json({ conns, log });
     if (p === "/v1/runs") return Response.json([runBody]);
     if (p === `/v1/runs/${RUN}`) return Response.json(runBody);

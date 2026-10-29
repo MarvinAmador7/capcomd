@@ -2,7 +2,7 @@ import type { RawAccess } from "rivetkit/db";
 import { traceActions, withSpan } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";
-import { setupLifecycleTables, transitionLifecycle, getLifecycle, getUndispatchedOutbox, markOutboxDispatched } from "../utils/lifecycle";
+import { setupLifecycleTables, transitionLifecycle, getLifecycle } from "../utils/lifecycle";
 import { mergeTask } from "../merge/service";
 import type { MergeOutcome } from "../merge/types";
 
@@ -46,7 +46,7 @@ export const verifierActor = actor({
 
       if (!existing) {
         await c.db.transaction(async (tx: RawAccess) => {
-          await transitionLifecycle(tx, verifierId, "verifier", "verifying", { taskId, branch, runId, target: params.target, testOnly: !!params.testOnly }, { type: "START_VERIFY" }, `verifier-${verifierId}-start`, []);
+          await transitionLifecycle(tx, verifierId, "verifier", "verifying", { taskId, branch, runId, target: params.target, testOnly: !!params.testOnly }, { type: "START_VERIFY" }, `verifier-${verifierId}-start`);
         }, { name: "startVerify" });
       }
 
@@ -64,7 +64,7 @@ export const verifierActor = actor({
           tx, verifierId, "verifier", state,
           { taskId, branch, runId, target: params.target, commitSha, passed: state === "passed", outcome, verifiedAt: Date.now() },
           { type: state === "passed" ? "VERIFY_PASS" : state === "conflict" ? "VERIFY_CONFLICT" : "VERIFY_FAIL" },
-          `verifier-${verifierId}-${state}`, []
+          `verifier-${verifierId}-${state}`
         );
       }, { name: "completeVerify" });
 

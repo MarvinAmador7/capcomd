@@ -26,6 +26,8 @@ public enum JSONValue: Codable, Hashable, Sendable {
   public subscript(_ k: String) -> JSONValue? { if case .object(let o) = self { return o[k] }; return nil }
   public var string: String? { if case .string(let s) = self { return s }; return nil }
   public var int: Int? { if case .number(let n) = self { return Int(n) }; return nil }
+  public var double: Double? { if case .number(let n) = self { return n }; return nil }
+  public var bool: Bool? { if case .bool(let b) = self { return b }; return nil }
   public var array: [JSONValue]? { if case .array(let a) = self { return a }; return nil }
   public var isNull: Bool { if case .null = self { return true }; return false }
 }
@@ -54,6 +56,8 @@ public struct Envelope: Codable, Hashable, Sendable {
   public var agentId: String?
   /// `durable` or `ephemeral`; ephemeral frames (agent.activity_changed) are live-only and never a resume cursor.
   public var durability: String?
+  /// The daemon's plain-language sentence for the step, written from trusted fields only (never agent text).
+  public var text: String?
   public var data: [String: JSONValue]
   public init(id: String, scope: String, seq: Int, entity: String, type: String, epochMs: Int, projectId: String?, runId: String?, agentId: String?, data: [String: JSONValue]) {
     self.v = 1; self.id = id; self.scope = scope; self.seq = seq; self.entity = entity; self.type = type; self.ts = nil

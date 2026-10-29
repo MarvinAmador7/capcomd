@@ -1,0 +1,3009 @@
+{
+ "format": "bot-catalog/1",
+ "frames": {
+  "xs": {
+   "w": 14,
+   "h": 14,
+   "head": [
+    1,
+    4
+   ],
+   "outline": false,
+   "shadow": false,
+   "uses": [
+    "xs"
+   ],
+   "shading": "flat"
+  },
+  "small": {
+   "w": 24,
+   "h": 24,
+   "head": [
+    3,
+    5
+   ],
+   "outline": true,
+   "shadow": false,
+   "uses": [
+    "small",
+    "std"
+   ],
+   "shading": "auto"
+  },
+  "full": {
+   "w": 32,
+   "h": 32,
+   "head": [
+    7,
+    5
+   ],
+   "outline": true,
+   "shadow": true,
+   "uses": [
+    "full",
+    "std"
+   ],
+   "shading": "auto"
+  }
+ },
+ "constants": {
+  "metal0": "#BDB7BC",
+  "metal1": "#857D81",
+  "metal2": "#4F494C",
+  "ink": "#0E0818",
+  "flame": "#36D6DE",
+  "white": "#FFFFFF",
+  "shadow": "#00000059"
+ },
+ "slots": {
+  "palette": [
+   {
+    "id": "orange",
+    "label": "Orange (primary)",
+    "weight": 1,
+    "roles": {
+     "planner": 6,
+     "lead": 3
+    },
+    "colors": {
+     "body0": "#FFB566",
+     "body1": "#FF7410",
+     "body2": "#C8530E",
+     "accent0": "#FFB566",
+     "accent1": "#E8650C",
+     "accent2": "#A8420A",
+     "trim0": "#9457DC",
+     "trim1": "#5E2BA8",
+     "deep": "#4A1A06",
+     "plateInk": "#FF9A40"
+    }
+   },
+   {
+    "id": "purple",
+    "label": "Purple",
+    "weight": 3,
+    "roles": {
+     "planner": 0,
+     "lead": 1,
+     "critic": 4
+    },
+    "colors": {
+     "body0": "#CDAAF5",
+     "body1": "#9457DC",
+     "body2": "#5E2BA8",
+     "accent0": "#CDAAF5",
+     "accent1": "#8247CC",
+     "accent2": "#4E2390",
+     "trim0": "#FF7410",
+     "trim1": "#C8530E",
+     "deep": "#2B0E57",
+     "plateInk": "#C59BF5"
+    }
+   },
+   {
+    "id": "orange-purple",
+    "label": "Orange / purple",
+    "weight": 3,
+    "roles": {
+     "planner": 2,
+     "lead": 3
+    },
+    "colors": {
+     "body0": "#FFB566",
+     "body1": "#FF7410",
+     "body2": "#8F4FD6",
+     "accent0": "#CDAAF5",
+     "accent1": "#9457DC",
+     "accent2": "#5E2BA8",
+     "trim0": "#9457DC",
+     "trim1": "#5E2BA8",
+     "deep": "#2B0E57",
+     "plateInk": "#FF9A40"
+    }
+   },
+   {
+    "id": "purple-orange",
+    "label": "Purple / orange",
+    "weight": 3,
+    "roles": {
+     "planner": 0,
+     "lead": 2
+    },
+    "colors": {
+     "body0": "#CDAAF5",
+     "body1": "#9457DC",
+     "body2": "#D2601A",
+     "accent0": "#FFB566",
+     "accent1": "#FF7410",
+     "accent2": "#C8530E",
+     "trim0": "#FF7410",
+     "trim1": "#C8530E",
+     "deep": "#2B0E57",
+     "plateInk": "#FF9A40"
+    }
+   },
+   {
+    "id": "lavender",
+    "label": "Lavender",
+    "weight": 2,
+    "roles": {
+     "planner": 0,
+     "lead": 1,
+     "critic": 3
+    },
+    "colors": {
+     "body0": "#F1E8FF",
+     "body1": "#BFA3F5",
+     "body2": "#8A6AD6",
+     "accent0": "#FFB566",
+     "accent1": "#FF7410",
+     "accent2": "#C8530E",
+     "trim0": "#FF7410",
+     "trim1": "#C8530E",
+     "deep": "#3A2470",
+     "plateInk": "#FFFFFF"
+    }
+   },
+   {
+    "id": "steel",
+    "label": "Steel",
+    "weight": 2,
+    "roles": {
+     "planner": 0,
+     "lead": 1
+    },
+    "colors": {
+     "body0": "#DADDE8",
+     "body1": "#9EA3B7",
+     "body2": "#62677C",
+     "accent0": "#FFB566",
+     "accent1": "#FF7410",
+     "accent2": "#C8530E",
+     "trim0": "#FF7410",
+     "trim1": "#C8530E",
+     "deep": "#262938",
+     "plateInk": "#36D6DE"
+    }
+   },
+   {
+    "id": "ivory",
+    "label": "Ivory",
+    "weight": 2,
+    "roles": {
+     "planner": 0,
+     "lead": 1
+    },
+    "colors": {
+     "body0": "#FFFFFF",
+     "body1": "#ECE6F5",
+     "body2": "#B4A9CB",
+     "accent0": "#CDAAF5",
+     "accent1": "#9457DC",
+     "accent2": "#5E2BA8",
+     "trim0": "#9457DC",
+     "trim1": "#5E2BA8",
+     "deep": "#3B2A5C",
+     "plateInk": "#C59BF5"
+    }
+   }
+  ],
+  "antenna": [
+   {
+    "id": "ball",
+    "label": "Ball",
+    "weight": 8,
+    "occupies": [
+     "top"
+    ],
+    "roles": {
+     "planner": 0,
+     "lead": 0
+    },
+    "art": {
+     "std": {
+      "rows": [
+       ".AA.",
+       "AAAA",
+       ".AA.",
+       ".GG."
+      ],
+      "anchor": [
+       2,
+       4
+      ]
+     },
+     "xs": {
+      "rows": [
+       "AA",
+       "GG"
+      ],
+      "anchor": [
+       1,
+       2
+      ]
+     }
+    }
+   },
+   {
+    "id": "dual",
+    "label": "Dual",
+    "weight": 4,
+    "occupies": [
+     "top"
+    ],
+    "roles": {
+     "planner": 0,
+     "lead": 0
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "AA....AA",
+       ".G....G.",
+       "..G..G.."
+      ],
+      "anchor": [
+       4,
+       3
+      ]
+     },
+     "xs": {
+      "rows": [
+       "A....A",
+       ".G..G."
+      ],
+      "anchor": [
+       3,
+       2
+      ]
+     }
+    }
+   },
+   {
+    "id": "bolt",
+    "label": "Bolt",
+    "weight": 3,
+    "occupies": [
+     "top"
+    ],
+    "roles": {
+     "planner": 0,
+     "lead": 0,
+     "worker": 4
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "..TT",
+       ".TT.",
+       "TTTT",
+       ".TT."
+      ],
+      "anchor": [
+       2,
+       4
+      ]
+     },
+     "xs": {
+      "rows": [
+       ".T",
+       "TT",
+       "T."
+      ],
+      "anchor": [
+       1,
+       3
+      ]
+     }
+    }
+   },
+   {
+    "id": "tab",
+    "label": "Tab",
+    "weight": 3,
+    "occupies": [
+     "top"
+    ],
+    "roles": {
+     "planner": 0,
+     "lead": 0
+    },
+    "art": {
+     "std": {
+      "rows": [
+       ".AAAA.",
+       "AAAAAA"
+      ],
+      "anchor": [
+       3,
+       2
+      ]
+     },
+     "xs": {
+      "rows": [
+       "AAAA"
+      ],
+      "anchor": [
+       2,
+       1
+      ]
+     }
+    }
+   },
+   {
+    "id": "dish",
+    "label": "Dish",
+    "weight": 2,
+    "occupies": [
+     "top"
+    ],
+    "roles": {
+     "planner": 0,
+     "lead": 0,
+     "critic": 6
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "G....G",
+       "GG..GG",
+       ".GGGG.",
+       "..GG.."
+      ],
+      "anchor": [
+       3,
+       4
+      ]
+     },
+     "xs": {
+      "rows": [
+       "G..G",
+       ".GG."
+      ],
+      "anchor": [
+       2,
+       2
+      ]
+     }
+    }
+   },
+   {
+    "id": "none",
+    "label": "None",
+    "weight": 3,
+    "roles": {
+     "planner": 0,
+     "lead": 0
+    },
+    "art": {}
+   },
+   {
+    "id": "crown",
+    "label": "Crown (planner)",
+    "weight": 0,
+    "keep": true,
+    "occupies": [
+     "top"
+    ],
+    "roles": {
+     "planner": 1
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "T..TT..T",
+       "TT.TT.TT",
+       "TTTEETTT",
+       "TTTTTTTT"
+      ],
+      "anchor": [
+       4,
+       3
+      ]
+     },
+     "xs": {
+      "rows": [
+       "T.TT.T",
+       "TTTTTT"
+      ],
+      "anchor": [
+       3,
+       2
+      ]
+     }
+    }
+   },
+   {
+    "id": "flag",
+    "label": "Flag (lead)",
+    "weight": 0,
+    "keep": true,
+    "occupies": [
+     "top"
+    ],
+    "roles": {
+     "lead": 1
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "...GTTTT",
+       "...GTTT.",
+       "...GTTTT",
+       "...G...."
+      ],
+      "anchor": [
+       4,
+       4
+      ]
+     },
+     "xs": {
+      "rows": [
+       "GTT",
+       "GT.",
+       "G.."
+      ],
+      "anchor": [
+       1,
+       3
+      ]
+     }
+    }
+   }
+  ],
+  "accessory": [
+   {
+    "id": "none",
+    "label": "None",
+    "weight": 10,
+    "art": {}
+   },
+   {
+    "id": "cap",
+    "label": "Cap",
+    "weight": 2,
+    "roles": {
+     "worker": 3,
+     "planner": 0,
+     "lead": 0
+    },
+    "occupies": [
+     "top"
+    ],
+    "requires": {
+     "head": [
+      "dome",
+      "round",
+      "capsule",
+      "octagon"
+     ]
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "......TTTTTT........",
+       "....TTTTTTTTTT......",
+       "...TTTTTTTTTTTT.....",
+       "..TTTTTTTTTTTTTT....",
+       ".TTTTTTTTTTTTTTTTTTT",
+       "..tttttttttttttt...."
+      ],
+      "anchor": [
+       9,
+       2
+      ]
+     },
+     "xs": {
+      "rows": [
+       "....TTTT.....",
+       "..TTTTTTTT...",
+       ".TTTTTTTTTTTT"
+      ],
+      "anchor": [
+       6,
+       1
+      ]
+     }
+    }
+   },
+   {
+    "id": "hardhat",
+    "label": "Hard hat",
+    "weight": 1,
+    "roles": {
+     "worker": 3,
+     "planner": 0,
+     "lead": 0,
+     "critic": 0
+    },
+    "occupies": [
+     "top"
+    ],
+    "art": {
+     "std": {
+      "rows": [
+       "......TTTTTT......",
+       "....TTTTTTTTTT....",
+       "...TTTTTTTTTTTT...",
+       "..TTTTTTTTTTTTTT..",
+       "..TTTTTTTTTTTTTT..",
+       "tttttttttttttttttt"
+      ],
+      "anchor": [
+       9,
+       2
+      ]
+     },
+     "xs": {
+      "rows": [
+       "...TTTTTT...",
+       "..TTTTTTTT..",
+       "tttttttttttt"
+      ],
+      "anchor": [
+       6,
+       2
+      ]
+     }
+    }
+   },
+   {
+    "id": "headlamp",
+    "label": "Headlamp",
+    "weight": 2,
+    "roles": {
+     "worker": 3,
+     "planner": 0,
+     "lead": 0
+    },
+    "occupies": [
+     "top"
+    ],
+    "art": {
+     "std": {
+      "rows": [
+       ".GGGG.",
+       "GGWWGG",
+       "GWFFWG",
+       "GGWWGG",
+       ".GGGG."
+      ],
+      "anchor": [
+       3,
+       3
+      ]
+     },
+     "xs": {
+      "rows": [
+       ".GG.",
+       "GWWG",
+       ".GG."
+      ],
+      "anchor": [
+       2,
+       2
+      ]
+     }
+    }
+   },
+   {
+    "id": "party",
+    "label": "Party hat",
+    "weight": 1,
+    "roles": {
+     "planner": 0,
+     "lead": 0
+    },
+    "occupies": [
+     "top"
+    ],
+    "art": {
+     "std": {
+      "rows": [
+       "...WW...",
+       "...TT...",
+       "..AAAA..",
+       "..TTTT..",
+       ".TTTTTT."
+      ],
+      "anchor": [
+       4,
+       4
+      ]
+     },
+     "xs": {
+      "rows": [
+       ".WW.",
+       ".TT.",
+       "TTTT"
+      ],
+      "anchor": [
+       2,
+       3
+      ]
+     }
+    }
+   },
+   {
+    "id": "bow",
+    "label": "Bow",
+    "weight": 2,
+    "roles": {
+     "critic": 1
+    },
+    "occupies": [
+     "side"
+    ],
+    "attach": "side",
+    "art": {
+     "std": {
+      "rows": [
+       "TT...TT",
+       "TTTtTTT",
+       "TTTtTTT",
+       "TT...TT"
+      ],
+      "anchor": [
+       3,
+       2
+      ]
+     },
+     "xs": {
+      "rows": [
+       "T.T",
+       "TtT",
+       "T.T"
+      ],
+      "anchor": [
+       1,
+       1
+      ]
+     }
+    }
+   },
+   {
+    "id": "monocle",
+    "label": "Monocle",
+    "weight": 0,
+    "roles": {
+     "critic": 6,
+     "other": 1
+    },
+    "occupies": [
+     "eyeR"
+    ],
+    "attach": "visor",
+    "requires": {
+     "eyes": [
+      "ovals",
+      "dots"
+     ]
+    },
+    "art": {
+     "std": {
+      "rows": [
+       ".......GGGG.",
+       ".......G..G.",
+       ".......G..G.",
+       ".......G..G.",
+       ".......GGGG.",
+       "..........G.",
+       "..........G."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "....GGGG",
+       "....G..G",
+       "....G..G",
+       "....GGGG"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "headphones",
+    "label": "Headphones",
+    "weight": 1,
+    "roles": {
+     "critic": 2,
+     "planner": 0,
+     "lead": 0
+    },
+    "occupies": [
+     "top",
+     "ears"
+    ],
+    "art": {
+     "std": {
+      "rows": [
+       "......GGGGGGGGGG......",
+       "....GG..........GG....",
+       "...G..............G...",
+       "..G................G..",
+       "..G................G..",
+       ".G..................G.",
+       ".G..................G.",
+       "AAA................AAA",
+       "AAA................AAA",
+       "AAA................AAA",
+       "AAA................AAA",
+       "AAA................AAA",
+       ".A..................A."
+      ],
+      "anchor": [
+       11,
+       2
+      ]
+     },
+     "xs": {
+      "rows": [
+       "....GGGGGG....",
+       "..GG......GG..",
+       ".G..........G.",
+       ".G..........G.",
+       "AA..........AA",
+       "AA..........AA",
+       "AA..........AA"
+      ],
+      "anchor": [
+       7,
+       2
+      ]
+     }
+    }
+   }
+  ],
+  "head": [
+   {
+    "id": "dome",
+    "label": "Dome",
+    "weight": 6,
+    "roles": {
+     "planner": 8,
+     "lead": 6
+    },
+    "art": {
+     "std": {
+      "rows": [
+       ".......BBBB.......",
+       ".....BBBBBBBB.....",
+       "...BBBBBBBBBBBB...",
+       "..BBBBBBBBBBBBBB..",
+       ".BBBBBBBBBBBBBBBB.",
+       ".BBBVVVVVVVVVVBBB.",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       ".BBBVVVVVVVVVVBBB.",
+       "BBBBBBBBBBBBBBBBBB",
+       ".BBBBBBBBBBBBBBBB.",
+       "..BBBBBBBBBBBBBB.."
+      ],
+      "anchors": {
+       "top": [
+        9,
+        0
+       ],
+       "side": [
+        14,
+        1
+       ],
+       "earL": [
+        0,
+        8
+       ],
+       "earR": [
+        18,
+        8
+       ],
+       "neck": [
+        9,
+        15
+       ],
+       "visor": [
+        3,
+        5
+       ]
+      }
+     },
+     "xs": {
+      "rows": [
+       "....BBBB....",
+       "..BBBBBBBB..",
+       ".BBBBBBBBBB.",
+       ".BBVVVVVVBB.",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       ".BBVVVVVVBB.",
+       "BBBBBBBBBBBB",
+       ".BBBBBBBBBB."
+      ],
+      "anchors": {
+       "top": [
+        6,
+        0
+       ],
+       "side": [
+        9,
+        1
+       ],
+       "earL": [
+        0,
+        5
+       ],
+       "earR": [
+        12,
+        5
+       ],
+       "visor": [
+        2,
+        3
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "round",
+    "label": "Round",
+    "weight": 5,
+    "art": {
+     "std": {
+      "rows": [
+       "......BBBBBB......",
+       "....BBBBBBBBBB....",
+       "..BBBBBBBBBBBBBB..",
+       ".BBBBBBBBBBBBBBBB.",
+       ".BBBBBBBBBBBBBBBB.",
+       "BBBBVVVVVVVVVVBBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBBVVVVVVVVVVBBBB",
+       ".BBBBBBBBBBBBBBBB.",
+       "..BBBBBBBBBBBBBB..",
+       "....BBBBBBBBBB...."
+      ],
+      "anchors": {
+       "top": [
+        9,
+        0
+       ],
+       "side": [
+        13,
+        1
+       ],
+       "earL": [
+        0,
+        8
+       ],
+       "earR": [
+        18,
+        8
+       ],
+       "neck": [
+        9,
+        15
+       ],
+       "visor": [
+        3,
+        5
+       ]
+      }
+     },
+     "xs": {
+      "rows": [
+       "...BBBBBB...",
+       ".BBBBBBBBBB.",
+       "BBBBBBBBBBBB",
+       "BBBVVVVVVBBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBBVVVVVVBBB",
+       ".BBBBBBBBBB.",
+       "...BBBBBB..."
+      ],
+      "anchors": {
+       "top": [
+        6,
+        0
+       ],
+       "side": [
+        9,
+        1
+       ],
+       "earL": [
+        0,
+        5
+       ],
+       "earR": [
+        12,
+        5
+       ],
+       "visor": [
+        2,
+        3
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "square",
+    "label": "Square",
+    "weight": 4,
+    "roles": {
+     "critic": 6
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "..................",
+       ".BBBBBBBBBBBBBBBB.",
+       "BGBBBBBBBBBBBBBBGB",
+       "BBBBBBBBBBBBBBBBBB",
+       "BBBBBBBBBBBBBBBBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBBBBBBBBBBBBBBBB",
+       "BBBBBBBBBBBBBBBBBB",
+       ".BBBBBBBBBBBBBBBB."
+      ],
+      "anchors": {
+       "top": [
+        9,
+        1
+       ],
+       "side": [
+        15,
+        1
+       ],
+       "earL": [
+        0,
+        8
+       ],
+       "earR": [
+        18,
+        8
+       ],
+       "neck": [
+        9,
+        15
+       ],
+       "visor": [
+        3,
+        5
+       ]
+      }
+     },
+     "xs": {
+      "rows": [
+       ".BBBBBBBBBB.",
+       "BGBBBBBBBBGB",
+       "BBBBBBBBBBBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBBBBBBBBBBB",
+       ".BBBBBBBBBB."
+      ],
+      "anchors": {
+       "top": [
+        6,
+        0
+       ],
+       "side": [
+        9,
+        1
+       ],
+       "earL": [
+        0,
+        5
+       ],
+       "earR": [
+        12,
+        5
+       ],
+       "visor": [
+        2,
+        3
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "octagon",
+    "label": "Octagon",
+    "weight": 4,
+    "art": {
+     "std": {
+      "rows": [
+       "....BBBBBBBBBB....",
+       "...BBBBBBBBBBBB...",
+       "..BBBBBBTTBBBBBB..",
+       ".BBBBBBBBBBBBBBBB.",
+       "BBBBBBBBBBBBBBBBBB",
+       "BBBBVVVVVVVVVVBBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBBVVVVVVVVVVBBBB",
+       ".BBBBBBBBBBBBBBBB.",
+       "..BBBBBBBBBBBBBB..",
+       "...BBBBBBBBBBBB..."
+      ],
+      "anchors": {
+       "top": [
+        9,
+        0
+       ],
+       "side": [
+        14,
+        1
+       ],
+       "earL": [
+        0,
+        8
+       ],
+       "earR": [
+        18,
+        8
+       ],
+       "neck": [
+        9,
+        15
+       ],
+       "visor": [
+        3,
+        5
+       ]
+      }
+     },
+     "xs": {
+      "rows": [
+       "..BBBBBBBB..",
+       ".BBBBBBBBBB.",
+       "BBBBBTTBBBBB",
+       "BBBVVVVVVBBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBBVVVVVVBBB",
+       ".BBBBBBBBBB.",
+       "..BBBBBBBB.."
+      ],
+      "anchors": {
+       "top": [
+        6,
+        0
+       ],
+       "side": [
+        9,
+        1
+       ],
+       "earL": [
+        0,
+        5
+       ],
+       "earR": [
+        12,
+        5
+       ],
+       "visor": [
+        2,
+        3
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "capsule",
+    "label": "Capsule",
+    "weight": 4,
+    "art": {
+     "std": {
+      "rows": [
+       "......BBBBBB......",
+       "....BBBBBBBBBB....",
+       "...BBBBBBBBBBBB...",
+       "..BBBBBBBBBBBBBB..",
+       ".BBBBBBBBBBBBBBBB.",
+       ".BBBVVVVVVVVVVBBB.",
+       ".BBVVVVVVVVVVVVBB.",
+       ".BBVVVVVVVVVVVVBB.",
+       ".BBVVVVVVVVVVVVBB.",
+       ".BBVVVVVVVVVVVVBB.",
+       ".BBVVVVVVVVVVVVBB.",
+       ".BBBVVVVVVVVVVBBB.",
+       ".BBBBBBBBBBBBBBBB.",
+       "..BBBBBBBBBBBBBB..",
+       "....BBBBBBBBBB...."
+      ],
+      "anchors": {
+       "top": [
+        9,
+        0
+       ],
+       "side": [
+        13,
+        1
+       ],
+       "earL": [
+        1,
+        8
+       ],
+       "earR": [
+        17,
+        8
+       ],
+       "neck": [
+        9,
+        15
+       ],
+       "visor": [
+        3,
+        5
+       ]
+      }
+     },
+     "xs": {
+      "rows": [
+       "...BBBBBB...",
+       "..BBBBBBBB..",
+       ".BBBBBBBBBB.",
+       ".BBVVVVVVBB.",
+       ".BVVVVVVVVB.",
+       ".BVVVVVVVVB.",
+       ".BVVVVVVVVB.",
+       ".BBVVVVVVBB.",
+       ".BBBBBBBBBB.",
+       "..BBBBBBBB.."
+      ],
+      "anchors": {
+       "top": [
+        6,
+        0
+       ],
+       "side": [
+        9,
+        1
+       ],
+       "earL": [
+        1,
+        5
+       ],
+       "earR": [
+        11,
+        5
+       ],
+       "visor": [
+        2,
+        3
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "helm",
+    "label": "Helm (crest)",
+    "weight": 3,
+    "excludes": {
+     "antenna": [
+      "ball",
+      "bolt",
+      "dish"
+     ]
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "......TTTTTT......",
+       ".....BTTTTTTB.....",
+       "...BBBBBBBBBBBB...",
+       "..BBBBBBBBBBBBBB..",
+       ".BBBBBBBBBBBBBBBB.",
+       ".BBBVVVVVVVVVVBBB.",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       "BBBVVVVVVVVVVVVBBB",
+       ".BBBVVVVVVVVVVBBB.",
+       "BBBBBBBBBBBBBBBBBB",
+       ".BBBBBBBBBBBBBBBB.",
+       "..BBBBBBBBBBBBBB.."
+      ],
+      "anchors": {
+       "top": [
+        9,
+        0
+       ],
+       "side": [
+        14,
+        1
+       ],
+       "earL": [
+        0,
+        8
+       ],
+       "earR": [
+        18,
+        8
+       ],
+       "neck": [
+        9,
+        15
+       ],
+       "visor": [
+        3,
+        5
+       ]
+      }
+     },
+     "xs": {
+      "rows": [
+       "....TTTT....",
+       "..BBTTTTBB..",
+       ".BBBBBBBBBB.",
+       ".BBVVVVVVBB.",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       "BBVVVVVVVVBB",
+       ".BBVVVVVVBB.",
+       "BBBBBBBBBBBB",
+       ".BBBBBBBBBB."
+      ],
+      "anchors": {
+       "top": [
+        6,
+        0
+       ],
+       "side": [
+        9,
+        1
+       ],
+       "earL": [
+        0,
+        5
+       ],
+       "earR": [
+        12,
+        5
+       ],
+       "visor": [
+        2,
+        3
+       ]
+      }
+     }
+    }
+   }
+  ],
+  "ears": [
+   {
+    "id": "disc",
+    "label": "Metal disc",
+    "weight": 7,
+    "occupies": [
+     "ears"
+    ],
+    "art": {
+     "std": {
+      "rows": [
+       ".G",
+       "GG",
+       "GG",
+       "GG",
+       ".G"
+      ],
+      "anchor": [
+       2,
+       2
+      ]
+     },
+     "xs": {
+      "rows": [
+       "G",
+       "G",
+       "G"
+      ],
+      "anchor": [
+       1,
+       1
+      ]
+     }
+    }
+   },
+   {
+    "id": "pod",
+    "label": "Pod",
+    "weight": 5,
+    "occupies": [
+     "ears"
+    ],
+    "art": {
+     "std": {
+      "rows": [
+       ".A",
+       "AA",
+       "AA",
+       "AA",
+       ".A"
+      ],
+      "anchor": [
+       2,
+       2
+      ]
+     },
+     "xs": {
+      "rows": [
+       "A",
+       "A",
+       "A"
+      ],
+      "anchor": [
+       1,
+       1
+      ]
+     }
+    }
+   },
+   {
+    "id": "bolt",
+    "label": "Bolt",
+    "weight": 3,
+    "occupies": [
+     "ears"
+    ],
+    "art": {
+     "std": {
+      "rows": [
+       "GG",
+       "GG",
+       "GG"
+      ],
+      "anchor": [
+       2,
+       1
+      ]
+     },
+     "xs": {
+      "rows": [
+       "G",
+       "G"
+      ],
+      "anchor": [
+       1,
+       1
+      ]
+     }
+    }
+   },
+   {
+    "id": "none",
+    "label": "None",
+    "weight": 1,
+    "art": {}
+   }
+  ],
+  "screen": [
+   {
+    "id": "night",
+    "label": "Night (cyan eyes)",
+    "weight": 8,
+    "colors": {
+     "V": "#07101A",
+     "E": "#36D6DE",
+     "e": "#ECFFFE",
+     "M": "#5DE2DF",
+     "K": "#C065D0"
+    }
+   },
+   {
+    "id": "plum",
+    "label": "Plum (white eyes)",
+    "weight": 4,
+    "colors": {
+     "V": "#2A0D52",
+     "E": "#FFFFFF",
+     "e": "#FFFFFF",
+     "M": "#E9DDFB",
+     "K": "#E07ACD"
+    }
+   },
+   {
+    "id": "lilac",
+    "label": "Lilac (ink eyes)",
+    "weight": 4,
+    "excludes": {
+     "palette": [
+      "purple",
+      "purple-orange",
+      "lavender"
+     ]
+    },
+    "colors": {
+     "V": "#9457DC",
+     "v": "#2B0E57",
+     "E": "#0B0614",
+     "e": "#FFFFFF",
+     "M": "#0B0614",
+     "K": "#F7A3DA"
+    },
+    "colorsXs": {
+     "V": "#5E2BA8",
+     "E": "#FFFFFF",
+     "e": "#FFFFFF",
+     "M": "#FFFFFF"
+    }
+   }
+  ],
+  "eyes": [
+   {
+    "id": "ovals",
+    "label": "Ovals",
+    "weight": 8,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "..eE....eE..",
+       "..EE....EE..",
+       "..EE....EE..",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       ".eE..eE.",
+       ".EE..EE.",
+       "........",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "dots",
+    "label": "Dots",
+    "weight": 5,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "..EE....EE..",
+       "..EE....EE..",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "..E..E..",
+       "..E..E..",
+       "........",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "wide",
+    "label": "Wide",
+    "weight": 4,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       ".eEE....eEE.",
+       ".EEE....EEE.",
+       ".EEE....EEE.",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       ".eE..eE.",
+       ".EE..EE.",
+       ".EE..EE.",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "happy",
+    "label": "Happy arcs",
+    "weight": 5,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "..EE....EE..",
+       ".E..E..E..E.",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       ".E....E.",
+       "E.E..E.E",
+       "........",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "wink",
+    "label": "Wink",
+    "weight": 3,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "..eE........",
+       "..EE....EE..",
+       "..EE...E..E.",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       ".eE...E.",
+       ".EE..E.E",
+       "........",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "sleepy",
+    "label": "Sleepy",
+    "weight": 2,
+    "roles": {
+     "critic": 1
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       ".EEEE..EEEE.",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "EEE..EEE",
+       "........",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "squint",
+    "label": "Squint ><",
+    "weight": 2,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       ".EE......EE.",
+       "...EE..EE...",
+       ".EE......EE.",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "E......E",
+       ".E....E.",
+       "E......E",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "bar",
+    "label": "Scanner bar",
+    "weight": 2,
+    "roles": {
+     "critic": 4
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "..eEEEEEEE..",
+       "...EEEEEE...",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       ".EEEEEE.",
+       "........",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "hearts",
+    "label": "Hearts",
+    "weight": 1,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       ".K.K....K.K.",
+       ".KKK....KKK.",
+       "..K......K..",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "K.K..K.K",
+       "KKK..KKK",
+       ".K....K.",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   }
+  ],
+  "mouth": [
+   {
+    "id": "smile",
+    "label": "Smile",
+    "weight": 8,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "...M....M...",
+       "....MMMM...."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "........",
+       "..MMMM.."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "small",
+    "label": "Small smile",
+    "weight": 5,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "....M..M....",
+       ".....MM....."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "........",
+       "...MM..."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "grin",
+    "label": "Grin",
+    "weight": 3,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "...MMMMMM...",
+       "....MMMM...."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "..MMMM..",
+       "...MM..."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "cat",
+    "label": "Cat ω",
+    "weight": 3,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "...M.MM.M...",
+       "....M..M...."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "........",
+       "..M..M.."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "flat",
+    "label": "Flat",
+    "weight": 2,
+    "roles": {
+     "critic": 4
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "....MMMM...."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "........",
+       "..MMMM.."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "o",
+    "label": "O",
+    "weight": 2,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       ".....MM.....",
+       ".....MM....."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "........",
+       "...MM..."
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "none",
+    "label": "None",
+    "weight": 1,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "........",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   }
+  ],
+  "blush": [
+   {
+    "id": "on",
+    "label": "Blush",
+    "weight": 6,
+    "roles": {
+     "critic": 3
+    },
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "KK........KK",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "K......K",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "none",
+    "label": "No blush",
+    "weight": 4,
+    "art": {
+     "std": {
+      "rows": [
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "............",
+       "............"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "xs": {
+      "rows": [
+       "........",
+       "........",
+       "........",
+       "........",
+       "........"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   }
+  ],
+  "torso": [
+   {
+    "id": "round",
+    "label": "Round",
+    "weight": 5,
+    "art": {
+     "small": {
+      "rows": [
+       "......BBBBBBBBBB......",
+       "AA...BBBBBBBBBBBB.....",
+       "AA...BBBBBBBBBBBB...AA",
+       "AA...BBBBBBBBBBBB...AA"
+      ],
+      "anchor": [
+       11,
+       0
+      ],
+      "anchors": {
+       "neck": [
+        11,
+        0
+       ],
+       "plate": [
+        7,
+        1
+       ]
+      }
+     },
+     "full": {
+      "rows": [
+       "..BBBBBBBBBB..",
+       ".BBBBBBBBBBBB.",
+       "BBBBBBBBBBBBBB",
+       "BBBBBBBBBBBBBB",
+       "BBBBBBBBBBBBBB",
+       ".BBBBBBBBBBBB.",
+       "..BBBBBBBBBB.."
+      ],
+      "anchor": [
+       7,
+       0
+      ],
+      "anchors": {
+       "neck": [
+        7,
+        0
+       ],
+       "plate": [
+        3,
+        1
+       ],
+       "armL": [
+        0,
+        1
+       ],
+       "armR": [
+        14,
+        1
+       ],
+       "hip": [
+        7,
+        7
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "box",
+    "label": "Box",
+    "weight": 4,
+    "art": {
+     "small": {
+      "rows": [
+       ".....BBBBBBBBBBBB.....",
+       "AA...BBBBBBBBBBBB.....",
+       "AA...BBBBBBBBBBBB...AA",
+       "AA...BBBBBBBBBBBB...AA"
+      ],
+      "anchor": [
+       11,
+       0
+      ],
+      "anchors": {
+       "neck": [
+        11,
+        0
+       ],
+       "plate": [
+        7,
+        1
+       ]
+      }
+     },
+     "full": {
+      "rows": [
+       ".BBBBBBBBBBBB.",
+       "BBBBBBBBBBBBBB",
+       "BBBBBBBBBBBBBB",
+       "BBBBBBBBBBBBBB",
+       "BBBBBBBBBBBBBB",
+       "bbbbbbbbbbbbbb",
+       ".BBBBBBBBBBBB."
+      ],
+      "anchor": [
+       7,
+       0
+      ],
+      "anchors": {
+       "neck": [
+        7,
+        0
+       ],
+       "plate": [
+        3,
+        1
+       ],
+       "armL": [
+        0,
+        1
+       ],
+       "armR": [
+        14,
+        1
+       ],
+       "hip": [
+        7,
+        7
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "slim",
+    "label": "Slim",
+    "weight": 3,
+    "art": {
+     "small": {
+      "rows": [
+       ".......BBBBBBBB.......",
+       "AA.....BBBBBBBB.......",
+       "AA.....BBBBBBBB.....AA",
+       "AA.....BBBBBBBB.....AA"
+      ],
+      "anchor": [
+       11,
+       0
+      ],
+      "anchors": {
+       "neck": [
+        11,
+        0
+       ],
+       "plate": [
+        7,
+        1
+       ]
+      }
+     },
+     "full": {
+      "rows": [
+       ".BBBBBBBBBB.",
+       "BBBBBBBBBBBB",
+       "BBBBBBBBBBBB",
+       "BBBBBBBBBBBB",
+       "BBBBBBBBBBBB",
+       "BBBBBBBBBBBB",
+       ".BBBBBBBBBB."
+      ],
+      "anchor": [
+       6,
+       0
+      ],
+      "anchors": {
+       "neck": [
+        6,
+        0
+       ],
+       "plate": [
+        2,
+        1
+       ],
+       "armL": [
+        -1,
+        1
+       ],
+       "armR": [
+        13,
+        1
+       ],
+       "hip": [
+        6,
+        7
+       ]
+      }
+     }
+    }
+   }
+  ],
+  "plate": [
+   {
+    "id": "heart",
+    "label": "Heart",
+    "weight": 5,
+    "art": {
+     "small": {
+      "rows": [
+       "PLLPPLLP",
+       "PLLLLLLP",
+       "PPPLLPPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "full": {
+      "rows": [
+       "PLLPPLLP",
+       "PLLLLLLP",
+       "PLLLLLLP",
+       "PPLLLLPP",
+       "PPPLLPPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "logo",
+    "label": "capcomd mark",
+    "weight": 4,
+    "roles": {
+     "planner": 8,
+     "lead": 6
+    },
+    "art": {
+     "small": {
+      "rows": [
+       "PPLLLLPP",
+       "PLPLLPLP",
+       "PPLLLLPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "full": {
+      "rows": [
+       "PPLLLLPP",
+       "PLPPPPLP",
+       "PLPLLPLP",
+       "PLPPPPLP",
+       "PPLLLLPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "letter",
+    "label": "Letter block",
+    "weight": 4,
+    "art": {
+     "small": {
+      "rows": [
+       "PPPPPPPP",
+       "PPLLLLPP",
+       "PPPPPPPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "full": {
+      "rows": [
+       "PPPPPPPP",
+       "PPPPPPPP",
+       "PPPPPPPP",
+       "PPPPPPPP",
+       "PPPPPPPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "screen",
+    "label": "Pulse screen",
+    "weight": 3,
+    "art": {
+     "small": {
+      "rows": [
+       "PPPFPPPP",
+       "FFFPFPFF",
+       "PPPPPFPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "full": {
+      "rows": [
+       "PPPPPPPP",
+       "PPPFPPPP",
+       "FFFPFPFF",
+       "PPPPPFPP",
+       "PPPPPPPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "vent",
+    "label": "Vent",
+    "weight": 3,
+    "art": {
+     "small": {
+      "rows": [
+       "PLLLLLLP",
+       "PPPPPPPP",
+       "PLLLLLLP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     },
+     "full": {
+      "rows": [
+       "PPPPPPPP",
+       "PLLLLLLP",
+       "PPPPPPPP",
+       "PLLLLLLP",
+       "PPPPPPPP"
+      ],
+      "anchor": [
+       0,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "none",
+    "label": "None",
+    "weight": 2,
+    "art": {}
+   }
+  ],
+  "pose": [
+   {
+    "id": "float",
+    "label": "Float",
+    "weight": 8,
+    "arms": [
+     {
+      "rows": [
+       ".AA.",
+       "AAAA",
+       "AAAA",
+       ".AA."
+      ],
+      "anchor": [
+       -3,
+       0
+      ]
+     },
+     {
+      "rows": [
+       ".AA.",
+       "AAAA",
+       "AAAA",
+       ".AA."
+      ],
+      "anchor": [
+       -3,
+       -1
+      ]
+     }
+    ]
+   },
+   {
+    "id": "wave",
+    "label": "Wave",
+    "weight": 3,
+    "arms": [
+     {
+      "rows": [
+       ".AA.",
+       "AAAA",
+       "AAAA",
+       ".AA."
+      ],
+      "anchor": [
+       -3,
+       0
+      ]
+     },
+     {
+      "rows": [
+       "AA.",
+       "AAA",
+       "AAA",
+       ".AA"
+      ],
+      "anchor": [
+       -5,
+       15
+      ]
+     }
+    ]
+   },
+   {
+    "id": "spark",
+    "label": "Spark",
+    "weight": 2,
+    "roles": {
+     "critic": 4
+    },
+    "arms": [
+     {
+      "rows": [
+       ".AA.",
+       "AAAA",
+       "AAAA",
+       ".AA."
+      ],
+      "anchor": [
+       -3,
+       0
+      ]
+     },
+     {
+      "rows": [
+       ".F.",
+       "FWF",
+       ".F.",
+       "...",
+       "AAA",
+       "AAA",
+       ".A."
+      ],
+      "anchor": [
+       -5,
+       18
+      ]
+     }
+    ]
+   },
+   {
+    "id": "cheer",
+    "label": "Cheer",
+    "weight": 0,
+    "arms": [
+     {
+      "rows": [
+       "AA.",
+       "AAA",
+       "AAA",
+       ".AA"
+      ],
+      "anchor": [
+       -5,
+       15
+      ]
+     },
+     {
+      "rows": [
+       "AA.",
+       "AAA",
+       "AAA",
+       ".AA"
+      ],
+      "anchor": [
+       -5,
+       15
+      ]
+     }
+    ]
+   }
+  ],
+  "legs": [
+   {
+    "id": "boots",
+    "label": "Boots",
+    "weight": 8,
+    "art": {
+     "full": {
+      "rows": [
+       "..BB....BB..",
+       "..BB....BB..",
+       ".AAAA..AAAA.",
+       "AAAAA..AAAAA"
+      ],
+      "anchor": [
+       6,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "hover",
+    "label": "Hover jet",
+    "weight": 2,
+    "art": {
+     "full": {
+      "rows": [
+       "...GGGGGG...",
+       "....FFFF....",
+       ".....FF....."
+      ],
+      "anchor": [
+       6,
+       0
+      ]
+     }
+    }
+   },
+   {
+    "id": "treads",
+    "label": "Treads",
+    "weight": 2,
+    "roles": {
+     "worker": 3
+    },
+    "art": {
+     "full": {
+      "rows": [
+       ".GGGGGGGGGG.",
+       "GgGgGgGgGgGG",
+       ".GGGGGGGGGG."
+      ],
+      "anchor": [
+       6,
+       0
+      ]
+     }
+    }
+   }
+  ],
+  "dither": [
+   {
+    "id": "checker",
+    "label": "Checker",
+    "weight": 5,
+    "style": "checker"
+   },
+   {
+    "id": "bayer",
+    "label": "Bayer 4×4",
+    "weight": 4,
+    "style": "bayer"
+   },
+   {
+    "id": "scan",
+    "label": "Scanline",
+    "weight": 2,
+    "style": "scan"
+   },
+   {
+    "id": "flat",
+    "label": "Flat (two-tone)",
+    "weight": 2,
+    "style": "flat"
+   }
+  ]
+ },
+ "names": [
+  "Bolt",
+  "Pixel",
+  "Widget",
+  "Sprocket",
+  "Nova",
+  "Byte",
+  "Chip",
+  "Gizmo",
+  "Ziggy",
+  "Dot",
+  "Echo",
+  "Fuse",
+  "Glint",
+  "Jolt",
+  "Kilo",
+  "Lumen",
+  "Mote",
+  "Nib",
+  "Orbit",
+  "Piston",
+  "Quark",
+  "Servo",
+  "Tock",
+  "Volt",
+  "Watt",
+  "Zap",
+  "Cog",
+  "Diode",
+  "Ember",
+  "Flux",
+  "Gear",
+  "Hex",
+  "Ion",
+  "Joule",
+  "Knob",
+  "Lever",
+  "Mica",
+  "Nano",
+  "Ohm",
+  "Probe",
+  "Rotor",
+  "Spark",
+  "Vector",
+  "Wren",
+  "Yoyo",
+  "Axel",
+  "Blip",
+  "Cosmo",
+  "Dynamo",
+  "Ferro",
+  "Gadget",
+  "Hopper",
+  "Jinx",
+  "Kit",
+  "Loop",
+  "Moxie",
+  "Nugget",
+  "Pip",
+  "Radar",
+  "Socket",
+  "Tinker",
+  "Ultra",
+  "Vim",
+  "Zed"
+ ],
+ "glyphs": {
+  "A": [
+   ".##.",
+   "#..#",
+   "####",
+   "#..#",
+   "#..#"
+  ],
+  "B": [
+   "###.",
+   "#..#",
+   "###.",
+   "#..#",
+   "###."
+  ],
+  "C": [
+   ".###",
+   "#...",
+   "#...",
+   "#...",
+   ".###"
+  ],
+  "D": [
+   "###.",
+   "#..#",
+   "#..#",
+   "#..#",
+   "###."
+  ],
+  "E": [
+   "####",
+   "#...",
+   "###.",
+   "#...",
+   "####"
+  ],
+  "F": [
+   "####",
+   "#...",
+   "###.",
+   "#...",
+   "#..."
+  ],
+  "G": [
+   ".###",
+   "#...",
+   "#.##",
+   "#..#",
+   ".###"
+  ],
+  "H": [
+   "#..#",
+   "#..#",
+   "####",
+   "#..#",
+   "#..#"
+  ],
+  "I": [
+   "####",
+   ".##.",
+   ".##.",
+   ".##.",
+   "####"
+  ],
+  "J": [
+   "..##",
+   "...#",
+   "...#",
+   "#..#",
+   ".##."
+  ],
+  "K": [
+   "#..#",
+   "#.#.",
+   "##..",
+   "#.#.",
+   "#..#"
+  ],
+  "L": [
+   "#...",
+   "#...",
+   "#...",
+   "#...",
+   "####"
+  ],
+  "M": [
+   "#..#",
+   "####",
+   "####",
+   "#..#",
+   "#..#"
+  ],
+  "N": [
+   "#..#",
+   "##.#",
+   "#.##",
+   "#..#",
+   "#..#"
+  ],
+  "O": [
+   ".##.",
+   "#..#",
+   "#..#",
+   "#..#",
+   ".##."
+  ],
+  "P": [
+   "###.",
+   "#..#",
+   "###.",
+   "#...",
+   "#..."
+  ],
+  "Q": [
+   ".##.",
+   "#..#",
+   "#..#",
+   "#.##",
+   ".###"
+  ],
+  "R": [
+   "###.",
+   "#..#",
+   "###.",
+   "#.#.",
+   "#..#"
+  ],
+  "S": [
+   ".###",
+   "#...",
+   ".##.",
+   "...#",
+   "###."
+  ],
+  "T": [
+   "####",
+   ".##.",
+   ".##.",
+   ".##.",
+   ".##."
+  ],
+  "U": [
+   "#..#",
+   "#..#",
+   "#..#",
+   "#..#",
+   ".##."
+  ],
+  "V": [
+   "#..#",
+   "#..#",
+   "#..#",
+   ".##.",
+   ".##."
+  ],
+  "W": [
+   "#..#",
+   "#..#",
+   "####",
+   "####",
+   "#..#"
+  ],
+  "X": [
+   "#..#",
+   "#..#",
+   ".##.",
+   "#..#",
+   "#..#"
+  ],
+  "Y": [
+   "#..#",
+   "#..#",
+   ".##.",
+   ".##.",
+   ".##."
+  ],
+  "Z": [
+   "####",
+   "...#",
+   ".##.",
+   "#...",
+   "####"
+  ]
+ },
+ "ground": {
+  "rows": [
+   "....S.S.S.S.S.S.S.....",
+   ".S.S.S.S.S.S.S.S.S.S..",
+   "....S.S.S.S.S.S.S.S..."
+  ],
+  "anchor": [
+   11,
+   3
+  ]
+ },
+ "bayer4": [
+  [
+   0,
+   8,
+   2,
+   10
+  ],
+  [
+   12,
+   4,
+   14,
+   6
+  ],
+  [
+   3,
+   11,
+   1,
+   9
+  ],
+  [
+   15,
+   7,
+   13,
+   5
+  ]
+ ]
+}

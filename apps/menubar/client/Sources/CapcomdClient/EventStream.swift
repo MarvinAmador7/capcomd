@@ -31,7 +31,7 @@ public actor ResumableEventStream {
   let maxReconnects: Int; let backoff: Duration; let idleTimeout: Duration
   /// `feed: "lifecycle"` opens the run's lifecycle feed (`?feed=lifecycle`).
   public init(transport: UnixSocketTransport, scope: String = "run-demo", feed: String? = nil, startAfter: Int = 0, maxReconnects: Int = 10,
-              backoff: Duration = .milliseconds(50), idleTimeout: Duration = .seconds(45)) {
+              backoff: Duration = .milliseconds(500), idleTimeout: Duration = .seconds(45)) {
     self.transport = transport; self.path = "/v1/streams/\(scope)/events" + (feed.map { "?feed=\($0)" } ?? ""); self.lastSeq = startAfter
     self.maxReconnects = maxReconnects; self.backoff = backoff; self.idleTimeout = idleTimeout
   }
@@ -76,8 +76,16 @@ public actor ResumableEventStream {
         if error is SSEIdleTimeout { stats.idleTimeouts += 1 } else { stats.drops += 1 }
         attempts += 1
         if attempts > maxReconnects { throw error }
-        try await Task.sleep(for: backoff * attempts)
+        try await Task.sleep(for: jitteredBackoff(base: backoff, attempt: attempts))
       }
     }
   }
+}
+
+/// Exponential backoff with full jitter: a random delay in [0, min(cap, base * 2^(attempt-1))].
+/// Spreads reconnects out after a daemon restart instead of every client hammering it at once.
+public func jitteredBackoff(base: Duration, attempt: Int, cap: Duration = .seconds(30)) -> Duration {
+  func ms(_ d: Duration) -> Double { Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15 }
+  let ceiling = min(ms(cap), ms(base) * pow(2, Double(max(0, min(attempt - 1, 30)))))
+  return .microseconds(Int64(Double.random(in: 0...max(0, ceiling)) * 1000))
 }

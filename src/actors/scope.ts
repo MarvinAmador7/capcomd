@@ -14,7 +14,17 @@ import { actor, UserError } from "rivetkit";
 import { db } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
+import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { startDriver } from "../primitives/drivers";
+import { agentWorkflowOn } from "../utils/agent-workflow-flag";
+
+/**
+ * ADR-022: tell connected awaiters that agents changed (status, notice), so they look again instead of polling. (With
+ * CAPCOMD_AGENT_WORKFLOW=0 nobody listens: awaits poll.)
+ */
+function agentsChanged(c: any): void {
+  try { c.broadcast("agentsChanged", { at: Date.now() }); } catch { /* no connections: nothing to tell */ }
+}
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import type { AttachedSkill } from "../agents/skills";
@@ -122,6 +132,8 @@ function rowToAgent(r: any) {
     workspace: r.workspace ? (JSON.parse(r.workspace as string) as AgentWorkspace) : null,
     /** Who asked this running agent to pause (`requestPause`): its runner stops it, keeps its work and pauses it. */
     pauseRequested: (r.pause_requested as string | null) ?? null,
+    /** ADR-022: how it is driven (CAPCOMD_SPAWN_EXEC, CAPCOMD_SCRIPT_*, driver timings), as its spawner's env had it. */
+    driveEnv: r.drive_env ? (JSON.parse(r.drive_env as string) as Record<string, string>) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -134,6 +146,11 @@ function opRow(r: any) {
   };
 }
 export type ScopeOp = ReturnType<typeof opRow>;
+/** How a run ended by itself (scope.endRun), not by its agents ending. */
+export type RunEnd = { state: "failed" | "cancelled"; reason: string | null; by: string | null; at: number };
+
+/** recordStep: an agent's step history (agent.step) keeps at most this many; later steps are dropped. */
+export const STEPS_MAX = 500;
 
 async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, data: Record<string, unknown>, idemKey: string) {
   // harness.v1 §6.2: the published payload schemas are open, but the daemon emits only declared fields.
@@ -267,6 +284,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "activity", "TEXT");
       await addColumn(database, "agents_v2", "workspace", "TEXT");
       await addColumn(database, "agents_v2", "pause_requested", "TEXT");
+      await addColumn(database, "agents_v2", "drive_env", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -284,6 +302,8 @@ export const scopeActor = actor({
           seq INTEGER PRIMARY KEY, at INTEGER NOT NULL, type TEXT NOT NULL, agent_id TEXT,
           data TEXT NOT NULL, idem_key TEXT NOT NULL UNIQUE
         )`);
+      // recordStep counts an agent's steps on every write (the STEPS_MAX cap).
+      await database.execute(`CREATE INDEX IF NOT EXISTS scope_events_agent_type ON scope_events (agent_id, type)`);
     },
   }),
 
@@ -315,7 +335,27 @@ export const scopeActor = actor({
         if (sp) spent[u] = Math.round(sp * 1e6) / 1e6;
       }
       const unallocated = available(meta.budget, {}, all.filter((a) => !a.parent).map((a) => ({ ...a, tree: tree.get(a.agentId) })));
-      return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated };
+      const ended = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'ended'");
+      return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated,
+        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null };
+    },
+
+    /**
+     * The run itself ended without its agents ending it: its first agent couldn't be spawned (failed), or it was stopped
+     * before any agent of it ran (cancelled). Recorded once (RUN_ENDED); a later call returns the first end unchanged.
+     */
+    async endRun(c, params: { state: RunEnd["state"]; reason?: string | null; by?: string | null }) {
+      const meta = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
+      if (!meta.length) fail("not_found", "run not found (create it with capcomd run new)");
+      const read = async () => { const r = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'ended'"); return r.length ? (JSON.parse(r[0]!.v as string) as RunEnd) : null; };
+      const had = await read();
+      if (had) return { changed: false, ended: had };
+      const end: RunEnd = { state: params.state, reason: params.reason ? redactShapes(String(params.reason)).slice(0, 2000) : null, by: params.by ?? null, at: Date.now() };
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('ended', ?)", JSON.stringify(end));
+        await addEvent(tx, "RUN_ENDED", null, { state: end.state, reason: end.reason, by: end.by }, "run-ended");
+      }, { name: "scopeEndRun" });
+      return { changed: true, ended: (await read())! };
     },
 
     async spawn(
@@ -324,6 +364,8 @@ export const scopeActor = actor({
         runId: string; agentId: string; key?: string; paramsHash: string; parent?: string | null;
         profile: string | null; ref: string | null; spec: Record<string, unknown> | null;
         task: string; contract?: Record<string, unknown> | null; budget?: Budget; operator?: boolean; grant?: Grant; review?: boolean;
+        /** ADR-022: the spawner's drive settings (not part of the params hash: a retry from another shell is the same spawn). */
+        driveEnv?: Record<string, string>;
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -335,6 +377,9 @@ export const scopeActor = actor({
       const meta = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (!meta.length) fail("not_found", `run ${params.runId} not found (create it with capcomd run new)`);
       const runBudget = JSON.parse(meta[0]!.v as string).budget as Budget;
+      // A run that ended by itself (endRun: stopped before it started, or it couldn't start) takes no new agents.
+      const ended = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'ended'");
+      if (ended.length) fail("conflict", `run ${params.runId} has ended (${JSON.parse(ended[0]!.v as string).state}); start a new run`);
 
       let out: ScopeAgent | null = null;
       let created = false;
@@ -374,12 +419,13 @@ export const scopeActor = actor({
         try { if (repoKv.length) runRepo = envVar("REPO", JSON.parse(repoKv[0]!.v as string) ?? {}); } catch { /* unreadable: fall back */ }
         const workspace = workspaceOf(runRepo ?? envVar("REPO"));
         await tx.execute(
-          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace, drive_env)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?, ?)`,
           params.agentId, params.runId, params.parent ?? null, d.depth, params.profile, params.ref,
           params.spec ? JSON.stringify(params.spec) : null, JSON.stringify(d.limits), params.task,
           params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now,
-          workspace ? JSON.stringify(workspace) : null
+          workspace ? JSON.stringify(workspace) : null,
+          params.driveEnv && Object.keys(params.driveEnv).length ? JSON.stringify(params.driveEnv) : null
         );
         killpoint("scope.spawn.mid");
         // Same redaction path as message bodies: the row keeps the raw task for the worker; event + attachment are redacted.
@@ -401,9 +447,10 @@ export const scopeActor = actor({
       const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
       const a = rowToAgent(r[0]);
-      if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { ok: false, agent: a };
+      // `instance`: which engine process answered (a driver tells a daemon restart from a fault by it).
+      if (TERMINAL_AGENT.has(a.status) || a.status === "paused") return { ok: false, agent: a, instance: ENGINE_INSTANCE };
       const now = Date.now();
-      if (a.driver && a.driver !== params.driver && a.driverUntil > now) return { ok: false, agent: a };
+      if (a.driver && a.driver !== params.driver && a.driverUntil > now) return { ok: false, agent: a, instance: ENGINE_INSTANCE };
       await c.db.transaction(async (tx: RawAccess) => {
         // Starting it is its first sign of life: its liveness window runs from here, not from spawn, so the time its
         // VM takes to come up doesn't read as "no heartbeat" (resume does the same). A takeover keeps the last heartbeat.
@@ -411,7 +458,7 @@ export const scopeActor = actor({
           params.driver, now + params.ttlMs, now, now, params.agentId);
         if (a.status === "pending") await addEvent(tx, "AGENT_STARTED", params.agentId, {}, `start-${params.agentId}`);
       }, { name: "scopeClaim" });
-      return { ok: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
+      return { ok: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]), instance: ENGINE_INSTANCE };
     },
 
     async finish(c, params: { agentId: string; status: "done" | "failed"; result: Record<string, unknown>; spent?: Budget }) {
@@ -428,6 +475,7 @@ export const scopeActor = actor({
         if (a.parent) await putItemTx(tx, a.parent, handoffOf(a.parent, params.agentId, params.status, params.result));
       }, { name: "scopeFinish" });
       const orphans = await reapOrphans(c, { ...a, status: params.status });
+      agentsChanged(c);
       return { changed: true, orphans, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
 
@@ -452,6 +500,7 @@ export const scopeActor = actor({
         await tx.execute("UPDATE agents_v2 SET notice = ?, updated_at = ? WHERE agent_id = ?", n ? JSON.stringify(n) : null, Date.now(), params.agentId);
         await addEvent(tx, n ? "AGENT_NOTICE" : "AGENT_NOTICE_CLEARED", params.agentId, n ? { ...n } : { kind: a.notice?.kind ?? null }, `notice-${params.agentId}-${n?.at ?? `clear-${Date.now()}`}`);
       }, { name: "scopeNotice" });
+      agentsChanged(c);
       return { changed: true };
     },
 
@@ -469,8 +518,11 @@ export const scopeActor = actor({
           params.until, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, "AGENT_PAUSED", params.agentId, { result: params.result, until: params.until || null }, `pause-${params.agentId}-e${a.epoch}`);
       }, { name: "scopePause" });
-      // Wake at the reset even when nobody awaits it (the engine host starts its driver).
+      // Wake at the reset even when nobody awaits it (the engine host starts its driver). With the agent workflow
+      // (ADR-022) the paused epoch's own workflow sleeps until then and wakes it; this alarm stays as the backstop
+      // (a pause from a driver, a workflow that died): wakeDue only resumes a pause that is still this one.
       if (params.until > 0) await c.schedule.at(params.until, "wakeDue", { agentId: params.agentId, epoch: a.epoch });
+      agentsChanged(c);
       return { changed: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]) };
     },
 
@@ -498,12 +550,18 @@ export const scopeActor = actor({
           }
         }, { name: "scopeRequestPause" });
       }
+      if (paused.length) agentsChanged(c);
       return { paused, pausing, affected: order.map((a) => a.agentId) };
     },
 
+    /** ADR-022: how this engine drives agents (its host's CAPCOMD_AGENT_WORKFLOW): the CLI follows it. */
+    async driveMode(_c) { return { agentWorkflow: agentWorkflowOn() }; },
+
     /** A paused agent runs again as its next epoch (a new worker and VM, continuing on its branch). */
     async resume(c, params: { agentId: string; by?: string }) {
-      return resumeAgent(c, params.agentId, params.by);
+      const r = await resumeAgent(c, params.agentId, params.by);
+      if (r.changed) agentsChanged(c);
+      return r;
     },
 
     /**
@@ -516,7 +574,7 @@ export const scopeActor = actor({
       const a = rowToAgent(r[0]);
       if (a.status !== "paused" || a.epoch !== params.epoch || !a.pausedUntil || a.pausedUntil > Date.now() + 1000) return { woken: false };
       const res = await resumeAgent(c, params.agentId, "reset");
-      if (res.changed) startDriver(a.runId, a.agentId);
+      if (res.changed) { agentsChanged(c); await startDriver(a.runId, a.agentId); }
       return { woken: res.changed };
     },
 
@@ -647,7 +705,7 @@ export const scopeActor = actor({
       await c.db.transaction(async (tx: RawAccess) => {
         const evs = await tx.execute("SELECT type, data FROM scope_events WHERE agent_id = ? ORDER BY seq DESC LIMIT 50", params.agentId);
         for (const e of evs as any[]) {
-          if (e.type === "TOKEN_REVOKED" || e.type === "MESSAGE_SENT") continue;
+          if (e.type === "TOKEN_REVOKED" || e.type === "MESSAGE_SENT" || e.type === "AGENT_STEP") continue;
           if (e.type !== "DRIVE_FAILED") break;
           const d = JSON.parse(String(e.data));
           if (d.kind === params.kind && d.message === message) consecutive++; else break;
@@ -765,6 +823,7 @@ export const scopeActor = actor({
         cancelled.push(a.agentId);
         if (++i === 1) killpoint("scope.cancel.mid");
       }
+      if (cancelled.length) agentsChanged(c);
       return { cancelled, affected: order.map((a) => a.agentId) };
     },
 
@@ -807,15 +866,17 @@ export const scopeActor = actor({
       return r.length ? opRow(r[0]) : null;
     },
 
-    /** Merges into a protected target wait for the operator: running → awaiting_approval (idempotent). */
-    async parkOp(c, params: { opId: string; reason: string }) {
+    /** Merges into a protected target wait for the operator: running → awaiting_approval (idempotent). `diff`, the files
+     *  the branch changes (read before parking), is kept on the op and the event, so the approval can show them. */
+    async parkOp(c, params: { opId: string; reason: string; diff?: Record<string, unknown> }) {
       await c.db.transaction(async (tx: RawAccess) => {
         const r = await tx.execute("SELECT * FROM ops WHERE op_id = ?", params.opId);
         if (!r.length) fail("not_found", `${params.opId} not found`);
         const op = opRow(r[0]);
         if (op.state !== "running") return;
-        await tx.execute("UPDATE ops SET state = 'awaiting_approval', updated_at = ? WHERE op_id = ? AND state = 'running'", Date.now(), params.opId);
-        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, reason: params.reason }, `park-${params.opId}`);
+        const data = params.diff ? { ...op.data, diff: params.diff } : op.data;
+        await tx.execute("UPDATE ops SET state = 'awaiting_approval', data = ?, updated_at = ? WHERE op_id = ? AND state = 'running'", JSON.stringify(data), Date.now(), params.opId);
+        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason, ...(params.diff ? { diff: params.diff } : {}) }, `park-${params.opId}`);
       }, { name: "scopeParkOp" });
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
     },
@@ -1021,6 +1082,33 @@ export const scopeActor = actor({
     const v = a && (ACTIVITY_KINDS as readonly string[]).includes(a.kind) ? JSON.stringify({ kind: a.kind, n: Math.max(1, Math.min(9999, Math.floor(Number(a.n) || 1))), at: Number(a.at) || Date.now() }) : null;
     await c.db.execute("UPDATE agents_v2 SET activity = ? WHERE agent_id = ? AND status IN ('pending','running')", v, params.agentId);
     return { ok: true };
+  },
+
+  /**
+   * One finished step of a working agent's history (harness.v1 `agent.step`, src/agents/activity.ts onStep), appended to
+   * the event log. Only while the agent is pending or running (a step reported after it ended, or after a cancel, is
+   * dropped). "think" is never a step; an unknown kind is "tool". A re-report of a step (same agent, kind and start: a
+   * retried call, a re-attached driver) is recorded once. At most STEPS_MAX per agent: later ones are dropped. Not traced,
+   * like setActivity.
+   */
+  async recordStep(c, params: { agentId: string; kind: string; n: number; startedAt: number; endedAt: number }) {
+    if (params.kind === "think") return { recorded: false };
+    const kind = (ACTIVITY_KINDS as readonly string[]).includes(params.kind) ? params.kind : "tool";
+    const startedAt = Math.floor(Number(params.startedAt)), end = Math.floor(Number(params.endedAt));
+    if (!Number.isFinite(startedAt) || startedAt <= 0) return { recorded: false };
+    const data = { kind, n: Math.max(1, Math.min(9999, Math.floor(Number(params.n) || 1))), startedAt, endedAt: Number.isFinite(end) ? Math.max(startedAt, end) : startedAt };
+    let recorded = false;
+    await c.db.transaction(async (tx: RawAccess) => {
+      const a = await tx.execute("SELECT status FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      if (!a.length || !["pending", "running"].includes(String(a[0]!.status))) return;
+      const key = `step-${params.agentId}-${kind}-${startedAt}`;
+      if ((await tx.execute("SELECT 1 FROM scope_events WHERE idem_key = ?", key)).length) return;
+      const have = await tx.execute("SELECT COUNT(*) AS n FROM scope_events WHERE agent_id = ? AND type = 'AGENT_STEP'", params.agentId);
+      if (Number(have[0]?.n ?? 0) >= STEPS_MAX) return;
+      await addEvent(tx, "AGENT_STEP", params.agentId, data, key);
+      recorded = true;
+    }, { name: "scopeStep" });
+    return { recorded };
   },
   },
 });

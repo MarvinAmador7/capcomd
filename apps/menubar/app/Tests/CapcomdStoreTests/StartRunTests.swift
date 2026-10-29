@@ -3,9 +3,9 @@ import XCTest
 
 final class FakeStarter: RunStarting, @unchecked Sendable {
   var outcomes: [Result<String, Error>] = []
-  var calls: [(goal: String, repo: String?, key: String)] = []
-  func start(goal: String, repo: String?, idempotencyKey: String) async throws -> String {
-    calls.append((goal, repo, idempotencyKey)); return try outcomes.removeFirst().get()
+  var calls: [(goal: String, repo: String?, driver: String?, sandbox: String?, effort: String?, key: String)] = []
+  func start(goal: String, choice c: RunChoice, idempotencyKey: String) async throws -> String {
+    calls.append((goal, c.repo, c.driver, c.sandbox, c.effort, idempotencyKey)); return try outcomes.removeFirst().get()
   }
 }
 
@@ -51,5 +51,19 @@ final class StartRunTests: XCTestCase {
     let s = CapcomdStore(starter: f)
     let r = await s.startRun(goal: "Ship it")
     XCTAssertEqual(r, .failed("This capcomd can't start runs from here yet"))
+  }
+
+  /// The driver and sandbox ride along, and a retry after a transport failure reuses the key only for the same choice.
+  func testDriverIsSentAndPartOfTheRetryKey() async {
+    let f = FakeStarter(); f.outcomes = [.failure(URLError(.timedOut)), .success("run-a"), .success("run-b")]
+    var n = 0
+    let s = CapcomdStore(starter: f, makeKey: { n += 1; return "key-\(n)" })
+    _ = await s.startRun(goal: "Ship it", driver: "codex")
+    _ = await s.startRun(goal: "Ship it", driver: "codex")
+    XCTAssertEqual(f.calls.map(\.driver), ["codex", "codex"])
+    XCTAssertEqual(f.calls.map(\.key), ["key-1", "key-1"])      // same submission: replayed, not started twice
+    _ = await s.startRun(goal: "Ship it", driver: "claude", sandbox: "boxd", effort: "high")
+    XCTAssertEqual(f.calls.last?.driver, "claude"); XCTAssertEqual(f.calls.last?.sandbox, "boxd"); XCTAssertEqual(f.calls.last?.effort, "high")
+    XCTAssertEqual(f.calls.last?.key, "key-2")
   }
 }

@@ -1,9 +1,9 @@
 // Persisted settings: `capcomd setup` writes them, every command reads them. They are defaults for the
 // environment, applied when the CLI starts: a real environment variable always wins, then the project's
 // .capcomd/config.json (found from the current directory upward), then ~/.capcomd/config.json.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
-import { homedir } from "os";
+import { homedir, userInfo } from "os";
 import { capcomdHome } from "../utils/home";
 
 export interface CapcomdConfig {
@@ -15,24 +15,50 @@ export interface CapcomdConfig {
   run?: { checks?: Record<string, string>; reviewer?: string; target?: string };
   /**
    * What an agent driving capcomd over MCP may do (ADR-018 §4). `approvals`: "human" (default) leaves merges into
-   * protected branches to a person; "client-confirmed" lets the tool approve after the client's own confirmation.
+   * protected branches to a person; "elicit" lets `capcomd_approve` ask the person itself (MCP elicitation, a prompt
+   * capcomd writes) and approve only on their accept; "client-confirmed" (kept for compatibility, not recommended)
+   * lets the tool approve after the client's own confirmation. `elicitTimeoutSeconds`: how long the prompt waits
+   * (default 300). `elicitClients`: the MCP clients (their initialize clientInfo.name, e.g. "hermes-agent") that may
+   * approve by elicitation; unset: any client except Claude Code ("claude-code"), whose hooks can answer a prompt.
    * `maxRunBudget`: a cap per run, e.g. "usd=20,turns=400" (units over it are refused, not clamped).
    */
-  driver?: { approvals?: "human" | "client-confirmed"; maxRunBudget?: string };
+  driver?: { approvals?: DriverApprovals; elicitTimeoutSeconds?: number; elicitClients?: string[]; maxRunBudget?: string };
+  /**
+   * The projects (repository checkouts) one capcomd MCP server serves, e.g. Hermes's single `mcp_servers.capcomd`
+   * entry (user config). `capcomd setup agent` adds the checkout it runs in. MCP tools take `project` (a name or a
+   * path); without one: the server's own checkout, else `default`, else the only project.
+   */
+  projects?: { default?: string; list?: ProjectEntry[] };
   /** harness.v1 API (docs/harness-architecture.md §6). `socket`: Unix socket path (default ~/.capcomd/harness.sock), e.g. a macOS app-group container. */
   harness?: { socket?: string };
+  /**
+   * Provider settings by place (ADR-021 §2; user config only, written by PATCH /v1/sandboxes/{name}/settings):
+   * `idleLifetime`, seconds a machine left behind lives (at least 900). CAPCOMD_SANDBOX_IDLE_SECONDS wins.
+   */
+  sandboxes?: Record<string, { idleLifetime?: number }>;
 }
+
+export type DriverApprovals = "human" | "elicit" | "client-confirmed";
+export const DRIVER_APPROVALS: DriverApprovals[] = ["human", "elicit", "client-confirmed"];
+export interface ProjectEntry { name: string; path: string }
 
 type Source = Record<string, string | undefined>;
 export const userConfigPath = (source: Source = process.env) => join(capcomdHome(source), "config.json");
 
-/** The nearest .capcomd/config.json from `cwd` upward (stops at the home directory or the filesystem root). */
-export function projectConfigPath(cwd = process.cwd()): string | null {
-  const home = resolve(homedir());
+const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
+
+/**
+ * The nearest .capcomd/config.json from `cwd` upward. Stops at $HOME and at the account's own home folder (a scratch
+ * HOME must not let the walk reach the real ~/.capcomd), or the filesystem root; capcomd's user config (this one's, or
+ * the account's) is never a project's.
+ */
+export function projectConfigPath(cwd = process.cwd(), env: Source = process.env): string | null {
+  const homes = new Set([env.HOME || homedir(), userInfo().homedir].map(real));
+  const userConfigs = new Set([userConfigPath(env), ...[...homes].map((h) => join(h, ".capcomd", "config.json"))].map(real));
   for (let d = resolve(cwd); ; d = dirname(d)) {
     const p = join(d, ".capcomd", "config.json");
-    if (existsSync(p)) return p;
-    if (d === home || dirname(d) === d) return null;
+    if (existsSync(p) && !userConfigs.has(real(p))) return p;
+    if (homes.has(real(d)) || dirname(d) === d) return null;
   }
 }
 
@@ -41,14 +67,21 @@ export function readConfig(path: string | null): CapcomdConfig {
   try { const v = JSON.parse(readFileSync(path, "utf8")); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 }
 
-/** Merge `patch` into the config at `path` (env maps merge key by key). */
-export function writeConfig(path: string, patch: CapcomdConfig): CapcomdConfig {
-  const cur = readConfig(path);
+/** `patch` merged into `cur` as writeConfig does it (env and run merge key by key; other keys are replaced). */
+export function mergeConfig(cur: CapcomdConfig, patch: CapcomdConfig): CapcomdConfig {
   const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) } };
   if (!Object.keys(next.env!).length) delete next.env;
   if (!Object.keys(next.run!).length) delete next.run;
+  return next;
+}
+/** A config file's bytes. */
+export const configText = (c: CapcomdConfig) => JSON.stringify(c, null, 2) + "\n";
+
+/** Merge `patch` into the config at `path` (env maps merge key by key). */
+export function writeConfig(path: string, patch: CapcomdConfig): CapcomdConfig {
+  const next = mergeConfig(readConfig(path), patch);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  writeFileSync(path, configText(next), { mode: 0o600 });
   return next;
 }
 
@@ -61,7 +94,7 @@ export interface Applied { user: string | null; project: string | null; keys: st
 export function applyConfig(env: Source = process.env, cwd = process.cwd(), keychain: () => string | null = defaultKeychain): Applied {
   const userPath = userConfigPath(env);
   const user = readConfig(userPath);
-  const projectPath = projectConfigPath(cwd);
+  const projectPath = projectConfigPath(cwd, env);
   const project = readConfig(projectPath);
   const keys: string[] = [];
   for (const [k, v] of Object.entries({ ...(user.env ?? {}), ...(project.env ?? {}) })) {
@@ -88,7 +121,7 @@ export function runDefaults(cwd = process.cwd()): NonNullable<CapcomdConfig["run
 /** The driver policy: the project's settings over the user's. */
 export function driverPolicy(cwd = process.cwd(), env: Source = process.env): NonNullable<CapcomdConfig["driver"]> {
   if (env.CAPCOMD_NO_CONFIG) return {};
-  return { ...(readConfig(userConfigPath(env)).driver ?? {}), ...(readConfig(projectConfigPath(cwd)).driver ?? {}) };
+  return { ...(readConfig(userConfigPath(env)).driver ?? {}), ...(readConfig(projectConfigPath(cwd, env)).driver ?? {}) };
 }
 
 function defaultKeychain(): string | null {

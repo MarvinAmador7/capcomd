@@ -4,20 +4,40 @@
 //
 //   SCENARIO=panel TOKEN=… bun scenarios.ts /tmp/capcomd-ui.sock
 //   swift run CapcomdMenuBar -capcomd.socketPath /tmp/capcomd-ui.sock     (argument domain: nothing is persisted)
+//   SETTINGS=mixed …                                                       Settings window routes (settings.ts)
+//   SETTINGS=mixed SANDBOXES=machines|stale|empty|unsafe|nores|off …     place details and machines (settings.ts)
+//   SETTINGS=mixed SANDBOXES=readonly|envlocked|noconfigure|conflict|owners …   changing settings, capcomd's own machines
+//   SETTINGS=mixed SANDBOXES=changed|unavailable|noactions …          deleting machines (409, 503, a phase 2 daemon)
+//   PROJECTS=ready|configured|notgit|noorigin|nogh-publish|secrets|taken|notgithub|nogh|apikey|refuse|old …   setting a folder up as a project, starting its repository and publishing it (projects.ts)
 //
-// Scenes: panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
+// Scenes: card-running | card-ask | card-stopped | card-finished | card-long | cards (the Active card, design/active-card),
+// panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
 // trace spans, transcript, files and pause/resume/cancel for run-mk32). The daemon snapshot carries agents and their agent.spawned envelopes too, so the
 // store's rebuild picks up repo/key (scope chips, suffixes) without a run stream; lifecycle feeds re-send the same
 // state per run. Folders ride in `Agent.workspace` / `agent.spawned.data.workspace` (harness #46).
+// The lead (agt-ld01) has a structured thread (threads.ts; THREAD=golden swaps in the daemon's golden session), and a
+// steer to it gets a live reply on connections that asked for ?thread=1.
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
+import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
+import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
+import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
 const SCENARIO = process.env.SCENARIO ?? "panel";
+// SETTINGS=mixed|fresh|building|failed|ready|old (settings.ts): the Settings window's routes and the run-options that
+// agree with them, with their capabilities added to CAPS.
+const SETTINGS = process.env.SETTINGS ? settingsScene(process.env.SETTINGS) : null;
+// PROJECTS=<scene> (projects.ts): project setup from the app, with its capability.
+const PROJECTS = process.env.PROJECTS ? projectsScene(process.env.PROJECTS) : null;
 const NOW = Date.now(), min = 60_000, iso = (ms: number) => new Date(ms).toISOString();
 
-type AgentSpec = { id: string; parent?: string; profile: string; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number };
-type ApprovalSpec = { id: string; agentId: string; question: string; ref: string; target: string };
+type AgentSpec = { id: string; parent?: string; profile: string; provider?: "claude" | "codex"; status: string; repo?: string; key?: string; activity?: string; kind?: string; task?: string; ago: number;
+  /** Agent.result (cost, a usage limit, an error, verification, merge): what the Active card reads (design/active-card). */
+  result?: Record<string, unknown> };
+type ApprovalSpec = { id: string; agentId: string; question: string; ref: string; target: string;
+  /** subject.files / filesTotal / added / removed (a parked merge's diff), and how long ago it was asked. */
+  files?: Array<{ path: string; status: string; added: number | null; removed: number | null }>; askedAgo?: number };
 type SpanSpec = { id: string; parent?: string; name: string; from: number; took: number; error?: boolean; attrs?: Record<string, unknown> };   // from/took: seconds after the run started
 type FileSpec = { path: string; status: string; added: number | null; removed: number | null; agentId: string };
 type RunSpec = { id: string; projectId: string; goal: string; state: string; startedAgo: number; lastAgo: number; agents: AgentSpec[]; approvals?: ApprovalSpec[];
@@ -95,10 +115,73 @@ const scenes: Record<string, RunSpec[]> = {
       agents: [{ id: "agt-f5", profile: "planner", status: "done", ago: 300 * min }] },
   ],
 };
+// Active card, direction B (design/active-card): one scene per board state, and `cards` with all of them for the store's
+// live-mock test. CARD scenes: card-running (three runs folded), card-ask (the screenshot case: worker asks to merge
+// with its files), card-stopped (a usage-limit pause and a failed worker), card-finished (a merged run's outcome with
+// files, checks and cost), card-long (ten agents).
+const GOAL1 = "Add a clamp(x, lo, hi) function to src/math.ts with a bun test for it in src/math.test.ts";
+const clampFiles = [{ path: "src/math.test.ts", status: "added", added: 13, removed: 0 }, { path: "src/math.ts", status: "modified", added: 11, removed: 0 }];
+const clamp = (state: "running" | "ask" | "paused" | "done"): RunSpec => ({
+  id: "run-cl01", projectId: "prj-e2e", goal: GOAL1, state: state === "done" ? "completed" : "running", startedAgo: state === "paused" ? 9.8 * min : state === "done" ? 7 * min : 4.2 * min, lastAgo: state === "done" ? 0.8 * min : 0.05 * min,
+  agents: [
+    { id: "agt-cl-pl", profile: "planner", provider: "claude", status: state === "paused" ? "paused" : state === "done" ? "done" : "running", repo: "capcomd-e2e-20261027", activity: state === "done" ? "Merged 1 branch" : "Waiting on 2 agents", kind: "spawn", ago: 4 * min,
+      result: state === "paused" ? { limit: "quota", resetAt: NOW + 38 * min, costUsd: 0 } : state === "done" ? { summary: "clamp added with tests", costUsd: 0.12 } : undefined },
+    { id: "agt-cl-wk", parent: "agt-cl-pl", profile: "worker", provider: "claude", status: state === "running" ? "running" : "done", repo: "capcomd-e2e-20261027", key: "task-clamp",
+      activity: state === "running" ? "Editing 2 files" : "Edited 2 files", kind: "edit", ago: 0.1 * min,
+      result: state === "running" ? undefined : { summary: "added clamp and its test", costUsd: 0.21, verification: { id: "vfy-1", pass: true, checks: { passed: true, status: "verified" } },
+        ...(state === "done" ? { merge: { id: "mrg-1", target: "main", state: "merged", sha: "9f2c1e0" } } : {}) } },
+    { id: "agt-cl-rv", parent: "agt-cl-pl", profile: "critic", provider: "claude", status: state === "paused" ? "paused" : state === "done" ? "done" : "pending", ago: 3.9 * min,
+      result: state === "paused" ? { limit: "quota", resetAt: NOW + 38 * min } : state === "done" ? { summary: "looks right", costUsd: 0.08 } : undefined },
+  ],
+  approvals: state === "ask" ? [{ id: "apr-cl1", agentId: "agt-cl-wk", question: "Merge this agent's work into main?", ref: "capcomd/run-cl01/agt-cl-wk", target: "main", files: clampFiles, askedAgo: 0.3 * min }] : [],
+  files: state === "done" ? clampFiles.map((f) => ({ ...f, agentId: "agt-cl-wk" })) : undefined,
+});
+const proration = (state: "running" | "failed"): RunSpec => ({
+  id: "run-pr02", projectId: "prj-billing2", goal: "Fix proration rounding in billing", state: "running", startedAgo: state === "failed" ? 7.3 * min : 2.1 * min, lastAgo: 0.2 * min,
+  agents: [
+    { id: "agt-pr-pl", profile: "planner", provider: "claude", status: "running", repo: "relay", activity: "Splitting the work across relay and addriva", kind: "plan", ago: 2 * min },
+    { id: "agt-pr-w1", parent: "agt-pr-pl", profile: "worker", provider: "codex", status: state === "failed" ? "failed" : "running", repo: "relay", key: "task-prorate", activity: state === "failed" ? "Ran the tests" : "Reading the proration module", kind: "test", ago: 1.5 * min,
+      result: state === "failed" ? { error: "bun test exited 1", costUsd: 0.09, verification: { id: "vfy-2", pass: false, checks: { passed: false, status: "failed", reason: "tests failed (exit 1)", excerpt: "(fail) rounds half up\nExpected: 10.33\nReceived: 10.34" } } } : undefined },
+    { id: "agt-pr-w2", parent: "agt-pr-pl", profile: "worker", provider: "codex", status: state === "failed" ? "done" : "pending", repo: "addriva", key: "task-ledger", ago: 1.4 * min },
+  ],
+});
+const matchkey = (): RunSpec => ({
+  id: "run-mk40", projectId: "prj-matchkey2", goal: "Migrate matchkey to v3.2", state: "running", startedAgo: 18.7 * min, lastAgo: 0.05 * min,
+  agents: [
+    { id: "agt-m-pl", profile: "planner", status: "running", activity: "Waiting on 3 agents", kind: "spawn", ago: 18 * min },
+    { id: "agt-m-w1", parent: "agt-m-pl", profile: "worker", status: "done", repo: "matchkey", key: "task-7a10", ago: 17 * min },
+    { id: "agt-m-l1", parent: "agt-m-pl", profile: "lead", status: "running", repo: "ids/v1", key: "task-1b2c", activity: "Reviewing 3 workers", kind: "spawn", ago: 16 * min },
+    { id: "agt-m-w2", parent: "agt-m-l1", profile: "worker", status: "running", repo: "ids/v1", key: "task-d3ce", activity: "Editing keys.ts", kind: "edit", ago: 0.02 * min },
+    { id: "agt-m-w3", parent: "agt-m-l1", profile: "worker", status: "done", repo: "ids/v1", key: "task-4423", ago: 12 * min },
+    { id: "agt-m-w4", parent: "agt-m-l1", profile: "worker", status: "pending", repo: "ids/v1", key: "task-9b1f", ago: 11 * min },
+    { id: "agt-m-l2", parent: "agt-m-pl", profile: "lead", status: "running", repo: "addriva", key: "task-2c3d", activity: "Waiting on 2 agents", kind: "spawn", ago: 15 * min },
+    { id: "agt-m-w5", parent: "agt-m-l2", profile: "worker", provider: "codex", status: "running", repo: "addriva", key: "task-61ac", activity: "Reading api/schema.ts", kind: "read", ago: 0.5 * min },
+    { id: "agt-m-w6", parent: "agt-m-l2", profile: "worker", status: "pending", repo: "addriva", key: "task-0e7d", ago: 10 * min },
+    { id: "agt-m-cr", parent: "agt-m-pl", profile: "critic", provider: "codex", status: "pending", repo: "addriva", key: "task-c0de", ago: 9 * min },
+  ],
+});
+const older = (): RunSpec => ({ id: "run-av02", projectId: "prj-addriva2", goal: "Launch Addriva Verify docs", state: "completed", startedAgo: 40 * min, lastAgo: 36 * min,
+  agents: [{ id: "agt-av-pl", profile: "planner", status: "done", repo: "addriva", ago: 40 * min }] });
+scenes["card-running"] = [clamp("running"), proration("running"), matchkey(), older()];
+scenes["card-ask"] = [clamp("ask"), proration("running")];
+scenes["card-stopped"] = [clamp("paused"), proration("failed")];
+scenes["card-finished"] = [proration("running"), clamp("done"), older()];
+scenes["card-long"] = [matchkey()];
+scenes["cards"] = [{ ...clamp("ask") }, proration("failed"), { ...matchkey() }, { ...clamp("paused"), id: "run-cl02", projectId: "prj-e2e2",
+  agents: clamp("paused").agents.map((a) => ({ ...a, id: a.id.replace("cl-", "cl2-"), parent: a.parent?.replace("cl-", "cl2-") })) },
+  { ...clamp("done"), id: "run-cl03", projectId: "prj-e2e3", goal: "Ship the clamp helper",
+    agents: clamp("done").agents.map((a) => ({ ...a, id: a.id.replace("cl-", "cl3-"), parent: a.parent?.replace("cl-", "cl3-") })),
+    files: clampFiles.map((f) => ({ ...f, agentId: "agt-cl3-wk" })) }];
 const runs = scenes[SCENARIO];
 if (!runs) { console.error(`unknown SCENARIO ${SCENARIO}; one of ${Object.keys(scenes).join(", ")}`); process.exit(2); }
 
 // Envelopes in seq order across all runs (run.created, agent.spawned, approval.requested).
+/** Which AI an agent runs on (Agent.provider / agent.spawned agent.provider): workers on Codex, the rest on Claude, a mixed team. */
+const providerOf = (a: { profile: string; provider?: string }) => a.provider ?? (a.profile === "worker" ? "codex" : "claude");
+const specOf = (a: { profile: string; provider?: string }) => {
+  const provider = providerOf(a);
+  return { provider, kind: provider === "claude" ? "claude-code" : "codex", model: provider === "claude" ? "claude-opus-5-5" : "gpt-5-codex" };
+};
 let seq = 0;
 const envelopes: any[] = [];
 const env = (r: RunSpec, type: string, entity: string, agentId: string | null, ms: number, data: any) =>
@@ -107,9 +190,9 @@ const env = (r: RunSpec, type: string, entity: string, agentId: string | null, m
 for (const r of runs) {
   env(r, "run.created", r.id, null, NOW - r.startedAgo, { runId: r.id, budget: {}, label: null, goal: r.goal });
   for (const a of r.agents) env(r, "agent.spawned", a.id, a.id, NOW - a.ago, { parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile,
-    budget: {}, limits: {}, agent: {}, task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a) });
-  for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - r.lastAgo, { approvalId: p.id, kind: "merge", question: p.question,
-    requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target }, expiresAt: null });
+    budget: {}, limits: {}, agent: specOf(a), task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a) });
+  for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - (p.askedAgo ?? r.lastAgo), { approvalId: p.id, kind: "merge", question: p.question,
+    requestedBy: { agentId: p.agentId, runId: r.id }, subject: subjectOf(p), expiresAt: null });
   env(r, "run.started", r.id, null, NOW - r.lastAgo, { cause: "started" });   // bumps lastEventMs to the run's recency
   const end = { completed: "run.completed", failed: "run.failed", cancelled: "run.cancelled" }[r.state];
   if (end) env(r, end, r.id, null, NOW - r.lastAgo, { cause: r.state });
@@ -120,16 +203,30 @@ function workspaceOf(a: AgentSpec) {
   const [repo, ...rest] = a.repo.split("/");
   return { repo: `/src/${repo}`, path: rest.length ? a.repo : null, label: a.repo };
 }
+/** A merge approval's subject: target and ref, plus the parked merge's diff when the scene has one. */
+function subjectOf(p: ApprovalSpec) {
+  if (!p.files) return { ref: p.ref, target: p.target };
+  return { ref: p.ref, target: p.target, files: p.files, filesTotal: p.files.length,
+    added: p.files.reduce((n, f) => n + (f.added ?? 0), 0), removed: p.files.reduce((n, f) => n + (f.removed ?? 0), 0) };
+}
 function depthOf(r: RunSpec, a: AgentSpec): number { let d = 0, p = a.parent; while (p) { d++; p = r.agents.find(x => x.id === p)?.parent; } return d; }
 const HEAD = seq;
 
 const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, repo: null, createdAt: iso(NOW - r.startedAgo) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
   text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
-  task: a.task ?? null, taskAttachment: null, result: null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago) });
+  task: a.task ?? null, taskAttachment: null, result: a.result ?? null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago),
+  provider: providerOf(a), model: specOf(a).model });
 const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind: "merge", status: decided.has(p.id) ? decided.get(p.id).status : "pending",
-  question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: { ref: p.ref, target: p.target } });
+  question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: subjectOf(p), expiresAt: null, requestedAt: iso(NOW - (p.askedAgo ?? r.lastAgo)) });
 const decided = new Map<string, any>();
+
+// Agent threads: the lead's, plus the steer that opens it (snapshot.threads).
+const threads = new ThreadStore(), leadRun = runs.find(r => r.agents.some(a => a.id === "agt-ld01")), T0 = NOW - 5 * min;
+if (leadRun) for (const d of process.env.THREAD === "golden" ? goldenThread() : withDiff(leadThread(T0))) threads.write("agt-ld01", d);
+const steers = leadRun ? [{ seq: 1, from: "operator", to: "agt-ld01", at: iso(T0), text: "Skip shards above 200 and keep it on the staging bucket.", attachment: null }] : [];
+// A 1×1 png for attachment media.
+const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 
 const sse = (id: number | null, event: string, data: unknown) => (id !== null ? `id: ${id}\n` : "") + `event: ${event}\n` + `data: ${JSON.stringify(data)}\n\n`;
 /** A full snapshot of `rs`, ending at HEAD. */
@@ -139,22 +236,96 @@ const snapshot = (rs: RunSpec[]) =>
   + sse(null, "snapshot.agents", { agents: rs.flatMap(r => r.agents.map(a => agentBody(r, a))) })
   + sse(null, "snapshot.approvals", { approvals: rs.flatMap(r => (r.approvals ?? []).map(p => approvalBody(r, p))) })
   + sse(null, "snapshot.steps", { steps: envelopes.filter(e => rs.some(r => r.id === e.runId)) })
-  + sse(null, "snapshot.threads", { messages: [] })
+  + sse(null, "snapshot.threads", { messages: steers.filter(m => rs.some(r => r.agents.some(a => a.id === m.to))) })
   + sse(HEAD, "snapshot.end", { snapshotSeq: HEAD });
 
 const err = (status: number, code: string, message: string) => Response.json({ code, message }, { status });
+// Open run streams, so a POST can confirm itself with a live event.
+const live = new Map<string, Set<ReadableStreamDefaultController>>();
+let msgSeq = steers.length;   // message seqs continue after the snapshot's
+const broadcast = (scope: string, e: any) => {
+  for (const c of live.get(scope) ?? []) { try { c.enqueue(new TextEncoder().encode(sse(e.seq, e.type, e))); } catch { /* closed */ } }
+};
+// Connections that asked for ?thread=1, per scope: agent.thread_item_changed frames (ephemeral: no SSE id).
+const liveThread = new Map<string, Set<ReadableStreamDefaultController>>();
+const threadWrite = (run: RunSpec, agentId: string, d: any) => {
+  const item = threads.write(agentId, d), ms = Date.now();
+  const e = { v: 1, id: `evt_thr_${item.seq}`, scope: run.id, seq: HEAD, entity: agentId, entitySeq: 0, type: "agent.thread_item_changed", typeVersion: 1,
+    durability: "ephemeral", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId, data: { agentId, item } };
+  for (const c of liveThread.get(run.id) ?? []) { try { c.enqueue(new TextEncoder().encode(sse(null, e.type, e))); } catch { /* closed */ } }
+};
 if (existsSync(sock)) unlinkSync(sock);
 Bun.serve({
   unix: sock,
   idleTimeout: 0,
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
-    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: `mock-ui-${SCENARIO}` });
+    // CAPS=steer.skills,agent.pause advertises features the thread input checks for.
+    const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : []), ...(PROJECTS ? projectsCaps(PROJECTS) : [])])];
+    if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: SETTINGS ? "0.6.0" : `mock-ui-${SCENARIO}`,
+      ...(caps.length ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
+    if (PROJECTS) {
+      const r = projectsRoute(url, PROJECTS, req) ?? projectsRunOptionsRefusal(url, PROJECTS);
+      if (r) return r;
+    }
+    if (p === "/v1/skills") return Response.json([
+      { name: "capcomd-orchestration", description: "Compose capcomd primitives into a plan: spawn, await, verify, merge.", source: "bundled" },
+      { name: "migrate-matchkey", description: "Steps and checks for matchkey schema migrations.", source: "user" },
+      { name: "validate-shards", description: "Null and row-count checks for parquet shards.", source: "user" },
+    ]);
+    // runs.options: who can drive a new run (its planner) and where its agents run. NO_CODEX=1 / NO_DOCKER=1 report
+    // those unavailable, as a daemon would when codex isn't logged in or Docker isn't running.
+    if (SETTINGS) {
+      const r = settingsRoute(p, SETTINGS, req);
+      if (r) return r;
+      if (p === "/v1/run-options") return Response.json(settingsRunOptions(SETTINGS));
+    }
+    if (p === "/v1/run-options") return Response.json({
+      drivers: [
+        { provider: "claude", label: "Claude Code", model: "claude-opus-5-5", available: true, reason: null, default: true, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null },
+        { provider: "codex", label: "Codex", model: "gpt-5-codex", available: !process.env.NO_CODEX, reason: process.env.NO_CODEX ? "codex isn't logged in" : null, default: false,
+          efforts: ["minimal", "low", "medium", "high"], effort: "medium" },
+      ],
+      sandboxes: [
+        { name: "docker", label: "Local", available: !process.env.NO_DOCKER, reason: process.env.NO_DOCKER ? "Docker isn't running" : null, default: false },
+        { name: "boxd", label: "Cloud", available: true, reason: null, default: true },
+      ],
+    });
+    const msg = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/messages$/);
+    if (msg && req.method === "POST") {   // agents.send (harness #50): answers at once, confirms on the run stream a moment later
+      if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+      const body: any = await req.json().catch(() => null);
+      if (typeof body?.body !== "string" || !body.body) return err(422, "invalid", "body must be {body: non-empty string}");
+      const run = runs.find(r => r.id === msg[1]), agent = run?.agents.find(a => a.id === msg[2]);
+      if (!run) return err(404, "not_found", `run ${msg[1]} not found`);
+      if (!agent) return err(404, "not_found", `agent ${msg[2]} not found`);
+      if (["done", "failed", "cancelled"].includes(agent.status)) return err(409, "conflict", `${agent.id} is ${agent.status}: nothing will read this message`);
+      const mseq = ++msgSeq, ms = Date.now();
+      setTimeout(() => broadcast(run.id, { v: 1, id: `evt_msg_${mseq}`, scope: run.id, seq: HEAD + mseq, entity: `msg-${mseq}`, entitySeq: 1, type: "message.sent",
+        typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: "operator",   // the sender, as scope.ts records it
+        data: { from: "operator", to: agent.id, seq: mseq, text: body.body, bytes: body.body.length, ...(body.skills ? { skills: body.skills } : {}) } }), 1200);
+      // The agent answers on its thread: a reply, then a tool call seen open and then done.
+      const at = (dt: number) => new Date(Date.now() + dt).toISOString(), base = { rev: 1, durationMs: null, format: "blocks/1", redacted: false, tool: null, error: null, truncated: null, child: null };
+      const say = { ...base, id: `itm-live-${mseq}-say`, kind: "say", status: "done", at: at(2500), text: "On it.", blocks: [{ t: "paragraph", children: [{ t: "text", text: "On it." }] }] };
+      const call = { ...base, id: `itm-live-${mseq}-tool`, kind: "tool", status: "open", at: at(3500), text: "Run bun test", blocks: [],
+        tool: { callId: `call-live-${mseq}`, name: "Bash", kind: "test", summary: "Run bun test", isError: false, args: "{\"command\": \"bun test\"}", output: null, files: [] } };
+      setTimeout(() => threadWrite(run, agent.id, say), 2500);
+      setTimeout(() => threadWrite(run, agent.id, call), 3500);
+      setTimeout(() => threadWrite(run, agent.id, { ...call, rev: 2, status: "done", durationMs: 2300, tool: { ...call.tool, output: "42 pass\n0 fail" } }), 5800);
+      return Response.json({ runId: run.id, to: agent.id, from: "operator", seq: mseq, note: null });
+    }
     if (p === "/v1/runs" && req.method === "POST") {   // runs.create (harness #49): accepted, starts nothing here
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
       const body: any = await req.json().catch(() => null);
       if (!body?.goal?.trim()) return err(422, "invalid", "goal is empty");
+      if (body.driver !== undefined && !["claude", "codex"].includes(body.driver)) return err(422, "invalid", `unknown driver ${JSON.stringify(body.driver)}`);
+      if (body.driver === "codex" && process.env.NO_CODEX) return err(422, "invalid", "codex can't drive this run: codex isn't logged in");
+      if (body.sandbox !== undefined && !["docker", "boxd"].includes(body.sandbox)) return err(422, "invalid", `unknown sandbox ${JSON.stringify(body.sandbox)}`);
+      if (body.sandbox === "docker" && process.env.NO_DOCKER) return err(422, "invalid", "can't run locally: Docker isn't running");
+      const levels: Record<string, string[]> = { claude: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high"] };
+      if (body.effort !== undefined && !levels[body.driver ?? "claude"].includes(body.effort)) return err(422, "invalid", `effort must be one of ${levels[body.driver ?? "claude"].join(", ")}`);
+      console.log(`runs.create goal=${JSON.stringify(body.goal)} driver=${body.driver ?? "(default)"} sandbox=${body.sandbox ?? "(default)"} effort=${body.effort ?? "(default)"}`);
       if (process.env.NO_REPO && !body.repo) return err(422, "invalid", "repo is required: this daemon has no default repository (CAPCOMD_REPO).");
       return Response.json({ id: `run-new${Date.now() % 100000}`, projectId: "prj-new", label: body.goal, state: "starting", goal: body.goal, repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
     }
@@ -168,6 +339,26 @@ Bun.serve({
     const tr = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/transcript$/);
     if (tr) { const lines = runs.find(r => r.id === tr[1])?.transcript?.[tr[2]] ?? []; const after = Number(url.searchParams.get("after") ?? 0);
       return Response.json({ items: lines.map((text, i) => ({ seq: i + 1, at: iso(Date.now() - (lines.length - i) * 2500), stream: "stdout", text })).filter(x => x.seq > after), next: null }); }
+    const th = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/thread$/);
+    if (th) return Response.json(threads.page(th[2], Number(url.searchParams.get("after") ?? 0), Math.min(500, Number(url.searchParams.get("limit") ?? 100))));
+    if (/^\/v1\/runs\/[^/]+\/attachments\/[^/]+\/content$/.test(p)) return new Response(PNG, { headers: { "content-type": "image/png", "x-content-type-options": "nosniff" } });
+    if (/^\/v1\/runs\/[^/]+\/agents\/[^/]+\/workspace$/.test(p)) return err(404, "not_found", "not in the agent's latest work");
+    const actl = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/(pause|resume)$/);
+    if (actl && req.method === "POST") {   // harness #68: one agent and its subtree; the lifecycle confirms it a moment later
+      if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+      const run = runs.find(r => r.id === actl[1]), agent = run?.agents.find(a => a.id === actl[2]);
+      if (!run) return err(404, "not_found", `run ${actl[1]} not found`);
+      if (!agent) return err(404, "not_found", `agent ${actl[2]} not found`);
+      const want = actl[3] === "pause" ? "running" : "paused";
+      if (agent.status !== want) return err(409, "conflict", actl[3] === "pause" ? `nothing in ${agent.id}'s subtree is running to pause` : `nothing in ${agent.id}'s subtree is paused`);
+      const type = actl[3] === "pause" ? "agent.paused" : "agent.resumed", ms = Date.now() + 1500;
+      setTimeout(() => {
+        agent.status = actl[3] === "pause" ? "paused" : "running";
+        broadcast(run.id, { v: 1, id: `evt_${type}_${ms}`, scope: run.id, seq: HEAD + 500 + (++msgSeq), entity: agent.id, entitySeq: 1, type, typeVersion: 1,
+          durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: agent.id, data: { agentId: agent.id, by: "client:menubar" } });
+      }, 1500);
+      return Response.json({ runId: run.id, agentId: agent.id, action: actl[3], changed: [], pending: [agent.id] });
+    }
     const ctl = p.match(/^\/v1\/runs\/([^/]+)\/(pause|resume|cancel)$/);
     if (ctl && req.method === "POST") {
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
@@ -186,15 +377,48 @@ Bun.serve({
     const s = p.match(/^\/v1\/streams\/([^/]+)\/events$/);
     if (!s) return err(404, "not_found", "no such route");
     const scope = s[1], picked = scope === "daemon" ? runs : runs.filter(r => r.id === scope);
-    let hb: ReturnType<typeof setInterval> | undefined;
+    let hb: ReturnType<typeof setInterval> | undefined, stream: ReadableStreamDefaultController | undefined;
     return new Response(new ReadableStream({
       start(c) {
+        if (!live.has(scope)) live.set(scope, new Set()); live.get(scope)!.add(c);
+        if (url.searchParams.get("thread") === "1") { if (!liveThread.has(scope)) liveThread.set(scope, new Set()); liveThread.get(scope)!.add(c); }
+        stream = c;
         c.enqueue(new TextEncoder().encode(snapshot(picked)));
         hb = setInterval(() => { try { c.enqueue(new TextEncoder().encode(": heartbeat\n\n")); } catch { clearInterval(hb); } }, 15_000);
       },
-      cancel() { clearInterval(hb); },
+      cancel() { clearInterval(hb); if (stream) { live.get(scope)?.delete(stream); liveThread.get(scope)?.delete(stream); } },
     }), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
   },
 });
 chmodSync(sock, 0o600);
 console.log(`scenario ${SCENARIO}: ${runs.length} runs, ${HEAD} events on unix:${sock}`);
+
+// MOMENTS=1: a scripted live run for the identity moments. 4 s after start (then every 30 s, with a fresh id), a run is
+// created and its planner spawns a lead, two workers and a critic about 300 ms apart ("meet your team"); 9 s later it
+// completes (the cheer).
+if (process.env.MOMENTS) {
+  let n = 0, s = HEAD + 10_000;
+  const cycle = () => {
+    const rid = `run-mom${++n}`, pid = `prj-mom${n}`;
+    const ev = (type: string, entity: string, agentId: string | null, data: any) => {
+      const ms = Date.now();
+      const e = { v: 1, id: `evt_m_${++s}`, scope: rid, seq: s, entity, entitySeq: 1, type, typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms,
+        projectId: pid, runId: rid, agentId, data };
+      broadcast("daemon", e); broadcast(rid, e);
+    };
+    const team = [["agt-m0", null, "planner"], ["agt-m1", "agt-m0", "lead"], ["agt-m2", "agt-m0", "worker"], ["agt-m3", "agt-m0", "worker"], ["agt-m4", "agt-m0", "critic"]]
+      .map(([id, parent, profile]) => ({ id: `${id}-${n}`, parent: parent ? `${parent}-${n}` : null, profile }));
+    ev("run.created", rid, null, { runId: rid, budget: {}, label: null, goal: "Ship the matchkey dashboard" });
+    ev("run.started", rid, null, { cause: "started" });
+    team.forEach((a, i) => setTimeout(() => {
+      ev("agent.spawned", a.id, a.id, { parent: a.parent, depth: a.parent ? 1 : 0, profile: a.profile, budget: {}, limits: {}, agent: specOf(a as { profile: string }), task: null, key: null, operator: false,
+        workspace: { repo: "/src/matchkey", path: null, label: "matchkey" } });
+      ev("agent.started", a.id, a.id, {});
+    }, 200 + i * 300));
+    setTimeout(() => {
+      for (const a of team) ev("agent.done", a.id, a.id, { result: { summary: "done" } });
+      ev("run.completed", rid, null, { cause: "completed" });
+    }, 9_000);
+  };
+  setTimeout(cycle, 4_000); setInterval(cycle, 30_000);
+}

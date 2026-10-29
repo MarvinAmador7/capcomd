@@ -7,7 +7,8 @@ import { BASE_EGRESS } from "../agents/config";
 import { ALL_ADAPTERS } from "../agents/adapters";
 import { agentHome, agentPath, detectScript, installScript, parseDetect, sq, templateDir } from "../agents/runner";
 import { Redactor } from "../agents/redact";
-import { ENV_PREFIX, ENV_SCHEMA, envName, readLedger, writeLedger, type EnvManifest, type EnvRecord } from "./resolve";
+import { rmSync } from "node:fs";
+import { buildMarkerPath, ENV_PREFIX, ENV_SCHEMA, envName, ledgerPath, readBuildMarker, readLedger, writeBuildMarker, writeLedger, type EnvManifest, type EnvRecord } from "./resolve";
 
 export const LOCKFILES = ["bun.lock", "bun.lockb", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 /** Shapes that must never be in a snapshot. */
@@ -38,7 +39,32 @@ export interface BuildOptions {
 
 export interface BuildResult { name: string; cached: boolean; record: EnvRecord; snapshot: SnapshotInfo }
 
+/**
+ * Build (or reuse) the agent environment. While it runs, a `building` marker next to the ledger says so (with this
+ * process's pid, so a killed build reads as stale); it is removed when the build succeeds and becomes `failed` when it
+ * throws (GET /v1/environments `status`). A marker another build has since taken over is left alone.
+ */
 export async function envBuild(p: SandboxProvider & SnapshotPlatform, o: BuildOptions): Promise<BuildResult> {
+  const marker = buildMarkerPath(o.ledgerPath ?? ledgerPath());
+  const mine = { state: "building" as const, pid: process.pid, startedAt: new Date().toISOString() };
+  const ours = () => { const m = readBuildMarker(marker); return !m || (m.pid === mine.pid && m.startedAt === mine.startedAt); };
+  const clear = () => { try { if (ours()) rmSync(marker, { force: true }); } catch { /* best effort */ } };
+  try { writeBuildMarker(marker, mine); } catch { /* a status marker never stops a build */ }
+  // Exiting mid-build (Ctrl-C handled with process.exit): no marker claims a build that isn't running.
+  process.once("exit", clear);
+  try {
+    const res = await buildEnv(p, o);
+    clear();
+    return res;
+  } catch (e) {
+    try { if (ours()) writeBuildMarker(marker, { ...mine, state: "failed", endedAt: new Date().toISOString() }); } catch { /* best effort */ }
+    throw e;
+  } finally {
+    process.removeListener("exit", clear);
+  }
+}
+
+async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions): Promise<BuildResult> {
   const log = o.log ?? (() => {});
   const now = o.now ?? Date.now;
   const t0 = now();
@@ -59,7 +85,15 @@ export async function envBuild(p: SandboxProvider & SnapshotPlatform, o: BuildOp
       return { name, cached: true, record, snapshot: existing };
     }
   }
-  const { id } = await p.ensure({ idemKey: `capcomd-env-build-${t0}`, isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "env-build" } });
+  const idemKey = `capcomd-env-build-${t0}`;
+  // capcomd's own job: recorded so the place's Machines list shows it as the environment build, not as left behind.
+  const { recordJobMachine } = await import("../providers/machines");
+  const { sandboxName } = await import("../providers/registry");
+  let place: string | null = null;
+  try { place = sandboxName(); } catch { /* unknown: recorded as such */ }
+  const release = recordJobMachine({ idemKey, sandbox: place, kind: "env_build", purpose: "env-build", ttlSeconds: 3600 });
+  let id: string;
+  try { ({ id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "env-build" } })); } catch (e) { release(); throw e; }
   const sh = (s: string, timeoutMs = 120_000) => p.exec(id, ["sh", "-c", s], { env: baseEnv, timeoutMs });
   const must = async (what: string, s: string, timeoutMs?: number) => {
     const res = await sh(s, timeoutMs);
@@ -158,6 +192,7 @@ export async function envBuild(p: SandboxProvider & SnapshotPlatform, o: BuildOp
     return { name, cached: false, record, snapshot: snap };
   } finally {
     if (!keep) await p.destroy(id).catch(() => {});
+    release();
   }
 }
 

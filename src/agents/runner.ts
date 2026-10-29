@@ -105,6 +105,13 @@ export interface AgentRunOptions {
   now?: () => number;
   /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
   subagents?: { skill: string; cliSource: string; rpcDir: string };
+  /**
+   * ADR-021 §2: the run's idle machine lifetime (seconds; default AGENT_VM_TTL_SECONDS). The VM's delete deadline is
+   * renewed to this from now every 10 minutes while the agent runs.
+   */
+  vmTtlSeconds?: number;
+  /** Called after each renewal with the lifetime it renewed (the worker keeps its own reap alarm in step). */
+  onRenew?: (seconds: number) => void;
 }
 
 export class AgentError extends Error {
@@ -114,7 +121,8 @@ export class AgentError extends Error {
   }
 }
 
-/** A worker VM is deleted this long after its last lease renewal, so a VM whose engine died is cleaned up. */
+/** A worker VM is deleted this long after its last lease renewal, so a VM whose engine died is cleaned up: the default
+ *  idle machine lifetime. A run's own (ADR-021 §2, recorded at `run new`) replaces it: AgentRunOptions.vmTtlSeconds. */
 export const AGENT_VM_TTL_SECONDS = 3600;
 const TTL_RENEW_MS = 10 * 60_000;
 const SPEND_REPORT_MS = 5_000;
@@ -155,6 +163,18 @@ export function logLinesOf(ev: AgentEvent): string[] {
   if (ev.text) out.push(`${ev.type === "result" ? "result" : "say"} ${cut(ev.text, 500)}`);
   else if (ev.type === "result") out.push(`result ${ev.subtype ?? ""}`.trim());
   return out;
+}
+
+/**
+ * The subject of an agent's commit (and so of its pull request): the task's first line, cut at a word to fit 72
+ * characters. The task and agent are named in the trailers, so the subject is only what the change does.
+ */
+export function commitSubject(goal: string, max = 72): string {
+  const line = goal.split("\n")[0]!.trim().replace(/\s+/g, " ");
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  const at = cut.lastIndexOf(" ");
+  return `${(at > max / 2 ? cut.slice(0, at) : cut).replace(/[\s,;:(\-]+$/, "")}…`;
 }
 
 export function buildPrompt(t: AgentTask): string {
@@ -245,6 +265,21 @@ fi
 npm/bin/${a.bin} --version`;
 }
 
+/**
+ * Stops the agent left running in `W` by an earlier runner of the same attempt: its process group (run.sh is a session
+ * leader, its pid in agent.pid), only while it has no exit file and the pid still runs that run.sh (never a reused pid).
+ */
+export function stopStaleRun(W: string): string {
+  const pid = sq(`${W}/agent.pid`), exit = sq(`${W}/agent.exit`), run = sq(`${W}/run.sh`);
+  return `p=$(cat ${pid} 2>/dev/null); case "$p" in ''|*[!0-9]*) exit 0;; esac
+[ -e ${exit} ] && exit 0
+cmd=$(tr '\\0' ' ' 2>/dev/null < /proc/$p/cmdline || ps -o args= -p "$p" 2>/dev/null)
+case "$cmd" in *${run}*) ;; *) exit 0;; esac
+kill -TERM -"$p" 2>/dev/null
+for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 -"$p" 2>/dev/null || exit 0; sleep 0.5; done
+kill -KILL -"$p" 2>/dev/null; true`;
+}
+
 export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider, vmId: VmId, task: AgentTask, cfg: AgentConfig, opts: AgentRunOptions): Promise<AgentResult> {
   const r = new Redactor([opts.apiKey, ...(opts.secrets ?? [])]);
   const now = opts.now ?? Date.now;
@@ -274,6 +309,9 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
   let live: AgentRunState | null = null; // for cost/turns on failed or timed-out spans (TUI contract)
   return withSpan(`agent.${name.replace("-", "_")}`, attrs, async (span) => { try {
     must(await sh(`mkdir -p ${sq(W)} ${sq(home)}`), "mkdir");
+    // A run of this attempt whose runner died (the daemon stopped or restarted, a host crash) may still be going here:
+    // stop it before starting over, so two agent CLIs never work in one checkout or race on its exit file.
+    await sh(stopStaleRun(W)).catch(() => {});
 
     // 1. Clone.
     const existing = await git(["ls-remote", "--heads", task.repoUrl, `refs/heads/${task.branch}`]);
@@ -492,7 +530,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     };
     while (exitCode === null) {
       // The VM's delete deadline is a lease: renewed while the agent runs, so no fixed lifetime cuts long work short.
-      if (provider.extendTtl && now() - renewedAt > TTL_RENEW_MS) { renewedAt = now(); await provider.extendTtl(vmId, AGENT_VM_TTL_SECONDS).catch(() => {}); }
+      if (provider.extendTtl && now() - renewedAt > TTL_RENEW_MS) {
+        renewedAt = now();
+        const ttl = opts.vmTtlSeconds ?? AGENT_VM_TTL_SECONDS;
+        await provider.extendTtl(vmId, ttl).then(() => opts.onRenew?.(ttl), () => {});
+      }
       await new Promise((res) => setTimeout(res, cfg.pollMs));
       await drain(false);
       if (exitCode !== null) break;
@@ -621,7 +663,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     }
     // At a limit the stop is always recorded in a commit (empty if the agent committed everything itself), so a replay sees it.
     if (status.stdout.trim() || limit) {
-      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${task.taskId}: ${task.goal.split("\n")[0]!.slice(0, 60)}`;
+      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${commitSubject(task.goal)}`;
       const msg = `${subject}\n\n${r.text(state.resultText ?? "").slice(0, 1500)}\n\nCapcomd-Task: ${key}\nCapcomd-Epoch: ${task.epoch}\nCapcomd-Agent: ${name}@${version}\n${limit ? `Capcomd-Stop: ${limit}\n` : ""}`;
       await provider.upload(vmId, `${W}/commit-msg.txt`, new TextEncoder().encode(msg));
       must(await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", ...(limit ? ["--allow-empty"] : []), "-F", `${W}/commit-msg.txt`], repo), "git commit");

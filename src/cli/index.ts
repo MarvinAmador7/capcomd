@@ -42,14 +42,19 @@ Usage:
   capcomd trace <runId>                  Show the span waterfall
   capcomd approve <runId> <taskId|mrgId> [--deny] [--reason R]
                                        Approve (or deny) a merge parked in awaiting_approval
-  capcomd env build [--force]            Bake agent CLIs + repo deps into a boxd snapshot (no secrets)
-  capcomd env status | env rm [name|all] List / delete env snapshots
+  capcomd env build [--force]            Bake agent CLIs + repo deps into a snapshot (no secrets)
+  capcomd env status | env rm [name|all] List / delete env snapshots (env, auth, doctor: --sandbox docker|boxd
+                                       works on that sandbox instead of CAPCOMD_SANDBOX)
   capcomd agents list|show|add|set|rm|schema|validate
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
                                            (default on boxd: the profile named "planner", which capcomd setup writes)
+             [--planner-provider claude|codex]  run the planner on that provider (its model and login: the project's
+                                           profile on it, else the provider's defaults)
+             [--planner-effort LEVEL]      the planner's reasoning effort (claude low..max, codex minimal..high)
+             [--sandbox docker|boxd]       where this run's agents and checks run (default: CAPCOMD_SANDBOX)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
-  capcomd clients add <name> [--scopes read,steer,approve] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages)
+  capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages; configure: change settings, set up projects)
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
@@ -76,7 +81,7 @@ Usage:
   capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start | --since-seq N]   (with --json: one JSON line per event; resume with --since-seq <last seq>)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
-                                       add/set flags: --provider --auth --model --max-turns --budget
+                                       add/set flags: --provider --auth --model --effort --max-turns --budget
                                        --timeout-ms --idle-after-ms --stuck-repeats --no-change-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
                                        --append-system-prompt --allowed-tools --disallowed-tools
                                        --description --default --spec JSON --unset k1,k2
@@ -89,12 +94,18 @@ Usage:
         [--yes] [--demo|--skip-demo] [--agents claude,codex] [--auth subscription|apikey] [--repo URL]
         [--mode pr|direct] [--target B] [--check CMD] [--budget USD] [--service|--no-service] [--no-plugin] [--no-store]
         [--org NAME]                   (the boxd org for the key setup creates with your boxd CLI login)
+        [--no-hermes] [--approvals elicit|human] [--default-project] [--hermes-entry-per-project]
+                                       (capcomd in Hermes, when it's installed: one entry for all your projects, this
+                                       checkout added to them; who approves merges into protected branches: elicit,
+                                       capcomd asks you in Hermes (recommended), or human, capcomd approve)
   capcomd setup check                    What's configured and working (changes nothing)
   capcomd service install|uninstall|status [--port N] [--dry-run]
                                        The engine as a background service (launchd / systemd user unit)
   capcomd upgrade [--to X.Y.Z] [--dry-run]
                                        Replace this capcomd with the latest release (the installed binary;
                                        npm and Homebrew installs say how to upgrade them)
+  capcomd sandbox shell <runId> <agentId>   A shell in the machine an agent runs on (its sandbox: what you change
+  capcomd sandbox shell --sandbox docker|boxd --machine <id>   can change its work), or in a machine capcomd left behind
   capcomd ui                             Launch the web UI
 
 Options:
@@ -148,6 +159,7 @@ async function main(argv: string[]): Promise<number> {
         provider: { type: "string" },
         auth: { type: "string" },
         model: { type: "string" },
+        effort: { type: "string" },
         "max-turns": { type: "string" },
         budget: { type: "string" },
         "timeout-ms": { type: "string" },
@@ -157,6 +169,7 @@ async function main(argv: string[]): Promise<number> {
         "no-change-after-ms": { type: "string" },
         notices: { type: "boolean" },
         sandbox: { type: "string" },
+        machine: { type: "string" },
         egress: { type: "string" },
         "system-prompt": { type: "string" },
         "append-system-prompt": { type: "string" },
@@ -190,6 +203,10 @@ async function main(argv: string[]): Promise<number> {
         "no-service": { type: "boolean" },
         "no-skill": { type: "boolean" },
         "no-plugin": { type: "boolean" },
+        "no-hermes": { type: "boolean" },
+        "hermes-entry-per-project": { type: "boolean" },
+        "default-project": { type: "boolean" },
+        approvals: { type: "string" },
         "no-store": { type: "boolean" },
         org: { type: "string" },
         relogin: { type: "boolean" },
@@ -222,6 +239,8 @@ async function main(argv: string[]): Promise<number> {
         recipe: { type: "boolean" },
         legacy: { type: "boolean" },
         planner: { type: "string" },
+        "planner-provider": { type: "string" },
+        "planner-effort": { type: "string" },
         after: { type: "string", multiple: true },
         skill: { type: "string", multiple: true },
         all: { type: "boolean" },
@@ -286,8 +305,13 @@ async function main(argv: string[]): Promise<number> {
         }
         if (sub === "list") { console.log(JSON.stringify(C.loadClients().map(({ sha256: _h, ...c }) => c), null, 2)); return EXIT.ok; }
         if (sub === "revoke" && arg) { if (!C.revokeClient(arg)) usage(`no active client ${arg}`); console.log(JSON.stringify({ revoked: arg })); return EXIT.ok; }
-        usage("capcomd clients add <name> [--scopes read,steer,approve] | list | revoke <id>");
+        usage("capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>");
         return EXIT.usage;
+      }
+      case "sandbox": {
+        if (positionals[1] !== "shell") usage("usage: capcomd sandbox shell <runId> <agentId> | capcomd sandbox shell --sandbox <name> --machine <id>");
+        const { localShellDeps, sandboxShell } = await import("./commands/sandbox");
+        return await sandboxShell({ positionals: positionals.slice(2), ...(values.sandbox !== undefined ? { sandbox: values.sandbox as string } : {}), ...(values.machine !== undefined ? { machine: values.machine as string } : {}) }, localShellDeps());
       }
       case "serve":
         await serve({ port: parseInt(values.port as string, 10), ...(values["harness-socket"] ? { harnessSocket: values["harness-socket"] as string } : {}) });
@@ -323,17 +347,52 @@ async function main(argv: string[]): Promise<number> {
         // A planner agent plans real work: --planner P, or on real VMs the profile named "planner" (capcomd setup writes
         // it). The built-in recipe's planner is a placeholder model, so real VMs need --recipe/--legacy to use it.
         const PA = await import("../recipes/planner-agent");
+        // --sandbox NAME: where this run's agents and checks run (recorded with the run), instead of CAPCOMD_SANDBOX.
+        // This process (the planner's choice, preflight, the run's driver) sees it as its own CAPCOMD_SANDBOX.
+        let runSandbox: string | undefined;
+        if (values.sandbox !== undefined) {
+          const RS = await import("../providers/run-sandbox");
+          const n = String(values.sandbox).toLowerCase();
+          if (!RS.isProviderName(n)) usage(`--sandbox names where the run's agents run: docker or boxd (got ${values.sandbox})`);
+          if (values.legacy || (!values.recipe && !values.planner && !values["planner-provider"] && !values["planner-effort"] && (process.env.CAPCOMD_RUN_PATH ?? DEFAULT_RUN_PATH) === "legacy")) usage("--sandbox needs a planner or recipe run (not --legacy)");
+          process.env.CAPCOMD_SANDBOX = n;
+          delete process.env.RELAY_SANDBOX;
+          runSandbox = n;
+        }
+        // --planner-provider claude|codex: who drives the run, i.e. the planner agent's provider (src/agents/run-driver.ts).
+        const driver = values["planner-provider"] as string | undefined;
+        if (driver !== undefined) {
+          if (values.recipe || values.legacy) usage("--planner-provider runs a planner agent; don't combine it with --recipe/--legacy");
+          if (driver !== "claude" && driver !== "codex") usage(`--planner-provider must be claude or codex (got ${driver})`);
+        }
+        // --planner-effort LEVEL: the planner's reasoning effort (one of its provider's levels; checked with the profile).
+        const effort = values["planner-effort"] as string | undefined;
+        if (effort !== undefined && (values.recipe || values.legacy)) usage("--planner-effort sets a planner agent's effort; don't combine it with --recipe/--legacy");
         const realVms = (await import("../providers/registry")).realSandbox();
         let planner: string | null = null;
         if (values.planner !== undefined) {
           if (values.recipe || values.legacy) usage("--planner runs a planner agent; don't combine it with --recipe/--legacy");
           planner = PA.plannerProfile(values.planner as string);
           if (!planner) throw PA.noPlannerError(values.planner as string);
-        } else if (!values.recipe && !values.legacy && !process.env.CAPCOMD_RUN_PATH && realVms) {
+        } else if (driver !== undefined || effort !== undefined || (!values.recipe && !values.legacy && !process.env.CAPCOMD_RUN_PATH && realVms)) {
           planner = PA.plannerProfile();
           if (!planner) throw PA.noPlannerError();
         }
+        // The planner agent's ref: its profile, with the provider swapped when --planner-provider names another.
+        let plannerRef = planner;
+        if (planner && (driver || effort)) {
+          const RD = await import("../agents/run-driver");
+          const p = (driver as "claude" | "codex" | undefined) ?? RD.profileProvider(planner);
+          const d = RD.plannerDriver(p, planner, process.env, effort);
+          if (!d.ok && d.code === "effort") usage(d.reason);
+          if (!d.ok) throw new RelayError("config", `${p} can't drive this run: ${d.reason}`, `Log in with \`capcomd auth login ${p}\` (or set its API key), or leave out --planner-provider to use the planner profile's own provider.`);
+          plannerRef = d.ref;
+        }
         if (planner && (values.profile || values.agent || (values.set as string[] | undefined)?.length || values.overrides)) usage("--profile/--set pick the worker of the built-in recipe; a planner agent picks its own workers (from its profile's children.allowedChildProfiles)");
+        // The checks the planner's spawn makes (its profile, the env snapshot its CLI needs on this run's sandbox, egress),
+        // made before the run is created or detached: a run whose planner can't start is refused with the reason here,
+        // instead of starting and then sitting with no agent.
+        if (plannerRef) (await import("../primitives/ops")).spawnChecks(plannerRef);
         // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
         if (!planner && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
         // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
@@ -363,7 +422,7 @@ async function main(argv: string[]): Promise<number> {
           mkdirSync(dir, { recursive: true });
           const log = join(dir, `${runId}.ndjson`);
           const fd = openSync(log, "a");
-          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), "--", goal);
+          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), ...(driver ? ["--planner-provider", driver] : []), ...(effort ? ["--planner-effort", effort] : []), ...(runSandbox ? ["--sandbox", runSandbox] : []), "--", goal);
           const child = spawn(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
           child.unref();
           if (json) out({ runId, detached: true, log, pid: child.pid });
@@ -384,9 +443,9 @@ async function main(argv: string[]): Promise<number> {
           else console.log(human);
         };
         const result = planner
-          ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: planner })
+          ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: plannerRef!, ...(driver ? { driver } : {}), ...(runSandbox ? { sandbox: runSandbox } : {}) })
           : runPath === "recipe"
-          ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit })
+          ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit, ...(runSandbox ? { sandbox: runSandbox } : {}) })
           : await executeRun({ goal, runId, targetBranch, emit });
         if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
         return result.ok ? EXIT.ok : EXIT.run_failed;
@@ -641,11 +700,11 @@ async function main(argv: string[]): Promise<number> {
         const runId = positionals[1] ?? usage("runId required: capcomd cancel <runId> [agentId]");
         // A recipe run (planner flow over the primitives) keeps the run-level cancel contract
         // ({runId, state, changed}); its scope agents are cancelled alongside.
-        const c = await (await import("../primitives/ops")).cancelAny(runId, positionals[2], values.reason as string | undefined);
+        const c = await (await import("../primitives/ops")).cancelAny(runId, positionals[2], values.reason as string | undefined, "operator");
         if (c.kind === "agents") {
           const r = c.agents;
           if (json) out(r);
-          else console.log(r.cancelled.length ? `✓ cancelled ${r.cancelled.join(", ")}` : `nothing to cancel (${r.affected.map((a: { agentId: string; status: string }) => `${a.agentId}=${a.status}`).join(", ") || "no agents"})`);
+          else console.log(r.cancelled.length ? `✓ cancelled ${r.cancelled.join(", ")}` : r.runEnded ? `✓ Run ${runId} cancelled` : `nothing to cancel (${r.affected.map((a: { agentId: string; status: string }) => `${a.agentId}=${a.status}`).join(", ") || "no agents"})`);
           return EXIT.ok;
         }
         const r = c.run;

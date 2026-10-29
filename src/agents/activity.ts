@@ -3,6 +3,7 @@
 // vocabulary plus a count. Nothing the agent wrote reaches the line: paths and commands only pick the kind and are
 // counted, never shown. Consecutive events of one kind coalesce ("Reading 4 files") and each agent's line is written
 // at most once per `minMs` (default 1s), so a busy agent costs one small row update a second, not one per event.
+// Each finished streak is also a step of the agent's history (harness.v1 `agent.step`), reported at once, unthrottled.
 import type { AgentEvent } from "./types";
 import { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind } from "../../packages/agent-thread/src/kinds";
 
@@ -13,6 +14,11 @@ export { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind };
 export type ActivityStep = { kind: ActivityKind; target: string };
 /** What is stored on the agent: the current kind, how many distinct targets the streak touched, when it last changed. */
 export type StoredActivity = { kind: ActivityKind; n: number; at: number };
+/**
+ * A finished streak (harness.v1 `agent.step`): its kind, how many distinct targets it touched, when it began (its first
+ * step) and ended (when a step of another kind began, or the agent ended), epoch ms. "think" is never a step.
+ */
+export type FinishedStep = { kind: ActivityKind; n: number; startedAt: number; endedAt: number };
 
 const step = (kind: ActivityKind, target: unknown = ""): ActivityStep => ({ kind, target: typeof target === "string" ? target : JSON.stringify(target ?? "") });
 
@@ -71,11 +77,20 @@ export function activityOf(ev: AgentEvent): ActivityStep[] {
  * to the streak (n = distinct targets); another kind starts a new streak. "think" never interrupts a streak: it only
  * shows when nothing else has yet. A write happens when the line would change, at most once per `minMs`; a change
  * inside the window is written when it ends (only the latest).
+ *
+ * `onStep` hears every finished streak, in order and unthrottled (a read → edit → test inside one second is three
+ * steps): when a step of another kind starts the next one, and the last one at `finish()`. Streaks of "think" are never
+ * reported. Calls are serialized (one at a time, in order), so the steps land in the order the agent took them, and
+ * each step's startedAt is later than the one before (by 1 ms when they came in one batch).
  */
-export function activityReporter(write: (a: StoredActivity) => unknown, o: { minMs?: number; now?: () => number } = {}) {
+export function activityReporter(
+	write: (a: StoredActivity) => unknown,
+	o: { minMs?: number; now?: () => number; onStep?: (s: FinishedStep) => unknown } = {},
+) {
 	const minMs = o.minMs ?? 1000, now = o.now ?? Date.now;
-	let kind: ActivityKind | null = null, targets = new Set<string>();
+	let kind: ActivityKind | null = null, targets = new Set<string>(), startedAt = 0;
 	let written: string | null = null, lastWrite = -Infinity, timer: ReturnType<typeof setTimeout> | null = null, stopped = false;
+	let steps: Promise<unknown> = Promise.resolve();
 	const current = (): StoredActivity | null => (kind ? { kind, n: Math.max(1, targets.size), at: now() } : null);
 	const flush = () => {
 		timer = null;
@@ -91,23 +106,47 @@ export function activityReporter(write: (a: StoredActivity) => unknown, o: { min
 		const wait = lastWrite + minMs - now();
 		if (wait <= 0) flush(); else timer = setTimeout(flush, wait);
 	};
-	const observe = (steps: ActivityStep[]) => {
+	/** The current streak ended at `at`: report it (not "think"). */
+	const ended = (at: number) => {
+		const onStep = o.onStep;
+		if (!onStep || !kind || kind === "think" || stopped) return;
+		const s: FinishedStep = { kind, n: Math.max(1, targets.size), startedAt, endedAt: Math.max(startedAt, at) };
+		steps = steps.then(() => onStep(s)).catch(() => { /* best effort */ });
+	};
+	const observe = (list: ActivityStep[]) => {
+		if (stopped) return;
 		let changed = false;
-		for (const s of steps) {
+		for (const s of list) {
 			if (s.kind === "think" && kind) continue;
-			if (s.kind !== kind) { kind = s.kind; targets = new Set(); changed = true; }
+			// Starts strictly increase (events often arrive in one batch, in one ms): each step has its own startedAt,
+			// which is how the scope actor tells a re-reported step from a new one.
+			if (s.kind !== kind) { const t = kind ? Math.max(now(), startedAt + 1) : now(); ended(t); kind = s.kind; targets = new Set(); startedAt = t; changed = true; }
 			if (s.target && !targets.has(s.target)) { targets.add(s.target); changed = true; }
 		}
 		if (changed) schedule();
 	};
+	const stop = () => { stopped = true; if (timer) clearTimeout(timer); timer = null; };
 	return {
 		/** An adapter event (claude/codex). */
 		event: (ev: AgentEvent) => observe(activityOf(ev)),
 		/** A capcomd op the agent called (spawn, await, send, …), as seen by the daemon. */
 		op: (op: string, target = "") => { const k = opKind(op); if (k) observe([step(k, target)]); },
 		steps: observe,
-		/** Stop: drop a pending write (the agent ended; its state change is the news now). */
-		stop: () => { stopped = true; if (timer) clearTimeout(timer); timer = null; },
+		/**
+		 * The agent ended: report its last streak as a step, stop, and wait (at most `timeoutMs`, default 10s) until every
+		 * step is reported, so they land before the agent's end does. A pending activity write is dropped, as with stop().
+		 */
+		finish: async (f: { timeoutMs?: number } = {}) => {
+			if (!stopped) { ended(now()); stop(); }
+			let t: ReturnType<typeof setTimeout> | undefined;
+			await Promise.race([steps, new Promise((r) => { t = setTimeout(r, f.timeoutMs ?? 10_000); })]);
+			clearTimeout(t);
+		},
+		/**
+		 * Stop without reporting the last streak (the agent was cancelled; a step it was in the middle of is dropped). Drops
+		 * a pending write (the agent ended; its state change is the news now). Steps already reported still go out.
+		 */
+		stop,
 	};
 }
 export type ActivityReporter = ReturnType<typeof activityReporter>;

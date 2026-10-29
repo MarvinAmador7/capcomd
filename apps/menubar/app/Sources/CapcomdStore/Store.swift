@@ -1,4 +1,5 @@
 import Foundation
+import CapcomdThread
 
 /// The menu bar app's state, fed by per-scope event streams. Platform-neutral (no SwiftUI/Observation: Observation
 /// doesn't link on the Linux toolchain here). The macOS app mirrors `onChange` into an `@Observable` model.
@@ -19,6 +20,14 @@ public final class CapcomdStore {
   /// Live lifecycle events worth a notification (approval requested, run completed/failed). Never fired for snapshots.
   public var onNotify: (@MainActor (Notice) -> Void)?
   public internal(set) var threads: [String: [ThreadItem]] = [:]
+  /// Structured thread items per agent (harness #59; StoreThreadItems.swift), the route's cursor, and whether it works.
+  public internal(set) var books: [String: Book] = [:]
+  var threadCursor: [String: Int] = [:]
+  public internal(set) var threadUnavailable: [String: DetailUnavailable] = [:]
+  public internal(set) var media: [MediaKey: Fetched<Data>] = [:]
+  /// The run whose lifecycle feed carries `thread=1` (the open thread's run), and the agent shown.
+  public internal(set) var threadStreamRun: String?
+  public internal(set) var openThreadAgent: String?
   public let prefs: UIPreferences
   public var onChange: (@MainActor () -> Void)?
 
@@ -30,14 +39,59 @@ public final class CapcomdStore {
   public internal(set) var logUnavailable: [String: DetailUnavailable] = [:]
   var logCursor: [String: Int] = [:]
   public internal(set) var controlState: [String: ControlState] = [:]
+  /// Pause / resume of one agent (and its subtree), keyed by agent id; settles on agent.paused / agent.resumed.
+  public internal(set) var agentControlState: [String: ControlState] = [:]
   public internal(set) var startState: StartState = .idle
-  var pendingStartKey: (goal: String, repo: String?, key: String)?
+  /// Steers typed in a thread, per agent, until confirmed (StoreThread.swift).
+  public internal(set) var outbox: [String: [PendingSteer]] = [:]
+  public internal(set) var capabilities: Set<String> = []
+  public internal(set) var skills: Fetched<[SkillInfo]>?
+  /// The daemon feed can't connect (the daemon is down or restarting); it keeps retrying.
+  public internal(set) var daemonUnreachable = false
+  /// Who can drive a new run and where it can run (`runs.options`); empty when the daemon can't be asked.
+  public internal(set) var runOptions = RunOptions()
+  /// The daemon's version (`GET /v1/health` `version`), for Settings and About.
+  public internal(set) var daemonVersion: String?
+  /// Settings (Settings.swift): logins per AI × place, each place's agent environment, the background service.
+  public internal(set) var logins: Fetched<[LoginInfo]>?
+  public internal(set) var environments: Fetched<[EnvironmentInfo]>?
+  public internal(set) var service: Fetched<ServiceInfo>?
+  /// Places as the daemon describes them (`sandboxes`; Sandboxes.swift), and per place its details and machines (read
+  /// while its Details screen shows).
+  public internal(set) var sandboxList: Fetched<[SandboxDescriptor]>?
+  public internal(set) var sandboxDetails: [String: Fetched<SandboxDetail>] = [:]
+  public internal(set) var sandboxResources: [String: Fetched<ResourcePage>] = [:]
+  /// Place settings being changed or that failed to change (`PATCH …/settings`), by `SettingEdit.key(place, id)`.
+  public internal(set) var settingEdits: [String: SettingEdit] = [:]
+  /// A settings change answered 403: this app's token lacks the `configure` scope, so settings stay read-only for as
+  /// long as this store (and so this token) lives.
+  public internal(set) var configureDenied = false
+  /// Machines being deleted, or whose last Delete didn't go through (`POST …/actions/delete`), by
+  /// `MachineDeletion.key(place, id)`.
+  public internal(set) var machineDeletions: [String: MachineDeletion] = [:]
+  var pendingStartKey: (goal: String, choice: RunChoice, key: String)?
+  /// Setting a folder up as a project (`projects.setup`; Projects.swift): the inspected folder, and the setup on its way
+  /// or how it ended.
+  public internal(set) var projectInspect: ProjectInspectState = .idle
+  public internal(set) var projectSetup: ProjectSetupState = .idle
+  var pendingSetupKey: (request: ProjectSetupRequest, key: String)?
+  /// Publishing the inspected checkout to GitHub (`projects.git`; Projects.swift): its options loading, ready, on their
+  /// way, or how it ended. Starting a repository (`initGit`) reports a refusal or failure here too.
+  public internal(set) var projectPublish: ProjectPublishState = .idle
+  /// The last publish options read (kept while publishing and after a refusal, so the form keeps its values).
+  public internal(set) var projectPublishOptions: ProjectPublishOptions?
+  /// `initGit` is on its way.
+  public internal(set) var initializingGit = false
 
   let subscriber: StreamSubscribing?
   let decider: ApprovalDeciding?
   let detail: RunDetailFetching?
   let controls: RunControlling?
   let starter: RunStarting?
+  let messenger: AgentMessaging?
+  let daemonInfo: DaemonInfoFetching?
+  let threadSource: ThreadFetching?
+  let projectSetter: ProjectSettingUp?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -60,19 +114,42 @@ public final class CapcomdStore {
   public static let maxLifecycleFeeds = 16
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
-              starter: RunStarting? = nil, prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
-    self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
+              starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil, thread: ThreadFetching? = nil,
+              projects: ProjectSettingUp? = nil,
+              prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
+    self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter
+    self.messenger = messenger; self.daemonInfo = daemonInfo; self.threadSource = thread; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
+    // The live daemon adapter sets projects up too; tests may pass a port of their own.
+    self.projectSetter = projects ?? (daemonInfo as? ProjectSettingUp)
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 
   // MARK: derived views
-  /// Project cards: running first, then most recent event (SPEC §4.1).
+  /// Project cards: running first, then most recent event (SPEC §4.1). The daemon's `projectId` is the repository
+  /// (a hash of it), but a card is one goal: runs group by repository and goal, so each goal started from the composer
+  /// is its own card and reruns of a goal stay together. A run whose goal hasn't arrived yet joins its repository's
+  /// newest card.
   public var projects: [Project] {
-    let grouped = Dictionary(grouping: runs.values) { $0.projectId ?? $0.id }
+    func goalKey(_ r: Run) -> String? { r.goal.map { $0.plain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() } }
+    var newestGoal: [String: (key: String, at: Int)] = [:]
+    for r in runs.values { if let g = goalKey(r), let p = r.projectId, r.recencyMs >= (newestGoal[p]?.at ?? .min) { newestGoal[p] = (g, r.recencyMs) } }
+    let waiting = Dictionary(grouping: pendingApprovals.filter { if case .decided = $0.decision { return false }; return true }, by: \.runId)
+    let withApprovals = runs.values.map { r -> Run in var r = r; r.waitingApprovals = waiting[r.id]?.count ?? 0; return r }
+    let grouped = Dictionary(grouping: withApprovals) { r -> String in
+      guard let p = r.projectId else { return r.id }
+      guard let g = goalKey(r) ?? newestGoal[p]?.key else { return r.id }
+      return "\(p)|\(Self.fnv1a(g))"
+    }
     return grouped.map { id, rs in
       let sorted = rs.sorted { ($0.recencyMs, $0.id) > ($1.recencyMs, $1.id) }
       return Project(id: id, goal: sorted.first(where: { $0.goal != nil })?.goal, runs: sorted)
     }.sorted { ($0.isActive ? 1 : 0, $0.recencyMs, $0.id) > ($1.isActive ? 1 : 0, $1.recencyMs, $1.id) }
+  }
+  /// A short, stable hash for card ids (the goal can be 16 KB).
+  static func fnv1a(_ s: String) -> String {
+    var h: UInt64 = 0xcbf2_9ce4_8422_2325
+    for b in s.utf8 { h ^= UInt64(b); h &*= 0x0000_0100_0000_01b3 }
+    return String(h, radix: 36)
   }
   /// Undecided approvals in request order.
   public var pendingApprovals: [PendingApproval] {
@@ -83,15 +160,25 @@ public final class CapcomdStore {
   public func approvals(forRun id: String) -> [PendingApproval] { pendingApprovals.filter { $0.runId == id } }
   /// Activity rows. An agent's row reads as its activity line ("Read 4 files", "Writing parquet shards to R2") with the
   /// activity's icon when the daemon reports one; otherwise its task's first line, else its profile.
+  /// With step history (`agent.step`), an agent shows each finished step in order; its own row stays only while it
+  /// works, as the live line after its history, and goes once it has ended (its last step says what it did).
   public func steps(forRun id: String) -> [Step] {
     guard let run = runs[id] else { return [] }
-    return run.steps.map { s in
-      guard s.kind == .agent, let aid = s.agentId, let a = run.agents[aid] else { return s }
+    let withHistory = Set(run.steps.filter { $0.id.hasPrefix("step:") }.compactMap(\.agentId))
+    var out: [Step] = [], live: [String: Step] = [:]
+    for s in run.steps {
+      // The agent's own row, by id: a step of kind .agent (it started or waited for a sub-agent) is history, not it.
+      guard s.id.hasPrefix("agent:"), let aid = s.agentId, let a = run.agents[aid] else { out.append(s); continue }
       var s = s
       if let act = a.activity { s.text = act; s.kind = StepKind(activityKind: a.activityKind) }
       else if let t = a.task?.firstLine, !t.isEmpty { s.text = t }
-      return s
+      if withHistory.contains(aid) { if s.status == .running || s.status == .paused { live[aid] = s } } else { out.append(s) }
     }
+    // Each working agent's live line goes right after its last finished step.
+    for (aid, s) in live {
+      if let i = out.lastIndex(where: { $0.agentId == aid && $0.id.hasPrefix("step:") }) { out.insert(s, at: i + 1) } else { out.append(s) }
+    }
+    return out
   }
 
   /// Outline tree for a run, orchestrator first. Approvals bubble to ancestors.
@@ -150,8 +237,9 @@ public final class CapcomdStore {
   /// Badge and notifications come from each run's lifecycle feed (`?feed=lifecycle`): one per known, unfinished run.
   func syncLifecycleFeeds() {
     guard subscriber != nil, subs["daemon"] != nil else { return }
+    // Active runs first: the daemon reports a finished run as `idle`, not a terminal state, so old ones mustn't crowd out new.
     let want = runs.values.filter { !Run.terminalStates.contains($0.state) }
-      .sorted { ($0.lastEventMs, $0.id) > ($1.lastEventMs, $1.id) }.prefix(Self.maxLifecycleFeeds).map(\.id)
+      .sorted { ($0.isActive ? 1 : 0, $0.lastEventMs, $0.id) > ($1.isActive ? 1 : 0, $1.lastEventMs, $1.id) }.prefix(Self.maxLifecycleFeeds).map(\.id)
     for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }   // live activity rides along (Live adds ?activity=1)
   }
   public var activeScopes: [String] { subs.keys.sorted() }
@@ -161,8 +249,9 @@ public final class CapcomdStore {
     guard subs[key] == nil, let subscriber else { return }
     let after = cursor[key] ?? 0
     let onFrame: @Sendable (StreamFrame) async -> Void = { [weak self] f in await self?.receive(f, scope: key) }
+    let thread = feed != nil && Self.lifecycleRun(key) == threadStreamRun   // the open thread's run: live thread items too
     subs[key] = feed == nil ? subscriber.subscribe(scope: scope, after: after, onFrame: onFrame)
-                            : subscriber.subscribe(scope: scope, feed: feed, after: after, onFrame: onFrame)
+                            : subscriber.subscribe(scope: scope, feed: feed, thread: thread, after: after, onFrame: onFrame)
   }
 
   // MARK: frames
@@ -185,6 +274,12 @@ public final class CapcomdStore {
       cursor[scope] = n; return
     case .unauthorized:
       unauthorized = true
+    case .link(let up):
+      guard scope == "daemon", daemonUnreachable == up else { return }   // the panel follows the daemon feed only
+      daemonUnreachable = !up
+      // Back: what the daemon can do and offers may have changed (a restart, an upgrade), and a first read made while it
+      // was down got nothing, which hid the composer's Local/VM and driver row until the app was restarted.
+      if up { Task { await refreshDaemonInfo() } }
     case .snapshotSteps(let st): pendingReset[scope, default: ResetBuffer()].steps += st; return
     case .snapshotThreads(let m): pendingReset[scope, default: ResetBuffer()].messages += m; return
     case .reset(let s, _):
@@ -235,6 +330,9 @@ public final class CapcomdStore {
       ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
       ag.activityKind = a.activity?.kind
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
+      ag.provider = Provider(wire: a.provider) ?? old?.provider; ag.model = a.model ?? old?.model
+      ag.activityAtMs = epochMs(iso: a.activity?.at) ?? old?.activityAtMs
+      ag.read(result: a.result)
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
     }
@@ -243,8 +341,8 @@ public final class CapcomdStore {
     for m in b.messages { appendMessage(m) }
     for a in b.approvals where a.status == "pending" {
       let rid = a.requestedBy?.runId ?? (scope.hasPrefix("run-") ? scope : nil)
-      approvals[a.approvalId] = PendingApproval(id: a.approvalId, runId: rid, agentId: a.requestedBy?.agentId, kind: a.kind,
-                                                question: UntrustedText(a.question), branchLine: Self.branchLine(kind: a.kind, subject: a.subject ?? [:]))
+      approvals[a.approvalId] = PendingApproval(id: a.approvalId, runId: rid, agentId: a.requestedBy?.agentId, kind: a.kind, question: a.question,
+                                                subject: a.subject ?? [:], requestedAtMs: epochMs(iso: a.requestedAt))
       approvalSeq[a.approvalId] = snapshotSeq
     }
     lastSeq[scope] = snapshotSeq
@@ -289,21 +387,42 @@ public final class CapcomdStore {
                     task: d["task"]?.string.map(UntrustedText.init), key: d["key"]?.string,
                     repo: d["workspace"]?["label"]?.string ?? d["repo"]?.string ?? d["agent"]?["repo"]?.string, spawnedAtMs: e.epochMs)
       a.taskAttachment = AttachmentRef(d["taskAttachment"])
+      a.provider = Provider(wire: d["agent"]?["provider"]?.string ?? d["agent"]?["kind"]?.string)
+      a.model = d["agent"]?["model"]?.string
       runs[runId]?.agents[id] = a
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
                                     phase: Self.phase(a.kind), text: a.displayName, detail: a.task, status: .queued))
-    case "agent.started", "agent.resumed": setStatus(runId, agentId, .running, e)
     case "agent.status_changed", "agent.status": setStatus(runId, agentId, AgentStatus(wire: d["status"]?.string), e)
     case "agent.done":
       setStatus(runId, agentId, .done, e)
       if let runId, let agentId, let sum = d["result"]?["summary"]?.string { runs[runId]?.agents[agentId]?.resultSummary = UntrustedText(sum) }
-    case "agent.failed", "drive.failed": setStatus(runId, agentId, .failed, e)
+      readResult(runId, agentId, d)
+    case "agent.failed", "drive.failed": setStatus(runId, agentId, .failed, e); readResult(runId, agentId, d)
     case "agent.cancelled", "agent.reaped": setStatus(runId, agentId, .cancelled, e)
-    case "agent.paused": setStatus(runId, agentId, .paused, e)
+    case "agent.paused":
+      setStatus(runId, agentId, .paused, e); readResult(runId, agentId, d)
+      // A usage limit resumes by itself at `until` (the result's resetAt may be unknown).
+      if let runId, let agentId, d["result"]?["limit"]?.string == "quota", runs[runId]?.agents[agentId]?.resetAtMs == nil, let u = d["until"]?.int {
+        runs[runId]?.agents[agentId]?.resetAtMs = u
+      }
+    case "agent.resumed", "agent.started":
+      setStatus(runId, agentId, .running, e)
+      if let runId, let agentId { runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil }
+    case "agent.thread_item_changed": applyThreadFrame(runId: runId, agentId: agentId, d)
+    case "agent.step":
+      // One finished step of an agent (capability agent.steps): "Read 4 files", then "Edited a file", in order. Keyed
+      // like the daemon dedupes it (agent, kind, start), so a replay or a re-driven agent doesn't add a row twice.
+      guard let runId, let agentId, let a = runs[runId]?.agents[agentId] else { return }
+      let kind = d["kind"]?.string ?? "tool"
+      let started = d["startedAt"]?.int ?? e.epochMs
+      upsertStep(runId: runId, Step(id: "step:\(agentId):\(kind):\(started)", seq: e.seq, epochMs: d["endedAt"]?.int ?? e.epochMs, agentId: agentId,
+                                    kind: StepKind(activityKind: kind), phase: Self.phase(a.kind), text: e.text ?? kind.prefix(1).uppercased() + kind.dropFirst(),
+                                    detail: nil, status: .done))
     case "agent.activity_changed":
       guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
       runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string
       runs[runId]?.agents[agentId]?.activityKind = d["activity"]?["kind"]?.string
+      runs[runId]?.agents[agentId]?.activityAtMs = epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs
       if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
     case "verify.started", "verify.passed", "verify.failed":
       guard let runId else { return }
@@ -321,6 +440,11 @@ public final class CapcomdStore {
         case "merge.approved": (.running, "Merge approved")
         default: (.failed, "Merge denied")
       }
+      // How the agent's merge ended, as its result says once it's re-read (a denial comes after the agent finished).
+      if let agentId, let state = ["merge.succeeded": "merged", "merge.failed": "failed", "merge.denied": "denied"][e.type] {
+        let target = d["target"]?.string ?? runs[runId]?.agents[agentId]?.merge?.target
+        runs[runId]?.agents[agentId]?.merge = MergeOutcome(state: state, target: target)
+      }
       let line = Self.branchLine(kind: "merge", subject: d)
       upsertStep(runId: runId, Step(id: "merge:\(key)", seq: e.seq, epochMs: e.epochMs, agentId: agentId, kind: .git, phase: .ship,
                                     text: line.map { "\(text) \($0)" } ?? text, detail: d["reason"]?.string.map(UntrustedText.init), status: st))
@@ -331,7 +455,7 @@ public final class CapcomdStore {
       let kind = d["kind"]?.string ?? "custom"
       let q = d["question"]?.string ?? d["summary"]?.string ?? "Approve \(kind)?"
       var subject: [String: JSONValue] = [:]; if case .object(let o)? = d["subject"] { subject = o }
-      approvals[id] = PendingApproval(id: id, runId: rid, agentId: aid, kind: kind, question: UntrustedText(q), branchLine: Self.branchLine(kind: kind, subject: subject))
+      approvals[id] = PendingApproval(id: id, runId: rid, agentId: aid, kind: kind, question: q, subject: subject, requestedAtMs: e.epochMs)
       approvalSeq[id] = e.seq
       if let rid { upsertStep(runId: rid, Step(id: "approval:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: aid, kind: .approval, phase: .ship,
                                                text: "Waiting for approval", detail: UntrustedText(q), status: .waiting)) }
@@ -354,7 +478,7 @@ public final class CapcomdStore {
     case "approval.requested":
       guard let id = e.data["approvalId"]?.string, let a = approvals[id] else { return }
       onNotify(.approvalRequested(approvalId: id, runId: a.runId, question: a.question))
-    case "run.completed", "run.failed":
+    case "run.completed", "run.failed", "run.cancelled":
       guard let rid = e.runId ?? e.data["runId"]?.string else { return }
       onNotify(.runFinished(runId: rid, type: e.type, title: runs[rid]?.title ?? rid))
     default: return
@@ -376,18 +500,23 @@ public final class CapcomdStore {
         old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text; old.activityKind = a.activity?.kind
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
         old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs; old.repo = a.workspace?.label ?? old.repo
+        old.provider = Provider(wire: a.provider) ?? old.provider; old.model = a.model ?? old.model
+        old.activityAtMs = epochMs(iso: a.activity?.at) ?? old.activityAtMs
+        old.read(result: a.result)
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
                        task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: i, activity: a.activity?.text)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
         ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
+        ag.provider = Provider(wire: a.provider); ag.model = a.model
+        ag.activityAtMs = epochMs(iso: a.activity?.at); ag.read(result: a.result)
         runs[a.runId]?.agents[a.id] = ag
       }
     }
     for a in b.approvals where a.status == "pending" && approvals[a.approvalId] == nil {
       approvals[a.approvalId] = PendingApproval(id: a.approvalId, runId: a.requestedBy?.runId ?? runId, agentId: a.requestedBy?.agentId, kind: a.kind,
-                                                question: UntrustedText(a.question), branchLine: Self.branchLine(kind: a.kind, subject: a.subject ?? [:]))
+                                                question: a.question, subject: a.subject ?? [:], requestedAtMs: epochMs(iso: a.requestedAt))
       approvalSeq[a.approvalId] = approvalSeq[a.approvalId] ?? snapshotSeq
     }
     lastSeq[key] = snapshotSeq
@@ -396,15 +525,21 @@ public final class CapcomdStore {
   func setStatus(_ runId: String?, _ agentId: String?, _ s: AgentStatus, _ e: Envelope) {
     guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
     runs[runId]?.agents[agentId]?.status = s; runs[runId]?.agents[agentId]?.updatedAtMs = e.epochMs
+    settleAgentControl(agentId: agentId, status: s)
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == "agent:\(agentId)" }) {
       runs[runId]?.steps[i].status = Self.stepStatus(s); runs[runId]?.steps[i].epochMs = e.epochMs
     }
+  }
+  /// agent.done / failed / paused carry the agent's `result`: its cost, limit, error, checks and merge.
+  func readResult(_ runId: String?, _ agentId: String?, _ d: [String: JSONValue]) {
+    guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
+    runs[runId]?.agents[agentId]?.read(result: d["result"])
   }
   func upsertStep(runId: String, _ s: Step) {
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == s.id }) { runs[runId]?.steps[i] = s } else { runs[runId]?.steps.append(s) }
   }
   nonisolated static func stepStatus(_ s: AgentStatus) -> StepStatus {
-    switch s { case .running: .running; case .done, .handedOff: .done; case .failed, .cancelled: .failed; case .pending, .paused, .unknown: .queued }
+    switch s { case .running: .running; case .done, .handedOff: .done; case .failed: .failed; case .cancelled: .stopped; case .paused: .paused; case .pending, .unknown: .queued }
   }
   nonisolated static func phase(_ k: ProfileKind) -> Phase { switch k { case .planner: .plan; case .critic: .ship; default: .build } }
   /// "fix/backfill → main" for merges; host/name for other kinds. Built only from structured subject fields.

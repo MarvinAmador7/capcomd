@@ -52,7 +52,7 @@ Capcomd orchestrates complex multi-actor workflows involving:
 - Actor actions across 6 actor types (run, planner, taskBoard, worker, verifier, judge)
 - State machine transitions with XState v5
 - External calls (model APIs, sandbox providers, git operations)
-- Asynchronous outbox-pattern message dispatch
+- Asynchronous message dispatch (there is no outbox since 2026-10-27; ADR-022 workflow steps are the async path)
 - Chaos recovery scenarios requiring audit trails
 
 Without instrumentation, debugging failures and understanding system behavior requires:

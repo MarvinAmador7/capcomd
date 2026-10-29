@@ -13,7 +13,16 @@ public final class UnixSocketTransport: @unchecked Sendable {
   let client: HTTPClient
   public init(socketPath: String, token: String) {
     self.socketPath = socketPath; self.token = token
-    self.client = HTTPClient(eventLoopGroupProvider: .singleton)
+    // A local socket: a refused connection means the daemon is down or restarting. Fail the request at once (connect
+    // timeout 3 s, no pool retry) and let the caller back off and reconnect; with the pool's retry an SSE request kept
+    // retrying inside its 24 h deadline, so feeds never came back after a daemon restart.
+    var config = HTTPClient.Configuration()
+    config.connectionPool.retryConnectionEstablishment = false
+    // Every SSE feed holds a connection for good (the daemon feed, one per followed run, the open thread's): the default
+    // 8 per host queued any feed past the eighth forever, so newer runs never showed their agents.
+    config.connectionPool.concurrentHTTP1ConnectionsPerHostSoftLimit = 64
+    config.timeout.connect = .seconds(3)
+    self.client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: config)
   }
   public func shutdown() async throws { try await client.shutdown() }
 
@@ -26,24 +35,35 @@ public final class UnixSocketTransport: @unchecked Sendable {
     return r
   }
 
-  public func get(_ path: String) async throws -> (Int, Data) {
+  /// GET with the body collected up to `maxBytes` (a larger body throws).
+  public func get(_ path: String, maxBytes: Int = 4 << 20) async throws -> (Int, Data) {
     let resp = try await client.execute(try request(path), timeout: .seconds(10))
-    let body = try await resp.body.collect(upTo: 4 << 20)
+    let body = try await resp.body.collect(upTo: maxBytes)
     return (Int(resp.status.code), Data(body.readableBytesView))
   }
 
-  public func getJSON<T: Decodable>(_ path: String, as: T.Type) async throws -> T {
-    let (s, d) = try await get(path)
+  public func getJSON<T: Decodable>(_ path: String, as: T.Type, maxBytes: Int = 4 << 20) async throws -> T {
+    let (s, d) = try await get(path, maxBytes: maxBytes)
     guard s == 200 else { throw HTTPStatusError(status: s) }
     return try JSONDecoder().decode(T.self, from: d)
   }
 
   /// POST with an optional JSON body; returns the status and body (errors are ApiError `{code, message}` JSON).
-  public func post(_ path: String, headers extra: [(String, String)] = [], json: Data? = nil) async throws -> (Int, Data) {
+  /// `timeout`: how long to wait for the answer (30 s; longer for a route that waits on the network, like publishing).
+  public func post(_ path: String, headers extra: [(String, String)] = [], json: Data? = nil, timeout: TimeAmount = .seconds(30)) async throws -> (Int, Data) {
+    try await send(.POST, path, headers: extra, json: json, timeout: timeout)
+  }
+
+  /// PATCH with a JSON body; returns the status and body, as `post`.
+  public func patch(_ path: String, headers extra: [(String, String)] = [], json: Data) async throws -> (Int, Data) {
+    try await send(.PATCH, path, headers: extra, json: json)
+  }
+
+  func send(_ method: HTTPMethod, _ path: String, headers extra: [(String, String)], json: Data?, timeout: TimeAmount = .seconds(30)) async throws -> (Int, Data) {
     var r = try request(path, headers: extra + (json == nil ? [] : [("Content-Type", "application/json")]))
-    r.method = .POST
+    r.method = method
     if let json { r.body = .bytes(ByteBuffer(data: json)) }
-    let resp = try await client.execute(r, timeout: .seconds(30))
+    let resp = try await client.execute(r, timeout: timeout)
     let body = try await resp.body.collect(upTo: 1 << 20)
     return (Int(resp.status.code), Data(body.readableBytesView))
   }

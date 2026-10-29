@@ -2,6 +2,7 @@
 // Is any boxd VM of this run still alive? Checks boxd itself (machine list by the run's deterministic
 // VM names: the legacy worker and every agent's worker), not only capcomd's ledger. No VM ever
 // created (e.g. auth failed at ensure) is OK. Exit 0 = clean, 1 = leaked, 2 = could not check.
+import "../src/cli/apply-config"; // the boxd key as the CLI gets it (environment, then the keychain)
 import { createClient } from "rivetkit/client";
 import { BoxdProvider, vmNameFor } from "../src/providers/boxd";
 import { cleanupVerdict, runVmKeys } from "../src/core/cleanup";

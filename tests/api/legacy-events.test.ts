@@ -42,9 +42,13 @@ test("the daemon-side check is strict except for op bags", () => {
 test("decision 9: every harness.v1 type is dotted lowercase noun.verb-past; MERGED → merge.succeeded is final", () => {
 	// Past verbs and participles; `cleared`, `expired` etc. all end in -ed. `done`, `sent` are irregular past participles.
 	const past = /(ed|done|sent|put)$/;
+	// agent.step is a noun: a record of a finished step (capability agent.steps), not a state change. So is
+	// sandbox.resource_action (ADR-021 §5): the audit record of a client's action on a machine; what the action did to
+	// the machine is its own past-tense event (sandbox.resource_deleted).
+	const nouns = new Set(["agent.step", "sandbox.resource_action"]);
 	for (const t of Object.keys(EventData)) {
 		expect(t).toMatch(/^[a-z]+(\.[a-z_]+)+$/);
-		expect(t.split(".").at(-1)!).toMatch(past);
+		if (!nouns.has(t)) expect(t.split(".").at(-1)!).toMatch(past);
 	}
 	expect(dottedType("MERGED")).toBe("merge.succeeded");
 	expect(dottedType("RUN_NEW")).toBe("run.created");

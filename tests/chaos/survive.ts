@@ -1,7 +1,8 @@
-import { Engine, runClient, sleep, pidsListening, type EngineOpts } from "./engine";
+import { Engine, assertPrivate, assertPrivatePort, runClient, sleep, pidsListening, type EngineOpts } from "./engine";
 import { auditRun } from "./invariants";
 
-export async function releasePort(port = 6420): Promise<void> {
+export async function releasePort(port: number): Promise<void> {
+  assertPrivatePort(port, "releasePort"); // it SIGKILLs whatever listens there
   let killed = false;
   for (const pid of await pidsListening(port)) {
     killed = true;
@@ -19,9 +20,11 @@ export async function releasePort(port = 6420): Promise<void> {
 }
 
 export async function wipeEngineData(opts: EngineOpts = {}): Promise<void> {
-  await releasePort(opts.port ?? 6420);
+  // Never a default: serve's default data dir is the user's real one (<capcomd home>/engine/<port>, with its backups).
+  assertPrivate(opts, "wipeEngineData");
+  await releasePort(opts.port!);
   const { rm } = await import("fs/promises");
-  const dir = opts.dataDir ?? `${(await import("os")).homedir()}/.rivetkit/var/engine`;
+  const dir = opts.dataDir!;
   await rm(dir, { recursive: true, force: true });
 }
 
@@ -63,9 +66,10 @@ export async function survive(killpoint: string, count: number, requireKill: boo
   killed: boolean;
   phases: Partial<Phases>;
 }> {
-  const runId = `chaos-${killpoint.replace(/\./g, "-")}-n${count}-${Date.now()}-p${opts.port ?? 6420}`;
+  const { port } = assertPrivate(opts, "survive");
+  const runId = `chaos-${killpoint.replace(/\./g, "-")}-n${count}-${Date.now()}-p${port}`;
   const engine = new Engine(`${killpoint}-${count}-${runId}`, opts);
-  const endpoint = `http://127.0.0.1:${opts.port ?? 6420}`;
+  const endpoint = `http://127.0.0.1:${port}`;
   const started = Date.now();
   const phases: Partial<Phases> = {};
   let last = started;

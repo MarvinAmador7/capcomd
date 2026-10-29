@@ -10,7 +10,7 @@
 - **JudgeActor**: judges run outcome.
 
 ## 2. Crash/resume and idempotency (recalled)
-Rivet facts relied on [Doc, verified earlier]: durable `c.state` with a 1 s save throttle; `c.db` SQLite; `c.schedule.after/at` (failed one-shot schedules are not retried); `actionTimeout` default 60 s; `onWake`, `keepAwake`, `waitUntil`; queue messages are not redelivered if processing fails; workflows via `@rivet-dev/workflows`; local endpoint :6420; tests via `setupTest`. Hence: idempotency keys on every message, outbox re-dispatch on wake, no reliance on queue redelivery.
+Rivet facts relied on [Doc, verified earlier]: durable `c.state` with a 1 s save throttle; `c.db` SQLite; `c.schedule.after/at` (failed one-shot schedules are not retried); `actionTimeout` default 60 s; `onWake`, `keepAwake`, `waitUntil`; queue messages are not redelivered if processing fails; workflows via `@rivet-dev/workflows`; local endpoint :6420; tests via `setupTest`. Hence: idempotency keys on every message, no reliance on queue redelivery. (An outbox re-dispatched on wake was planned; it never had a consumer and was removed on 2026-10-27, see durability.md.)
 
 Lifecycle state (task, lease, worker, run) is governed by **ADR-008**: XState v5 pure transitions, persisted atomically with the triggering event in actor SQLite. WorkerActor provisions VMs through `SandboxProvider` (boxd first, see boxd.md).
 
@@ -35,7 +35,7 @@ export const registry = setup({ use: { taskBoard } });
 ```
 
 ## 6. Pain points
-Original table lost. Known since: `bun build --compile` breaks rivetkit's native module; 60 s action/transaction timeouts force outbox + polling for long VM operations.
+Original table lost. Known since: `bun build --compile` breaks rivetkit's native module; 60 s action/transaction timeouts force polling (or, with ADR-022, workflow steps) for long VM operations.
 
 ## Amendment (2026-10-17): storage
-All durable actor data (lifecycle rows, event log, outbox) lives in `c.db`, written via `c.db.transaction`. `c.state` is used only for disposable caches, because it saves on a throttle and isn't atomic with `c.db`. Event log durability = the local engine's disk for now (Rivet Cloud deferred, ADR-009); back up per durability.md. `bun build --compile` currently fails to embed rivetkit's native module. See rivet-sqlite.md.
+All durable actor data (lifecycle rows, event log) lives in `c.db`, written via `c.db.transaction`. `c.state` is used only for disposable caches, because it saves on a throttle and isn't atomic with `c.db`. Event log durability = the local engine's disk for now (Rivet Cloud deferred, ADR-009); back up per durability.md. `bun build --compile` currently fails to embed rivetkit's native module. See rivet-sqlite.md.

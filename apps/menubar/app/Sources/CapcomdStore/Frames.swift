@@ -16,6 +16,8 @@ public enum StreamFrame: Sendable, Hashable {
   case cursor(Int)
   /// The daemon answered 401: the token is missing or wrong.
   case unauthorized
+  /// The subscriber's view of the connection: down after repeated failed attempts, up again on the next data.
+  case link(up: Bool)
   case ignored(String)
 
   /// Parses `event:` name plus `data:` JSON. Accepts the contract (`event: <type>`) and the mock's legacy shape
@@ -68,10 +70,15 @@ public struct SnapshotAgent: Codable, Sendable, Hashable {
   /// `{summary, artifacts}` once finished; summary is agent-written (untrusted).
   public var result: JSONValue?
   public var updatedAt: String?
+  /// "claude" | "codex" | null, and the model it runs (both optional: older daemons send neither).
+  public var provider: String?
+  public var model: String?
 }
 public struct SnapshotApproval: Codable, Sendable, Hashable {
   public var approvalId: String; public var kind: String; public var status: String; public var question: String
   public var requestedBy: RequestedBy?; public var subject: [String: JSONValue]?
+  /// When it was asked (a merge: when it was parked); older daemons don't send it.
+  public var requestedAt: String?
   public struct RequestedBy: Codable, Sendable, Hashable { public var agentId: String?; public var runId: String }
 }
 /// `Agent.activity`: `text` is a daemon-written plain line ("Reading 4 files"); `kind` is an icon hint.

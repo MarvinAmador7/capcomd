@@ -11,6 +11,10 @@ import { seedRepo, wipeEngineData } from "./survive";
 
 // "driver.kill:0" = no engine kill: the scenario kills the driver process mid-push (engine push is slowed).
 // push.after.before_event runs with a repo: the remote branch exists when the takeover runs, so it must adopt it.
+// With the agent workflow (ADR-022, the default; CAPCOMD_AGENT_WORKFLOW=0 is the driver path) there are no driver processes; each driver case kills the engine host instead,
+// mid-step, and proves the same recovery: "driver.kill:0" dies at workflow.watch.running while the slowed push is in
+// flight (the run is re-run once after the restart, the push lands once, the agent finishes once); "vm.rpc.*:0" fire
+// in the engine host, where the agent's spool pump now runs (the scripted "VM" outlives it, its RPC is answered once).
 export const PRIM_KILLPOINTS = ["scope.spawn.mid:1", "scope.spawn.mid:3", "scope.cancel.mid:1", "push.mid:1", "push.after.before_event:1", "driver.kill:0", "merge.after_cas.before_event:1", "board.claim.mid:2", "board.claim.after.before_reply:4", "kv.cas.mid:3", "kv.cas.after.before_reply:4",
   // ADR-017: spawn-from-VM and await. "vm.rpc.*:0" kill the parent's driver (not the engine);
   // "vm.scope.spawn.mid:2" kills the engine inside the first spawn a VM asked for.
@@ -50,13 +54,17 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
   const vm = kp.startsWith("vm.");
   const vmDriver = kp.startsWith("vm.rpc.");
   const driverKill = kp.startsWith("driver.kill") || vmDriver;
+  const workflow = process.env.CAPCOMD_AGENT_WORKFLOW !== "0";
+  // With the workflow, the driver's death is the engine host's: restart and resume like any engine kill.
+  const engineKill = !driverKill || workflow;
   const adopt = kp.startsWith("push.after.before_event");
   const merge = kp.startsWith("merge.");
   const board = kp.startsWith("board."), kv = kp.startsWith("kv.");
   const mode = vm ? "subagent" : board ? "board" : kv ? "kv" : merge ? "merge" : driverKill || adopt ? "driverkill" : "tree";
   const opts: EngineOpts = { ...baseOpts, ...(adopt || merge ? { repo: true } : {}), ...(driverKill && !vm ? { env: { CAPCOMD_FAKE_PUSH_DELAY_MS: "4000" } } : {}) };
   const engine = new Engine(`prim-${tag}`, opts);
-  const extra: Record<string, string> = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: vm ? "script" : "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1" };
+  // The workflow looks at its run every second here (default 60 s): driver.kill's killpoint must fire during the push.
+  const extra: Record<string, string> = { CAPCOMD_AGENTS_FILE: agentsFile(), CAPCOMD_SPAWN_EXEC: vm ? "script" : "fake", CAPCOMD_AWAIT_POLL_MS: "200", CAPCOMD_DRIVER_LEASE_MS: "4000", CAPCOMD_SKIP_PREFLIGHT: "1", CAPCOMD_AGENT_WORKFLOW_POLL_MS: "1000" };
   if (vm) Object.assign(extra, {
     CAPCOMD_RPC_KEY: `chaos-${tag}`, CAPCOMD_SCRIPT_RPC_TIMEOUT_MS: "240000", CAPCOMD_SCRIPT_VM_DIR: mkdtempSync(join(tmpdir(), "capcomd-chaos-vms-")),
     ...(vmDriver ? { CAPCOMD_DRIVER_KILLPOINT: kp.slice(3).split(":")[0]!, CAPCOMD_DRIVER_KILLPOINT_MARKER: join(mkdtempSync(join(tmpdir(), "capcomd-chaos-dk-")), "fired") } : {}),
@@ -67,14 +75,14 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
   await wipeEngineData(opts);
   if (opts.repo) await seedRepo(opts);
   try {
-    await engine.start(driverKill ? null : vm ? kp.slice(3) : kp);
+    await engine.start(workflow && kp.startsWith("driver.kill") ? "workflow.watch.running:1" : driverKill ? null : vm ? kp.slice(3) : kp);
     mark("engineUp");
     const first = await runScenario(tag, opts, extra, mode);
     mark("firstClient");
-    const killed = driverKill ? first.output.includes("[DRIVER-KILL]") : engine.sawKill || first.output.includes("[KILLPOINT]");
+    const killed = driverKill && !workflow ? first.output.includes("[DRIVER-KILL]") : engine.sawKill || first.output.includes("[KILLPOINT]");
     if (vmDriver && !killed) return { ok: false, killed, error: `driver killpoint ${kp} never fired: ${first.output.slice(-400)}`, phases };
     let final = first;
-    if (!driverKill && !(first.code === 0 && !killed)) {
+    if (engineKill && !(first.code === 0 && !killed)) {
       await engine.stop(); mark("stop");
       await engine.start(null); mark("restart");
       final = await runScenario(tag, opts, extra, mode);
@@ -83,7 +91,7 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
     if (!killed) return { ok: false, killed, error: `killpoint ${kp} never fired; client (${first.code}): ${first.output.slice(-400)}`, phases };
     if (final.code !== 0 || !final.output.includes("✓ primitives scenario ok")) return { ok: false, killed, error: `scenario failed (${final.code}): ${errorLines(final.output)} … ${final.output.slice(-400)}`, phases };
     const ids = JSON.parse(final.output.split("\n").find((l) => l.startsWith("PRIM "))!.slice(5));
-    const v = mode === "subagent" ? await auditSubagent(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "board" ? await auditBoard(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "kv" ? await auditKv(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "merge" ? await auditMerge(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, opts) : mode === "driverkill" ? await auditPush(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, { driverKill, adopt, opts }) : await audit(ids, engineEnv(opts).CAPCOMD_ENDPOINT!);
+    const v = mode === "subagent" ? await auditSubagent(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "board" ? await auditBoard(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "kv" ? await auditKv(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "merge" ? await auditMerge(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, opts) : mode === "driverkill" ? await auditPush(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, { driverKill, adopt, opts, workflow }) : await audit(ids, engineEnv(opts).CAPCOMD_ENDPOINT!);
     mark("audit");
     return v.length ? { ok: false, killed, error: v.join("; "), phases } : { ok: true, killed, phases };
   } catch (e) {
@@ -145,14 +153,16 @@ async function auditSubagent(ids: { runId: string; sup: string }, endpoint: stri
 }
 
 /** One push: the takeover driver waited for (driver kill) or adopted (engine kill after push) the first push. */
-async function auditPush(ids: { runId: string; d: string }, endpoint: string, o: { driverKill: boolean; adopt: boolean; opts: EngineOpts }): Promise<string[]> {
+async function auditPush(ids: { runId: string; d: string }, endpoint: string, o: { driverKill: boolean; adopt: boolean; opts: EngineOpts; workflow?: boolean }): Promise<string[]> {
   const c: any = createClient({ endpoint });
   const v: string[] = [];
   const pushes: any[] = await c.worker.getOrCreate([ids.runId, ids.d]).getPushes({});
   if (pushes.length !== 1) v.push(`expected 1 push lock row, got ${pushes.length}`);
   const p = pushes[0];
   if (p?.state !== "done") v.push(`push state ${p?.state}`);
-  if (o.driverKill && p?.attempts !== 1) v.push(`driver kill: push ran ${p?.attempts}× (want 1: takeover must wait for the live push)`);
+  if (o.driverKill && !o.workflow && p?.attempts !== 1) v.push(`driver kill: push ran ${p?.attempts}× (want 1: takeover must wait for the live push)`);
+  // The workflow's executor died with the engine mid-push: its run is re-run once after the restart (a takeover).
+  if (o.driverKill && o.workflow && p?.attempts !== 2) v.push(`engine kill mid-push: push ran ${p?.attempts}× (want 2: the lost run once more)`);
   if (o.adopt) {
     if (p?.attempts !== 2) v.push(`adopt: attempts ${p?.attempts} (want 2: first push, then takeover)`);
     if (!p?.adopted) v.push("adopt: takeover re-pushed instead of adopting the remote branch");

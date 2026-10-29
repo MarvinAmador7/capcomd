@@ -1,8 +1,6 @@
 import { createServer } from "net";
 import { mkdirSync, readFileSync, rmSync } from "fs";
 import { spawnSync } from "child_process";
-import { homedir } from "os";
-import { join } from "path";
 import { createRequire } from "module";
 
 /** True when 127.0.0.1:port can be bound right now (nobody else listens). */
@@ -11,6 +9,21 @@ function portFree(port: number): Promise<boolean> {
     const srv = createServer().once("error", () => res(false)).once("listening", () => srv.close(() => res(true)));
     srv.listen(port, "127.0.0.1");
   });
+}
+
+/** "pid N (command)" of whoever listens on 127.0.0.1:port, when lsof can tell; else null. */
+function portOwner(port: number): string | null {
+  try {
+    const out = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { encoding: "utf8", timeout: 2000 }).stdout ?? "";
+    const pid = /^p(\d+)/m.exec(out)?.[1], cmd = /^c(.+)/m.exec(out)?.[1];
+    return pid ? `pid ${pid}${cmd ? ` (${cmd})` : ""}` : null;
+  } catch { return null; }
+}
+
+/** pid's descendants, all levels, read before any is signalled (a dead parent's children are reparented out of reach). */
+function descendants(pid: number): number[] {
+  const kids = (spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8", timeout: 2000 }).stdout ?? "").split(/\s+/).filter(Boolean).map(Number);
+  return kids.flatMap((k) => [k, ...descendants(k)]);
 }
 
 /** The harness socket path: --harness-socket > CAPCOMD_HARNESS_SOCKET > config harness.socket (unless CAPCOMD_NO_CONFIG) > ~/.capcomd/harness.sock. */
@@ -46,23 +59,31 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     console.error(`capcomd serve: ${new HarnessSocketInUseError(sock, held.version, held.detail).message}`);
     process.exit(1);
   }
+  // rivet-services, when it runs (RivetKit's default: on the default port only; RIVET_RUN_SERVICES=0/1 overrides, and
+  // off the default port serve turns it off below), binds RIVET_PORT, 8642 by default, whatever --port is.
+  const services = process.env.RIVET_RUN_SERVICES === undefined ? port === 6420 : process.env.RIVET_RUN_SERVICES === "1";
+  const needed = [port, port + 1, port + 10, ...(services ? [Number(process.env.RIVET_PORT) || 8642] : [])];
   const busy: number[] = [];
-  for (const p of [port, port + 1, port + 10]) if (!(await portFree(p))) busy.push(p);
+  for (const p of needed) if (!(await portFree(p))) busy.push(p);
   if (busy.length) {
-    console.error(`capcomd serve: port${busy.length > 1 ? "s" : ""} ${busy.join(", ")} already in use (the engine needs ${port}, ${port + 1} and ${port + 10}); stop the other engine or pick another --port`);
+    for (const p of busy) { const who = portOwner(p); if (who) console.error(`capcomd serve: :${p} is held by ${who}`); }
+    console.error(`capcomd serve: port${busy.length > 1 ? "s" : ""} ${busy.join(", ")} already in use (the engine needs ${needed.slice(0, -1).join(", ")} and ${needed.at(-1)}); stop the other engine or pick another --port`);
     process.exit(1);
   }
   process.env.RIVET_RUN_ENGINE_PORT = String(port);
   // What the engine host starts itself (a paused agent's driver, at its reset) talks to this engine.
   process.env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${port}`;
-  // Own data dir per port (the default :6420 keeps rivetkit's default dir): a second engine on the
-  // shared ~/.rivetkit/var/engine/db never becomes healthy while another engine holds its LOCK.
-  const dataDir = process.env.CAPCOMD_ENGINE_DATA ?? process.env.CAPCOMD_CHAOS_ENGINE_DATA ?? (port === 6420 ? undefined : join(homedir(), ".capcomd", "engine", String(port)));
-  const runDir = join(homedir(), ".capcomd", "engine");
-  mkdirSync(runDir, { recursive: true });
-  const pidFile = process.env.CAPCOMD_ENGINE_PIDFILE ?? join(runDir, `${port}.pid`);
+  // Every engine keeps its data under capcomd's home, one dir per port (src/engine/data.ts): never rivetkit's shared
+  // ~/.rivetkit, which other rivetkit projects also use (a newer one stamps the db and ours then refuses to open it).
+  const data = await import("../../engine/data");
+  const dataDir = data.engineDataDir(port);
+  const copyLegacy = data.copiesLegacyData(port);   // before CAPCOMD_ENGINE_DATA is set below
+  mkdirSync(dataDir, { recursive: true });
+  const pidFile = process.env.CAPCOMD_ENGINE_PIDFILE ?? data.pidFileOf(dataDir);
   process.env.CAPCOMD_ENGINE_PIDFILE = pidFile;
-  if (dataDir) process.env.CAPCOMD_ENGINE_DATA = dataDir;
+  process.env.CAPCOMD_ENGINE_DATA = dataDir;
+  // rivetkit's own files (engine logs, runtime stamp) go under the data dir too: <data>/.rivetkit/.
+  process.env.RIVETKIT_STORAGE_PATH = dataDir;
   if (!process.env.RIVET_ENGINE_BINARY) {
     // Launch through the wrapper (data dir + pid file); it execs the real platform binary.
     // The single executable carries the engine and extracts it once per version; from source it's the npm package's.
@@ -73,7 +94,9 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   }
   // A previous serve on this port that died without reaping its engine: that engine is not
   // listening (ports were free above) but may still hold the data dir. It is ours; stop it.
-  const enginePid = () => { try { const n = Number(readFileSync(pidFile, "utf8").trim()); return n > 1 ? n : null; } catch { return null; } };
+  // (Before the per-port layout, its pid file was <home>/engine/<port>.pid.)
+  const readPid = (f: string) => { try { const n = Number(readFileSync(f, "utf8").trim()); return n > 1 ? n : null; } catch { return null; } };
+  const enginePid = () => readPid(pidFile);
   // Alive AND still a rivet-engine (guards against a recycled pid; `ps` works on Linux and macOS). A zombie (exited,
   // not yet reaped) counts as gone.
   const isAlive = (pid: number) => {
@@ -81,23 +104,73 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     const ps = (spawnSync("ps", ["-o", "stat=,command=", "-p", String(pid)], { encoding: "utf8" }).stdout ?? "").trim();
     return /rivet-engine/.test(ps) && !ps.startsWith("Z");
   };
-  const stale = enginePid();
-  if (stale && isAlive(stale)) {
-    console.log(`  stopping a stale engine (pid ${stale}) left by an earlier serve on :${port}`);
-    try { process.kill(stale, "SIGKILL"); } catch {}
-    for (let i = 0; i < 50 && isAlive(stale); i++) await new Promise((r) => setTimeout(r, 100));
+  const gone = (pid: number) => { try { process.kill(pid, 0); } catch { return true; } return /^Z/.test((spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout ?? "").trim()); };
+  // The engine leads its own process group: signal its descendants, that group and the engine itself, so nothing it
+  // started outlives it. Only an engine this serve can vouch for: one that is alive and still a rivet-engine, or one
+  // that is gone (a group under its pid can then only be the one it led, since a pid isn't reused while its group
+  // lives). A pid recycled to another program is left alone.
+  const killTree = (pid: number, sig: NodeJS.Signals) => {
+    if (!isAlive(pid) && !gone(pid)) return;
+    const tree = descendants(pid);
+    try { process.kill(-pid, sig); } catch {}
+    try { process.kill(pid, sig); } catch {}
+    for (const k of tree) { try { process.kill(-k, sig); } catch {} try { process.kill(k, sig); } catch {} }
+  };
+  for (const f of [pidFile, data.legacyPidFile(port)]) {
+    const stale = readPid(f);
+    if (stale && isAlive(stale)) {
+      console.log(`  stopping a stale engine (pid ${stale}) left by an earlier serve on :${port}`);
+      killTree(stale, "SIGKILL");
+      for (let i = 0; i < 50 && isAlive(stale); i++) await new Promise((r) => setTimeout(r, 100));
+    }
+    if (f !== pidFile) rmSync(f, { force: true });
+  }
+  // Once per start (not again in the engine host below): the one-time copy from ~/.rivetkit, then the version guard.
+  // The engine's version is recorded only once it answers (below), so the record never names an engine that didn't open it.
+  if (process.env.CAPCOMD_SERVE_EXEC !== "1") {
+    const real = process.env.CAPCOMD_REAL_ENGINE ?? process.env.CAPCOMD_CHAOS_REAL_ENGINE ?? process.env.RIVET_ENGINE_BINARY!;
+    const engineVersion = data.engineVersionOf(real);
+    if (engineVersion) process.env.CAPCOMD_ENGINE_VERSION = engineVersion;
+    const { VERSION } = await import("../../utils/self");
+    if (copyLegacy) {
+      const m = data.migrateLegacyEngineData({ dataDir, legacyDb: data.legacyRivetkitDb(), engineVersion, capcomdVersion: VERSION });
+      if (m.action === "refused") { console.error(`capcomd serve: ${m.message}`); process.exit(1); }
+      if (m.action === "copied") console.log(`  ${m.message}`);
+    }
+    const held = data.holdersOf(data.dbDir(dataDir));
+    if (held === null || held.length) { console.error(`capcomd serve: ${data.dbDir(dataDir)} is in use by ${data.describeHolders(held)} (another engine on this data dir?); stop it and retry.`); process.exit(1); }
+    if (engineVersion === null) console.log(`  couldn't read the engine's version (${real} --version); starting without the version check or backup`);
+    const p = data.prepareEngineData({ dataDir, engineVersion });
+    if (p.action === "refused") { console.error(`capcomd serve: ${p.message}`); process.exit(1); }
+    if (p.action === "backed-up") console.log(`  ${p.message}`);
   }
   rmSync(pidFile, { force: true });
-  // rivet-engine runs in its own process group: kill it whenever serve exits. On a signal, wait for it to go (its
-  // graceful shutdown can take seconds on a slow host), then SIGKILL; `exit` can only ask, as a last resort.
-  const reap = () => { const pid = enginePid(); if (pid && isAlive(pid)) { try { process.kill(pid, "SIGTERM"); } catch {} } rmSync(pidFile, { force: true }); };
+  // rivet-services (RivetKit starts it on the default port) is a child of this process that only RivetKit's own shutdown
+  // stops: after the watchdog's exit or a signal it was left running, kept :8642, and reconnected its envoy to the next
+  // engine on this port, another daemon's (live Mac, 2026-10-27); that daemon's own services then failed to bind.
+  const servicesPids = () => (spawnSync("ps", ["-ax", "-o", "pid=,ppid=,command="], { encoding: "utf8" }).stdout ?? "").split("\n").flatMap((l) => {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l);
+    return m && Number(m[2]) === process.pid && /rivet-services/.test(m[3]!) ? [Number(m[1])] : [];
+  });
+  // rivet-engine runs in its own process group: kill it and its tree whenever serve exits. On a signal, wait for it to go
+  // (its graceful shutdown can take seconds on a slow host), then SIGKILL; `exit` can only ask, as a last resort.
+  const reap = () => {
+    for (const pid of servicesPids()) try { process.kill(pid, "SIGTERM"); } catch {}
+    // An engine that already died may have left its group behind: SIGKILL what's left of it.
+    const pid = enginePid(); if (pid) killTree(pid, isAlive(pid) ? "SIGTERM" : "SIGKILL");
+    rmSync(pidFile, { force: true });
+  };
   const stopEngine = async () => {
+    const services = servicesPids();
+    for (const pid of services) try { process.kill(pid, "SIGTERM"); } catch {}
     const pid = enginePid();
-    if (pid && isAlive(pid)) {
-      try { process.kill(pid, "SIGTERM"); } catch {}
+    if (pid) {
+      killTree(pid, "SIGTERM");
       for (let i = 0; i < 50 && isAlive(pid); i++) await new Promise((r) => setTimeout(r, 100));
-      if (isAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch {}
+      killTree(pid, "SIGKILL"); // the engine, if it's still up, and anything it left behind in its group
     }
+    for (let i = 0; i < 30 && services.some((p) => !gone(p)); i++) await new Promise((r) => setTimeout(r, 100));
+    for (const p of services) if (!gone(p)) try { process.kill(p, "SIGKILL"); } catch {}
     rmSync(pidFile, { force: true });
   };
   process.on("exit", reap);
@@ -123,6 +196,8 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     await registry.start();
   } catch (e) {
     console.error(`capcomd serve: engine failed to start: ${(e as Error).message}`);
+    const tail = data.engineLogTail(dataDir);
+    if (tail) console.error(`  the engine's last words (${dataDir}/.rivetkit/var/logs/rivet-engine/):\n${tail.replace(/^/gm, "    ")}`);
     process.exit(1);
   }
   let endpoint: string | undefined;
@@ -132,31 +207,75 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     process.exit(1);
   }
 
+  // The daemon's durable state (idempotency keys, its own audit events): the harness API and the engine share it, so
+  // machines the engine deletes (a worker's drain, the sweep below) are audited with the API's (ADR-021 §5).
+  const { harnessState } = await import("../../api/state");
+  const harnessStore = harnessState();
+  const audit = await import("../../providers/machine-audit");
+  audit.setMachineAuditSink((e) => { harnessStore.recordDaemonEvent(e); });
+
   // Docker doesn't delete containers by itself (ADR-020): remove capcomd's expired ones now and every 5 minutes.
   if ((await import("../../providers/registry")).sandboxName() === "docker") {
-    const { DockerProvider } = await import("../../providers/docker");
+    const { DockerProvider, sweepIdle } = await import("../../providers/docker");
     const docker = new DockerProvider();
-    const sweep = () => docker.sweep().then((gone) => { if (gone.length) console.log(`  removed ${gone.length} expired sandbox container(s)`); }, () => {});
+    const sweep = () => sweepIdle(docker).then((gone) => { if (gone.length) console.log(`  removed ${gone.length} expired sandbox container(s)`); }, () => {});
     void sweep();
     setInterval(sweep, 5 * 60_000).unref?.();
   }
 
-  // Watchdog: up within 90s, then exit after ~20s of no answer (engine child died, port lost).
+  // harness.v1 requests not yet answered ("METHOD /path#n"), named when the watchdog gives up.
+  const inflight = new Set<string>();
+  // Watchdog: up within 90s, then exit after ~20s of no answer (engine child died, port lost). It stops the engine and
+  // what it started before exiting (the exit handler can only ask them to go).
+  let dying = false;
+  const die = async (msg: string, tail?: string | null) => {
+    if (dying) return;
+    dying = true;
+    console.error(msg);
+    if (tail) console.error(tail);
+    if (inflight.size) console.error(`  ${inflight.size} harness request(s) in flight: ${[...inflight].slice(0, 20).join(", ")}${inflight.size > 20 ? ", …" : ""}`);
+    await stopEngine();
+    process.exit(1);
+  };
   const url = `http://127.0.0.1:${port}/`;
   const alive = () => fetch(url, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
   const t0 = Date.now();
   let up = false, misses = 0;
   setInterval(async () => {
-    if (await alive()) { if (!up) console.log(`✓ Rivet engine running at http://localhost:${port}`); up = true; misses = 0; return; }
-    if (!up && Date.now() - t0 > 90_000) { console.error(`capcomd serve: engine never answered on :${port} within 90s; exiting`); process.exit(1); }
-    if (up && ++misses >= 10) { console.error(`capcomd serve: engine on :${port} stopped answering; exiting`); process.exit(1); }
+    if (dying) return;
+    if (await alive()) {
+      if (!up) {
+        console.log(`✓ Rivet engine running at http://localhost:${port}`);
+        // It opened the data: record which engine did (its /health says; else the binary's --version).
+        const health: any = await fetch(`${url}health`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json(), () => null);
+        const version = typeof health?.version === "string" ? health.version : process.env.CAPCOMD_ENGINE_VERSION;
+        if (version) try { data.recordEngineVersion(dataDir, version, (await import("../../utils/self")).VERSION); } catch {}
+      }
+      up = true; misses = 0; return;
+    }
+    if (!up && Date.now() - t0 > 90_000) {
+      const tail = data.engineLogTail(dataDir);
+      return die(`capcomd serve: engine never answered on :${port} within 90s; exiting`, tail && `  the engine's last words:\n${tail.replace(/^/gm, "    ")}`);
+    }
+    if (up && ++misses >= 10) return die(`capcomd serve: engine on :${port} stopped answering; exiting`);
   }, 2000);
+
+  // Open the API once capcomd's actors can answer (rivetkit's envoy has registered with the engine; registry.start()
+  // doesn't wait for it): a client that connects right after a restart, like the menu bar, would otherwise exhaust the
+  // engine's wake retries on every run it reads. Bounded by rivetkit (30 s); the API opens either way.
+  await registry.startAndWait().catch((e: Error) => console.error(`capcomd serve: actors not ready yet (${e.message}); opening the harness API anyway`));
 
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {
     const { harnessApp } = await import("../../api/server");
     const { rivetSource } = await import("../../api/rivet-source");
-    const harness = await serveHarnessSocket(sock, harnessApp({ source: rivetSource() }).fetch);
+    const app = harnessApp({ source: rivetSource(), state: harnessStore });
+    let seq = 0;
+    const harness = await serveHarnessSocket(sock, async (req: Request) => {
+      const key = `${req.method} ${new URL(req.url).pathname}#${++seq}`;
+      inflight.add(key);
+      try { return await app.fetch(req); } finally { inflight.delete(key); }
+    });
     // Removed on the way out only while it is still ours: never another daemon's socket.
     process.on("exit", () => harness.release());
     console.log(`✓ harness.v1 API on ${sock}`);

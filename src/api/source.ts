@@ -2,19 +2,26 @@
 // scope actors (src/primitives/ops.ts); tests use memorySource so tests/api stays fast and engine-free.
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, AgentStatus, Attachment, Decision, Message, Project, Run, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Agent, AgentStatus, Attachment, Decision, Environment, Login, Message, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
-import type { RunRepo } from "./run-files";
+import type { ApprovalDiff, RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
+import type { ListedProvider } from "../providers/registry";
+import { LISTED_PROVIDERS } from "../providers/registry";
+import { sandboxSurface, type ActionOutcome, type MachineOwner, type RecordedMachine, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
+import type { VmInfo } from "../providers/sandbox";
+import { memorySettingsStore, type SettingsStore } from "../providers/settings";
+import { inspectProject, setUpProject, type ProjectDeps, type ProjectInspection, type ProjectSetupInput, type SetupOutcome } from "./projects";
+import { initGit, publishOptions, publishProject, type GitInitOutcome, type OptionsOutcome, type PublishInput, type PublishOutcome } from "./project-git";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
-export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null };
+export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
 type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
-export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string };
+export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string; driver?: "claude" | "codex"; effort?: string; sandbox?: ListedProvider };
 /** A run that can't be started as asked (bad repo, no repository, refused by `capcomd run`): 422 with this message. */
 export class CreateRunError extends Error {}
 
@@ -42,6 +49,29 @@ export interface HarnessSource {
 	workspaceFile(runId: string, agentId: string, path: string): Promise<WorkspaceFile | null>;
 	trace(runId: string): Promise<O<typeof Span>[]>;
 	skills(): Promise<O<typeof Skill>[]>;
+	/**
+	 * GET /v1/run-options: drivers and sandboxes a new run may use, and whether each is available now; with `repo`, for a
+	 * run of that project (throws CreateRunError, a 422, when it isn't one).
+	 */
+	runOptions(repo?: string): Promise<O<typeof RunOptions>>;
+	/** GET /v1/logins: claude then codex, each in docker then boxd. Local state only; never a credential. */
+	logins(): Promise<O<typeof Login>[]>;
+	/** GET /v1/environments: docker then boxd. */
+	environments(): Promise<O<typeof Environment>[]>;
+	/** GET /v1/service. */
+	service(): Promise<O<typeof ServiceStatus>>;
+	/** GET /v1/sandboxes: every listed place's descriptor, availability and whether it's the default. Local only. */
+	sandboxes(): Promise<SandboxSummary[]>;
+	/** GET /v1/sandboxes/{name}: null when it isn't a listed place. Local only. */
+	sandbox(name: string): Promise<SandboxDetail | null>;
+	/** PATCH /v1/sandboxes/{name}/settings: checks and stores a change (the user config); never a provider call. */
+	updateSandboxSettings(name: string, patch: SettingsPatch): Promise<SettingsOutcome>;
+	/** GET /v1/sandboxes/{name}/resources: one page; null when it isn't a listed place. */
+	sandboxResources(name: string, page: { limit?: number; cursor?: string }): Promise<ResourcePage | null>;
+	/** GET /v1/sandboxes/{name}/resources/{id}: null when capcomd doesn't list it there. */
+	sandboxResource(name: string, id: string): Promise<ResourceDetail | null>;
+	/** POST /v1/sandboxes/{name}/resources/{id}/actions/{action} (delete): `by` is client:<id>. */
+	sandboxAction(name: string, id: string, action: string, by: string): Promise<ActionOutcome>;
 	approvals(runId: string): Promise<PendingApproval[]>;
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
@@ -59,6 +89,16 @@ export interface HarnessSource {
 	control(runId: string, action: RunAction, by: string, agentId?: string): Promise<ControlResult>;
 	/** Send `to` a message from the operator, with skills to read with it; idempotent by `key`. */
 	send(runId: string, to: string, body: string, key: string, skills?: AttachedSkill[]): Promise<{ seq: number; note: string | null }>;
+	/** GET /v1/projects/inspect (capability projects.setup): a folder's facts and what blocks setting it up. Writes nothing. */
+	inspectProject(path: string): Promise<ProjectInspection>;
+	/** POST /v1/projects, the body's shape already checked: checks it against the folder, writes the project, lists it. */
+	setUpProject(input: ProjectSetupInput): Promise<SetupOutcome>;
+	/** POST /v1/projects/git-init (capability projects.git): `git init -b main` in a folder that isn't a checkout. */
+	initGit(path: string): Promise<GitInitOutcome>;
+	/** GET /v1/projects/publish-options: accounts, a name and the first commit's files for a checkout without origin. */
+	publishOptions(path: string): Promise<OptionsOutcome>;
+	/** POST /v1/projects/publish, the body's shape already checked: the first commit if needed, then `gh repo create … --push`. */
+	publishProject(input: PublishInput): Promise<PublishOutcome>;
 }
 export type RunAction = "pause" | "resume" | "cancel";
 export type ControlResult = { changed: string[]; pending: string[]; noop: string | null };
@@ -84,6 +124,21 @@ export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
 	}));
 }
 
+/**
+ * A parked merge's question and subject. The merge's `ref` is often just the agent's id (`capcomd_merge ref: agt-…`),
+ * which made "Merge agt-mvqa… into main?": name the work as the agent's, and give the branch it pushed as the subject's ref.
+ */
+export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown }): { question: string; subject: { target: string | null; ref: string | null } & Partial<ApprovalDiff> } {
+	const ref = typeof d.ref === "string" ? d.ref : null, branch = typeof d.branch === "string" ? d.branch : null;
+	const target = typeof d.target === "string" ? d.target : null;
+	const byAgent = ref !== null && /^agt-/.test(ref);
+	const what = byAgent ? "this agent's work" : (ref ?? branch ?? "this work");
+	// The files the branch changes, as read when the merge was parked (op data / the park event's `diff`).
+	const diff = d.diff && typeof d.diff === "object" && Array.isArray((d.diff as ApprovalDiff).files) ? (d.diff as ApprovalDiff) : null;
+	const files = diff ? { files: diff.files, filesTotal: diff.filesTotal, added: diff.added, removed: diff.removed } : {};
+	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref, ...files } };
+}
+
 export const approvalIdFor = (runId: string, opId: string) => `apr-${Buffer.from(`${runId}\u0000${opId}`).toString("hex")}`;
 export function parseApprovalId(id: string): { runId: string; opId: string } | null {
 	const m = /^apr-([0-9a-f]+)$/.exec(id);
@@ -93,6 +148,7 @@ export function parseApprovalId(id: string): { runId: string; opId: string } | n
 }
 
 /** In-memory source for tests and fixtures. */
+const noPlanner = Object.fromEntries(LISTED_PROVIDERS.map((n) => [n, { available: false, reason: "No planner profile (run capcomd setup)" }]));
 export function memorySource(seed: Partial<{
 	runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo>;
 	/** Thread items by run (tests push more as the agent "works"). */
@@ -101,10 +157,34 @@ export function memorySource(seed: Partial<{
 	files: Record<string, Record<string, Record<string, Uint8Array>>>;
 	/** Skills GET /v1/skills lists, with the SKILL.md each sends. */
 	skills: Array<O<typeof Skill> & { content: string }>;
+	/** What GET /v1/run-options answers (default: both drivers and sandboxes, unavailable). */
+	runOptions: O<typeof RunOptions>;
+	/** GET /v1/logins, /v1/environments, /v1/service (default: logged out everywhere, no environment, no service). */
+	logins: O<typeof Login>[];
+	environments: O<typeof Environment>[];
+	service: O<typeof ServiceStatus>;
+	/** The provider surface's inputs (GET /v1/sandboxes…): provider lists by place, capcomd's machine owners, the
+	 *  environment the info rows read. Default: no machines anywhere, and logins from `logins`. */
+	machines: Partial<Record<ListedProvider, VmInfo[] | (() => Promise<VmInfo[]>)>>;
+	owners: MachineOwner[] | (() => Promise<MachineOwner[]>);
+	/** This capcomd's machines ledger (the machines it made; null: unreadable). Default: every machine of the lists
+	 *  given as arrays, as if this capcomd made them all. */
+	recorded: RecordedMachine[] | null | (() => Promise<RecordedMachine[] | null>);
+	surface: Partial<SurfaceDeps>;
+	/** Provider settings (PATCH /v1/sandboxes/{name}/settings writes here). Default: empty, in memory. */
+	settings: SettingsStore;
+	/** An orphan's Delete (`provider.destroy`). Default: records it in `destroyed` and drops the machine from `machines`. */
+	destroy: (name: ListedProvider, vmId: string) => Promise<void>;
+	/** Project setup (GET /v1/projects/inspect, POST /v1/projects) reads and writes real folders: the environment whose
+	 *  CAPCOMD_HOME holds the project list (default process.env; CAPCOMD_GH_CLI in it names the gh that publishes), whether
+	 *  `gh` is logged in (default no), the logins (default `logins`). */
+	projects: Partial<ProjectDeps>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
 	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }>;
+	/** Machines deleted at a provider (an orphan's Delete), in order. */
+	destroyed: Array<{ sandbox: string; vmId: string }>;
 } {
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
@@ -113,6 +193,42 @@ export function memorySource(seed: Partial<{
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
 	const delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }> = [];
+	const loginsOf = async () => seed.logins ?? (["claude", "codex"] as const).flatMap((provider) => LISTED_PROVIDERS.map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` })));
+	const optionsOf = async () => seed.runOptions ?? {
+		drivers: [
+			{ provider: "claude" as const, label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
+			{ provider: "codex" as const, label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
+		],
+		sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
+	};
+	const destroyed: Array<{ sandbox: string; vmId: string }> = [];
+	// Set below: Delete on an agent's machine cancels it through this source's own control (agent.cancelled).
+	let controlOf: HarnessSource["control"] | null = null;
+	const surface = sandboxSurface({
+		env: { CAPCOMD_NO_CONFIG: "1" },
+		destroy: async (name, vmId) => {
+			if (seed.destroy) await seed.destroy(name, vmId);
+			destroyed.push({ sandbox: name, vmId });
+			const m = seed.machines?.[name];
+			if (Array.isArray(m)) m.splice(0, m.length, ...m.filter((v) => v.id !== vmId));
+		},
+		cancelAgent: async (runId, agentId, by) => ({ changed: (await controlOf!(runId, "cancel", by, agentId)).changed.includes(agentId) }),
+		settings: seed.settings ?? memorySettingsStore(),
+		logins: loginsOf,
+		availability: async (name) => {
+			const o = (await optionsOf()).sandboxes.find((x) => x.name === name);
+			return { available: o?.available ?? false, reason: o ? o.reason : "unknown", default: o?.default ?? false };
+		},
+		list: async (name) => { const m = seed.machines?.[name]; return typeof m === "function" ? m() : m ?? []; },
+		owners: async () => {
+			const owners = typeof seed.owners === "function" ? await seed.owners() : seed.owners ?? [];
+			if (seed.recorded !== undefined) return { owners, recorded: typeof seed.recorded === "function" ? await seed.recorded() : seed.recorded };
+			// Default: every machine of the lists given as arrays (a list given as a function records nothing).
+			const recorded = LISTED_PROVIDERS.flatMap((n) => { const m = seed.machines?.[n]; return Array.isArray(m) ? m.map((r) => ({ sandbox: n as string, name: r.name })) : []; });
+			return { owners, recorded };
+		},
+		...seed.surface,
+	});
 	const push = (runId: string, e: Omit<RawEvent, "seq">) => { const l = (events[runId] ??= []); const r = { ...e, seq: (l.at(-1)?.seq ?? 0) + 1 }; l.push(r); return r; };
 	// Agent state changes as the scope actor writes them (a running agent pauses at once here: there is no runner).
 	const STEP: Record<RunAction, { from: string[]; to: O<typeof AgentStatus>; type: string; data: (by: string) => Record<string, unknown>; noop: string }> = {
@@ -120,28 +236,32 @@ export function memorySource(seed: Partial<{
 		resume: { from: ["paused"], to: "running", type: "AGENT_RESUMED", data: (by) => ({ epoch: 2, by }), noop: "no paused agent to resume" },
 		cancel: { from: ["pending", "running", "paused"], to: "cancelled", type: "AGENT_CANCELLED", data: (by) => ({ reason: `cancelled by ${by}`, by: "run" }), noop: "nothing to cancel: every agent has ended" },
 	};
+	const control: HarnessSource["control"] = async (runId, action, by, agentId) => {
+		const s = STEP[action];
+		const out: ControlResult = { changed: [], pending: [], noop: null };
+		const all = seed.agents?.[runId] ?? [];
+		// With agentId: that agent and its descendants (the scope's preorder: the target first).
+		const within = (a: O<typeof Agent> | undefined): boolean => !!a && (a.id === agentId || within(all.find((p) => p.id === a.parent)));
+		const order = agentId ? [...all.filter((a) => a.id === agentId), ...all.filter((a) => a.id !== agentId && within(a))] : all;
+		for (const a of order) {
+			if (!s.from.includes(a.status)) continue;
+			(action === "pause" && a.status === "running" ? out.pending : out.changed).push(a.id);
+			a.status = s.to;
+			push(runId, { at: Date.now(), type: s.type, agentId: a.id, data: s.data(by) });
+		}
+		if (!out.changed.length && !out.pending.length) out.noop = `${agentId ?? runId}: ${s.noop}`;
+		return out;
+	};
+	controlOf = control;
+	const projectDeps: ProjectDeps = { env: process.env, logins: loginsOf, ghReady: async () => false, ...seed.projects };
 	return {
 		version: "test",
 		decided,
 		created,
 		push,
 		delivered,
-		control: async (runId, action, by, agentId) => {
-			const s = STEP[action];
-			const out: ControlResult = { changed: [], pending: [], noop: null };
-			const all = seed.agents?.[runId] ?? [];
-			// With agentId: that agent and its descendants (the scope's preorder: the target first).
-			const within = (a: O<typeof Agent> | undefined): boolean => !!a && (a.id === agentId || within(all.find((p) => p.id === a.parent)));
-			const order = agentId ? [...all.filter((a) => a.id === agentId), ...all.filter((a) => a.id !== agentId && within(a))] : all;
-			for (const a of order) {
-				if (!s.from.includes(a.status)) continue;
-				(action === "pause" && a.status === "running" ? out.pending : out.changed).push(a.id);
-				a.status = s.to;
-				push(runId, { at: Date.now(), type: s.type, agentId: a.id, data: s.data(by) });
-			}
-			if (!out.changed.length && !out.pending.length) out.noop = `${agentId ?? runId}: ${s.noop}`;
-			return out;
-		},
+		destroyed,
+		control,
 		send: async (runId, to, body, key, skills = []) => {
 			const prior = sent.get(key);
 			if (prior !== undefined) return { seq: prior, note: null };
@@ -171,6 +291,11 @@ export function memorySource(seed: Partial<{
 		},
 		trace: async () => [],
 		skills: async () => (seed.skills ?? []).map(({ content: _, ...s }) => s),
+		runOptions: optionsOf,
+		logins: loginsOf,
+		...surface,
+		environments: async () => seed.environments ?? LISTED_PROVIDERS.map((sandbox) => ({ sandbox, status: "missing" as const, name: null, versions: {}, builtAt: null, command: `capcomd env build --sandbox ${sandbox}` })),
+		service: async () => seed.service ?? { installed: false, loaded: false, installCommand: "capcomd service install", uninstallCommand: "capcomd service uninstall" },
 		skill: async (name) => { const s = seed.skills?.find((x) => x.name === name); return s ? { name: s.name, content: s.content } : null; },
 		approvals: async (r) => (approvals[r] ?? []).filter((a) => !decided.some((d) => d.approvalId === a.approvalId)),
 		approval: async (id) => {
@@ -186,6 +311,11 @@ export function memorySource(seed: Partial<{
 			return run;
 		},
 		repo: async (r) => seed.repos?.[r] ?? null,
+		inspectProject: (path) => inspectProject(path, projectDeps),
+		setUpProject: (input) => setUpProject(input, projectDeps),
+		initGit: (path) => initGit(path, projectDeps),
+		publishOptions: (path) => publishOptions(path, projectDeps),
+		publishProject: (input) => publishProject(input, projectDeps),
 	};
 }
 export type { Decision };

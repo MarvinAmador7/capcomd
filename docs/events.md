@@ -60,6 +60,50 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `run.ended`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": [
+        "failed",
+        "cancelled"
+      ],
+      "description": "How the run itself ended, when its agents didn't end it: failed (it couldn't start its first agent) or cancelled (stopped before any agent of it had run, or with none left to stop)"
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "by": {
+      "description": "Who ended it: operator, client:<id>, or null for capcomd itself",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "state",
+    "reason",
+    "by"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `agent.spawned`
 
 ```json
@@ -85,7 +129,47 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "budget": {},
     "limits": {},
-    "agent": {},
+    "agent": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "kind": {
+          "description": "The runner: claude-code, codex, or fake (a local stand-in with no AI provider)",
+          "type": "string",
+          "enum": [
+            "fake",
+            "claude-code",
+            "codex"
+          ]
+        },
+        "provider": {
+          "description": "The profile's provider; absent when the agent was chosen by CAPCOMD_AGENT without a profile (then see kind)",
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "model": {
+          "description": "The model it runs with (CAPCOMD_AGENT_MODEL, else the profile's); absent or null: the provider CLI's default",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "description": "The reasoning effort it runs with (CAPCOMD_AGENT_EFFORT, else the profile's or the run's chosen level); absent or null: the provider CLI's default",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": {},
+      "description": "The agent's resolved profile and runner; null on events from daemons that recorded none"
+    },
     "task": {
       "description": "Agent-written text: render as plain text, never markdown, links or actions",
       "type": [
@@ -279,7 +363,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "boolean"
         },
         "limit": {},
-        "verification": {}
+        "verification": {
+          "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+        },
+        "merge": {
+          "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+        }
       },
       "additionalProperties": {},
       "x-untrusted": true,
@@ -374,7 +463,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "boolean"
         },
         "limit": {},
-        "verification": {}
+        "verification": {
+          "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+        },
+        "merge": {
+          "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+        }
       },
       "additionalProperties": {},
       "x-untrusted": true,
@@ -478,6 +572,47 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "kind"
   ],
   "additionalProperties": {}
+}
+```
+
+## `agent.step`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "description": "What the agent did (icon hint): read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, tool. More may be added: treat an unknown kind as tool. Never think"
+    },
+    "n": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "How many distinct things it acted on (files, commands, sub-agents); 1 or more"
+    },
+    "startedAt": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991,
+      "description": "When the step began (epoch ms): its first tool call"
+    },
+    "endedAt": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991,
+      "description": "When it ended (epoch ms, ≥ startedAt): when the agent's next step began, or when it ended"
+    }
+  },
+  "required": [
+    "kind",
+    "n",
+    "startedAt",
+    "endedAt"
+  ],
+  "additionalProperties": {},
+  "description": "Capability agent.steps. One finished step of an agent's history, in the order it took them: a streak of one kind of tool call (reading files, editing, running the tests), reported once the agent moved on to another kind or ended. Durable: replayed by GET /v1/events and on run streams like any event (not on the lifecycle feed). The envelope text is the step in past tense (\"Read 4 files\", \"Ran the tests\"); `agentId`/`entity` is the agent. At most 500 per agent; a cancelled agent's unfinished last step is not recorded"
 }
 ```
 
@@ -914,6 +1049,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "target": {},
     "ref": {},
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "reason": {
       "type": [
         "string",
@@ -921,6 +1062,61 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       ],
       "x-untrusted": true,
       "description": "Agent-written text: render as plain text, never markdown, links or actions"
+    },
+    "diff": {
+      "description": "The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "status": {
+                "type": "string"
+              },
+              "added": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "removed": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "status",
+              "added",
+              "removed"
+            ]
+          }
+        },
+        "filesTotal": {
+          "type": "number"
+        },
+        "added": {
+          "type": "number"
+        },
+        "removed": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "files",
+        "filesTotal",
+        "added",
+        "removed"
+      ]
     }
   },
   "required": [
@@ -1366,11 +1562,93 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "subject": {
       "type": "object",
-      "propertyNames": {
-        "type": "string"
+      "properties": {
+        "target": {
+          "description": "merge: the branch it lands on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref": {
+          "description": "merge: the branch (or ref) being merged",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "files": {
+          "description": "merge: the files the branch changes, `git diff --numstat` of the verified commit against where its branch left the target, the 20 with the most changed lines first (then by path). Absent when the daemon couldn't read the diff (no repository, the remote unreachable) or on a daemon that predates it",
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "modified",
+                  "deleted",
+                  "renamed",
+                  "copied",
+                  "typechange",
+                  "unknown"
+                ]
+              },
+              "added": {
+                "description": "Lines added; null for a binary file",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "removed": {
+                "description": "Lines removed; null for a binary file",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "path",
+              "status",
+              "added",
+              "removed"
+            ]
+          }
+        },
+        "filesTotal": {
+          "description": "merge: how many files the branch changes (files lists at most the first ones)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "added": {
+          "description": "merge: lines added across all its files (binary files not counted)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "removed": {
+          "description": "merge: lines removed across all its files (binary files not counted)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
       },
       "additionalProperties": {},
-      "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+      "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
     },
     "expiresAt": {
       "type": [
@@ -1559,6 +1837,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1606,6 +1892,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1653,6 +1947,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1700,6 +2002,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1747,6 +2057,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1794,6 +2112,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1841,6 +2167,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
     }
   },
   "required": [
@@ -1848,6 +2182,311 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "agentId"
   ],
   "additionalProperties": {}
+}
+```
+
+## `sandbox.settings_changed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sandbox": {
+      "type": "string",
+      "description": "The place (a listed provider's name)"
+    },
+    "id": {
+      "type": "string",
+      "description": "The setting's id (idleLifetime)"
+    },
+    "from": {
+      "description": "The value before (as the field's `value` showed it)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "to": {
+      "type": "string",
+      "description": "The value now"
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that changed it (cli-…)"
+    }
+  },
+  "required": [
+    "sandbox",
+    "id",
+    "from",
+    "to",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability sandboxes.settings. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a place's setting was changed with PATCH /v1/sandboxes/{name}/settings. `entity` is sandbox:<name>; the envelope text says what changed, from daemon-written labels"
+}
+```
+
+## `sandbox.resource_action`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sandbox": {
+      "type": "string",
+      "description": "The place (a listed provider's name)"
+    },
+    "resourceId": {
+      "type": "string",
+      "description": "The machine's id (as GET …/resources lists it)"
+    },
+    "action": {
+      "type": "string",
+      "description": "The action: delete"
+    },
+    "owner": {
+      "description": "Who used the machine when the action ran: the agent that was cancelled (ids and role only, never its task); null for a machine left behind",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "agent (more may come)"
+        },
+        "runId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "runId",
+        "agentId",
+        "role"
+      ],
+      "additionalProperties": {}
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that acted (cli-…)"
+    }
+  },
+  "required": [
+    "sandbox",
+    "resourceId",
+    "action",
+    "owner",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client's action on a machine (POST /v1/sandboxes/{name}/resources/{id}/actions/{action}) changed something. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Cloud: Delete on machine relay-…: cancelled worker agt-41 of run-8kq2.\"). A Delete is followed by sandbox.resource_deleted with cause action"
+}
+```
+
+## `project.configured`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The checkout's root (absolute)"
+    },
+    "name": {
+      "type": "string",
+      "description": "Its name in capcomd's projects"
+    },
+    "mode": {
+      "type": "string",
+      "description": "pr or direct"
+    },
+    "target": {
+      "type": "string",
+      "description": "The target branch"
+    },
+    "check": {
+      "type": "string",
+      "description": "The check command (\"\" for none), as the user typed it"
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "claude and/or codex"
+    },
+    "budgetUsd": {
+      "description": "The spend cap per run in USD; null for none",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "gitignored": {
+      "description": "`.capcomd/` was added to the checkout's .gitignore (the body asked for `gitignore`)",
+      "type": "boolean"
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that set it up (cli-…)"
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "mode",
+    "target",
+    "check",
+    "agents",
+    "budgetUsd",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability projects.setup. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client set a folder up as a capcomd project with POST /v1/projects and something changed (its settings, its profiles or capcomd's project list). `entity` is project:<name>; the envelope text is daemon-written (\"Set up app (~/src/app): pull requests into main, with Claude Code and Codex.\"). Never a secret"
+}
+```
+
+## `project.git_initialized`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The folder (absolute), now a checkout's root"
+    },
+    "name": {
+      "type": "string",
+      "description": "The name capcomd would give the project"
+    },
+    "branch": {
+      "type": "string",
+      "description": "The branch it starts on (main)"
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that asked (cli-…)"
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "branch",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client started a git repository in a folder with POST /v1/projects/git-init (`git init -b main`, no commit). `entity` is project:<name>; the envelope text is daemon-written (\"Started a git repository in my-app (~/src/my-app), on branch main.\")"
+}
+```
+
+## `project.published`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The checkout's root (absolute)"
+    },
+    "name": {
+      "type": "string",
+      "description": "The name capcomd would give the project"
+    },
+    "owner": {
+      "type": "string",
+      "description": "The GitHub account or organization it was created in"
+    },
+    "repo": {
+      "type": "string",
+      "description": "owner/name on GitHub"
+    },
+    "visibility": {
+      "type": "string",
+      "description": "private or public"
+    },
+    "firstCommit": {
+      "type": "boolean",
+      "description": "capcomd made the first commit (the folder had none)"
+    },
+    "files": {
+      "description": "How many files that first commit holds; null when the checkout had commits already",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that published it (cli-…)"
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "owner",
+    "repo",
+    "visibility",
+    "firstCommit",
+    "files",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability projects.git. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client published a checkout without origin to GitHub with POST /v1/projects/publish (the repository was created, added as origin and pushed). `entity` is project:<name>; the envelope text is daemon-written (\"Published my-app (~/src/my-app) to github.com/marvin/my-app, private, with a first commit of 24 files.\"). Names and counts only: never file names or contents"
+}
+```
+
+## `sandbox.resource_deleted`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sandbox": {
+      "type": "string",
+      "description": "The place (a listed provider's name)"
+    },
+    "resourceId": {
+      "type": "string",
+      "description": "The machine's id"
+    },
+    "cause": {
+      "type": "string",
+      "description": "Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"
+    }
+  },
+  "required": [
+    "sandbox",
+    "resourceId",
+    "cause"
+  ],
+  "additionalProperties": {},
+  "description": "Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")"
 }
 ```
 
@@ -1930,7 +2569,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
         },
         "state": {
           "type": "string",
-          "description": "new, idle, running or unknown; starting in the runs.create response, before the run's process has registered it"
+          "description": "new, idle, running or unknown; failed or cancelled when the run ended without its agents ending it (a failed start, Stop on a run with no agent running: `run.ended`); starting in the runs.create response, before the run's process has registered it"
         },
         "goal": {
           "type": [
@@ -2176,7 +2815,12 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                 "type": "boolean"
               },
               "limit": {},
-              "verification": {}
+              "verification": {
+                "description": "Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"
+              },
+              "merge": {
+                "description": "Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"
+              }
             },
             "additionalProperties": {},
             "x-untrusted": true,
@@ -2213,6 +2857,32 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "additionalProperties": {},
             "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
           },
+          "provider": {
+            "description": "The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "claude",
+              "codex",
+              null
+            ]
+          },
+          "model": {
+            "description": "The model the agent runs with, when the daemon knows it (the profile's model or CAPCOMD_AGENT_MODEL); null: the provider CLI's default, or a fake agent",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "description": "The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "updatedAt": {
             "type": [
               "string",
@@ -2241,6 +2911,9 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "taskAttachment",
           "result",
           "workspace",
+          "provider",
+          "model",
+          "effort",
           "updatedAt"
         ]
       }
@@ -2317,11 +2990,108 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           },
           "subject": {
             "type": "object",
-            "propertyNames": {
-              "type": "string"
+            "properties": {
+              "target": {
+                "description": "merge: the branch it lands on",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ref": {
+                "description": "merge: the branch (or ref) being merged",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "files": {
+                "description": "merge: the files the branch changes, `git diff --numstat` of the verified commit against where its branch left the target, the 20 with the most changed lines first (then by path). Absent when the daemon couldn't read the diff (no repository, the remote unreachable) or on a daemon that predates it",
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "added",
+                        "modified",
+                        "deleted",
+                        "renamed",
+                        "copied",
+                        "typechange",
+                        "unknown"
+                      ]
+                    },
+                    "added": {
+                      "description": "Lines added; null for a binary file",
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "removed": {
+                      "description": "Lines removed; null for a binary file",
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "status",
+                    "added",
+                    "removed"
+                  ]
+                }
+              },
+              "filesTotal": {
+                "description": "merge: how many files the branch changes (files lists at most the first ones)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "added": {
+                "description": "merge: lines added across all its files (binary files not counted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "removed": {
+                "description": "merge: lines removed across all its files (binary files not counted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
             },
             "additionalProperties": {},
-            "description": "Kind-specific detail: merge {target, ref}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+            "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+          },
+          "requestedAt": {
+            "description": "When it was asked (a merge: when it was parked); absent on daemons that predate it",
+            "type": [
+              "string",
+              "null"
+            ],
+            "allOf": [
+              {
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            ]
           }
         },
         "required": [

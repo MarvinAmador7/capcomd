@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import CapcomdStore
+import CapcomdBot
 
 /// SPEC §4.3 run drill-down (view-activity / view-trace / drill-collapsed / drill-a2-*): header, step bar, Activity or
 /// Trace (remembered), Log | Files (remembered), then Pause · Stop · Open in terminal. Clicks animate; the same changes
@@ -30,12 +31,14 @@ struct RunDrillDownView: View {
     }
     .padding([.top, .horizontal], Theme.Drill.padding)
     // Natural height (every region has a fixed height) plus the footer: the panel sizes to it.
-    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { content = $0; model.routeHeight = content + footer }
+    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { content = $0; if model.path.last == .run(runId) { model.routeHeight = content + footer } }
     .frame(maxHeight: .infinity, alignment: .top)
     .safeAreaInset(edge: .bottom, spacing: 0) {
-      DrillFooter(runId: runId).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footer = $0; model.routeHeight = content + footer }
+      DrillFooter(runId: runId).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footer = $0; if model.path.last == .run(runId) { model.routeHeight = content + footer } }
     }
     .navigationBarBackButtonHidden(true)
+    .hiddenUnlessTop(.run(runId))
+    .onChange(of: model.path.last == .run(runId)) { _, top in if top { model.routeHeight = content + footer } }   // back on top: its height again
     // Refresh the REST parts on screen; a change of view or tab refreshes at once.
     .task(id: "\(runId)|\(model.drillView.rawValue)|\(model.detailTab.rawValue)") {
       while !Task.isCancelled {
@@ -62,13 +65,15 @@ struct DrillHeader: View {
       Button { model.back() } label: {
         Image(systemName: "chevron.left").font(Theme.Drill.backIcon).foregroundStyle(Theme.Drill.switchOn)
           .frame(width: Theme.Drill.backSize, height: Theme.Drill.backSize)
-          .background(RoundedRectangle(cornerRadius: Theme.Drill.backRadius).fill(Theme.Drill.backFill))
+          .background(ControlSurface(shape: Circle(), fallback: Theme.Drill.backFill))
       }
       .buttonStyle(PressableStyle()).accessibilityLabel("Back")
       .background { keyboardOnly("[") { withTransaction(Transaction(animation: nil)) { model.back() } } }
       VStack(alignment: .leading, spacing: Theme.Drill.titleTop) {
         Text(verbatim: run?.title ?? runId).font(Theme.Drill.crumbFont).foregroundStyle(Theme.Drill.crumbText).lineLimit(1)
-        RedactableText(text: UntrustedText(current?.text ?? run?.title ?? runId))
+        // An ended run is titled by how it ended, not by its last step ("Edited a file" said little); a run with no step
+        // yet by that, not by its goal again (the line above is the goal).
+        RedactableText(text: UntrustedText(run?.endedHead ?? current?.text ?? (run == nil ? runId : "Starting…")))
           .font(Theme.Drill.titleFont).tracking(Theme.Drill.titleTracking).foregroundStyle(Theme.Drill.switchOn).lineLimit(1)
       }
       Spacer(minLength: 0)
@@ -120,12 +125,12 @@ struct StepBar: View {
   let steps: [Step]
   var body: some View {
     HStack(spacing: Theme.Drill.barGap) {
-      ForEach(steps) { s in RoundedRectangle(cornerRadius: Theme.Drill.barRadius).fill(color(s.status)).frame(height: Theme.Drill.barHeight) }
+      ForEach(steps) { s in RoundedRectangle(cornerRadius: Theme.Drill.barRadius, style: .continuous).fill(color(s.status)).frame(height: Theme.Drill.barHeight) }
     }
     .accessibilityHidden(true)
   }
   func color(_ s: StepStatus) -> Color {
-    switch s { case .done: Theme.Drill.barDone; case .running: Theme.Drill.barCurrent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued: Theme.Drill.barQueued }
+    switch s { case .done: Theme.Drill.barDone; case .running: Theme.Drill.barCurrent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued, .paused, .stopped: Theme.Drill.barQueued }
   }
 }
 
@@ -138,11 +143,15 @@ struct StepIcon: View {
   let step: Step
   var body: some View {
     let tint: Color = switch step.status {
-      case .running: Theme.accent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued: Theme.Drill.rowQueued; case .done: Theme.Drill.iconText
+      case .running: Theme.accent; case .failed: Theme.red; case .waiting: Theme.amber; case .queued, .paused, .stopped: Theme.Drill.rowQueued; case .done: Theme.Drill.iconText
     }
     let profile = step.agentId.flatMap { model.run(runId)?.agents[$0]?.kind }
     Group {
-      if step.status == .waiting { Image(systemName: "hand.raised") }
+      // Who did it leads the row: the agent's bot ("[bot] Ran the tests"), for its own steps and for the verify, merge and
+      // approval of its work, as in Trace rows (SPEC: bots replace the profile icons). Steps of the run itself keep
+      // their event icon.
+      if let id = step.agentId, let bot = model.bot(runId: runId, agentId: id) { BotAvatar(traits: bot, size: .xs) }
+      else if step.status == .waiting { Image(systemName: "hand.raised") }
       else if step.kind == .agent, let k = profile { ZStack { Image(systemName: k.symbol); if k.hasCentreDot { Circle().frame(width: 3, height: 3) } } }
       else { Image(systemName: step.kind.symbol) }
     }
@@ -177,6 +186,10 @@ struct ActivityView: View {
     ScrollViewReader { proxy in
       ScrollView(showsIndicators: false) {
         VStack(alignment: .leading, spacing: 0) {
+          if steps.isEmpty {
+            Text("Nothing has happened yet.").font(Theme.Drill.emptyFont).foregroundStyle(Theme.Drill.emptyText)
+              .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, Theme.Drill.rowPadding).frame(height: Theme.Drill.spanHeight)
+          }
           ForEach(grouped, id: \.0) { phase, rows in
             Text(phase.rawValue).font(Theme.Drill.phaseFont).foregroundStyle(Theme.Drill.phaseText)
               .frame(height: Theme.Drill.phaseHeight).padding(.horizontal, Theme.Drill.rowPadding)
@@ -224,8 +237,8 @@ struct ActivityView: View {
         .overlay(alignment: .leading) { Rectangle().fill(Theme.Drill.chevronDivider).frame(width: 0.5) }
     }
     .frame(height: Theme.Drill.stripHeight)
-    .background(RoundedRectangle(cornerRadius: Theme.Drill.stripRadius).fill(Theme.Drill.stripFill))
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Drill.stripRadius))
+    .background(RoundedRectangle(cornerRadius: Theme.Drill.stripRadius, style: .continuous).fill(Theme.Drill.stripFill))
+    .clipShape(RoundedRectangle(cornerRadius: Theme.Drill.stripRadius, style: .continuous))
     .padding(.top, Theme.Drill.stripTop)
   }
 
@@ -241,11 +254,23 @@ struct ActivityView: View {
   }
 }
 
-/// `.ar`: icon · text · relative time (+ status). Finished steps show no status mark.
+/// `.ar`: icon · text · relative time (+ status). Finished steps show no status mark. A row of an agent opens its
+/// thread: once a run has ended its card is gone, and this is the way back to what each agent said.
 struct ActivityRow: View {
+  @Environment(AppModel.self) private var model
   let runId: String
   let step: Step
   var body: some View {
+    if let id = step.agentId, model.run(runId)?.agents[id] != nil {
+      Button { model.path.append(.thread(runId: runId, agentId: id)) } label: { row.contentShape(Rectangle()) }
+        .buttonStyle(PressableStyle())
+        .accessibilityHint("Opens its thread")
+    } else {
+      row
+    }
+  }
+
+  @ViewBuilder private var row: some View {
     let color: Color = switch step.status {
       case .running: Theme.Drill.switchOn; case .queued: Theme.Drill.rowQueued; case .failed: Theme.Drill.rowFailed; default: Theme.Drill.rowText
     }
@@ -259,6 +284,7 @@ struct ActivityRow: View {
           TimelineView(.periodic(from: .now, by: 30)) { ctx in
             Text(verbatim: step.status == .running ? "now" : relativeAgo(ms: step.epochMs, nowMs: Int(ctx.date.timeIntervalSince1970 * 1000)))
               .font(Theme.Drill.timeFont).foregroundStyle(step.status == .running ? Theme.Drill.switchOn : Theme.Drill.timeText)
+              .frame(minWidth: Theme.Drill.timeColumn, alignment: .trailing)
           }
         }
         StatusMark(status: step.status == .done ? nil : step.status)
@@ -266,9 +292,14 @@ struct ActivityRow: View {
     }
     .frame(height: Theme.Drill.rowHeight)
     .padding(.horizontal, Theme.Drill.rowPadding)
+    .help(who.map { a in [model.botName(runId: runId, agentId: a.id), a.displayName].compactMap { $0 }.joined(separator: " · ") } ?? "")
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(step.text), \(String(describing: step.status))")
+    .accessibilityLabel("\(who.map { "\($0.displayName): " } ?? "")\(step.text), \(String(describing: step.status))")
   }
+
+  /// The agent that did this step (or whose work it was: verify, merge, approval), if the run knows it; its bot leads
+  /// the row, and its name and role are the tooltip.
+  private var who: Agent? { step.agentId.flatMap { model.run(runId)?.agents[$0] } }
 }
 
 /// `.si2`: a 24 pt icon cell; the current step on a faint blue tile, an approval amber, finished muted.
@@ -279,7 +310,7 @@ struct StripCell: View {
   var body: some View {
     StepIcon(runId: runId, step: step)
       .frame(width: Theme.Drill.cell, height: Theme.Drill.cell)
-      .background(RoundedRectangle(cornerRadius: Theme.Drill.cellRadius)
+      .background(RoundedRectangle(cornerRadius: Theme.Drill.cellRadius, style: .continuous)
         .fill(step.status == .running ? Theme.Drill.cellNow : hover ? Theme.Drill.cellHover : .clear))
       .onHover { hover = $0 }
       .accessibilityElement(children: .ignore)
@@ -405,8 +436,8 @@ struct SpanRow: View {
   @ViewBuilder private var icon: some View {
     let tint: Color = row.status == .failed ? Theme.red : row.status == .running ? Theme.accent : Theme.Drill.iconText
     let agentId = row.id.hasPrefix("pending:agent:") ? String(row.id.dropFirst("pending:agent:".count)) : nil
-    if row.kind == .agent, let k = agentId.flatMap({ model.run(runId)?.agents[$0]?.kind }) {
-      ProfileIcon(kind: k, tint: row.status == .running ? .blue : .grey)
+    if row.kind == .agent, let id = agentId, model.run(runId)?.agents[id] != nil {
+      BotAvatar(traits: model.bot(runId: runId, agentId: id), size: .xs).help(model.botName(runId: runId, agentId: id) ?? "")
     } else {
       Image(systemName: row.kind.symbol).font(Theme.Drill.iconFont).foregroundStyle(tint).accessibilityHidden(true)
     }
@@ -463,7 +494,7 @@ struct DetailPane: View {
     }
     .padding(Theme.Drill.segInset)
     .frame(width: Theme.Drill.segWidth)
-    .background(RoundedRectangle(cornerRadius: Theme.Drill.segRadius).fill(Theme.Drill.segFill))
+    .background(RoundedRectangle(cornerRadius: Theme.Drill.segRadius, style: .continuous).fill(Theme.Drill.segFill))
     .padding(Theme.Drill.segPadding)
   }
 
@@ -472,7 +503,7 @@ struct DetailPane: View {
     return Button { withAnimation(Theme.Motion.ease(reduceMotion)) { model.detailTab = tab } } label: {
       Text(title).font(Theme.Drill.segFont).foregroundStyle(on ? Theme.Drill.switchOn : Theme.Drill.segOff)
         .frame(maxWidth: .infinity).frame(height: Theme.Drill.segItemHeight)
-        .background(RoundedRectangle(cornerRadius: Theme.Drill.segItemRadius).fill(on ? Theme.Drill.segOnFill : .clear)
+        .background(RoundedRectangle(cornerRadius: Theme.Drill.segItemRadius, style: .continuous).fill(on ? Theme.Drill.segOnFill : .clear)
           .shadow(color: .black.opacity(on ? 0.3 : 0), radius: 1, y: 1))
         .contentShape(Rectangle())
     }
@@ -512,7 +543,7 @@ struct DetailPane: View {
     }
     .padding(Theme.Drill.tailPadding)
     .frame(height: Theme.Drill.tailHeight, alignment: .top)
-    .background(RoundedRectangle(cornerRadius: Theme.Drill.tailRadius).fill(Theme.Drill.tailFill))
+    .background(RoundedRectangle(cornerRadius: Theme.Drill.tailRadius, style: .continuous).fill(Theme.Drill.tailFill))
     .padding(.bottom, Theme.Drill.paneHeight - Theme.Drill.tailHeight)   // .pane is 94; its .tail box is 84
   }
 
@@ -522,7 +553,12 @@ struct DetailPane: View {
       case .loaded(let f) where !f.files.isEmpty:
         ScrollView(showsIndicators: false) {
           VStack(spacing: 0) {
-            ForEach(f.files, id: \.self) { FileRow(file: $0) }
+            // Which agent changed it: two agents can change one path on their own branches (two rows, two bots).
+            let several = Set(f.files.map(\.agentId)).count > 1
+            ForEach(f.files, id: \.self) { file in
+              FileRow(file: file, bot: several ? model.bot(runId: runId, agentId: file.agentId) : nil,
+                      who: model.botName(runId: runId, agentId: file.agentId))
+            }
             if f.truncated { empty("\(f.total - f.files.count) more not shown") }
           }
         }
@@ -546,15 +582,18 @@ struct DetailPane: View {
   }
 }
 
-/// `.f`: status glyph · path (mono, middle-truncated) · +n · −n.
+/// `.f`: status glyph · path (mono, middle-truncated) · the agent's bot when several agents changed files · +n · −n.
 struct FileRow: View {
   let file: RunFiles.File
+  var bot: BotTraits? = nil
+  var who: String? = nil
   var body: some View {
     HStack(spacing: Theme.Drill.fileGap) {
       Image(systemName: symbol).font(Theme.Drill.iconFont).foregroundStyle(Theme.Drill.iconText).frame(width: Theme.Drill.fileIcon)
       Text(verbatim: UntrustedText(file.path).plain).font(Theme.Drill.fileFont).foregroundStyle(Theme.Drill.fileText)
         .lineLimit(1).truncationMode(.middle)
       Spacer(minLength: 0)
+      if let bot { BotAvatar(traits: bot, size: .xs).help(who ?? "") }
       if let a = file.added { Text(verbatim: "+\(a)").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.green) }
       if let r = file.removed { Text(verbatim: "−\(r)").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.red) }
       if file.added == nil && file.removed == nil { Text("binary").font(Theme.Drill.fileCountFont).foregroundStyle(Theme.Drill.emptyText) }
@@ -562,6 +601,7 @@ struct FileRow: View {
     .frame(height: Theme.Drill.fileHeight)
     .padding(.horizontal, Theme.Drill.rowPadding)
     .accessibilityElement(children: .combine)
+    .accessibilityHint(who.map { "Changed by \($0)" } ?? "")
   }
   private var symbol: String {
     switch file.status { case "added": "doc.badge.plus"; case "deleted": "trash"; case "renamed", "copied": "arrow.right.doc.on.clipboard"; default: "square.and.pencil" }
@@ -593,15 +633,14 @@ struct DrillFooter: View {
 
   private var bar: some View {
     HStack(spacing: Theme.Drill.footerGap) {
-      pauseButton
-      stopButton
+      if active { pauseButton; stopButton }   // an ended run has nothing to pause or stop
       Spacer(minLength: 0)
       terminalButton
     }
     .padding(Theme.Drill.footerPadding)
     .frame(maxWidth: .infinity)
-    .background(Theme.Footer.material)
-    .overlay(alignment: .top) { Rectangle().fill(Theme.Footer.divider).frame(height: Theme.Footer.dividerHeight) }
+    .background(ControlSurface(shape: Rectangle(), fallback: Theme.Footer.material))
+    .overlay(alignment: .top) { DitherLine() }
   }
 
   private var pauseButton: some View {
@@ -630,7 +669,7 @@ struct DrillFooter: View {
     Button(action: run) {
       Text(title).font(Theme.Drill.actionFont).foregroundStyle(Theme.Drill.actionText)
         .padding(.horizontal, Theme.Drill.actionPadding).frame(height: Theme.Drill.actionHeight)
-        .background(RoundedRectangle(cornerRadius: Theme.Drill.actionRadius).fill(fill))
+        .background(RoundedRectangle(cornerRadius: Theme.Drill.actionRadius, style: .continuous).fill(fill))
     }
     .buttonStyle(PressableStyle())
   }

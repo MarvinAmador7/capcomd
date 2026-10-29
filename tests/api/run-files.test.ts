@@ -3,9 +3,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RunFiles } from "../../src/api/contract";
+import { APPROVAL_FILES_MAX, RunFiles } from "../../src/api/contract";
 import { addClient, loadClients } from "../../src/api/clients";
-import { FilesMirror, parseDiff, runFiles, useMirror, workTips } from "../../src/api/run-files";
+import { approvalDiff, FilesMirror, parseDiff, runFiles, summarizeDiff, useMirror, workTips } from "../../src/api/run-files";
 import { harnessApp } from "../../src/api/server";
 import { memorySource, type RawEvent } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
@@ -165,6 +165,34 @@ describe("runFiles", () => {
 	});
 });
 
+describe("approvalDiff (a parked merge's subject.files)", () => {
+	test("the verified commit against where its branch left the target: biggest change first, totals over every file", async () => {
+		const d = await approvalDiff({ ...repo, workdir: join(root, "mirror-approval") }, { agentId: "a1", sha: a1, branch: "capcomd/run-1/a1" });
+		expect(d).toEqual({
+			files: [
+				{ path: "a.txt", status: "modified", added: 2, removed: 1 },
+				{ path: "new.ts", status: "added", added: 1, removed: 0 },
+				{ path: "logo.bin", status: "modified", added: null, removed: null },
+				{ path: "renamed.txt", status: "renamed", added: 0, removed: 0 },
+			],
+			filesTotal: 4, added: 3, removed: 1,
+		});
+	});
+	test("no commit, an unsafe branch name or an unreadable remote: no diff, never an error", async () => {
+		expect(await approvalDiff(repo, { agentId: "a1", sha: null, branch: "capcomd/run-1/a1" })).toBeNull();
+		expect(await approvalDiff(repo, { agentId: "a1", sha: a1, branch: "--upload-pack=evil" })).toBeNull();
+		const gone = { remote: join(root, "no-such.git"), target: "main", workdir: join(root, "mirror-gone") };
+		expect(await approvalDiff(gone, { agentId: "a1", sha: "b".repeat(40), branch: "x" })).toBeNull();
+	});
+	test("at most APPROVAL_FILES_MAX files; the totals still count them all", () => {
+		const many = Array.from({ length: APPROVAL_FILES_MAX + 5 }, (_, i) => ({ path: `f${String(i).padStart(2, "0")}.ts`, oldPath: null, status: "modified" as const, added: i, removed: 1 }));
+		const d = summarizeDiff(many);
+		expect(d.files).toHaveLength(APPROVAL_FILES_MAX);
+		expect(d.files[0]!.path).toBe(`f${APPROVAL_FILES_MAX + 4}.ts`);
+		expect(d).toMatchObject({ filesTotal: APPROVAL_FILES_MAX + 5, added: many.reduce((n, f) => n + f.added, 0), removed: APPROVAL_FILES_MAX + 5 });
+	});
+});
+
 describe("a remote that never answers", () => {
 	// ssh "connects" to a command that sleeps: no network needed, and git waits on it forever.
 	const sleep = `47.${String(process.pid).padStart(7, "0")}`;
@@ -191,7 +219,7 @@ describe("a remote that never answers", () => {
 		const path = join(root, "clients-slow.json");
 		const token = addClient("reader", ["read"], path).token;
 		const run = { id: "run-2", projectId: null, label: null, state: "running", goal: null, repo: slow.remote, createdAt: "2026-10-25T07:00:00.000Z" };
-		const agents = ["s1", "s2"].map((id) => ({ id, runId: "run-2", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null }));
+		const agents = ["s1", "s2"].map((id) => ({ id, runId: "run-2", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null, provider: null, model: null, effort: null }));
 		const evs: RawEvent[] = [
 			{ seq: 1, at: 1, type: "AGENT_DONE", agentId: "s1", data: { result: { branch: "capcomd/run-2/s1", commit: "a".repeat(40) } } },
 			{ seq: 2, at: 2, type: "AGENT_CHECKPOINT", agentId: "s2", data: { ref: "refs/capcomd/checkpoints/s2", sha: "b".repeat(40), at: 2, reason: "x", files: 1 } },
@@ -218,7 +246,7 @@ describe("GET /v1/runs/{runId}/files", () => {
 	const path = join(root, "clients.json");
 	const token = addClient("reader", ["read"], path).token;
 	const run = { id: "run-1", projectId: null, label: "demo", state: "running", goal: null, repo: remote, createdAt: "2026-10-25T07:00:00.000Z" };
-	const agent = (id: string) => ({ id, runId: "run-1", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null });
+	const agent = (id: string) => ({ id, runId: "run-1", parent: null, depth: 0, profile: null, status: "done" as const, text: "", task: null, taskAttachment: null, result: null, updatedAt: null, activity: null, workspace: null, provider: null, model: null, effort: null });
 	const app = harnessApp({
 		source: memorySource({ runs: [run], agents: { "run-1": ["a1", "a2", "a3", "a4", "rev", "gone"].map(agent) }, events: { "run-1": events }, repos: { "run-1": { ...repo, workdir: join(root, "mirror-http") } } }),
 		clients: () => loadClients(path), state: harnessState(null),

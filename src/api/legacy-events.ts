@@ -7,12 +7,18 @@
 import { z } from "zod";
 import { AttachmentRef } from "./inline-cap";
 import { AgentWorkspace } from "./workspace";
+import { ACTIVITY_KINDS } from "../../packages/agent-thread/src/kinds";
 
 /** Text written by an agent or worker. Render as plain text only: never as markdown, links or actions. */
 export const UntrustedText = z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions" });
 
 const S = z.string(), N = z.number(), nS = z.string().nullable(), U = z.unknown(), T = UntrustedText, nT = UntrustedText.nullable();
 const task = { taskId: S, holder: S, epoch: N };
+/** A parked merge's diff: at most 20 files, biggest change first; totals count every file (binaries have null counts). */
+export const MergeDiff = z.object({
+	files: z.array(z.object({ path: T, status: S, added: N.nullable(), removed: N.nullable() })),
+	filesTotal: N, added: N, removed: N,
+});
 const budget = { add: U, budget: U, by: U };
 /** agent.done / agent.failed `result`. Every text field is agent-written. Unknown fields may appear (the agent's declared result bag). */
 export const AgentResult = z.looseObject({
@@ -32,17 +38,28 @@ export const AgentResult = z.looseObject({
 	exitCode: N.optional(),
 	adopted: z.boolean().optional(),
 	limit: U.optional(),
-	verification: U.optional(),
+	verification: U.optional().describe("Set by `capcomd verify` of its work: {id, pass, commit, checks: {passed, status, reason?, excerpt?}, review?}. When the checks failed, `reason` says how and `excerpt` holds the last lines of the check output that name the failure (at most 3 lines, untrusted)"),
+	merge: U.optional().describe("Set when its work was merged, or the merge failed or was denied: {id, target, state: merged | failed | denied, sha?, pr?, status?}"),
 }).meta({ "x-untrusted": true, description: "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions" });
 const finish = { result: AgentResult, spent: U, budget: U };
+/** Which AI provider an agent runs on (harness.v1 Agent.provider, agent.spawned agent.provider). */
+export const AgentProvider = z.enum(["claude", "codex"]);
+/** agent.spawned `agent`: the agent's profile as resolved at spawn (provider, auth, limits, …) plus the runner the daemon
+ * chose. Open: other profile fields come along, and may be added. */
+export const SpawnedAgent = z.looseObject({
+	kind: z.enum(["fake", "claude-code", "codex"]).optional().describe("The runner: claude-code, codex, or fake (a local stand-in with no AI provider)"),
+	provider: AgentProvider.optional().describe("The profile's provider; absent when the agent was chosen by CAPCOMD_AGENT without a profile (then see kind)"),
+	model: z.string().nullable().optional().describe("The model it runs with (CAPCOMD_AGENT_MODEL, else the profile's); absent or null: the provider CLI's default"),
+	effort: z.string().nullable().optional().describe("The reasoning effort it runs with (CAPCOMD_AGENT_EFFORT, else the profile's or the run's chosen level); absent or null: the provider CLI's default"),
+}).describe("The agent's resolved profile and runner; null on events from daemons that recorded none");
 /** Set on lifecycle-feed copies of state-change events (GET /v1/runs/{runId}/lifecycle, ?feed=lifecycle): trusted reason code. */
 const cause = { cause: S.optional().describe("Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)") };
 const kv = { k: S, version: N, writer: S.optional() };
 
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
 export const SCOPE_EVENT_TYPES = [
-	"RUN_NEW", "RUN_GRANTED",
-	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED",
+	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED",
+	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED", "AGENT_STEP",
 	"AGENT_PAUSED", "AGENT_RESUMED", "AGENT_GRANTED", "AGENT_ADOPTED", "AGENT_REAPED", "AGENT_CANCELLED",
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
@@ -58,13 +75,20 @@ const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verif
 export const LegacyEventShapes = {
 	"run.created": { budget: U, label: nS, goal: nT.optional(), ...cause },
 	"run.granted": budget,
-	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: U, task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(), ...cause },
+	"run.ended": { state: z.enum(["failed", "cancelled"]).describe("How the run itself ended, when its agents didn't end it: failed (it couldn't start its first agent) or cancelled (stopped before any agent of it had run, or with none left to stop)"), reason: nT.describe("Why: the error that stopped it, or the cancel's reason"), by: nS.describe("Who ended it: operator, client:<id>, or null for capcomd itself"), ...cause },
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(), ...cause },
 	"agent.started": { ...cause },
 	"agent.done": { ...finish, ...cause },
 	"agent.failed": { ...finish, ...cause },
 	"agent.checkpointed": { ref: S, sha: S, at: N, reason: T, files: N },
 	"agent.notice_raised": { kind: S, detail: T, at: N },
 	"agent.notice_cleared": { kind: nS },
+	"agent.step": {
+		kind: S.describe(`What the agent did (icon hint): ${ACTIVITY_KINDS.filter((k) => k !== "think").join(", ")}. More may be added: treat an unknown kind as tool. Never think`),
+		n: z.number().int().min(1).describe("How many distinct things it acted on (files, commands, sub-agents); 1 or more"),
+		startedAt: z.number().int().describe("When the step began (epoch ms): its first tool call"),
+		endedAt: z.number().int().describe("When it ended (epoch ms, ≥ startedAt): when the agent's next step began, or when it ended"),
+	},
 	"agent.paused": { result: U.describe("Why: limit \"quota\" (a provider usage limit; resetAt, login) or \"paused\" (the operator: `by` is operator or client:<id>); branch/commit: the work it kept"), until: U.describe("When it resumes by itself (epoch ms); null when it waits for a resume"), ...cause },
 	"agent.resumed": { epoch: N, by: nS, ...cause },
 	"agent.granted": budget,
@@ -81,7 +105,7 @@ export const LegacyEventShapes = {
 	"merge.started": { id: S },
 	"merge.succeeded": { id: S },
 	"merge.failed": { id: S },
-	"merge.approval_requested": { id: S, target: U, ref: U, reason: T.nullable().optional() },
+	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read") },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
 	"task.added": { taskId: S, title: T, after: z.array(S).optional() },

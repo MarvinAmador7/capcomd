@@ -25,6 +25,7 @@ export function specFromFlags(v: Record<string, any>): Partial<AgentSpec> {
   set("auth", v.auth === "api-key" ? "apikey" : v.auth);
   set("description", v.description);
   set("model", v.model);
+  set("effort", v.effort);
   set("maxTurns", num(v["max-turns"], "max-turns"));
   set("maxBudgetUsd", num(v.budget, "budget"));
   set("timeoutMs", num(v["timeout-ms"], "timeout-ms"));
@@ -82,7 +83,7 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
       let effective: unknown = null, error: string | null = null;
       try {
         const c = loadAgentConfig(process.env, n);
-        effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
+        effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
       } catch (e) { error = (e as Error).message; }
       out({ name: n, default: f.default === n, spec, effective, error, ...readiness(n, spec) }, JSON.stringify({ name: n, spec, effective, error }, null, 2));
       return error ? 1 : 0;

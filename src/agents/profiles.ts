@@ -17,6 +17,8 @@ export interface AgentSpec {
   auth: AuthMode;
   description?: string;
   model?: string;
+  /** Reasoning effort, one of the provider's levels (PROVIDER_EFFORTS); unset: the CLI's default. */
+  effort?: string;
   /** Limits are optional (ADR-019): unset means none. An agent that reaches one is stopped and keeps its work. */
   maxTurns?: number;
   maxBudgetUsd?: number;
@@ -60,6 +62,14 @@ export interface AgentsFile { schema: typeof AGENTS_SCHEMA; default?: string; ag
 
 export const PROVIDER_KIND: Record<Provider, "claude-code" | "codex"> = { claude: "claude-code", codex: "codex" };
 
+/**
+ * Reasoning effort levels each provider's CLI takes, lowest to highest: claude `--effort <level>` (Claude Code
+ * `--help`: low, medium, high, xhigh, max), codex `-c model_reasoning_effort=<level>`.
+ */
+export const PROVIDER_EFFORTS: Record<Provider, readonly string[]> = { claude: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high"] };
+/** The level a provider's CLI uses when none is set, when it is fixed (codex: medium); null: the CLI decides (claude: by model). */
+export const PROVIDER_DEFAULT_EFFORT: Record<Provider, string | null> = { claude: null, codex: "medium" };
+
 /** JSON Schema (draft 2020-12) for `.capcomd/agents.json`; `capcomd agents schema` prints it. */
 export const AGENTS_JSON_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -87,6 +97,7 @@ export const AGENTS_JSON_SCHEMA = {
         auth: { enum: ["apikey", "subscription"], description: "Exactly one credential kind; no fallback" },
         description: { type: "string" },
         model: { type: "string", minLength: 1 },
+        effort: { enum: ["minimal", "low", "medium", "high", "xhigh", "max"], description: "Reasoning effort: claude low|medium|high|xhigh|max, codex minimal|low|medium|high" },
         maxTurns: { type: "integer", minimum: 1 },
         maxBudgetUsd: { type: "number", exclusiveMinimum: 0 },
         timeoutMs: { type: "integer", minimum: 1000 },
@@ -143,6 +154,10 @@ export function validateSpec(name: string, raw: unknown): string[] {
   if (s.maxBudgetUsd !== undefined && !(typeof s.maxBudgetUsd === "number" && s.maxBudgetUsd > 0)) at("maxBudgetUsd must be > 0");
   if (s.sandbox !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(s.sandbox as string)) at("sandbox is invalid");
   if (s.model !== undefined && (typeof s.model !== "string" || !s.model)) at("model must be a non-empty string");
+  if (s.effort !== undefined) {
+    const levels = PROVIDER_EFFORTS[s.provider as Provider];
+    if (typeof s.effort !== "string" || (levels && !levels.includes(s.effort))) at(`effort must be one of ${(levels ?? []).join(", ")} for provider ${s.provider}`);
+  }
   for (const k of ["egress", "allowedTools", "disallowedTools"]) {
     if (s[k] === undefined) continue;
     if (!Array.isArray(s[k]) || (s[k] as unknown[]).some((x) => typeof x !== "string" || !x)) at(`${k} must be an array of non-empty strings`);
@@ -260,7 +275,9 @@ export interface ResolvedAgent { name: string | null; kind: "fake" | "claude-cod
  * Which agent runs: explicit profile name (task/run) → CAPCOMD_AGENT (profile name or provider
  * kind; env override) → the file's default → fake.
  */
-export function resolveAgent(name?: string | null, source: Record<string, string | undefined> = process.env): ResolvedAgent {
+export function resolveAgent(name?: string | null, source: Record<string, string | undefined> = process.env, pinned?: unknown): ResolvedAgent {
+  const p = pinnedAgent(name, pinned);
+  if (p) return p;
   const file = readAgentsFile(agentsFilePath(source));
   const pick = (n: string): ResolvedAgent | null => {
     const spec = file.agents[n];
@@ -270,7 +287,8 @@ export function resolveAgent(name?: string | null, source: Record<string, string
     const ref = decodeAgentRef(name);
     name = ref.name;
     const r = pick(name);
-    if (r && ref.overrides) return { ...r, spec: applyOverrides(name, r.spec!, ref.overrides), overridden: true };
+    // An operator override may change the provider (`capcomd run --planner-provider`): the runner follows it.
+    if (r && ref.overrides) { const spec = applyOverrides(name, r.spec!, ref.overrides); return { ...r, kind: PROVIDER_KIND[spec.provider], spec, overridden: true }; }
     if (!r) throw new AgentConfigError(`unknown agent profile "${name}" (defined: ${Object.keys(file.agents).join(", ") || "none"}; add one with \`capcomd agents add\`)`);
     return r;
   }
@@ -285,6 +303,29 @@ export function resolveAgent(name?: string | null, source: Record<string, string
   }
   if (file.default) return pick(file.default)!;
   return { name: null, kind: "fake" };
+}
+
+/**
+ * The spec an agent was spawned with, as recorded with it (the scope's agent record, or a task of the legacy plan):
+ * its profile with the ref's overrides applied, plus `kind`. The engine side resolves an agent from it: the process
+ * that runs the worker (the daemon) need not see the project's agents file, and its own may define the name otherwise
+ * or not at all; a provider swap (`--planner-provider`) is in it too. Null when there is none usable (older records):
+ * the caller resolves by name.
+ */
+export function pinnedAgent(ref: string | null | undefined, pinned: unknown): ResolvedAgent | null {
+  if (!pinned || typeof pinned !== "object" || Array.isArray(pinned)) return null;
+  const { kind, ...rest } = pinned as Record<string, unknown>;
+  const decoded = ref ? decodeAgentRef(ref) : null;
+  const name = decoded?.name ?? null;
+  if (kind === "fake" && rest.provider === undefined) return { name, kind: "fake" };
+  const spec = rest as unknown as AgentSpec;
+  if (spec.provider !== "claude" && spec.provider !== "codex") return null;
+  if (spec.auth !== "apikey" && spec.auth !== "subscription") return null;
+  return { name, kind: PROVIDER_KIND[spec.provider], spec, ...(decoded?.overrides ? { overridden: true } : {}) };
+}
+/** What to record with an agent so the engine can resolve it without the agents file (see pinnedAgent). */
+export function pinSpec(r: ResolvedAgent): Record<string, unknown> {
+  return { ...((r.spec ?? {}) as unknown as Record<string, unknown>), kind: r.kind };
 }
 
 /** Goal directive `[agent:NAME] …` selects a profile for that run/task. */
@@ -350,16 +391,16 @@ export function decodeAgentRef(ref: string): { name: string; overrides?: Overrid
 }
 
 /** Effective, fully resolved agent spec for the event log (no credentials, only modes). */
-export function effectiveAgentRecord(ref?: string | null, source: Record<string, string | undefined> = process.env): Record<string, unknown> {
+export function effectiveAgentRecord(ref?: string | null, source: Record<string, string | undefined> = process.env, pinned?: unknown): Record<string, unknown> {
   try {
-    const ra = resolveAgent(ref, source);
+    const ra = resolveAgent(ref, source, pinned);
     if (ra.kind === "fake") return { kind: "fake" };
     const { loadAgentConfig } = require("./config") as typeof import("./config");
-    const c = loadAgentConfig(source, ref);
+    const c = loadAgentConfig(source, ref, pinned);
     return {
       name: ra.name, kind: ra.kind, overridden: !!ra.overridden, operator: ref ? !!decodeAgentRef(ref).overrides?.operator : false,
       auth: c.credentialMode === "subscription" ? "subscription" : "apikey", credentialMode: c.credentialMode,
-      model: c.model ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, noChangeAfterMs: c.noChangeAfterMs || null, checkpointEveryMs: c.checkpointEveryMs,
+      model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, noChangeAfterMs: c.noChangeAfterMs || null, checkpointEveryMs: c.checkpointEveryMs,
       sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools,
       systemPrompt: !!c.systemPrompt, appendSystemPrompt: !!c.appendSystemPrompt,
       children: { allowSpawn: false, ...(ra.spec?.children ?? {}) },

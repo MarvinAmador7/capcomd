@@ -5,7 +5,10 @@
 # 5 s: their checkpoint refs must reach GitHub and be deleted when their work merges. Prints the tree, rollups and
 # timings.
 # The GitHub repo is NOT deleted (inspect it; the delete command is printed at the end).
-# Needs: bun, gh (logged in), BOXD_API_KEY, working claude + codex logins (capcomd auth status).
+# Needs: bun, gh (logged in), a boxd key (BOXD_API_KEY, or the one `capcomd setup` keeps in the keychain),
+# working claude + codex logins (capcomd auth status).
+# CAPCOMD_E2E_RESTART=1: once a worker is running, SIGKILL the engine (serve, its engine host and rivet-engine) and
+# start it again on the same data and port; the run must still pass (agents resume on their own).
 # Override profiles with CAPCOMD_PLANNER_SPEC / CAPCOMD_CLAUDE_WORKER_SPEC / CAPCOMD_CODEX_WORKER_SPEC /
 # CAPCOMD_REVIEWER_SPEC (JSON). Every verify is also reviewed by the read-only `reviewer` profile.
 set -euo pipefail
@@ -17,7 +20,6 @@ REPO="$OWNER/capcomd-subagents-$TS"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/capcomd-subagents.XXXXXX")"
 T0=$(date +%s)
 die() { echo "mac-subagents-e2e: $*" >&2; echo "artifacts: $WORK"; exit 1; }
-[ -n "${BOXD_API_KEY:-}" ] || die "BOXD_API_KEY is not set"
 command -v bun >/dev/null || die "bun not on PATH"
 command -v gh >/dev/null || die "gh not installed"
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
@@ -46,6 +48,10 @@ export CAPCOMD_TEST_COMMAND="bun test"
 export CAPCOMD_WORKDIR="$WORK/merge"
 export CAPCOMD_TRACE_DIR="$WORK/traces"
 export CAPCOMD_RPC_KEY_FILE="$WORK/rpc.key"   # per-run token signing key (host only)
+# This run's index in the work dir, not the capcomd home's state/runs.jsonl: the user's own daemon (and the menu bar)
+# lists that file, and these runs live on this script's private engine. Logins, env snapshots, the boxd key and the
+# user config are still found where they always are (the capcomd home is unchanged).
+export CAPCOMD_RUNS_INDEX="$WORK/runs.jsonl"
 
 PORT=$(bun -e 'const { testPort } = await import("./tests/helpers/engine.ts"); console.log(await testPort())') || die "no free engine port"
 export CAPCOMD_ENDPOINT="http://127.0.0.1:$PORT"
@@ -77,12 +83,17 @@ echo "   https://github.com/$REPO  (target branch: integration)"
 
 echo "== 2. engine on :$PORT"
 # Engine data in the run's work dir, not ~/.capcomd/engine/<port> (one per test port, never removed).
-CAPCOMD_ENGINE_DATA="$WORK/engine" CAPCOMD_HARNESS_SOCKET="$WORK/harness.sock" bun src/cli/index.ts serve --port "$PORT" > "$WORK/engine.log" 2>&1 &
-ENGINE_PID=$!
+start_engine() {
+  CAPCOMD_ENGINE_DATA="$WORK/engine" CAPCOMD_HARNESS_SOCKET="$WORK/harness.sock" bun src/cli/index.ts serve --port "$PORT" >> "$WORK/engine.log" 2>&1 &
+  ENGINE_PID=$!
+  bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
+  kill -0 "$ENGINE_PID" 2>/dev/null || die "engine exited: $(tail -3 "$WORK/engine.log")"
+}
+# Every process under serve (its engine host, rivet-engine, …), deepest first.
+tree_pids() { local p c; for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done; echo "$1"; }
 cleanup() { pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
-bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
-kill -0 "$ENGINE_PID" 2>/dev/null || die "engine exited: $(tail -3 "$WORK/engine.log")"
+start_engine
 
 C="bun src/cli/index.ts"
 # CAPCOMD_E2E_VIA=run: the same goal through `capcomd run --planner planner`, which creates the run from the project's
@@ -124,6 +135,24 @@ echo "== 3. planner (run $RUN)"
 T_RUN0=$(date +%s)
 ROOT=$($C spawn "$RUN" --profile planner --task "$GOAL" --key planner --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).agentId)')
 echo "   planner $ROOT"
+if [ "${CAPCOMD_E2E_RESTART:-}" = 1 ]; then
+  # Wait (up to 10 min) for a worker to be running, give it a few seconds of work, then crash the engine.
+  for _ in $(seq 1 120); do
+    $C tree "$RUN" --json 2>/dev/null | grep -q '"profile":"[a-z]*-worker"[^}]*"status":"running"' && break
+    $C tree "$RUN" 2>/dev/null | grep -qE '\[(claude|codex)-worker\] running' && break
+    sleep 5
+  done
+  sleep 8
+  echo "== 3b. engine SIGKILLed while workers run; restarted on the same data"
+  $C tree "$RUN" 2>/dev/null | sed 's/^/   before | /' | head -8
+  KILLED=$(tree_pids "$ENGINE_PID"); EP=$(cat "$WORK/engine/engine.pid" 2>/dev/null || true)
+  kill -9 $KILLED $EP 2>/dev/null || true
+  for _ in $(seq 1 60); do lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 || break; sleep 1; done
+  T_KILL=$(date +%s)
+  start_engine
+  echo "   engine back after $(( $(date +%s) - T_KILL ))s (pid $ENGINE_PID)"
+  RESTARTED=1
+fi
 ( while kill -0 "$ENGINE_PID" 2>/dev/null; do sleep 20; $C tree "$RUN" 2>/dev/null | sed 's/^/   | /' | head -12; done ) &
 WATCH=$!
 set +e
@@ -154,7 +183,8 @@ gh pr list -R "$REPO" --state all --json number,title,state,url -q '.[] | "   #\
 MERGED=$(gh pr list -R "$REPO" --state merged --base integration --json number -q 'length' 2>/dev/null || echo 0)
 echo "== 7b. checkpoints (pushed while the workers ran; deleted once their work merged)"
 CKPTS=$($C events "$RUN" --json 2>/dev/null | grep -c '"AGENT_CHECKPOINT"' || true)
-MERGED_IDS=$(gh pr list -R "$REPO" --state merged --base integration --json title -q '.[].title' | grep -o 'agt-[a-z0-9]*' | sort -u)
+# The agent id is in the PR's branch name (capcomd/<run>/<agt>); titles are the task text.
+MERGED_IDS=$(gh pr list -R "$REPO" --state merged --base integration --json headRefName -q '.[].headRefName' | grep -o 'agt-[a-z0-9]*' | sort -u || true)
 LEFT=0
 for ref in $(git ls-remote "https://github.com/$REPO.git" 'refs/capcomd/checkpoints/*' | awk '{print $2}'); do
   echo "   left: $ref"; echo "$MERGED_IDS" | grep -qx "${ref##*/}" && LEFT=$((LEFT + 1))
@@ -183,5 +213,6 @@ FAILS=""
 [ "$VMS" = clean ] || FAILS="$FAILS vms=$VMS"
 [ "${CKPTS:-0}" -ge 1 ] || FAILS="$FAILS checkpoints=0"
 [ "$LEFT" = 0 ] || FAILS="$FAILS checkpoint-refs-left=$LEFT"
+[ "${CAPCOMD_E2E_RESTART:-}" != 1 ] || [ "${RESTARTED:-}" = 1 ] || FAILS="$FAILS restart=not-done"
 if [ -n "$FAILS" ]; then echo "E2E FAIL:$FAILS"; exit 1; fi
 echo "E2E PASS: planner done, 3/3 reviewed and merged, integration suite green, checkpoints pushed and cleaned up, no VMs left"

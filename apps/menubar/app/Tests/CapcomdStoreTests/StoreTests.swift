@@ -33,7 +33,7 @@ final class StoreTests: XCTestCase {
   func testProjectTitledByGoalWithRun() async throws {
     let s = CapcomdStore(); try feed(s, "contract")
     XCTAssertEqual(s.projects.count, 1)
-    XCTAssertEqual(s.projects[0].id, "prj-1")
+    XCTAssertTrue(s.projects[0].id.hasPrefix("prj-1|"))                   // repository + goal
     XCTAssertEqual(s.projects[0].title, "Fix flaky login tests")          // first line only
     XCTAssertEqual(s.projects[0].runs.map(\.id), ["run-a1"])
     XCTAssertTrue(s.projects[0].isRunning)
@@ -51,10 +51,25 @@ final class StoreTests: XCTestCase {
     send(4, "run-a", "agent.spawned", agent: "agt-3", ["profile": .string("lead"), "repo": .string("ids/v1")])
     send(5, "run-a", "agent.spawned", agent: "agt-4", ["profile": .string("worker"), "repo": .string("matchkey")])
     send(1, "run-b", "agent.spawned", agent: "agt-9", ["profile": .string("critic"), "repo": .string("addriva")])
-    XCTAssertEqual(s.projects.count, 1)                                       // grouped by project id, not goal text
+    XCTAssertEqual(s.projects.count, 1)                                       // a run without a goal yet joins its repo's card
     XCTAssertEqual(s.projects[0].title, "Migrate matchkey to v3.2")
     XCTAssertEqual(s.projects[0].runs.map(\.id), ["run-a", "run-b"])
     XCTAssertEqual(s.projects[0].scopes, ["matchkey", "ids/v1", "addriva"])   // distinct, spawn order, no run ids
+  }
+
+  /// The daemon's projectId is the repository: each goal in it is its own card, reruns of a goal share one.
+  func testEachGoalInARepositoryIsItsOwnCard() {
+    let s = CapcomdStore()
+    func created(_ seq: Int, _ run: String, _ goal: String) {
+      s.receive(.event(Envelope(id: "g\(seq)", scope: run, seq: seq, entity: run, type: "run.created", epochMs: seq * 1000,
+                                projectId: "prj-repo", runId: run, agentId: nil, data: ["goal": .string(goal)])), scope: run)
+    }
+    created(1, "run-1", "Ship the CSV export")
+    created(2, "run-2", "Fix the login bug")
+    created(3, "run-3", "Ship the CSV export ")   // a rerun of the first goal
+    XCTAssertEqual(s.projects.count, 2)
+    XCTAssertEqual(Set(s.projects.map(\.title)), ["Ship the CSV export", "Fix the login bug"])
+    XCTAssertEqual(s.projects.first { $0.title == "Ship the CSV export" }?.runs.map(\.id).sorted(), ["run-1", "run-3"])
   }
 
   func testRunOutcomeFromStateThenAgents() {
@@ -102,7 +117,7 @@ final class StoreTests: XCTestCase {
     send(2, "run-c", "prj-c", "run.failed", ms: 445_000)
 
     let ps = s.projects
-    XCTAssertEqual(ps.map(\.id), ["prj-a", "prj-c", "prj-b"])            // active first, then most recent
+    XCTAssertEqual(ps.map { $0.id.prefix { $0 != "|" } }, ["prj-a", "prj-c", "prj-b"])   // active first, then most recent
     XCTAssertEqual(ps[0].activeRuns.map(\.id), ["run-new"])               // the finished run left the card
     XCTAssertTrue(ps[0].isActive); XCTAssertNil(ps[0].endedLine)
     XCTAssertEqual(ps[2].endedLine, "Done in 4m · 3 repos")
@@ -279,6 +294,33 @@ final class StoreTests: XCTestCase {
     XCTAssertNil(s.agentTree(runId: "run-l").first?.activity)
     XCTAssertEqual(s.lastSeq[scope], 7)   // ephemeral frames never move the cursor
     XCTAssertEqual(s.duplicatesDropped, 0)
+  }
+
+  /// The provider comes from `Agent.provider` on snapshots, or agent.spawned's `agent.provider`, else `agent.kind`.
+  func testProviderFromSpawnSpecAndSnapshot() async throws {
+    let s = CapcomdStore()
+    func send(_ seq: Int, _ type: String, agent: String? = nil, _ data: [String: JSONValue]) {
+      s.receive(.event(Envelope(id: "p\(seq)", scope: "run-p", seq: seq, entity: agent ?? "run-p", type: type, epochMs: seq,
+                                projectId: "prj-p", runId: "run-p", agentId: agent, data: data)), scope: "run-p")
+    }
+    send(1, "run.created", ["goal": .string("Mixed team")])
+    send(2, "agent.spawned", agent: "agt-1", ["profile": .string("planner"),
+                                               "agent": .object(["provider": .string("claude"), "kind": .string("claude-code"), "model": .string("claude-opus-5-5")])])
+    send(3, "agent.spawned", agent: "agt-2", ["profile": .string("worker"), "agent": .object(["kind": .string("codex")])])
+    send(4, "agent.spawned", agent: "agt-3", ["profile": .string("critic"), "agent": .object(["kind": .string("fake")])])
+    let agents = s.runs["run-p"]?.agents
+    XCTAssertEqual(agents?["agt-1"]?.provider, .claude); XCTAssertEqual(agents?["agt-1"]?.model, "claude-opus-5-5")
+    XCTAssertEqual(agents?["agt-2"]?.provider, .codex); XCTAssertNil(agents?["agt-2"]?.model)
+    XCTAssertNil(agents?["agt-3"]?.provider)
+
+    let t = CapcomdStore(), scope = "lifecycle:run-q"
+    let agent = #"{"id":"agt-1","runId":"run-q","parent":null,"depth":0,"profile":"lead","status":"running","text":"x","task":null,"taskAttachment":null,"result":null,"updatedAt":null,"provider":"codex","model":"gpt-5-codex"}"#
+    for (e, d) in [("snapshot.run", #"{"run":{"id":"run-q","projectId":"prj-q","label":null,"state":"running","goal":"Ship it"}}"#),
+                   ("snapshot.agents", #"{"agents":[\#(agent)]}"#), ("snapshot.approvals", #"{"approvals":[]}"#), ("snapshot.end", #"{"snapshotSeq":3}"#)] {
+      t.receive(StreamFrame.parse(event: e, data: d), scope: scope)
+    }
+    XCTAssertEqual(t.runs["run-q"]?.agents["agt-1"]?.provider, .codex)
+    XCTAssertEqual(t.runs["run-q"]?.agents["agt-1"]?.model, "gpt-5-codex")
   }
 
   // MARK: lifecycle (PR #40)

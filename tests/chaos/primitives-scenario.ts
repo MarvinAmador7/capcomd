@@ -101,24 +101,30 @@ if (mode === "merge") {
   process.exit(0);
 }
 if (mode === "driverkill") {
-  // Kill the detached driver while its push is in flight (the engine keeps running the push).
+  // Kill the detached driver while its push is in flight (the engine keeps running the push). With the agent workflow
+  // (ADR-022) there is no driver: the engine host itself dies mid-step (killpoint workflow.watch.running) and the
+  // harness restarts it, so this only awaits.
+  const workflow = process.env.CAPCOMD_AGENT_WORKFLOW !== "0";
   const { readFileSync } = await import("fs");
+  const { join } = await import("path");
+  const { stateDir } = await import("../../src/utils/home");
   const { createClient } = await import("rivetkit/client");
   const { runId } = await runNew({ budget: { usd: 2 }, label: `chaos ${tag}`, key: `chaos-${tag}` });
   const d = await spawnAgent({ runId, profile: "coder", task: "slow push", key: "d", budget: { usd: 1 } });
   const c: any = createClient({ endpoint: process.env.CAPCOMD_ENDPOINT! });
   const w = c.worker.getOrCreate([runId, d.agentId]);
   let killed = false;
-  for (let i = 0; i < 200 && !killed; i++) {
+  for (let i = 0; i < 200 && !killed && !workflow; i++) {
     const p = (await w.getPushes({}).catch(() => [])) as any[];
     if (p.some((x) => x.live)) {
-      const pid = Number(readFileSync(`.relay/drivers/${d.agentId}.pid`, "utf8"));
+      // Where driveAgent writes it: <state dir>/drivers (the checkout's .relay/, or $CAPCOMD_HOME/state).
+      const pid = Number(readFileSync(join(stateDir(), "drivers", `${d.agentId}.pid`), "utf8"));
       process.kill(pid, "SIGKILL");
       killed = true;
       console.log(`[DRIVER-KILL] pid ${pid} mid-push`);
     } else await new Promise((r) => setTimeout(r, 100));
   }
-  if (!killed) { const p = await w.getPushes({}); if (!p.length || p[0].state !== "done") { console.log("✗ never saw a live push"); process.exit(1); } }
+  if (!killed && !workflow) { const p = await w.getPushes({}); if (!p.length || p[0].state !== "done") { console.log("✗ never saw a live push"); process.exit(1); } }
   const r: any = await awaitAgents(runId, [d.agentId], { timeoutMs: 90_000 });
   if (r.timeout || r.agents[0].status !== "done") { console.log(`✗ d not done: ${JSON.stringify(r.agents[0])}`); process.exit(1); }
   console.log(`PRIM ${JSON.stringify({ runId, d: d.agentId, mode, killed })}`);

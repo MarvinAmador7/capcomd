@@ -70,7 +70,7 @@ export function eventGapViolations(rows: SeqRow[]): string[] {
  *  lostTasks:   a `merged` task's change is on the target exactly once, and nothing is on the
  *               target for a task that is not recorded `merged`.
  */
-export async function auditRun(runId: string, endpoint = "http://127.0.0.1:6420", repo?: { bare: string; target: string }): Promise<InvariantReport> {
+export async function auditRun(runId: string, endpoint: string, repo?: { bare: string; target: string }): Promise<InvariantReport> {
   const client = createClient<Registry>({ endpoint });
   const violations: string[] = [];
 

@@ -6,8 +6,9 @@
 // is paused, run.resumed when one resumes, and run.completed / run.failed / run.cancelled when the last live agent ends
 // (always run.cancelled when a run-wide cancel ended it).
 import { z } from "zod";
-import { approvalIdFor, toEnvelope, type RawEvent } from "./source";
+import { approvalIdFor, mergeApprovalText, toEnvelope, type RawEvent } from "./source";
 import { dottedType, type HarnessEvent } from "./envelope";
+import { UntrustedText } from "./legacy-events";
 
 /** Trusted, machine-readable reason for a state change. Agent-written detail (cancel reason, error) stays in its own untrusted field. */
 export const LifecycleCause = z.enum([
@@ -24,7 +25,8 @@ export const LIFECYCLE_TYPES = [
 ] as const;
 export type LifecycleType = (typeof LIFECYCLE_TYPES)[number];
 
-const runData = z.looseObject({ cause: LifecycleCause, agentId: z.string().nullable().describe("Agent whose change moved the run, if any") });
+const runData = z.looseObject({ cause: LifecycleCause, agentId: z.string().nullable().describe("Agent whose change moved the run, if any"),
+	reason: UntrustedText.nullable().optional().describe("run.failed / run.cancelled of a run that ended by itself (run.ended, no agent moved it): why, e.g. the error that kept its first agent from starting") });
 /** New run.* payloads (agent/approval payloads are the existing ones plus `cause`). */
 export const RunLifecycleData = {
 	"run.started": runData, "run.paused": runData, "run.resumed": runData,
@@ -65,11 +67,23 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 			out.push(env); continue;
 		}
 		if (t === "RUN_DELETED" || t === "run.deleted") { runEvt({ ...e, agentId: null }, "run.deleted", "deleted"); run = "ended"; continue; }
+		// The run ended by itself (scope.endRun): it couldn't start its first agent, or it was stopped before any agent ran.
+		if (t === "RUN_ENDED" || t === "run.ended") {
+			if (run === "ended") continue;
+			const d = e.data as { state?: string; reason?: string | null; by?: string | null };
+			const failed = d.state === "failed";
+			runEvt({ ...e, agentId: null }, failed ? "run.failed" : "run.cancelled", failed ? "error" : "cancelled");
+			const env = out.at(-1)!;
+			env.data = { ...env.data, reason: d.reason ?? null, ...(d.by ? { by: d.by } : {}) };
+			if (failed) env.text = "The run could not start.";
+			run = "ended"; anyFailed = false; anyDone = false; runCancel = false;
+			continue;
+		}
 		if (t === "MERGE_AWAITING_APPROVAL") {
-			const d = e.data as any;
+			const d = e.data as any, text = mergeApprovalText(d);
 			const env = toEnvelope(runId, { ...e, type: "approval.requested", data: {
-				approvalId: approvalIdFor(runId, String(d.id)), kind: "merge", question: `Merge ${d.ref ?? "this work"} into ${d.target ?? "the target"}?`,
-				requestedBy: { agentId: e.agentId, runId }, subject: { target: d.target ?? null, ref: d.ref ?? null }, expiresAt: null, cause: "approval_needed",
+				approvalId: approvalIdFor(runId, String(d.id)), kind: "merge", question: text.question,
+				requestedBy: { agentId: e.agentId, runId }, subject: text.subject, expiresAt: null, cause: "approval_needed",
 			} }, next(k), projectId);
 			out.push(env); continue;
 		}
@@ -110,6 +124,12 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 		}
 	}
 	return out;
+}
+/** Where the run itself stands in the lifecycle feed: new (nothing ran yet), running, paused, or ended. */
+export function runPhase(runId: string, evs: RawEvent[]): "new" | "running" | "paused" | "ended" {
+	const last = lifecycleEvents(runId, evs).filter((e) => e.type.startsWith("run.") && e.type !== "run.created").at(-1)?.type;
+	if (!last) return "new";
+	return last === "run.started" || last === "run.resumed" ? "running" : last === "run.paused" ? "paused" : "ended";
 }
 export const isLifecycleType = (t: string): t is LifecycleType => (LIFECYCLE_TYPES as readonly string[]).includes(t);
 export { dottedType };

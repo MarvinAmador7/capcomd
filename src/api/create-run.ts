@@ -2,16 +2,18 @@
 // directory. The daemon runs that command itself, so the CLI stays the one place that resolves profiles, the planner,
 // the engine and the background process; this file only decides the directory and environment it runs in.
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
-import { applyConfig, projectConfigPath, readConfig, userConfigPath } from "../config/store";
+import { existsSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import { defaultAgentsFile } from "../utils/home";
+import { applyConfig, projectConfigPath, readConfig } from "../config/store";
 import { REPO_ENV_KEYS } from "../merge/config";
 import { env as envVar } from "../utils/env";
 import { selfArgv } from "../utils/self";
 import { CreateRunError, type CreateRunInput } from "./source";
+import { withSandbox } from "../providers/run-sandbox";
+import { sandboxAvailable } from "./run-options";
 
 type Env = Record<string, string | undefined>;
-const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
 
 /**
  * Where a run starts and with which settings.
@@ -21,8 +23,14 @@ const real = (p: string) => { try { return realpathSync(p); } catch { return res
  *   project's agent profiles and run defaults (checks, reviewer, target) apply too.
  * - `repo` omitted: the daemon's own settings and directory, when they name a repository (CAPCOMD_REPO).
  * Either way, no repository is a CreateRunError: a run without one would only record dry-run merges.
+ * `sandbox` (POST /v1/runs `sandbox`): the run's own CAPCOMD_SANDBOX, in this one command's environment (the CLI also
+ * gets `--sandbox`, which records it with the run for the engine); the daemon's own setting is never changed.
  */
-export function launchContext(repo: string | undefined, base: Env = process.env, cwd = process.cwd()): { cwd: string; env: Env; repo: string } {
+export function launchContext(repo: string | undefined, base: Env = process.env, cwd = process.cwd(), o: { sandbox?: string } = {}): { cwd: string; env: Env; repo: string } {
+	const ctx = contextFor(repo, base, cwd);
+	return o.sandbox ? { ...ctx, env: withSandbox(ctx.env, o.sandbox) } : ctx;
+}
+function contextFor(repo: string | undefined, base: Env, cwd: string): { cwd: string; env: Env; repo: string } {
 	if (repo === undefined) {
 		const r = envVar("REPO", base);
 		if (!r) throw new CreateRunError("repo is required: this daemon has no default repository (CAPCOMD_REPO, e.g. in ~/.capcomd/config.json). Pass repo, the absolute path of a project checkout set up with `capcomd setup project`.");
@@ -31,17 +39,27 @@ export function launchContext(repo: string | undefined, base: Env = process.env,
 	if (!isAbsolute(repo)) throw new CreateRunError(`repo must be an absolute path, got ${JSON.stringify(repo)}`);
 	const dir = resolve(repo);
 	if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new CreateRunError(`repo ${dir} is not a directory on this machine`);
-	const project = projectConfigPath(dir);
-	// The nearest config from a directory in $HOME can be capcomd's own (~/.capcomd/config.json): that is no project.
-	if (!project || real(project) === real(userConfigPath(base))) throw new CreateRunError(`${dir} is not a capcomd project (no .capcomd/config.json in it or above it). Run \`capcomd setup project\` in it first.`);
+	const project = projectConfigPath(dir, base);   // never capcomd's own ~/.capcomd/config.json
+	if (!project) throw new CreateRunError(`${dir} is not a capcomd project (no .capcomd/config.json in it or above it). Run \`capcomd setup project\` in it first.`);
 	const env: Env = { ...base };
 	for (const k of REPO_ENV_KEYS) { delete env[`CAPCOMD_${k}`]; delete env[`RELAY_${k}`]; }
+	// The project's own profiles (.capcomd/agents.json, which the CLI finds from its directory) win over the daemon's file.
+	if (existsSync(join(dir, ".capcomd", "agents.json"))) { delete env.CAPCOMD_AGENTS_FILE; delete env.RELAY_AGENTS_FILE; }
 	// CAPCOMD_NO_CONFIG (tests) skips the user's settings, never the project the request named.
 	if (base.CAPCOMD_NO_CONFIG) { for (const [k, v] of Object.entries(readConfig(project).env ?? {})) if (env[k] === undefined && typeof v === "string") env[k] = v; }
 	else applyConfig(env, dir);
 	const r = envVar("REPO", env);
 	if (!r) throw new CreateRunError(`${project} names no repository (CAPCOMD_REPO). Run \`capcomd setup project\` in ${dir}.`);
 	return { cwd: dir, env, repo: r };
+}
+
+/**
+ * The env the daemon itself evaluates a run of `repo` in (GET /v1/run-options?repo=): the launch env, with the agents
+ * file the CLI finds from the project's directory named explicitly (this process's directory is not the project's).
+ */
+export function projectSource(repo: string, base: Env = process.env): Env {
+	const ctx = launchContext(repo, base);
+	return { ...ctx.env, CAPCOMD_AGENTS_FILE: envVar("AGENTS_FILE", ctx.env) ?? defaultAgentsFile(ctx.env, ctx.cwd) };
 }
 
 /** The CLI errors that mean "not like this" (422), as opposed to a daemon fault. */
@@ -51,11 +69,18 @@ const REFUSALS = new Set(["usage", "config", "not_found", "conflict"]);
  * Run `capcomd run --detach --json` for `input` and wait for it to hand the run to its background process (a second or
  * two: it checks the profile and the engine, then forks). Resolves with the run's repository.
  */
-export async function startDetachedRun(input: CreateRunInput & { runId: string }, o: { env?: Env; cwd?: string; timeoutMs?: number } = {}): Promise<{ repo: string; log: string | null }> {
-	const ctx = launchContext(input.repo, o.env ?? process.env, o.cwd ?? process.cwd());
+export async function startDetachedRun(input: CreateRunInput & { runId: string }, o: { env?: Env; cwd?: string; timeoutMs?: number; sandboxCheck?: typeof sandboxAvailable; spawn?: typeof spawn } = {}): Promise<{ repo: string; log: string | null }> {
+	if (input.profile && input.driver) throw new CreateRunError("profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
+	if (input.profile && input.effort) throw new CreateRunError("profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
+	const ctx = launchContext(input.repo, o.env ?? process.env, o.cwd ?? process.cwd(), { ...(input.sandbox ? { sandbox: input.sandbox } : {}) });
+	if (input.sandbox) {
+		const s = await (o.sandboxCheck ?? sandboxAvailable)(input.sandbox, ctx.env);
+		if (!s.available) throw new CreateRunError(`sandbox ${input.sandbox} isn't available: ${s.reason}`);
+	}
 	const [cmd, ...args] = selfArgv("run", "--detach", "--json", "--run-id", input.runId,
-		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []), "--", input.goal);
-	const child = spawn(cmd!, args, { cwd: ctx.cwd, env: ctx.env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"] });
+		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []),
+		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []), "--", input.goal);
+	const child = (o.spawn ?? spawn)(cmd!, args, { cwd: ctx.cwd, env: ctx.env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"] });
 	let stdout = "", stderr = "";
 	child.stdout!.on("data", (b) => { stdout += b; });
 	child.stderr!.on("data", (b) => { stderr += b; });

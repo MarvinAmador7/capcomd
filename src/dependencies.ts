@@ -29,15 +29,26 @@ function tracedModel(model: ModelClient, name: string): ModelClient {
   }));
 }
 
+/** A git argv's subcommand, past global options (`git -c k=v -C dir push …`), and for a push the ref it pushes. */
+export function gitSpanOf(argv: string[]): { op: string; ref?: string } {
+  let i = 1;
+  for (let a = argv[i]; a?.startsWith("-"); a = argv[i]) i += a === "-c" || a === "-C" ? 2 : 1;
+  const op = argv[i] ?? "git";
+  if (op !== "push") return { op };
+  const positional = argv.slice(i + 1).filter((a) => !a.startsWith("-"));   // [remote, ref…]
+  return { op, ref: positional[1] };
+}
+
 function tracedProvider(provider: SandboxProvider, name: string): SandboxProvider {
   return traceMethods("sandbox", provider, (method, args, result) => {
     const attributes: Record<string, any> = { "sandbox.provider": name, "sandbox.operation": method };
     if (typeof args[0] === "string") attributes["sandbox.vm_id"] = args[0];
     if (result && typeof result === "object" && "id" in result) attributes["sandbox.vm_id"] = result.id;
     if (method === "exec" && Array.isArray(args[1]) && args[1][0] === "git") {
-      attributes["git.operation"] = args[1][1];
-      if (args[1][1] === "push") attributes["git.ref"] = args[1][3];
-      return { name: `git.${args[1][1]}`, attributes };
+      const { op, ref } = gitSpanOf(args[1] as string[]);
+      attributes["git.operation"] = op;
+      if (ref) attributes["git.ref"] = ref;
+      return { name: `git.${op}`, attributes };
     }
     return { name: `sandbox.${method}`, attributes };
   });
@@ -81,4 +92,31 @@ export function getDependencies(): Dependencies {
 
 export function resetDependencies() {
   deps = null;
+  bySandbox.clear();
+}
+
+// Runs started on another sandbox than the daemon's (`capcomd run --sandbox`): one provider per sandbox name.
+const bySandbox = new Map<string, SandboxProvider>();
+/** The provider for a sandbox name; the daemon's own (getDependencies) for its CAPCOMD_SANDBOX or no name. */
+export function providerNamed(name: string | null | undefined): SandboxProvider {
+  if (!name || name === sandboxName()) return getDependencies().provider;
+  let p = bySandbox.get(name);
+  if (!p) {
+    const raw = providerFromEnv({ ...process.env, CAPCOMD_SANDBOX: name, RELAY_SANDBOX: undefined });
+    // Docker doesn't delete containers by itself (ADR-020): `capcomd serve` sweeps its own sandbox's; this one's too.
+    if (name === "docker" && typeof (raw as any).sweep === "function") {
+      const sweep = () => { (raw as any).sweep().catch(() => {}); };
+      sweep();
+      setInterval(sweep, 5 * 60_000).unref?.();
+    }
+    p = tracedProvider(raw, raw.constructor?.name === "FakeProvider" ? "fake" : raw.constructor?.name ?? "provider");
+    bySandbox.set(name, p);
+  }
+  return p;
+}
+/** The provider a run's agents and checks use: its recorded sandbox, else the daemon's. */
+export async function providerForRun(runId: string | null | undefined): Promise<{ provider: SandboxProvider; sandbox: string | null }> {
+  const { runSandbox } = await import("./providers/run-sandbox");
+  const sandbox = await runSandbox(runId);
+  return { provider: providerNamed(sandbox), sandbox };
 }

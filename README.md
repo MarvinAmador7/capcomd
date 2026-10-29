@@ -135,6 +135,8 @@ curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.
 /plugin install capcomd --marketplace MarvinAmador7/capcomd
 # Codex
 codex plugin marketplace add MarvinAmador7/capcomd     # then install capcomd from /plugins
+# Hermes (Nous Research): after installing the CLI, in your repository
+capcomd setup agent      # adds capcomd's MCP server and skills to ~/.hermes (docs/integration-agents.md#hermes)
 ```
 
 **2. Ask your agent to set it up**, in the repository the agents should work on:
@@ -170,6 +172,7 @@ published by CI with [provenance](https://docs.npmjs.com/generating-provenance-s
 |---|---|---|
 | Claude Code | The capcomd plugin: MCP tools + orchestration and setup skills | Works, verified live: Claude Code ran a 3-worker swarm with only the plugin's tools |
 | Codex | The same plugin from the marketplace (`/plugins`) | Built to OpenAI's plugin format; not yet tried in Codex |
+| Hermes | `capcomd setup agent`: `capcomd mcp` in Hermes's `config.yaml` + the skills ([how](docs/integration-agents.md#hermes)) | Setup tested against Hermes's documented config; not yet driven live |
 | Any other MCP client | `capcomd mcp` ([how](docs/integration-agents.md#mcp)) | Works |
 | Any agent with a shell | The CLI with `--json` and [the skill](plugins/capcomd/skills/capcomd-orchestration/SKILL.md) | Works, verified live |
 
@@ -246,7 +249,9 @@ agent profiles.
   [docs/output-contract.md](docs/output-contract.md).
 - **MCP server** (`capcomd mcp`): the primitives as tools for your agent, with bounded waits; it starts the engine
   when none is running. See [docs/integration-agents.md](docs/integration-agents.md#mcp).
-- **Other callers** (Hermes, scripts, services): see [docs/integration-agents.md](docs/integration-agents.md).
+- **Hermes** (Nous Research's agent, also from Telegram, Slack and the rest of its gateway): `capcomd setup agent`
+  registers the MCP server and installs the skills; see [docs/integration-agents.md](docs/integration-agents.md#hermes).
+- **Other callers** (scripts, services): see [docs/integration-agents.md](docs/integration-agents.md).
 
 ## Documentation
 

@@ -5,7 +5,7 @@
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
@@ -13,8 +13,11 @@ import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
 import { CreateRunError, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
-import { harnessState, type HarnessState } from "./state";
+import { harnessState, type DaemonEvent, type HarnessState } from "./state";
+import { parseSettingsPatch } from "./sandboxes";
 import { runFiles } from "./run-files";
+import { isListedProvider, PROVIDER_LABEL } from "../providers/registry";
+import { resourceActionEvent, resourceDeletedEvent } from "../providers/machine-audit";
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -28,7 +31,9 @@ export function servedType(bytes: Uint8Array, hint: string | null): { type: stri
 	return { type: "application/octet-stream", inline: false };
 }
 const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "already_decided", 422: "invalid" };
-const err = (c: Context, status: 401 | 403 | 404 | 409 | 422, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
+/** POST routes that need the configure scope (projects.setup, projects.git). */
+const CONFIGURE_POSTS = new Set(["/v1/projects", "/v1/projects/git-init", "/v1/projects/publish"]);
+const err = (c: Context, status: 401 | 403 | 404 | 409 | 422 | 503, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
 
 /** agent.activity_changed: at most one frame per agent per this many ms (ACTIVITY_DOC). */
 export const ACTIVITY_MS = 1000;
@@ -52,12 +57,30 @@ export function harnessApp(o: ServerOptions) {
 	// runs.create: (clientId, key) → in-flight start.
 	type Outcome = { status: number; body: object };
 	const creating = new Map<string, { hash: string; done: Promise<Outcome> }>();
+	// Daemon/project streams: known runs missing from the list whose log was already read for run.deleted. Each is read
+	// once per daemon (again only after it is listed and then missing again), never on every 500ms tick: a state file
+	// holding hundreds of runs this daemon doesn't list (another ledger's) turned every tick into hundreds of actor calls.
+	const deletionChecked = new Set<string>();
 
+	/** A daemon-scope event (state.recordDaemonEvent) as the stream and GET /v1/events?scope=daemon send it. */
+	const daemonEnvelope = (e: DaemonEvent) => ({
+		v: 1 as const, id: `evt_daemon_${e.seq}`, scope: "daemon", seq: e.seq, entity: e.entity, entitySeq: e.entitySeq, type: e.type, typeVersion: 1,
+		durability: "durable" as const, ts: isoTs(e.at), epochMs: e.at, projectId: null, runId: null, agentId: null, text: e.text, data: e.data,
+	});
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
 	const router = {
 		health: os.health.handler(() => ({ ok: true as const, api: "harness.v1" as const, version: src.version, capabilities: [...CAPABILITY_NAMES] })),
-		projects: { list: os.projects.list.handler(() => src.projects()) },
+		projects: {
+			list: os.projects.list.handler(() => src.projects()),
+			inspect: os.projects.inspect.handler(({ input }) => src.inspectProject(input.path)),
+			// Served natively below (Idempotency-Key, the configure scope): this handler is never reached.
+			setup: os.projects.setup.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			// Served natively below (refusals carry `field` and `problem`; the POSTs take an Idempotency-Key): never reached.
+			gitInit: os.projects.gitInit.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			publishOptions: os.projects.publishOptions.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			publish: os.projects.publish.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+		},
 		runs: {
 			list: os.runs.list.handler(() => src.runs()),
 			get: os.runs.get.handler(async ({ input }) => (await src.runs()).find((r) => r.id === input.runId) ?? (() => { throw nf(input.runId); })()),
@@ -105,9 +128,36 @@ export function harnessApp(o: ServerOptions) {
 			get: os.attachments.get.handler(async ({ input }) => (await src.attachment(input.runId, input.attachmentId)) ?? (() => { throw nf(input.attachmentId); })()),
 			content: os.attachments.content.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
+		runOptions: { get: os.runOptions.get.handler(async ({ input }) => {
+			try { return await src.runOptions(input.repo); } catch (e) {
+				if (e instanceof CreateRunError) throw new ORPCError("UNPROCESSABLE_CONTENT", { message: e.message });
+				throw e;
+			}
+		}) },
 		skills: { list: os.skills.list.handler(() => src.skills()) },
+		// ?sandbox= (capability sandboxes): one place's rows; a name that isn't a listed place is 404.
+		logins: { list: os.logins.list.handler(async ({ input }) => {
+			if (input.sandbox !== undefined && !isListedProvider(input.sandbox)) throw nf(`sandbox ${input.sandbox.slice(0, 64)}`);
+			return { logins: (await src.logins()).filter((l) => input.sandbox === undefined || l.sandbox === input.sandbox) };
+		}) },
+		environments: { list: os.environments.list.handler(async ({ input }) => {
+			if (input.sandbox !== undefined && !isListedProvider(input.sandbox)) throw nf(`sandbox ${input.sandbox.slice(0, 64)}`);
+			return { environments: (await src.environments()).filter((e) => input.sandbox === undefined || e.sandbox === input.sandbox) };
+		}) },
+		// ADR-021 (capabilities sandboxes, sandboxes.resources). Unlisted providers (the test fakes) are 404 like unknown ones.
+		sandboxes: {
+			list: os.sandboxes.list.handler(async () => ({ sandboxes: await src.sandboxes() })),
+			get: os.sandboxes.get.handler(async ({ input }) => (await src.sandbox(input.name)) ?? (() => { throw nf(`sandbox ${input.name.slice(0, 64)}`); })()),
+			resources: os.sandboxes.resources.handler(async ({ input }) => (await src.sandboxResources(input.name, { ...(input.limit ? { limit: input.limit } : {}), ...(input.cursor ? { cursor: input.cursor } : {}) })) ?? (() => { throw nf(`sandbox ${input.name.slice(0, 64)}`); })()),
+			resource: os.sandboxes.resource.handler(async ({ input }) => {
+				if (!isListedProvider(input.name)) throw nf(`sandbox ${input.name.slice(0, 64)}`);
+				return (await src.sandboxResource(input.name, input.id)) ?? (() => { throw nf(`resource ${input.id.slice(0, 128)}`); })();
+			}),
+		},
+		service: { get: os.service.get.handler(() => src.service()) },
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
+				if (input.scope === "daemon") return state.daemonEvents(input.after ?? 0).map(daemonEnvelope);
 				if (!input.scope.startsWith("run-")) return [];
 				return envelopes(input.scope, await src.events(input.scope, 0)).filter((e) => e.seq > (input.after ?? 0));
 			}),
@@ -120,7 +170,11 @@ export function harnessApp(o: ServerOptions) {
 		if (c.req.method === "GET" && c.req.path === "/v1/health") return next();
 		const cl = authenticate(c.req.header("authorization"), clients());
 		if (!cl) return err(c, 401, "unauthorized", "missing or unknown bearer token (create one with `capcomd clients add`)");
-		const need: ClientScope = c.req.method === "GET" ? "read" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
+		// PATCH changes settings (capability sandboxes.settings), POST /v1/projects sets a folder up (projects.setup) and
+		// …/git-init and …/publish start and publish its repository (projects.git): the configure scope, which steering a run
+		// doesn't give.
+		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && CONFIGURE_POSTS.has(c.req.path));
+		const need: ClientScope = c.req.method === "GET" ? "read" : configures ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
 		if (!cl.scopes.includes(need)) return err(c, 403, "forbidden", `token lacks the ${need} scope`);
 		c.set("client", cl);
 		return next();
@@ -177,12 +231,33 @@ export function harnessApp(o: ServerOptions) {
 		const parsed = CreateRunBody.safeParse(await c.req.json().catch(() => undefined));
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
-			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?}");
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?, driver?, effort?, sandbox?}");
 		}
 		const p = parsed.data;
-		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}) };
+		if (p.profile !== undefined && p.driver !== undefined) return err(c, 422, "invalid", "profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
+		if (p.profile !== undefined && p.effort !== undefined) return err(c, 422, "invalid", "profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
+		if (p.effort !== undefined || p.sandbox !== undefined) {
+			// GET /v1/run-options for this run (the body's project, when it names one): the chosen driver, else the default.
+			let drivers;
+			try { drivers = (await src.runOptions(p.repo)).drivers; } catch (e) {
+				if (e instanceof CreateRunError) return err(c, 422, "invalid", e.message);
+				throw e;
+			}
+			const d = p.driver !== undefined ? drivers.find((x) => x.provider === p.driver) : drivers.find((x) => x.default);
+			if (p.effort !== undefined) {
+				if (!d) return err(c, 422, "invalid", `effort needs a driver: ${p.repo !== undefined ? "this project" : "this daemon"} has no default planner profile (run capcomd setup), so send driver too`);
+				if (!d.efforts.includes(p.effort)) return err(c, 422, "invalid", d.efforts.length ? `effort ${JSON.stringify(p.effort)} isn't a ${d.label} level: use one of ${d.efforts.join(", ")}` : `${d.label}'s effort can't be set`);
+			}
+			// Logins and agent environments are per sandbox: a driver that can't run in the chosen one is refused now, not
+			// minutes later (capability runs.options.sandbox).
+			const fit = p.sandbox !== undefined ? d?.sandboxes?.[p.sandbox] : undefined;
+			if (fit && !fit.available) return err(c, 422, "invalid", `${d!.label} can't drive a run in ${PROVIDER_LABEL[p.sandbox as keyof typeof PROVIDER_LABEL] ?? p.sandbox}: ${fit.reason ?? "unavailable"}`);
+		}
+		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox as NonNullable<CreateRunInput["sandbox"]> } : {}) };
 		const kid = `${c.get("client").clientId}\u0000runs.create\u0000${key}`;
-		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null]);
+		// driver and sandbox are part of the body (another value: idempotency_conflict); a request without them hashes as
+		// before they existed, so a retry across the upgrade still replays.
+		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null, ...(input.driver || input.sandbox || input.effort ? [input.driver ?? null, input.sandbox ?? null, ...(input.effort ? [input.effort] : [])] : [])]);
 		const conflict = () => err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different body");
 		const replay = (r: Outcome) => c.json(r.body, r.status as 201, r.status === 201 ? { "idempotent-replayed": "true" } : {});
 		const prior = state.key(kid);
@@ -315,6 +390,112 @@ export function harnessApp(o: ServerOptions) {
 		});
 	});
 
+	// PATCH /v1/sandboxes/{name}/settings (capability sandboxes.settings; the configure scope, checked above). No
+	// Idempotency-Key: `rev` makes a retry safe (a retry after a change that landed is 409, and the value is already set).
+	app.patch("/v1/sandboxes/:name/settings", async (c) => {
+		const name = c.req.param("name");
+		const patch = parseSettingsPatch(await c.req.json().catch(() => null));
+		if (typeof patch === "string") return err(c, 422, "invalid", patch);
+		const r = await src.updateSandboxSettings(name, patch);
+		if (!r.ok) return err(c, r.status, r.code, r.message, r.rev !== undefined ? { rev: r.rev } : {});
+		const client = c.get("client");
+		const place = PROVIDER_LABEL[name as keyof typeof PROVIDER_LABEL] ?? name;
+		for (const ch of r.changes) {
+			const f = r.detail.settings.find((x) => x.id === ch.id);
+			const say = (v: string | null) => (v === null ? "unset" : f?.choices.find((x) => x.value === v)?.label ?? v);
+			state.recordDaemonEvent({
+				type: "sandbox.settings_changed", entity: `sandbox:${name}`,
+				text: `${place}: ${f?.label ?? ch.id} is now ${say(ch.to)} (was ${say(ch.from)}).`,
+				data: { sandbox: name, id: ch.id, from: ch.from, to: ch.to, clientId: client.clientId },
+			});
+		}
+		return c.json(r.detail, 200);
+	});
+
+	// POST /v1/sandboxes/{name}/resources/{id}/actions/{action} (capability sandboxes.actions; the steer scope, as
+	// cancelling a run). Today only delete. The write-route Idempotency-Key rules (a replay answers the first 200 and
+	// acts once). No body, no parameters: the machine and the action are the whole request. Each action that changed
+	// something is audited on the daemon stream: sandbox.resource_action, then sandbox.resource_deleted (cause action).
+	app.post("/v1/sandboxes/:name/resources/:id/actions/:action", (c) => {
+		const name = c.req.param("name"), id = c.req.param("id"), action = c.req.param("action");
+		return idempotent(c, ["sandboxes.action", name, id, action], async (client) => {
+			const r = await src.sandboxAction(name, id, action, `client:${client.clientId}`);
+			if (!r.ok) return { status: r.status, body: { code: r.code, message: r.message } };
+			if (r.changed) {
+				state.recordDaemonEvent(resourceActionEvent(name, id, action, r.owner, client.clientId));
+				state.recordDaemonEvent(resourceDeletedEvent(name, id, "action"));
+			}
+			return { status: 200, body: { resource: r.resource, changed: r.changed } };
+		});
+	});
+
+	// POST /v1/projects (capability projects.setup; the configure scope, checked above): set a folder up as a project. The
+	// write-route Idempotency-Key rules: a replay answers the first 200 and writes nothing again; only a 200 is kept. A
+	// setup that changed something is audited on the daemon stream (project.configured).
+	app.post("/v1/projects", async (c) => {
+		const parsed = ProjectSetupBody.safeParse(await c.req.json().catch(() => undefined));
+		if (!parsed.success) {
+			const i = parsed.error.issues[0];
+			const field = typeof i?.path[0] === "string" ? i.path[0] : undefined;
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {path, mode, target, check?, agents, budgetUsd?, expect?, gitignore?}", field ? { field } : {});
+		}
+		const b = parsed.data;
+		return idempotent(c, ["projects.setup", b.path, b.mode, b.target, b.check ?? null, b.agents, b.budgetUsd ?? null, b.expect ? (b.expect.repo ?? null) : "-", b.gitignore ?? false], async (client) => {
+			const r = await src.setUpProject(b);
+			if (!r.ok) {
+				const { ok: _, status, ...body } = r;
+				return { status, body };
+			}
+			if (r.changed) state.recordDaemonEvent({
+				type: "project.configured", entity: `project:${r.project.name}`,
+				text: r.event.text, data: { path: r.project.root, name: r.project.name, ...r.event.data, clientId: client.clientId },
+			});
+			return { status: 200, body: { project: r.project, changed: r.changed } };
+		});
+	});
+
+	// Capability projects.git: start a folder's repository and publish it to GitHub, so it can then be set up (above). The
+	// POSTs follow the write-route Idempotency-Key rules and are audited on the daemon stream; refusals carry the daemon's
+	// sentence, the field it's about and the inspect problem code.
+	const bodyOf = async <T>(c: Context, schema: { safeParse(v: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ path: PropertyKey[]; message: string }> } } }, shape: string) => {
+		const parsed = schema.safeParse(await c.req.json().catch(() => undefined));
+		if (parsed.success) return { body: parsed.data };
+		const i = parsed.error.issues[0];
+		const field = typeof i?.path[0] === "string" ? i.path[0] : undefined;
+		return { refused: err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : `body must be a JSON object ${shape}`, field ? { field } : {}) };
+	};
+	const refusal = (r: { status: number; code: string; message: string; field?: string; problem?: string }): Outcome =>
+		({ status: r.status, body: { code: r.code, message: r.message, ...(r.field ? { field: r.field } : {}), ...(r.problem ? { problem: r.problem } : {}) } });
+	app.post("/v1/projects/git-init", async (c) => {
+		const p = await bodyOf(c, ProjectGitInitBody, "{path}");
+		if (!p.body) return p.refused!;
+		const b = p.body;
+		return idempotent(c, ["projects.gitInit", b.path], async (client) => {
+			const r = await src.initGit(b.path);
+			if (!r.ok) return refusal(r);
+			state.recordDaemonEvent({ type: "project.git_initialized", entity: r.event.entity, text: r.event.text, data: { ...r.event.data, clientId: client.clientId } });
+			return { status: 200, body: r.inspection };
+		});
+	});
+	app.get("/v1/projects/publish-options", async (c) => {
+		const path = c.req.query("path") ?? "";
+		if (!path.startsWith("/") || path.length > 4096) return err(c, 422, "invalid", "path: path must be an absolute path", { field: "path" });
+		const r = await src.publishOptions(path);
+		if (!r.ok) { const o = refusal(r); return c.json(o.body, o.status as 422); }
+		return c.json(r.options);
+	});
+	app.post("/v1/projects/publish", async (c) => {
+		const p = await bodyOf(c, ProjectPublishBody, "{path, owner, name, visibility}");
+		if (!p.body) return p.refused!;
+		const b = p.body;
+		return idempotent(c, ["projects.publish", b.path, b.owner, b.name, b.visibility], async (client) => {
+			const r = await src.publishProject(b);
+			if (!r.ok) return refusal(r);
+			state.recordDaemonEvent({ type: "project.published", entity: r.event.entity, text: r.event.text, data: { ...r.event.data, clientId: client.clientId } });
+			return { status: 200, body: r.inspection };
+		});
+	});
+
 	app.get("/v1/streams/:scope/events", (c) => {
 		const scope = c.req.param("scope");
 		if (!/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-9_-]+)$/.test(scope)) return err(c, 422, "invalid", "scope is daemon, prj-<id> or run-<id>");
@@ -342,13 +523,25 @@ export function harnessApp(o: ServerOptions) {
 				ctl.enqueue(enc.encode(": connected\n\n"));
 				if (!scope.startsWith("run-")) {
 					// daemon and project scopes: run.created per run; seq is the run's persisted seq (stable across deletes/ties).
-					let seen = last ?? 0;
+					let seen = last ?? 0, busy = false;
 					const tick = async () => {
+						// One tick at a time: a slow engine must not stack a new tick (and its actor calls) every pollMs.
+						if (busy || closed) return;
+						busy = true;
+						try { await daemonTick(); } finally { busy = false; }
+					};
+					const daemonTick = async () => {
 						const all = await src.runs();
 						const seqOf = state.seqs(all);
 						// Drop a seq only on a confirmed deletion (run.deleted in the run's log), never because the list came back short.
 						const listed = new Set(all.map((r) => r.id));
-						for (const id of state.knownRuns()) if (!listed.has(id) && (await src.events(id, 0).catch(() => [])).some((e) => e.type === "run.deleted" || e.type === "RUN_DELETED")) state.runDeleted(id);
+						for (const id of listed) deletionChecked.delete(id);
+						for (const id of state.knownRuns()) {
+							if (closed) return;
+							if (listed.has(id) || deletionChecked.has(id)) continue;
+							deletionChecked.add(id);
+							if ((await src.events(id, 0).catch(() => [])).some((e) => e.type === "run.deleted" || e.type === "RUN_DELETED")) state.runDeleted(id);
+						}
 						const runs = [...all].sort((a, b) => seqOf.get(a.id)! - seqOf.get(b.id)!);
 						let top = seen;
 						const out: Array<{ event: string; data: unknown; seq: number }> = [];
@@ -358,6 +551,9 @@ export function harnessApp(o: ServerOptions) {
 							if (i + 1 <= seen || (scope.startsWith("prj-") && r.projectId !== scope)) return;
 							out.push({ event: "run.created", seq: i + 1, data: { v: 1, id: `evt_${scope}_${i + 1}`, scope, seq: i + 1, entity: r.id, entitySeq: 1, type: "run.created", typeVersion: 1, durability: "durable", ts: r.createdAt ?? isoTs(Date.now()), epochMs: r.createdAt ? Date.parse(r.createdAt) : Date.now(), projectId: r.projectId, runId: r.id, agentId: null, text: "Run created.", data: { label: r.label, goal: r.goal, budget: null } } });
 						});
+						// The daemon's own durable events (settings changes): daemon stream only, from the same seq counter.
+						if (scope === "daemon") for (const e of state.daemonEvents(seen)) { top = Math.max(top, e.seq); out.push({ event: e.type, seq: e.seq, data: daemonEnvelope(e) }); }
+						out.sort((a, b) => a.seq - b.seq);
 						sendGroups(out);
 						seen = top;
 					};

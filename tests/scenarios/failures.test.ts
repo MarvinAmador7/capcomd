@@ -132,7 +132,9 @@ capcomd result --summary "claimed=$(capcomd status $id | $S/jget agents.0.result
   expect(r.status).toBe("done");
   expect(r.result.summary).toBe("claimed=all-tests-pass-feature-complete verified=false");
   const kid = (await agentsOf(run)).find((a: any) => a.depth === 1);
-  expect(kid.result.verification).toMatchObject({ pass: false, checks: { passed: false } });
+  expect(kid.result.verification).toMatchObject({ pass: false, checks: { passed: false, status: "failed" } });
+  expect(kid.result.verification.checks.reason).toEqual(expect.any(String)); // how the checks failed, for the app's card
+  expect(kid.result.verification.checks).toHaveProperty("excerpt");
   const ty = await types(w, run);
   expect(ty).toContain("VERIFY_FAILED");
   expect(ty).not.toContain("MERGED");

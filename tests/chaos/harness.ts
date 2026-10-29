@@ -115,8 +115,8 @@ export function randomKillpoint(seed: number): {
   killpoint: string;
   iteration: number;
 } {
-  // Frozen list: seed→killpoint mappings are pinned by regression tests. New killpoints
-  // (e.g. merge.lock.acquired) are covered by the named KILLPOINTS jobs in cases.ts.
+  // Frozen list: seed→killpoint mappings are pinned by regression tests (keep its length and order). Other new
+  // killpoints are covered by the named KILLPOINTS jobs in cases.ts.
   const killpoints = [
     "tx.mid",
     "model.after_return.before_commit",
@@ -127,7 +127,7 @@ export function randomKillpoint(seed: number): {
     "vm.create.after_request.before_record",
     "lease.expire.mid",
     "budget.charge.mid",
-    "outbox.dispatch.after_send.before_ack",
+    "merge.lock.acquired", // was outbox.dispatch.after_send.before_ack (the outbox is gone): same slot, a live killpoint
   ];
 
   const random = (seed * 9301 + 49297) % 233280;

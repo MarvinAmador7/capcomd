@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { OPEN_EGRESS, type SandboxProvider, type VmId, type VmSpec, type ExecResult, type VmInfo } from "./sandbox";
+import { MACHINE_PREFIX, OPEN_EGRESS, type SandboxProvider, type VmId, type VmSpec, type ExecResult, type VmInfo } from "./sandbox";
 import {
   SandboxConfigError,
   SandboxHibernatedError,
@@ -13,6 +13,7 @@ import {
   mapBoxdError,
 } from "./boxd-errors";
 import { env } from "../utils/env";
+import { BOXD_MACHINE_HINTS } from "./boxd-machine";
 import { stateDir } from "../utils/home";
 
 export * from "./boxd-errors";
@@ -25,6 +26,9 @@ export interface BoxdMachine {
   egressAllow?: string[];
   /** Isolated machines get no org credentials from their metadata service (see boxd-machine.ts). */
   isolated?: boolean;
+  createdAt?: Date | string | null;
+  /** The platform's delete-after time, if set. */
+  deleteAt?: Date | string | null;
 }
 export interface BoxdLike {
   machines: {
@@ -93,7 +97,7 @@ const DEAD = new Set(["destroyed", "failed"]);
 const ASLEEP = new Set(["hibernated", "suspended"]);
 
 /** Deterministic, DNS-safe VM name for an idempotency key (taskId+epoch etc). */
-export function vmNameFor(idemKey: string, prefix = "relay-"): string {
+export function vmNameFor(idemKey: string, prefix = MACHINE_PREFIX): string {
   const h = createHash("sha256").update(idemKey).digest("hex").slice(0, 16);
   return `${prefix}${h}`;
 }
@@ -124,7 +128,7 @@ export class BoxdProvider implements SandboxProvider {
     } else {
       const apiKey = opts.apiKey ?? process.env.BOXD_API_KEY;
       // Inside a boxd machine the SDK mints the machine's own credentials when it has no key (boxd-machine.ts).
-      const inMachine = ["BOXD_VM_ID", "BOXD_VM_NAME", "BOXD_PROXY_ENDPOINT"].some((h) => process.env[h]);
+      const inMachine = BOXD_MACHINE_HINTS.some((h) => process.env[h]);
       if (!apiKey && !inMachine) throw new SandboxConfigError("BoxdProvider requires BOXD_API_KEY");
       // Lazy require keeps grpc-js out of processes that never select boxd.
       const { Boxd } = require("@boxd-sh/sdk") as typeof import("@boxd-sh/sdk");
@@ -133,7 +137,7 @@ export class BoxdProvider implements SandboxProvider {
     this.gitCredentials = opts.gitCredentials ?? noGitCredentials;
     this.keepaliveMs = opts.keepaliveMs ?? 30 * 60_000;
     this.org = opts.org ?? process.env.BOXD_ORG;
-    this.prefix = opts.namePrefix ?? "relay-";
+    this.prefix = opts.namePrefix ?? MACHINE_PREFIX;
     const path = opts.dbPath ?? env("BOXD_DB") ?? join(stateDir(), "boxd.sqlite");
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true });
@@ -397,7 +401,8 @@ export class BoxdProvider implements SandboxProvider {
 
   async list(prefix: string): Promise<VmInfo[]> {
     const all = await this.client.machines.list(this.org ? { org: this.org } : undefined).catch((e) => { throw mapBoxdError(e, undefined, "list"); });
-    return all.filter((m) => m.name.startsWith(prefix)).map((m) => ({ id: m.id, name: m.name, state: m.status }));
+    const ms = (d: Date | string | null | undefined) => { const t = d ? new Date(d).getTime() : NaN; return Number.isFinite(t) ? t : null; };
+    return all.filter((m) => m.name.startsWith(prefix)).map((m) => ({ id: m.id, name: m.name, state: m.status, createdAt: ms(m.createdAt), deleteAt: ms(m.deleteAt) }));
   }
 
   async close(): Promise<void> {

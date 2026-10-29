@@ -44,6 +44,13 @@ function reportedMs(r: any): number | null {
 	return null;
 }
 
+/**
+ * Claude Code system events that are its own bookkeeping, not something the agent did: the session's start and status,
+ * and a background task starting or ending (`task_started`, `task_notification`: the tool call that ran it and the
+ * child's hand-back already show both). Any other system event still shows ("System: <subtype>").
+ */
+const QUIET_SYSTEM = new Set(["init", "status", "task_started", "task_progress", "task_notification"]);
+
 export function threadBuilder(o: ThreadOptions) {
 	const now = o.now ?? Date.now;
 	const ctx = o.link ?? {};
@@ -189,7 +196,7 @@ export function threadBuilder(o: ThreadOptions) {
 			else if (text && text !== lastText) out.push(markdownItem("result", str(raw.result)));
 		} else if (type === "system") {
 			if (raw.subtype === "compact_boundary") out.push(other("Compacted the conversation"));
-			else if (raw.subtype !== "init" && raw.subtype !== "status" && !String(raw.subtype ?? "").startsWith("hook_")) out.push(other(`System: ${str(raw.subtype) || "event"}`));
+			else if (!QUIET_SYSTEM.has(str(raw.subtype)) && !str(raw.subtype).startsWith("hook_")) out.push(other(`System: ${str(raw.subtype) || "event"}`));
 		} else if (type === "rate_limit_event") {
 			if (raw.rate_limit_info?.status === "rejected") out.push(other("Usage limit reached"));
 		} else if (["stream_event", "tool_progress", "tool_use_summary", "auth_status", "keep_alive", "user", "assistant"].includes(type)) {

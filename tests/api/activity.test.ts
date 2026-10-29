@@ -4,12 +4,13 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activityOf, activityReporter, commandKind, type StoredActivity } from "../../src/agents/activity";
+import { activityOf, activityReporter, commandKind, type FinishedStep, type StoredActivity } from "../../src/agents/activity";
 import type { AgentEvent } from "../../src/agents/types";
 import { addClient, loadClients } from "../../src/api/clients";
 import { Agent, EventData } from "../../src/api/contract";
 import { agentActivity, describeActivity } from "../../src/api/describe";
 import { HarnessEvent } from "../../src/api/envelope";
+import { strictEventData } from "../../src/api/legacy-events";
 import { harnessApp } from "../../src/api/server";
 import { memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
@@ -127,18 +128,101 @@ describe("coalescing and throttling", () => {
 	});
 });
 
+const think: AgentEvent = { type: "assistant", raw: { message: { content: [{ type: "text", text: "hmm" }] } } };
+
+describe("step history (agent.step): finished streaks, unthrottled", () => {
+	const clock = () => { let t = 1_000_000; return { now: () => t, tick: (ms: number) => { t += ms; } }; };
+	test("read → edit → test inside one second is three steps, in order, with their start and end; the last at finish()", async () => {
+		const c = clock(), steps: FinishedStep[] = [], writes: StoredActivity[] = [];
+		const r = activityReporter((a) => { writes.push(a); }, { minMs: 1000, now: c.now, onStep: (s) => { steps.push(s); } });
+		r.event(claude(["Read", { file_path: "/a" }], ["Read", { file_path: "/b" }])); c.tick(100);
+		r.event(claude(["Read", { file_path: "/a" }])); c.tick(100);
+		r.event(claude(["Edit", { file_path: "/a" }])); c.tick(200);
+		r.event(claude(["Bash", { command: "bun test" }])); c.tick(300);
+		await Bun.sleep(0);
+		expect(writes.length).toBe(1); // the line is still throttled (one write in the window)…
+		expect(steps).toEqual([ // …the steps are not
+			{ kind: "read", n: 2, startedAt: 1_000_000, endedAt: 1_000_200 },
+			{ kind: "edit", n: 1, startedAt: 1_000_200, endedAt: 1_000_400 },
+		]);
+		await r.finish();
+		expect(steps.at(-1)).toEqual({ kind: "test", n: 1, startedAt: 1_000_400, endedAt: 1_000_700 });
+		expect(steps.length).toBe(3);
+		r.event(claude(["Write", { file_path: "/z" }]));
+		await r.finish();
+		expect(steps.length).toBe(3); // finished: nothing more, and finish() twice reports nothing twice
+	});
+	test("one batch, one millisecond: each step still gets its own, increasing startedAt (read → edit → read is three steps)", async () => {
+		const steps: FinishedStep[] = [];
+		const r = activityReporter(() => {}, { minMs: 0, now: () => 5_000, onStep: (s) => { steps.push(s); } });
+		r.steps([{ kind: "read", target: "/a" }, { kind: "edit", target: "/a" }, { kind: "read", target: "/b" }]);
+		await r.finish();
+		expect(steps).toEqual([
+			{ kind: "read", n: 1, startedAt: 5_000, endedAt: 5_001 },
+			{ kind: "edit", n: 1, startedAt: 5_001, endedAt: 5_002 },
+			{ kind: "read", n: 1, startedAt: 5_002, endedAt: 5_002 },
+		]);
+	});
+	test("think is never a step and never splits one; a leading think streak is skipped", async () => {
+		const c = clock(), steps: FinishedStep[] = [];
+		const r = activityReporter(() => {}, { minMs: 0, now: c.now, onStep: (s) => { steps.push(s); } });
+		r.event(think); c.tick(50);
+		r.event(claude(["Read", { file_path: "/a" }])); c.tick(50);
+		r.event(think); c.tick(50);
+		r.event(claude(["Read", { file_path: "/b" }])); c.tick(50);
+		r.event(codex("item_completed", { id: "i1", type: "reasoning", text: "x" })); c.tick(50);
+		await r.finish();
+		expect(steps).toEqual([{ kind: "read", n: 2, startedAt: 1_000_050, endedAt: 1_000_250 }]);
+		const only = activityReporter(() => {}, { minMs: 0, now: c.now, onStep: (s) => { steps.push(s); } });
+		only.event(think);
+		await only.finish();
+		expect(steps.length).toBe(1); // an agent that only thought has no steps
+	});
+	test("stop() (a cancel) drops the unfinished last step; steps already finished still go out, in order", async () => {
+		const c = clock(), steps: FinishedStep[] = [];
+		const slow = async (s: FinishedStep) => { await Bun.sleep(s.kind === "read" ? 30 : 1); steps.push(s); };
+		const r = activityReporter(() => {}, { minMs: 0, now: c.now, onStep: slow });
+		r.op("spawn", "req-1"); c.tick(10); r.op("spawn", "req-2"); c.tick(10);
+		r.op("await"); c.tick(10); r.op("await"); c.tick(10);
+		r.event(claude(["Read", { file_path: "/a" }])); c.tick(10);
+		r.event(claude(["Edit", { file_path: "/a" }])); c.tick(10);
+		r.stop();
+		await r.finish(); // after stop: reports nothing new, but waits for what is in flight
+		expect(steps.map((s) => `${s.kind}${s.n}`)).toEqual(["spawn2", "wait1", "read1"]); // serialized: a slow call doesn't reorder
+	});
+	test("a failing or hanging onStep never breaks the reporter; finish() waits at most timeoutMs", async () => {
+		const c = clock();
+		const r = activityReporter(() => {}, { minMs: 0, now: c.now, onStep: () => { throw new Error("actor down"); } });
+		r.event(claude(["Read", { file_path: "/a" }])); r.event(claude(["Edit", { file_path: "/a" }]));
+		await r.finish();
+		const h = activityReporter(() => {}, { minMs: 0, now: c.now, onStep: () => new Promise(() => {}) });
+		h.event(claude(["Read", { file_path: "/a" }]));
+		const t0 = Date.now();
+		await h.finish({ timeoutMs: 50 });
+		expect(Date.now() - t0).toBeLessThan(1000);
+	});
+	test("the event payload is exactly {kind, n, startedAt, endedAt}; its text is the step in past tense", () => {
+		expect(strictEventData("agent.step", { kind: "read", n: 4, startedAt: 1, endedAt: 2 }).ok).toBe(true);
+		expect(strictEventData("agent.step", { kind: "read", n: 4, startedAt: 1, endedAt: 2, target: "/a" }).ok).toBe(false);
+		expect(strictEventData("agent.step", { kind: "read", n: 0, startedAt: 1, endedAt: 2 }).ok).toBe(false);
+		expect(strictEventData("agent.step", { kind: "read", n: 1.5, startedAt: 1, endedAt: 2 }).ok).toBe(false);
+		expect(EventData["agent.step"].safeParse({ kind: "new-kind", n: 1, startedAt: 1, endedAt: 2 }).success).toBe(true);
+	});
+});
+
 const dir = mkdtempSync(join(tmpdir(), "harness-activity-"));
 const cpath = join(dir, "clients.json");
 const token = addClient("reader", ["read"], cpath).token;
 const run = { id: "run-1", projectId: null, label: "demo", state: "running", goal: null, repo: "/r", createdAt: "2026-10-25T07:00:00.000Z" };
 const at = 1792900500000;
 
-function app() {
-	const agent: any = { id: "a1", runId: "run-1", parent: null, depth: 0, profile: "worker", status: "running", text: "Agent a1 is now running.", activity: agentActivity({ kind: "read", n: 2, at }, "running"), task: "t", taskAttachment: null, result: null, workspace: null, updatedAt: null };
+function app(extra: Array<{ seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> }> = []) {
+	const agent: any = { id: "a1", runId: "run-1", parent: null, depth: 0, profile: "worker", status: "running", text: "Agent a1 is now running.", activity: agentActivity({ kind: "read", n: 2, at }, "running"), task: "t", taskAttachment: null, result: null, workspace: null, provider: "claude", model: null, effort: null, updatedAt: null };
 	const src = memorySource({ runs: [run], agents: { "run-1": [agent] }, events: { "run-1": [
 		{ seq: 1, at, type: "RUN_NEW", agentId: null, data: { budget: {}, label: "demo" } },
 		{ seq: 2, at, type: "AGENT_SPAWNED", agentId: "a1", data: { parent: null, depth: 0, profile: "worker", task: "t", key: null, operator: true, budget: {}, limits: {}, agent: null } },
 		{ seq: 3, at, type: "AGENT_STARTED", agentId: "a1", data: {} },
+		...extra,
 	] } });
 	const a = harnessApp({ source: src, clients: () => loadClients(cpath), heartbeatMs: 60_000, pollMs: 10, activityMs: 100, state: harnessState(null) });
 	const set = (kind: string, n: number) => { agent.activity = agentActivity({ kind, n, at: Date.now() }, agent.status); };
@@ -161,6 +245,27 @@ async function read(res: Response, ms: number, until?: RegExp) {
 const frames = (t: string, type: string) => t.split("\n\n").filter((f) => f.includes(`event: ${type}\n`));
 
 describe("API", () => {
+	test("agent.step: replayed by GET /v1/events and in snapshot.steps, durable, with the past-tense text; not on the lifecycle feed", async () => {
+		const { req } = app([
+			{ seq: 4, at, type: "AGENT_STEP", agentId: "a1", data: { kind: "read", n: 4, startedAt: at - 900, endedAt: at - 400 } },
+			{ seq: 5, at, type: "AGENT_STEP", agentId: "a1", data: { kind: "test", n: 1, startedAt: at - 400, endedAt: at } },
+			{ seq: 6, at, type: "AGENT_STEP", agentId: "a1", data: { kind: "zap", n: 2, startedAt: at, endedAt: at } },
+		]);
+		const replay = await (await req("/v1/events?scope=run-1")).json() as any[];
+		const steps = replay.filter((e) => e.type === "agent.step");
+		expect(steps.map((e) => e.text)).toEqual(["Read 4 files", "Ran the tests", "Used 2 tools"]);
+		for (const e of steps) {
+			expect(HarnessEvent.safeParse(e).success).toBe(true);
+			expect(EventData["agent.step"].safeParse(e.data).success).toBe(true);
+			expect(e).toMatchObject({ durability: "durable", agentId: "a1", entity: "a1", scope: "run-1" });
+		}
+		expect(steps[0].data).toEqual({ kind: "read", n: 4, startedAt: at - 900, endedAt: at - 400 });
+		const t = await read(await req("/v1/streams/run-1/events"), 300, /snapshot\.end/);
+		expect(t).toContain('"type":"agent.step"');
+		const life = await (await req("/v1/runs/run-1/lifecycle")).json() as any[];
+		expect(life.some((e) => e.type === "agent.step")).toBe(false);
+	});
+
 	test("Agent.activity in GET /v1/runs/{runId}/agents and snapshot.agents", async () => {
 		const { req } = app();
 		const agents = await (await req("/v1/runs/run-1/agents")).json() as any[];

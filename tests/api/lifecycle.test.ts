@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { addClient, loadClients } from "../../src/api/clients";
 import { EventData } from "../../src/api/contract";
 import { HarnessEvent } from "../../src/api/envelope";
-import { LIFECYCLE_TYPES, lifecycleEvents } from "../../src/api/lifecycle";
+import { LIFECYCLE_TYPES, lifecycleEvents, runPhase } from "../../src/api/lifecycle";
+import { strictEventData } from "../../src/api/legacy-events";
 import { harnessApp } from "../../src/api/server";
 import { harnessState } from "../../src/api/state";
 import { approvalIdFor, memorySource, type RawEvent } from "../../src/api/source";
@@ -47,6 +48,19 @@ describe("lifecycle_events", () => {
 		expect(l.find((e) => e.type === "approval.requested")!.data.approvalId).toBe(approvalIdFor("run-1", "op1"));
 		expect(l.find((e) => e.type === "approval.decided")!.data).toMatchObject({ status: "approved", decidedBy: { clientId: "client:ive" } });
 		expect(new Set(l.map((e) => e.id)).size).toBe(l.length);
+	});
+
+	test("a parked merge's approval carries the files its branch changes (subject.files), as the park event read them", () => {
+		const diff = { files: [{ path: "src/math.test.ts", status: "added", added: 13, removed: 0 }, { path: "src/math.ts", status: "modified", added: 11, removed: 0 }], filesTotal: 2, added: 24, removed: 0 };
+		const park = { id: "op2", target: "main", ref: "agt-a1", branch: "capcomd/run-1/agt-a1", reason: "target main is protected", diff };
+		expect(strictEventData("merge.approval_requested", park)).toEqual({ ok: true });
+		expect(strictEventData("merge.approval_requested", { ...park, diff: { ...diff, filesTotal: "2" } }).ok).toBe(false);
+		const req = lifecycleEvents("run-1", [ev(1, "AGENT_SPAWNED", "a1", {}), ev(2, "MERGE_AWAITING_APPROVAL", "a1", park)]).find((e) => e.type === "approval.requested")!;
+		expect(req.data.subject).toEqual({ target: "main", ref: "capcomd/run-1/agt-a1", ...diff });
+		expect(EventData["approval.requested"].safeParse(req.data).success).toBe(true);
+		// Without a diff (no repository, an older park event): the subject is unchanged.
+		const old = lifecycleEvents("run-1", [ev(1, "MERGE_AWAITING_APPROVAL", "a1", { id: "op3", target: "main", ref: "b" })]).find((e) => e.type === "approval.requested")!;
+		expect(old.data.subject).toEqual({ target: "main", ref: "b" });
 	});
 
 	test("decision 9 names: every lifecycle type is a published dotted past-tense type", () => {
@@ -162,4 +176,20 @@ describe("spawn task redaction", () => {
 test("RUN_DELETED in the scope log projects to run.deleted with cause deleted", () => {
 	const out = lifecycleEvents("run-x", [{ seq: 1, type: "RUN_DELETED", at: "2026-10-25T00:00:00.000Z" } as any]);
 	expect(out.map((e: any) => [e.type, e.data?.cause])).toContainEqual(["run.deleted", "deleted"]);
+});
+
+test("RUN_ENDED (a run its agents didn't end) projects to run.failed / run.cancelled with its reason, once", () => {
+	const failed = lifecycleEvents("run-x", [ev(1, "RUN_NEW", null, { budget: {}, label: "l" }), ev(2, "RUN_ENDED", null, { state: "failed", reason: "no capcomd env snapshot", by: null })]);
+	expect(failed.map((e) => e.type)).toEqual(["run.created", "run.failed"]);
+	expect(failed[1]!.data).toMatchObject({ cause: "error", reason: "no capcomd env snapshot", agentId: null });
+	expect(failed[1]!.text).toBe("The run could not start.");
+	expect(EventData["run.failed"].safeParse(failed[1]!.data).success).toBe(true);
+	expect(runPhase("run-x", [ev(1, "RUN_NEW", null, {})])).toBe("new");
+	const cancelled = [ev(1, "AGENT_SPAWNED", "a", {}), ev(2, "AGENT_CANCELLED", "a", { reason: "stop", by: "run" }), ev(3, "RUN_ENDED", null, { state: "cancelled", reason: "stop", by: "client:x" })];
+	expect(lifecycleEvents("run-x", cancelled).filter((e) => e.type.startsWith("run.")).map((e) => [e.type, e.data.cause, e.data.by])).toEqual([["run.cancelled", "cancelled", "client:x"]]);
+	expect(runPhase("run-x", cancelled)).toBe("ended");
+	// A run its agents already ended gets no second end.
+	const done = [ev(1, "AGENT_SPAWNED", "a", {}), ev(2, "AGENT_STARTED", "a"), ev(3, "AGENT_DONE", "a", { result: {} }), ev(4, "RUN_ENDED", null, { state: "cancelled", reason: null, by: null })];
+	expect(lifecycleEvents("run-x", done).filter((e) => e.type.startsWith("run.")).map((e) => e.type)).toEqual(["run.started", "run.completed"]);
+	expect(strictEventData("run.ended", { state: "failed", reason: "r", by: null })).toEqual({ ok: true });
 });

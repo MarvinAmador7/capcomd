@@ -94,7 +94,11 @@ export async function serveHarnessSocket(path: string, fetch: (req: Request) => 
 		// Create the socket already 0600: no window where another local user could connect. chmod stays as belt-and-braces.
 		const prev = process.umask(0o177);
 		let server: ReturnType<typeof Bun.serve>;
-		try { server = Bun.serve({ unix: tmp, fetch }); } finally { process.umask(prev); }
+		// idleTimeout above the SSE heartbeat (HEARTBEAT_MS, 15 s): Bun's default 10 s cut every quiet event stream. Bun
+		// honours it on a unix socket (checked: a stream lasts past 25 s with it, 12 s without), but its types only declare
+		// it for TCP servers, hence the untyped spread; server.timeout(req, 0) does not help there.
+		const idle: object = { idleTimeout: 60 };
+		try { server = Bun.serve({ unix: tmp, fetch, ...idle }); } finally { process.umask(prev); }
 		try {
 			chmodSync(tmp, 0o600);
 			linkSync(tmp, path);

@@ -60,3 +60,33 @@ export function resolveEnvSnapshot(source: Record<string, string | undefined> = 
   // Lockfile mismatch only means the worker installs deps itself; CLIs + git config still apply.
   return readLedger(ledgerPath(source)).current?.name;
 }
+
+/**
+ * What `capcomd env build` is doing, next to its sandbox's ledger (`envs.build.json`, `envs-docker.build.json`):
+ * written when a build starts (`building`, with the builder's pid), removed when it succeeds, rewritten as `failed`
+ * when it throws. GET /v1/environments reads it: a `building` marker whose pid is gone (the build was killed) is stale.
+ */
+export interface EnvBuildMarker { state: "building" | "failed"; pid: number; startedAt: string; endedAt?: string }
+/** A build marker this old is stale even when its pid is alive (the pid was reused): no build runs this long. */
+export const BUILD_MARKER_MAX_MS = 3 * 60 * 60_000;
+export const buildMarkerPath = (ledger: string) => `${ledger.replace(/\.json$/, "")}.build.json`;
+export function readBuildMarker(path: string): EnvBuildMarker | null {
+  if (!existsSync(path)) return null;
+  try {
+    const m = JSON.parse(readFileSync(path, "utf8"));
+    if ((m?.state !== "building" && m?.state !== "failed") || !Number.isInteger(m.pid) || typeof m.startedAt !== "string") return null;
+    return m;
+  } catch { return null; }
+}
+export function writeBuildMarker(path: string, m: EnvBuildMarker) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(m) + "\n");
+}
+const pidAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; } };
+/** Is the build this marker describes still running (its process alive, and not implausibly old)? */
+export function buildInProgress(m: EnvBuildMarker | null, now = Date.now()): boolean {
+  if (m?.state !== "building" || m.pid <= 0) return false;
+  const t = Date.parse(m.startedAt);
+  if (Number.isFinite(t) && now - t > BUILD_MARKER_MAX_MS) return false;
+  return pidAlive(m.pid);
+}

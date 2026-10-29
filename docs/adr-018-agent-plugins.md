@@ -114,7 +114,9 @@ A new principal, **driver**, sits between the operator (the human) and agents in
   widening.
 - **Approvals for protected branches stay human by default** (`approvals: "human"`): `capcomd_approve` answers
   with how to approve (`capcomd approve …` in a terminal, the TUI, or, later, a link). A project can set
-  `approvals: "client-confirmed"` to let the tool approve after the client's own per-call confirmation.
+  `approvals: "elicit"` to let the tool ask the person itself (MCP elicitation, capcomd's own prompt; only an accept
+  approves; docs/integration-agents.md), or the older `approvals: "client-confirmed"` to let the tool approve after
+  the client's own per-call confirmation.
 
 Enforcement lives in the primitives (`ops.ts`, `policy.ts`) keyed on the caller (`operator | driver | agent`), not
 in the MCP layer. On a machine where the driver agent also has a shell, these are guardrails against mistakes,
@@ -131,9 +133,9 @@ ChatGPT connects only to remote HTTPS MCP servers. `capcomd mcp --http` serves S
 the engine runs somewhere reachable:
 
 - **(a) Your machine, through a tunnel** (OpenAI's Secure MCP Tunnel, Cloudflare Tunnel): no hosting, but the
-  laptop must stay awake for the endpoint, and for the run: each agent's driver (`agent-drive`) is a process on
-  the engine's host, so while it sleeps the agents' VMs keep running but nothing relays their requests, pushes
-  their branches or records their results; the run resumes when it wakes (durability), it doesn't progress.
+  laptop must stay awake for the endpoint, and for the run: each agent is driven by the engine on that host (ADR-022),
+  so while it sleeps the agents' VMs keep running but nothing relays their requests, pushes their branches or
+  records their results; the run resumes when it wakes (durability), it doesn't progress.
 - **(b) A hosted engine in a provider VM** (boxd gives `https://<name>.boxd.sh` and persistent disk): always on,
   the same durable state, VM backups; it needs the user's provider key and agent logins to live there, so it is
   its own design (credentials, OAuth, multi-user) before it ships.

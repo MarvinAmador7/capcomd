@@ -15,6 +15,7 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "run.cancelled": return "The run was cancelled.";
 		case "run.deleted": return "The run was deleted.";
 		case "run.granted": return "The run's budget was raised.";
+		case "run.ended": return d.state === "failed" ? "The run could not start." : "The run was cancelled.";
 		case "agent.spawned": return `${a} was started${d.parent ? ` by ${d.parent}` : ""}${d.profile ? ` as ${String(d.profile).toLowerCase()}` : ""}.`;
 		case "agent.started": return `${a} began working.`;
 		case "agent.done": return `${a} finished.`;
@@ -22,6 +23,8 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "agent.checkpointed": return `${a} saved a checkpoint (${Number(d.files) || 0} files).`;
 		case "agent.notice_raised": return `${a} needs attention.`;
 		case "agent.notice_cleared": return `${a} no longer needs attention.`;
+		// One finished step of the agent's history: the activity line in past tense ("Read 4 files", "Ran the tests").
+		case "agent.step": return describeActivity(typeof d.kind === "string" ? d.kind : "tool", Number(d.n), true);
 		case "agent.paused": return `${a} paused.`;
 		case "agent.resumed": return `${a} resumed.`;
 		case "agent.granted": return `${a} got more budget.`;
@@ -53,6 +56,12 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "task.done": return "A task is done.";
 		case "task.released": return "A task was released.";
 		case "kv.put": case "kv.deleted": case "kv.swapped": return "A shared value changed.";
+		case "sandbox.settings_changed": return "A place's setting was changed.";
+		case "sandbox.resource_action": return "A machine was acted on from capcomd.";
+		case "sandbox.resource_deleted": return "A machine was deleted.";
+		case "project.configured": return "A project was set up.";
+		case "project.git_initialized": return "A git repository was started in a folder.";
+		case "project.published": return "A project was published to GitHub.";
 		default: return type.replace(/[._]/g, " ") + ".";
 	}
 }

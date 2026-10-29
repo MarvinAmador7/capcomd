@@ -54,7 +54,7 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
   emit("run.started", { goal: opts.goal, targetBranch: opts.targetBranch ?? null, recipe: "hierarchical" }, `Starting run: ${runId} (recipe)\nGoal: ${opts.goal}\n`);
 
   // 1. scope + run ledger (run new also creates the run actor in "planning").
-  const scope = await runNew({ runId, budget: opts.budgetUsd ? { usd: opts.budgetUsd } : {}, label: opts.goal, goal: opts.goal });
+  const scope = await runNew({ runId, budget: opts.budgetUsd ? { usd: opts.budgetUsd } : {}, label: opts.goal, goal: opts.goal, ...(opts.sandbox ? { sandbox: opts.sandbox } : {}) });
   emit(scope.created ? "run.created" : "run.resumed", { runId }, scope.created ? "✓ Run created (scope)" : "✓ Run resumed (scope)");
   const runH = c.run.getOrCreate([runId]);
   let run = await runH.getRun({ runId });
@@ -124,7 +124,6 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
     while (!TERMINAL.has(lt.state)) {
       if (lt.state === "pending") {
         const g: any = await ledger.grantLease({ taskId: t.id, workerId: `${runId}-recipe` });
-        await ledger.flushOutbox({}); // ack the lease's outbox events, as the legacy loop does after provisioning
         emit("task.leased", { taskId: t.id, epoch: g.epoch, workerId: `${runId}-recipe` }, `  → ${t.id} (epoch ${g.epoch})`);
         lt = await ledger.getTask({ taskId: t.id });
         continue;
