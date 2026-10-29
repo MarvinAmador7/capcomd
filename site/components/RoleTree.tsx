@@ -88,7 +88,6 @@ export function RoleTree() {
         </figure>
         <div className="roles__file" data-reveal style={delay(80)}>
           <Win title=".capcomd/agents.json · example" label="Example .capcomd/agents.json"><code className="json" tabIndex={0}>{AGENTS_JSON}</code></Win>
-          <p className="file__note">An example, extended from what <code>capcomd setup project</code> writes. For a repo with Claude and Codex logins and <code>bun test</code> as its check, setup writes one worker per provider, a read-only reviewer that may also run the check, and a planner that may spawn only the workers. Here a <code>lead</code> and a <code>triage</code> profile are added, and the planner may spawn them too. No turn, time or money limits until you add them.</p>
         </div>
       </div>
       <h3 className="talk__title" id="talk" data-reveal>How they talk</h3>

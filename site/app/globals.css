@@ -354,7 +354,6 @@
 .roles__file .win { margin-top: 0; }
 .win code.json { white-space: pre; overflow-x: auto; font-size: 12px; line-height: 1.55; }
 .win code.json::before { content: none; }
-.file__note { margin: 18px 0 0; }
 .talk__title { margin: 96px 0 0; font: 400 clamp(2.5rem, 4vw, 4rem)/0.9 var(--font-display); text-transform: uppercase; }
 #roles .talk__list { display: grid; grid-template-columns: repeat(5, 1fr); gap: 24px 32px; margin-top: 32px; }
 #roles .talk__list > div + div { margin-top: 0; }
