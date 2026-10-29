@@ -8,6 +8,7 @@ import { Reveals } from "@/components/Reveals";
 import { RoleTree } from "@/components/RoleTree";
 import { Run } from "@/components/Run";
 import { Sandboxes } from "@/components/Sandboxes";
+import { Start } from "@/components/Start";
 
 export default function Home() {
   return (
@@ -15,11 +16,12 @@ export default function Home() {
       <a className="skip" href="#main">Skip to content</a>
       <Hero />
       <main id="main" tabIndex={-1}>
+        <AtScale />
         <Run />
         <Sandboxes />
         <RoleTree />
-        <AtScale />
         <Patterns />
+        <Start />
         <BotsCta />
       </main>
       <Footer />

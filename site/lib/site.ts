@@ -6,7 +6,7 @@ export const SITE = {
   title: "capcomd · durable orchestration for swarms of coding agents",
   ogTitle: "capcomd: put a crew on it",
   description:
-    "Durable orchestration for swarms of coding agents: one VM and branch per agent, operator-owned checks and a reviewer agent, exactly-once merges of the commit that passed.",
+    "Durable orchestration for swarms of coding agents: one VM and branch per agent, your checks and a reviewer agent, exactly-once merges of the commit that passed.",
   repo: "https://github.com/MarvinAmador7/capcomd",
   /** The licence line shown under the playground. */
   license: "capcomd is open source, released under the MIT License.",

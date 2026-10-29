@@ -1,5 +1,6 @@
 import { AgentInstall, InstallCommand } from "./AgentInstall";
 import { HeroCrew } from "./crew";
+import { Steps } from "./Steps";
 import { delay } from "./marks";
 import { Nav } from "./Nav";
 import { SITE } from "@/lib/site";
@@ -18,14 +19,15 @@ export function Hero() {
 
       <div className="hero__foot">
         <p className="hero__lead" data-load style={delay(420)}>
-          <b>capcomd</b> is a durable orchestration CLI and MCP server for swarms of coding agents running on cloud VMs.
+          Your coding agent (Claude Code, Codex or Hermes) spawns a crew of agents, each in its own VM or container on its own branch. Only the commit that passed your checks and a reviewer agent lands, exactly once, even if the engine crashes mid-merge.
         </p>
         <div className="hero__install" data-load style={delay(500)} id="install">
           <InstallCommand cmd="brew install MarvinAmador7/tap/capcomd" />
           <AgentInstall />
-          <a className="button hero__oss" href={SITE.repo}>OSS Project</a>
+          <a className="button hero__oss" href={SITE.repo}>View on GitHub</a>
         </div>
-        <p className="hero__fine" data-load style={delay(560)}>Open source. One executable for macOS and Linux.</p>
+        <Steps className="hero__steps" />
+        <p className="hero__fine" data-load style={delay(560)}>Open source. One executable for macOS and Linux. Claude Code is verified live; the Codex and Hermes setups are built but not yet driven live.</p>
       </div>
     </header>
   );

@@ -20,7 +20,7 @@ const Worker = ({ i }: { i: number }) => <span>worker<span className="sub"><Agen
 const stages: Stage[] = [
   {
     id: "ask", name: "Ask", face: <MarkFace />,
-    text: <div><p><code>run new</code> takes its gates from the project: named checks, the reviewer profile, the target branch. The driver picks check names, budgets and a staging target, never the commands.</p><TryGoals /></div>,
+    text: <div><p>Your project sets the gates once: which checks run, which reviewer reads the work, which branch it lands on. Your agent picks checks by name and can set a budget or a staging branch; it never writes the commands.</p><TryGoals /></div>,
     picture: (
       <Desk>
         <div className="composer">
@@ -45,7 +45,7 @@ const stages: Stage[] = [
   },
   {
     id: "swarm", name: "Swarm", face: <Bot i={0} size="small" />,
-    text: <p><code>spawn --profile worker --task … --check unit --key …</code> per task: a fresh VM, its own clone and branch, a profile (provider, login, model, limits, tools). <code>--key</code> makes a spawn retried after a crash a no-op.</p>,
+    text: <><p>Each task gets a fresh VM with its own clone and branch, and a profile: provider, login, model, limits, tools. A spawn retried after a crash never starts a second agent.</p><p className="stage__cmd"><code>spawn --profile worker --task … --check unit --key …</code></p></>,
     picture: (
       <Desk label="The menu bar panel as a run starts: the planner above three workers.">
         <div className="label" style={{ marginTop: 6 }}>Active</div>
@@ -65,7 +65,7 @@ const stages: Stage[] = [
   },
   {
     id: "verify", name: "Verify", face: <Bot i={1} size="small" />,
-    text: <p><code>verify --ref agt</code> runs the named check on the branch merged with the latest target, in a throwaway VM holding no credentials. Agents pick a check by name; a contract from a VM can&apos;t carry one.</p>,
+    text: <><p>Your test command runs on the agent&apos;s branch merged with the latest target, in a throwaway VM with no credentials. Agents choose a check by name; they can never write one.</p><p className="stage__cmd"><code>verify --ref agt</code></p></>,
     picture: (
       <Desk label="The menu bar panel: the agent tree; one worker's unit check passed, one running, one queued.">
         <div className="label" style={{ marginTop: 6 }}>Active</div>
@@ -83,7 +83,7 @@ const stages: Stage[] = [
   },
   {
     id: "review", name: "Review", face: <Bot i={4} size="small" />,
-    text: <p>With <code>run new --reviewer P</code>, verify then spawns a read-only reviewer on the commit, judged against the acceptance criteria; it never pushes. Both must pass. A missing or garbled verdict is a fail.</p>,
+    text: <><p>A read-only reviewer agent reads the commit against the acceptance criteria; it never pushes. The checks and the review must both pass, and a missing or garbled verdict counts as a fail.</p><p className="stage__cmd"><code>run new --reviewer P</code></p></>,
     picture: (
       <Desk label="The menu bar panel: two workers passed their checks; one reviewer passed, one is reading.">
         <div className="label" style={{ marginTop: 6 }}>Active</div>
@@ -102,7 +102,7 @@ const stages: Stage[] = [
   },
   {
     id: "merge", name: "Merge", face: <Bot i={1} size="small" />,
-    text: <p><code>merge --require vfy</code> lands that exact commit, once, by compare-and-swap on the target. A protected target parks it until approved: <code>capcomd approve</code>, the menu bar app, or the driver&apos;s client where the project allows it.</p>,
+    text: <><p>The exact commit that passed lands, once. Protected branches wait for your approval: from <code>capcomd approve</code>, the capcomd menu bar app, or your agent where the project allows it.</p><p className="stage__cmd"><code>merge --require vfy</code></p></>,
     picture: (
       <Desk label="The menu bar panel asking: merge worker's work into main? Two files with lines added and removed, and Deny and Approve.">
         <div className="label" style={{ marginTop: 6 }}>Active</div>
@@ -129,8 +129,8 @@ export function Run() {
       <div className="run__intro">
         <h2 id="run-title" data-reveal><span>Spawn, await,</span> <span>verify, merge.</span></h2>
         <div className="cols">
-          <p data-reveal style={delay(80)}>Your coding agent runs the whole thing with five calls: <code>run new</code> sets the gates, <code>spawn</code> starts an agent in its own VM and branch, <code>await</code> waits on it, <code>verify</code> runs your checks (and a reviewer, if the run has one), and <code>merge</code> lands the commit that passed.</p>
-          <p data-reveal style={delay(140)}>Primitives, not a workflow. The driver can be your agent (through the plugin, MCP or the CLI), an agent in a VM that may delegate, or you. Agents keep working when the driver&apos;s session ends.</p>
+          <p data-reveal style={delay(80)}>You tell your agent what you want: &ldquo;Use capcomd to fix the failing tests in <code>src/</code>: one worker per file, each verified and reviewed, then merged.&rdquo; It does the rest with five calls: <code>run new</code> sets the gates, <code>spawn</code> starts an agent in its own VM and branch, <code>await</code> waits on it, <code>verify</code> runs your checks (and a reviewer, if the run has one), and <code>merge</code> lands the commit that passed.</p>
+          <p data-reveal style={delay(140)}>Building blocks, not a fixed workflow. Your agent drives them through the plugin, MCP or the CLI; so can an agent in a VM that may delegate, or you. Spawned agents keep working after your agent&apos;s session ends.</p>
         </div>
       </div>
       <RunAccordion stages={stages} initial="swarm" />

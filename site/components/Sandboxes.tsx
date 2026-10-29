@@ -84,7 +84,7 @@ export function Sandboxes() {
     <section className="sec" id="sandboxes" aria-labelledby="sb-title">
       <h2 className="big" id="sb-title" data-reveal><span>One agent, one VM,</span> <span>one branch.</span></h2>
       <div className="two">
-        <p data-reveal>VMs come through one sandbox provider interface: create from a snapshot, exec, upload and download, egress allowlist, checkpoint and snapshot, suspend and resume, destroy. Orchestration, durability and the gates sit above it.</p>
+        <p data-reveal>Pick where agents run. boxd gives each agent its own cloud VM, with secrets the agent never sees and an egress allowlist. Docker runs them in containers on your machine with no account to create; isolation is weaker, an API key is visible to the agent, and there is no egress allowlist.</p>
         <p data-reveal style={delay(60)}>Inside its VM an agent is unrestricted by default: every tool, open network. A profile narrows its tools, sandbox and egress.</p>
       </div>
       <Bay />
@@ -108,7 +108,6 @@ export function Sandboxes() {
             <p className="runs__note">A container, not a VM: no host-bound secrets and no egress allowlist.</p>
           </div>
         </div>
-        <p className="runs__note">The app learns about providers from the daemon, so a new one needs no change there.</p>
       </div>
       <div className="facts">
         <div data-reveal><h3>Credentials</h3><p>VM snapshots are scrubbed of secrets. An agent&apos;s VM holds only its own login; agents never hold push credentials, and a checks VM holds none.</p></div>

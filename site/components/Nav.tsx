@@ -1,7 +1,7 @@
 import { SITE } from "@/lib/site";
 import { Wordmark } from "./marks";
 
-const SECTIONS = [["run", "Run"], ["sandboxes", "Sandboxes"], ["roles", "Roles"], ["scale", "At scale"], ["patterns", "Patterns"]] as const;
+const SECTIONS = [["scale", "Why"], ["run", "Run"], ["sandboxes", "Sandboxes"], ["roles", "Roles"], ["patterns", "Patterns"], ["start", "Start"]] as const;
 
 /** The site's navigation. On the home page the sections are anchors; elsewhere they lead back to them. */
 export function Nav({ home = true, current }: { home?: boolean; current?: "bots" }) {

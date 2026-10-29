@@ -5,7 +5,7 @@ const PAIRS: Array<[string, ReactNode]> = [
   ["Agents claim success", <>Your checks and a read-only reviewer decide; no agent merges its own work.</>],
   ["Parallel agents collide", <>One VM and branch each; merges land one at a time, exactly once.</>],
   ["Delegation multiplies risk", <>Limits only narrow down the tree, and budgets are carved from the parent&apos;s.</>],
-  ["Agents get stuck", <>Idle or spinning agents are flagged to their parent, their work checkpointed.</>],
+  ["Agents get stuck", <>Idle agents are flagged to their parent, their work checkpointed.</>],
   ["Nobody sees what happened", <>A live agent tree, timelines and costs per agent and subtree.</>],
   ["Machines are left behind", <>Every VM is destroyed when its work is done, or reaped once idle.</>],
 ];

@@ -8,9 +8,9 @@ import { AGENT_ICONS } from "@/lib/agent-icons";
 
 const ASK = "Set up capcomd for this repository.";
 const AGENTS = [
-  { id: "claude", name: "Claude Code", copy: "/plugin install capcomd --marketplace MarvinAmador7/capcomd", next: <>Paste it into Claude Code, then ask: &ldquo;{ASK}&rdquo;</> },
-  { id: "codex", name: "Codex", copy: "codex plugin marketplace add MarvinAmador7/capcomd", next: <>Run it in a terminal, install capcomd from <code>/plugins</code> in Codex, then ask: &ldquo;{ASK}&rdquo;</> },
-  { id: "hermes", name: "Hermes", copy: "curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.sh | sh && capcomd setup agent", next: <>Run it in your repository, then ask Hermes: &ldquo;{ASK}&rdquo;</> },
+  { id: "claude", name: "Claude Code", copy: "/plugin install capcomd --marketplace MarvinAmador7/capcomd", next: <>Paste it into Claude Code, then ask: &ldquo;{ASK}&rdquo; Verified live.</> },
+  { id: "codex", name: "Codex", copy: "codex plugin marketplace add MarvinAmador7/capcomd", next: <>Run it in a terminal, install capcomd from <code>/plugins</code> in Codex, then ask: &ldquo;{ASK}&rdquo; Built to OpenAI&apos;s plugin format; not yet tried in Codex.</> },
+  { id: "hermes", name: "Hermes", copy: "curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.sh | sh && capcomd setup agent", next: <>Run it in your repository, then ask Hermes: &ldquo;{ASK}&rdquo; Setup tested against Hermes&apos;s config; not yet driven live.</> },
 ] as const;
 
 async function copy(text: string): Promise<boolean> {

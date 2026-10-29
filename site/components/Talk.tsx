@@ -9,10 +9,10 @@ import { Bot } from "./crew";
 
 type Ch = "down" | "up" | "shared" | "fenced";
 const CHANNELS: Array<{ id: Ch; name: string; text: ReactNode }> = [
-  { id: "down", name: "Down", text: <><code>send</code>: the orchestrator, a parent or an ancestor messages a running agent. Claude reads it at its next step; Codex can&apos;t while it runs.</> },
+  { id: "down", name: "Down", text: <><code>send</code>: your agent, a parent or an ancestor messages a running agent. Claude reads it at its next step; Codex can&apos;t while it runs.</> },
   { id: "up", name: "Up", text: <>A child&apos;s result goes to whoever awaits it: its branch, commit and verification, and from an agent that may spawn, a summary, artifacts and data.</> },
-  { id: "shared", name: "Shared", text: <>The run&apos;s task board, with leases and epochs, and a kv blackboard written with compare-and-swap, for the orchestrator and agents that may spawn.</> },
-  { id: "fenced", name: "Fenced", text: <>What another agent wrote arrives as data, never instructions. Authority comes only from the agent&apos;s capability token and its scope&apos;s limits.</> },
+  { id: "shared", name: "Shared", text: <>A task board agents claim work from, and a shared scratchpad, for your agent and any agent allowed to delegate.</> },
+  { id: "fenced", name: "Fenced", text: <>Text from another agent is data, never instructions. What an agent may do comes only from the permissions it was spawned with.</> },
 ];
 
 // The drawing, on a 600 × 400 canvas (positions in canvas units; HTML is placed in % so it scales with the box).

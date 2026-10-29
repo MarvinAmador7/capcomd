@@ -74,10 +74,10 @@ export function Durable() {
           <span>Built on</span><img src="/logos/rivet.svg" alt="" width={84} height={28} />
         </a>
         <h3 className="durable__title" data-reveal style={delay(60)}><span>Kill it mid-merge.</span> <span>It lands once.</span></h3>
-        <p data-reveal style={delay(120)}>Each run is a set of Rivet actors with their own SQLite state. Every change is one keyed transaction, so a replayed step is recorded once.</p>
+        <p data-reveal style={delay(120)}>Every step of a run is recorded before it counts, so a crashed engine resumes from the last recorded step and a retried step never acts twice. The record lives in Rivet actors, each with its own SQLite database.</p>
         <dl className="durable__cases" data-reveal style={delay(200)}>
-          <div><dt>The engine crashes</dt><dd>Its actors wake on the next request or alarm and carry on from the last committed step.</dd></div>
-          <div><dt>A worker VM dies</dt><dd>Its lease expires; the task comes back under a new epoch, and late results from the old one are refused.</dd></div>
+          <div><dt>The engine crashes</dt><dd>It resumes from the last recorded step.</dd></div>
+          <div><dt>A worker VM dies</dt><dd>Its task goes back on the board for a new agent; anything the dead one sends later is ignored.</dd></div>
           <div><dt>The engine is down</dt><dd>Worker VMs keep working and pushing their branches; nothing merges until it&apos;s back.</dd></div>
         </dl>
       </div>
