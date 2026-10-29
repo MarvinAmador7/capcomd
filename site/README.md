@@ -1,8 +1,9 @@
 # capcomd launch site
 
 A Next.js app (App Router, TypeScript) styled with Tailwind CSS. It's exported as static files (`output: "export"`),
-so `out/` can be served by any static host. It has no server features, API routes, middleware, analytics or
-host-specific code. It lives in the capcomd repo but has its own `package.json` and lockfile, and it isn't part of a
+so `out/` can be served by any static host. It has no server features, API routes, middleware or
+host-specific code. The one host-specific piece is Vercel Web Analytics (`@vercel/analytics`, mounted in
+`app/layout.tsx`): cookieless page views, sent to `/_vercel/insights` on Vercel and inert on any other host. It lives in the capcomd repo but has its own `package.json` and lockfile, and it isn't part of a
 root workspace.
 
 ```sh
