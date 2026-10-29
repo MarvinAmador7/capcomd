@@ -334,6 +334,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fix: `capcomd serve` now stops the Durable Streams services process (port 8642) when it exits, including when its
   watchdog stops it. It used to keep running, hold the port so the next `capcomd serve` couldn't start its own, and
   attach itself to that daemon's engine.
+- `capcomd serve` names the process holding a port it needs ("capcomd serve: :6421 is held by pid 4242 (rivet-engine)"),
+  and on the default port it also checks the services port (8642, or `RIVET_PORT`) before starting, instead of
+  starting an engine whose services then can't bind.
+- `capcomd serve` stops the engine together with anything the engine started, including after the engine died. When
+  its watchdog gives up on the engine, it now waits for the engine to stop before exiting and lists the harness API
+  requests that were still waiting for an answer.
+- Menu bar app: after the daemon restarts, its feeds reconnect at random, growing intervals (up to 5 s) instead of all
+  at once.
 - Menu bar app: an ended run's view is titled by how it ended ("Done in 7s", "Stopped after 32s") instead of its
   last step.
 - Menu bar app: in a run's view, click an agent's row in Activity to read its thread; that's how you get back to
