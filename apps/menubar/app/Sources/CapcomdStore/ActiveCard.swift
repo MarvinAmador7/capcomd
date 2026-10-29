@@ -68,9 +68,12 @@ public struct ActiveCard: Sendable, Hashable {
 
 /// A finished project's outcome (the newest Recent row, unfolded): how its latest run ended, then what landed.
 public struct CardOutcome: Sendable, Hashable {
+  /// How it ended, as the card's mark shows it.
+  public enum End: Sendable, Hashable { case merged, done, mergeDenied, mergeFailed, failed, stopped }
   public var runId: String
-  /// "Merged into main", "Merge denied", "Merge failed", or "Done", "Failed", "Stopped".
+  /// "Merged into main", "Merge denied", "Merge failed", or "Done", "Failed", "Stopped": the mark's label.
   public var head: String
+  public var end: End
   /// Its work was up for merging and didn't land (denied or failed, nothing merged): the files are what it proposed.
   public var notMerged = false
   public var durationMs: Int?
@@ -138,7 +141,12 @@ extension CapcomdStore {
     let took = run.startedAtMs.flatMap { s in run.endedAtMs.flatMap { e in e >= s ? e - s : nil } }
     let checked = agents.compactMap(\.checks)
     let cost = agents.compactMap(\.costUsd).reduce(0, +)
-    var out = CardOutcome(runId: run.id, head: head, durationMs: took,
+    let end: CardOutcome.End = switch run.outcome {
+    case .failed: .failed
+    case .stopped: .stopped
+    default: merged != nil ? .merged : unmerged == "denied" ? .mergeDenied : unmerged != nil ? .mergeFailed : .done
+    }
+    var out = CardOutcome(runId: run.id, head: head, end: end, durationMs: took,
                           crew: agents.prefix(ActiveCard.crewShown).map { ActiveCard.Member(runId: run.id, agentId: $0.id, name: names[$0.id] ?? $0.displayName) },
                           checksPassed: checked.isEmpty ? nil : checked.allSatisfy(\.passed), costUsd: cost > 0 ? cost : nil)
     out.notMerged = unmerged != nil

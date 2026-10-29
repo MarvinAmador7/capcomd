@@ -139,8 +139,8 @@ extension View {
   func hiddenUnlessTop(_ route: AppModel.Route) -> some View { modifier(HiddenUnlessTop(route: route)) }
 }
 
-/// A recent project (Composer board "Continue" rows): its planner's bot on a tile in the bot's palette, the goal, how it
-/// ended in words, and ⌘1–⌘3 to open it. No counts beyond the approved "· n repos".
+/// A recent project (Composer board "Continue" rows): its planner's bot on a tile in the bot's palette, the run's title,
+/// how it ended (its mark, then in words), and ⌘1–⌘3 to open it. No counts beyond the approved "· n repos".
 struct RecentRow: View {
   @Environment(AppModel.self) private var model
   let project: Project
@@ -152,6 +152,7 @@ struct RecentRow: View {
     // A run that never had agents still gets a bot, seeded by the run: a blank tile read as a broken image.
     let bot = run.flatMap { r in root.flatMap { model.bot(runId: r.id, agentId: $0.id) } }
       ?? run.flatMap { botTeam([(seed: $0.id, role: "planner")]).first }
+    let outcome = model.outcome(project)
     Button { if let run { model.open(run: run.id) } } label: {
       HStack(spacing: 12) {
         BotAvatar(traits: bot, size: .small)
@@ -160,7 +161,11 @@ struct RecentRow: View {
           .overlay(RoundedRectangle(cornerRadius: Theme.Composer2.tileRadius, style: .continuous).strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5))
         VStack(alignment: .leading, spacing: 2) {
           Text(verbatim: project.title).font(Theme.Composer2.rowTitle).foregroundStyle(Theme.Ask.text).lineLimit(1).truncationMode(.tail)
-          Text(verbatim: project.endedLine ?? "Done").font(Theme.Composer2.rowSub).foregroundStyle(Theme.Composer2.rowSubText).lineLimit(1)
+            .help(project.fullTitle)
+          HStack(spacing: Theme.Composer2.rowMarkGap) {
+            if let o = outcome { OutcomeMark(end: o.end, label: o.head, font: Theme.Composer2.rowMark) }
+            Text(verbatim: project.endedLine ?? "Done").font(Theme.Composer2.rowSub).foregroundStyle(Theme.Composer2.rowSubText).lineLimit(1)
+          }
         }
         Spacer(minLength: 0)
         FinishSparkle(endedAtMs: run?.lastEventMs)
@@ -173,7 +178,8 @@ struct RecentRow: View {
     .buttonStyle(PressableStyle())
     .onHover { hover = $0 }
     .keyboardShortcut(index <= 3 ? KeyEquivalent(Character("\(index)")) : KeyEquivalent(Character("0")), modifiers: index <= 3 ? .command : [.command, .option, .control, .shift])
-    .accessibilityLabel("\(project.title), \(project.endedLine ?? "done")")
+    // The words already say how it ended, except that its work merged.
+    .accessibilityLabel([project.title, outcome?.end == .merged ? outcome?.head : nil, project.endedLine ?? "done"].compactMap { $0 }.joined(separator: ", "))
     .accessibilityHint("Opens the run")
   }
 

@@ -19,7 +19,7 @@ Priority, highest first: **ask › failed › paused › working**. Every state 
 | Ask | an approval waits for the run | hand mark, the question | the asker's head, "worker asked 18s ago · planner and reviewer wait on it" | the files with +/−, or the branch line from an older daemon | View diff · Deny · Approve ↩ |
 | Failed | an agent of an active run failed | ✕ mark, "worker's checks failed" or "worker failed" | the agent's head, "worker · its checks didn't pass" / "· stopped with an error" | the failing lines (mono box) | Hide · Open thread |
 | Paused | agents stopped at a provider's usage limit (`result.limit == "quota"`) | pause mark, "Paused at Claude's usage limit" | their heads, "planner and reviewer pick up again at 15:40" (or "when the limit resets") | none | "Nothing to do unless it's urgent" · Resume now |
-| Outcome | the newest finished project (top of Recent) | crew heads, "Merged into main" (or Merge denied, Merge failed, Done, Failed, Stopped), duration | the goal | ✓ 2 files +24 −0 · checks passed · $0.41, or ✕ and the failing line | none (⌘1 opens it) |
+| Outcome | the newest finished project (top of Recent) | (none: the run's title leads, with how it ended as a mark by the duration) | the goal, unless the title already says it | the crew's heads, then ✓ 2 files +24 −0 · checks passed · $0.41, or the failing line (the mark is its ✕) | none (⌘1 opens it) |
 
 An ask can't be put away. Hide folds a failure back to the sentence until another reason unfolds the card (the
 reason is remembered: `ask:<approvalId>`, `failed:<agentId>`, `paused:<runId>:<agentIds>`). The chevron shows or
@@ -38,9 +38,21 @@ hides the agent tree (24 pt rows; approvals stay in the card body, not under the
 - Files: up to 4 rows, biggest change first (the daemon's order), then "and n more files". Binary files show a dash.
 - Failure line: a failed check's excerpt (the lines of the check output that name the failure), else how the checks
   failed, else the agent's error. At most 3 lines.
-- Outcome: "Merged into <target>" when an agent's merge landed and the run completed; "Merge denied" (or "Merge failed")
-  when nothing landed and a merge was denied (or failed), and then no leading ✓: the files are what it proposed; cost
-  only when API spend was billed; files only when the run changed some.
+- Titles: a run is named by its title (harness `Run.title`, else the app's port of the same rules in
+  `CapcomdStore/RunTitle.swift`): its label when it isn't just the goal, else the merged work's commit and PR subject
+  when exactly one agent's work merged, else a short form of the goal (its first line, cut where a clause ends, else
+  at a word with "…", about 50 characters), else its first agent's task; "Untitled run" with none of these, never the
+  run id. The Active card's title and the Recent rows use it too. One line, tail-truncated; the hover shows it in full
+  (the goal's first line when the title was cut from it). A better title (the merge's, once it lands) crossfades in
+  like the sentence (0.15 s, 1.5 pt blur; Reduce Motion: opacity only). The goal shows under the title only when the
+  title doesn't already say it, so the same words never show twice.
+- Outcome: how it ended is a mark before the duration, its words the tooltip and what VoiceOver reads: merged
+  (`arrow.triangle.merge`, green: "Merged into <target>") when an agent's merge landed and the run completed; done
+  (`checkmark.circle`, secondary); merge denied (`hand.raised.slash`, secondary) or merge failed
+  (`exclamationmark.triangle`, red) when nothing landed and a merge was denied (or failed), and then no leading ✓: the
+  files are what it proposed; failed (`xmark.circle`, red); stopped (`stop.circle`, tertiary). The marks render
+  hierarchically; the shape differs for each, so it never rests on colour. Cost only when API spend was billed; files
+  only when the run changed some. A Recent row carries the same mark (11 pt) before its words ("Done in 4m").
 - Times: elapsed and duration as a clock ("4:12", "1:02:09"); "asked 18s ago" with `shortDuration`; "at 15:40" in
   the user's locale.
 
@@ -59,7 +71,7 @@ hides the agent tree (24 pt rows; approvals stay in the card body, not under the
 | Failure box | 10 below; 7 corners, sunk fill, 7 × 9 padding, 11 mono on 3 spacing, 3 lines |
 | Bar | docked to the card's foot (full bleed), 12 above, 10 × 12 inside, 8 between, sunk fill (black 20 %, 5 % light) |
 | Buttons | 28 tall, 7 corners, 12 padding, 12.5/500; Approve: inverted fill (#F2F2F7 / #1D1D1F), 12.5/600, at least 112 wide, a 15 pt ↩ key (4 corners, 10.5/600, grey 22 %); Deny: 0.5 outline (20 %); text actions 12/500 secondary |
-| Outcome | the card's padding; heads + head 13/600 on a 20 row; goal 6 below at 12 secondary; stats 4 below at 11.5 |
+| Outcome | the card's padding; the folded card's shape: title 13/600 with the mark (12/500) 4 before the duration on the top row; goal (when shown) 6 below at 12 secondary; heads + stats (11.5) on the sentence's 20 row, 8 below |
 | Tree | 10 below the content, 24 rows |
 
 Colours (dark / light): text #F2F2F7 / #1D1D1F; secondary label 68 % / #3C3C43 86 %; tertiary 57 % / 80 %; amber

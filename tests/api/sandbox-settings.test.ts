@@ -194,7 +194,7 @@ describe("audit: sandbox.settings_changed on the daemon scope", () => {
 	test("durable: replayed by GET /v1/events?scope=daemon, sent on the daemon stream in seq order with run.created, kept across a restart", async () => {
 		const statePath = join(mkdtempSync(join(dir, "state-")), "harness-state.json");
 		const { app, get, patch, src } = setup({ statePath });
-		(await src.runs()).push({ id: "run-a", projectId: null, label: "a", state: "new", goal: "a", repo: null, createdAt: "2026-10-27T09:00:00.000Z" });
+		(await src.runs()).push({ id: "run-a", projectId: null, label: "a", state: "new", goal: "a", title: "a", titleSource: "goal", repo: null, createdAt: "2026-10-27T09:00:00.000Z" });
 		// The stream assigns the run its seq first (1), then the change gets the next one (2).
 		const read = async (after?: number) => {
 			const ctl = new AbortController();

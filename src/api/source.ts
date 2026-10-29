@@ -6,6 +6,7 @@ import type { Agent, AgentStatus, Attachment, Decision, Environment, Login, Mess
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
+import { runTitle } from "./run-title";
 import type { ApprovalDiff, RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
 import type { ListedProvider } from "../providers/registry";
@@ -147,10 +148,12 @@ export function parseApprovalId(id: string): { runId: string; opId: string } | n
 	return runId && opId ? { runId, opId } : null;
 }
 
+/** A seeded run: its title and titleSource may be left out (the source works them out as the daemon does). */
+type SeedRun = Omit<O<typeof Run>, "title" | "titleSource"> & Partial<Pick<O<typeof Run>, "title" | "titleSource">>;
 /** In-memory source for tests and fixtures. */
 const noPlanner = Object.fromEntries(LISTED_PROVIDERS.map((n) => [n, { available: false, reason: "No planner profile (run capcomd setup)" }]));
 export function memorySource(seed: Partial<{
-	runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo>;
+	runs: SeedRun[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo>;
 	/** Thread items by run (tests push more as the agent "works"). */
 	items: Record<string, O<typeof ThreadItem>[]>;
 	attachments: Record<string, Record<string, { mime: string; bytes: Uint8Array }>>;
@@ -189,6 +192,7 @@ export function memorySource(seed: Partial<{
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
 	const runs = seed.runs ?? [];
+	const autoTitled = new WeakSet<SeedRun>();
 	const decided: Array<{ approvalId: string; approve: boolean; by: string }> = [];
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
@@ -271,7 +275,15 @@ export function memorySource(seed: Partial<{
 			sent.set(key, seq);
 			return { seq, note: null };
 		},
-		runs: async () => runs,
+		// A seeded run without a title gets the daemon's, from its label, goal and agents as they are now. The list itself is
+		// returned (tests add and remove runs through it).
+		runs: async () => {
+			for (const r of runs) {
+				if (r.title === undefined) autoTitled.add(r);
+				if (autoTitled.has(r)) Object.assign(r, runTitle({ label: r.label, goal: r.goal, agents: seed.agents?.[r.id] }));
+			}
+			return runs as O<typeof Run>[];
+		},
 		projects: async () => [],
 		agents: async (r) => seed.agents?.[r] ?? (seed.runs?.some((x) => x.id === r) ? [] : null),
 		events: async (r, after) => (events[r] ?? []).filter((e) => e.seq > after),
@@ -306,7 +318,7 @@ export function memorySource(seed: Partial<{
 		createRun: async (input) => {
 			created.push(input);
 			const repo = input.repo ?? "/default-repo";
-			const run = { id: `run-mem-${created.length}`, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, repo, createdAt: isoTs(Date.now()) };
+			const run = { id: `run-mem-${created.length}`, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, ...runTitle({ label: input.goal, goal: input.goal }), repo, createdAt: isoTs(Date.now()) };
 			runs.push(run);
 			return run;
 		},

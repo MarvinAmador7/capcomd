@@ -309,6 +309,7 @@ public final class CapcomdStore {
     for r in b.runs {
       var run = runs[r.id] ?? Run(id: r.id, projectId: r.projectId, label: r.label, goal: nil, state: r.state, startedAtMs: nil, lastEventMs: 0)
       run.projectId = r.projectId; run.label = r.label; run.state = r.state; run.goal = r.goal.map(UntrustedText.init)
+      run.daemonTitle = Self.daemonTitle(r)
       run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt)
       runs[r.id] = run
     }
@@ -485,6 +486,12 @@ public final class CapcomdStore {
     }
   }
 
+  /// `Run.title` as the daemon sent it (agent- or user-written: plain text), with its source.
+  nonisolated static func daemonTitle(_ r: SnapshotRun) -> RunTitle? {
+    guard let t = r.title.map({ UntrustedText($0).firstLine }), !t.isEmpty else { return nil }
+    return RunTitle(text: t, source: .init(wire: r.titleSource ?? "goal"))
+  }
+
   /// Lifecycle feed snapshot: run state, agent statuses and pending approvals for one run. Leaves Activity alone
   /// (the run stream owns it when open).
   func mergeLifecycle(runId: String, key: String, from b: ResetBuffer, snapshotSeq: Int) {
@@ -492,6 +499,7 @@ public final class CapcomdStore {
       var run = runs[r.id] ?? Run(id: r.id, projectId: r.projectId, label: r.label, goal: nil, state: r.state, startedAtMs: nil, lastEventMs: 0)
       run.projectId = r.projectId ?? run.projectId; run.label = r.label ?? run.label; run.state = r.state
       if let g = r.goal { run.goal = UntrustedText(g) }
+      run.daemonTitle = Self.daemonTitle(r)
       run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt)
       runs[r.id] = run
     }

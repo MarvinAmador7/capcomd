@@ -1,0 +1,251 @@
+{
+	"short": [
+		{
+			"input": "Add a multiply(a, b) function to src/math.ts and a bun test for it",
+			"title": "Add a multiply(a, b) function to src/math.ts"
+		},
+		{
+			"input": "Add a multiply(a, b) function to src/math.ts and a bun test for it. Keep the existing exports.",
+			"title": "Add a multiply(a, b) function to src/math.ts"
+		},
+		{
+			"input": "Fix the flaky login test. It times out on CI about once a day and nobody knows why yet",
+			"title": "Fix the flaky login test"
+		},
+		{
+			"input": "Fix the flaky login test",
+			"title": "Fix the flaky login test"
+		},
+		{
+			"input": "fix ids",
+			"title": "fix ids"
+		},
+		{
+			"input": "  \n\n## Migrate the `ids/v1` schema to **v2**\nDetails on the next line",
+			"title": "Migrate the ids/v1 schema to v2"
+		},
+		{
+			"input": "- [ ] write docs",
+			"title": "write docs"
+		},
+		{
+			"input": "Please add dark mode to the settings window",
+			"title": "Add dark mode to the settings window"
+		},
+		{
+			"input": "can you bump the rivetkit pin to 2.3.31?",
+			"title": "Bump the rivetkit pin to 2.3.31"
+		},
+		{
+			"input": "Refactor the scheduler: split the lease logic out of scope.ts so it can be tested without an engine",
+			"title": "Refactor the scheduler"
+		},
+		{
+			"input": "Investigate why the menu bar app crashes when the daemon restarts (see the crash log in ~/Library/Logs) and fix it",
+			"title": "Investigate why the menu bar app crashes when…"
+		},
+		{
+			"input": "In src/math.ts add and export function multiply(a: number, b: number): number returning a * b, then add a test",
+			"title": "In src/math.ts add and export function…"
+		},
+		{
+			"input": "Make the onboarding flow remember the last folder the user picked across launches of the app",
+			"title": "Make the onboarding flow remember the last…"
+		},
+		{
+			"input": "設定画面にダークモードを追加して、既存のテーマ設定と連動させる。テストも追加すること。さらにドキュメントも更新する",
+			"title": "設定画面にダークモードを追加して、既存のテーマ設定と連動させる"
+		},
+		{
+			"input": "ログイン画面のバグを修正してください。エラーメッセージが表示されない問題があり、再現手順はissueに書いてあります",
+			"title": "ログイン画面のバグを修正してください"
+		},
+		{
+			"input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+			"title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+		},
+		{
+			"input": "Добавить функцию умножения в src/math.ts и тест для неё, затем обновить README и CHANGELOG",
+			"title": "Добавить функцию умножения в src/math.ts и тест…"
+		},
+		{
+			"input": "🚀 Ship the release notes generator with emoji support 🎉 and make sure it handles 👨‍👩‍👧 family emoji correctly",
+			"title": "🚀 Ship the release notes generator"
+		},
+		{
+			"input": "[agent:planner] Split the work into three tasks",
+			"title": "Split the work into three tasks"
+		},
+		{
+			"input": "...",
+			"title": null
+		},
+		{
+			"input": "",
+			"title": null
+		},
+		{
+			"input": "Update deps",
+			"title": "Update deps"
+		},
+		{
+			"input": "1. Rename capcomd's run index file and migrate old entries on first read so nothing is lost",
+			"title": "Rename capcomd's run index file"
+		},
+		{
+			"input": "Rename\tthe   run    index",
+			"title": "Rename the run index"
+		}
+	],
+	"runs": [
+		{
+			"name": "goal",
+			"run": {
+				"label": null,
+				"goal": "Add a multiply(a, b) function to src/math.ts and a bun test for it",
+				"agents": []
+			},
+			"title": "Add a multiply(a, b) function to src/math.ts",
+			"titleSource": "goal"
+		},
+		{
+			"name": "label repeating the goal",
+			"run": {
+				"label": "Add a multiply(a, b) function to src/math.ts and a bun test for it",
+				"goal": "Add a multiply(a, b) function to src/math.ts and a bun test for it",
+				"agents": []
+			},
+			"title": "Add a multiply(a, b) function to src/math.ts",
+			"titleSource": "goal"
+		},
+		{
+			"name": "label of its own",
+			"run": {
+				"label": "Auth refactor",
+				"goal": "Move token checks into one middleware",
+				"agents": [
+					{
+						"parent": "agt-p",
+						"task": "Move token checks",
+						"result": {
+							"merge": {
+								"state": "merged",
+								"target": "main"
+							}
+						}
+					}
+				]
+			},
+			"title": "Auth refactor",
+			"titleSource": "label"
+		},
+		{
+			"name": "one merge",
+			"run": {
+				"label": null,
+				"goal": "make math better",
+				"agents": [
+					{
+						"parent": null,
+						"task": "make math better",
+						"result": null
+					},
+					{
+						"parent": "agt-p",
+						"task": "Add multiply(a, b) to src/math.ts with a test\n\nUse bun test.",
+						"result": {
+							"merge": {
+								"state": "merged",
+								"target": "main"
+							}
+						}
+					}
+				]
+			},
+			"title": "Add multiply(a, b) to src/math.ts with a test",
+			"titleSource": "merge"
+		},
+		{
+			"name": "two merges",
+			"run": {
+				"label": null,
+				"goal": "make math better",
+				"agents": [
+					{
+						"parent": null,
+						"task": "make math better",
+						"result": null
+					},
+					{
+						"parent": "agt-p",
+						"task": "Add multiply",
+						"result": {
+							"merge": {
+								"state": "merged",
+								"target": "main"
+							}
+						}
+					},
+					{
+						"parent": "agt-p",
+						"task": "Add divide",
+						"result": {
+							"merge": {
+								"state": "merged",
+								"target": "main"
+							}
+						}
+					}
+				]
+			},
+			"title": "make math better",
+			"titleSource": "goal"
+		},
+		{
+			"name": "merge denied",
+			"run": {
+				"label": null,
+				"goal": "make math better",
+				"agents": [
+					{
+						"parent": "agt-p",
+						"task": "Add multiply",
+						"result": {
+							"merge": {
+								"state": "denied"
+							}
+						}
+					}
+				]
+			},
+			"title": "make math better",
+			"titleSource": "goal"
+		},
+		{
+			"name": "no goal: first agent's task",
+			"run": {
+				"label": null,
+				"goal": null,
+				"agents": [
+					{
+						"parent": null,
+						"task": "Survey the repo's tests and report the slow ones",
+						"result": null
+					}
+				]
+			},
+			"title": "Survey the repo's tests and report the slow ones",
+			"titleSource": "task"
+		},
+		{
+			"name": "nothing",
+			"run": {
+				"label": null,
+				"goal": null,
+				"agents": []
+			},
+			"title": null,
+			"titleSource": null
+		}
+	]
+}

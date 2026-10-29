@@ -21,6 +21,7 @@ import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
 import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
 import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
+import { runTitle } from "../../../../src/api/run-title";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
@@ -212,7 +213,7 @@ function subjectOf(p: ApprovalSpec) {
 function depthOf(r: RunSpec, a: AgentSpec): number { let d = 0, p = a.parent; while (p) { d++; p = r.agents.find(x => x.id === p)?.parent; } return d; }
 const HEAD = seq;
 
-const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, repo: null, createdAt: iso(NOW - r.startedAgo) });
+const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, ...runTitle({ label: null, goal: r.goal }), repo: null, createdAt: iso(NOW - r.startedAgo) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
   text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
   task: a.task ?? null, taskAttachment: null, result: a.result ?? null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago),
@@ -327,7 +328,7 @@ Bun.serve({
       if (body.effort !== undefined && !levels[body.driver ?? "claude"].includes(body.effort)) return err(422, "invalid", `effort must be one of ${levels[body.driver ?? "claude"].join(", ")}`);
       console.log(`runs.create goal=${JSON.stringify(body.goal)} driver=${body.driver ?? "(default)"} sandbox=${body.sandbox ?? "(default)"} effort=${body.effort ?? "(default)"}`);
       if (process.env.NO_REPO && !body.repo) return err(422, "invalid", "repo is required: this daemon has no default repository (CAPCOMD_REPO).");
-      return Response.json({ id: `run-new${Date.now() % 100000}`, projectId: "prj-new", label: body.goal, state: "starting", goal: body.goal, repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
+      return Response.json({ id: `run-new${Date.now() % 100000}`, projectId: "prj-new", label: body.goal, state: "starting", goal: body.goal, ...runTitle({ label: body.goal, goal: body.goal }), repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
     }
     if (p === "/v1/runs") return Response.json(runs.map(runBody));
     const r1 = p.match(/^\/v1\/runs\/([^/]+)\/(trace|files)$/), run1 = r1 && runs.find(r => r.id === r1[1]);

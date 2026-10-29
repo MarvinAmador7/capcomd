@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- The menu bar's Recent list shows each run by its title instead of "Done", with how it ended as an icon by its time
+  (merged, done, merge denied, merge failed, failed, stopped; hover it, or ask VoiceOver, for the words). The title is
+  the run's label when you (or the agent that started it, through `capcomd_run_new`) gave it one, else the title of
+  the pull request its work merged as, else a short form of the goal ("Add a multiply(a, b) function to
+  src/math.ts"), and it changes to the pull request's title once that lands. The goal shows under the title only when
+  the title doesn't already say it; hover a cut title for all of it. Active cards and the run view use the same titles.
+  The harness API's runs carry it as `title` and `titleSource`.
 - Fix: listing runs no longer creates empty runs in the engine. When your run list (`state/runs.jsonl`) names a run
   this engine doesn't have, for example one a test engine on another port recorded, the menu bar, the harness API and
   `capcomd_runs` show it as "unknown" with no agents. Before, every listing (twice a second while the menu bar is open)

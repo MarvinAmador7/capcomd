@@ -69,15 +69,17 @@ struct ActiveCardView: View {
   }
 
   // MARK: top row
-  /// The goal (13/600 folded, 12 secondary once the ask leads) and the elapsed time. Opens the run.
+  /// The run's title (13/600 folded, 12 secondary once the ask leads; the full goal on hover) and the elapsed time.
+  /// Opens the run.
   private func top(_ c: ActiveCard, open: Bool) -> some View {
     Button { model.open(run: c.runId) } label: {
       HStack(alignment: .firstTextBaseline, spacing: Theme.Ask.topGap) {
-        Text(verbatim: c.title)   // untrusted goal: verbatim, never markdown
+        Text(verbatim: c.title)   // untrusted title: verbatim, never markdown
           .font(open ? Theme.Ask.goalFont : Theme.Ask.titleFont).tracking(open ? 0 : Theme.Ask.titleTracking)
           .foregroundStyle(open ? Theme.Ask.text2 : Theme.Ask.text)
           .lineLimit(1).truncationMode(.tail)
           .frame(maxWidth: .infinity, alignment: .leading)
+          .help(project.fullTitle)
         ElapsedClock(since: c.startedAtMs)
       }
       .contentShape(Rectangle())
@@ -522,26 +524,50 @@ struct CardTextButtonStyle: ButtonStyle {
   }
 }
 
-/// A finished project's newest run, folded to its outcome: its crew, how it ended and how long it took, the goal, then
-/// what landed (files, lines, checks, cost) or why it failed. ⌘1 opens it, like the Recent rows below it.
+/// A finished project's newest run, folded to its outcome: its crew, the run's title, how it ended (a mark) and how long
+/// it took, the goal when the title doesn't already say it, then what landed (files, lines, checks, cost) or why it
+/// failed. ⌘1 opens it, like the Recent rows below it.
 struct OutcomeRow: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let project: Project
   var body: some View {
     if let o = model.outcome(project) {
+      let title = project.title
       Button { model.open(run: o.runId) } label: {
         VStack(alignment: .leading, spacing: 0) {
-          HStack(spacing: Theme.Ask.lineGap) {
-            CrewHeads(members: o.crew)
-            Text(verbatim: o.head).font(Theme.Ask.titleFont).tracking(Theme.Ask.titleTracking).foregroundStyle(Theme.Ask.text).lineLimit(1)
-            Spacer(minLength: 0)
+          // The top row keeps the Active card's shape: the title, then how it ended (a mark) by the time it took.
+          HStack(alignment: .firstTextBaseline, spacing: Theme.Ask.topGap) {
+            // The title names the work (untrusted: verbatim, never markdown); a better one (the merged work's) crossfades in.
+            ZStack(alignment: .leading) {
+              Text(verbatim: title).font(Theme.Ask.titleFont).tracking(Theme.Ask.titleTracking).foregroundStyle(Theme.Ask.text)
+                .lineLimit(1).truncationMode(.tail)
+                .id(title).transition(reduceMotion ? .opacity : .blurFade(Theme.Ask.tickerBlur))
+            }
+            .animation(reduceMotion ? Theme.Ask.reduced : Theme.Ask.ticker, value: title)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(project.fullTitle)
             FinishSparkle(endedAtMs: model.run(o.runId)?.endedAtMs)
-            if let d = o.durationMs { Text(verbatim: elapsedClock(ms: d)).font(Theme.Ask.timeFont).foregroundStyle(Theme.Ask.text3).monospacedDigit() }
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Ask.markGap) {
+              OutcomeMark(end: o.end, label: o.head, tooltip: false)
+              if let d = o.durationMs { Text(verbatim: elapsedClock(ms: d)).font(Theme.Ask.timeFont).foregroundStyle(Theme.Ask.text3).monospacedDigit() }
+            }
+            .fixedSize()
+            .help(o.durationMs.map { "\(o.head) · took \(spokenDuration(ms: $0))" } ?? o.head)
           }
-          .frame(height: Theme.Ask.lineHeight)
-          Text(verbatim: project.title).font(Theme.Ask.goalFont).foregroundStyle(Theme.Ask.text2).lineLimit(1).truncationMode(.tail)
-            .padding(.top, Theme.Ask.outcomeGoalTop)
-          stats(o).padding(.top, Theme.Ask.statsTop)
+          if let goal = project.goalLine {
+            Text(verbatim: goal).font(Theme.Ask.goalFont).foregroundStyle(Theme.Ask.text2).lineLimit(1).truncationMode(.tail)
+              .padding(.top, Theme.Ask.outcomeGoalTop)
+          }
+          // Where the Active card's crew said what it was doing, the crew and what landed.
+          if !o.crew.isEmpty || Self.hasStats(o) {
+            HStack(spacing: Theme.Ask.lineGap) {
+              if !o.crew.isEmpty { CrewHeads(members: o.crew) }
+              stats(o)
+            }
+            .frame(height: Theme.Ask.lineHeight)
+            .padding(.top, Theme.Ask.lineTop)
+          }
         }
         .padding(Theme.Ask.padding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -559,7 +585,7 @@ struct OutcomeRow: View {
   @ViewBuilder private func stats(_ o: CardOutcome) -> some View {
     HStack(spacing: Theme.Ask.statsGap) {
       if let f = o.failure {
-        Image(systemName: "xmark.circle").foregroundStyle(Theme.Ask.red)
+        // The ✕ is the top row's mark: here only why.
         Text(verbatim: f.firstLine).font(Theme.Ask.errFont).foregroundStyle(Theme.Ask.text2).lineLimit(1).truncationMode(.tail)
       } else {
         // The ✓ reads as "landed": not on work whose merge was denied or failed.
@@ -582,16 +608,51 @@ struct OutcomeRow: View {
     .font(Theme.Ask.statsFont).lineLimit(1)
   }
   private var dot: some View { Text(verbatim: "·").foregroundStyle(Theme.Ask.text3) }
+  static func hasStats(_ o: CardOutcome) -> Bool { o.failure != nil || o.files != nil || o.checksPassed != nil || o.costUsd != nil }
   static func money(_ usd: Double) -> String { usd >= 100 ? String(format: "$%.0f", usd) : String(format: "$%.2f", usd) }
 
   private func spoken(_ o: CardOutcome) -> String {
-    var parts = [o.head, project.title]
+    var parts = [project.title, o.head]
+    if let g = project.goalLine { parts.append(g) }
     if let d = o.durationMs { parts.append("took \(spokenDuration(ms: d))") }
     if let f = o.failure { parts.append(f.firstLine) }
     if let n = o.files { parts.append("\(n) \(n == 1 ? "file" : "files"), \(o.added ?? 0) lines added, \(o.removed ?? 0) removed") }
     if let c = o.checksPassed { parts.append(c ? "checks passed" : "checks failed") }
     if let usd = o.costUsd { parts.append(Self.money(usd)) }
     return parts.joined(separator: ", ")
+  }
+}
+
+/// How a finished run ended, as a status mark (SPEC §5's marks, plus merged / merge denied / merge failed): the shape
+/// differs per outcome, so it never rests on colour; its words are the tooltip and what VoiceOver reads.
+struct OutcomeMark: View {
+  let end: CardOutcome.End
+  let label: String
+  var font: Font = Theme.Ask.markFont
+  /// Off where the mark sits in a group with a tooltip of its own.
+  var tooltip = true
+  var body: some View {
+    Image(systemName: Self.symbol(end)).font(font).symbolRenderingMode(.hierarchical).foregroundStyle(Self.tint(end))
+      .help(tooltip ? label : "").accessibilityLabel(label)
+  }
+  static func symbol(_ e: CardOutcome.End) -> String {
+    switch e {
+    case .merged: "arrow.triangle.merge"
+    case .done: "checkmark.circle"
+    case .mergeDenied: "hand.raised.slash"
+    case .mergeFailed: "exclamationmark.triangle"
+    case .failed: "xmark.circle"
+    case .stopped: "stop.circle"
+    }
+  }
+  /// Green only for work that landed, red for failures; a decision or a stop isn't one, so it stays grey.
+  static func tint(_ e: CardOutcome.End) -> Color {
+    switch e {
+    case .merged: Theme.Ask.green
+    case .done, .mergeDenied: Theme.Ask.text2
+    case .mergeFailed, .failed: Theme.Ask.red
+    case .stopped: Theme.Ask.text3
+    }
   }
 }
 

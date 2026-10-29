@@ -418,6 +418,8 @@ enum Theme {
     // Recent rows (.continue)
     static let tile: CGFloat = 34, tileRadius: CGFloat = 10, rowRadius: CGFloat = 14, rowPadding = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
     static let rowTitle = Font.system(size: 13.5, weight: .medium), rowSub = Font.system(size: 12)
+    /// The outcome mark leading the row's second line, 4 pt before its words.
+    static let rowMark = Font.system(size: 11, weight: .medium), rowMarkGap: CGFloat = 4
     static let rowSubText = Theme.label(dark: 0.55, light: 0.72), rowHover = Color.white.opacity(0.07)
   }
   /// The composer's inline project setup (design/setup/Inline*.dc.html): a picked folder's next steps in the card.
@@ -600,8 +602,12 @@ enum Theme {
     static let key: CGFloat = 15, keyRadius: CGFloat = 4, keyFont = Font.system(size: 10.5, weight: .semibold), keyGap: CGFloat = 7
     static let textButtonFont = Font.system(size: 12, weight: .medium), noteFont = Font.system(size: 12)
     static let statusFont = Font.system(size: 12)
-    // The outcome (a finished run, folded): heads, how it ended, the goal, then what landed (.b-stats, 4 below).
-    static let outcomeGoalTop: CGFloat = 6, statsTop: CGFloat = 4, statsFont = Font.system(size: 11.5), statsGap: CGFloat = 6
+    // The outcome (a finished run, folded), in the folded card's shape: the run's title and how it ended as a mark by
+    // its time (the top row), the goal 6 below when the title doesn't already say it, then the crew's heads and what
+    // landed (.b-stats) on the sentence's row.
+    static let outcomeGoalTop: CGFloat = 6, statsFont = Font.system(size: 11.5), statsGap: CGFloat = 6
+    /// How it ended (Recent): a status mark at the title's size class, 4 pt before the time it took.
+    static let markFont = Font.system(size: 12, weight: .medium), markGap: CGFloat = 4
     // The tree, unfolded (.b-tree): 10 below, 24 pt rows.
     static let treeTop: CGFloat = 10, treeRow: CGFloat = 24
     static let ringWidth: CGFloat = 1
