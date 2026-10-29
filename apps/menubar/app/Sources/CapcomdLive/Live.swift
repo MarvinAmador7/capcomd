@@ -8,8 +8,8 @@ import Foundation
 /// connection (the store drops local state and applies the snapshot; the cursor jumps to snapshotSeq); `: heartbeat`
 /// every 15s, so `idleTimeout` (default 45s) of silence is a dead socket and we reconnect. A feed must outlive the
 /// daemon: a clean close (daemon restart, a cut connection), a 5xx or a transport error reconnects from the cursor,
-/// backing off up to `maxBackoff`, for as long as the subscription lives. Only 401 (bad token) and 404 (no such
-/// scope) end it.
+/// backing off exponentially with full jitter up to `maxBackoff` (so a restart doesn't get every feed back at once), for
+/// as long as the subscription lives. Only 401 (bad token) and 404 (no such scope) end it.
 public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   let transport: UnixSocketTransport
   let backoff: Duration; let maxBackoff: Duration; let idleTimeout: Duration
@@ -53,7 +53,7 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
         catch { if Task.isCancelled { return } }
         attempts += 1
         if attempts >= 2, !down { down = true; await onFrame(.link(up: false)) }   // not on one quick reconnect
-        try? await Task.sleep(for: min(bo * attempts * attempts, cap))
+        try? await Task.sleep(for: jitteredBackoff(base: bo, attempt: attempts, cap: cap))
       }
     }
     return h
