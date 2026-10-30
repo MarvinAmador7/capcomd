@@ -25,11 +25,20 @@ public final class CapcomdStore {
   var threadCursor: [String: Int] = [:]
   public internal(set) var threadUnavailable: [String: DetailUnavailable] = [:]
   public internal(set) var media: [MediaKey: Fetched<Data>] = [:]
-  /// The run whose lifecycle feed carries `thread=1` (the open thread's run), and the agent shown.
-  public internal(set) var threadStreamRun: String?
+  /// Who follows which run's live thread items: the panel's open thread ("panel") and the desktop reel ("reel") each
+  /// hold at most one run. Those runs' lifecycle feeds carry `thread=1`; it covers every agent of the run.
+  var threadHolders: [String: String] = [:]
+  public var threadStreamRuns: Set<String> { Set(threadHolders.values) }
+  /// The panel's open thread: its run, and the agent shown.
+  public var threadStreamRun: String? { threadHolders[Self.panelHolder] }
   public internal(set) var openThreadAgent: String?
   public let prefs: UIPreferences
+  /// Something changed (the menu bar's whole-model refresh).
   public var onChange: (@MainActor () -> Void)?
+  /// The same moment, saying what changed, so a view showing one agent re-renders only for that agent. `.all` when
+  /// a change isn't narrowed (most durable events); live frames (activity, thread items) are always narrowed.
+  public var onChanges: (@MainActor (Set<ChangeKey>) -> Void)?
+  var pendingChanges: Set<ChangeKey> = []
 
   // Run detail (drill-down): fetched over REST while a run is open; see StoreDetail.swift.
   public internal(set) var traces: [String: Fetched<[TraceSpan]>] = [:]
@@ -249,7 +258,7 @@ public final class CapcomdStore {
     guard subs[key] == nil, let subscriber else { return }
     let after = cursor[key] ?? 0
     let onFrame: @Sendable (StreamFrame) async -> Void = { [weak self] f in await self?.receive(f, scope: key) }
-    let thread = feed != nil && Self.lifecycleRun(key) == threadStreamRun   // the open thread's run: live thread items too
+    let thread = feed != nil && Self.lifecycleRun(key).map(threadStreamRuns.contains) == true   // followed runs: live thread items too
     subs[key] = feed == nil ? subscriber.subscribe(scope: scope, after: after, onFrame: onFrame)
                             : subscriber.subscribe(scope: scope, feed: feed, thread: thread, after: after, onFrame: onFrame)
   }
@@ -409,7 +418,10 @@ public final class CapcomdStore {
     case "agent.resumed", "agent.started":
       setStatus(runId, agentId, .running, e)
       if let runId, let agentId { runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil }
-    case "agent.thread_item_changed": applyThreadFrame(runId: runId, agentId: agentId, d)
+    case "agent.thread_item_changed":
+      applyThreadFrame(runId: runId, agentId: agentId, d)
+      // Up to four frames a second per item: narrowed, so only that agent's thread (and its run's last-event time) re-render.
+      if let runId, let agentId { mark(.run(runId), .agent(agentId), .thread(agentId)) }
     case "agent.step":
       // One finished step of an agent (capability agent.steps): "Read 4 files", then "Edited a file", in order. Keyed
       // like the daemon dedupes it (agent, kind, start), so a replay or a re-driven agent doesn't add a row twice.
@@ -425,6 +437,7 @@ public final class CapcomdStore {
       runs[runId]?.agents[agentId]?.activityKind = d["activity"]?["kind"]?.string
       runs[runId]?.agents[agentId]?.activityAtMs = epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs
       if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
+      mark(.run(runId), .agent(agentId), .thread(agentId))   // live, once a second per agent: narrowed
     case "verify.started", "verify.passed", "verify.failed":
       guard let runId else { return }
       let st: StepStatus = e.type == "verify.started" ? .running : e.type == "verify.passed" ? .done : .failed
@@ -590,5 +603,23 @@ public final class CapcomdStore {
     return result
   }
 
-  func changed() { onChange?() }
+  /// Narrows the next `changed()` to these keys. Only for a change known to touch nothing else.
+  func mark(_ keys: ChangeKey...) { pendingChanges.formUnion(keys) }
+  func changed() {
+    let keys: Set<ChangeKey> = pendingChanges.isEmpty ? [.all] : pendingChanges
+    pendingChanges = []
+    onChange?(); onChanges?(keys)
+  }
+}
+
+/// What a change touched (`CapcomdStore.onChanges`).
+public enum ChangeKey: Hashable, Sendable {
+  /// Anything may have changed.
+  case all
+  /// A run's own fields (state, last event, its agents' statuses or activity lines).
+  case run(String)
+  /// One agent's fields (status, activity line).
+  case agent(String)
+  /// One agent's thread (its items).
+  case thread(String)
 }

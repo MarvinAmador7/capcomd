@@ -82,6 +82,43 @@ final class ThreadItemsTests: XCTestCase {
     XCTAssertEqual(sub.opened.filter { $0.scope == "run-x" }.count, 3)
   }
 
+  func testPanelAndReelFollowRunsIndependently() {
+    let sub = RecordingSub(); let s = CapcomdStore(subscriber: sub, thread: FakeThread())
+    s.start(); spawn(s)
+    s.receive(.event(Envelope(id: "rc", scope: "daemon", seq: 2, entity: "run-x", type: "run.created", epochMs: 1, projectId: "prj-x", runId: "run-x",
+                              agentId: nil, data: [:])), scope: "daemon")
+    func runX() -> Int { sub.opened.filter { $0.scope == "run-x" }.count }
+    s.followThreads(runId: "run-x", holder: CapcomdStore.reelHolder)
+    XCTAssertEqual(sub.opened.last?.thread, true)
+    let reopened = runX()
+    s.openThread(runId: "run-x", agentId: "agt-1")   // already followed by the reel: the feed isn't reopened
+    XCTAssertEqual(runX(), reopened)
+    s.closeThread()                                 // the reel still follows it
+    XCTAssertEqual(runX(), reopened)
+    XCTAssertEqual(s.threadStreamRuns, ["run-x"])
+    frame(s, itemJSON("i1", seq: 1, order: 0))
+    XCTAssertEqual(s.books["agt-1"]?.items.map(\.id), ["i1"])
+    s.followThreads(runId: nil, holder: CapcomdStore.reelHolder)
+    XCTAssertEqual(sub.opened.last.map { "\($0.scope) \($0.feed ?? "-") \($0.thread)" }, "run-x lifecycle false")
+  }
+
+  func testLiveFramesNarrowTheChangeToTheirAgent() {
+    let s = CapcomdStore(thread: FakeThread()); spawn(s)
+    var seen: [Set<ChangeKey>] = []
+    s.onChanges = { seen.append($0) }
+    s.followThreads(runId: "run-x", holder: CapcomdStore.reelHolder)
+    frame(s, itemJSON("i1", seq: 1, order: 0))
+    XCTAssertEqual(seen.last, [.run("run-x"), .agent("agt-1"), .thread("agt-1")])
+    var e = Envelope(id: "act", scope: "run-x", seq: 1, entity: "agt-1", type: "agent.activity_changed", epochMs: 2, projectId: "prj-x",
+                     runId: "run-x", agentId: "agt-1", data: ["activity": .object(["text": .string("Editing keys.ts"), "kind": .string("edit")])])
+    e.durability = "ephemeral"
+    s.receive(.event(e), scope: CapcomdStore.lifecycleKey("run-x"))
+    XCTAssertEqual(seen.last, [.run("run-x"), .agent("agt-1"), .thread("agt-1")])
+    s.receive(.event(Envelope(id: "sp2", scope: "run-x", seq: 3, entity: "agt-2", type: "agent.spawned", epochMs: 3, projectId: "prj-x", runId: "run-x",
+                              agentId: "agt-2", data: ["profile": .string("worker")])), scope: "run-x")   // durable: not narrowed
+    XCTAssertEqual(seen.last, [.all])
+  }
+
   func testStructuredItemsInterleaveWithSteersAndFallBackOnOlderDaemons() async {
     let t = FakeThread()
     t.pages[0] = page([itemJSON("i1", seq: 1, order: 0, at: "2026-10-26T12:00:00.000Z"), itemJSON("i2", seq: 2, order: 1, at: "2026-10-26T12:00:10.000Z")], next: nil)
