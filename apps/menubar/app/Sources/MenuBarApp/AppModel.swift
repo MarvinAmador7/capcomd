@@ -363,3 +363,12 @@ enum Notifier {
   }
 }
 #endif
+
+#if canImport(SwiftUI) && os(macOS)
+/// The menu bar's thread views read the whole model (its `revision`): fine for one thread at a time in the panel.
+extension AppModel: ThreadHost {
+  func agentProvider(runId: String, agentId: String) -> Provider? { provider(runId: runId, agentId: agentId)?.provider }
+  func role(runId: String, agentId: String) -> String? { run(runId)?.agents[agentId]?.displayName }
+  func openAgent(runId: String, agentId: String) { path.append(.thread(runId: runId, agentId: agentId)) }
+}
+#endif

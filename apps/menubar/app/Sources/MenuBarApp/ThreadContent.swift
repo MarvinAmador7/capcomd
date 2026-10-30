@@ -9,6 +9,30 @@ import CapcomdBot
 /// plain text: it goes into `Text(verbatim:)` or a plain `AttributedString(_:)` (never markdown), links act only on the
 /// daemon's classification (LinkAction), and media loads through the daemon or, for remote media, only on a click.
 
+/// What thread views need from the app showing them, so the same views serve the menu bar and the desktop app. Each
+/// host decides how narrowly its reads are observed: the desktop reads per-agent slices, so a row re-renders only when
+/// what it shows changed.
+@MainActor protocol ThreadHost: AnyObject {
+  func bot(runId: String, agentId: String) -> BotTraits?
+  func agentProvider(runId: String, agentId: String) -> Provider?
+  /// The agent's role as the tree names it ("worker").
+  func role(runId: String, agentId: String) -> String?
+  func media(_ key: MediaKey) -> Fetched<Data>?
+  func loadMedia(_ key: MediaKey) async
+  /// A click on a handoff or an agent link: show that agent.
+  func openAgent(runId: String, agentId: String)
+}
+
+/// The host, compared by identity so re-applying the same one never invalidates the views that read it.
+struct ThreadHostBox: Equatable {
+  let host: any ThreadHost
+  static func == (a: Self, b: Self) -> Bool { a.host === b.host }
+}
+private struct ThreadHostKey: EnvironmentKey { static let defaultValue: ThreadHostBox? = nil }
+extension EnvironmentValues {
+  var threadHost: ThreadHostBox? { get { self[ThreadHostKey.self] } set { self[ThreadHostKey.self] = newValue } }
+}
+
 /// Internal link URLs: a click on an agent or run link navigates; web links carry their own (checked http/https) URL.
 enum ThreadLinkURL {
   static let scheme = "capcomd-thread"
@@ -241,7 +265,7 @@ struct TableBlock: View {
 /// Attachment and workspace images load through the daemon (png, jpeg, gif, webp only). Remote media and anything
 /// that isn't an image show as a chip: a remote image loads only when clicked, and nothing else ever loads.
 struct MediaBlockView: View {
-  @Environment(AppModel.self) private var model
+  @Environment(\.threadHost) private var host
   let runId: String
   let agentId: String
   let media: Media
@@ -259,13 +283,13 @@ struct MediaBlockView: View {
 
   var body: some View {
     if let key {
-      switch model.media(key) {
+      switch host?.host.media(key) {
       case .loaded(let d)?:
         if let img = NSImage(data: d) { picture(img) } else { chip(icon: "photo", text: media.alt.isEmpty ? "Image" : media.alt, note: "couldn't be shown") }
       case .unavailable?: chip(icon: "photo", text: media.alt.isEmpty ? "Image" : media.alt, note: "unavailable")
       case .loading?: chip(icon: "photo", text: media.alt.isEmpty ? "Image" : media.alt, note: nil)
       case nil:
-        chip(icon: "photo", text: media.alt.isEmpty ? "Image" : media.alt, note: nil).task { await model.loadMedia(key) }
+        chip(icon: "photo", text: media.alt.isEmpty ? "Image" : media.alt, note: nil).task { await host?.host.loadMedia(key) }
       }
     } else if case .remote(let url, let host) = media.source {
       if let remote { picture(remote) }
@@ -318,7 +342,6 @@ struct MediaBlockView: View {
 
 /// One structured thread item.
 struct ThreadItemRow: View {
-  @Environment(AppModel.self) private var model
   let runId: String
   let agentId: String
   let item: CapcomdThread.Item
@@ -567,12 +590,12 @@ struct DiffCard<Detail: View>: View {
 /// with a happy face when the work passes (as in the run-finished moment) and makes its "oops" face when it doesn't;
 /// the face is the bot's own, nothing is drawn on it. The reasons are agent text, shown as plain text.
 struct VerdictCard: View {
-  @Environment(AppModel.self) private var model
+  @Environment(\.threadHost) private var host
   let runId: String
   let agentId: String
   let verdict: Verdict
   private var face: BotTraits? {
-    guard let t = model.bot(runId: runId, agentId: agentId) else { return nil }
+    guard let t = host?.host.bot(runId: runId, agentId: agentId) else { return nil }
     return verdict.passed ? ((try? withOverrides(t, mood: .happy, pose: "cheer")) ?? (try? withOverrides(t, mood: .happy)) ?? t)
                           : ((try? withOverrides(t, mood: .oops)) ?? t)
   }
@@ -607,20 +630,20 @@ struct VerdictCard: View {
 }
 
 struct HandoffCard: View {
-  @Environment(AppModel.self) private var model
+  @Environment(\.threadHost) private var host
   let runId: String
   let item: CapcomdThread.Item
 
   var body: some View {
     let childId = item.child?.agentId
-    let child = childId.flatMap { model.run(runId)?.agents[$0] }
-    Button { if let childId { model.path.append(.thread(runId: runId, agentId: childId)) } } label: {
+    let h = host?.host
+    Button { if let childId { h?.openAgent(runId: runId, agentId: childId) } } label: {
       VStack(alignment: .leading, spacing: 0) {
         HStack(spacing: Theme.Content.handoffGap) {
-          ProvidedBot(traits: childId.flatMap { model.bot(runId: runId, agentId: $0) }, size: .small,
-                      provider: childId.flatMap { model.provider(runId: runId, agentId: $0)?.provider })
+          let bot = childId.flatMap { h?.bot(runId: runId, agentId: $0) }
+          ProvidedBot(traits: bot, size: .small, provider: childId.flatMap { h?.agentProvider(runId: runId, agentId: $0) })
           // The bot's name leads; the role joins the note ("worker · handed back").
-          let role = child?.displayName ?? "Agent", name = childId.flatMap { model.botName(runId: runId, agentId: $0) }
+          let role = childId.flatMap { h?.role(runId: runId, agentId: $0) } ?? "Agent", name = bot?.name
           Text(verbatim: name ?? role).font(Theme.Content.handoffName).foregroundStyle(.white)
           let note = item.child?.status == "failed" ? "failed" : "handed back"
           Text(verbatim: name == nil ? note : "\(role) · \(note)")
