@@ -108,13 +108,16 @@ import DeskBenchKit
   }
 
   /// A swipe: scroll-wheel events with trackpad phases, then our own momentum tail, delivered to the reel's NSScrollView.
-  /// Fidelity: the deltas and the decay are the bench's, not the trackpad driver's; AppKit's gesture handling, SwiftUI's
+  /// Fidelity: the deltas and the decay are the bench's, not the trackpad driver's; AppKit's gesture handling, the reel's
   /// snapping and all the per-frame work are real. See DESKBENCH.md.
   func fling() async -> ([StepResult], [Check]) {
     await rewind()
     guard let sv = h.reelScrollView() else { return ([], [Check("reel-scroll-view", false, "no horizontal NSScrollView found under the window")]) }
     var steps: [StepResult] = []; var snapped = true
-    let pitch = Double(sv.documentView!.frame.width) / Double(max(1, h.model.columns.count))
+    // A column edge: one view per column (the AppKit reel) gives the pitch exactly; otherwise estimate it.
+    let views = sv.documentView!.subviews.map(\.frame.minX).sorted()
+    let pitch = views.count == h.model.columns.count && views.count > 1 ? Double(views[1] - views[0])
+      : Double(sv.documentView!.frame.width) / Double(max(1, h.model.columns.count))
     let v0 = Double(int("velocity", 2400))   // pt/s at release
     for i in 0..<int("flings", 6) {
       let sign: Double = i % 2 == 0 ? -1 : 1   // negative deltaX scrolls content left (forward)

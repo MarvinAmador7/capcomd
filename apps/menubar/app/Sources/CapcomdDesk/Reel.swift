@@ -1,93 +1,246 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
+import AppKit
 import CapcomdStore
 import CapcomdThread
 import CapcomdBot
 import CapcomdUI
 
 /// The open project's agents as full-height columns in tree order (Reel). Snaps to a column edge; neighbours peek at
-/// both sides. Not lazy: a lazy stack builds every column it scrolls past and drops it again, which is what made
-/// scrolling stutter (worst on long jumps). Columns stay; their threads are built once, ahead of time (DeskModel's
-/// warm set).
+/// both sides.
 ///
-/// Scrolling costs one frame's worth of work per frame and nothing more (SPEC §1): snapping is arithmetic on the
-/// column pitch (`.viewAligned` re-measured the lazy stack every frame), and the leading column is reported to the
-/// model only when it changes (`scrollPosition(id:)` searched for it every frame).
-@available(macOS 15, *)
-struct Reel: View {
+/// The reel is an AppKit scroll view and each column its own SwiftUI hosting view (ReelView). Scrolling then moves a
+/// layer and nothing else (SPEC §1): in a SwiftUI ScrollView every scroll frame dirtied the whole reel's view graph
+/// (16 columns of threads) and most frames were late. Columns are not lazy: each is built once and kept, and its thread
+/// is built ahead of time (DeskModel's warm set).
+struct ReelHost: View {
   @Environment(DeskModel.self) private var model
-  @State private var position = ScrollPosition(edge: .leading)
-  /// The leading column as the scroll geometry last reported it.
-  @State private var at = 0
   var body: some View {
     DeskProbe.body("Reel")
-    return GeometryReader { geo in
-      let across = Theme.Desk.columnsAcross(geo.size.width)
-      let inset = Theme.Desk.peek + Theme.Desk.gap
-      let width = max(320, (geo.size.width - 2 * inset - CGFloat(across - 1) * Theme.Desk.gap) / CGFloat(across))
-      let pitch = width + Theme.Desk.gap
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: Theme.Desk.gap) {
-          ForEach(model.columns, id: \.self) { id in
-            Column(agentId: id).frame(width: width)
-          }
-        }
-        .padding(.bottom, Theme.Desk.gap)
-      }
-      .scrollPosition($position)
-      .scrollTargetBehavior(ColumnSnap(pitch: pitch))
-      .contentMargins(.horizontal, inset, for: .scrollContent)
-      // The offset counts the leading margin (column 0 rests at -inset); scrollTo(x:) counts from the margin.
-      .onScrollGeometryChange(for: Int.self) { g in Int(((g.contentOffset.x + inset) / pitch).rounded()) } action: { _, i in
-        at = i
-        DeskProbe.event("reel.position", i)
-        model.reelScrolled(toIndex: i)
-      }
-      .onChange(of: model.reelRequest, initial: true) { _, r in
-        guard let r else { return }
-        let i = r.agentId.flatMap { model.columns.firstIndex(of: $0) } ?? 0
-        let x = { (n: Int) in CGFloat(n) * pitch }
-        guard r.animated else { position.scrollTo(x: x(i)); return }
-        // A long jump would build, lay out and drop every column it passes. Cut to one column short of the target,
-        // then slide the last one: only the columns that end up on screen are ever made.
-        if abs(i - at) > across {
-          position.scrollTo(x: x(i < at ? i + 1 : i - 1))
-          DispatchQueue.main.async { withAnimation(.spring(duration: 0.3, bounce: 0)) { position.scrollTo(x: x(i)) } }
-        } else {
-          withAnimation(.spring(duration: 0.35, bounce: 0)) { position.scrollTo(x: x(i)) }
-        }
-      }
-      .onScrollPhaseChange { _, p in model.reelMoving = p.isScrolling; DeskProbe.event("reel.phase", p.isScrolling ? 1 : 0) }
-      .onChange(of: across, initial: true) { _, n in if model.across != n { model.across = n } }
-    }
+    return ReelRepresentable(model: model, columns: model.columns, request: model.reelRequest)
   }
 }
 
-/// The reel in its own hosting view, with no safe area. In the window's hosting view, a scroll view takes the
-/// toolbar's 52 pt as a content inset wherever it sits: its content ends up taller than itself and the reel scrolls
-/// vertically. Running the reel up under the title bar instead costs every frame, as AppKit then walks all its views
-/// for the title bar's opaque region. Here it stays below the title bar and nothing inherits the toolbar's inset.
-@available(macOS 15, *)
-struct ReelHost: NSViewRepresentable {
+struct ReelRepresentable: NSViewRepresentable {
   let model: DeskModel
-  func makeNSView(context: Context) -> NSHostingView<AnyView> {
-    let v = NSHostingView(rootView: content)
-    v.safeAreaRegions = []
-    return v
+  let columns: [String]
+  let request: ReelRequest?
+  func makeNSView(context: Context) -> ReelView { ReelView(model: model) }
+  /// The reel takes the space it's given. Without this SwiftUI measures it through Auto Layout, which solves every
+  /// column's hosting view on each update of the window (two thirds of a step's main thread).
+  func sizeThatFits(_ proposal: ProposedViewSize, nsView: ReelView, context: Context) -> CGSize? {
+    proposal.replacingUnspecifiedDimensions(by: DeskWindowContent.minSize)
   }
-  func updateNSView(_ v: NSHostingView<AnyView>, context: Context) {}
-  private var content: AnyView {
-    AnyView(Reel().environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark))
+  func updateNSView(_ v: ReelView, context: Context) {
+    v.show(columns)
+    if let request { v.perform(request) }
   }
 }
 
-/// Lands on a column's leading edge: the nearest one to where the gesture would stop (momentum included). The target
-/// counts from the leading margin, as scrollTo(x:) does: column n is at n × pitch.
-struct ColumnSnap: ScrollTargetBehavior {
-  let pitch: CGFloat
-  func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+/// The reel's AppKit side: the scroll view, a hosting view per column laid out on the column pitch, snapping, and the
+/// leading column reported to the model only when it changes. Slides run in the render server (`slide`).
+final class ReelView: NSView {
+  private let model: DeskModel
+  private let scroll = SnapScrollView()
+  private let doc = Flipped()
+  private var hosts: [String: NSHostingView<AnyView>] = [:]
+  private var order: [String] = []
+  private var across = 0, pitch: CGFloat = 0, width: CGFloat = 0
+  /// The leading column, as the scroll offset last put it.
+  private var at = 0
+  private var served = -1
+  private var pending: ReelRequest?
+  private var gestures = 0, slides = 0
+
+  init(model: DeskModel) {
+    self.model = model
+    super.init(frame: .zero)
+    scroll.hasHorizontalScroller = false
+    scroll.hasVerticalScroller = false
+    scroll.drawsBackground = false
+    scroll.automaticallyAdjustsContentInsets = false
+    scroll.verticalScrollElasticity = .none
+    scroll.horizontalScrollElasticity = .allowed
+    doc.wantsLayer = true
+    scroll.documentView = doc
+    scroll.reel = self
+    scroll.contentView.postsBoundsChangedNotifications = true
+    addSubview(scroll)
+    NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+  }
+  required init?(coder: NSCoder) { fatalError() }
+  override var isFlipped: Bool { true }
+  override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
+
+  /// The open project's columns: a hosting view each, kept while its agent stays in the run.
+  func show(_ ids: [String]) {
+    guard ids != order else { return }
+    for id in Set(hosts.keys).subtracting(ids) { hosts.removeValue(forKey: id)?.removeFromSuperview() }
+    for id in ids where hosts[id] == nil {
+      let h = NSHostingView(rootView: AnyView(Column(agentId: id)
+        .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark)))
+      h.safeAreaRegions = []
+      h.sizingOptions = []   // the reel sets its frame; nothing to measure
+      doc.addSubview(h)
+      hosts[id] = h
+    }
+    order = ids
+    at = min(at, max(0, ids.count - 1))
+    needsLayout = true
+  }
+
+  override func layout() {
+    super.layout()
+    scroll.frame = bounds
+    let gap = Theme.Desk.gap, inset = Theme.Desk.peek + gap
+    let n = Theme.Desk.columnsAcross(bounds.width)
+    let w = max(320, (bounds.width - 2 * inset - CGFloat(n - 1) * gap) / CGFloat(n))
+    let moved = w + gap != pitch
+    across = n; width = w; pitch = w + gap
+    let height = max(0, bounds.height - gap)
+    for (i, id) in order.enumerated() { hosts[id]?.frame = CGRect(x: inset + CGFloat(i) * pitch, y: 0, width: w, height: height) }
+    doc.frame = CGRect(x: 0, y: 0, width: max(bounds.width, 2 * inset + CGFloat(order.count) * pitch - gap), height: bounds.height)
+    if moved { jump(to: at) }   // a new width keeps the same leading column
+    if model.across != n { DispatchQueue.main.async { [model] in if model.across != n { model.across = n } } }
+    if let p = pending, bounds.width > 0 { pending = nil; perform(p) }
+  }
+
+  /// A crew tab, a shortcut or Follow asked for a column.
+  func perform(_ r: ReelRequest) {
+    guard r.serial != served else { return }
+    guard bounds.width > 0, pitch > 0 else { pending = r; return }
+    served = r.serial
+    let i = r.agentId.flatMap { order.firstIndex(of: $0) } ?? 0
+    guard r.animated else { jump(to: i); return }
+    // A long jump would slide every column it passes past the screen. Cut to one column short, then slide the last.
+    if abs(i - at) > across { slide(to: i, from: x(i < at ? i + 1 : i - 1)) } else { slide(to: i) }
+  }
+
+  private func x(_ i: Int) -> CGFloat { min(max(0, CGFloat(i) * pitch), max(0, doc.frame.width - bounds.width)) }
+
+  private func jump(to i: Int) {
+    stopSlide()
+    scroll.contentView.setBoundsOrigin(NSPoint(x: x(i), y: 0))
+    scrolled()
+  }
+
+  /// Slides to column `i` in the render server: the scroll offset moves to the target at once (one update for the
+  /// columns, which then don't move again) and the document layer is animated from where it showed. Scrolling the
+  /// clip view frame by frame made every column's hosting view update its graph each frame (~20 ms a frame).
+  fileprivate func slide(to i: Int, from start: CGFloat? = nil) {
+    let from = start ?? shownOffset(), to = x(i)
+    stopSlide()
+    scroll.contentView.setBoundsOrigin(NSPoint(x: to, y: 0))
+    scrolled()
+    guard abs(to - from) > 0.5, let layer = doc.layer else { return }
+    slides += 1; moving()
+    let a = CABasicAnimation(keyPath: "position.x")
+    a.isAdditive = true
+    a.fromValue = to - from   // where the old offset showed the document, relative to where it now is
+    a.toValue = 0
+    a.duration = 0.35
+    a.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+    CATransaction.begin()
+    CATransaction.setCompletionBlock { [weak self] in
+      MainActor.assumeIsolated { guard let self else { return }; self.slides -= 1; self.moving() }
+    }
+    layer.add(a, forKey: "slide")
+    CATransaction.commit()
+  }
+
+  /// The offset on screen: the scroll offset less what a slide in flight still has to go.
+  private func shownOffset() -> CGFloat {
+    let o = scroll.contentView.bounds.origin.x
+    guard let l = doc.layer, l.animation(forKey: "slide") != nil, let p = l.presentation() else { return o }
+    return o - (p.position.x - l.position.x)
+  }
+
+  /// Ends a slide where it shows now (a new slide or a swipe takes over from there).
+  private func stopSlide() {
+    guard let l = doc.layer, l.animation(forKey: "slide") != nil else { return }
+    let shown = shownOffset()
+    l.removeAnimation(forKey: "slide")   // its completion block still runs and balances `slides`
+    scroll.contentView.setBoundsOrigin(NSPoint(x: shown, y: 0))
+  }
+
+  /// A swipe began: it takes over from a slide in flight.
+  fileprivate func gestureBegan() {
+    gestures = 1
+    stopSlide()
+    moving()
+  }
+
+  /// A swipe ended: land on the column edge nearest where its momentum would have stopped, at most a screen away.
+  fileprivate func gestureEnded(velocity v: CGFloat) {
+    gestures = 0
+    guard pitch > 0, !order.isEmpty else { moving(); return }
+    let now = scroll.contentView.bounds.origin.x
+    let projected = now - v * 0.3   // the content follows the fingers: a leftward swipe (v < 0) scrolls right
+    let start = Int((now / pitch).rounded())
+    var i = Int((projected / pitch).rounded())
+    i = min(max(i, start - across, 0), min(start + across, order.count - 1))
+    slide(to: i)
+  }
+
+  /// A mouse wheel (no gesture phases): settle on the nearest column once the wheel stops.
+  fileprivate func wheelStopped() {
     guard pitch > 0 else { return }
-    target.rect.origin.x = (target.rect.minX / pitch).rounded() * pitch
+    slide(to: Int((scroll.contentView.bounds.origin.x / pitch).rounded()))
+  }
+
+  private func moving() {
+    let m = gestures + slides > 0
+    guard model.reelMoving != m else { return }
+    model.reelMoving = m
+    DeskProbe.event("reel.phase", m ? 1 : 0)
+  }
+
+  @objc private func scrolled() {
+    guard pitch > 0, !order.isEmpty else { return }
+    let i = min(max(0, Int((scroll.contentView.bounds.origin.x / pitch).rounded())), order.count - 1)
+    guard i != at else { return }
+    at = i
+    DeskProbe.event("reel.position", i)
+    model.reelScrolled(toIndex: i)
+  }
+
+  final class Flipped: NSView { override var isFlipped: Bool { true } }
+}
+
+/// The reel's scroll view: it follows the fingers during a swipe and hands the landing to the reel instead of the
+/// system's momentum, so it always comes to rest on a column edge.
+final class SnapScrollView: NSScrollView {
+  weak var reel: ReelView?
+  private var swallowMomentum = false
+  private var samples: [(t: TimeInterval, dx: CGFloat)] = []
+  private var wheelTimer: Timer?
+
+  override func scrollWheel(with e: NSEvent) {
+    guard let reel else { return super.scrollWheel(with: e) }
+    if !e.momentumPhase.isEmpty {
+      // The system's momentum after a swipe: the reel already chose where to land.
+      if swallowMomentum { if e.momentumPhase.contains(.ended) || e.momentumPhase.contains(.cancelled) { swallowMomentum = false }; return }
+      return super.scrollWheel(with: e)
+    }
+    if e.phase.isEmpty {
+      super.scrollWheel(with: e)
+      wheelTimer?.invalidate()
+      wheelTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak reel] _ in MainActor.assumeIsolated { reel?.wheelStopped() } }
+      return
+    }
+    if e.phase.contains(.began) { swallowMomentum = false; samples = []; reel.gestureBegan() }
+    super.scrollWheel(with: e)
+    if e.phase.contains(.changed) {
+      samples.append((e.timestamp, e.scrollingDeltaX))
+      samples.removeAll { e.timestamp - $0.t > 0.08 }
+    }
+    if e.phase.contains(.ended) || e.phase.contains(.cancelled) {
+      let span = max(samples.last.map { $0.t } ?? 0, 0) - (samples.first?.t ?? 0)
+      let v = samples.isEmpty ? 0 : samples.reduce(0) { $0 + $1.dx } / CGFloat(max(span, 1.0 / 120))
+      samples = []
+      swallowMomentum = true
+      reel.gestureEnded(velocity: v)
+    }
   }
 }
 
@@ -98,7 +251,7 @@ struct Column: View {
   var body: some View {
     let _ = DeskProbe.body("Column", id: agentId)
     if let a = model.agent(agentId) {
-      let asks = a.approval != nil, focused = model.focusedAgent == agentId
+      let asks = a.approval != nil, focused = a.focused
       VStack(spacing: 0) {
         ColumnHead(slice: a)
         if a.warm {

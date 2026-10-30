@@ -161,7 +161,7 @@ scenario step with the step's name as its message), so steps line up on the Inst
   `withAnimation`, which is exactly what a tab click does.
 - **Fling**: scroll-wheel `NSEvent`s built from `CGEvent`s with trackpad phases (began/changed/ended, then momentum
   began/changed/ended) are delivered straight to the reel's `NSScrollView.scrollWheel(with:)`. AppKit's gesture handling
-  and SwiftUI's snapping run; the WindowServer, hit-testing and the trackpad driver's momentum curve do not (the decay is
+  and the reel's snapping run; the WindowServer, hit-testing and the trackpad driver's momentum curve do not (the decay is
   the bench's: 4 % a frame from the release velocity). Good for "does scrolling by hand drop frames"; not for comparing
   deceleration feel.
 - **Typing**: `NSEvent.keyEvent` pairs sent with `window.sendEvent` to the composer made first responder: the real
@@ -223,6 +223,23 @@ ours, but every run was `UNTRUSTED` by the noise rule; re-measure on a quiet mac
 - The planted regression (LazyHStack, no `.geometryGroup()`): `ab` reports late frames 6 → 95 (+1483 %) and the
   longest stretch 232 → 542 ms, exit 4; `explain` on the lazy build shows `EntryRow×116 Column×34 ColumnThread×10`
   inside 580 ms stretches during jumps and names the lazy stack.
+
+## After the AppKit reel (2026-10-30, load 2–6)
+
+The reel became an AppKit scroll view with a hosting view per column, and slides run as a Core Animation animation of
+the document layer (Reel.swift). `ab` against the SwiftUI reel, 5 reps a side, `--host scene`, crew17:
+
+| scenario | late frames | frame p95 | longest stretch | latency |
+| --- | --- | --- | --- | --- |
+| step | 145 → 19 | 27.9 → 12.5 ms | 174 → 117 ms | |
+| jump | 30 → 12 | 35.6 → 16.7 ms | 165 → 73 ms | |
+| fling | 40 → 42 (same) | 10.3 → 10.9 ms (same) | 155 → 49 ms | |
+| switch | | | 905 → 491 ms | 493 → 215 ms |
+
+What is left: a click still costs one 50–70 ms update before the slide starts (every column's hosting view takes its
+new place once, and the title bar follows); a swipe still updates every column's hosting view per event while the
+fingers move; `switch` builds the target run's columns synchronously. The per-frame focus walk listed above was
+already gone once the reel left the title bar's band (3a6b5b7); it no longer shows in profiles.
 
 ## Adding to the bench
 

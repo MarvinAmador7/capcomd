@@ -156,7 +156,7 @@ struct CrewTab: View {
           Text(verbatim: h.suffix ?? h.name).font(Theme.Desk.label)
           if asks { Text("asks").font(Theme.Desk.label).foregroundStyle(Theme.amber) }
         }
-        .foregroundStyle(asks || model.onScreen.contains(agentId) ? Theme.Desk.text : Theme.Desk.secondary)
+        .foregroundStyle(asks || a.onScreen ? Theme.Desk.text : Theme.Desk.secondary)
         .padding(.leading, 4).padding(.trailing, 9)
         .frame(height: Theme.Desk.tabHeight)
         .background(RoundedRectangle(cornerRadius: Theme.Desk.tabRadius, style: .continuous).fill(asks ? Theme.Desk.askFill : .clear))

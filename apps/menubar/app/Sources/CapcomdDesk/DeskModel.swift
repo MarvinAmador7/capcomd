@@ -22,8 +22,14 @@ package final class AgentSlice {
   package private(set) var approval: PendingApproval?
   /// Whether the column shows its thread (DeskModel's warm set); a cold column is its header and box only.
   package private(set) var warm = false
+  /// Its column is on screen (the tab is bracketed) / focused. Kept per agent so a scroll or a focus change re-renders
+  /// the columns and tabs whose state changed, not every one that read the model's position.
+  package private(set) var onScreen = false
+  package private(set) var focused = false
   init(_ h: ColumnHeader) { id = h.agentId; header = h }
   func set(warm w: Bool) { if warm != w { warm = w } }
+  func set(onScreen o: Bool) { if onScreen != o { onScreen = o } }
+  func set(focused f: Bool) { if focused != f { focused = f } }
   func set(_ h: ColumnHeader) { if header != h { header = h } }
   func set(bot b: BotTraits?) { if bot != b { bot = b } }
   func set(approval a: PendingApproval?) { if approval != a { approval = a } }
@@ -64,15 +70,21 @@ package final class DeskModel {
   package private(set) var reelPosition: String?
   /// A scroll the reel carries out (a tab click, Follow, the keyboard, a project switch); `serial` makes a repeat count.
   package private(set) var reelRequest: ReelRequest?
-  package var focusedAgent: String?
+  package var focusedAgent: String? { didSet { if focusedAgent != oldValue { syncFlags() } } }
   /// Follow: an ask or a failure in the open project scrolls the reel to its column (SPEC §3).
   package var follow = true
   /// Columns across the window (3, 2 or 1), set by the reel when its width crosses a step.
-  package var across = 3
+  package var across = 3 { didSet { if across != oldValue { syncFlags() } } }
   /// The column ids on screen, for the title bar's bracket: derived from the scroll position, never tracked per frame.
   package var onScreen: Set<String> {
     let start = reelPosition.flatMap { columns.firstIndex(of: $0) } ?? 0
     return Set(columns.dropFirst(start).prefix(across))
+  }
+
+  /// Copies position and focus into the agents' slices (equality-guarded: only changed ones notify).
+  private func syncFlags() {
+    let seen = onScreen
+    for (id, a) in agents { a.set(onScreen: seen.contains(id)); a.set(focused: id == focusedAgent) }
   }
 
   @ObservationIgnored private var agents: [String: AgentSlice] = [:]
@@ -138,6 +150,7 @@ package final class DeskModel {
       let cols = store.reelColumns(runId: runId)
       let ids = cols.map(\.agentId)
       if columns != ids { columns = ids; warm(around: columns.firstIndex(of: reelPosition ?? "") ?? 0); startWarming() }
+      defer { syncFlags() }
       let bots = all ? team(runId) : nil
       let asks = all ? Dictionary(store.approvals(forRun: runId).compactMap { a in a.agentId.map { ($0, a) } }, uniquingKeysWith: { a, _ in a }) : nil
       for h in cols where all || keys.contains(.agent(h.agentId)) {
@@ -192,7 +205,7 @@ package final class DeskModel {
     openRunId = run
     agents = [:]; threads = [:]; columns = []; warmOrder = []
     knownAsks = Set(deck?.askingAgentId.map { [$0] } ?? [])
-    reelPosition = deck?.askingAgentId; focusedAgent = deck?.askingAgentId
+    reelPosition = deck?.askingAgentId; focusedAgent = deck?.askingAgentId; syncFlags()
     reelRequest = ReelRequest(agentId: deck?.askingAgentId, animated: false, serial: (reelRequest?.serial ?? 0) + 1)
     store.followThreads(runId: run, holder: CapcomdStore.reelHolder)
     return true
@@ -210,14 +223,14 @@ package final class DeskModel {
     // Keep the column where it lands: the reel's leading column moves only as far as needed.
     let i = columns.firstIndex(of: agentId) ?? 0, start = columns.firstIndex(of: reelPosition ?? "") ?? 0
     let target = columns[i < start ? i : max(0, i - across + 1)]
-    reelPosition = target
+    reelPosition = target; syncFlags()
     reelRequest = ReelRequest(agentId: target, animated: animated, serial: (reelRequest?.serial ?? 0) + 1)
   }
 
   /// The reel's leading column changed (it scrolled, by hand or by request).
   package func reelScrolled(toIndex i: Int) {
     let id = columns.indices.contains(i) ? columns[i] : columns.last
-    if reelPosition != id { reelPosition = id }
+    if reelPosition != id { reelPosition = id; syncFlags() }
     warm(around: i)
   }
 
