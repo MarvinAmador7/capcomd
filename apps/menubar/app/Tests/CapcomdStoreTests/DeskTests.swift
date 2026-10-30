@@ -64,6 +64,18 @@ final class DeskTests: XCTestCase {
     XCTAssertEqual(zip(before, after).filter { $0 != $1 }.map(\.0.agentId), ["w1"])   // the app reassigns one slice
   }
 
+  func testAFinishedDeckSaysHowItEndedNotAZeroClock() {
+    let s = CapcomdStore()
+    ev(s, "run-e", "run.created", nil, ["goal": .string("Finished one")], at: 10_000)
+    ev(s, "run-e", "agent.spawned", "p", ["profile": .string("planner")], at: 10_001)
+    ev(s, "run-e", "agent.started", "p", at: 10_002)
+    ev(s, "run-e", "agent.done", "p", at: 249_000)
+    ev(s, "run-e", "run.completed", nil, at: 250_000)
+    let d = s.decks()
+    XCTAssertEqual(d.first?.endedHead, "Done in 4m")
+    XCTAssertNil(store().decks().first?.endedHead)   // a running deck keeps its clock
+  }
+
   func testADeckSaysWhereItRunsWhenTheDaemonDoes() {
     let s = CapcomdStore()
     ev(s, "run-c", "run.created", nil, ["goal": .string("Cloud one"), "sandbox": .string("boxd")], at: 1)

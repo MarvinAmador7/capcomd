@@ -18,11 +18,40 @@ struct TitleBar: View {
         }
         .padding(.vertical, 6)
       }
+      .modifier(KeepBracketInView())
       Spacer(minLength: 0)
       FollowButton()
     }
     .padding(.leading, Theme.Desk.titleLeading).padding(.trailing, 10)
     .frame(height: Theme.Desk.titleBar)
+  }
+}
+
+/// The bracket stays in view: when the reel's on-screen columns change, the strip scrolls the least it can to show the
+/// tab on the side the reel moved toward. (ScrollViewReader's scrollTo, issued while the reel's own hosting view updates, only took
+/// effect on this view's next update: a jump later.)
+struct KeepBracketInView: ViewModifier {
+  func body(content: Content) -> some View {
+    if #available(macOS 15, *) { content.modifier(Follow()) } else { content }
+  }
+  @available(macOS 15, *)
+  struct Follow: ViewModifier {
+    @Environment(DeskModel.self) private var model
+    @State private var position = ScrollPosition(idType: String.self)
+    func body(content: Content) -> some View {
+      content
+        .scrollPosition($position)
+        .onChange(of: model.reelPosition) { old, new in
+          let seen = model.onScreen, cols = model.columns
+          guard let first = cols.first(where: seen.contains), let last = cols.last(where: seen.contains) else { return }
+          let right = (new.flatMap { cols.firstIndex(of: $0) } ?? 0) >= (old.flatMap { cols.firstIndex(of: $0) } ?? 0)
+          // No anchor: the least scroll that shows it (pinning the first tab to the leading edge hid the project name).
+          // Back at the first column, the whole group shows again, project name included.
+          withAnimation(.easeOut(duration: 0.18)) {
+            if first == cols.first { position.scrollTo(edge: .leading) } else { position.scrollTo(id: right ? last : first) }
+          }
+        }
+    }
   }
 }
 
@@ -55,6 +84,7 @@ struct OpenGroup: View {
             .anchorPreference(key: BracketBounds.self, value: .bounds) { n == first || n == last ? [$0] : [] }
         }
       }
+      .scrollTargetLayout()   // the tabs are what the strip scrolls to (KeepBracketInView)
       .backgroundPreferenceValue(BracketBounds.self) { anchors in
         GeometryReader { g in
           if let r = anchors.map({ g[$0] }).reduce(nil, { ($0 ?? $1).union($1) }) {
@@ -80,10 +110,10 @@ struct DeckClock: View {
   var body: some View {
     HStack(spacing: 0) {
       if let p = Place(sandbox: deck.sandbox) { Text(verbatim: p.word + " · ") }
-      if let start = deck.startedAtMs, deck.endedAtMs == nil {
+      if let ended = deck.endedHead {
+        Text(verbatim: ended)
+      } else if let start = deck.startedAtMs {
         Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
-      } else if let start = deck.startedAtMs, let end = deck.endedAtMs {
-        Text(verbatim: Duration.milliseconds(end - start).formatted(.time(pattern: .minuteSecond)))
       }
     }
     .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()

@@ -10,8 +10,8 @@ public struct DeckInfo: Sendable, Hashable, Identifiable {
   public var runId: String
   public var title: String
   public var startedAtMs: Int?
-  /// Ended runs show a duration instead of a clock.
-  public var endedAtMs: Int?
+  /// Ended runs show how they ended instead of a clock: the menu bar's words ("Done in 4m", "Failed after 12m").
+  public var endedHead: String?
   public var isRunning: Bool
   /// Where it runs: "docker" (Local), "boxd" (Cloud), another place, or nil when the daemon doesn't say.
   public var sandbox: String?
@@ -50,7 +50,7 @@ extension CapcomdStore {
       let ids = agentTree(runId: run.id).flatMap(\.subtreeIds)
       let asking = approvals(forRun: run.id).compactMap(\.agentId).first { run.agents[$0] != nil }
       return DeckInfo(id: p.id, runId: run.id, title: p.title, startedAtMs: run.startedAtMs,
-                      endedAtMs: run.isActive ? nil : run.lastEventMs, isRunning: run.isRunning, sandbox: run.sandbox,
+                      endedHead: run.endedHead, isRunning: run.isRunning, sandbox: run.sandbox,
                       askingAgentId: asking, askingName: asking.flatMap { columnHeader(runId: run.id, agentId: $0) }.map { h in [h.name, h.suffix].compactMap { $0 }.joined(separator: " ") },
                       agentIds: ids)
     }

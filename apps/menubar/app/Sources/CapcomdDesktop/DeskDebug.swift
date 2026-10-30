@@ -32,9 +32,10 @@ import AppKit
     guard let w = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
           let frame = w.contentView?.superview ?? w.contentView,
           let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+    frame.layoutSubtreeIfNeeded()   // an occluded window gets no display passes: catch up before drawing it
     frame.cacheDisplay(in: frame.bounds, to: rep)
     try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("window.png"))
-    var lines = ["window \(w.frame.size) contentLayoutRect \(w.contentLayoutRect)"]
+    var lines = ["window \(w.frame.size) contentLayoutRect \(w.contentLayoutRect) visible \(w.occlusionState.contains(.visible)) key \(w.isKeyWindow)"]
     func walk(_ v: NSView) {
       if let s = v as? NSScrollView {
         let f = s.convert(s.bounds, to: nil)
