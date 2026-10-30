@@ -17,6 +17,7 @@ let engine: Engine;
 let env: Record<string, string>;
 let vm = "";
 let quotaLedger = "";
+let faultFile = "";
 const saved = { ...process.env };
 
 beforeAll(async () => {
@@ -43,6 +44,8 @@ beforeAll(async () => {
     CAPCOMD_AUTH_LEDGER: join(dir, "auths.json"),
     CAPCOMD_ENV_LEDGER: join(dir, "envs.json"),
     CAPCOMD_QUOTA_LEDGER: (quotaLedger = join(dir, "quotas.json")),
+    // An injected provider outage (none while the file is absent): keeps a step inside a provider call for as long.
+    CAPCOMD_FAKE_OUTAGE_FILE: (faultFile = join(dir, "fault.json")),
     ANTHROPIC_API_KEY: "sk-ant-api03-WORKFLOW-abcdefghijklmnopqrstuvwxyz0123456789",
     CAPCOMD_ENV: "image",
   };
@@ -144,6 +147,49 @@ test("restart mid-step: a worker whose engine host died inside a workflow step w
   expect(Date.now() - back).toBeLessThan(60_000);
   expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
   expect((await cj(["events", run])).stdout).not.toContain('"DRIVE_FAILED"');
+}, 300_000);
+
+test("restart mid-watch, after its steps' wakes have fired: the worker still wakes by itself at its watch's deadline", async () => {
+  // The live e2e's case (2026-10-30): the engine killed well after the run started, with the workflow waiting in its
+  // watch (60 s default here) and every alarm a step armed already fired. The watch's own alarm must still wake it.
+  const run = (await cj(["run", "new"])).j?.runId;
+  const agent = (await cj(["spawn", run, "--profile", "worker", "--task", "[hold:90] make the failing test pass", "--key", "late"])).j?.agentId;
+  expect(agent).toMatch(/^agt-/);
+  const hold = join(vm, `${agent}-e1`, "hold.log");
+  for (let i = 0; i < 150 && !existsSync(hold); i++) await sleep(200);
+  expect(existsSync(hold)).toBe(true);
+  await sleep(15_000); // past the last step's wake alarm (10 s): it fired while the actor was up
+  await engine.stop();
+  await sleep(4000);
+  await engine.start(null);
+  const back = Date.now();
+  await untilStatus(run, agent, "done", 150_000);
+  console.log(`  done ${Math.round((Date.now() - back) / 1000)}s after the engine came back`);
+  expect(Date.now() - back).toBeLessThan(100_000);
+  expect(readFileSync(hold, "utf8").trim().split("\n")).toEqual(["start", "stopped", "start", "finished"]);
+}, 300_000);
+
+test("restart inside a long step (provisioning that blocks): the worker wakes by itself and finishes the agent", async () => {
+  // The live path: a machine call that takes a while (here the fake provider not answering `ensure`, retried with
+  // backoff inside the ensure-machine step), the engine killed 15 s in (the step's first wakes have fired; it keeps one
+  // armed), then the provider answers again.
+  writeFileSync(faultFile, JSON.stringify({ until: Date.now() + 120_000, ops: ["ensure"] }));
+  try {
+    const run = (await cj(["run", "new"])).j?.runId;
+    const agent = (await cj(["spawn", run, "--profile", "worker", "--task", "make the failing test pass", "--key", "slow"])).j?.agentId;
+    expect(agent).toMatch(/^agt-/);
+    await sleep(15_000);
+    expect((await scopeAgent(run, agent))?.status).toBe("running");
+    await engine.stop();
+    rmSync(faultFile, { force: true });
+    await sleep(4000);
+    await engine.start(null);
+    const back = Date.now();
+    const a = await untilStatus(run, agent, "done", 120_000);
+    console.log(`  done ${Math.round((Date.now() - back) / 1000)}s after the engine came back`);
+    expect(Date.now() - back).toBeLessThan(60_000);
+    expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
+  } finally { rmSync(faultFile, { force: true }); }
 }, 300_000);
 
 test("quota wake: the paused epoch's workflow sleeps to the reset and runs the next epoch, with nobody awaiting", async () => {
