@@ -2,6 +2,7 @@
 # Fake `claude` for adapter tests. Behaviour is selected by markers in the -p prompt:
 #   [leak] print the API key everywhere   [sleep] hang   [nochange] edit nothing   [fail] error result
 #   [slow] keep working for ~5s, one event every 0.25s (liveness)
+#   [slower] the same for ~10s (liveness: longer than its stuck window on a slow runner)
 #   [quota] or [quota:N] edit, then stop at a plan usage limit resetting in N seconds (default 3600), as
 #           claude 2.1.303 does; a resumed run (its prompt says it was stopped earlier) works normally
 #   [steady] edit, then keep working for ~3s (checkpoints, supervisor heartbeats)
@@ -40,7 +41,9 @@ case "$prompt" in *"[hold:"*)
   trap 'echo stopped >> ../hold.log; exit 143' TERM
   [ "$again" = 1 ] || sleep "${n:-30}";;
 esac
-case "$prompt" in *"[slow]"*)
+case "$prompt" in *"[slower]"*)
+  for i in $(seq 1 40); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
+*"[slow]"*)
   for i in $(seq 1 20); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
 esac
 if [[ "$prompt" == *"[fail]"* ]]; then
