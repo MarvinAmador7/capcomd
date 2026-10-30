@@ -26,7 +26,7 @@ beforeAll(async () => {
     CAPCOMD_AGENT_CLAUDE_BIN: new URL("../agents/fake-claude.sh", import.meta.url).pathname,
     CAPCOMD_AGENT_WORKDIR: join(dir, "vm"),
     CAPCOMD_AGENT_POLL_MS: "100",
-    CAPCOMD_STUCK_AFTER_MS: "1500",
+    CAPCOMD_STUCK_AFTER_MS: "4000",
     CAPCOMD_DRIVER_LEASE_MS: "3000",
     CAPCOMD_SKIP_PREFLIGHT: "1",
     CAPCOMD_TRACE_DIR: join(dir, "traces"),
@@ -57,10 +57,11 @@ const cj = async (args: string[]) => {
 test("a worker without the in-VM CLI that keeps working is not flagged stuck", async () => {
   const run = (await cj(["run", "new"])).j?.runId;
   expect(run).toMatch(/^run-/);
-  const sp = await cj(["spawn", run, "--profile", "worker", "--task", "[slow] make the failing test pass", "--key", "slow"]);
+  const sp = await cj(["spawn", run, "--profile", "worker", "--task", "[slower] make the failing test pass", "--key", "slow"]);
   const id = sp.j?.agentId;
   expect(id).toMatch(/^agt-/);
-  // Watch it while it works: past the 1.5s stuck window it must carry an engine heartbeat and no stuck flag.
+  // Watch it while it works: past the 4 s stuck window (1.5 s let a loaded CI runner's output gaps read as stuck) it
+  // must carry an engine heartbeat and no stuck flag.
   const t0 = Date.now();
   let seen = 0;
   let flagged: string | undefined;
@@ -69,7 +70,7 @@ test("a worker without the in-VM CLI that keeps working is not flagged stuck", a
     const j = (await cj(["inspect", run, id])).j;
     if (j?.status !== "running") { if (j?.status && j.status !== "pending") break; continue; }
     if (j.stuck) flagged = j.stuck;
-    if (Date.now() - t0 > 2500 && j.heartbeatAt) seen++;
+    if (Date.now() - t0 > 5000 && j.heartbeatAt) seen++;
   }
   expect(flagged).toBeUndefined();
   expect(seen).toBeGreaterThan(0);
