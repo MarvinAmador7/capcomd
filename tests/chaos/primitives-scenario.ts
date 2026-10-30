@@ -54,7 +54,15 @@ if (mode === "subagent") {
   ].join("\n"));
   const { runId } = await runNew({ budget: { usd: 4 }, label: `chaos ${tag}`, key: `chaos-${tag}` });
   const sup = await spawnAgent({ runId, task: "plan", profile: "sup", key: "sup", contract: { script: `sh ${script}` } });
-  const res: any = await awaitAgents(runId, [sup.agentId], { timeoutMs: 240_000 });
+  // Await in 10 s slices and say what is still pending each time: a run killed by the harness's timer then shows what
+  // it was waiting for (the agents' states, the planner's unanswered in-VM requests).
+  const t0 = Date.now();
+  let res: any;
+  for (;;) {
+    res = await awaitAgents(runId, [sup.agentId], { timeoutMs: Math.min(10_000, Math.max(0, t0 + 240_000 - Date.now())) });
+    if (!res.timeout || Date.now() - t0 >= 240_000) break;
+    console.log(`[waiting ${Math.round((Date.now() - t0) / 1000)}s] ${await pending(runId, sup.agentId)}`);
+  }
   const a = res.agents[0];
   if (a.status !== "done") { console.log(`✗ planner ${a.status} ${JSON.stringify(a.result ?? {})}`); process.exit(1); }
   const marker = process.env.CAPCOMD_DRIVER_KILLPOINT_MARKER;
@@ -62,6 +70,18 @@ if (mode === "subagent") {
   console.log(`PRIM ${JSON.stringify({ runId, mode, sup: sup.agentId })}`);
   console.log("✓ primitives scenario ok");
   process.exit(0);
+}
+/** The run's agents and the planner's spool (requests not yet taken, taken but unanswered), for a progress line. */
+async function pending(runId: string, supId: string): Promise<string> {
+  const { readdirSync, existsSync } = await import("fs");
+  const { join } = await import("path");
+  const { client } = await import("../../src/core/relay");
+  const agents: any[] = await client().scope.getOrCreate([runId]).listAgents({}).catch((e: any) => [{ agentId: `listAgents failed: ${e?.message}` }]);
+  const open = agents.filter((x) => !["done", "failed", "cancelled"].includes(x.status));
+  const tree = `${agents.length - open.length}/${agents.length} agents ended; open: ${open.map((x) => `${x.agentId}${x.agentId === supId ? " (planner)" : ""} ${x.status ?? "?"}${x.driver ? ` driver ${x.driver} until ${new Date(x.driverUntil).toISOString()}` : ""}`).join(", ") || "none"}`;
+  const dir = join(process.env.CAPCOMD_SCRIPT_VM_DIR ?? "", runId, supId, "rpc");
+  const ls = (d: string) => (existsSync(join(dir, d)) ? readdirSync(join(dir, d)).filter((f) => f.endsWith(".json")) : []);
+  return `${tree} | planner spool req=[${ls("req").join(",")}] work=[${ls("work").join(",")}] res=${ls("res").length}`;
 }
 if (mode === "kv") {
   // 6 writers add themselves to a set with read-cas-retry; idempotent by content (a writer that

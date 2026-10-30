@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
+  or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
+  coming back, and whoever awaits it (you, or a parent agent's `capcomd await`) gets its result.
+
 ## 0.7.0-rc.1 (2026-10-29)
 
 Release candidate: agents driven by a durable workflow inside the engine (no process per agent) that ride out a

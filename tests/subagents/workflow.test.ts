@@ -119,6 +119,33 @@ test("restart mid-agent: the workflow resumes by itself, runs the attempt again 
   expect(drivers(run)).toEqual([]);
 }, 300_000);
 
+test("restart mid-step: a worker whose engine host died inside a workflow step wakes by itself and finishes the agent", async () => {
+  // The engine host dies inside the start-agent step (killpoint), with the agent claimed by its workflow (a 6 h lease, so
+  // no await would kick it) and no wait of the workflow's own pending (a step arms no alarm). After the restart nothing
+  // calls the worker: only the scope's record is read, so the worker must wake by itself.
+  await engine.stop();
+  await engine.start("workflow.start_agent.mid:1");
+  const run = (await cj(["run", "new"])).j?.runId;
+  expect(run).toMatch(/^run-/);
+  await cj(["spawn", run, "--profile", "worker", "--task", "make the failing test pass", "--key", "mid"]);
+  for (let i = 0; i < 300 && !engine.sawKill; i++) await sleep(100);
+  expect(engine.sawKill).toBe(true);
+  expect(await Bun.file(engine.logPath).text()).toContain("[KILLPOINT] Exiting at workflow.start_agent.mid");
+  await engine.stop();
+  await engine.start(null);
+  const back = Date.now();
+  const { client } = await import("../../src/core/relay");
+  const agents: any[] = await client().scope.getOrCreate([run]).listAgents({});
+  expect(agents.length).toBe(1);
+  expect(agents[0].driver).toMatch(/^wf-/);
+  const a = await untilStatus(run, agents[0].agentId, "done", 90_000);
+  // Before: the worker slept until its next alarm (the machine's 1 h reap), so the agent stayed "running".
+  console.log(`  done ${Math.round((Date.now() - back) / 1000)}s after the engine came back`);
+  expect(Date.now() - back).toBeLessThan(60_000);
+  expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
+  expect((await cj(["events", run])).stdout).not.toContain('"DRIVE_FAILED"');
+}, 300_000);
+
 test("quota wake: the paused epoch's workflow sleeps to the reset and runs the next epoch, with nobody awaiting", async () => {
   rmSync(quotaLedger, { force: true });
   const run = (await cj(["run", "new"])).j?.runId;

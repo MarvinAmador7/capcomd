@@ -32,7 +32,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord } from "../agents/profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
-import { agentWorkflowOn, agentWorkflowParts, queueStart, workflowStats, type StartAgent } from "./agent-workflow";
+import { agentWorkflowOn, agentWorkflowParts, queueStart, stepWakeActions, workflowStats, type StartAgent } from "./agent-workflow";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
 
@@ -483,7 +483,10 @@ export const workerActor = actor({
     },
   }),
 
-  actions: traceActions("worker", {
+  actions: {
+    // ADR-022: the step wake (agent-workflow.ts STEP_WAKE_MS), untraced.
+    ...(WORKFLOW ? stepWakeActions : {}),
+    ...traceActions("worker", {
     /** Push lock rows (attempts, adopted, state) for audits and the takeover chaos case. */
     async getPushes(c, _p: Record<string, never>) {
       await c.db.execute(PUSH_LOCKS_SQL);
@@ -784,4 +787,5 @@ export const workerActor = actor({
       };
     },
   }),
+  },
 });

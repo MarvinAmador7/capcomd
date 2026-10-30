@@ -224,6 +224,16 @@ under the one-day pre-gate spike code) resolves to 1 by rivetkit's rule and isn'
   writes ~720 loop entries instead of ~7200); the lease is claimed once, not renewed.
 - **Where driver-side settings are read** (fixed, decision 6): they travel with the agent. Settings outside the
   allowlist are the engine host's, as they always were for the worker's own actions (`CAPCOMD_REPO`, sandbox, keys).
+- **A host that dies inside a step** (found 2026-10-29: `chaos (primitives)` `vm.rpc.await.before:0` failed 3 of 5 CI
+  runs). The engine brings a crashed actor back only at its next alarm or on a call to it (rivet's crash policy:
+  sleep). The workflow arms an alarm only to wait (the watch, a backoff, `sleepUntil`); a running step has none, and
+  the 6 h lease keeps awaits from kicking it. A worker whose host died in `ensure-machine`, `start-agent`, `settle` and
+  the like slept until its machine's reap alarm, an hour later, with the agent "running" (in the chaos case: the
+  second child, started just as its parent's `capcomd await` killed the host). Every step but the watch's look now
+  keeps a no-op wake alarm 10 s ahead while it runs (`STEP_WAKE_MS`: the worker's own `armStepWake` action, at the
+  step's start and every 5 s), so after a restart the worker wakes by itself and runs the step again
+  (`tests/subagents/workflow.test.ts` "restart mid-step", killpoint `workflow.start_agent.mid`). Cost: one schedule
+  row per step, plus one per 5 s of a long step (provisioning).
 - **Workflow-engine argument checks.** A queue wait's timeout must be an integer (a 4000 ms lease / 3 failed the whole
   workflow with "Not an integer"); timeouts and `sleepUntil` targets are rounded.
 
