@@ -49,6 +49,12 @@ const MAX_ATTEMPTS = 3;
  * host that died inside a step (provisioning, starting the run, settling) left the agent "running" until the worker's
  * next alarm, its machine's reap an hour later. So each step keeps a no-op alarm this far ahead while it runs: after a
  * restart the worker wakes within this (at once if it's past) and its workflow runs the step again.
+ *
+ * The wake must never outlive its step. An actor has one alarm, and in rivetkit 2.3.31 the workflow sets it directly
+ * for its waits while every change to the actor's schedule (an event added, fired or cancelled) sets it to the earliest
+ * scheduled event. A wake left to fire during the watch replaced the watch's alarm with the machine's reap (an hour
+ * out): a host killed after that left the worker asleep (live e2e, 2026-10-30). So a step cancels its wakes before it
+ * returns, before the workflow arms its next wait.
  */
 const STEP_WAKE_MS = 10_000;
 /** Steps that need no wake of their own: the watch's look follows its timed wait, whose alarm covers it. */
@@ -85,22 +91,40 @@ export async function queueStart(c: any, p: StartAgent): Promise<{ queued: boole
 export const stepWakeActions = {
   /** Arm a wake alarm `ms` ahead (a step calls it on its own worker as it starts, then every half of that). */
   async armStepWake(c: any, p: { ms?: number }) {
-    await c.schedule.after(Math.min(Math.max(Number(p?.ms) || STEP_WAKE_MS, 1000), 60_000), "stepWake", {});
-    return { ok: true };
+    const id = await c.schedule.after(Math.min(Math.max(Number(p?.ms) || STEP_WAKE_MS, 1000), 60_000), "stepWake", {});
+    return { id };
+  },
+  /** Cancel every pending step wake (a step calls it as it ends: see STEP_WAKE_MS). */
+  async disarmStepWakes(c: any, _p: Record<string, never>) {
+    let n = 0;
+    for (const e of (await c.schedule.list()) as Array<{ id: string; action: string }>) if (e.action === "stepWake") { await c.schedule.cancel(e.id); n++; }
+    return { cancelled: n };
   },
   /** The alarm's action: nothing. Waking the worker is the point: its workflow resumes when the actor starts. */
   async stepWake(_c: any, _p: Record<string, never>) { return { ok: true }; },
 };
 
-/** Run a step body with its worker's wake alarm armed (STEP_WAKE_MS ahead) until it ends. Never fails the step. */
+const within = <T>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<void>((r) => setTimeout(r, ms))]);
+
+/**
+ * Run a step body with its worker's wake alarm armed (STEP_WAKE_MS ahead) until it ends, then cancel the wakes before
+ * the step returns (the workflow's next wait sets the actor's alarm after that). Never fails the step.
+ */
 async function withStepWake<T>(c: any, run: () => Promise<T>): Promise<T> {
   let self: any = null;
   try { self = c.client().worker.getOrCreate(c.key); } catch {}
-  const arm = () => self?.armStepWake({ ms: STEP_WAKE_MS }).catch(() => {});
-  // Armed before the work (bounded: a slow engine never holds the step up; the last step's alarm is still pending).
-  await Promise.race([arm(), new Promise((r) => setTimeout(r, 2000))]);
+  if (!self) return run();
+  const inFlight = new Set<Promise<unknown>>();
+  const arm = () => { const p = self.armStepWake({ ms: STEP_WAKE_MS }).catch(() => {}); inFlight.add(p); void p.finally(() => inFlight.delete(p)); return p; };
+  // Armed before the work (bounded: a slow engine never holds the step up).
+  await within(arm(), 2000);
   const t = setInterval(arm, STEP_WAKE_MS / 2);
-  try { return await run(); } finally { clearInterval(t); }
+  try { return await run(); } finally {
+    clearInterval(t);
+    await within(Promise.all([...inFlight]), 5000);
+    // A wake left pending would replace the workflow's next alarm when it fires: the cancel is tried twice.
+    for (let i = 0; i < 2; i++) if (await within(self.disarmStepWakes({}).then(() => true, () => false), 5000)) break;
+  }
 }
 
 /** ADR-022 measurements: the workflow's stored history (rows, bytes) and the actor database's size. */

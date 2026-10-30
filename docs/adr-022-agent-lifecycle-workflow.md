@@ -232,8 +232,20 @@ under the one-day pre-gate spike code) resolves to 1 by rivetkit's rule and isn'
   second child, started just as its parent's `capcomd await` killed the host). Every step but the watch's look now
   keeps a no-op wake alarm 10 s ahead while it runs (`STEP_WAKE_MS`: the worker's own `armStepWake` action, at the
   step's start and every 5 s), so after a restart the worker wakes by itself and runs the step again
-  (`tests/subagents/workflow.test.ts` "restart mid-step", killpoint `workflow.start_agent.mid`). Cost: one schedule
-  row per step, plus one per 5 s of a long step (provisioning).
+  (`tests/subagents/workflow.test.ts` "restart mid-step", killpoint `workflow.start_agent.mid`, and "restart inside a
+  long step", a provider that doesn't answer `ensure`). Cost: one schedule row per step, plus one per 5 s of a long
+  step (provisioning).
+- **One alarm per actor; the schedule overwrites the workflow's** (found 2026-10-30 by the live e2e with
+  `CAPCOMD_E2E_RESTART=1`, on the first version of the step wake). In rivetkit 2.3.31 the workflow sets the actor's
+  alarm directly for its waits, and every change to the actor's schedule (an event added, fired or cancelled) sets it to
+  the earliest scheduled event. The first step wake was left to fire 10 s after its step, during the watch: it replaced
+  the watch's alarm (60 s) with the machine's reap (1 h), so an engine killed after that left the workers asleep, worse
+  than without it. A step now cancels its wakes (`disarmStepWakes`) before it returns, before the workflow arms its
+  next wait ("restart mid-watch, after its steps' wakes have fired"). The same overwrite remains possible from the
+  worker's other scheduled actions during a wait (`reapIfExpired` re-arming for an agent that outlives its machine's
+  idle lifetime, `retryDrain`): a crash right after one of those wakes the worker at that event, not at the watch's
+  deadline. Worth an upstream report: the workflow driver could use the actor's run-wake deadline (`c.run.setWakeAt`),
+  which rivetkit-core appears to restore after a schedule alarm.
 - **Workflow-engine argument checks.** A queue wait's timeout must be an integer (a 4000 ms lease / 3 failed the whole
   workflow with "Not an integer"); timeouts and `sleepUntil` targets are rounded.
 
