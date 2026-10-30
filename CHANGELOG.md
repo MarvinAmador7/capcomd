@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Desktop window bench for coding agents (`apps/menubar/app/DESKBENCH.md`): `swift run -c release CapcomdDeskBench`
+  hosts the desktop window on generated runs (1 to 64 agents, no daemon), drives it (open, project switch, reel steps,
+  jumps, swipes, thread bursts, typing, resize, Follow), measures frames, main-thread stretches and which views
+  re-rendered, judges the result against the SPEC §1 budgets, and compares builds within the machine's noise (`run`,
+  `suite`, `ab`, `compare`, `profile` under Instruments, `snapshot`, `explain`; `--json` everywhere, stable exit codes).
+  The desktop app's views now live in the `CapcomdDesk` library the app and the bench both link; the app is unchanged.
 - Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
   or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
   coming back, and whoever awaits it (you, or a parent agent's `capcomd await`) gets its result.
