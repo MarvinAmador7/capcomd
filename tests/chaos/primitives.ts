@@ -30,7 +30,8 @@ function agentsFile() {
   return p;
 }
 
-function runScenario(tag: string, opts: EngineOpts, extra: Record<string, string>, mode = "tree"): Promise<{ code: number; output: string }> {
+const SCENARIO_TIMEOUT_MS = 120_000;
+function runScenario(tag: string, opts: EngineOpts, extra: Record<string, string>, mode = "tree"): Promise<{ code: number; output: string; timedOut: boolean }> {
   return new Promise((resolve) => {
     const { CAPCOMD_ENDPOINT, ...rest } = engineEnv(opts);
     const env: NodeJS.ProcessEnv = { ...process.env, ...extra, ...(opts.repo ? rest : {}), CAPCOMD_ENDPOINT };
@@ -39,14 +40,24 @@ function runScenario(tag: string, opts: EngineOpts, extra: Record<string, string
     let output = "";
     child.stdout?.on("data", (d) => (output += d));
     child.stderr?.on("data", (d) => (output += d));
-    const t = setTimeout(() => child.kill("SIGKILL"), 120_000);
-    child.on("close", (code) => { clearTimeout(t); resolve({ code: code ?? 1, output }); });
+    let timedOut = false;
+    const t = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, SCENARIO_TIMEOUT_MS);
+    child.on("close", (code) => { clearTimeout(t); resolve({ code: code ?? 1, output, timedOut }); });
   });
 }
 
 /** The lines that say what failed (error/code/message), which a raw stack tail often cuts off. */
 function errorLines(out: string): string {
   return out.split("\n").filter((l) => /error|code:|message|✗/i.test(l) && !/^\s*at /.test(l)).slice(-6).map((l) => l.trim()).join(" | ").slice(0, 600);
+}
+
+/** Why a scenario run failed: killed by the timer (and what it last said it was waiting for), or its error lines and
+ *  last output. A scenario killed while waiting prints nothing of its own, so say so instead of an empty "…". */
+export function scenarioFailure(r: { code: number; output: string; timedOut?: boolean }): string {
+  const last = r.output.split("\n").map((l) => l.trim()).filter(Boolean).slice(-3).join(" | ").slice(-800);
+  const why = r.timedOut ? `timed out after ${SCENARIO_TIMEOUT_MS / 1000}s (SIGKILL)` : `exit ${r.code}`;
+  const errs = errorLines(r.output);
+  return `scenario failed (${why}): ${errs ? `${errs} … ` : ""}last output: ${last || "(none)"}`;
 }
 
 export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promise<{ ok: boolean; killed: boolean; error?: string; phases: Record<string, number> }> {
@@ -89,7 +100,7 @@ export async function survivePrimitives(kp: string, baseOpts: EngineOpts): Promi
       mark("resume");
     }
     if (!killed) return { ok: false, killed, error: `killpoint ${kp} never fired; client (${first.code}): ${first.output.slice(-400)}`, phases };
-    if (final.code !== 0 || !final.output.includes("✓ primitives scenario ok")) return { ok: false, killed, error: `scenario failed (${final.code}): ${errorLines(final.output)} … ${final.output.slice(-400)}`, phases };
+    if (final.code !== 0 || !final.output.includes("✓ primitives scenario ok")) return { ok: false, killed, error: scenarioFailure(final), phases };
     const ids = JSON.parse(final.output.split("\n").find((l) => l.startsWith("PRIM "))!.slice(5));
     const v = mode === "subagent" ? await auditSubagent(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "board" ? await auditBoard(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "kv" ? await auditKv(ids, engineEnv(opts).CAPCOMD_ENDPOINT!) : mode === "merge" ? await auditMerge(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, opts) : mode === "driverkill" ? await auditPush(ids, engineEnv(opts).CAPCOMD_ENDPOINT!, { driverKill, adopt, opts, workflow }) : await audit(ids, engineEnv(opts).CAPCOMD_ENDPOINT!);
     mark("audit");

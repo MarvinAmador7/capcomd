@@ -42,6 +42,17 @@ const WATCH_MS = () => Math.ceil(Number(env("AGENT_WORKFLOW_POLL_MS") ?? 60_000)
  *  (a client without the flag) can't take it over while the workflow runs it. */
 const WF_LEASE_MS = 6 * 3600_000;
 const MAX_ATTEMPTS = 3;
+/**
+ * How far ahead a running step keeps its worker's wake alarm. When the engine host dies, the engine brings a worker back
+ * only at its next alarm or on a call to it (rivet's crash policy: sleep). The workflow arms an alarm only to wait (the
+ * watch, a backoff, the usage-limit sleep): a step arms none, and the workflow's long lease means no await kicks it. A
+ * host that died inside a step (provisioning, starting the run, settling) left the agent "running" until the worker's
+ * next alarm, its machine's reap an hour later. So each step keeps a no-op alarm this far ahead while it runs: after a
+ * restart the worker wakes within this (at once if it's past) and its workflow runs the step again.
+ */
+const STEP_WAKE_MS = 10_000;
+/** Steps that need no wake of their own: the watch's look follows its timed wait, whose alarm covers it. */
+const NO_WAKE = new Set(["poll", "look"]);
 const ALL_FAILURES = ["critical", "timeout", "exhausted", "rollback"] as const;
 
 export const ATTEMPTS_SQL = `CREATE TABLE IF NOT EXISTS agent_attempts (
@@ -68,6 +79,28 @@ export async function queueStart(c: any, p: StartAgent): Promise<{ queued: boole
   await c.queue.send("start", p);
   await c.db.execute("INSERT OR IGNORE INTO agent_workflow_start (id, run_id, agent_id, epoch, at) VALUES (1, ?, ?, ?, ?)", p.runId, p.agentId, p.epoch, Date.now());
   return { queued: true };
+}
+
+/** The worker actions behind the step wake (STEP_WAKE_MS); untraced: bookkeeping, not work. */
+export const stepWakeActions = {
+  /** Arm a wake alarm `ms` ahead (a step calls it on its own worker as it starts, then every half of that). */
+  async armStepWake(c: any, p: { ms?: number }) {
+    await c.schedule.after(Math.min(Math.max(Number(p?.ms) || STEP_WAKE_MS, 1000), 60_000), "stepWake", {});
+    return { ok: true };
+  },
+  /** The alarm's action: nothing. Waking the worker is the point: its workflow resumes when the actor starts. */
+  async stepWake(_c: any, _p: Record<string, never>) { return { ok: true }; },
+};
+
+/** Run a step body with its worker's wake alarm armed (STEP_WAKE_MS ahead) until it ends. Never fails the step. */
+async function withStepWake<T>(c: any, run: () => Promise<T>): Promise<T> {
+  let self: any = null;
+  try { self = c.client().worker.getOrCreate(c.key); } catch {}
+  const arm = () => self?.armStepWake({ ms: STEP_WAKE_MS }).catch(() => {});
+  // Armed before the work (bounded: a slow engine never holds the step up; the last step's alarm is still pending).
+  await Promise.race([arm(), new Promise((r) => setTimeout(r, 2000))]);
+  const t = setInterval(arm, STEP_WAKE_MS / 2);
+  try { return await run(); } finally { clearInterval(t); }
 }
 
 /** ADR-022 measurements: the workflow's stored history (rows, bytes) and the actor database's size. */
@@ -117,6 +150,7 @@ async function startAttempt(c: any, p: StartAgent, n: number): Promise<"started"
   const key: string[] = c.key;
   const cl = c.client();
   const live = `${c.actorId}:${n}`;
+  killpoint("workflow.start_agent.mid"); // chaos/tests: the engine host dies inside a step (no wait, so no alarm of its own)
   await db.execute(ATTEMPTS_SQL);
   const row: any = (await db.execute("SELECT state FROM agent_attempts WHERE attempt = ?", n))[0];
   if (row && row.state !== "running") return "settled";
@@ -204,13 +238,14 @@ async function agentLifecycle(ctx: any): Promise<void> {
   // The agent's drive settings (recorded at spawn: how it runs, the driver's timings), over this host's env, for every
   // step and the run it starts. Read by the first step (its output is history, so a replay knows them too).
   let driveEnv: Record<string, string> | null = null;
-  const inEnv = (run: (c: any) => Promise<any>) => (c: any) => withDriveEnv(driveEnv, () => run(c));
+  // Each step runs with the agent's settings and (but the watch's look) its worker's wake alarm armed (STEP_WAKE_MS).
+  const inEnv = (name: string, run: (c: any) => Promise<any>) => (c: any) => withDriveEnv(driveEnv, () => (NO_WAKE.has(name) ? run(c) : withStepWake(c, () => run(c))));
   const settings = await ctx.tryStep({ name: "settings", timeout: 60_000, maxRetries: 10, retryBackoffBase: 1000, retryBackoffMax: 30_000, retryOnTimeout: true, catch: ALL_FAILURES,
-    run: async () => { const a = await (await ops()).getAgentOrThrow(p.runId, p.agentId); return { driveEnv: a.driveEnv, watchMs: withDriveEnv(a.driveEnv, WATCH_MS) }; } });
+    run: (c: any) => withStepWake(c, async () => { const a = await (await ops()).getAgentOrThrow(p.runId, p.agentId); return { driveEnv: a.driveEnv, watchMs: withDriveEnv(a.driveEnv, WATCH_MS) }; }) });
   driveEnv = settings.ok ? settings.value.driveEnv : null;
   const watchMs: number = settings.ok ? settings.value.watchMs : WATCH_MS();
   const step = (name: string, run: (c: any) => Promise<any>, o: Record<string, unknown> = {}) =>
-    ctx.tryStep({ name, timeout: 120_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 30_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run: inEnv(run) });
+    ctx.tryStep({ name, timeout: 120_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 30_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run: inEnv(name, run) });
   const failureOf = (r: any): AttemptError => ({ kind: "error", message: String(r.failure?.error?.message ?? `${r.failure?.stepName ?? "a step"} failed`).slice(0, 2000), final: true });
   // A step that never succeeds (its retries exhausted): the agent fails with that error, never stays "running".
   const giveUp = async (err: AttemptError) => { await step("give-up", async () => (await ops()).finishFailed(p.runId, p.agentId, p.epoch, err), { maxRetries: 10 }); };
@@ -238,7 +273,7 @@ async function agentLifecycle(ctx: any): Promise<void> {
     name: "drive", state: { phase: "ensure", n: 1 } as Drive,
     run: async (l: any, st: Drive) => {
       const lstep = (name: string, run: (c: any) => Promise<any>, o: Record<string, unknown> = {}) =>
-        l.tryStep({ name, timeout: 60_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 15_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run: inEnv(run) });
+        l.tryStep({ name, timeout: 60_000, maxRetries: 5, retryBackoffBase: 1000, retryBackoffMax: 15_000, retryOnTimeout: true, catch: ALL_FAILURES, ...o, run: inEnv(name, run) });
       const n = st.n;
       const iterShape: number = await gate(l, "drive-shape", DRIVE_SHAPE());
       // The upgrade drill's version 2 of an iteration: one more (no-op) step before each phase, and the watch's entries
