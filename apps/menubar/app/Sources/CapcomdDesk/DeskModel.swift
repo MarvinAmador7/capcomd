@@ -149,15 +149,25 @@ package final class DeskModel {
     if touchesRun {
       let cols = store.reelColumns(runId: runId)
       let ids = cols.map(\.agentId)
-      if columns != ids { columns = ids; warm(around: columns.firstIndex(of: reelPosition ?? "") ?? 0); startWarming() }
       defer { syncFlags() }
       let bots = all ? team(runId) : nil
       let asks = all ? Dictionary(store.approvals(forRun: runId).compactMap { a in a.agentId.map { ($0, a) } }, uniquingKeysWith: { a, _ in a }) : nil
+      // Slices first, added in one assignment, then the columns: a column or tab that read `agents` mid-way would
+      // render empty first and then once per agent added.
+      var added: [String: AgentSlice] = [:]
       for h in cols where all || keys.contains(.agent(h.agentId)) {
-        let s = agents[h.agentId] ?? { let n = AgentSlice(h); agents[h.agentId] = n; return n }()
+        let s = agents[h.agentId] ?? added[h.agentId] ?? { let n = AgentSlice(h); added[h.agentId] = n; return n }()
         s.set(h)
         if let bots { s.set(bot: bots[h.agentId]) }
         if let asks { s.set(approval: asks[h.agentId]) }
+      }
+      if !added.isEmpty { agents.merge(added) { a, _ in a } }
+      if columns != ids {
+        // A project just opened shows its columns' heads first; their threads warm after, nearest first.
+        let opened = columns.isEmpty
+        columns = ids
+        if !opened { warm(around: columns.firstIndex(of: reelPosition ?? "") ?? 0) }
+        startWarming()
       }
       if let asks { followAsks(Set(asks.keys)) }
     }

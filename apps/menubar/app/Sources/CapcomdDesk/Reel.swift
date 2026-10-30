@@ -72,21 +72,71 @@ final class ReelView: NSView {
   override var isFlipped: Bool { true }
   override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
 
-  /// The open project's columns: a hosting view each, kept while its agent stays in the run.
+  /// The open project's columns: a hosting view each, kept while its agent stays in the run. Only the columns on
+  /// screen and one each side are built at once; the rest show a blank column until they're built, one per idle turn
+  /// of the run loop, nearest first (a project with 17 agents took ~200 ms to its first frame building them all).
   func show(_ ids: [String]) {
     guard ids != order else { return }
     for id in Set(hosts.keys).subtracting(ids) { hosts.removeValue(forKey: id)?.removeFromSuperview() }
-    for id in ids where hosts[id] == nil {
-      let h = NSHostingView(rootView: AnyView(Column(agentId: id)
-        .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark)))
-      h.safeAreaRegions = []
-      h.sizingOptions = []   // the reel sets its frame; nothing to measure
-      doc.addSubview(h)
-      hosts[id] = h
-    }
+    for id in Set(blanks.keys).subtracting(ids) { blanks.removeValue(forKey: id)?.removeFromSuperview() }
     order = ids
     at = min(at, max(0, ids.count - 1))
+    for id in ids where hosts[id] == nil && blanks[id] == nil {
+      let b = NSView()
+      b.wantsLayer = true
+      b.layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
+      b.layer?.cornerRadius = Theme.Desk.columnRadius
+      b.layer?.cornerCurve = .continuous
+      doc.addSubview(b)
+      blanks[id] = b
+    }
     needsLayout = true
+    buildSoon()
+  }
+
+  private var blanks: [String: NSView] = [:]
+  private var building = false
+
+  /// Builds column `i`'s hosting view in place of its blank.
+  private func build(_ i: Int) {
+    guard order.indices.contains(i), hosts[order[i]] == nil else { return }
+    let id = order[i]
+    let h = NSHostingView(rootView: AnyView(Column(agentId: id)
+      .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark)))
+    h.safeAreaRegions = []
+    h.sizingOptions = []   // the reel sets its frame; nothing to measure
+    h.frame = blanks[id]?.frame ?? frame(of: i)
+    doc.addSubview(h)
+    hosts[id] = h
+    blanks.removeValue(forKey: id)?.removeFromSuperview()
+  }
+
+  /// The columns that must exist now: those on screen and one each side.
+  private func buildAround(_ i: Int) {
+    guard !order.isEmpty, across > 0 else { return }
+    for j in max(0, i - 1)...min(order.count - 1, i + across) { build(j) }
+  }
+
+  /// The rest, one per turn of the run loop while the reel stands still, nearest the leading column first.
+  private func buildSoon() {
+    guard !building, !blanks.isEmpty else { return }
+    building = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.building = false
+      guard self.across > 0 else { return self.buildSoon() }   // not laid out yet
+      if !self.model.reelMoving, let next = self.order.indices.filter({ self.hosts[self.order[$0]] == nil }).min(by: { abs($0 - self.at) < abs($1 - self.at) }) {
+        self.build(next)
+      }
+      if !self.blanks.isEmpty {
+        // Yield to the next frame before the next column: the run loop handles input and display in between.
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self] in self?.buildSoon() }
+      }
+    }
+  }
+
+  private func frame(of i: Int) -> CGRect {
+    CGRect(x: Theme.Desk.peek + Theme.Desk.gap + CGFloat(i) * pitch, y: 0, width: width, height: max(0, bounds.height - Theme.Desk.gap))
   }
 
   override func layout() {
@@ -97,12 +147,12 @@ final class ReelView: NSView {
     let w = max(320, (bounds.width - 2 * inset - CGFloat(n - 1) * gap) / CGFloat(n))
     let moved = w + gap != pitch
     across = n; width = w; pitch = w + gap
-    let height = max(0, bounds.height - gap)
-    for (i, id) in order.enumerated() { hosts[id]?.frame = CGRect(x: inset + CGFloat(i) * pitch, y: 0, width: w, height: height) }
+    for (i, id) in order.enumerated() { (hosts[id] ?? blanks[id])?.frame = frame(of: i) }
     doc.frame = CGRect(x: 0, y: 0, width: max(bounds.width, 2 * inset + CGFloat(order.count) * pitch - gap), height: bounds.height)
     if moved { jump(to: at) }   // a new width keeps the same leading column
     if model.across != n { DispatchQueue.main.async { [model] in if model.across != n { model.across = n } } }
     if let p = pending, bounds.width > 0 { pending = nil; perform(p) }
+    buildAround(at)
   }
 
   /// A crew tab, a shortcut or Follow asked for a column.
@@ -129,6 +179,7 @@ final class ReelView: NSView {
   /// clip view frame by frame made every column's hosting view update its graph each frame (~20 ms a frame).
   fileprivate func slide(to i: Int, from start: CGFloat? = nil) {
     let from = start ?? shownOffset(), to = x(i)
+    buildAround(i)
     stopSlide()
     scroll.contentView.setBoundsOrigin(NSPoint(x: to, y: 0))
     scrolled()
@@ -200,6 +251,7 @@ final class ReelView: NSView {
     let i = min(max(0, Int((scroll.contentView.bounds.origin.x / pitch).rounded())), order.count - 1)
     guard i != at else { return }
     at = i
+    buildAround(i)
     DeskProbe.event("reel.position", i)
     model.reelScrolled(toIndex: i)
   }
