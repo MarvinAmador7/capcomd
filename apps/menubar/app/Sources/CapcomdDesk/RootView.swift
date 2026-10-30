@@ -7,10 +7,12 @@ import CapcomdUI
 /// The content stays inside the safe area (below the toolbar's 52 pt) and the title bar is drawn into that band from
 /// outside it. Ignoring the safe area for the whole stack instead hands the band to the reel's scroll view as a content
 /// inset: its content becomes 52 pt taller than the view and the window scrolls vertically.
-struct RootView: View {
+package struct RootView: View {
   @Environment(DeskModel.self) private var model
-  var body: some View {
-    Group {
+  package init() {}
+  package var body: some View {
+    DeskProbe.body("RootView")
+    return Group {
       switch model.link {
       case .connecting: Color.clear
       case .needsToken: TokenView()

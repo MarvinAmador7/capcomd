@@ -9,7 +9,8 @@ import CapcomdUI
 struct TitleBar: View {
   @Environment(DeskModel.self) private var model
   var body: some View {
-    HStack(spacing: 8) {
+    DeskProbe.body("TitleBar")
+    return HStack(spacing: 8) {
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 8) {
           ForEach(model.decks) { deck in
@@ -66,9 +67,10 @@ struct OpenGroup: View {
   @Environment(DeskModel.self) private var model
   let deck: DeckInfo
   var body: some View {
+    DeskProbe.body("OpenGroup")
     let cols = model.columns, seen = model.onScreen
     let first = cols.firstIndex(where: seen.contains) ?? -1, last = cols.lastIndex(where: seen.contains) ?? -1
-    HStack(spacing: 2) {
+    return HStack(spacing: 2) {
       PlaceIcon(sandbox: deck.sandbox).padding(.trailing, 6)
       VStack(alignment: .leading, spacing: 1) {
         Text(verbatim: deck.title).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).lineLimit(1)
@@ -145,6 +147,7 @@ struct CrewTab: View {
   @Environment(DeskModel.self) private var model
   let agentId: String
   var body: some View {
+    let _ = DeskProbe.body("CrewTab", id: agentId)
     if let a = model.agent(agentId) {
       let h = a.header, asks = a.approval != nil
       Button { model.scroll(to: agentId) } label: {
@@ -172,8 +175,9 @@ struct FoldedDeck: View {
   @Environment(DeskModel.self) private var model
   let deck: DeckInfo
   var body: some View {
+    DeskProbe.body("FoldedDeck")
     let asks = deck.askingAgentId != nil
-    Button { model.open(project: deck.id) } label: {
+    return Button { model.open(project: deck.id) } label: {
       HStack(spacing: 9) {
         PlaceIcon(sandbox: deck.sandbox)
         VStack(alignment: .leading, spacing: 1) {

@@ -14,14 +14,14 @@ import CapcomdUI
 
 /// One agent as its column header and tab show it.
 @Observable @MainActor
-final class AgentSlice {
-  let id: String
-  private(set) var header: ColumnHeader
-  private(set) var bot: BotTraits?
+package final class AgentSlice {
+  package let id: String
+  package private(set) var header: ColumnHeader
+  package private(set) var bot: BotTraits?
   /// The approval this agent waits on, if any.
-  private(set) var approval: PendingApproval?
+  package private(set) var approval: PendingApproval?
   /// Whether the column shows its thread (DeskModel's warm set); a cold column is its header and box only.
-  private(set) var warm = false
+  package private(set) var warm = false
   init(_ h: ColumnHeader) { id = h.agentId; header = h }
   func set(warm w: Bool) { if warm != w { warm = w } }
   func set(_ h: ColumnHeader) { if header != h { header = h } }
@@ -31,10 +31,10 @@ final class AgentSlice {
 
 /// One agent's thread as its column shows it.
 @Observable @MainActor
-final class ThreadSlice {
-  private(set) var entries: [ThreadEntry] = []
-  private(set) var pending: [PendingSteer] = []
-  private(set) var unavailable: DetailUnavailable?
+package final class ThreadSlice {
+  package private(set) var entries: [ThreadEntry] = []
+  package private(set) var pending: [PendingSteer] = []
+  package private(set) var unavailable: DetailUnavailable?
   func set(entries e: [ThreadEntry], pending p: [PendingSteer], unavailable u: DetailUnavailable?) {
     if entries != e { entries = e }
     if pending != p { pending = p }
@@ -44,33 +44,33 @@ final class ThreadSlice {
 
 /// Media bytes loaded through the daemon; rare, so one observed dictionary is enough.
 @Observable @MainActor
-final class MediaSlice { var items: [MediaKey: Fetched<Data>] = [:] }
+package final class MediaSlice { package var items: [MediaKey: Fetched<Data>] = [:] }
 
 @Observable @MainActor
-final class DeskModel {
-  enum Link: Equatable { case connecting, needsToken, ready }
+package final class DeskModel {
+  package enum Link: Equatable { case connecting, needsToken, ready }
 
-  @ObservationIgnored private(set) var store: CapcomdStore
-  @ObservationIgnored private var transport: UnixSocketTransport
-  private(set) var link: Link = .connecting
+  @ObservationIgnored package private(set) var store: CapcomdStore
+  @ObservationIgnored private var transport: UnixSocketTransport?
+  package private(set) var link: Link = .connecting
   /// Every project with something to show, oldest first (never reordered by activity).
-  private(set) var decks: [DeckInfo] = []
+  package private(set) var decks: [DeckInfo] = []
   /// The project the reel shows, and its run.
-  private(set) var openProjectId: String?
-  private(set) var openRunId: String?
+  package private(set) var openProjectId: String?
+  package private(set) var openRunId: String?
   /// The open run's agents, in tree order: the reel's columns and the title bar's tabs.
-  private(set) var columns: [String] = []
+  package private(set) var columns: [String] = []
   /// The reel's leading on-screen column, as the reel reports it: once per column crossed, never per frame.
-  private(set) var reelPosition: String?
+  package private(set) var reelPosition: String?
   /// A scroll the reel carries out (a tab click, Follow, the keyboard, a project switch); `serial` makes a repeat count.
-  private(set) var reelRequest: ReelRequest?
-  var focusedAgent: String?
+  package private(set) var reelRequest: ReelRequest?
+  package var focusedAgent: String?
   /// Follow: an ask or a failure in the open project scrolls the reel to its column (SPEC §3).
-  var follow = true
+  package var follow = true
   /// Columns across the window (3, 2 or 1), set by the reel when its width crosses a step.
-  var across = 3
+  package var across = 3
   /// The column ids on screen, for the title bar's bracket: derived from the scroll position, never tracked per frame.
-  var onScreen: Set<String> {
+  package var onScreen: Set<String> {
     let start = reelPosition.flatMap { columns.firstIndex(of: $0) } ?? 0
     return Set(columns.dropFirst(start).prefix(across))
   }
@@ -81,7 +81,8 @@ final class DeskModel {
   @ObservationIgnored private var teams: [String: (sig: String, bots: [String: BotTraits])] = [:]
   @ObservationIgnored private var knownAsks: Set<String> = []
 
-  init() {
+  /// The app's model: connected to the daemon's socket with the Keychain token (or `CAPCOMD_TOKEN`).
+  package init() {
     (store, transport) = Connection.makeStore(token: "")
     if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { connect(env); return }
     Task.detached(priority: .userInitiated) {
@@ -90,13 +91,22 @@ final class DeskModel {
     }
   }
 
+  /// A model on a store that is already filled and needs no socket (the bench's fixtures, previews, tests): ready at
+  /// once, following the store's keyed changes exactly as the connected model does.
+  package init(store s: CapcomdStore) {
+    store = s; transport = nil
+    s.onChanges = { [weak self] keys in self?.apply(keys) }
+    link = .ready
+    apply([.all])
+  }
+
   // MARK: connection
 
   private func connect(_ token: String?) {
     guard let token, !token.isEmpty else { link = .needsToken; return }
     let old = transport
     (store, transport) = Connection.makeStore(token: token)
-    Task { try? await old.shutdown() }
+    if let old { Task { try? await old.shutdown() } }
     store.onChanges = { [weak self] keys in self?.apply(keys) }
     store.start()
     link = .ready
@@ -104,7 +114,7 @@ final class DeskModel {
   }
 
   /// A pasted token: saved to the Keychain item the menu bar app uses too.
-  func submit(token raw: String) -> Bool {
+  package func submit(token raw: String) -> Bool {
     let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !t.isEmpty, Keychain.save(t) else { return false }
     store.stop(); connect(t); return true
@@ -113,7 +123,7 @@ final class DeskModel {
   // MARK: changes
 
   /// The store changed: refresh only what the keys name. `.all` refreshes everything, comparing before assigning.
-  func apply(_ keys: Set<ChangeKey>) {
+  package func apply(_ keys: Set<ChangeKey>) {
     if store.unauthorized { link = .needsToken; return }
     let all = keys.contains(.all)
     if all {
@@ -168,7 +178,7 @@ final class DeskModel {
   // MARK: projects and columns
 
   /// Show a project (a deck click, ⌘1–9). Keyboard switches don't animate; the reel starts at its ask, if any.
-  func open(project id: String?) {
+  package func open(project id: String?) {
     guard select(id) else { return }
     apply([.all])
   }
@@ -188,13 +198,13 @@ final class DeskModel {
     return true
   }
 
-  func agent(_ id: String) -> AgentSlice? { agents[id] }
+  package func agent(_ id: String) -> AgentSlice? { agents[id] }
 
   /// A folded deck's heads: its run's bots, cached per run until its agents change.
-  func heads(_ deck: DeckInfo) -> [BotTraits] { let t = team(deck.runId); return deck.agentIds.compactMap { t[$0] } }
+  package func heads(_ deck: DeckInfo) -> [BotTraits] { let t = team(deck.runId); return deck.agentIds.compactMap { t[$0] } }
 
   /// Bring a column on screen and focus it. `animated` only for Follow and clicks, never for the keyboard (SPEC §4).
-  func scroll(to agentId: String, animated: Bool = true) {
+  package func scroll(to agentId: String, animated: Bool = true) {
     focusedAgent = agentId
     guard !onScreen.contains(agentId) else { return }
     // Keep the column where it lands: the reel's leading column moves only as far as needed.
@@ -205,7 +215,7 @@ final class DeskModel {
   }
 
   /// The reel's leading column changed (it scrolled, by hand or by request).
-  func reelScrolled(toIndex i: Int) {
+  package func reelScrolled(toIndex i: Int) {
     let id = columns.indices.contains(i) ? columns[i] : columns.last
     if reelPosition != id { reelPosition = id }
     warm(around: i)
@@ -218,9 +228,9 @@ final class DeskModel {
   // one each side at once, the rest one at a time while the reel stands still, nearest first, up to `warmCap`. Past
   // the cap the least recently shown thread is let go (its data stays in the store).
 
-  static let warmCap = 32
+  package static let warmCap = 32
   /// Set by the reel: warming waits while it moves, so it never competes with a scroll for a frame.
-  @ObservationIgnored var reelMoving = false
+  @ObservationIgnored package var reelMoving = false
   @ObservationIgnored private var warmOrder: [String] = []
   @ObservationIgnored private var warmer: Task<Void, Never>?
 
@@ -252,16 +262,16 @@ final class DeskModel {
     }
   }
 
-  func goToProject(_ n: Int) { if decks.indices.contains(n) { open(project: decks[n].id) } }
-  func goToAgent(_ n: Int) { if columns.indices.contains(n) { scroll(to: columns[n], animated: false) } }
-  func moveFocus(_ by: Int) {
+  package func goToProject(_ n: Int) { if decks.indices.contains(n) { open(project: decks[n].id) } }
+  package func goToAgent(_ n: Int) { if columns.indices.contains(n) { scroll(to: columns[n], animated: false) } }
+  package func moveFocus(_ by: Int) {
     let i = focusedAgent.flatMap { columns.firstIndex(of: $0) } ?? 0
     let j = min(max(0, i + by), columns.count - 1)
     if columns.indices.contains(j) { scroll(to: columns[j], animated: false) }
   }
 
   /// The column's thread, created when the column first shows (its pages load then, not before).
-  func thread(_ agentId: String) -> ThreadSlice {
+  package func thread(_ agentId: String) -> ThreadSlice {
     if let t = threads[agentId] { return t }
     let t = ThreadSlice(); threads[agentId] = t
     t.set(entries: store.threadEntries(agentId: agentId), pending: store.pendingSteers(agentId: agentId), unavailable: store.threadUnavailable[agentId])
@@ -269,7 +279,7 @@ final class DeskModel {
   }
 
   /// Read the column's thread from the route, then again slowly in case the stream dropped a frame.
-  func keepThreadFresh(agentId: String) async {
+  package func keepThreadFresh(agentId: String) async {
     guard let runId = openRunId else { return }
     while !Task.isCancelled {
       await store.refreshThread(runId: runId, agentId: agentId)
@@ -277,27 +287,27 @@ final class DeskModel {
     }
   }
 
-  func steer(agentId: String, body: String) {
+  package func steer(agentId: String, body: String) {
     guard let runId = openRunId else { return }
     Task { await store.steer(runId: runId, agentId: agentId, body: body) }
   }
 
-  func decide(_ approvalId: String, _ d: ApprovalDecision) { Task { _ = await store.decide(approvalId, d) } }
+  package func decide(_ approvalId: String, _ d: ApprovalDecision) { Task { _ = await store.decide(approvalId, d) } }
 }
 
-struct ReelRequest: Equatable {
+package struct ReelRequest: Equatable {
   /// nil: the first column.
-  var agentId: String?
-  var animated: Bool
-  var serial: Int
+  package var agentId: String?
+  package var animated: Bool
+  package var serial: Int
 }
 
 extension DeskModel: ThreadHost {
-  func bot(runId: String, agentId: String) -> BotTraits? { agents[agentId]?.bot }
-  func agentProvider(runId: String, agentId: String) -> Provider? { agents[agentId]?.header.provider }
-  func role(runId: String, agentId: String) -> String? { agents[agentId]?.header.name }
-  func media(_ key: MediaKey) -> Fetched<Data>? { mediaSlice.items[key] }
-  func loadMedia(_ key: MediaKey) async { await store.loadMedia(key); mediaSlice.items[key] = store.media[key] }
-  func openAgent(runId: String, agentId: String) { scroll(to: agentId) }
+  package func bot(runId: String, agentId: String) -> BotTraits? { agents[agentId]?.bot }
+  package func agentProvider(runId: String, agentId: String) -> Provider? { agents[agentId]?.header.provider }
+  package func role(runId: String, agentId: String) -> String? { agents[agentId]?.header.name }
+  package func media(_ key: MediaKey) -> Fetched<Data>? { mediaSlice.items[key] }
+  package func loadMedia(_ key: MediaKey) async { await store.loadMedia(key); mediaSlice.items[key] = store.media[key] }
+  package func openAgent(runId: String, agentId: String) { scroll(to: agentId) }
 }
 #endif

@@ -20,7 +20,8 @@ struct Reel: View {
   /// The leading column as the scroll geometry last reported it.
   @State private var at = 0
   var body: some View {
-    GeometryReader { geo in
+    DeskProbe.body("Reel")
+    return GeometryReader { geo in
       let across = Theme.Desk.columnsAcross(geo.size.width)
       let inset = Theme.Desk.peek + Theme.Desk.gap
       let width = max(320, (geo.size.width - 2 * inset - CGFloat(across - 1) * Theme.Desk.gap) / CGFloat(across))
@@ -39,6 +40,7 @@ struct Reel: View {
       // The offset counts the leading margin (column 0 rests at -inset); scrollTo(x:) counts from the margin.
       .onScrollGeometryChange(for: Int.self) { g in Int(((g.contentOffset.x + inset) / pitch).rounded()) } action: { _, i in
         at = i
+        DeskProbe.event("reel.position", i)
         model.reelScrolled(toIndex: i)
       }
       .onChange(of: model.reelRequest, initial: true) { _, r in
@@ -55,7 +57,7 @@ struct Reel: View {
           withAnimation(.spring(duration: 0.35, bounce: 0)) { position.scrollTo(x: x(i)) }
         }
       }
-      .onScrollPhaseChange { _, p in model.reelMoving = p.isScrolling }
+      .onScrollPhaseChange { _, p in model.reelMoving = p.isScrolling; DeskProbe.event("reel.phase", p.isScrolling ? 1 : 0) }
       .onChange(of: across, initial: true) { _, n in if model.across != n { model.across = n } }
     }
   }
@@ -94,6 +96,7 @@ struct Column: View {
   @Environment(DeskModel.self) private var model
   let agentId: String
   var body: some View {
+    let _ = DeskProbe.body("Column", id: agentId)
     if let a = model.agent(agentId) {
       let asks = a.approval != nil, focused = model.focusedAgent == agentId
       VStack(spacing: 0) {
@@ -121,8 +124,9 @@ struct Column: View {
 struct ColumnHead: View {
   let slice: AgentSlice
   var body: some View {
+    DeskProbe.body("ColumnHead", id: slice.id)
     let h = slice.header
-    HStack(spacing: 8) {
+    return HStack(spacing: 8) {
       ProvidedBot(traits: slice.bot, size: .xs, cell: 1.5, provider: h.provider)
       Text(verbatim: h.name).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text)
       if let s = h.suffix { Text(verbatim: s).font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary) }
@@ -158,8 +162,9 @@ struct ColumnThread: View {
   let agentId: String
   let thread: ThreadSlice
   var body: some View {
+    DeskProbe.body("ColumnThread", id: agentId)
     let entries = thread.entries
-    ScrollView {
+    return ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
           EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1])).equatable()
@@ -185,6 +190,7 @@ struct EntryRow: View, Equatable {
   let entry: ThreadEntry
   let above: CGFloat
   var body: some View {
+    let _ = DeskProbe.body("EntryRow", id: agentId)
     switch entry {
     case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above)
     case .event(let ev): ThreadItemView(runId: runId, agentId: agentId, item: ev).padding(.bottom, Theme.Content.proseBottom)
@@ -200,7 +206,8 @@ struct ColumnComposer: View {
   let name: String
   @State private var draft = ""
   var body: some View {
-    HStack(spacing: 8) {
+    DeskProbe.body("ColumnComposer", id: agentId)
+    return HStack(spacing: 8) {
       TextField("Tell \(name)…", text: $draft, axis: .vertical)
         .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)
         .onSubmit(send)
@@ -229,8 +236,9 @@ struct DecisionBar: View {
   @Environment(DeskModel.self) private var model
   let approval: PendingApproval
   var body: some View {
+    DeskProbe.body("DecisionBar")
     let busy = approval.decision != .idle
-    VStack(alignment: .leading, spacing: 8) {
+    return VStack(alignment: .leading, spacing: 8) {
       Text(verbatim: approval.question.plain).font(Theme.Desk.question).foregroundStyle(Theme.Desk.text)
         .fixedSize(horizontal: false, vertical: true)
       if let b = approval.branchLine { Text(verbatim: b).font(Theme.Desk.mono).foregroundStyle(Theme.Desk.secondary) }
