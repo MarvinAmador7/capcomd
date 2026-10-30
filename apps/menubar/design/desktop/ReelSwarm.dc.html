@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Reel: a swarm of 17 agents</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.sb{--text:#F2F2F7;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--amber:#FFB020;--red:#FF6961;--green:#30D158;--col:#151518;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.lights{display:flex;gap:8px;padding-right:10px}
+.lights span{width:12px;height:12px;border-radius:6px;background:#3a3a3e}
+.grp{display:flex;align-items:center;gap:4px;height:44px;padding:0 4px 0 12px;border-radius:13px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12)}
+.tp{display:inline-flex;align-items:center;gap:5px;height:30px;padding:0 9px 0 4px;border-radius:9px;color:var(--sec);font-size:12px;white-space:nowrap}
+.tp img{width:20px;height:20px;image-rendering:pixelated}
+.sub{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 9px 0 6px;border-radius:10px;background:rgba(255,255,255,.05);font-size:12px;color:var(--sec);white-space:nowrap}
+.dk{display:inline-flex;align-items:center}
+.dk span{width:22px;height:22px;border-radius:6px;background:#26262a;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #1a1a1d}
+.dk span+span{margin-left:-15px}
+.dk img{width:16px;height:16px;image-rendering:pixelated}
+.nm{display:flex;flex-direction:column;line-height:1.2}
+.nm b{font-weight:600;font-size:12.5px;color:var(--text)}
+.nm i{font-style:normal;font-size:10.5px;color:var(--ter)}
+.env{flex:0 0 auto;color:#C7C7CE}
+.col{flex:1;min-width:0;background:var(--col);border-radius:11px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;flex-direction:column;overflow:hidden}
+.ch{height:38px;flex:0 0 38px;display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12.5px}
+.ch img{width:20px;height:20px;image-rendering:pixelated}
+.cb{flex:1;padding:4px 14px 12px;display:flex;flex-direction:column;gap:10px;color:#E6E6EC;line-height:1.5;font-size:12.5px;overflow:hidden}
+.mm{display:flex;gap:2px}
+.mm span{width:14px;height:8px;border-radius:2px}
+.r{background:rgba(10,132,255,.75)}.q{background:rgba(255,255,255,.16)}.a{background:#FFB020}.d{background:rgba(48,209,88,.6)}
+.cap{font-size:13px;line-height:1.55;color:var(--sec)}
+.cap b{color:var(--text);font-weight:600}
+.btn{height:26px;padding:0 11px;border-radius:7px;font:500 12px/1 inherit;font-family:inherit;color:var(--text);background:transparent;border:.5px solid rgba(255,255,255,.2);display:inline-flex;align-items:center;gap:6px}
+.btn.inv{background:#F2F2F7;color:#1D1D1F;border:0;font-weight:600;min-width:96px;justify-content:center}
+</style>
+</helmet>
+<div class="sb" style="width:1440px;height:900px;box-sizing:border-box;padding:40px 64px;background:#0b0b0c;display:flex;flex-direction:column;gap:28px">
+
+  <div style="height:620px;border-radius:12px;background:#0e0e10;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);display:flex;flex-direction:column;overflow:hidden">
+
+    <header style="height:60px;flex:0 0 60px;display:flex;align-items:center;gap:6px;padding:0 12px 0 16px">
+      <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+      <nav aria-label="Migrate matchkey crew, 17 agents" class="grp" style="gap:6px">
+        <svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Cloud"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg>
+        <span class="nm" style="padding:0 6px 0 4px"><b>Migrate matchkey</b><i>Cloud · <span class="mono">18:40</span> · 17 agents</i></span>
+
+        <span class="tp" title="planner Glint"><img src="bots/mk-planner-0-xs.svg" alt="">planner</span>
+
+        <!-- the subtree on screen, fanned out -->
+        <span role="group" aria-label="lead ids/v1 and 4 workers, on screen" style="display:inline-flex;align-items:center;gap:2px;padding:2px 3px;border-radius:11px;background:rgba(255,255,255,.04)">
+          <span style="display:inline-flex;gap:2px;padding:2px;border-radius:9px;background:rgba(255,255,255,.08);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14)" aria-label="In view">
+            <span class="tp" style="color:var(--text)"><img src="bots/mk-lead-1-xs.svg" alt="">lead ids/v1</span>
+            <span class="tp" style="color:var(--text)"><img src="bots/mk-worker-2-xs.svg" alt="">d3ce</span>
+            <span class="tp" style="color:var(--text);background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55)"><img src="bots/mk-worker-3-xs.svg" alt="">4423</span>
+          </span>
+          <span class="tp" style="opacity:.6"><img src="bots/mk-worker-4-xs.svg" alt="">9b1f</span>
+          <span class="tp"><img src="bots/pr-worker-1-xs.svg" alt="">5e07</span>
+        </span>
+
+        <!-- other subtrees, folded to stacks -->
+        <span class="sub" aria-label="lead addriva and 4 workers, all working">
+          <span class="dk"><span><img src="bots/pr-planner-0-xs.svg" alt=""></span><span><img src="bots/mk-worker-2-xs.svg" alt=""></span><span><img src="bots/pr-worker-1-xs.svg" alt=""></span><span><img src="bots/mk-worker-4-xs.svg" alt=""></span><span><img src="bots/mk-worker-3-xs.svg" alt=""></span></span>
+          addriva<span class="mono" style="color:var(--ter);font-size:11px">5</span>
+        </span>
+        <span class="sub" aria-label="lead matchkey and 4 workers; worker a91c asks">
+          <span class="dk"><span><img src="bots/pr-critic-2-xs.svg" alt=""></span><span><img src="bots/mk-worker-4-xs.svg" alt=""></span><span><img src="bots/pr-worker-1-xs.svg" alt=""></span><span><img src="bots/mk-worker-2-xs.svg" alt=""></span></span>
+          matchkey<span class="mono" style="color:var(--ter);font-size:11px">4</span>
+          <span style="display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px 0 3px;margin-left:2px;border-radius:8px;background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55);color:var(--text)"><img src="bots/mk-worker-3-small.svg" alt="" style="width:18px;height:18px;image-rendering:pixelated">a91c</span>
+        </span>
+
+        <span class="tp" style="opacity:.6;padding:0 4px" title="critic Nib, queued"><img src="bots/mk-critic-5-xs.svg" alt="critic, queued"></span>
+      </nav>
+      <span style="flex:1"></span>
+      <span style="display:flex;align-items:center;gap:7px;height:30px;padding:0 10px;border-radius:8px;background:rgba(10,132,255,.16);color:#6CB4FF;font-size:12px;font-weight:500"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" stroke="currentColor" fill="none" stroke-width="1.3"/><circle cx="8" cy="8" r="2.2" fill="currentColor"/></svg>Follow</span>
+    </header>
+
+    <!-- the subtree's name rides above its columns -->
+    <div style="display:flex;align-items:center;gap:10px;height:26px;flex:0 0 26px;padding-left:54px;font-size:11.5px;color:var(--ter)">
+      <span style="color:var(--sec)">lead ids/v1 · 4 workers</span>
+      <span style="flex:1"></span>
+      <span style="padding-right:12px">2 more off screen →</span>
+    </div>
+
+    <div style="flex:1;min-height:0;display:flex;gap:10px;padding:0 0 8px">
+      <div style="flex:0 0 44px;border-radius:0 11px 11px 0;background:var(--col);display:flex;justify-content:center;padding-top:10px;opacity:.7"><img src="bots/mk-planner-0-xs.svg" alt="planner, scroll left" style="width:20px;height:20px;image-rendering:pixelated"></div>
+      <section class="col" aria-label="lead ids/v1">
+        <div class="ch"><img src="bots/mk-lead-1-small.svg" alt=""><b style="font-weight:600">lead</b><span style="color:var(--ter)">ids/v1</span><span style="font-size:11.5px;color:var(--sec)">· working</span></div>
+        <div class="cb"><div>Four workers on ids/v1. 4423 fixed the join; d3ce is writing shards; 9b1f waits; 5e07 backfills history.</div><div style="color:var(--sec)">Running test/ids/join.test.ts <span class="mono" style="color:var(--blue);font-size:11px">0:12</span></div></div>
+      </section>
+      <section class="col" aria-label="worker d3ce">
+        <div class="ch"><img src="bots/mk-worker-2-small.svg" alt=""><b style="font-weight:600">worker</b><span class="mono" style="color:var(--ter);font-size:10.5px">d3ce</span><span style="font-size:11.5px;color:var(--sec)">· working</span></div>
+        <div class="cb"><div>Writing the v3.2 shards to r2://staging/mk.</div><div><span class="mono" style="font-size:18px;font-weight:500">118</span><span class="mono" style="font-size:12px;color:var(--ter)"> / 256</span></div><div style="display:grid;grid-template-columns:repeat(32,1fr);gap:2px" aria-hidden="true"><span style="grid-column:span 15;height:5px;background:var(--blue);border-radius:1px"></span><span style="grid-column:span 17;height:5px;background:rgba(255,255,255,.10);border-radius:1px"></span></div></div>
+      </section>
+      <section class="col" aria-label="worker 4423, waiting on you" style="box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)">
+        <div class="ch"><img src="bots/mk-worker-3-small.svg" alt=""><b style="font-weight:600">worker</b><span class="mono" style="color:var(--ter);font-size:10.5px">4423</span><span style="font-size:11.5px;color:var(--amber)">· waiting on you</span></div>
+        <div class="cb"><div>Emails are normalised on both sides before the join. Checks passed.</div></div>
+        <div style="background:#1f1c17;padding:10px 14px;display:flex;flex-direction:column;gap:6px"><div style="font-size:14px;font-weight:600">Merge worker 4423's work into main?</div><div style="display:flex;gap:8px;justify-content:flex-end"><span class="btn">Deny</span><span class="btn inv">Approve</span></div></div>
+      </section>
+      <div style="flex:0 0 44px;border-radius:11px 0 0 11px;background:var(--col);display:flex;justify-content:center;padding-top:10px;opacity:.7"><img src="bots/mk-worker-4-xs.svg" alt="worker 9b1f, scroll right" style="width:20px;height:20px;image-rendering:pixelated;opacity:.6"></div>
+    </div>
+
+    <!-- the whole swarm as a strip: one cell per agent, grouped by lead -->
+    <div role="img" aria-label="17 agents: 12 working, 2 asking, 3 queued; columns 2 to 4 on screen" style="height:30px;flex:0 0 30px;display:flex;align-items:center;justify-content:center;gap:10px;border-top:.5px solid rgba(255,255,255,.08)">
+      <span class="mm"><span class="r"></span></span>
+      <span class="mm" style="position:relative"><span class="r" style="outline:1.5px solid rgba(255,255,255,.7);outline-offset:1px"></span><span class="r" style="outline:1.5px solid rgba(255,255,255,.7);outline-offset:1px"></span><span class="a" style="outline:1.5px solid rgba(255,255,255,.7);outline-offset:1px"></span><span class="q"></span><span class="r"></span></span>
+      <span class="mm"><span class="r"></span><span class="r"></span><span class="r"></span><span class="r"></span><span class="r"></span></span>
+      <span class="mm"><span class="r"></span><span class="q"></span><span class="r"></span><span class="r"></span><span class="a"></span></span>
+      <span class="mm"><span class="q"></span></span>
+      <span style="font-size:11px;color:var(--ter);margin-left:8px">12 working · <span style="color:var(--amber)">2 ask</span> · 3 queued</span>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:40px">
+    <div class="cap"><b>The tree folds, like the projects do.</b> Each lead and its workers are one stack in the title bar. Only the subtree you're looking at is fanned out into named tabs, with the bracket on the columns on screen. Scroll into another subtree and it fans out while this one folds.</div>
+    <div class="cap"><b>An ask breaks out of its stack.</b> Worker a91c is inside the folded matchkey subtree, so its head steps out next to the stack, amber, with its id. Asks never hide, at any depth. With Follow on, the reel goes to the oldest ask first.</div>
+    <div class="cap"><b>The strip is the whole swarm.</b> One cell per agent, grouped by lead, coloured by state, with the on-screen columns outlined. Click a cell to jump there; ⌘0 opens the overview with every agent as a card.</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

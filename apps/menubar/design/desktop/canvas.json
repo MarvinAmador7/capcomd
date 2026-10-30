@@ -1,0 +1,86 @@
+{
+ "v": 3,
+ "createdOnFiles": {
+  "v": 1,
+  "at": "2026-10-29T23:45:00Z"
+ },
+ "title": "capcomd desktop \u00b7 reel",
+ "launch": {
+  "view": "canvas"
+ },
+ "pages": [],
+ "boards": {
+  "Reel.dc.html": {
+   "x": 0,
+   "y": 2640,
+   "w": 1440,
+   "h": 900,
+   "title": "Reel \u00b7 the crew as columns, follow on",
+   "expand": "fill",
+   "radius": 14
+  },
+  "ReelStates.dc.html": {
+   "x": 1520,
+   "y": 2640,
+   "w": 1440,
+   "h": 900,
+   "title": "Reel \u00b7 overview, a new agent, zoom"
+  },
+  "ReelStack.dc.html": {
+   "x": 3040,
+   "y": 2640,
+   "w": 1440,
+   "h": 900,
+   "title": "Reel \u00b7 one project open, the others folded into stacks",
+   "expand": "fill",
+   "radius": 14
+  },
+  "ReelTabs.dc.html": {
+   "x": 4560,
+   "y": 2640,
+   "w": 1440,
+   "h": 900,
+   "title": "Reel \u00b7 title bar states"
+  },
+  "ReelMenu.dc.html": {
+   "x": 6080,
+   "y": 2640,
+   "w": 1440,
+   "h": 900,
+   "title": "Reel \u00b7 the open project's menu"
+  },
+  "ReelSwarm.dc.html": {
+   "x": 7600,
+   "y": 2640,
+   "w": 1440,
+   "h": 900,
+   "title": "Reel \u00b7 a swarm of 17 agents"
+  },
+  "ReelNew.dc.html": {
+   "x": 9120,
+   "y": 2640,
+   "w": 1440,
+   "h": 900,
+   "title": "Reel \u00b7 starting a new project"
+  },
+  "Expand.dc.html": {
+   "x": 0,
+   "y": 3960,
+   "w": 1440,
+   "h": 900,
+   "title": "Menu bar \u2192 window"
+  }
+ },
+ "order": [
+  "Reel.dc.html",
+  "ReelStates.dc.html",
+  "ReelStack.dc.html",
+  "ReelTabs.dc.html",
+  "ReelMenu.dc.html",
+  "ReelSwarm.dc.html",
+  "ReelNew.dc.html",
+  "Expand.dc.html"
+ ],
+ "notes": {},
+ "designSystems": []
+}
