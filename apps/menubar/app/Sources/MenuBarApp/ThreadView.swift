@@ -4,39 +4,6 @@ import CapcomdStore
 import CapcomdThread
 import CapcomdBot
 
-/// SPEC §4.5 agent thread (thread-panel-v2): header, then the agent's thread (the daemon's structured items, harness #59,
-/// with your steers between them; against an older daemon, the event-built lines), then the composer. Agent text is
-/// never markdown, links or actions beyond what the daemon classified (ThreadContent.swift).
-/// The agent's task, folded by default like a thought: "› Task" and its first line; a click shows all of it.
-struct TaskRow: View {
-  let task: UntrustedText
-  @State private var open = false
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
-        HStack(spacing: Theme.Content.thinkGap) {
-          Chevron(open: open)
-          Text("Task")
-          if !open { RedactableText(text: UntrustedText(task.firstLine)).foregroundStyle(Theme.Content.taskPreviewText).lineLimit(1) }
-        }
-        .font(Theme.Content.thinkFont).foregroundStyle(Theme.Content.thinkText)
-        .frame(height: Theme.Content.thinkHeight).contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .accessibilityLabel(open ? "Task, shown" : "Task: \(task.firstLine)").accessibilityHint(open ? "Hides the task" : "Shows the whole task")
-      if open {
-        RedactableText(text: task).font(Theme.Content.thoughtFont).foregroundStyle(Theme.Content.thoughtText)
-          .lineSpacing(Theme.Content.thoughtSpacing).textSelection(.enabled)
-          .padding(.leading, Theme.Content.thoughtIndent)
-          .overlay(alignment: .leading) { Rectangle().fill(Theme.Content.thoughtRule).frame(width: 1) }
-          .padding(Theme.Content.thoughtMargin)
-          .transition(.opacity)
-      }
-    }
-    .padding(.bottom, Theme.Content.proseBottom)
-  }
-}
 
 struct ThreadView: View {
   @Environment(AppModel.self) private var model
@@ -176,66 +143,4 @@ struct ThreadHeader: View {
   }
 }
 
-struct ThreadItemView: View {
-  @Environment(AppModel.self) private var model
-  let runId: String
-  let agentId: String
-  let item: ThreadItem
-  var body: some View {
-    switch item.kind {
-    case .status(let s):
-      Text(verbatim: s).font(Theme.chip).foregroundStyle(.tertiary)
-    case .notice(let kind, let detail):
-      HStack(alignment: .firstTextBaseline, spacing: 6) {
-        Image(systemName: "wrench").foregroundStyle(.secondary).font(.system(size: 11))
-        Text(verbatim: kind).font(Theme.monoTime).foregroundStyle(.tertiary)
-        RedactableText(text: detail).font(Theme.body)
-      }
-    case .checkpoint(let reason, let files):
-      HStack(alignment: .firstTextBaseline, spacing: 6) {
-        Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary).font(.system(size: 11))
-        RedactableText(text: reason).font(Theme.body)
-        if let f = files { Text(verbatim: "\(f) files").font(Theme.monoTime).foregroundStyle(.tertiary) }
-      }
-    case .steer(let bytes):
-      HStack { Spacer()
-        Text(verbatim: bytes.map { "Message sent (\($0) bytes)" } ?? "Message sent").font(Theme.body)
-          .padding(.horizontal, 10).padding(.vertical, 6)
-          .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
-      }
-    case .message(let from, _, let text, _) where from == "operator" && text != nil:
-      SteerBubble(runId: runId, text: text!.plain)   // the operator's own words, right-aligned (.me)
-    case .message(let from, let to, let text, let attachment):
-      let outgoing = from == agentId
-      HStack { if outgoing { Spacer() }
-        VStack(alignment: outgoing ? .trailing : .leading, spacing: 4) {
-          Text(verbatim: outgoing ? "to \(to)" : "from \(from)").font(Theme.monoTime).foregroundStyle(.tertiary)
-          if let t = text { RedactableText(text: t).font(Theme.body).textSelection(.enabled) }
-          if let a = attachment { Text(verbatim: a.label).font(Theme.chip).foregroundStyle(.tertiary) }
-        }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(outgoing ? 0.07 : 0.04)))
-        if !outgoing { Spacer() }
-      }
-    case .handoff(let childId, let name, let summary, let artifacts):
-      Button { model.path.append(.thread(runId: runId, agentId: childId)) } label: {
-        VStack(alignment: .leading, spacing: 6) {
-          HStack(spacing: 6) {
-            Text(verbatim: name).font(Theme.body.weight(.semibold))
-            Text("handed back").font(Theme.chip).foregroundStyle(.tertiary)
-            Spacer()
-            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-          }
-          if let s = summary { RedactableText(text: s).font(Theme.body).foregroundStyle(.primary.opacity(0.88)).multilineTextAlignment(.leading) }
-          if !artifacts.isEmpty {
-            HStack(spacing: 4) { ForEach(artifacts, id: \.self) { Chip(text: $0.plain) } }
-          }
-        }
-        .padding(Theme.cardPadding)
-        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.cardFill))
-      }
-      .buttonStyle(.plain)
-    }
-  }
-}
 #endif

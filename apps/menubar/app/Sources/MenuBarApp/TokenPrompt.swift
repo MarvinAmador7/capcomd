@@ -24,16 +24,4 @@ struct TokenPrompt: View {
   private func save() { failed = !model.submitToken(token); if !failed { token = "" } }
 }
 
-/// Untrusted text with `[REDACTED]` markers dimmed. Every piece is still `Text(verbatim:)`: no markdown, no links.
-struct RedactableText: View {
-  let text: UntrustedText
-  var body: some View {
-    text.segments.reduce(Text(verbatim: "")) { acc, seg in
-      switch seg {
-      case .text(let s): return acc + Text(verbatim: s)
-      case .redacted: return acc + Text(verbatim: "[REDACTED]").foregroundStyle(.tertiary)
-      }
-    }
-  }
-}
 #endif

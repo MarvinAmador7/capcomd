@@ -7,13 +7,6 @@ import CapcomdLive
 import CapcomdClient
 import CapcomdBot
 
-/// UserDefaults-backed prefs for the store's remembered UI choices.
-final class DefaultsPreferences: PreferenceStoring {
-  let d = UserDefaults.standard
-  func string(forKey k: String) -> String? { d.string(forKey: "capcomd.\(k)") }
-  func set(_ v: String?, forKey k: String) { d.set(v, forKey: "capcomd.\(k)") }
-}
-
 /// Observable mirror of CapcomdStore. The store stays platform-neutral; every store change bumps `revision`,
 /// and computed properties read it so SwiftUI tracks them.
 @Observable @MainActor
@@ -52,17 +45,9 @@ final class AppModel {
     }
   }
 
-  static var socketPath: String {
-    UserDefaults.standard.string(forKey: "capcomd.socketPath")
-      ?? (NSHomeDirectory() as NSString).appendingPathComponent(".capcomd/harness.sock")
-  }
+  static var socketPath: String { Connection.socketPath }
 
-  static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) {
-    let t = UnixSocketTransport(socketPath: socketPath, token: token)
-    return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), detail: LiveDetail(transport: t),
-                         controls: LiveControls(transport: t), starter: LiveStarter(transport: t), messenger: LiveMessenger(transport: t),
-                         daemonInfo: LiveDaemonInfo(transport: t), thread: LiveThread(transport: t), prefs: DefaultsPreferences()), t)
-  }
+  static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) { Connection.makeStore(token: token) }
 
   // Identity moments: seen live only (never from a snapshot or a reopened panel), each once per run.
   @ObservationIgnored private var celebrations: [String: Date] = [:]
@@ -311,31 +296,6 @@ final class AppModel {
   func open(run id: String) { store.openRun(id); path = [.run(id)] }
   func back() { if !path.isEmpty { path.removeLast() }; if path.isEmpty { store.closeRun() } }
   func decide(_ id: String, _ d: ApprovalDecision) { Task { _ = await store.decide(id, d) } }
-}
-
-/// Daemon token in the login Keychain: generic password, service "capcomd", account NSUserName().
-enum Keychain {
-  static let service = "capcomd"
-  static func token() -> String? {
-    let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                            kSecAttrAccount as String: NSUserName(),
-                            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-    var out: CFTypeRef?
-    guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
-    return String(data: d, encoding: .utf8)
-  }
-  @discardableResult
-  static func save(_ token: String) -> Bool {
-    let key: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                              kSecAttrAccount as String: NSUserName()]
-    let data = Data(token.utf8)
-    let upd = SecItemUpdate(key as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-    if upd == errSecSuccess { return true }
-    guard upd == errSecItemNotFound else { return false }
-    var add = key; add[kSecValueData as String] = data
-    add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-    return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
-  }
 }
 
 /// Approval / run-finished notifications from the lifecycle feed. UNUserNotificationCenter needs a bundle, so a bare

@@ -1,6 +1,6 @@
 ---
 title: capcomd desktop window: spec
-subtitle: The menu bar app's full-size window ("Reel"). SwiftUI + AppKit, same app and store as the menu bar.
+subtitle: The capcomd desktop app ("Reel"). Its own app (installable without the menu bar one), sharing the store, transport and thread renderer with it.
 date: 2026-10-30
 ---
 
@@ -17,7 +17,7 @@ same PR. Behaviour conflicts go to the owner.
 
 | What | Budget | How |
 |---|---|---|
-| Open the window (menu bar → window) | first frame ≤ 100 ms | The window shares the app's live store; nothing is fetched to show it. Data that isn't there yet shows as an empty column, never a spinner over the window. |
+| Open the window | first frame ≤ 100 ms after launch | Nothing is fetched to show the window; the store fills it as frames arrive. Data that isn't there yet shows as an empty column, never a spinner over the window. |
 | Switch project (click or ⌘1–9) | first frame ≤ 50 ms | The decks are already in memory; the reel shows headers at once, thread pages fill in. Keyboard switches don't animate. |
 | Reel scroll | no dropped frames at 120 Hz with 17 agents | `LazyHStack` columns; only on-screen columns ±1 render thread bodies; others render their header only. |
 | A thread item arrives | re-renders its own column only | Keyed change notifications (§6), not the menu bar's global `revision`. |
@@ -34,7 +34,7 @@ PR is called done, and put the numbers in the PR.
 
 One window, two parts.
 
-- **Title bar** (60 pt, full-size content, no separate toolbar): traffic lights, then the **projects**, then on the
+- **Title bar** (52 pt: the unified toolbar's height, so the traffic lights centre on it; full-size content): traffic lights, then the **projects**, then on the
   right **Follow**, **Actions ⌘K**, **+**. Boards: `ReelStack`, `ReelTabs`.
   - The **open project** is one group: Local/Cloud glyph (`laptopcomputer` / `cloud`), name with "Cloud · 18:40",
     then its crew tabs in tree order, with a bracket around the tabs whose columns are on screen.
@@ -83,7 +83,8 @@ fan-out spring 0.3 s, names fade in over the last 120 ms. Menu bar → window: o
 
 # 7. Phases
 
-1. Window scene (same app; Dock icon while the window is open), title bar with projects and crew tabs, the reel with
-   real threads, message boxes and decisions, Follow, keyboard. Keyed changes and many threads in the store.
+1. The `CapcomdDesktop` app (a regular Dock app; the shared pieces live in the `CapcomdUI` library), title bar with
+   projects and crew tabs, the reel with real threads, message boxes and decisions, Follow, keyboard. Keyed changes
+   and many threads in the store.
 2. New project column, project menu, overview and zoom.
 3. Swarm folding and the strip, menu bar → window motion, voice input.
