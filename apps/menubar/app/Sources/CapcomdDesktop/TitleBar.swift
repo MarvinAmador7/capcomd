@@ -26,13 +26,19 @@ struct TitleBar: View {
   }
 }
 
+/// The first and last on-screen tabs' bounds, for the bracket.
+struct BracketBounds: PreferenceKey {
+  static let defaultValue: [Anchor<CGRect>] = []
+  static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) { value += nextValue() }
+}
+
 /// The open project: its name and clock, then its crew in tree order, with the on-screen columns bracketed.
 struct OpenGroup: View {
   @Environment(DeskModel.self) private var model
   let deck: DeckInfo
   var body: some View {
     let cols = model.columns, seen = model.onScreen
-    let first = cols.firstIndex(where: seen.contains), last = cols.lastIndex(where: seen.contains)
+    let first = cols.firstIndex(where: seen.contains) ?? -1, last = cols.lastIndex(where: seen.contains) ?? -1
     HStack(spacing: 2) {
       PlaceIcon(sandbox: deck.sandbox).padding(.trailing, 6)
       VStack(alignment: .leading, spacing: 1) {
@@ -41,16 +47,24 @@ struct OpenGroup: View {
       }
       .frame(maxWidth: 200, alignment: .leading)
       .padding(.trailing, 8)
-      if let first, let last {
-        ForEach(cols[..<first], id: \.self) { CrewTab(agentId: $0) }
-        HStack(spacing: 2) { ForEach(cols[first...last], id: \.self) { CrewTab(agentId: $0) } }
-          .padding(2)
-          .background(RoundedRectangle(cornerRadius: Theme.Desk.tabRadius + 2, style: .continuous).fill(Theme.Desk.bracketFill))
-          .overlay(RoundedRectangle(cornerRadius: Theme.Desk.tabRadius + 2, style: .continuous).strokeBorder(Theme.Desk.bracketStroke, lineWidth: 0.5))
-          .accessibilityElement(children: .contain).accessibilityLabel("On screen")
-        ForEach(cols[(last + 1)...], id: \.self) { CrewTab(agentId: $0) }
-      } else {
-        ForEach(cols, id: \.self) { CrewTab(agentId: $0) }
+      // One row of tabs whose identity never changes as the reel scrolls; the bracket is drawn behind the on-screen
+      // ones from their bounds, so moving it re-lays out one shape instead of rebuilding tabs.
+      HStack(spacing: 2) {
+        ForEach(Array(cols.enumerated()), id: \.element) { n, id in
+          CrewTab(agentId: id)
+            .anchorPreference(key: BracketBounds.self, value: .bounds) { n == first || n == last ? [$0] : [] }
+        }
+      }
+      .backgroundPreferenceValue(BracketBounds.self) { anchors in
+        GeometryReader { g in
+          if let r = anchors.map({ g[$0] }).reduce(nil, { ($0 ?? $1).union($1) }) {
+            RoundedRectangle(cornerRadius: Theme.Desk.tabRadius + 2, style: .continuous)
+              .fill(Theme.Desk.bracketFill)
+              .overlay(RoundedRectangle(cornerRadius: Theme.Desk.tabRadius + 2, style: .continuous).strokeBorder(Theme.Desk.bracketStroke, lineWidth: 0.5))
+              .frame(width: r.width + 4, height: r.height + 4)
+              .offset(x: r.minX - 2, y: r.minY - 2)
+          }
+        }
       }
     }
     .padding(.leading, 12).padding(.trailing, 4)

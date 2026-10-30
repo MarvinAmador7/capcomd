@@ -19,7 +19,7 @@ same PR. Behaviour conflicts go to the owner.
 |---|---|---|
 | Open the window | first frame ≤ 100 ms after launch | Nothing is fetched to show the window; the store fills it as frames arrive. Data that isn't there yet shows as an empty column, never a spinner over the window. |
 | Switch project (click or ⌘1–9) | first frame ≤ 50 ms | The decks are already in memory; the reel shows headers at once, thread pages fill in. Keyboard switches don't animate. |
-| Reel scroll | no dropped frames at 120 Hz with 17 agents | `LazyHStack` columns; only on-screen columns ±1 render thread bodies; others render their header only. |
+| Reel scroll | no dropped frames at 120 Hz with 17 agents | Columns stay built while the run is open (a lazy stack rebuilt every column it scrolled past); each is a `.geometryGroup()`, so a scroll frame moves columns instead of every view in them. Threads are built ahead of time, nearest first while the reel stands still, at most 32 kept. Snapping is arithmetic on the column pitch; the leading column is reported once per column crossed. A jump of more than a screen cuts to one column short and slides the last. |
 | A thread item arrives | re-renders its own column only | Keyed change notifications (§6), not the menu bar's global `revision`. |
 | Typing in a composer | no work outside the composer | The draft is local `@State`; nothing in the store changes until Send. |
 | Network | one stream per open run, whatever the column count | The run stream with `?thread=1` already carries every agent's thread items; no per-column connections (AsyncHTTPClient caps at 8). |

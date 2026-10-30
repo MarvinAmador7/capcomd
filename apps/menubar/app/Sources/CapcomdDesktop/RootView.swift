@@ -15,12 +15,21 @@ struct RootView: View {
       case .connecting: Color.clear
       case .needsToken: TokenView()
       case .ready:
-        if model.openRunId == nil { EmptyReel() } else { Reel() }
+        if model.openRunId == nil { EmptyReel() } else if #available(macOS 15, *) { ReelHost(model: model) } else { OldMacOS() }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .overlay(alignment: .top) { TitleBar().alignmentGuide(.top) { $0[.bottom] } }
     .background { Theme.Desk.ground.ignoresSafeArea() }
+  }
+}
+
+/// The reel scrolls with macOS 15's scroll geometry; the menu bar app still covers macOS 14.
+struct OldMacOS: View {
+  var body: some View {
+    Text("The capcomd window needs macOS 15 or later. The menu bar app works on this Mac.")
+      .font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 

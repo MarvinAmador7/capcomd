@@ -5,35 +5,87 @@ import CapcomdThread
 import CapcomdBot
 import CapcomdUI
 
-/// The open project's agents as full-height columns in tree order (Reel). Lazy: only columns near the screen exist,
-/// and only those load their threads. Snaps to a column edge; neighbours peek at both sides.
+/// The open project's agents as full-height columns in tree order (Reel). Snaps to a column edge; neighbours peek at
+/// both sides. Not lazy: a lazy stack builds every column it scrolls past and drops it again, which is what made
+/// scrolling stutter (worst on long jumps). Columns stay; their threads are built once, ahead of time (DeskModel's
+/// warm set).
+///
+/// Scrolling costs one frame's worth of work per frame and nothing more (SPEC §1): snapping is arithmetic on the
+/// column pitch (`.viewAligned` re-measured the lazy stack every frame), and the leading column is reported to the
+/// model only when it changes (`scrollPosition(id:)` searched for it every frame).
+@available(macOS 15, *)
 struct Reel: View {
   @Environment(DeskModel.self) private var model
+  @State private var position = ScrollPosition(edge: .leading)
+  /// The leading column as the scroll geometry last reported it.
+  @State private var at = 0
   var body: some View {
-    @Bindable var m = model
     GeometryReader { geo in
       let across = Theme.Desk.columnsAcross(geo.size.width)
       let inset = Theme.Desk.peek + Theme.Desk.gap
-      let width = (geo.size.width - 2 * inset - CGFloat(across - 1) * Theme.Desk.gap) / CGFloat(across)
+      let width = max(320, (geo.size.width - 2 * inset - CGFloat(across - 1) * Theme.Desk.gap) / CGFloat(across))
+      let pitch = width + Theme.Desk.gap
       ScrollView(.horizontal, showsIndicators: false) {
-        LazyHStack(spacing: Theme.Desk.gap) {
+        HStack(spacing: Theme.Desk.gap) {
           ForEach(model.columns, id: \.self) { id in
-            Column(agentId: id).frame(width: max(320, width))
+            Column(agentId: id).frame(width: width)
           }
         }
-        .scrollTargetLayout()
-        .padding(.top, Theme.Desk.titleBar)
         .padding(.bottom, Theme.Desk.gap)
       }
-      .scrollTargetBehavior(.viewAligned)
-      .scrollPosition(id: $m.reelPosition, anchor: .leading)
+      .scrollPosition($position)
+      .scrollTargetBehavior(ColumnSnap(pitch: pitch))
       .contentMargins(.horizontal, inset, for: .scrollContent)
-      // A scroll view under the toolbar takes the toolbar's 52 pt as a content inset wherever it sits, which leaves
-      // its content taller than itself and the reel scrolling vertically. It runs up under the title bar instead, and
-      // the columns start below it.
-      .ignoresSafeArea(.container, edges: .top)
+      // The offset counts the leading margin (column 0 rests at -inset); scrollTo(x:) counts from the margin.
+      .onScrollGeometryChange(for: Int.self) { g in Int(((g.contentOffset.x + inset) / pitch).rounded()) } action: { _, i in
+        at = i
+        model.reelScrolled(toIndex: i)
+      }
+      .onChange(of: model.reelRequest, initial: true) { _, r in
+        guard let r else { return }
+        let i = r.agentId.flatMap { model.columns.firstIndex(of: $0) } ?? 0
+        let x = { (n: Int) in CGFloat(n) * pitch }
+        guard r.animated else { position.scrollTo(x: x(i)); return }
+        // A long jump would build, lay out and drop every column it passes. Cut to one column short of the target,
+        // then slide the last one: only the columns that end up on screen are ever made.
+        if abs(i - at) > across {
+          position.scrollTo(x: x(i < at ? i + 1 : i - 1))
+          DispatchQueue.main.async { withAnimation(.spring(duration: 0.3, bounce: 0)) { position.scrollTo(x: x(i)) } }
+        } else {
+          withAnimation(.spring(duration: 0.35, bounce: 0)) { position.scrollTo(x: x(i)) }
+        }
+      }
+      .onScrollPhaseChange { _, p in model.reelMoving = p.isScrolling }
       .onChange(of: across, initial: true) { _, n in if model.across != n { model.across = n } }
     }
+  }
+}
+
+/// The reel in its own hosting view, with no safe area. In the window's hosting view, a scroll view takes the
+/// toolbar's 52 pt as a content inset wherever it sits: its content ends up taller than itself and the reel scrolls
+/// vertically. Running the reel up under the title bar instead costs every frame, as AppKit then walks all its views
+/// for the title bar's opaque region. Here it stays below the title bar and nothing inherits the toolbar's inset.
+@available(macOS 15, *)
+struct ReelHost: NSViewRepresentable {
+  let model: DeskModel
+  func makeNSView(context: Context) -> NSHostingView<AnyView> {
+    let v = NSHostingView(rootView: content)
+    v.safeAreaRegions = []
+    return v
+  }
+  func updateNSView(_ v: NSHostingView<AnyView>, context: Context) {}
+  private var content: AnyView {
+    AnyView(Reel().environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark))
+  }
+}
+
+/// Lands on a column's leading edge: the nearest one to where the gesture would stop (momentum included). The target
+/// counts from the leading margin, as scrollTo(x:) does: column n is at n × pitch.
+struct ColumnSnap: ScrollTargetBehavior {
+  let pitch: CGFloat
+  func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+    guard pitch > 0 else { return }
+    target.rect.origin.x = (target.rect.minX / pitch).rounded() * pitch
   }
 }
 
@@ -46,16 +98,21 @@ struct Column: View {
       let asks = a.approval != nil, focused = model.focusedAgent == agentId
       VStack(spacing: 0) {
         ColumnHead(slice: a)
-        ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
+        if a.warm {
+          ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
+            .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
+        } else {
+          Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
         if let ap = a.approval { DecisionBar(approval: ap) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }
       .background(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous).fill(Theme.Desk.column))
       .overlay(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous)
         .strokeBorder(asks ? Theme.Desk.askStroke : focused ? Theme.accent.opacity(0.45) : Theme.Desk.columnStroke, lineWidth: asks || focused ? 1 : 0.5))
       .clipShape(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous))
+      .geometryGroup()
       .contentShape(Rectangle())
       .onTapGesture { if model.focusedAgent != agentId { model.focusedAgent = agentId } }
-      .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
     }
   }
 }
