@@ -35,6 +35,7 @@ struct OpenGroup: View {
     let cols = model.columns, seen = model.onScreen
     let first = cols.firstIndex(where: seen.contains), last = cols.lastIndex(where: seen.contains)
     HStack(spacing: 2) {
+      PlaceIcon(sandbox: deck.sandbox).padding(.trailing, 6)
       VStack(alignment: .leading, spacing: 1) {
         Text(verbatim: deck.title).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).lineLimit(1)
         DeckClock(deck: deck)
@@ -64,7 +65,8 @@ struct OpenGroup: View {
 struct DeckClock: View {
   let deck: DeckInfo
   var body: some View {
-    Group {
+    HStack(spacing: 0) {
+      if let p = Place(sandbox: deck.sandbox) { Text(verbatim: p.word + " · ") }
       if let start = deck.startedAtMs, deck.endedAtMs == nil {
         Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
       } else if let start = deck.startedAtMs, let end = deck.endedAtMs {
@@ -72,6 +74,26 @@ struct DeckClock: View {
       }
     }
     .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()
+  }
+}
+
+/// Where a project runs, as the menu bar's Local / Cloud switch shows it. A place this app doesn't know shows nothing.
+enum Place {
+  case local, cloud
+  init?(sandbox: String?) {
+    switch sandbox { case "docker"?, "fake-host"?: self = .local; case "boxd"?: self = .cloud; default: return nil }
+  }
+  var word: String { self == .local ? "Local" : "Cloud" }
+  var symbol: String { self == .local ? "laptopcomputer" : "cloud" }
+}
+
+struct PlaceIcon: View {
+  let sandbox: String?
+  var body: some View {
+    if let p = Place(sandbox: sandbox) {
+      Image(systemName: p.symbol).font(.system(size: 13, weight: .regular)).foregroundStyle(Color(white: 0.78))
+        .accessibilityLabel(p.word)
+    }
   }
 }
 
@@ -110,6 +132,7 @@ struct FoldedDeck: View {
     let asks = deck.askingAgentId != nil
     Button { model.open(project: deck.id) } label: {
       HStack(spacing: 9) {
+        PlaceIcon(sandbox: deck.sandbox)
         VStack(alignment: .leading, spacing: 1) {
           Text(verbatim: deck.title).font(Theme.Desk.label).foregroundStyle(Theme.Desk.text).lineLimit(1)
           if asks, let who = deck.askingName { Text(verbatim: "\(who) asks").font(Theme.Desk.meta).foregroundStyle(Theme.amber) }

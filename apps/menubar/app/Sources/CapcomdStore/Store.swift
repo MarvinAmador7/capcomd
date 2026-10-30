@@ -319,7 +319,7 @@ public final class CapcomdStore {
       var run = runs[r.id] ?? Run(id: r.id, projectId: r.projectId, label: r.label, goal: nil, state: r.state, startedAtMs: nil, lastEventMs: 0)
       run.projectId = r.projectId; run.label = r.label; run.state = r.state; run.goal = r.goal.map(UntrustedText.init)
       run.daemonTitle = Self.daemonTitle(r)
-      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt)
+      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
       runs[r.id] = run
     }
     let agentRuns = Set(b.agents.map(\.runId)).union(b.steps.compactMap { $0.runId ?? ($0.scope.hasPrefix("run-") ? $0.scope : nil) })
@@ -374,6 +374,7 @@ public final class CapcomdStore {
       guard let runId else { return }
       runs[runId]?.goal = d["goal"]?.string.map(UntrustedText.init); runs[runId]?.startedAtMs = e.epochMs
       if let l = d["label"]?.string { runs[runId]?.label = l }
+      if let sb = d["sandbox"]?.string { runs[runId]?.sandbox = sb }
     case "run.started", "run.paused", "run.resumed", "run.completed", "run.failed", "run.cancelled", "run.deleted":
       guard let runId else { return }
       let t = RunTransition(type: e.type, cause: d["cause"]?.string, agentId: d["agentId"]?.string ?? e.agentId, seq: e.seq, epochMs: e.epochMs)
@@ -513,7 +514,7 @@ public final class CapcomdStore {
       run.projectId = r.projectId ?? run.projectId; run.label = r.label ?? run.label; run.state = r.state
       if let g = r.goal { run.goal = UntrustedText(g) }
       run.daemonTitle = Self.daemonTitle(r)
-      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt)
+      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
       runs[r.id] = run
     }
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {

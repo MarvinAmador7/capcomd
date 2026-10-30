@@ -13,6 +13,8 @@ public struct DeckInfo: Sendable, Hashable, Identifiable {
   /// Ended runs show a duration instead of a clock.
   public var endedAtMs: Int?
   public var isRunning: Bool
+  /// Where it runs: "docker" (Local), "boxd" (Cloud), another place, or nil when the daemon doesn't say.
+  public var sandbox: String?
   /// The agent whose approval waits (the first, by request order), and its tree name with suffix ("worker 4423").
   public var askingAgentId: String?
   public var askingName: String?
@@ -48,7 +50,7 @@ extension CapcomdStore {
       let ids = agentTree(runId: run.id).flatMap(\.subtreeIds)
       let asking = approvals(forRun: run.id).compactMap(\.agentId).first { run.agents[$0] != nil }
       return DeckInfo(id: p.id, runId: run.id, title: p.title, startedAtMs: run.startedAtMs,
-                      endedAtMs: run.isActive ? nil : run.lastEventMs, isRunning: run.isRunning,
+                      endedAtMs: run.isActive ? nil : run.lastEventMs, isRunning: run.isRunning, sandbox: run.sandbox,
                       askingAgentId: asking, askingName: asking.flatMap { columnHeader(runId: run.id, agentId: $0) }.map { h in [h.name, h.suffix].compactMap { $0 }.joined(separator: " ") },
                       agentIds: ids)
     }

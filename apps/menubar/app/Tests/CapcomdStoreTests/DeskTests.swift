@@ -63,4 +63,11 @@ final class DeskTests: XCTestCase {
     let after = s.reelColumns(runId: "run-a")
     XCTAssertEqual(zip(before, after).filter { $0 != $1 }.map(\.0.agentId), ["w1"])   // the app reassigns one slice
   }
+
+  func testADeckSaysWhereItRunsWhenTheDaemonDoes() {
+    let s = CapcomdStore()
+    ev(s, "run-c", "run.created", nil, ["goal": .string("Cloud one"), "sandbox": .string("boxd")], at: 1)
+    ev(s, "run-d", "run.created", nil, ["goal": .string("Older daemon")], at: 2)
+    XCTAssertEqual(s.decks().map(\.sandbox), ["boxd", nil])
+  }
 }
