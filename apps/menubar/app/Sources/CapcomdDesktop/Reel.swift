@@ -22,11 +22,16 @@ struct Reel: View {
           }
         }
         .scrollTargetLayout()
+        .padding(.top, Theme.Desk.titleBar)
         .padding(.bottom, Theme.Desk.gap)
       }
       .scrollTargetBehavior(.viewAligned)
       .scrollPosition(id: $m.reelPosition, anchor: .leading)
       .contentMargins(.horizontal, inset, for: .scrollContent)
+      // A scroll view under the toolbar takes the toolbar's 52 pt as a content inset wherever it sits, which leaves
+      // its content taller than itself and the reel scrolling vertically. It runs up under the title bar instead, and
+      // the columns start below it.
+      .ignoresSafeArea(.container, edges: .top)
       .onChange(of: across, initial: true) { _, n in if model.across != n { model.across = n } }
     }
   }

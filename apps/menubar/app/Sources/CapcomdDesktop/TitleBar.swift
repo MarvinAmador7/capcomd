@@ -18,7 +18,6 @@ struct TitleBar: View {
         }
         .padding(.vertical, 6)
       }
-      .scrollClipDisabled()
       Spacer(minLength: 0)
       FollowButton()
     }

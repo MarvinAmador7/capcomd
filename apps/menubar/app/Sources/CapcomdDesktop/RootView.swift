@@ -3,11 +3,14 @@ import SwiftUI
 import CapcomdUI
 
 /// The window: the title bar over the reel, or what's needed before there is one.
+///
+/// The content stays inside the safe area (below the toolbar's 52 pt) and the title bar is drawn into that band from
+/// outside it. Ignoring the safe area for the whole stack instead hands the band to the reel's scroll view as a content
+/// inset: its content becomes 52 pt taller than the view and the window scrolls vertically.
 struct RootView: View {
   @Environment(DeskModel.self) private var model
   var body: some View {
-    VStack(spacing: 0) {
-      TitleBar()
+    Group {
       switch model.link {
       case .connecting: Color.clear
       case .needsToken: TokenView()
@@ -15,8 +18,9 @@ struct RootView: View {
         if model.openRunId == nil { EmptyReel() } else { Reel() }
       }
     }
-    .background(Theme.Desk.ground)
-    .ignoresSafeArea(.container, edges: .top)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .overlay(alignment: .top) { TitleBar().alignmentGuide(.top) { $0[.bottom] } }
+    .background { Theme.Desk.ground.ignoresSafeArea() }
   }
 }
 

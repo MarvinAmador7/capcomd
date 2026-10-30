@@ -29,6 +29,9 @@ final class DesktopDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ n: Notification) {
     NSApp.setActivationPolicy(.regular)   // `swift run` starts with .prohibited; the bundle is .regular anyway
     NSApp.activate()
+    #if DEBUG
+    DeskDebug.start()
+    #endif
   }
   func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 }
