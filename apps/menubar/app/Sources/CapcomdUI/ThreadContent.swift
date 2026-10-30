@@ -12,7 +12,7 @@ import CapcomdBot
 /// What thread views need from the app showing them, so the same views serve the menu bar and the desktop app. Each
 /// host decides how narrowly its reads are observed: the desktop reads per-agent slices, so a row re-renders only when
 /// what it shows changed.
-@MainActor protocol ThreadHost: AnyObject {
+@MainActor package protocol ThreadHost: AnyObject {
   func bot(runId: String, agentId: String) -> BotTraits?
   func agentProvider(runId: String, agentId: String) -> Provider?
   /// The agent's role as the tree names it ("worker").
@@ -24,19 +24,20 @@ import CapcomdBot
 }
 
 /// The host, compared by identity so re-applying the same one never invalidates the views that read it.
-struct ThreadHostBox: Equatable {
-  let host: any ThreadHost
-  static func == (a: Self, b: Self) -> Bool { a.host === b.host }
+package struct ThreadHostBox: Equatable {
+  package let host: any ThreadHost
+  package init(host: any ThreadHost) { self.host = host }
+  package static func == (a: Self, b: Self) -> Bool { a.host === b.host }
 }
 private struct ThreadHostKey: EnvironmentKey { static let defaultValue: ThreadHostBox? = nil }
 extension EnvironmentValues {
-  var threadHost: ThreadHostBox? { get { self[ThreadHostKey.self] } set { self[ThreadHostKey.self] = newValue } }
+  package var threadHost: ThreadHostBox? { get { self[ThreadHostKey.self] } set { self[ThreadHostKey.self] = newValue } }
 }
 
 /// Internal link URLs: a click on an agent or run link navigates; web links carry their own (checked http/https) URL.
-enum ThreadLinkURL {
-  static let scheme = "capcomd-thread"
-  static func make(_ a: LinkAction) -> URL? {
+package enum ThreadLinkURL {
+  package static let scheme = "capcomd-thread"
+  package static func make(_ a: LinkAction) -> URL? {
     switch a {
     case .web(let u): return u
     case .agent(let id): return URL(string: "\(scheme)://agent/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")")
@@ -47,13 +48,13 @@ enum ThreadLinkURL {
 }
 
 /// Inline nodes → one AttributedString. Only typed attributes are set; the text is never parsed.
-enum InlineText {
-  static func make(_ xs: [Inline], font: Font, code: Font = Theme.Content.codeInlineFont) -> AttributedString {
+package enum InlineText {
+  package static func make(_ xs: [Inline], font: Font, code: Font = Theme.Content.codeInlineFont) -> AttributedString {
     var out = AttributedString()
     for x in xs { out += piece(x, font: font, code: code, bold: false, italic: false, strike: false) }
     return out
   }
-  static func piece(_ x: Inline, font: Font, code: Font, bold: Bool, italic: Bool, strike: Bool) -> AttributedString {
+  package static func piece(_ x: Inline, font: Font, code: Font, bold: Bool, italic: Bool, strike: Bool) -> AttributedString {
     func styled(_ s: String) -> AttributedString {
       var a = AttributedString(s)
       var f = font; if bold { f = f.bold() }; if italic { f = f.italic() }
@@ -90,27 +91,28 @@ enum InlineText {
 }
 
 /// A run of blocks: prose, lists, code, tables, quotes, rules, media.
-struct BlocksView: View {
-  let runId: String
-  let agentId: String
-  let blocks: [Block]
-  var font: Font = Theme.Content.proseFont
-  var color: Color = Theme.Content.proseText
-  var spacing: CGFloat = Theme.Content.proseSpacing
+package struct BlocksView: View {
+  package let runId: String
+  package let agentId: String
+  package let blocks: [Block]
+  package var font: Font = Theme.Content.proseFont
+  package var color: Color = Theme.Content.proseText
+  package var spacing: CGFloat = Theme.Content.proseSpacing
   /// Space under a paragraph: list items sit tight (`li` margins are 1 pt).
-  var paragraphBottom: CGFloat = Theme.Content.proseBottom
+  package var paragraphBottom: CGFloat = Theme.Content.proseBottom
   /// Margin already above the first block (the previous item's bottom margin). Vertical margins collapse as in the
   /// mockups' CSS: a heading sits max(that, 14) below what precedes it, not their sum.
-  var leadingMargin: CGFloat = 0
+  package var leadingMargin: CGFloat = 0
+  package init(runId: String, agentId: String, blocks: [Block], font: Font = Theme.Content.proseFont, color: Color = Theme.Content.proseText, spacing: CGFloat = Theme.Content.proseSpacing, paragraphBottom: CGFloat = Theme.Content.proseBottom, leadingMargin: CGFloat = 0) { self.runId = runId; self.agentId = agentId; self.blocks = blocks; self.font = font; self.color = color; self.spacing = spacing; self.paragraphBottom = paragraphBottom; self.leadingMargin = leadingMargin }
 
-  var body: some View {
+  package var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       ForEach(Array(blocks.enumerated()), id: \.offset) { n, b in block(b, above: n == 0 ? leadingMargin : Self.bottomMargin(blocks[n - 1])) }
     }
   }
 
   /// The bottom margin each block leaves (what a following heading collapses with).
-  static func bottomMargin(_ b: Block) -> CGFloat {
+  package static func bottomMargin(_ b: Block) -> CGFloat {
     switch b {
     case .code: Theme.Content.codeBottom
     case .table: Theme.Content.tableBottom
@@ -120,7 +122,7 @@ struct BlocksView: View {
     }
   }
 
-  @ViewBuilder func block(_ b: Block, above: CGFloat) -> some View {
+  @ViewBuilder package func block(_ b: Block, above: CGFloat) -> some View {
     switch b {
     case .paragraph(let k):
       prose(k).padding(.bottom, paragraphBottom)
@@ -158,12 +160,12 @@ struct BlocksView: View {
     }
   }
 
-  func prose(_ k: [Inline]) -> some View {
+  package func prose(_ k: [Inline]) -> some View {
     Text(InlineText.make(k, font: font)).foregroundStyle(color).lineSpacing(spacing).tint(Theme.Content.link)
       .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
   }
 
-  @ViewBuilder func marker(ordered: Bool, n: Int, checked: Bool?) -> some View {
+  @ViewBuilder package func marker(ordered: Bool, n: Int, checked: Bool?) -> some View {
     if let checked {
       Image(systemName: checked ? "checkmark.square" : "square").font(.system(size: 11)).foregroundStyle(checked ? Theme.accent : Theme.Content.listMarker)
     } else {
@@ -172,13 +174,14 @@ struct BlocksView: View {
   }
 }
 
-struct CodeBlock: View {
-  let lang: String?
-  let text: String
-  let truncatedLines: Int?
+package struct CodeBlock: View {
+  package let lang: String?
+  package let text: String
+  package let truncatedLines: Int?
+  package init(lang: String?, text: String, truncatedLines: Int?) { self.lang = lang; self.text = text; self.truncatedLines = truncatedLines }
   @State private var copied = false
 
-  var body: some View {
+  package var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
         Text(verbatim: lang ?? "")
@@ -204,7 +207,7 @@ struct CodeBlock: View {
     .padding(.bottom, Theme.Content.codeBottom)
   }
 
-  static func highlighted(_ code: String, lang: String?) -> AttributedString {
+  package static func highlighted(_ code: String, lang: String?) -> AttributedString {
     var out = AttributedString()
     for t in Highlight.tokens(code, lang: lang) {
       var a = AttributedString(t.text)
@@ -221,9 +224,10 @@ struct CodeBlock: View {
   }
 }
 
-struct TableBlock: View {
-  let table: CapcomdThread.Table
-  var body: some View {
+package struct TableBlock: View {
+  package let table: CapcomdThread.Table
+  package init(table: CapcomdThread.Table) { self.table = table }
+  package var body: some View {
     let cols = max(table.header.count, table.rows.map(\.count).max() ?? 0)
     VStack(alignment: .leading, spacing: 0) {
       Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
@@ -253,10 +257,10 @@ struct TableBlock: View {
     }
     .padding(.bottom, Theme.Content.tableBottom)
   }
-  func alignment(_ c: Int) -> Alignment {
+  package func alignment(_ c: Int) -> Alignment {
     switch c < table.align.count ? table.align[c] : nil { case .right?: .trailing; case .center?: .center; default: .leading }
   }
-  func cell(_ k: [Inline], col: Int, font: Font) -> some View {
+  package func cell(_ k: [Inline], col: Int, font: Font) -> some View {
     Text(InlineText.make(k, font: font, code: Theme.Content.tdMono)).tint(Theme.Content.link).textSelection(.enabled)
       .multilineTextAlignment(alignment(col) == .trailing ? .trailing : .leading)
   }
@@ -264,15 +268,16 @@ struct TableBlock: View {
 
 /// Attachment and workspace images load through the daemon (png, jpeg, gif, webp only). Remote media and anything
 /// that isn't an image show as a chip: a remote image loads only when clicked, and nothing else ever loads.
-struct MediaBlockView: View {
+package struct MediaBlockView: View {
   @Environment(\.threadHost) private var host
-  let runId: String
-  let agentId: String
-  let media: Media
+  package let runId: String
+  package let agentId: String
+  package let media: Media
+  package init(runId: String, agentId: String, media: Media) { self.runId = runId; self.agentId = agentId; self.media = media }
   @State private var remote: NSImage?
   @State private var remoteFailed = false
 
-  var key: MediaKey? {
+  package var key: MediaKey? {
     guard media.kind == .image else { return nil }
     switch media.source {
     case .attachment(let id): return .attachment(runId: runId, id: id)
@@ -281,7 +286,7 @@ struct MediaBlockView: View {
     }
   }
 
-  var body: some View {
+  package var body: some View {
     if let key {
       switch host?.host.media(key) {
       case .loaded(let d)?:
@@ -306,10 +311,10 @@ struct MediaBlockView: View {
     }
   }
 
-  var icon: String { switch media.kind { case .image: "photo"; case .video: "film"; case .audio: "waveform"; case .file: "doc" } }
-  var sourceNote: String? { if case .workspace(let p) = media.source { return p }; return nil }
+  package var icon: String { switch media.kind { case .image: "photo"; case .video: "film"; case .audio: "waveform"; case .file: "doc" } }
+  package var sourceNote: String? { if case .workspace(let p) = media.source { return p }; return nil }
 
-  func picture(_ img: NSImage) -> some View {
+  package func picture(_ img: NSImage) -> some View {
     // Never larger than the image itself; scaled down to the column and the 180 pt cap.
     Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
       .frame(maxWidth: img.size.width, maxHeight: min(img.size.height, Theme.Content.mediaMaxHeight))
@@ -318,7 +323,7 @@ struct MediaBlockView: View {
       .accessibilityLabel(media.alt.isEmpty ? "Image" : media.alt)
   }
 
-  func chip(icon: String, text: String, note: String?) -> some View {
+  package func chip(icon: String, text: String, note: String?) -> some View {
     HStack(spacing: Theme.Content.artGap) {
       Image(systemName: icon)
       Text(verbatim: text).lineLimit(1)
@@ -329,7 +334,7 @@ struct MediaBlockView: View {
   }
 
   /// Explicit click only: an ephemeral session, no cookies, http(s) only, at most 5 MB, raster images only.
-  func loadRemote(_ s: String) async {
+  package func loadRemote(_ s: String) async {
     guard let u = URL(string: s), let sc = u.scheme?.lowercased(), sc == "https" || sc == "http" else { remoteFailed = true; return }
     let cfg = URLSessionConfiguration.ephemeral; cfg.httpCookieStorage = nil; cfg.timeoutIntervalForRequest = 10
     do {
@@ -341,15 +346,16 @@ struct MediaBlockView: View {
 }
 
 /// One structured thread item.
-struct ThreadItemRow: View {
-  let runId: String
-  let agentId: String
-  let item: CapcomdThread.Item
-  let next: CapcomdThread.Item?
+package struct ThreadItemRow: View {
+  package let runId: String
+  package let agentId: String
+  package let item: CapcomdThread.Item
+  package let next: CapcomdThread.Item?
   /// Bottom margin of the entry above (0 under a tool or thinking row): headings collapse with it.
-  var above: CGFloat = 0
+  package var above: CGFloat = 0
+  package init(runId: String, agentId: String, item: CapcomdThread.Item, next: CapcomdThread.Item?, above: CGFloat = 0) { self.runId = runId; self.agentId = agentId; self.item = item; self.next = next; self.above = above }
 
-  var body: some View {
+  package var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       switch item.kind {
       case "say", "result":
@@ -382,7 +388,7 @@ struct ThreadItemRow: View {
   }
 
   /// A format this client doesn't know has no blocks: its plain text.
-  @ViewBuilder var blocks: some View {
+  @ViewBuilder package var blocks: some View {
     if item.blocks.isEmpty {
       Text(verbatim: item.text).font(Theme.Content.proseFont).foregroundStyle(Theme.Content.proseText).lineSpacing(Theme.Content.proseSpacing)
         .textSelection(.enabled).padding(.bottom, Theme.Content.proseBottom)
@@ -392,7 +398,7 @@ struct ThreadItemRow: View {
   }
 
   /// What this item leaves under itself: tool and thinking rows have no margin; prose ends with its last block's.
-  static func bottomMargin(_ i: CapcomdThread.Item) -> CGFloat {
+  package static func bottomMargin(_ i: CapcomdThread.Item) -> CGFloat {
     switch i.kind {
     case "tool", "thinking": 0
     case "handoff": Theme.Content.handoffBottom
@@ -402,14 +408,15 @@ struct ThreadItemRow: View {
 }
 
 /// `.thk` / `.thb`: folded to "Thought for 8s"; a click unfolds the reasoning under a hairline.
-struct ThinkingRow: View {
-  let runId: String
-  let agentId: String
-  let item: CapcomdThread.Item
-  let seconds: Int?
+package struct ThinkingRow: View {
+  package let runId: String
+  package let agentId: String
+  package let item: CapcomdThread.Item
+  package let seconds: Int?
+  package init(runId: String, agentId: String, item: CapcomdThread.Item, seconds: Int?) { self.runId = runId; self.agentId = agentId; self.item = item; self.seconds = seconds }
   @State private var open = false
 
-  var body: some View {
+  package var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
         HStack(spacing: Theme.Content.thinkGap) {
@@ -430,7 +437,7 @@ struct ThinkingRow: View {
     }
   }
 
-  var label: String {
+  package var label: String {
     if item.open { return "Thinking…" }
     let base = seconds.map { "Thought for \($0)s" } ?? "Thought"
     return item.redacted ? "\(base) · hidden by the CLI" : base
@@ -438,12 +445,13 @@ struct ThinkingRow: View {
 }
 
 /// `.tc` / `.tx`: icon · summary · mono duration · chevron; a click shows Arguments and Result.
-struct ToolCallRow: View {
-  let item: CapcomdThread.Item
+package struct ToolCallRow: View {
+  package let item: CapcomdThread.Item
+  package init(item: CapcomdThread.Item) { self.item = item }
   @State private var open = false
   @State private var hover = false
 
-  var body: some View {
+  package var body: some View {
     if let tool = item.tool, let diff = tool.diff {
       DiffCard(diff: diff, failed: tool.isError, open: $open) { detail(tool) }
     } else { row }
@@ -458,7 +466,7 @@ struct ToolCallRow: View {
     return StepKind(activityKind: tool?.kind).symbol
   }
 
-  var row: some View {
+  package var row: some View {
     let tool = item.tool
     return VStack(alignment: .leading, spacing: 0) {
       Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
@@ -486,7 +494,7 @@ struct ToolCallRow: View {
     }
   }
 
-  func detail(_ t: CapcomdThread.Item.Tool) -> some View {
+  package func detail(_ t: CapcomdThread.Item.Tool) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       if let a = t.args, !a.isEmpty { section("Arguments", a, first: true) }
       if let o = t.output, !o.isEmpty { section("Result", o, first: t.args?.isEmpty ?? true) }
@@ -503,7 +511,7 @@ struct ToolCallRow: View {
     .padding(Theme.Content.detailMargin)
   }
 
-  func section(_ label: String, _ text: String, first: Bool) -> some View {
+  package func section(_ label: String, _ text: String, first: Bool) -> some View {
     VStack(alignment: .leading, spacing: Theme.Content.detailLabelGap) {
       Text(label).font(Theme.Content.detailLabel).foregroundStyle(Theme.Content.detailLabelText)
       Text(verbatim: Self.clip(text)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -512,7 +520,7 @@ struct ToolCallRow: View {
   }
 
   /// Long results keep their last lines (the daemon keeps the end too).
-  static func clip(_ s: String) -> String {
+  package static func clip(_ s: String) -> String {
     let lines = s.split(separator: "\n", omittingEmptySubsequences: false)
     guard lines.count > Theme.Content.detailMaxLines else { return s }
     return "… \(lines.count - Theme.Content.detailMaxLines) earlier lines\n" + lines.suffix(Theme.Content.detailMaxLines).joined(separator: "\n")
@@ -521,13 +529,13 @@ struct ToolCallRow: View {
 
 /// `.df`: an edit as a diff card: pencil · path · `+n −n`, then its first lines (context, removed red, added green; `@`
 /// gaps as a faint hunk header). A click on the header shows the call's arguments and result. A failed edit is dimmed.
-struct DiffCard<Detail: View>: View {
-  let diff: CapcomdThread.Item.Diff
-  let failed: Bool
+package struct DiffCard<Detail: View>: View {
+  package let diff: CapcomdThread.Item.Diff
+  package let failed: Bool
   @Binding var open: Bool
-  @ViewBuilder let detail: () -> Detail
+  @ViewBuilder package let detail: () -> Detail
 
-  var body: some View {
+  package var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       VStack(alignment: .leading, spacing: 0) {
         Button { withTransaction(Transaction(animation: nil)) { open.toggle() } } label: {   // snaps: the panel resizes to fit (SPEC §7)
@@ -563,7 +571,7 @@ struct DiffCard<Detail: View>: View {
     }
   }
 
-  @ViewBuilder func line(_ l: CapcomdThread.Item.Diff.Line) -> some View {
+  @ViewBuilder package func line(_ l: CapcomdThread.Item.Diff.Line) -> some View {
     switch l.op {
     case .gap:
       Text(verbatim: l.text.isEmpty ? "⋯" : l.text).font(Theme.Content.diffFont).foregroundStyle(Theme.Content.diffGapText)
@@ -589,17 +597,18 @@ struct DiffCard<Detail: View>: View {
 /// green or red seal with "Passed review" / "Didn't pass review", then each reason. An identity moment: the bot cheers
 /// with a happy face when the work passes (as in the run-finished moment) and makes its "oops" face when it doesn't;
 /// the face is the bot's own, nothing is drawn on it. The reasons are agent text, shown as plain text.
-struct VerdictCard: View {
+package struct VerdictCard: View {
   @Environment(\.threadHost) private var host
-  let runId: String
-  let agentId: String
-  let verdict: Verdict
+  package let runId: String
+  package let agentId: String
+  package let verdict: Verdict
+  package init(runId: String, agentId: String, verdict: Verdict) { self.runId = runId; self.agentId = agentId; self.verdict = verdict }
   private var face: BotTraits? {
     guard let t = host?.host.bot(runId: runId, agentId: agentId) else { return nil }
     return verdict.passed ? ((try? withOverrides(t, mood: .happy, pose: "cheer")) ?? (try? withOverrides(t, mood: .happy)) ?? t)
                           : ((try? withOverrides(t, mood: .oops)) ?? t)
   }
-  var body: some View {
+  package var body: some View {
     VStack(alignment: .leading, spacing: Theme.Content.verdictGap) {
       HStack(spacing: Theme.Content.handoffGap) {
         if let face { BotAvatar(traits: face, size: .small).accessibilityHidden(true) }
@@ -629,12 +638,13 @@ struct VerdictCard: View {
   }
 }
 
-struct HandoffCard: View {
+package struct HandoffCard: View {
   @Environment(\.threadHost) private var host
-  let runId: String
-  let item: CapcomdThread.Item
+  package let runId: String
+  package let item: CapcomdThread.Item
+  package init(runId: String, item: CapcomdThread.Item) { self.runId = runId; self.item = item }
 
-  var body: some View {
+  package var body: some View {
     let childId = item.child?.agentId
     let h = host?.host
     Button { if let childId { h?.openAgent(runId: runId, agentId: childId) } } label: {
@@ -670,7 +680,7 @@ struct HandoffCard: View {
   }
 
   /// The daemon puts a handoff's artifacts last, as a list of one-link items (handoffDraft): those become `.art` chips.
-  static func split(_ blocks: [Block]) -> ([Block], [CapcomdThread.Link]) {
+  package static func split(_ blocks: [Block]) -> ([Block], [CapcomdThread.Link]) {
     guard case .list(false, _, let items)? = blocks.last else { return (blocks, []) }
     var links: [CapcomdThread.Link] = []
     for i in items {
@@ -682,9 +692,10 @@ struct HandoffCard: View {
 }
 
 /// `.art`: an artifact a child handed back, as the daemon classified it (folder or file icon, mono name).
-struct ArtifactChip: View {
-  let link: CapcomdThread.Link
-  var body: some View {
+package struct ArtifactChip: View {
+  package let link: CapcomdThread.Link
+  package init(link: CapcomdThread.Link) { self.link = link }
+  package var body: some View {
     HStack(spacing: Theme.Content.artGap) {
       Image(systemName: icon).font(.system(size: 9))
       Text(verbatim: link.text).lineLimit(1).truncationMode(.middle)
@@ -693,7 +704,7 @@ struct ArtifactChip: View {
     .background(RoundedRectangle(cornerRadius: Theme.Content.artRadius, style: .continuous).fill(Theme.Content.artFill))
     .help(link.destination ?? link.path ?? link.text)
   }
-  var icon: String {
+  package var icon: String {
     switch link.target {
     case .web: "globe"; case .agent: "hexagon"; case .run: "point.3.connected.trianglepath.dotted"; case .artifact: "paperclip"
     case .file: "doc"; case .none: link.text.hasSuffix("/") ? "folder" : "doc"
@@ -702,9 +713,10 @@ struct ArtifactChip: View {
 }
 
 /// The 9 pt chevron of `.thk` / `.tc` (32 %), turned down when open.
-struct Chevron: View {
-  let open: Bool
-  var body: some View {
+package struct Chevron: View {
+  package let open: Bool
+  package init(open: Bool) { self.open = open }
+  package var body: some View {
     Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).foregroundStyle(Theme.Content.label.opacity(0.32))
       .rotationEffect(.degrees(open ? 90 : 0))
   }

@@ -3,9 +3,10 @@ import SwiftUI
 import CapcomdBot
 
 /// A 1 pt ordered dither in brand orange: every other point lit. The footer hairlines (Polish board, item 5).
-struct DitherLine: View {
+package struct DitherLine: View {
+  package init() {}
   @Environment(\.colorSchemeContrast) private var contrast
-  var body: some View {
+  package var body: some View {
     if contrast == .increased { Rectangle().fill(Theme.Craft.contrastStroke).frame(height: 1).accessibilityHidden(true) } else { dots }
   }
   private var dots: some View {
@@ -19,10 +20,11 @@ struct DitherLine: View {
 }
 
 /// The CAPCOMD wordmark drawn from the bot catalog's 4×5 pixel glyphs, at whole points per cell (Polish board, item 7).
-struct PixelWordmark: View {
-  var text = "CAPCOMD"
-  var cell = Theme.Polish.wordmarkCell
-  var body: some View {
+package struct PixelWordmark: View {
+  package var text = "CAPCOMD"
+  package var cell = Theme.Polish.wordmarkCell
+  package init(text: String = "CAPCOMD", cell: CGFloat = Theme.Polish.wordmarkCell) { self.text = text; self.cell = cell }
+  package var body: some View {
     let glyphs = text.uppercased().map { BotCatalog.standard.glyphs[String($0)] ?? [] }
     let advance = (4 + Theme.Polish.wordmarkGap) * cell
     Canvas { ctx, _ in
@@ -41,10 +43,10 @@ struct PixelWordmark: View {
 
 /// Where a bot's visor is, in cells, and the colour its eyes shine: the visor glow is centred there, not on the
 /// avatar's box (Polish board, item 2).
-@MainActor enum BotVisor {
-  struct Key: Hashable { let traits: BotTraits; let size: BotSize }
+@MainActor package enum BotVisor {
+  package struct Key: Hashable { let traits: BotTraits; let size: BotSize }
   private static var cache: [Key: (CGPoint, Color)?] = [:]
-  static func glow(_ t: BotTraits, size: BotSize) -> (center: CGPoint, color: Color)? {
+  package static func glow(_ t: BotTraits, size: BotSize) -> (center: CGPoint, color: Color)? {
     let k = Key(traits: t, size: size)
     if let hit = cache[k] { return hit.map { (center: $0.0, color: $0.1) } }
     var out: (CGPoint, Color)?
@@ -63,7 +65,7 @@ struct PixelWordmark: View {
 
 extension Color {
   /// "#RRGGBB" → Color.
-  init?(hex: String) {
+  package init?(hex: String) {
     let h = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
     guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
     self.init(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255)
@@ -72,12 +74,13 @@ extension Color {
 
 /// ✦ beside a run that just finished, fading out by opacity only within 300 ms (Polish board, item 8). Not shown with
 /// Reduce Motion, nor for runs that ended a while ago (opening the panel later shows no sparkle).
-struct FinishSparkle: View {
-  let endedAtMs: Int?
+package struct FinishSparkle: View {
+  package let endedAtMs: Int?
+  package init(endedAtMs: Int?) { self.endedAtMs = endedAtMs }
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var visible = true
   @State private var bounce = 0
-  var body: some View {
+  package var body: some View {
     let fresh = endedAtMs.map { Double(Int(Date().timeIntervalSince1970 * 1000) - $0) / 1000 < Theme.Polish.sparkleWithin } ?? false
     if fresh && !reduceMotion {
       Image(systemName: "sparkle").font(.system(size: Theme.Polish.sparkle, weight: .semibold)).foregroundStyle(Theme.accent)

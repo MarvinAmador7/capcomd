@@ -18,8 +18,11 @@ let package = Package(
     .target(name: "CapcomdStore", dependencies: ["CapcomdThread"]),
     // Glue to the CapcomdClient transport: SSE subscriptions per scope and the HTTP approval decider.
     .target(name: "CapcomdLive", dependencies: ["CapcomdStore", "CapcomdThread", .product(name: "CapcomdClient", package: "client")]),
+    // SwiftUI pieces both apps draw with: the theme, bots, provider marks and the thread renderer. macOS only (an
+    // empty module on Linux); declarations other targets use are `package`.
+    .target(name: "CapcomdUI", dependencies: ["CapcomdStore", "CapcomdThread", "CapcomdBot"]),
     // SwiftUI menu bar app. Every view is behind `#if canImport(SwiftUI)`; on Linux this builds to a stub.
-    .executableTarget(name: "MenuBarApp", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot"]),
+    .executableTarget(name: "MenuBarApp", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI"]),
     .testTarget(name: "CapcomdStoreTests", dependencies: ["CapcomdStore", "CapcomdLive", .product(name: "CapcomdClient", package: "client")],
                 resources: [.copy("Fixtures")]),
     // Decodes packages/agent-thread/fixtures/golden (shared with the daemon's own tests) in place.
