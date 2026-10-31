@@ -149,7 +149,15 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
 ```
 
 `ledger.jsonl`: one line per state change, `{ "schema": "perfloop.ledger/1", "at": "…", "experiment": "0007",
-"state": "promoted", "objective": { "before": 41.2, "after": 16.9 }, "build": "sha256:…", "by": "agent|owner" }`.
+"state": "promoted", "objective": { "before": 41.2, "after": 16.9 }, "build": "sha256:…", "by": "agent|owner",
+"runner": "ssh://Marvins-Mac-mini.local", "machine": "Mac16,11" }` (`runner`/`machine` on a stage's line: where its
+numbers came from).
+
+Every pair and stage records where it ran (C10): `"runner": { "runner": "local" | "ssh://host" | "vm:tart/NAME",
+"model": "Mac16,11", "host": "Marvins-Mac-mini", "os": "26.6.2" }`. A pair without one predates runners and counts as
+`local` on the store's Mac. A stage never mixes runners (acceptance says `error`; resuming a stage on another runner is
+refused, exit 6). A pair the local runner aborted on input has `"interrupted": true` (never judged); the pair that
+replaced it has `"interruptions": N`.
 `champion.json`: `{ "schema": "perfloop.champion/1", "experiment": "0007", "build": { … }, "merged": false,
 "parents": ["0005", "0002"], "mergedAncestor": "9bcd41a", "objectives": { "step": 16.9, "switch": 153.2 }, "since": "…" }`.
 `parents` is the chain of earlier champions back to the newest merged one, and `mergedAncestor` is that merged commit,
@@ -178,6 +186,19 @@ fitted when an axis has ≥ 4 distinct values and reported as curving only when 
 than 0.02. Fits use every point with a number, busy ones included (they are marked; `--redo KEY` measures one again).
 Fixture parameters reach the adapter in the fixture's name (manifest protocol 1): `--fixture crew@agents=24,items=100`,
 for any fixture whose manifest entry has `parametric` (`{ "agents": [1, 128] }`: each parameter's accepted range).
+
+## 7a. `perfloop.queue/1` (`<store>/queue.jsonl`)
+
+```jsonc
+{ "schema": "perfloop.queue/1", "at": "…", "item": "q3", "state": "queued", "experiment": "0007", "stage": "auto",   // auto | screen | full
+  "runner": "ssh://Marvins-Mac-mini.local" | null, "force": true | null, "note": "…" }
+{ "schema": "perfloop.queue/1", "at": "…", "item": "q3", "state": "running", "runner": "local", "note": "pid 4242 on local (Mac16,1, …)" }
+{ "schema": "perfloop.queue/1", "at": "…", "item": "q3", "state": "waiting", "note": "waiting: last input 12 s ago < 120 s (frontmost: Xcode)" }
+```
+
+Append-only, like the ledger: an item's state is its newest line. `waiting` lines say why a runner didn't start a rep
+(one per change of reason); `stopped` (`--until` reached, a signal) puts the item back in the queue, and its stage
+resumes at the first missing pair; then `done` (the note is the experiment's new state) or `failed` (the error).
 
 ## 8. `perfloop.gesture/1`
 
