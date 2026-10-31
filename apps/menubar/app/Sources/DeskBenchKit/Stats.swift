@@ -49,6 +49,9 @@ public struct Regression: Codable, Sendable, Equatable {
   public var regression: Bool
   public var improvement: Bool
   public var reason: String
+  /// objective | guard | info. Only the objective and the guards decide a verdict; nil (older results) decides.
+  public var role: String?
+  public var decides: Bool { role != "info" }
 
   /// `higherIsWorse`: true for durations and counts. `floorPct`: the smallest change worth reporting (default 10 %).
   /// `absoluteFloor`: a change below this many units is never a regression (frames, ms).

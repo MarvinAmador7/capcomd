@@ -7,6 +7,8 @@ public enum Explain {
     var o: [String] = []
     let s = r.summary
     o.append("\(r.scenario) on \(r.fixture): \(r.verdict.uppercased())  (\(r.reps.count) reps, \(Int(r.durationMs)) ms, \(r.machine.screenHz.clean) Hz, \(r.tool.configuration))")
+    o.append("build: " + (r.tool.build?.line ?? "\(r.tool.commit ?? "unknown commit") (no build stamp: from before it, or read from the cwd)"))
+    if r.profiled == true { o.append("profiled: a profiler was attached; these numbers include its cost and are never compared") }
     o.append("budget: \(r.budget.budget)")
     o.append("rule:   \(r.budget.rule)")
     if !r.budget.pass { for why in r.budget.reasons { o.append("  ✗ \(why)") } } else { o.append("  ✓ met") }
@@ -24,7 +26,15 @@ public enum Explain {
     o.append("numbers (medians across reps):")
     if let l = s.latencyMs { o.append("  latency       median \(l.median) ms  p95 \(l.p95) ms  max \(l.max) ms  (n=\(l.n))") }
     if let st = s.settleMs { o.append("  settle        median \(st.median) ms  max \(st.max) ms") }
-    o.append("  frames        display at \(s.steadyHz.median.clean) Hz  p95 \(s.frameP95Ms.median) ms  p99 \(s.frameP99Ms.median) ms  late \(s.lateFrames.median)/rep (max \(s.lateFrames.max))  dropped \(s.droppedFrames.median)/rep")
+    // The objectives (what ab/compare decide on), then the frames. Results from before them get CPU/step from their reps.
+    func dist(_ xs: [Double]) -> Dist? { xs.isEmpty ? nil : Dist(xs) }
+    if let ob = s.objective, let v = ob.value { o.append("  objective     \(ob.name) \(v)\(ob.dist.map { " (min \($0.min), max \($0.max), n=\($0.n))" } ?? "")") }
+    var per: [String] = []
+    if let c = s.mainThreadCpuMsPerStep ?? dist(r.reps.compactMap(\.cpuMsPerStep)) { per.append("main-thread cpu \(c.median) ms (mad \(c.mad))") }
+    if let i = s.instructionsPerStep { per.append(String(format: "instructions %.2f M (mad %.2f M)", i.median / 1e6, i.mad / 1e6)) }
+    if !per.isEmpty { o.append("  per step      " + per.joined(separator: "  ")) }
+    let hitch = s.hitchTimeRatioMsPerS.map { "late frame time \($0.median) ms/s (max \($0.max))  " } ?? ""
+    o.append("  frames        \(hitch)display at \(s.steadyHz.median.clean) Hz  p95 \(s.frameP95Ms.median) ms  p99 \(s.frameP99Ms.median) ms  late \(s.lateFrames.median)/rep (max \(s.lateFrames.max))  dropped \(s.droppedFrames.median)/rep")
     o.append("  main thread   longest \(s.longestStretchMs.median) ms (max \(s.longestStretchMs.max))  >16.7 ms: \(s.stretchesOver16.median)/rep  >100 ms: \(s.hangsOver100.median)/rep  cpu share while awake \(Int(s.mainThreadCpuShare * 100)) %")
     if s.mainThreadCpuShare < 0.6 { o.append("  !! the main thread had \(Int(s.mainThreadCpuShare * 100)) % of a core while awake: it was preempted by other processes. Stretch lengths below are wall time; the cpu column is the work.") }
     if s.steadyHz.median < r.machine.screenHz - 0.5, ["step", "jump", "fling", "follow", "burst"].contains(r.scenario) { o.append("  !! the display ran at \(s.steadyHz.median.clean) Hz during the scenario on a \(r.machine.screenHz.clean) Hz panel (adaptive refresh, or a 60 Hz display setting); late frames are judged at that rate") }

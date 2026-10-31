@@ -57,6 +57,14 @@ public enum Budgets {
   /// landed) come in through each rep's `checks`.
   public static func evaluate(_ spec: ScenarioSpec, reps: [RepResult], summary: Summary) -> BudgetVerdict {
     var reasons: [String] = []
+    // "No late frame" is judged on late frame time (rate-invariant); reps from an older bench only have the count.
+    func lateFrames() {
+      if let h = summary.hitchTimeRatioMsPerS {
+        if h.median > 0 { reasons.append("late frame time: median \(h.median) ms per second of scenario (max \(h.max)) at \(summary.steadyHz.median.clean) Hz; \(summary.lateFrames.median) late frames/rep, frame p99 \(summary.frameP99Ms.median) ms") }
+      } else if summary.lateFrames.median > 0 {
+        reasons.append("late frames: median \(summary.lateFrames.median) per rep (max \(summary.lateFrames.max)) at \(summary.steadyHz.median.clean) Hz; frame p99 \(summary.frameP99Ms.median) ms")
+      }
+    }
     switch spec.kind {
     case .latency:
       if let d = summary.latencyMs, let b = spec.latencyBudgetMs, d.median > b {
@@ -65,14 +73,14 @@ public enum Budgets {
       if summary.latencyMs == nil { reasons.append("no latency was measured") }
       if summary.hangsOver100.max > 0 { reasons.append("a main-thread stretch over 100 ms in \(Int(summary.hangsOver100.max)) rep(s); longest \(summary.longestStretchMs.max) ms") }
     case .smooth:
-      if summary.lateFrames.median > 0 { reasons.append("late frames: median \(summary.lateFrames.median) per rep (max \(summary.lateFrames.max)) at \(summary.steadyHz.median.clean) Hz; frame p99 \(summary.frameP99Ms.median) ms") }
+      lateFrames()
       if spec.name == "resize" {
         if summary.hangsOver100.median > 0 { reasons.append("main-thread stretches over 100 ms: median \(summary.hangsOver100.median) per rep") }
       } else if summary.stretchesOver16.median > 0 {
         reasons.append("main-thread stretches over 16.7 ms: median \(summary.stretchesOver16.median) per rep (longest \(summary.longestStretchMs.median) ms)")
       }
     case .isolation:
-      if summary.lateFrames.median > 0 { reasons.append("late frames: median \(summary.lateFrames.median) per rep") }
+      lateFrames()
     }
     // Checks fail the budget when they failed in most reps (one wild rep is noise, not a verdict).
     for name in summary.checksFailed {
@@ -85,7 +93,8 @@ public enum Budgets {
     return BudgetVerdict(budget: spec.budget, rule: spec.rule, pass: reasons.isEmpty, reasons: reasons)
   }
 
-  /// The metrics `compare` and `ab` look at per scenario kind, with whether higher is worse.
+  /// The frame and stretch metrics the bench has always compared; `Comparison` prints them as information (they no
+  /// longer decide: the objective and the guards do).
   public static func metrics(for spec: ScenarioSpec) -> [(name: String, pick: (RepResult) -> Double?, floorPct: Double, absoluteFloor: Double)] {
     switch spec.kind {
     case .latency:

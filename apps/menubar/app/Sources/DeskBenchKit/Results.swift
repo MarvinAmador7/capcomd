@@ -27,6 +27,12 @@ public struct FrameStats: Codable, Sendable, Equatable {
   public var dropped: Int
   /// late / ticks.
   public var lateRatio: Double
+  /// Σ (interval − steady frame) over the late intervals: how long frames were held past their vsync. An interval
+  /// within 1.5 × the frame is callback jitter, not a missed vsync, and adds nothing. nil in results from before it.
+  public var hitchTimeMs: Double?
+  /// hitchTimeMs per second the intervals span, in ms/s: rate- and length-invariant, unlike `late` (Apple's bands:
+  /// < 5 good, 5–10 noticeable, > 10 act). What the verdicts use.
+  public var hitchTimeRatioMsPerS: Double?
 
   public init(intervalsMs xs: [Double], nominalHz hz: Double) {
     ticks = xs.count; nominalHz = hz
@@ -42,6 +48,8 @@ public struct FrameStats: Codable, Sendable, Equatable {
     lateAtNominal = xs.filter { $0 > nominal * 1.5 }.count
     dropped = xs.reduce(0) { $0 + max(0, Int(($1 / steady).rounded()) - 1) }
     lateRatio = ticks == 0 ? 0 : Stats.round(Double(late) / Double(ticks), 4)
+    let hitch = xs.filter { $0 > steady * 1.5 }.reduce(0) { $0 + $1 - steady }, span = xs.reduce(0, +)
+    hitchTimeMs = Stats.round(hitch, 2); hitchTimeRatioMsPerS = span > 0 ? Stats.round(hitch / span * 1000, 2) : 0
   }
   public static let empty = FrameStats(intervalsMs: [], nominalHz: 60)
 }
@@ -103,9 +111,14 @@ public struct StepResult: Codable, Sendable, Equatable {
   public var mainThread: MainThreadStats
   public var bodies: [String: Int]
   public var notes: [String]
-  public init(name: String, atMs: Double, durationMs: Double, latencyMs: Double? = nil, settleMs: Double? = nil, frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], notes: [String] = []) {
+  /// Main-thread CPU ms over the step's stretches (= mainThread.cpuMs, unrounded to 0.01).
+  public var cpuMs: Double?
+  /// Instructions this process retired during the step (proc_pid_rusage, all threads); nil where counters read zero.
+  public var instructions: Int?
+  public init(name: String, atMs: Double, durationMs: Double, latencyMs: Double? = nil, settleMs: Double? = nil, frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], notes: [String] = [],
+              cpuMs: Double? = nil, instructions: Int? = nil) {
     self.name = name; self.atMs = atMs; self.durationMs = durationMs; self.latencyMs = latencyMs; self.settleMs = settleMs
-    self.frames = frames; self.mainThread = mainThread; self.bodies = bodies; self.notes = notes
+    self.frames = frames; self.mainThread = mainThread; self.bodies = bodies; self.notes = notes; self.cpuMs = cpuMs; self.instructions = instructions
   }
 }
 
@@ -161,7 +174,14 @@ public struct Summary: Codable, Sendable, Equatable {
   /// Median body count per view type across reps.
   public var bodies: [String: Double]
   public var checksFailed: [String]
-  public init(reps rs: [RepResult]) {
+  /// The number this scenario is judged on in `ab`/`compare` (the default objective unless one was asked for).
+  public var objective: ObjectiveValue?
+  public var mainThreadCpuMsPerStep: Dist?
+  /// nil where the counters read zero (a VM) or an older bench made the reps.
+  public var instructionsPerStep: Dist?
+  public var hitchTimeRatioMsPerS: Dist?
+  /// `objective`: what to record as the objective; by default latency when the reps measured one, else CPU per step.
+  public init(reps rs: [RepResult], objective: Objective? = nil) {
     reps = rs.count
     let lat = rs.flatMap(\.latencies); latencyMs = lat.isEmpty ? nil : Dist(lat)
     let set = rs.flatMap(\.settles); settleMs = set.isEmpty ? nil : Dist(set)
@@ -176,6 +196,11 @@ public struct Summary: Codable, Sendable, Equatable {
     for r in rs { for (k, v) in r.bodies { b[k, default: []].append(Double(v)) } }
     bodies = b.mapValues { Stats.median($0) }
     checksFailed = Array(Set(rs.flatMap { $0.checks.filter { !$0.pass }.map(\.name) })).sorted()
+    func dist(_ xs: [Double]) -> Dist? { xs.isEmpty ? nil : Dist(xs) }
+    mainThreadCpuMsPerStep = dist(rs.compactMap(\.cpuMsPerStep)); instructionsPerStep = dist(rs.compactMap(\.instructionsPerStep))
+    hitchTimeRatioMsPerS = dist(rs.compactMap(\.frames.hitchTimeRatioMsPerS))
+    let o = objective ?? (lat.isEmpty ? .cpu : .latency)
+    self.objective = rs.isEmpty ? nil : ObjectiveValue(o, reps: rs)
   }
 }
 
@@ -234,9 +259,11 @@ public struct Noise: Codable, Sendable, Equatable {
 public struct ToolInfo: Codable, Sendable, Equatable {
   public var name = "CapcomdDeskBench"
   public var version: String
+  /// The build stamp's commit (equal to `build.commit`); nil in results from benches that read it from the cwd and failed.
   public var commit: String?
   public var configuration: String
-  public init(version: String, commit: String?, configuration: String) { self.version = version; self.commit = commit; self.configuration = configuration }
+  public var build: BuildInfo?
+  public init(version: String, commit: String?, configuration: String, build: BuildInfo? = nil) { self.version = version; self.commit = commit; self.configuration = configuration; self.build = build }
 }
 
 /// Everything one `run` prints.
@@ -260,12 +287,15 @@ public struct BenchResult: Codable, Sendable, Equatable {
   public var exitCode: Int
   /// Where the window PNGs and view dumps went, if asked for.
   public var artifacts: [String]
+  /// A profiler was attached (`profile`, `--wait-for`): its numbers are the profiler's too, so they are never compared
+  /// with an unprofiled run. nil in results from before the flag.
+  public var profiled: Bool?
   public init(tool: ToolInfo, scenario: String, fixture: String, params: [String: String], startedAt: String, durationMs: Double, machine: Machine, noise: Noise, window: WindowState?,
-              reps: [RepResult], summary: Summary, budget: BudgetVerdict, comparison: [Regression]?, artifacts: [String]) {
+              reps: [RepResult], summary: Summary, budget: BudgetVerdict, comparison: [Regression]?, artifacts: [String], profiled: Bool = false) {
     self.tool = tool; self.scenario = scenario; self.fixture = fixture; self.params = params; self.startedAt = startedAt; self.durationMs = durationMs
     self.machine = machine; self.noise = noise; self.window = window; self.reps = reps; self.summary = summary; self.budget = budget; self.comparison = comparison
-    self.artifacts = artifacts
-    let regressed = comparison?.contains { $0.regression } ?? false
+    self.artifacts = artifacts; self.profiled = profiled
+    let regressed = comparison?.contains { $0.decides && $0.regression } ?? false
     if budget.pass && !regressed { verdict = "pass"; exitCode = 0 }
     else if !noise.quiet { verdict = "untrusted"; exitCode = ExitCode.untrusted }
     else if !budget.pass { verdict = "fail"; exitCode = ExitCode.budget }
@@ -281,6 +311,8 @@ public enum ExitCode {
   public static let budget = 3
   public static let regression = 4
   public static let untrusted = 5
+  /// Refused on provenance: a profiled result in a comparison.
+  public static let refused = 6
 }
 
 public enum JSONOut {
