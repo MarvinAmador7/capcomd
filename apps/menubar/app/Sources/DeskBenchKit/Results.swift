@@ -80,6 +80,9 @@ public struct MainThreadStats: Codable, Sendable, Equatable {
 
 /// One long main-thread stretch, what SwiftUI evaluated inside it and, with the sampler on, the stacks it sampled.
 public struct Stretch: Codable, Sendable, Equatable {
+  /// The step the stretch overlapped most; between steps "after <step>", before the first "before <step> (setup)".
+  /// ("idle" in results from before bench measure 2: anything before the first step, and stretches after a step were
+  /// given that step's name.)
   public var step: String
   public var atMs: Double
   public var durationMs: Double
@@ -89,8 +92,11 @@ public struct Stretch: Codable, Sendable, Equatable {
   public var bodies: [String: Int]
   // The in-process sampler's view of the stretch (Sampler.swift); all absent when it was off (`--sampler off`) or in
   // results from before it existed.
-  /// Main-thread stacks sampled inside the stretch (1 per ms once it passed the gate); 0 when it was shorter than the gate.
+  /// Main-thread stacks sampled inside the stretch (1 per ms once it passed the gate); 0 when none were (`unsampled` says why).
   public var samples: Int? = nil
+  /// Why a stretch has no samples: "gate" (shorter than the sampler's gate) or "missed" (it passed the gate but the
+  /// sampler thread got no core in time, on a loaded machine). nil when sampled, and in older results.
+  public var unsampled: String? = nil
   /// The samples folded into a call tree (`v` = samples), symbolised in-process with dladdr after the rep.
   public var stacks: StackTree? = nil
   /// Our frames (the app's and the bench's code), inclusive, heaviest first.
@@ -99,10 +105,21 @@ public struct Stretch: Codable, Sendable, Equatable {
   public var topFramework: [SymbolCount]? = nil
   /// Where the samples landed (leaf frames).
   public var topSelf: [SymbolCount]? = nil
-  /// Wall time from the first observer of the wake-up to the last one before the thread slept: covers the Core
-  /// Animation commit, which `durationMs` (measured at observer order 0) ends before.
+  /// Results from bench measure 1 only: the sampler's own wake-up length, which covered the Core Animation commit that
+  /// `durationMs` (then measured at observer order 0) ended before. Since measure 2 both are the same stretch, so it is
+  /// no longer written.
   public var awakeMs: Double? = nil
   public init(step: String, atMs: Double, durationMs: Double, cpuMs: Double, bodies: [String: Int]) { self.step = step; self.atMs = atMs; self.durationMs = durationMs; self.cpuMs = cpuMs; self.bodies = bodies }
+
+  /// Which step a stretch at `at` lasting `dur` ms belongs to: the one it overlaps most; between two steps "after" the
+  /// earlier one; before the first, the scenario's setup (rewinding the reel, building columns).
+  public static func label(at: Double, dur: Double, steps: [StepResult]) -> String {
+    let end = at + dur
+    let overlaps = steps.map { ($0.name, min(end, $0.atMs + $0.durationMs) - max(at, $0.atMs)) }.filter { $0.1 > 0 }
+    if let best = overlaps.max(by: { $0.1 < $1.1 }) { return best.0 }
+    if let prev = steps.last(where: { $0.atMs + $0.durationMs <= at + 0.1 }) { return "after \(prev.name)" }
+    return steps.first.map { "before \($0.name) (setup)" } ?? "the scenario"
+  }
 }
 
 /// A check a scenario makes beyond timing (which views re-rendered, where the reel landed).
@@ -126,9 +143,10 @@ public struct StepResult: Codable, Sendable, Equatable {
   public var mainThread: MainThreadStats
   public var bodies: [String: Int]
   public var notes: [String]
-  /// Main-thread CPU ms over the step's stretches (= mainThread.cpuMs, unrounded to 0.01).
+  /// Main-thread CPU ms from the step's start to its end (thread_info; measure 1: summed over the step's stretches).
   public var cpuMs: Double?
-  /// Instructions this process retired during the step (proc_pid_rusage, all threads); nil where counters read zero.
+  /// Instructions the main thread retired from the step's start to its end (measure 1: the whole process, from
+  /// proc_pid_rusage); nil where the counters read zero (a VM) or can't be read.
   public var instructions: Int?
   public init(name: String, atMs: Double, durationMs: Double, latencyMs: Double? = nil, settleMs: Double? = nil, frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], notes: [String] = [],
               cpuMs: Double? = nil, instructions: Int? = nil) {
@@ -166,6 +184,8 @@ public struct RepResult: Codable, Sendable, Equatable {
   public var window: WindowState?
   /// What the in-process sampler did and cost during the rep; absent when it was off.
   public var sampler: SamplerStats? = nil
+  /// How the bench measured stretches, CPU and instructions (`currentMeasure`, Objective.swift); nil = 1, from before it.
+  public var measure: Int? = nil
   public init(index: Int, variant: String? = nil, steps: [StepResult], frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], checks: [Check], worstStretches: [Stretch], window: WindowState?) {
     self.index = index; self.variant = variant; self.steps = steps; self.frames = frames; self.mainThread = mainThread; self.bodies = bodies; self.checks = checks; self.worstStretches = worstStretches; self.window = window
   }

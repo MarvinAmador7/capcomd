@@ -79,6 +79,25 @@ public enum ProcessCounters {
     return nil
     #endif
   }
+
+  /// Instructions retired by the calling thread so far (`thread_selfcounts`, the per-thread counters libsystem_kernel
+  /// exports; looked up with dlsym, as it isn't in the SDK's headers). nil where it is missing or fails, 0 in a VM.
+  /// What the bench counts per step: the main thread's own, not the sampler's or any other thread's.
+  public static func threadInstructions() -> UInt64? {
+    #if canImport(Darwin)
+    guard let f = selfCounts else { return nil }
+    var counts: (instructions: UInt64, cycles: UInt64) = (0, 0)
+    let rc = withUnsafeMutablePointer(to: &counts) { f(1, $0, MemoryLayout<(UInt64, UInt64)>.size) }   // 1: THSC_CPI
+    return rc == 0 ? counts.instructions : nil
+    #else
+    return nil
+    #endif
+  }
+
+  #if canImport(Darwin)
+  typealias SelfCountsFn = @convention(c) (Int32, UnsafeMutableRawPointer?, Int) -> Int32
+  static let selfCounts: SelfCountsFn? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "thread_selfcounts").map { unsafeBitCast($0, to: SelfCountsFn.self) }
+  #endif
 }
 
 /// A `.trace` embeds the recorded process's environment (tokens included: FEASIBILITY.md §1.6), so a profiled child

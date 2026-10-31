@@ -54,8 +54,12 @@ public enum Objective: String, Codable, Sendable, CaseIterable {
     }
   }
 
-  /// When the asked-for objective has no values on a side, the one to use instead.
-  var fallback: Objective? { self == .cpu ? nil : .cpu }
+  /// When the asked-for objective can't be used, the ones to try instead, in order: CPU, then late frame time.
+  var fallbacks: [Objective] { [.cpu, .frames].filter { $0 != self } }
+
+  /// Whether the number depends on where the bench draws a stretch's edges and which threads it counts (`measure`):
+  /// CPU and instructions do; the display link's frame times and the commit-completion latencies don't.
+  public var dependsOnMeasure: Bool { self == .cpu || self == .instructions }
 
   public func compare(baseline: [RepResult], candidate: [RepResult], role: String) -> Regression {
     var r = Regression(metric: metric, baseline: baseline.compactMap(value), candidate: candidate.compactMap(value), floorPct: floors.pct, absoluteFloor: floors.absolute)
@@ -63,6 +67,14 @@ public enum Objective: String, Codable, Sendable, CaseIterable {
     return r
   }
 }
+
+/// How this bench measures (`RepResult.measure`; nil in results from before it = 1). 1: a stretch ran from
+/// `afterWaiting` to `beforeWaiting` at observer order 0, so it ended before Core Animation's commit; CPU per step was
+/// summed over the stretches that began inside a step; instructions were process-wide. 2: a stretch runs from the
+/// first observer of a wake-up to the last before the thread sleeps (the commit and AppKit's display cycle included,
+/// not cut at a run-loop exit); CPU and instructions per step are the main thread's own counters between the step's
+/// start and end. CPU and instructions from different measures are not compared.
+public let currentMeasure = 2
 
 /// The objective's medians across reps, for `Summary`.
 public struct ObjectiveValue: Codable, Sendable, Equatable {
@@ -77,8 +89,13 @@ public struct ObjectiveValue: Codable, Sendable, Equatable {
 }
 
 extension RepResult {
-  /// Main-thread CPU over the steps' stretches, per step.
-  public var cpuMsPerStep: Double? { steps.isEmpty ? nil : Stats.round(mainThread.cpuMs / Double(steps.count), 2) }
+  /// Main-thread CPU per step: the steps' own counters (measure 2), or the stretches inside the steps (measure 1).
+  public var cpuMsPerStep: Double? {
+    guard !steps.isEmpty else { return nil }
+    let own = steps.compactMap(\.cpuMs)
+    if (measure ?? 1) >= 2, own.count == steps.count { return Stats.round(own.reduce(0, +) / Double(steps.count), 2) }
+    return Stats.round(mainThread.cpuMs / Double(steps.count), 2)
+  }
   /// Instructions retired during the steps, per step; nil unless every step has a non-zero count.
   public var instructionsPerStep: Double? {
     let xs = steps.compactMap(\.instructions)
@@ -99,24 +116,47 @@ public struct Comparison: Codable, Sendable, Equatable {
   public var improvement: Bool
   public var guardsFailed: [String]
 
+  /// Saved results (`compare`, `run --baseline`): the medians of the two sets of reps.
   public init(_ spec: ScenarioSpec, objective asked: Objective? = nil, baseline a: [RepResult], candidate b: [RepResult]) {
+    self.init(spec, asked, a, b) { metric, pick, floorPct, absolute in
+      Regression(metric: metric, baseline: a.compactMap(pick), candidate: b.compactMap(pick), floorPct: floorPct, absoluteFloor: absolute)
+    }
+  }
+
+  /// `ab`: A/B pairs run back to back; every row is the paired verdict (`Regression(metric:pairs:)`).
+  public init(_ spec: ScenarioSpec, objective asked: Objective? = nil, pairs: [(a: RepResult, b: RepResult)]) {
+    self.init(spec, asked, pairs.map(\.a), pairs.map(\.b)) { metric, pick, floorPct, absolute in
+      Regression(metric: metric, pairs: pairs.compactMap { p in pick(p.a).flatMap { x in pick(p.b).map { (a: x, b: $0) } } }, floorPct: floorPct, absoluteFloor: absolute)
+    }
+  }
+
+  private init(_ spec: ScenarioSpec, _ asked: Objective?, _ a: [RepResult], _ b: [RepResult], row: (String, (RepResult) -> Double?, Double, Double) -> Regression) {
     var o = asked ?? .default(for: spec)
     var notes: [String] = []
-    func available(_ x: Objective) -> Bool { !a.compactMap(x.value).isEmpty && !b.compactMap(x.value).isEmpty }
-    if !available(o), let f = o.fallback, available(f) {
-      notes.append("\(o.metric) is missing on \(a.compactMap(o.value).isEmpty ? "the baseline" : "the candidate") (counters off, an older bench, or no such step): decided on \(f.metric) instead")
-      o = f
+    let ma = Set(a.map { $0.measure ?? 1 }), mb = Set(b.map { $0.measure ?? 1 })
+    let sameMeasure = ma == mb && ma.count <= 1
+    func has(_ x: Objective) -> Bool { !a.compactMap(x.value).isEmpty && !b.compactMap(x.value).isEmpty }
+    func available(_ x: Objective) -> Bool { has(x) && (sameMeasure || !x.dependsOnMeasure) }
+    func make(_ x: Objective, _ role: String) -> Regression { var r = row(x.metric, x.value, x.floors.pct, x.floors.absolute); r.role = role; return r }
+    let measures = "bench measure \(ma.sorted().map(String.init).joined(separator: "/")) vs \(mb.sorted().map(String.init).joined(separator: "/"))"
+    if !available(o) {
+      let why = !has(o) ? "\(o.metric) is missing on \(a.compactMap(o.value).isEmpty ? "the baseline" : "the candidate") (counters off, an older bench, or no such step)"
+        : "\(o.metric) isn't comparable across the two builds (\(measures): they draw stretches and count differently)"
+      if let f = o.fallbacks.first(where: available) { notes.append("\(why): decided on \(f.metric) instead"); o = f }
+      else { notes.append("\(why), and no other objective is measured the same way on both sides: no verdict") }
     }
     objective = o.metric
-    var rows = [o.compare(baseline: a, candidate: b, role: "objective")]
+    var rows = [make(o, "objective")]
+    if !available(o) { rows[0].regression = false; rows[0].improvement = false; rows[0].reason = "\(o.metric): not comparable (\(measures))" }
     // Guards: frames may not get worse beyond their band (SPEC §5.1), whatever the objective.
-    if o != .frames, available(.frames) { rows.append(Objective.frames.compare(baseline: a, candidate: b, role: "guard")) }
-    var longest = Regression(metric: "longestStretchMs", baseline: a.map(\.mainThread.longestMs), candidate: b.map(\.mainThread.longestMs), floorPct: 25, absoluteFloor: 4)
-    longest.role = "guard"; rows.append(longest)
+    if o != .frames, available(.frames) { rows.append(make(.frames, "guard")) }
+    var longest = row("longestStretchMs", { $0.mainThread.longestMs }, 25, 4)
+    longest.role = sameMeasure ? "guard" : "info"; rows.append(longest)
+    if !sameMeasure { notes.append("longestStretchMs is information only: \(measures) draw stretches differently") }
     // Information: the other objectives and the frame counts the bench has always printed.
-    for x in Objective.allCases where x != o && !rows.contains(where: { $0.metric == x.metric }) && available(x) { rows.append(x.compare(baseline: a, candidate: b, role: "info")) }
+    for x in Objective.allCases where x != o && !rows.contains(where: { $0.metric == x.metric }) && available(x) { rows.append(make(x, "info")) }
     for m in Budgets.metrics(for: spec) where !rows.contains(where: { $0.metric == m.name }) {
-      var r = Regression(metric: m.name, baseline: a.compactMap(m.pick), candidate: b.compactMap(m.pick), floorPct: m.floorPct, absoluteFloor: m.absoluteFloor)
+      var r = row(m.name, m.pick, m.floorPct, m.absoluteFloor)
       r.role = "info"; rows.append(r)
     }
     self.rows = rows; self.notes = notes
