@@ -7,25 +7,29 @@ import CapcomdClient
 import CapcomdThread
 import CapcomdBot
 import CapcomdUI
+import PerfLoopProbe
 
 // State for the desktop window (design/desktop/SPEC.md §1, §6). The store reports what each change touched; this model
 // keeps one small observable slice per agent and per thread, and assigns a slice only when its value differs. A view
 // reads only its own slice, so a thread item arriving re-renders that column's rows and nothing else.
+//
+// Each observed property that drives a body reports its sets to `Mutations` (PerfLoopProbe, CAPABILITIES.md C7), so the
+// bench can say which change preceded which bodies. With no sink attached (the app) that is a nil check per set.
 
 /// One agent as its column header and tab show it.
 @Observable @MainActor
 package final class AgentSlice {
   package let id: String
-  package private(set) var header: ColumnHeader
-  package private(set) var bot: BotTraits?
+  package private(set) var header: ColumnHeader { didSet { Mutations.record("AgentSlice.header", id: id) } }
+  package private(set) var bot: BotTraits? { didSet { Mutations.record("AgentSlice.bot", id: id) } }
   /// The approval this agent waits on, if any.
-  package private(set) var approval: PendingApproval?
+  package private(set) var approval: PendingApproval? { didSet { Mutations.record("AgentSlice.approval", id: id) } }
   /// Whether the column shows its thread (DeskModel's warm set); a cold column is its header and box only.
-  package private(set) var warm = false
+  package private(set) var warm = false { didSet { Mutations.record("AgentSlice.warm", id: id) } }
   /// Its column is on screen (the tab is bracketed) / focused. Kept per agent so a scroll or a focus change re-renders
   /// the columns and tabs whose state changed, not every one that read the model's position.
-  package private(set) var onScreen = false
-  package private(set) var focused = false
+  package private(set) var onScreen = false { didSet { Mutations.record("AgentSlice.onScreen", id: id) } }
+  package private(set) var focused = false { didSet { Mutations.record("AgentSlice.focused", id: id) } }
   init(_ h: ColumnHeader) { id = h.agentId; header = h }
   func set(warm w: Bool) { if warm != w { warm = w } }
   func set(onScreen o: Bool) { if onScreen != o { onScreen = o } }
@@ -38,9 +42,9 @@ package final class AgentSlice {
 /// One agent's thread as its column shows it.
 @Observable @MainActor
 package final class ThreadSlice {
-  package private(set) var entries: [ThreadEntry] = []
-  package private(set) var pending: [PendingSteer] = []
-  package private(set) var unavailable: DetailUnavailable?
+  package private(set) var entries: [ThreadEntry] = [] { didSet { Mutations.record("ThreadSlice.entries") } }
+  package private(set) var pending: [PendingSteer] = [] { didSet { Mutations.record("ThreadSlice.pending") } }
+  package private(set) var unavailable: DetailUnavailable? { didSet { Mutations.record("ThreadSlice.unavailable") } }
   func set(entries e: [ThreadEntry], pending p: [PendingSteer], unavailable u: DetailUnavailable?) {
     if entries != e { entries = e }
     if pending != p { pending = p }
@@ -50,7 +54,7 @@ package final class ThreadSlice {
 
 /// Media bytes loaded through the daemon; rare, so one observed dictionary is enough.
 @Observable @MainActor
-package final class MediaSlice { package var items: [MediaKey: Fetched<Data>] = [:] }
+package final class MediaSlice { package var items: [MediaKey: Fetched<Data>] = [:] { didSet { Mutations.record("MediaSlice.items") } } }
 
 @Observable @MainActor
 package final class DeskModel {
@@ -58,23 +62,23 @@ package final class DeskModel {
 
   @ObservationIgnored package private(set) var store: CapcomdStore
   @ObservationIgnored private var transport: UnixSocketTransport?
-  package private(set) var link: Link = .connecting
+  package private(set) var link: Link = .connecting { didSet { Mutations.record("DeskModel.link") } }
   /// Every project with something to show, oldest first (never reordered by activity).
-  package private(set) var decks: [DeckInfo] = []
+  package private(set) var decks: [DeckInfo] = [] { didSet { Mutations.record("DeskModel.decks") } }
   /// The project the reel shows, and its run.
-  package private(set) var openProjectId: String?
-  package private(set) var openRunId: String?
+  package private(set) var openProjectId: String? { didSet { Mutations.record("DeskModel.openProjectId") } }
+  package private(set) var openRunId: String? { didSet { Mutations.record("DeskModel.openRunId") } }
   /// The open run's agents, in tree order: the reel's columns and the title bar's tabs.
-  package private(set) var columns: [String] = []
+  package private(set) var columns: [String] = [] { didSet { Mutations.record("DeskModel.columns") } }
   /// The reel's leading on-screen column, as the reel reports it: once per column crossed, never per frame.
-  package private(set) var reelPosition: String?
+  package private(set) var reelPosition: String? { didSet { Mutations.record("DeskModel.reelPosition") } }
   /// A scroll the reel carries out (a tab click, Follow, the keyboard, a project switch); `serial` makes a repeat count.
-  package private(set) var reelRequest: ReelRequest?
-  package var focusedAgent: String? { didSet { if focusedAgent != oldValue { syncFlags() } } }
+  package private(set) var reelRequest: ReelRequest? { didSet { Mutations.record("DeskModel.reelRequest") } }
+  package var focusedAgent: String? { didSet { Mutations.record("DeskModel.focusedAgent"); if focusedAgent != oldValue { syncFlags() } } }
   /// Follow: an ask or a failure in the open project scrolls the reel to its column (SPEC §3).
-  package var follow = true
+  package var follow = true { didSet { Mutations.record("DeskModel.follow") } }
   /// Columns across the window (3, 2 or 1), set by the reel when its width crosses a step.
-  package var across = 3 { didSet { if across != oldValue { syncFlags() } } }
+  package var across = 3 { didSet { Mutations.record("DeskModel.across"); if across != oldValue { syncFlags() } } }
   /// The column ids on screen, for the title bar's bracket: derived from the scroll position, never tracked per frame.
   package var onScreen: Set<String> {
     let start = reelPosition.flatMap { columns.firstIndex(of: $0) } ?? 0
