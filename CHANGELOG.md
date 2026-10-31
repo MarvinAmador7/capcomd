@@ -27,6 +27,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `ab <scenario> --a-knobs … --b-knobs …` compares two knob settings of one binary. A new `perfloop` tool
   (`tools/perfloop`: `perfloop exp new|screen|full|promote`, `champion`, `store`) keeps a ledger of experiments against the best
   build so far; `apps/menubar/app/PROGRAM.md` is the procedure an agent follows with it.
+- Correctness guards for the desktop bench and perfloop: `deskbench run … --guards built-within,snapshot-diff` checks
+  that the columns in view were built once the window is at rest and saves a snapshot; `deskbench snapdiff A.png
+  B.png` compares two. perfloop asks both builds for the best build's guards on every pair: a build that fails one
+  can't win, a snapshot unlike the best build's goes to the owner (`needsReview`), and the `burst`/`typing` isolation
+  checks run before every promotion. `perfloop guards --exp ID` re-runs them; only the owner may pass
+  `--guard-tolerance`.
+- Bench results say why views re-rendered: each step and long stretch has `causes` (which desktop-model properties
+  were set before its view bodies ran, and how many distinct columns or tabs re-ran), `explain` prints them under each
+  stretch, and `perfloop causes <result.json>` prints the whole table. `profile --template swiftui` summarises the
+  SwiftUI instrument's cause tables and says when the recording has none.
+- `perfloop sweep step --set agents=4..64/12` measures the desktop window across a grid of crew sizes, thread lengths,
+  knobs and scenario params and prints the cost curve with its fit ("ms/step grows 4.98 ms per agent (r² 0.84)");
+  `--dry-run` shows the grid and an estimate, and running the same command again resumes. Generated fixtures take
+  parameters (`crew@agents=32,items=200`). `deskbench fixture capture --from <socket> --run <id> --token-file <file>`
+  saves a run as an anonymised fixture outside the repo, and the bench runs on it with `--fixture file:<name>`.
 - Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
   or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
   coming back, and whoever awaits it (you, or a parent agent's `capcomd await`) gets its result.
