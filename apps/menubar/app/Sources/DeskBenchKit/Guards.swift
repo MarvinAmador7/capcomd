@@ -340,8 +340,12 @@ public enum SnapshotDiff {
 
   /// The report as the guard's record.
   public static func guardResult(_ r: Report, artifacts: [String]) -> GuardResult {
+    // How close the threads came to the floor (`threadInkMin`): the headroom the tolerance has on this pair.
+    let inks = r.columns.compactMap { c in c.threadInkA.flatMap { a in c.threadInkB.map { a > 0 ? $0 / a : 1 } } }
     let detail = r.pass
-      ? "\(pct(r.ratio)) of the pixels differ (tolerance \(pct(r.tolerance))); \(r.columns.count) column(s) within their boxes; \(pct(Double(r.masked) / Double(max(1, r.compared + r.masked)))) masked (clocks)"
+      ? "\(pct(r.ratio)) of the pixels outside the threads differ (tolerance \(pct(r.tolerance))); \(r.columns.count) column(s) within their boxes"
+        + (inks.min().map { ", threads drawn \(Int(($0 * 100).rounded())) % or more of the champion's" } ?? "")
+        + "; \(pct(Double(r.masked) / Double(max(1, r.compared + r.masked + (r.threads ?? 0))))) masked (clocks)"
       : r.reasons.joined(separator: "; ")
     return GuardResult(name: Guards.snapshotDiff, pass: r.pass, detail: detail, artifacts: artifacts, value: r.ratio, limit: r.tolerance, review: r.pass ? nil : true)
   }
