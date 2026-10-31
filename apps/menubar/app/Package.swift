@@ -48,5 +48,6 @@ let package = Package(
     // Checks the port against packages/bot-avatar/fixtures (golden bots and the catalog), read in place.
     .testTarget(name: "CapcomdBotTests", dependencies: ["CapcomdBot"]),
     // Fixtures/ holds hand-made xctrace exports, read in place.
-    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore", .product(name: "PerfLoopProbe", package: "perfloop")], exclude: ["Fixtures"]),
+    // CapcomdDesk for its knobs' defaults (no window is made).
+    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore", "CapcomdDesk", .product(name: "PerfLoopProbe", package: "perfloop")], exclude: ["Fixtures"]),
   ])

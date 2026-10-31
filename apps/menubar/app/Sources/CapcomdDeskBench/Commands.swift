@@ -138,8 +138,9 @@ import DeskBenchKit
       } catch { return .failure(.harness("couldn't read the baseline: \(error)")) }
     }
     if o.holdSeconds > 0 { await h.sleep(ms: o.holdSeconds * 1000) }
-    let result = BenchResult(tool: tool(), scenario: spec.name, fixture: o.fixture, params: runParams, startedAt: startedAt, durationMs: Stats.round((CACurrentMediaTime() - began) * 1000, 0),
+    var result = BenchResult(tool: tool(), scenario: spec.name, fixture: o.fixture, params: runParams, startedAt: startedAt, durationMs: Stats.round((CACurrentMediaTime() - began) * 1000, 0),
                              machine: machine, noise: noise, window: windowState, reps: repResults, summary: summary, budget: budget, comparison: comparison, artifacts: artifacts, profiled: o.profiled)
+    result.knobs = DeskKnobs.vector
     h.closeWindow()
     return .success(result)
   }
@@ -166,29 +167,33 @@ enum Commands {
     return ((try? JSONOut.decode(BenchResult.self, from: data)), p.terminationStatus, text)
   }
 
-  /// A and B alternate, one process each, `reps` times a side; the medians are compared with the noise band.
-  static func ab(a: String, b: String, scenario: String, fixture: String, reps: Int, params: [String], activate: Bool = true, objective: Objective? = nil) throws -> (ABResult, Int) {
+  /// A and B alternate, one process each, `reps` times a side; the medians are compared with the noise band. `envA` and
+  /// `envB` go into each side's environment (PERFLOOP_KNOBS: two knob settings of one binary).
+  static func ab(a: String, b: String, scenario: String, fixture: String, reps: Int, params: [String], activate: Bool = true, objective: Objective? = nil,
+                 envA: [String: String] = [:], envB: [String: String] = [:]) throws -> (ABResult, Int) {
     guard let spec = Scenarios.spec(scenario) else { throw CLIError.usage("unknown scenario '\(scenario)'") }
     var ra: [RepResult] = [], rb: [RepResult] = []
     var failures: [String] = []
-    var builds: [String: BuildInfo] = [:]
+    var builds: [String: BuildInfo] = [:], knobs: [String: [String: String]] = [:]
     for i in 0..<reps {
       for (label, exe) in [("A", a), ("B", b)] {
         var args = ["run", scenario, "--fixture", fixture, "--reps", "1", "--json", "--quiet-check", "0", "--variant", label]
         for p in params { args += ["--set", p] }
         if !activate { args.append("--no-activate") }
         FileHandle.standardError.write(Data("ab: \(label) rep \(i + 1)/\(reps)\n".utf8))
-        let (r, code, text) = try child(exe, args)
+        let (r, code, text) = try child(exe, args, env: label == "A" ? envA : envB)
         guard let r else { failures.append("\(label) rep \(i): exit \(code): \(text.prefix(300))"); continue }
         if label == "A" { ra += r.reps } else { rb += r.reps }
         if let b = r.tool.build { builds[label] = b }
+        if let k = r.knobs { knobs[label] = k }
       }
     }
     let c = ra.isEmpty || rb.isEmpty ? nil : Comparison(spec, objective: objective, baseline: ra, candidate: rb)
     let used = c.flatMap { Objective(argument: $0.objective) } ?? objective ?? .default(for: spec)
     let res = ABResult(scenario: scenario, fixture: fixture, a: a, b: b, repsPerSide: reps, summaryA: Summary(reps: ra, objective: used), summaryB: Summary(reps: rb, objective: used),
                        comparison: c?.rows ?? [], failures: failures, regression: c?.regression ?? false, improvement: c?.improvement ?? false,
-                       objective: used.metric, guardsFailed: c?.guardsFailed ?? [], notes: c?.notes ?? [], buildA: ra.isEmpty ? nil : builds["A"], buildB: rb.isEmpty ? nil : builds["B"])
+                       objective: used.metric, guardsFailed: c?.guardsFailed ?? [], notes: c?.notes ?? [], buildA: ra.isEmpty ? nil : builds["A"], buildB: rb.isEmpty ? nil : builds["B"],
+                       knobsA: knobs["A"], knobsB: knobs["B"])
     return (res, failures.count == reps * 2 ? ExitCode.harness : res.regression ? ExitCode.regression : ExitCode.ok)
   }
 
@@ -204,9 +209,15 @@ enum Commands {
     var guardsFailed: [String]?
     var notes: [String]?
     var buildA: BuildInfo?, buildB: BuildInfo?
+    /// Each side's knob vector, as its runs reported it.
+    var knobsA: [String: String]?, knobsB: [String: String]?
     var text: String {
       var o = ["ab \(scenario) on \(fixture): \(repsPerSide) reps a side, decided on \(objective ?? "?")",
                "  A: \(a)" + (buildA.map { "  [\($0.line)]" } ?? ""), "  B: \(b)" + (buildB.map { "  [\($0.line)]" } ?? "")]
+      if let ka = knobsA, let kb = knobsB, ka != kb {
+        let differ = Set(ka.keys).union(kb.keys).filter { ka[$0] != kb[$0] }.sorted()
+        o.append("  knobs: " + differ.map { "\($0) A=\(ka[$0] ?? "-") B=\(kb[$0] ?? "-")" }.joined(separator: ", "))
+      }
       o += Commands.rows(comparison)
       for n in notes ?? [] { o.append("  note: " + n) }
       func line(_ s: Summary) -> String { Commands.medians(s) }

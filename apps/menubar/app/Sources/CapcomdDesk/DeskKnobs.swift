@@ -24,13 +24,13 @@ package enum DeskKnobs {
                                           summary: "off-screen columns built per frame after a project opens (heads-first open), nearest first",
                                           since: "0.7")
 
-  /// Every knob, made (and so registered) first.
-  package static var all: [KnobInfo] { register(); return Knobs.registered }
-  /// The full knob vector this process runs with, defaults included.
-  package static var vector: [String: String] { register(); return Knobs.vector }
+  /// Every knob of the window. A new knob goes here too, or `describe` won't list it.
+  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame] }
+  /// What `describe` lists, by name.
+  package static var all: [KnobInfo] { knobs.map(\.info).sorted { $0.name < $1.name } }
+  /// The full knob vector this process runs with, defaults included (a result's `knobs`).
+  package static var vector: [String: String] { Dictionary(uniqueKeysWithValues: knobs.map { ($0.info.name, $0.valueText) }) }
   /// What is wrong with PERFLOOP_KNOBS: a name no knob has, a value a knob refused (it then runs with its default).
-  package static var problems: [String] { register(); return Knobs.problems }
-
-  private static func register() { _ = reelSlide; _ = buildPerFrame }
+  package static var problems: [String] { _ = knobs; return Knobs.problems }
 }
 #endif

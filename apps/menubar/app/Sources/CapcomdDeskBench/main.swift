@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
+import CapcomdDesk
 import DeskBenchKit
+import PerfLoopProbe
 
 // CapcomdDeskBench: the desktop window's performance and debugging harness, for coding agents. `deskbench help`.
 // Stable subcommands, --json everywhere, documented schema (DeskBenchKit/Results.swift), exit codes in ExitCode.
@@ -12,6 +14,9 @@ deskbench: performance and debugging harness for the capcomd desktop window (app
 
 commands
   list [scenarios|fixtures|budgets] [--json]     what can be run, and the SPEC §1 budget each scenario maps to
+  describe [--json]                               the perfloop.manifest/1: build, scenarios with objective and guards,
+                                                  fixtures, knobs, hosts (what a generic runner reads)
+  knobs [--json]                                  the runtime knobs this process would run with (PERFLOOP_KNOBS, --knob)
   fixture <name> [--json]                         describe a fixture: projects, agents, items, asks
   run <scenario> [options]                        drive one scenario in-process on a fixture, judge it against its budget
   suite [options]                                 every scenario in turn; one line each, exit non-zero if any fails
@@ -23,6 +28,8 @@ commands
                                                   profile JSON), ms per step: what grew, what shrank (also `trace --diff a b`)
   ab --a EXE --b EXE <scenario> [--reps N] [--objective O]
                                                   alternate two builds of this bench, compare medians within the noise
+  ab <scenario> --a-knobs K --b-knobs K [--a EXE]  the same, one binary (this one unless --a/--b) with two knob settings,
+                                                  K = name=value[,name=value] on top of --knob and PERFLOOP_KNOBS
   compare <baseline.json> <candidate.json> [--objective O]
                                                   regression check between two saved results of the same scenario
   explain <result.json>                           a saved result as text: verdict, numbers, longest stretches, causes
@@ -33,6 +40,8 @@ run options
   --fixture NAME        solo | trio | crew17 (default) | crew17-long | swarm64
   --reps N              repetitions (default 3; medians are reported, one rep proves nothing)
   --set key=value       a scenario parameter (see `list --json` → params)
+  --knob name=value     a runtime knob (see `describe`), also `--set knob:name=value`; exported to the window as
+                        PERFLOOP_KNOBS. The result's `knobs` has the full vector, defaults included
   --json                print the result JSON (otherwise the text explanation)
   --out FILE            also write the result JSON here (a baseline for --baseline / compare)
   --baseline FILE       compare against a saved result; exit 4 on a regression beyond the noise band
@@ -66,7 +75,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion"] + SamplerConfig.flags
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "knob", "a-knobs", "b-knobs"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -122,6 +131,10 @@ func kv(_ xs: [String]) -> [String: String] {
     }
     return 0
 
+  case "describe": return KnobArgs.describe(json: json)
+
+  case "knobs": return KnobArgs.show(json: json)
+
   case "fixture":
     guard let name = args.positional.dropFirst().first, let w = Fixtures.make(name) else { err("usage: deskbench fixture <name>  (see `list fixtures`)"); return Int32(ExitCode.usage) }
     struct F: Codable { var spec: FixtureSpec; var runs: [String]; var openRun: String?; var agents: [String: [String]]; var asking: [String: [String]]; var items: [String: Int]; var events: Int; var attachments: Int; var kinds: [String: Int] }
@@ -140,7 +153,7 @@ func kv(_ xs: [String]) -> [String: String] {
     var o = Runner.Options(scenario: args.positional.dropFirst().first ?? "")
     if let f = args.one("fixture") { o.fixture = f }
     if let r = args.one("reps").flatMap(Int.init) { o.reps = r }
-    o.params = kv(args.all("set"))
+    o.params = kv(args.all("set").filter { !KnobArgs.isKnob($0) })
     if let s = args.one("size") { let p = s.lowercased().split(separator: "x"); if p.count == 2, let w = Double(p[0]), let h = Double(p[1]) { o.width = w; o.height = h } }
     o.activate = !args.has("no-activate")
     o.quietCheck = args.one("quiet-check") != "0"
@@ -234,10 +247,23 @@ func kv(_ xs: [String]) -> [String: String] {
     } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
 
   case "ab":
-    guard let a = args.one("a"), let b = args.one("b"), let sc = args.positional.dropFirst().first else { err("usage: deskbench ab --a EXE --b EXE <scenario> [--fixture F] [--reps N]"); return Int32(ExitCode.usage) }
+    // Two builds (--a, --b), or one binary with two knob settings (--a-knobs, --b-knobs; this binary unless --a or --b).
+    let byKnobs = args.has("a-knobs") || args.has("b-knobs")
+    let a = args.one("a") ?? (byKnobs ? args.one("b") ?? Commands.selfPath() : nil), b = args.one("b") ?? (byKnobs ? a : nil)
+    guard let a, let b, let sc = args.positional.dropFirst().first else {
+      err("usage: deskbench ab --a EXE --b EXE <scenario> [--fixture F] [--reps N]\n       deskbench ab <scenario> --a-knobs name=value --b-knobs name=value [--a EXE]"); return Int32(ExitCode.usage)
+    }
+    let ka = KnobArgs.side(args.one("a-knobs")), kb = KnobArgs.side(args.one("b-knobs"))
+    for (exe, k, side) in [(a, ka, "--a-knobs"), (b, kb, "--b-knobs")] where exe == Commands.selfPath() {
+      let p = Knobs.check(k)
+      if !p.isEmpty { err("deskbench: \(side): " + p.joined(separator: "; ")); return Int32(ExitCode.usage) }
+    }
+    if byKnobs && a == b && ka == kb { err("deskbench: --a-knobs and --b-knobs are the same setting: nothing to compare"); return Int32(ExitCode.usage) }
     do {
-      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", reps: args.one("reps").flatMap(Int.init) ?? 5, params: args.all("set"),
-                                      activate: !args.has("no-activate"), objective: objective)
+      // Knobs reach the children in PERFLOOP_KNOBS, never as --set: a side's setting must not be overridden.
+      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", reps: args.one("reps").flatMap(Int.init) ?? 5,
+                                      params: args.all("set").filter { !KnobArgs.isKnob($0) }, activate: !args.has("no-activate"), objective: objective,
+                                      envA: [Knobs.variable: Knobs.format(ka)], envB: [Knobs.variable: Knobs.format(kb)])
       if let p = args.one("out") { try? JSONOut.encode(r).write(toFile: p, atomically: true, encoding: .utf8) }
       out(json ? JSONOut.encode(r) : r.text)
       return Int32(code)
@@ -289,6 +315,13 @@ func kv(_ xs: [String]) -> [String: String] {
 // commands run as a SwiftUI app whose Window scene shows the fixture (the app's own window machinery) unless
 // `--host window` asks for a hand-made NSWindow; `open` always uses one (it needs a fresh window per rep).
 let startup = Args(Array(CommandLine.arguments.dropFirst()))
+KnobArgs.export(startup)   // before anything makes a knob
+// A knob setting this binary refuses runs nothing (it would measure the default under another name), and before any
+// window shows.
+if ["run", "suite", "snapshot", "profile", "ab"].contains(startup.positional.first ?? "") {
+  let p = DeskKnobs.problems
+  if !p.isEmpty { err("deskbench: " + p.joined(separator: "\ndeskbench: ")); exit(Int32(ExitCode.usage)) }
+}
 let sceneCommands = ["run", "suite", "snapshot"]
 let wantsScene = sceneCommands.contains(startup.positional.first ?? "") && (startup.one("host") ?? "scene") == "scene"
   && !(startup.positional.first == "run" && startup.positional.dropFirst().first == "open")
@@ -304,7 +337,7 @@ Task { @MainActor in
 }
 if MainActor.assumeIsolated({ Harness.current != nil }) {
   BenchScene.main()
-} else if startup.positional.first == "selftest" {
+} else if ["selftest", "describe", "knobs"].contains(startup.positional.first ?? "") {
   // Headless: the main run loop without NSApplication (no Dock icon, no window server connection).
   CFRunLoopRun()
 } else {

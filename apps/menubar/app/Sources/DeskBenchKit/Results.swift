@@ -307,6 +307,10 @@ public struct BenchResult: Codable, Sendable, Equatable {
   /// A profiler was attached (`profile`, `--wait-for`): its numbers are the profiler's too, so they are never compared
   /// with an unprofiled run. nil in results from before the flag.
   public var profiled: Bool?
+  /// The runtime knobs this run used (PERFLOOP_KNOBS; CAPABILITIES.md C4), the full vector with defaults included: two
+  /// results compare like for like only when these agree or their difference is the experiment. nil in results from
+  /// before knobs.
+  public var knobs: [String: String]?
   public init(tool: ToolInfo, scenario: String, fixture: String, params: [String: String], startedAt: String, durationMs: Double, machine: Machine, noise: Noise, window: WindowState?,
               reps: [RepResult], summary: Summary, budget: BudgetVerdict, comparison: [Regression]?, artifacts: [String], profiled: Bool = false) {
     self.tool = tool; self.scenario = scenario; self.fixture = fixture; self.params = params; self.startedAt = startedAt; self.durationMs = durationMs
