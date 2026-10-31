@@ -19,8 +19,10 @@ commands
   profile <scenario> --template hitches|time|swiftui [--out DIR]
                                                   run the scenario under xctrace and summarise the trace as JSON/text
   trace <file.trace> [--process NAME] [--json]     summarise an existing trace (hitches, hangs, time profile) the same way
-  ab --a EXE --b EXE <scenario> [--reps N]        alternate two builds of this bench, compare medians within the noise
-  compare <baseline.json> <candidate.json>        regression check between two saved results of the same scenario
+  ab --a EXE --b EXE <scenario> [--reps N] [--objective O]
+                                                  alternate two builds of this bench, compare medians within the noise
+  compare <baseline.json> <candidate.json> [--objective O]
+                                                  regression check between two saved results of the same scenario
   explain <result.json>                           a saved result as text: verdict, numbers, longest stretches, causes
   help
 
@@ -38,9 +40,14 @@ run options
   --host scene|window   scene (default): the window comes from a SwiftUI Window scene, as in the app; window: an NSWindow
                         made by hand (the default for `open`, which needs a fresh window per rep)
   --hold S              keep the window up S seconds after the run (to look at it)
-  --wait-for FILE       show the window, then wait until FILE exists before running (what `profile` uses to attach)
+  --wait-for FILE       show the window, then wait until FILE exists before running (what `profile` uses to attach);
+                        FILE.done appears when the reps are done. The result is marked profiled
+  --objective O         what --baseline, ab and compare decide on: cpu (main-thread CPU ms per step; the default) |
+                        instructions (per step, the least noisy) | frames (late frame ms per second) | latency (the
+                        default for open, switch, follow). Frame metrics are guards: worse beyond their band also fails
 
 exit codes  0 pass · 1 usage · 2 harness error · 3 budget failed · 4 regression beyond noise · 5 untrusted (failed on a noisy machine: run again)
+            6 refused (a profiled result in a comparison)
 """
 
 struct Args {
@@ -52,7 +59,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host"]
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective"]
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -76,17 +83,23 @@ func kv(_ xs: [String]) -> [String: String] {
   let args = Args(argv)
   guard let cmd = args.positional.first else { out(help); return Int32(ExitCode.usage) }
   let json = args.has("json")
+  var objective: Objective?
+  if let s = args.one("objective") {
+    guard let o = Objective(argument: s) else { err("deskbench: --objective must be one of \(Objective.allCases.map(\.rawValue).joined(separator: ", "))"); return Int32(ExitCode.usage) }
+    objective = o
+  }
   switch cmd {
   case "help", "-h", "--help": out(help); return 0
 
   case "list":
     let what = args.positional.dropFirst().first ?? "all"
     if json {
-      struct L: Codable { var scenarios: [ScenarioSpec]; var fixtures: [FixtureSpec]; var suite: [String]; var exitCodes: [String: Int] }
-      out(JSONOut.encode(L(scenarios: Scenarios.all, fixtures: Fixtures.all, suite: Scenarios.suite,
-                           exitCodes: ["ok": 0, "usage": 1, "harness": 2, "budget": 3, "regression": 4, "untrusted": 5])))
+      struct L: Codable { var tool: ToolInfo; var scenarios: [ScenarioSpec]; var fixtures: [FixtureSpec]; var suite: [String]; var exitCodes: [String: Int] }
+      out(JSONOut.encode(L(tool: Runner.tool(), scenarios: Scenarios.all, fixtures: Fixtures.all, suite: Scenarios.suite,
+                           exitCodes: ["ok": 0, "usage": 1, "harness": 2, "budget": 3, "regression": 4, "untrusted": 5, "refused": 6])))
       return 0
     }
+    out("deskbench \(Runner.build.line)")
     if what == "all" || what == "scenarios" || what == "budgets" {
       out("scenarios (→ SPEC §1 budget):")
       for s in Scenarios.all {
@@ -129,6 +142,8 @@ func kv(_ xs: [String]) -> [String: String] {
     o.holdSeconds = args.one("hold").flatMap(Double.init) ?? 0
     o.variant = args.one("variant")
     o.host = Harness.current != nil ? "scene" : "window"
+    o.profiled = args.has("profiled") || o.waitFor != nil
+    o.objective = objective
     if cmd == "run" {
       guard !o.scenario.isEmpty else { err("usage: deskbench run <scenario> [options]"); return Int32(ExitCode.usage) }
       switch await Runner.run(o) {
@@ -154,8 +169,7 @@ func kv(_ xs: [String]) -> [String: String] {
         if !json {
           let s = r.summary
           var line = "\(r.verdict.uppercased().padding(toLength: 10, withPad: " ", startingAt: 0)) \(name.padding(toLength: 8, withPad: " ", startingAt: 0))"
-          if let l = s.latencyMs { line += " latency \(l.median) ms (p95 \(l.p95))" }
-          line += "  late frames \(s.lateFrames.median)/rep  frame p95 \(s.frameP95Ms.median) ms  longest stretch \(s.longestStretchMs.median) ms"
+          line += "  " + Commands.medians(s)
           if !r.budget.pass { line += "\n           " + r.budget.reasons.joined(separator: "\n           ") }
           out(line)
         }
@@ -210,7 +224,8 @@ func kv(_ xs: [String]) -> [String: String] {
   case "ab":
     guard let a = args.one("a"), let b = args.one("b"), let sc = args.positional.dropFirst().first else { err("usage: deskbench ab --a EXE --b EXE <scenario> [--fixture F] [--reps N]"); return Int32(ExitCode.usage) }
     do {
-      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", reps: args.one("reps").flatMap(Int.init) ?? 5, params: args.all("set"), activate: !args.has("no-activate"))
+      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", reps: args.one("reps").flatMap(Int.init) ?? 5, params: args.all("set"),
+                                      activate: !args.has("no-activate"), objective: objective)
       if let p = args.one("out") { try? JSONOut.encode(r).write(toFile: p, atomically: true, encoding: .utf8) }
       out(json ? JSONOut.encode(r) : r.text)
       return Int32(code)
@@ -218,17 +233,27 @@ func kv(_ xs: [String]) -> [String: String] {
 
   case "compare":
     let files = Array(args.positional.dropFirst())
-    guard files.count == 2 else { err("usage: deskbench compare <baseline.json> <candidate.json>"); return Int32(ExitCode.usage) }
+    guard files.count == 2 else { err("usage: deskbench compare <baseline.json> <candidate.json> [--objective cpu|instructions|frames|latency]"); return Int32(ExitCode.usage) }
     do {
       let a = try JSONOut.decode(BenchResult.self, from: Data(contentsOf: URL(fileURLWithPath: files[0])))
       let b = try JSONOut.decode(BenchResult.self, from: Data(contentsOf: URL(fileURLWithPath: files[1])))
       guard a.scenario == b.scenario, let spec = Scenarios.spec(a.scenario) else { err("the results are for different scenarios (\(a.scenario) vs \(b.scenario))"); return Int32(ExitCode.usage) }
-      let regs = Runner.compare(spec, baseline: a.reps, candidate: b.reps)
-      struct C: Codable { var schema = "deskbench.compare/1"; var scenario: String; var baseline: String; var candidate: String; var comparison: [Regression]; var regression: Bool }
-      let c = C(scenario: a.scenario, baseline: files[0], candidate: files[1], comparison: regs, regression: regs.contains { $0.regression })
+      if a.profiled == true || b.profiled == true {
+        err("deskbench: \(a.profiled == true ? files[0] : files[1]) was recorded under a profiler; profiled runs are never compared (the profiler's cost is in the numbers)")
+        return Int32(ExitCode.refused)
+      }
+      let cmp = Comparison(spec, objective: objective, baseline: a.reps, candidate: b.reps)
+      struct C: Codable {
+        var schema = "deskbench.compare/1"; var scenario: String; var baseline: String; var candidate: String; var comparison: [Regression]; var regression: Bool
+        var objective: String; var improvement: Bool; var guardsFailed: [String]; var notes: [String]; var buildA: BuildInfo?; var buildB: BuildInfo?
+      }
+      let c = C(scenario: a.scenario, baseline: files[0], candidate: files[1], comparison: cmp.rows, regression: cmp.regression, objective: cmp.objective,
+                improvement: cmp.improvement, guardsFailed: cmp.guardsFailed, notes: cmp.notes, buildA: a.tool.build, buildB: b.tool.build)
       if json { out(JSONOut.encode(c)) } else {
-        out("compare \(a.scenario): \(files[0]) → \(files[1])")
-        for r in regs { out("  \(r.regression ? "✗ REGRESSION" : r.improvement ? "✓ better" : "· same") \(r.reason)") }
+        out("compare \(a.scenario): \(files[0]) → \(files[1]), decided on \(cmp.objective)")
+        for (f, r) in [(files[0], a), (files[1], b)] { out("  \(f): \(r.tool.build?.line ?? r.tool.commit ?? "unknown build (no stamp)")") }
+        Commands.rows(cmp.rows).forEach(out)
+        for n in cmp.notes { out("  note: " + n) }
         if !a.noise.quiet || !b.noise.quiet { out("  (one of the runs was on a noisy machine)") }
       }
       return Int32(c.regression ? ExitCode.regression : ExitCode.ok)

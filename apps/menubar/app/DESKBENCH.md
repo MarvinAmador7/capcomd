@@ -14,7 +14,7 @@ result into the sentences you would otherwise have to work out.
 cd apps/menubar/app
 swift build -c release --product CapcomdDeskBench      # ~3 min the first time; always bench a release build
 B=.build/release/CapcomdDeskBench
-$B list                                                 # scenarios → budgets, fixtures
+$B list                                                 # this build's commit, scenarios → budgets, fixtures
 $B run step --fixture crew17 --reps 5                   # one scenario, text verdict (add --json for the result)
 $B suite --reps 3 --out /tmp/bench                      # everything, one line each; JSON per scenario in /tmp/bench
 $B snapshot --out /tmp/snap                             # window.png + window.json (view tree, scroll geometry, model)
@@ -24,11 +24,18 @@ $B profile step --template hitches --out /tmp/prof      # the same run under Ins
 Debug builds are 5–20× slower in SwiftUI's own code and will fail every budget: the result says `"configuration":
 "debug"` so you can tell, but don't quote those numbers.
 
+Every result says which binary made it: `tool.build` (perfloop.build/1) has the commit, whether the package's tracked
+sources had uncommitted changes (`dirty`), a hash of those sources (`sourceHash`: two clean builds of one commit
+agree), the build time, configuration, Xcode, and the executable's own `hash`. The `BuildStamp` plugin
+(`Plugins/BuildStamp`) compiles that into the binary before every build, so a copied binary run from anywhere still
+reports its own commit; `tool.commit` is the same commit. Built without git (a tarball), `commit` is null and `dirty`
+true. Results from before the stamp have no `build` and often no `commit`.
+
 ## When to use what
 
 | You want to know | Run | Read |
 |---|---|---|
-| Is the reel smooth / did my change hurt it? | `run step` (or `jump`, `fling`) `--reps 5` | `verdict`, `summary.lateFrames`, `summary.longestStretchMs`, then the stretches |
+| Is the reel smooth / did my change hurt it? | `run step` (or `jump`, `fling`) `--reps 5` | `verdict`, `summary.hitchTimeRatioMsPerS`, `summary.mainThreadCpuMsPerStep`, `summary.longestStretchMs`, then the stretches |
 | Does the window open / switch fast enough? | `run open`, `run switch` | `summary.latencyMs.median` vs the budget (100 / 50 ms) |
 | Does a thread item re-render only its column? | `run burst` | `checks` named `isolation-*`; `reps[].steps[].notes` has the counts |
 | Does typing stay inside the composer? | `run typing` | `checks` `isolation`; which views leaked is in the detail |
@@ -37,11 +44,12 @@ Debug builds are 5–20× slower in SwiftUI's own code and will fail every budge
 | Which views re-rendered when X happened? | any `run`, look at `reps[].steps[].bodies` and `worstStretches[].bodies` | per view type; `Column`, `EntryRow` etc. carry the agent id internally for the isolation checks |
 | What ran inside a long stretch (stacks)? | `profile <scenario> --template time` | `timeProfile.burstFrames` (what the ≥16 ms bursts were doing), `inclusiveOurs` |
 | What did the compositor count as hitches? | `profile <scenario> --template hitches` | `hitches.hitches`, `causes`, `potentialHangsMs` |
-| Did commit B regress commit A? | build both, `ab --a A/CapcomdDeskBench --b B/CapcomdDeskBench step --reps 5` | the `comparison` lines; exit 4 on a regression beyond noise |
+| Did commit B regress commit A? | build both, `ab --a A/CapcomdDeskBench --b B/CapcomdDeskBench step --reps 5` | the `[objective]` and `[guard]` lines; exit 4 on a regression beyond noise |
 | Gate in a script | `run … --baseline saved.json` or `compare a.json b.json` | exit code |
 
 Exit codes: `0` pass · `1` usage · `2` harness error · `3` budget failed · `4` regression beyond noise · `5` untrusted
-(the budget failed **and** the machine was noisy: the run says nothing about the reel; run it again when quiet).
+(the budget failed **and** the machine was noisy: the run says nothing about the reel; run it again when quiet) ·
+`6` refused (a profiled result was given to `compare` or `--baseline`).
 
 Two hosts (`--host`): `scene` (default) runs the bench as a SwiftUI app whose `Window` scene shows the fixture — the
 app's own NSWindow subclass, hosting view and toolbar handling, so what the app pays, the bench pays; `window` makes an
@@ -60,7 +68,8 @@ way `profile` does.
   process-launch number.
 - `switch`: `model.open(project:)` between the two largest projects → the frame showing the new columns. Budget 50 ms.
 - `step` / `jump`: animated scrolls as a crew-tab click does (one screen at a time; first ↔ last). Budget: no late frame
-  while the reel moves, no main-thread stretch over a frame.
+  while the reel moves (judged as late frame time: `hitchTimeRatioMsPerS` must be 0), no main-thread stretch over a
+  frame.
 - `fling`: a swipe with momentum, see *Fidelity* below. Also checks the reel rested on a column edge.
 - `burst`: thread items for one on-screen agent at N/s (default 20/s for 3 s), standing still and then while stepping.
   Passes when no other column's thread, no `Column`/`ColumnHead`/`CrewTab`/`TitleBar` body ran.
@@ -77,6 +86,7 @@ images as attachments, one or more pending asks). `fixture <name>` describes one
 
 ```
 step on crew17: PASS  (5 reps, 9800 ms, 120 Hz, release)
+build: 9bcd41a · release · built 2026-10-30T15:31:02Z
 budget: Reel scroll: no dropped frames at 120 Hz with 17 agents
 rule:   no late frame while the reel moves; no stretch over 16.7 ms during a step
   ✓ met
@@ -84,7 +94,9 @@ noise: quiet (idle: 0/120 late frames, longest idle stretch 2.1 ms, load/core 0.
 
 numbers (medians across reps):
   settle        median 412.0 ms  max 440.1 ms
-  frames        p95 8.41 ms  p99 8.6 ms  late 0.0/rep (max 1.0)  dropped 0.0/rep
+  objective     mainThreadCpuMsPerStep 41.2 (min 39.8, max 44.0, n=5)
+  per step      main-thread cpu 41.2 ms (mad 0.9)  instructions 61.20 M (mad 0.01 M)
+  frames        late frame time 0.0 ms/s (max 1.2)  display at 120 Hz  p95 8.41 ms  p99 8.6 ms  late 0.0/rep (max 1.0)  dropped 0.0/rep
   main thread   longest 6.9 ms (max 11.2)  >16.7 ms: 0.0/rep  >100 ms: 0.0/rep
   bodies/rep    Column 136  CrewTab 128  Reel 8  OpenGroup 8
 
@@ -92,7 +104,16 @@ longest main-thread stretches (what SwiftUI evaluated inside each):
      11.2 ms  during step#3 9→12  Column×17 CrewTab×16 OpenGroup×1
 ```
 
-- **frames**: display-link ticks on the main thread while a step ran. `steadyHz` is the rate the display actually ran
+- **objective** and **per step**: the numbers `ab`, `compare` and `--baseline` decide on (see *Comparing two builds*).
+  `mainThreadCpuMsPerStep` is the main thread's CPU time over the steps' stretches (`thread_info`) divided by the
+  steps; `instructionsPerStep` is the instructions the process retired during the steps (`proc_pid_rusage`, all
+  threads; null where the counters read zero, as in a VM). Both are rate-invariant and far less noisy than wall
+  time on a busy machine: the instruction count varied 0.01 % across identical work where wall time varied 9–15 %.
+- **frames**: display-link ticks on the main thread while a step ran. **Late frame time** (`hitchTimeRatioMsPerS`) is
+  the sum, over intervals longer than 1.5× the steady frame, of how much longer they were than one frame, per second
+  of scenario: ms of lateness per second, the same whatever rate the panel ran at and however long the scenario was
+  (Apple's bands: under 5 good, 5–10 noticeable, over 10 act). It is what the budgets and the frame guard use; the
+  counts below are kept and printed but never decide. `steadyHz` is the rate the display actually ran
   at (the fastest quartile of intervals, snapped to a panel rate: a ProMotion panel idles at 24–48 Hz and the bench
   asks for its top rate, but a main thread that can't keep up pulls it down); `late` = an interval over 1.5× that frame;
   `lateAtNominal` judges against the panel's top rate; `dropped` = how many frames the late intervals spanned. This is
@@ -112,9 +133,11 @@ longest main-thread stretches (what SwiftUI evaluated inside each):
   says whether that held. **One run proves nothing on a shared machine**; use `--reps 5` and medians, or `ab`.
 
 JSON: `BenchResult` in `Results.swift`. The useful paths: `.verdict`, `.exitCode`, `.budget.reasons[]`,
-`.summary.{latencyMs,lateFrames,frameP95Ms,longestStretchMs,bodies}`, `.reps[].steps[]` (per step: `latencyMs`,
-`settleMs`, `frames`, `mainThread`, `bodies`, `notes`), `.reps[].checks[]`, `.reps[].worstStretches[]`,
-`.noise`, `.window`, `.machine`, `.comparison[]`.
+`.summary.{objective,mainThreadCpuMsPerStep,instructionsPerStep,hitchTimeRatioMsPerS,latencyMs,longestStretchMs,bodies}`
+(and the frame counts `lateFrames`, `frameP95Ms`), `.reps[].steps[]` (per step: `latencyMs`, `settleMs`, `cpuMs`,
+`instructions`, `frames` with `hitchTimeRatioMsPerS`, `mainThread`, `bodies`, `notes`), `.reps[].checks[]`,
+`.reps[].worstStretches[]`, `.noise`, `.window`, `.machine`, `.tool.build`, `.profiled`, `.comparison[]` (each row
+with its `role`). Fields are only ever added: older results still decode, with the new ones absent.
 
 ## Comparing two builds
 
@@ -129,18 +152,30 @@ swift build -c release --product CapcomdDeskBench
   --b .build/release/CapcomdDeskBench step --reps 5
 ```
 
-`ab` runs A, B, A, B … one process each, then compares medians per metric (`lateFrames`, `frameP95Ms`,
-`longestStretchMs`, `stretchesOver16`; `latencyMs` for latency scenarios). A difference is a regression only when it is
-outside a band of max(1.48 × MAD of either side, 10–25 % of the baseline, an absolute floor of a couple of frames/ms).
-Same-source A/B (`--a X --b X`) is the way to see the band on a given day.
+`ab` runs A, B, A, B … one process each, then compares medians, row by row, each row with a role:
+
+- `[objective]`: the one number the verdict climbs on, lower is better. `--objective cpu` (main-thread CPU ms per
+  step; the default), `instructions` (per step: the least noisy, use it when the CPU band is wide), `frames` (late
+  frame time) or `latency` (the default for `open`, `switch`, `follow`). If the asked-for one is missing on a side
+  (counters read zero, a pre-stamp bench), it falls back to CPU and a note says so.
+- `[guard]`: late frame time and the longest stretch may not get worse beyond their band, whatever the objective.
+- `[info]`: everything else (the other objectives, `lateFrames`, `frameP95Ms`, `stretchesOver16`), printed, never
+  deciding: frame counts swing with the machine and the panel's rate.
+
+A difference counts only outside a band of max(1.48 × MAD of either side, a floor: 5 % for CPU and instructions,
+15–25 % for latency and frames, an absolute floor of a few ms). Exit 4 when the objective or a guard is worse;
+`improvement` when the objective is better and no guard is worse. Same-source A/B (`--a X --b X`) is the way to see the
+band on a given day. The result carries both binaries' `build` blocks.
 
 To gate on a saved baseline instead: `run step --json --out base.json` on the good commit, later
-`run step --baseline base.json` (exit 4 on regression) or `compare base.json new.json`.
+`run step --baseline base.json` (exit 4 on regression) or `compare base.json new.json`; both take `--objective`.
 
 ## Profiling without reading XML
 
 `profile <scenario> --template hitches|time|swiftui --out DIR` spawns the bench as a child, lets it show the window,
-attaches `xctrace record` to its pid, then signals it to run, exports the tables and summarises them:
+attaches `xctrace record` to its pid, waits for xctrace to say it is recording, then signals the child to run. When the
+child's reps are done it stops the recording with SIGINT (xctrace saves, as on Ctrl-C), so the trace covers every
+step; `--seconds S` is only a safety limit (default 600). Then it exports the tables and summarises them:
 
 - `hitches`: count, total/max ms, hitches ≥ 16 ms, Instruments' "potential issue" per hitch, potential hangs.
 - `time`: main-thread samples; ≥ 16 ms bursts and what ran inside them (our symbols and the SwiftUI/AppKit hot spots:
@@ -148,7 +183,14 @@ attaches `xctrace record` to its pid, then signals it to run, exports the tables
 - `swiftui`: whatever view tables the installed Instruments exports (they vary by Xcode version; the result lists the
   schemas it saw if it recognised none).
 
-The `.trace` stays in DIR for Instruments.app; the child's own in-process result is in the JSON under `inProcess`.
+The `.trace` stays in DIR for Instruments.app; the child's own in-process result is in the JSON under `inProcess`,
+marked `"profiled": true`: a profiler's cost is in those numbers, so `compare` and `--baseline` refuse them (exit 6).
+`run --wait-for` (attaching a profiler by hand) marks its result the same way.
+
+**Traces are private.** A `.trace` can hold the recorded process's environment (tokens included) and your paths.
+`profile` launches the child and xctrace with an allowlisted environment (`HOME`, `PATH`, `USER`, `TMPDIR`, locale,
+`DESKBENCH_*` …) and prints a warning with the trace's path (louder when it is inside a git checkout). Never commit,
+publish or attach a trace to an issue; keep `--out` outside the repo (`*.trace` is gitignored here as a backstop).
 The bench emits `os_signpost` intervals (`dev.capcomd.deskbench`, points of interest, one interval named `step` per
 scenario step with the step's name as its message), so steps line up on the Instruments timeline.
 

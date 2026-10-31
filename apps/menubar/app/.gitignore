@@ -1,1 +1,5 @@
 .build/
+# Instruments traces hold the recorded process's environment and paths (tokens included): never commit them.
+*.trace
+deskbench-profile/
+deskbench-snapshot/

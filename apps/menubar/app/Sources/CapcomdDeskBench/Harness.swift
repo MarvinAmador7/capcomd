@@ -213,23 +213,25 @@ import DeskBenchKit
 
   // MARK: steps
 
-  struct Marker { var name: String; var at: Double; var tick: Int; var stretch: Int; var body: Int; var state: OSSignpostIntervalState }
+  struct Marker { var name: String; var at: Double; var tick: Int; var stretch: Int; var body: Int; var state: OSSignpostIntervalState; var instructions: UInt64? }
 
   func begin(_ name: String) -> Marker {
     let id = signposter.makeSignpostID()
     let st = signposter.beginInterval("step", id: id, "\(name, privacy: .public)")
     log.debug("step begin \(name, privacy: .public)")
-    return Marker(name: name, at: now(), tick: ticks.count, stretch: stretches.count, body: bodies.count, state: st)
+    // The counter last, so the step's own bookkeeping isn't in it.
+    return Marker(name: name, at: now(), tick: ticks.count, stretch: stretches.count, body: bodies.count, state: st, instructions: ProcessCounters.instructions())
   }
 
   func end(_ m: Marker, latencyMs: Double? = nil, settleMs: Double? = nil, notes: [String] = []) -> StepResult {
+    let instructions = ProcessCounters.instructions().flatMap { b in m.instructions.map { b > $0 ? Int(b - $0) : 0 } }
     signposter.endInterval("step", m.state)
     let end = now()
     let its = intervals(from: m.tick)
     let st = stretches[m.stretch...]
     return StepResult(name: m.name, atMs: Stats.round(m.at, 1), durationMs: Stats.round(end - m.at, 1), latencyMs: latencyMs.map { Stats.round($0, 2) }, settleMs: settleMs.map { Stats.round($0, 1) },
                       frames: FrameStats(intervalsMs: its, nominalHz: nominalHz), mainThread: MainThreadStats(stretchesMs: st.map(\.dur), cpuMs: st.map(\.cpu)),
-                      bodies: count(bodies[m.body...]), notes: notes)
+                      bodies: count(bodies[m.body...]), notes: notes, cpuMs: Stats.round(st.reduce(0) { $0 + $1.cpu }, 2), instructions: instructions.flatMap { $0 > 0 ? $0 : nil })
   }
 
   func intervals(from tick: Int) -> [Double] {
