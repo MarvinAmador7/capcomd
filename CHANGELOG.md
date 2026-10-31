@@ -18,6 +18,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   late frames measured as ms of lateness per second. `profile` records the whole scenario, marks its results as
   profiled (never compared: exit 6), and warns that `.trace` files hold private data and must never be committed.
   The desktop app's views now live in the `CapcomdDesk` library the app and the bench both link; the app is unchanged.
+- The desktop bench's `ab` is fair to both builds: it runs them in pairs with the order of each pair counterbalanced
+  (`--order random|abba`, `--seed N` to redraw it), waits for a quiet machine before every run (`--quiet-wait`,
+  `--quiet-busy`; it names any build running alongside), and decides on the per-pair differences. `explain` takes a
+  stretch's likely causes from its sampled stacks, and the first step no longer starts inside the setup's work.
+  `deskbench describe [--json]` lists the scenarios, objectives, guards, fixtures and runtime knobs; `--knob
+  name=value` sets a knob (`reel.slide=ca|clip`, `build.perFrame=1..8`), results record every knob's value, and
+  `ab <scenario> --a-knobs … --b-knobs …` compares two knob settings of one binary. A new `perfloop` tool
+  (`tools/perfloop`: `perfloop exp new|screen|full|promote`, `champion`, `store`) keeps a ledger of experiments against the best
+  build so far; `apps/menubar/app/PROGRAM.md` is the procedure an agent follows with it.
 - Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
   or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
   coming back, and whoever awaits it (you, or a parent agent's `capcomd await`) gets its result.
