@@ -34,7 +34,10 @@ let package = Package(
     // The bench's pure parts (fixtures, statistics, budgets, xctrace summaries), tested without a window.
     .target(name: "DeskBenchKit", dependencies: ["CapcomdStore", "CapcomdThread"]),
     // The bench: hosts the desktop window in-process against fixture data and measures it (DESKBENCH.md).
-    .executableTarget(name: "CapcomdDeskBench", dependencies: ["DeskBenchKit", "CapcomdDesk", "CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdUI"]),
+    // BuildStamp embeds the commit, dirty flag and build time, so a copied binary still says what it was built from.
+    .executableTarget(name: "CapcomdDeskBench", dependencies: ["DeskBenchKit", "CapcomdDesk", "CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdUI"],
+                      plugins: ["BuildStamp"]),
+    .plugin(name: "BuildStamp", capability: .buildTool()),
     .testTarget(name: "CapcomdStoreTests", dependencies: ["CapcomdStore", "CapcomdLive", .product(name: "CapcomdClient", package: "client")],
                 resources: [.copy("Fixtures")]),
     // Decodes packages/agent-thread/fixtures/golden (shared with the daemon's own tests) in place.

@@ -82,11 +82,12 @@ func kv(_ xs: [String]) -> [String: String] {
   case "list":
     let what = args.positional.dropFirst().first ?? "all"
     if json {
-      struct L: Codable { var scenarios: [ScenarioSpec]; var fixtures: [FixtureSpec]; var suite: [String]; var exitCodes: [String: Int] }
-      out(JSONOut.encode(L(scenarios: Scenarios.all, fixtures: Fixtures.all, suite: Scenarios.suite,
-                           exitCodes: ["ok": 0, "usage": 1, "harness": 2, "budget": 3, "regression": 4, "untrusted": 5])))
+      struct L: Codable { var tool: ToolInfo; var scenarios: [ScenarioSpec]; var fixtures: [FixtureSpec]; var suite: [String]; var exitCodes: [String: Int] }
+      out(JSONOut.encode(L(tool: Runner.tool(), scenarios: Scenarios.all, fixtures: Fixtures.all, suite: Scenarios.suite,
+                           exitCodes: ["ok": 0, "usage": 1, "harness": 2, "budget": 3, "regression": 4, "untrusted": 5, "refused": 6])))
       return 0
     }
+    out("deskbench \(Runner.build.line)")
     if what == "all" || what == "scenarios" || what == "budgets" {
       out("scenarios (→ SPEC §1 budget):")
       for s in Scenarios.all {

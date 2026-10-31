@@ -5,23 +5,18 @@ import DeskBenchKit
 
 /// Runs one scenario for N repetitions in this process and builds the result.
 @MainActor enum Runner {
-  static func tool() -> ToolInfo {
+  /// What this binary is, from the stamp Plugins/BuildStamp compiled into it (never the cwd's git: a copied binary
+  /// would report whatever checkout it was run from).
+  static let build: BuildInfo = {
     #if DEBUG
     let cfg = "debug"
     #else
     let cfg = "release"
     #endif
-    return ToolInfo(version: "1", commit: gitHead(), configuration: cfg)
-  }
+    return BuildInfo(stamp: generatedBuildStamp, configuration: cfg, hash: BuildInfo.sha256(file: Commands.selfPath()))
+  }()
 
-  static func gitHead() -> String? {
-    let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/git"); p.arguments = ["rev-parse", "--short", "HEAD"]
-    let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
-    guard (try? p.run()) != nil else { return nil }
-    let d = out.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
-    let s = String(decoding: d, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-    return s.isEmpty ? nil : s
-  }
+  static func tool() -> ToolInfo { ToolInfo(version: "1", commit: build.commit, configuration: build.configuration, build: build) }
 
   /// Process start → now, from the kernel's record of this process.
   static func sinceProcessStartMs() -> Double? {
