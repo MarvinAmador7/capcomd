@@ -44,7 +44,7 @@ machine; rerun).
   "fixtures": [ { …FixtureSpec as today…, "parametric": { "agents": [1, 64], "items": [50, 600] } } ],
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"], "since": "0.7" },
              { "name": "build.perFrame", "type": "int", "default": 2, "range": [1, 8] } ],
-  "hosts": [ "scene", "window" ], "defaultHost": "scene",
+  "hosts": [ "scene", "window" ], "defaultHost": "scene", "defaultFixture": "crew17",
   "probes": [ "Column", "ColumnHead", "ColumnThread", "EntryRow", "ColumnComposer", "CrewTab", "TitleBar", "OpenGroup", "Reel", "RootView", "DecisionBar", "FoldedDeck" ],
   "exitCodes": { "ok": 0, … } }
 ```
