@@ -14,12 +14,15 @@ import DeskBenchKit
 
   func int(_ k: String, _ d: Int) -> Int { params[k].flatMap(Int.init) ?? d }
 
-  /// The reel at its first column, not animated, settled.
+  /// The reel at its first column, not animated, settled: the columns built and the threads warmed, so the first step
+  /// starts from the same state as the others (in a one-rep run, as `ab` makes, it otherwise caught a varying part of
+  /// the setup: ±30 % CPU per step on the same build).
   func rewind() async {
     guard let first = h.model.columns.first else { return }
     h.model.scroll(to: first, animated: false)
     _ = await h.nextCommit()
     await h.sleep(ms: 120)
+    if await h.waitQuiet() == nil { h.log.info("rewind: the main thread didn't go quiet within the timeout; the first step may include setup work") }
   }
 
   // MARK: open

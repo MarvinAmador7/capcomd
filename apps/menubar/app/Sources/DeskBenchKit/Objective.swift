@@ -73,7 +73,8 @@ public enum Objective: String, Codable, Sendable, CaseIterable {
 /// summed over the stretches that began inside a step; instructions were process-wide. 2: a stretch runs from the
 /// first observer of a wake-up to the last before the thread sleeps (the commit and AppKit's display cycle included,
 /// not cut at a run-loop exit); CPU and instructions per step are the main thread's own counters between the step's
-/// start and end. CPU and instructions from different measures are not compared.
+/// start and end; the first step starts once the setup (rewinding the reel, building columns, warming threads) has
+/// gone quiet. CPU and instructions from different measures are not compared.
 public let currentMeasure = 2
 
 /// The objective's medians across reps, for `Summary`.
