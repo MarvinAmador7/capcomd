@@ -388,11 +388,17 @@ enum Commands {
       if let t = table("time-profile") { result.timeProfile = ProfileSummary(timeProfile: t, ids: t.ids); result.addCallTrees(timeProfile: t, signposts: table("os-signpost"), process: "CapcomdDeskBench") } else { result.notes.append("no time-profile table") }
       if let h = table("potential-hangs") { result.hitches = HitchSummary(hitches: XCTable.emptyHitches, hangs: h, process: "CapcomdDeskBench") }
     default:
-      // The SwiftUI template's tables vary by Xcode version: take every table whose schema mentions a view or update.
+      // The cause and effect tables (C7's confirmation): root causes by view, the longest updates, the graph's edges.
       let schemas = toc.components(separatedBy: "schema=\"").dropFirst().compactMap { $0.split(separator: "\"").first.map(String.init) }
-      let interesting = Set(schemas.filter { ["view", "swiftui", "update", "body"].contains { $0.lowercased().contains($0) } || $0.lowercased().contains("swiftui") || $0.lowercased().contains("view-body") })
-      result.swiftUI = interesting.sorted().compactMap { table($0) }.map(SwiftUISummary.init)
-      if result.swiftUI?.isEmpty ?? true { result.notes.append("no SwiftUI tables recognised; schemas: \(Set(schemas).sorted().joined(separator: ", "))") }
+      var tables: [String: XCTable] = [:]
+      for name in SwiftUIProfile.tableNames { if let t = table(name) { tables[name] = t } }
+      let s = SwiftUIProfile(tables: tables, process: "CapcomdDeskBench")
+      result.swiftUI = s
+      if tables.isEmpty { result.notes.append("no SwiftUI tables in the trace; schemas: \(Set(schemas).sorted().joined(separator: ", "))") }
+      else if s.empty {
+        let issues = recLog.split(separator: "\n").filter { $0.contains("[Warning]") || $0.contains("[Error]") }.map { $0.trimmingCharacters(in: .whitespaces) }
+        result.notes.append("the SwiftUI tables have no rows" + (issues.isEmpty ? "" : " (xctrace: \(issues.joined(separator: "; ")))") + "; the in-process causes (worstStretches[].causes) are the record")
+      }
       if let t = table("time-profile") { result.timeProfile = ProfileSummary(timeProfile: t, ids: t.ids) }
     }
     if let s = table("os-signpost") {
@@ -445,7 +451,7 @@ enum Commands {
       o.append("  inside the bursts:"); for f in t.burstFrames.prefix(25) { o.append(String(format: "  %6d  %@", f.samples, f.symbol)) }
       o.append("  self top:"); for f in t.selfTop.prefix(10) { o.append(String(format: "  %6d  %@", f.samples, f.symbol)) }
     }
-    if let s = r.swiftUI { for t in s { o.append("swiftui table \(t.table): \(t.rows) rows"); for (k, v) in t.byView.sorted(by: { $0.value > $1.value }).prefix(20) { o.append("  \(v)× \(k)") } } }
+    if let s = r.swiftUI { o += s.lines }
     if let sp = r.signposts { o.append("signposts: " + sp.map { "\($0.key)×\($0.value)" }.sorted().joined(separator: " ")) }
     if r.tree != nil { o.append(Explain.callTreeText(r)) }
     if let ip = r.inProcess { o.append(""); o.append("in-process (same run):"); o.append(Explain.text(ip).split(separator: "\n").prefix(14).joined(separator: "\n")) }

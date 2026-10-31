@@ -179,7 +179,9 @@ public struct ProfileResult: Codable, Sendable, Equatable {
   public var durationS: Double
   public var hitches: HitchSummary?
   public var timeProfile: ProfileSummary?
-  public var swiftUI: [SwiftUISummary]?
+  /// SwiftUI template: rows per table, root causes by view, the longest updates (SwiftUICauses.swift). Profiles from
+  /// before it wrote the list of table summaries here; it reads as `swiftUI.tables`.
+  public var swiftUI: SwiftUIProfile?
   public var signposts: [String: Int]?
   /// The in-process result of the same run (frames, stretches, bodies), when the child wrote one.
   public var inProcess: BenchResult?

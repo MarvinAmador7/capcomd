@@ -201,6 +201,28 @@ Read it with care:
   doesn't forward flags, but the environment reaches its children: `DESKBENCH_SAMPLER=off $B ab …` (or compare CPU).
 - arm64 only (the bench's architecture); elsewhere the sampler is off.
 
+## Why a body ran: causes
+
+The desktop model reports each set of an observed property that drives a body (`Mutations.record("AgentSlice.focused",
+id:)` in `DeskModel.swift`, from PerfLoopProbe; with no sink attached, as in the app, a nil check). The bench charges
+the bodies SwiftUI evaluates to the mutations recorded since the previous update, and every step and long stretch gets
+`causes[]`: each key path with how often it was set (`count`), on how many objects (`ids`), the bodies charged to the
+updates it was part of (`bodies`) and how many distinct objects those were (`objects`). `explain` prints it under each
+stretch and sums the steps:
+
+```
+     38.5 ms wall   37.8 ms cpu  during step#0 0→3  Column×34 CrewTab×4 OpenGroup×2 Reel×2
+             causes: AgentSlice.focused×2 + AgentSlice.onScreen×2 + DeskModel.focusedAgent×1 + … (Column×34 (17 distinct), CrewTab×4 (2 distinct), OpenGroup×2, Reel×2)
+```
+
+`Column×34 (17 distinct)` after a tab click: every column's body ran (twice), in the update that followed the focus
+change. Key paths set in the same update share its bodies and are printed as one group: the record says which
+changes preceded the bodies, not which dependency edge invalidated which view (`@Observable` doesn't say). Bodies
+after no recorded mutation (the environment, layout, a property without a record) show as `(unrecorded)`. A turn is
+an update: one ends where a stretch closes, and mutations whose update SwiftUI defers to a later turn keep their
+bodies. `perfloop causes <result.json>` prints the whole table (all reps, per step, the longest stretches); results
+from before it have no causes. Add a record when you add an observed property that a body reads.
+
 ## Comparing two builds
 
 Noise on this machine has swung identical builds between 26 and 709 hitches in 20 s. Single runs are meaningless;
@@ -283,8 +305,12 @@ step; `--seconds S` is only a safety limit (default 600). Then it exports the ta
 - `hitches`: count, total/max ms, hitches ≥ 16 ms, Instruments' "potential issue" per hitch, potential hangs.
 - `time`: main-thread samples; ≥ 16 ms bursts and what ran inside them (our symbols and the SwiftUI/AppKit hot spots:
   `AG::Graph::propagate_dirty`, `_opaqueFullSizeContentViewRegionWithClipRect`, tracking areas, CoreText…); self top.
-- `swiftui`: whatever view tables the installed Instruments exports (they vary by Xcode version; the result lists the
-  schemas it saw if it recognised none).
+- `swiftui`: the cause and effect tables (`swiftui-updates`, `swiftui-causes`, `swiftui-update-groups`,
+  `swiftui-changes`), as `swiftUI.rows` per table, `rootCauses[]` (each root cause with its updates by view and ms),
+  `longUpdates[]`, the cause graph's `edges` and the `changes`. On this Mac (macOS 27.0.1, Instruments 27.1,
+  Developer Mode off) every one of those tables has come out empty, attached or launched, with xctrace warning "Trace
+  file had no SwiftUI data"; the result says so in `notes`, and the in-process causes are the record. Profiles from
+  before it have `swiftUI` as a list of tables; it reads as `swiftUI.tables`.
 
 The `.trace` stays in DIR for Instruments.app; the child's own in-process result is in the JSON under `inProcess`,
 marked `"profiled": true`: a profiler's cost is in those numbers, so `compare` and `--baseline` refuse them (exit 6).

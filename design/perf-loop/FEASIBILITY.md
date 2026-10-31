@@ -98,7 +98,7 @@ ledger stores paths and summaries (SPEC §4.3).
 | `dladdr` names local shared-cache symbols | Verified (1.3) |
 | `proc_pid_rusage` instructions/cycles without root, CV 0.01 % | Verified (1.2) |
 | CPU Counters template records without root on this Mac | Verified for a plain process (1.4); meaningfulness and stability across OS updates assumed fragile (refs 3, 4) |
-| SwiftUI template exports cause/effect tables | Schemas verified (1.5); row content assumed |
+| SwiftUI template exports cause/effect tables | Schemas verified (1.5); rows: none yet. Phase 3 recorded `step` attached and launched (bare, with get-task-allow, as an .app): every swiftui-* table empty, "Trace file had no SwiftUI data" (Developer Mode was off; cause unconfirmed) |
 | xctrace stops cleanly on SIGINT and saves | Assumed from "Ctrl-C to stop the recording" in its output and the man page (ref 1); verify in Phase 0 |
 | Signpost `step` intervals land in the `os-signpost` table | Mixed: the harness emits them, but two session recordings showed `signposts:` empty; fallback designed (C2) |
 | Compositor hitch time ratio from the `hitches` table | Verified data path (today's `HitchSummary`); the ratio is arithmetic |
