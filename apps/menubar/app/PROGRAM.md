@@ -26,7 +26,9 @@ Start each session with `perfloop session start` and `perfloop exp status`. Then
 1. **Look.** `perfloop exp status` says what is open and what each experiment needs next. The newest
    `~/.perfloop/capcomd-desktop/exp/<id>/explain.txt` says where the candidate's time went (its worst stretch: our
    frames, framework frames and the app frame they ran `under`). For a whole-run picture, `deskbench diff A B` on two
-   time profiles. Pick the largest subtree that is ours or attributable to one of our frames.
+   time profiles. Pick the largest subtree that is ours or attributable to one of our frames. When the stretch is
+   bodies (`Column×34`), its `causes:` line says which model properties were set before them;
+   `perfloop causes <result.json>` prints the whole table, per step.
 2. **Say it in one sentence.** The hypothesis names the subtree and why your change removes it: "the representable
    answers sizeThatFits itself, so Auto Layout never sizes 16 hosting views". One idea per experiment.
 3. **Change the code**, on a work branch, in the app's own sources (`Sources/CapcomdDesk`, `Sources/CapcomdUI`,

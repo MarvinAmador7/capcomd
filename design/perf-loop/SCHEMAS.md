@@ -71,7 +71,8 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
     …as today…,
     "sampler": { "hz": 1000, "samples": 2310, "overheadPct": 0.6, "gateMs": 4 },
     "steps": [ { …as today…, "cpuMs": 38.9, "instructions": 61200000, "hitchTimeRatioMsPerS": 0.0,
-                 "causes": [ { "keyPath": "DeskModel.onScreen", "bodies": { "Column": 17, "CrewTab": 16 } } ],
+                 "causes": [ { "keyPath": "AgentSlice.onScreen", "count": 2, "ids": 2,      // sets, distinct objects
+                               "bodies": { "Column": 34, "CrewTab": 4 }, "objects": { "Column": 17, "CrewTab": 2 } } ],
                  "smoothness": { "positionErrorP95Pt": 0.8, "stalls": 0, "jerkP95": 1.9 } | null } ],
     "worstStretches": [ { …as today…,
                  "stacks": { …tree… } | null,          // folded, symbolised; null when the sampler was off
@@ -98,7 +99,8 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
   "treePerStep": [ { "step": "step#3 9→12", "tree": { …tree… } } ],
   "msPerStep": 312.4, "sampleIntervalMs": 1.0, "stepsCovered": 16, "stepsExpected": 16,
   "hitches": { …as today…, "timeRatioMsPerS": 60.4, "recordingS": 12.0 },
-  "swiftUI": { "tables": [ …as today… ],
+  "swiftUI": { "tables": [ …as today… ], "rows": { "swiftui-updates": 0, … },   // rows per table: 0 = recorded nothing
+               "edges": { "label: changed-properties": 3 }, "changes": { "…": 1 },
                "rootCauses": [ { "cause": "DeskModel.onScreen", "updates": 33, "views": { "Column": 17, "CrewTab": 16 } } ],
                "longUpdates": [ { "view": "Column", "ms": 23.1, "cause": "…", "severity": "…" } ] } }
 ```
