@@ -140,8 +140,9 @@ import DeskBenchKit
       } catch { return .failure(.harness("couldn't read the baseline: \(error)")) }
     }
     if o.holdSeconds > 0 { await h.sleep(ms: o.holdSeconds * 1000) }
-    let result = BenchResult(tool: tool(), scenario: spec.name, fixture: o.fixture, params: runParams, startedAt: startedAt, durationMs: Stats.round((CACurrentMediaTime() - began) * 1000, 0),
+    var result = BenchResult(tool: tool(), scenario: spec.name, fixture: o.fixture, params: runParams, startedAt: startedAt, durationMs: Stats.round((CACurrentMediaTime() - began) * 1000, 0),
                              machine: machine, noise: noise, window: windowState, reps: repResults, summary: summary, budget: budget, comparison: comparison, artifacts: artifacts, profiled: o.profiled)
+    result.knobs = DeskKnobs.vector
     h.closeWindow()
     return .success(result)
   }
@@ -204,8 +205,10 @@ enum Commands {
 
   /// A and B in pairs, one process each, `reps` pairs; within a pair the first side is counterbalanced (seeded, recorded),
   /// every run waits for a settle pause and a quiet machine, and the verdict is paired (Regression(metric:pairs:)): the
-  /// per-pair differences against their own spread, and Mann-Whitney U on the two sides.
-  static func ab(a: String, b: String, scenario: String, fixture: String, params: [String], activate: Bool = true, objective: Objective? = nil, options o: ABOptions = ABOptions()) throws -> (ABResult, Int) {
+  /// per-pair differences against their own spread, and Mann-Whitney U on the two sides. `envA` and `envB` go into each
+  /// side's environment (PERFLOOP_KNOBS: two knob settings of one binary).
+  static func ab(a: String, b: String, scenario: String, fixture: String, params: [String], activate: Bool = true, objective: Objective? = nil, options o: ABOptions = ABOptions(),
+                 envA: [String: String] = [:], envB: [String: String] = [:]) throws -> (ABResult, Int) {
     guard let spec = Scenarios.spec(scenario) else { throw CLIError.usage("unknown scenario '\(scenario)'") }
     guard ["random", "abba"].contains(o.order) else { throw CLIError.usage("--order must be random or abba") }
     let seed = o.seed ?? UInt64.random(in: 1...999_999)
@@ -213,7 +216,7 @@ enum Commands {
     var got: [Int: [String: RepResult]] = [:]
     var runs: [ABRun] = []
     var failures: [String] = []
-    var builds: [String: BuildInfo] = [:]
+    var builds: [String: BuildInfo] = [:], knobs: [String: [String: String]] = [:]
     let env = o.sampler ? [:] : ["DESKBENCH_SAMPLER": "off"]
     for (i, first) in order.enumerated() {
       for (pos, label) in (first == "AB" ? ["A", "B"] : ["B", "A"]).enumerated() {
@@ -223,11 +226,12 @@ enum Commands {
         if !activate { args.append("--no-activate") }
         let q = Quiet.wait(pauseMs: o.pauseMs, maxS: o.quietWaitS, busyPct: o.quietBusyPct)
         FileHandle.standardError.write(Data("ab: pair \(i + 1)/\(order.count) \(first) · \(label)\(q.quiet ? "" : "  (not quiet after \(Int(q.waitedS)) s: \(q.busyPct) % busy\(q.builds.isEmpty ? "" : ", " + q.builds.joined(separator: ", ")))")\n".utf8))
-        let (r, code, text) = try child(exe, args, env: env)
+        let (r, code, text) = try child(exe, args, env: env.merging(label == "A" ? envA : envB) { $1 })
         runs.append(ABRun(pair: i, side: label, position: pos + 1, busyPct: q.busyPct, builds: q.builds, waitedS: q.waitedS, quiet: q.quiet, exit: code))
         guard let r, let rep = r.reps.first else { failures.append("\(label) pair \(i + 1): exit \(code): \(text.prefix(300))"); continue }
         got[i, default: [:]][label] = rep
         if let b = r.tool.build { builds[label] = b }
+        if let k = r.knobs { knobs[label] = k }
       }
     }
     let ra = order.indices.compactMap { got[$0]?["A"] }, rb = order.indices.compactMap { got[$0]?["B"] }
@@ -249,7 +253,7 @@ enum Commands {
                        comparison: c?.rows ?? [], failures: failures, regression: c?.regression ?? false, improvement: c?.improvement ?? false,
                        objective: used.metric, guardsFailed: c?.guardsFailed ?? [], notes: notes, buildA: ra.isEmpty ? nil : builds["A"], buildB: rb.isEmpty ? nil : builds["B"],
                        order: order, orderMode: o.order, seed: seed, pairs: pairs.count, runs: runs, orderEffectPct: orderEffect.isEmpty ? nil : Stats.round(Stats.median(orderEffect), 1),
-                       samplerInChildren: o.sampler, pauseMs: o.pauseMs, quietBusyPct: o.quietBusyPct)
+                       samplerInChildren: o.sampler, pauseMs: o.pauseMs, quietBusyPct: o.quietBusyPct, knobsA: knobs["A"], knobsB: knobs["B"])
     return (res, pairs.isEmpty ? ExitCode.harness : res.regression ? ExitCode.regression : ExitCode.ok)
   }
 
@@ -278,6 +282,8 @@ enum Commands {
     var samplerInChildren: Bool? = nil
     var pauseMs: Double? = nil
     var quietBusyPct: Double? = nil
+    /// Each side's knob vector, as its runs reported it.
+    var knobsA: [String: String]?, knobsB: [String: String]?
     var text: String {
       var o = ["ab \(scenario) on \(fixture): \(pairs.map { "\($0) pairs" } ?? "\(repsPerSide) reps a side"), decided on \(objective ?? "?")",
                "  A: \(a)" + (buildA.map { "  [\($0.line)]" } ?? ""), "  B: \(b)" + (buildB.map { "  [\($0.line)]" } ?? "")]
@@ -285,6 +291,10 @@ enum Commands {
       if let runs, !runs.isEmpty {
         let busy = runs.map(\.busyPct)
         o.append("  machine before each run: \(Stats.round(Stats.median(busy), 0)) % of the cores busy (median, max \(Stats.round(busy.max() ?? 0, 0)) %); \(runs.filter(\.quiet).count)/\(runs.count) runs started quiet")
+      }
+      if let ka = knobsA, let kb = knobsB, ka != kb {
+        let differ = Set(ka.keys).union(kb.keys).filter { ka[$0] != kb[$0] }.sorted()
+        o.append("  knobs: " + differ.map { "\($0) A=\(ka[$0] ?? "-") B=\(kb[$0] ?? "-")" }.joined(separator: ", "))
       }
       o += Commands.rows(comparison)
       for n in notes ?? [] { o.append("  note: " + n) }

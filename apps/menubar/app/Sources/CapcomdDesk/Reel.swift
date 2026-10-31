@@ -51,6 +51,9 @@ final class ReelView: NSView {
   private var served = -1
   private var pending: ReelRequest?
   private var gestures = 0, slides = 0
+  /// Runtime knobs (DeskKnobs), read once: how a slide moves the reel, and how many far columns each frame builds.
+  private let clipSlide = DeskKnobs.reelSlide.value == .clip
+  private let perFrame = DeskKnobs.buildPerFrame.value
 
   init(model: DeskModel) {
     self.model = model
@@ -117,7 +120,8 @@ final class ReelView: NSView {
     for j in max(0, i - 1)...min(order.count - 1, i + across) { build(j) }
   }
 
-  /// The rest, one per turn of the run loop while the reel stands still, nearest the leading column first.
+  /// The rest, one per turn of the run loop (`build.perFrame`) while the reel stands still, nearest the leading column
+  /// first.
   private func buildSoon() {
     guard !building, !blanks.isEmpty else { return }
     building = true
@@ -125,7 +129,8 @@ final class ReelView: NSView {
       guard let self else { return }
       self.building = false
       guard self.across > 0 else { return self.buildSoon() }   // not laid out yet
-      if !self.model.reelMoving, let next = self.order.indices.filter({ self.hosts[self.order[$0]] == nil }).min(by: { abs($0 - self.at) < abs($1 - self.at) }) {
+      for _ in 0..<self.perFrame {
+        guard !self.model.reelMoving, let next = self.order.indices.filter({ self.hosts[self.order[$0]] == nil }).min(by: { abs($0 - self.at) < abs($1 - self.at) }) else { break }
         self.build(next)
       }
       if !self.blanks.isEmpty {
@@ -178,6 +183,7 @@ final class ReelView: NSView {
   /// columns, which then don't move again) and the document layer is animated from where it showed. Scrolling the
   /// clip view frame by frame made every column's hosting view update its graph each frame (~20 ms a frame).
   fileprivate func slide(to i: Int, from start: CGFloat? = nil) {
+    if clipSlide { return clipViewSlide(to: i, from: start) }
     let from = start ?? shownOffset(), to = x(i)
     buildAround(i)
     stopSlide()
@@ -208,10 +214,53 @@ final class ReelView: NSView {
 
   /// Ends a slide where it shows now (a new slide or a swipe takes over from there).
   private func stopSlide() {
+    if clipSlide { return stopClipViewSlide() }
     guard let l = doc.layer, l.animation(forKey: "slide") != nil else { return }
     let shown = shownOffset()
     l.removeAnimation(forKey: "slide")   // its completion block still runs and balances `slides`
     scroll.contentView.setBoundsOrigin(NSPoint(x: shown, y: 0))
+  }
+
+  // MARK: reel.slide=clip
+
+  /// The slide in flight with `reel.slide=clip`, by serial: a completion that isn't the current one's is stale.
+  private var clipSerial = 0, clipInFlight = false
+
+  /// `reel.slide=clip`: the clip view's own animation (NSClipView's animator), the bounds moving frame by frame, as the
+  /// reel slid before the render-server slide. Kept as a knob so the loop can measure that decision again.
+  private func clipViewSlide(to i: Int, from start: CGFloat?) {
+    let to = x(i)
+    buildAround(i)
+    stopClipViewSlide(settle: false)   // the new slide takes over: the reel doesn't report a stop in between
+    if let start { scroll.contentView.setBoundsOrigin(NSPoint(x: start, y: 0)); scrolled() }
+    guard abs(to - scroll.contentView.bounds.origin.x) > 0.5 else { return moving() }
+    clipSerial += 1; clipInFlight = true
+    let serial = clipSerial
+    slides += 1; moving()
+    NSAnimationContext.runAnimationGroup({ ctx in
+      ctx.duration = 0.35
+      ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+      scroll.contentView.animator().setBoundsOrigin(NSPoint(x: to, y: 0))
+    }, completionHandler: { [weak self] in
+      MainActor.assumeIsolated {
+        guard let self, self.clipInFlight, self.clipSerial == serial else { return }
+        self.clipInFlight = false; self.slides -= 1
+        self.scroll.reflectScrolledClipView(self.scroll.contentView)
+        self.moving()
+      }
+    })
+  }
+
+  /// Ends a clip-view slide where it is now: a zero-length animation to the current offset replaces the one in flight.
+  private func stopClipViewSlide(settle: Bool = true) {
+    guard clipInFlight else { return }
+    clipInFlight = false; slides -= 1
+    let now = scroll.contentView.bounds.origin
+    NSAnimationContext.runAnimationGroup { ctx in
+      ctx.duration = 0
+      scroll.contentView.animator().setBoundsOrigin(now)
+    }
+    if settle { moving() }
   }
 
   /// A swipe began: it takes over from a slide in flight.

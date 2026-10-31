@@ -104,7 +104,8 @@ public enum ProcessCounters {
 /// gets only what it needs to run.
 public enum TracePrivacy {
   public static let allowedKeys: Set<String> = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "LANG", "TERM", "__CF_USER_TEXT_ENCODING", "DEVELOPER_DIR"]
-  public static let allowedPrefixes = ["LC_", "DESKBENCH_"]
+  /// PERFLOOP_KNOBS carries the run's knob settings, nothing secret.
+  public static let allowedPrefixes = ["LC_", "DESKBENCH_", "PERFLOOP_"]
   public static func scrub(_ env: [String: String]) -> [String: String] {
     env.filter { k, _ in allowedKeys.contains(k) || allowedPrefixes.contains { k.hasPrefix($0) } }
   }

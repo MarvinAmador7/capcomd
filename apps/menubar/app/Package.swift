@@ -11,7 +11,8 @@ let package = Package(
     // The desktop window's performance and debugging harness, for coding agents (DESKBENCH.md).
     .executable(name: "CapcomdDeskBench", targets: ["CapcomdDeskBench"]),
   ],
-  dependencies: [.package(path: "../client")],
+  // tools/perfloop: the performance loop's probe library (runtime knobs), linked by the desktop window itself.
+  dependencies: [.package(path: "../client"), .package(path: "../../../tools/perfloop")],
   targets: [
     // Thread items (format blocks/1): decoding, merge by id/rev, link and code presentation. Foundation only.
     .target(name: "CapcomdThread"),
@@ -28,14 +29,16 @@ let package = Package(
     .executableTarget(name: "MenuBarApp", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI"]),
     // The desktop window (design/desktop) as a library: its model, reel and title bar, so the app and the bench both
     // host the same views. macOS only (an empty module on Linux).
-    .target(name: "CapcomdDesk", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", .product(name: "CapcomdClient", package: "client")]),
+    .target(name: "CapcomdDesk", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", .product(name: "CapcomdClient", package: "client"),
+                                                .product(name: "PerfLoopProbe", package: "perfloop")]),
     // The desktop app (design/desktop): its own app, installable without the menu bar one. Only the @main scene.
     .executableTarget(name: "CapcomdDesktop", dependencies: ["CapcomdDesk", "CapcomdUI"]),
     // The bench's pure parts (fixtures, statistics, budgets, xctrace summaries), tested without a window.
-    .target(name: "DeskBenchKit", dependencies: ["CapcomdStore", "CapcomdThread"]),
+    .target(name: "DeskBenchKit", dependencies: ["CapcomdStore", "CapcomdThread", .product(name: "PerfLoopProbe", package: "perfloop")]),
     // The bench: hosts the desktop window in-process against fixture data and measures it (DESKBENCH.md).
     // BuildStamp embeds the commit, dirty flag and build time, so a copied binary still says what it was built from.
-    .executableTarget(name: "CapcomdDeskBench", dependencies: ["DeskBenchKit", "CapcomdDesk", "CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdUI"],
+    .executableTarget(name: "CapcomdDeskBench", dependencies: ["DeskBenchKit", "CapcomdDesk", "CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdUI",
+                                                              .product(name: "PerfLoopProbe", package: "perfloop")],
                       plugins: ["BuildStamp"]),
     .plugin(name: "BuildStamp", capability: .buildTool()),
     .testTarget(name: "CapcomdStoreTests", dependencies: ["CapcomdStore", "CapcomdLive", .product(name: "CapcomdClient", package: "client")],
@@ -45,5 +48,6 @@ let package = Package(
     // Checks the port against packages/bot-avatar/fixtures (golden bots and the catalog), read in place.
     .testTarget(name: "CapcomdBotTests", dependencies: ["CapcomdBot"]),
     // Fixtures/ holds hand-made xctrace exports, read in place.
-    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore"], exclude: ["Fixtures"]),
+    // CapcomdDesk for its knobs' defaults (no window is made).
+    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore", "CapcomdDesk", .product(name: "PerfLoopProbe", package: "perfloop")], exclude: ["Fixtures"]),
   ])
