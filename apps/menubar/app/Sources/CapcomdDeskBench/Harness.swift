@@ -7,7 +7,7 @@ import CapcomdDesk
 import DeskBenchKit
 
 /// The desktop window hosted in this process on a fixture, with the instruments around it: a display link for frame
-/// timing, a run-loop observer for main-thread stretches, the views' probe for body counts, signposts for Instruments.
+/// timing, the stretch clock's run-loop observers for main-thread stretches (StretchClock.swift), the views' probe for body counts, signposts for Instruments.
 /// Everything is driven in-process (the model's own entry points, events sent to our own window); nothing is posted to
 /// the system, so the owner's Mac is never clicked into.
 @MainActor final class Harness: DeskProbeSink {
@@ -25,13 +25,12 @@ import DeskBenchKit
   // Samples. Times are ms since the harness was made (CACurrentMediaTime, the display link's clock).
   let t0 = CACurrentMediaTime()
   var ticks: [Double] = []
-  var stretches: [(at: Double, dur: Double, cpu: Double)] = []
-  var awokeCpu = 0.0
+  /// Main-thread stretches, from the clock (the same edges the sampler uses).
+  lazy var clock = StretchClock(t0: t0)
+  var stretches: [StretchClock.Entry] { clock.entries }
   var bodies: [(t: Double, view: String, id: String?)] = []
   var events: [(t: Double, name: String, value: Int)] = []
   var link: CADisplayLink?
-  var observer: CFRunLoopObserver?
-  var awoke: Double?
   var waiters: [(id: Int, check: () -> Bool, resume: () -> Void)] = []
   var waiterSerial = 0
   var nominalHz: Double = 60
@@ -135,21 +134,16 @@ import DeskBenchKit
     l.preferredFrameRateRange = CAFrameRateRange(minimum: hz, maximum: hz, preferred: hz)   // hold ProMotion at its top rate
     l.add(to: .main, forMode: .common)
     link = l
-    let o = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { [unowned self] _, a in
-      MainActor.assumeIsolated {
-        if a == .afterWaiting { awoke = now(); awokeCpu = Self.threadCpuMs() }
-        else if let s = awoke { stretches.append((s, now() - s, Self.threadCpuMs() - awokeCpu)); awoke = nil; checkWaiters() }
-      }
-    }
-    CFRunLoopAddObserver(CFRunLoopGetMain(), o, CFRunLoopMode.commonModes)
-    observer = o
-    if SamplerConfig.current.enabled, MainThreadSampler.supported { sampler = sampler ?? MainThreadSampler(config: SamplerConfig.current); sampler?.attach() }
+    clock.closed = { [unowned self] in checkWaiters() }
+    if SamplerConfig.current.enabled, MainThreadSampler.supported { sampler = sampler ?? MainThreadSampler(config: SamplerConfig.current); sampler?.start() }
+    clock.sampler = sampler
+    clock.attach()
   }
 
   func stopSampling() {
     link?.invalidate(); link = nil
-    if let o = observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), o, CFRunLoopMode.commonModes); observer = nil }
-    sampler?.detach()
+    clock.detach()
+    clock.sampler = nil
   }
 
   /// The calling thread's CPU time (user + system) in ms.
@@ -217,25 +211,29 @@ import DeskBenchKit
 
   // MARK: steps
 
-  struct Marker { var name: String; var at: Double; var tick: Int; var stretch: Int; var body: Int; var state: OSSignpostIntervalState; var instructions: UInt64? }
+  struct Marker { var name: String; var at: Double; var tick: Int; var stretch: Int; var body: Int; var state: OSSignpostIntervalState; var cpu: Double; var instructions: UInt64? }
 
+  /// A step starts. Its CPU and instructions are the main thread's own counters from here to `end` (bench measure 2):
+  /// every stretch, or part of one, inside the step and nothing outside it; no other thread (the sampler's included).
   func begin(_ name: String) -> Marker {
     let id = signposter.makeSignpostID()
     let st = signposter.beginInterval("step", id: id, "\(name, privacy: .public)")
     log.debug("step begin \(name, privacy: .public)")
-    // The counter last, so the step's own bookkeeping isn't in it.
-    return Marker(name: name, at: now(), tick: ticks.count, stretch: stretches.count, body: bodies.count, state: st, instructions: ProcessCounters.instructions())
+    // The counters last, so the step's own bookkeeping isn't in them.
+    let at = now(), cpu = Self.threadCpuMs()
+    return Marker(name: name, at: at, tick: ticks.count, stretch: stretches.count, body: bodies.count, state: st, cpu: cpu, instructions: ProcessCounters.threadInstructions())
   }
 
   func end(_ m: Marker, latencyMs: Double? = nil, settleMs: Double? = nil, notes: [String] = []) -> StepResult {
-    let instructions = ProcessCounters.instructions().flatMap { b in m.instructions.map { b > $0 ? Int(b - $0) : 0 } }
+    let instructions = ProcessCounters.threadInstructions().flatMap { b in m.instructions.map { b > $0 ? Int(b - $0) : 0 } }
+    let cpu = Self.threadCpuMs() - m.cpu
     signposter.endInterval("step", m.state)
     let end = now()
     let its = intervals(from: m.tick)
     let st = stretches[m.stretch...]
     return StepResult(name: m.name, atMs: Stats.round(m.at, 1), durationMs: Stats.round(end - m.at, 1), latencyMs: latencyMs.map { Stats.round($0, 2) }, settleMs: settleMs.map { Stats.round($0, 1) },
                       frames: FrameStats(intervalsMs: its, nominalHz: nominalHz), mainThread: MainThreadStats(stretchesMs: st.map(\.dur), cpuMs: st.map(\.cpu)),
-                      bodies: count(bodies[m.body...]), notes: notes, cpuMs: Stats.round(st.reduce(0) { $0 + $1.cpu }, 2), instructions: instructions.flatMap { $0 > 0 ? $0 : nil })
+                      bodies: count(bodies[m.body...]), notes: notes, cpuMs: Stats.round(cpu, 2), instructions: instructions.flatMap { $0 > 0 ? $0 : nil })
   }
 
   func intervals(from tick: Int) -> [Double] {
@@ -256,13 +254,12 @@ import DeskBenchKit
 
   /// The longest main-thread stretches since `from`, each with the bodies evaluated inside it (and its stacks, with the sampler on).
   func worstStretches(from index: Int, steps: [StepResult], limit: Int = 8) -> [Stretch] {
-    if let first = stretches[index...].first { sampler?.discard(before: t0 + first.at / 1000 - 0.001) }
+    if let first = stretches[index...].first { sampler?.discard(beforeStretch: first.id) }
     return stretches[index...].sorted { $0.dur > $1.dur }.prefix(limit).map { s in
-      let step = steps.last { $0.atMs <= s.at + 0.01 }?.name ?? "idle"
       var b: [String: Int] = [:]
       for x in bodies(in: s.at...(s.at + s.dur)) { b[x.view, default: 0] += 1 }
-      var w = Stretch(step: step, atMs: Stats.round(s.at, 1), durationMs: Stats.round(s.dur, 2), cpuMs: Stats.round(s.cpu, 2), bodies: b)
-      sampler?.annotate(&w, wokeAt: t0 + s.at / 1000)
+      var w = Stretch(step: Stretch.label(at: s.at, dur: s.dur, steps: steps), atMs: Stats.round(s.at, 1), durationMs: Stats.round(s.dur, 2), cpuMs: Stats.round(s.cpu, 2), bodies: b)
+      sampler?.annotate(&w, stretch: s.id)
       return w
     }
   }

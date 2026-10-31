@@ -33,9 +33,9 @@ struct SamplerConfig {
 /// suspended; the stack is written into a buffer allocated up front, by index. The walk stays inside the main thread's
 /// stack bounds, stops on a misaligned or non-increasing frame pointer, and is capped in depth.
 ///
-/// Observers: one at the very first order of `afterWaiting` opens the stretch, one at the very last order of
-/// `beforeWaiting` closes it, so the samples cover Core Animation's commit and the display cycle (both run in
-/// `beforeWaiting` observers after the harness's own, order 0). A closed stretch's samples are copied out on the main
+/// Stretch edges: the sampler has no observers of its own. `StretchClock` opens and closes it (`woke`, `slept`) at the
+/// same moments it opens and closes the harness's stretch, and the samples are filed under that stretch's serial
+/// number, so every stretch longer than the gate has its stacks. A closed stretch's samples are copied out on the main
 /// thread then; symbolisation (dladdr) happens only when a result asks for them, after the rep.
 @MainActor final class MainThreadSampler {
   let config: SamplerConfig
@@ -47,12 +47,12 @@ struct SamplerConfig {
     #endif
   }()
 
-  /// One sampled wake-up: its times (CACurrentMediaTime seconds) and where its words are in `arena`.
-  struct Span { var wake: Double; var sleep: Double; var samples: Int; var start: Int; var words: Int }
+  /// One sampled stretch: the clock's serial number for it, its times (CACurrentMediaTime seconds) and where its
+  /// words are in `arena`.
+  struct Span { var stretch: Int; var wake: Double; var sleep: Double; var samples: Int; var start: Int; var words: Int }
   private(set) var spans: [Span] = []
   private var arena: [UInt] = []
   private var wakeTime = 0.0
-  private var observers: [CFRunLoopObserver] = []
   private let raw: Raw
   private let wakeSem = DispatchSemaphore(value: 0)
   private let doneSem = DispatchSemaphore(value: 0)
@@ -88,30 +88,9 @@ struct SamplerConfig {
     thread = t
   }
 
-  /// Installs the observers on the main run loop: from now on wake-ups are sampled.
-  func attach() {
-    start()
-    guard observers.isEmpty, thread != nil else { return }
-    let open = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.afterWaiting.rawValue, true, CFIndex.min) { [unowned self] _, _ in
-      MainActor.assumeIsolated { woke() }
-    }!
-    let close = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.exit.rawValue, true, CFIndex.max) { [unowned self] _, _ in
-      MainActor.assumeIsolated { slept() }
-    }!
-    for o in [open, close] { CFRunLoopAddObserver(CFRunLoopGetMain(), o, CFRunLoopMode.commonModes) }
-    observers = [open, close]
-  }
-
-  /// Removes the observers; the thread stays, asleep, for the next window.
-  func detach() {
-    for o in observers { CFRunLoopRemoveObserver(CFRunLoopGetMain(), o, CFRunLoopMode.commonModes) }
-    observers = []
-    slept()
-  }
-
   /// Stops the thread and waits for it (the buffers stay allocated: a late sample can never write to freed memory).
   func stop() {
-    detach()
+    cancel()
     guard thread != nil else { return }
     os_unfair_lock_lock(raw.lock); raw.state.pointee.running = false; os_unfair_lock_unlock(raw.lock)
     wakeSem.signal()
@@ -119,9 +98,11 @@ struct SamplerConfig {
     thread = nil
   }
 
-  // MARK: the gate (main thread)
+  // MARK: the gate (main thread, called by StretchClock)
 
-  private func woke() {
+  /// A stretch opened: sample it once it passes the gate.
+  func woke() {
+    start()
     let t = mach_absolute_time()
     os_unfair_lock_lock(raw.lock)
     let s = raw.state
@@ -132,33 +113,35 @@ struct SamplerConfig {
     wakeTime = CACurrentMediaTime()
   }
 
-  private func slept() {
+  /// The stretch closed: keep its samples under the clock's serial number for it (nil: drop them).
+  func slept(stretch: Int?) {
     os_unfair_lock_lock(raw.lock)
     let s = raw.state
     let open = s.pointee.openAt != 0
     s.pointee.openAt = 0
     let n = s.pointee.count, words = s.pointee.head
     os_unfair_lock_unlock(raw.lock)
-    guard open, n > 0 else { return }
+    guard open, n > 0, let stretch else { return }
     // The sampler won't write again before the next wake-up, which this thread opens.
-    spans.append(Span(wake: wakeTime, sleep: CACurrentMediaTime(), samples: n, start: arena.count, words: words))
+    spans.append(Span(stretch: stretch, wake: wakeTime, sleep: CACurrentMediaTime(), samples: n, start: arena.count, words: words))
     arena.append(contentsOf: UnsafeBufferPointer(start: raw.buf, count: words))
   }
 
+  /// Stops sampling the open stretch, if any, and drops what it had.
+  func cancel() { slept(stretch: nil) }
+
   // MARK: results (main thread, after a rep)
 
-  /// The span of the wake-up that began at or just before `at` (CACurrentMediaTime seconds) and was still awake then.
-  func span(at: Double) -> Span? {
+  /// The samples of the clock's stretch `id`, if it had any.
+  func span(stretch id: Int) -> Span? {
     var lo = 0, hi = spans.count
-    while lo < hi { let mid = (lo + hi) / 2; if spans[mid].wake <= at + 0.000_5 { lo = mid + 1 } else { hi = mid } }
-    guard lo > 0 else { return nil }
-    let s = spans[lo - 1]
-    return s.sleep + 0.000_5 >= at ? s : nil
+    while lo < hi { let mid = (lo + hi) / 2; if spans[mid].stretch < id { lo = mid + 1 } else { hi = mid } }
+    return lo < spans.count && spans[lo].stretch == id ? spans[lo] : nil
   }
 
-  /// Forgets spans that ended before `before`: what a finished rep no longer needs.
-  func discard(before: Double) {
-    guard let i = spans.firstIndex(where: { $0.sleep >= before }) else { spans = []; arena = []; return }
+  /// Forgets the spans of stretches before `id`: what a finished rep no longer needs.
+  func discard(beforeStretch id: Int) {
+    guard let i = spans.firstIndex(where: { $0.stretch >= id }) else { spans = []; arena = []; return }
     guard i > 0 else { return }
     let cut = spans[i].start
     spans.removeFirst(i)
@@ -205,12 +188,12 @@ struct SamplerConfig {
     return f
   }
 
-  /// Fills the sampler's fields of a worst stretch from the span of the same wake-up.
-  func annotate(_ w: inout Stretch, wokeAt: Double) {
-    guard let s = span(at: wokeAt) else { w.samples = 0; return }
+  /// Fills the sampler's fields of a worst stretch from the samples filed under its serial number; without any, says
+  /// why: shorter than the gate, or past it with the sampler thread not scheduled in time (a loaded machine).
+  func annotate(_ w: inout Stretch, stretch id: Int) {
+    guard let s = span(stretch: id) else { w.samples = 0; w.unsampled = w.durationMs < config.gateMs + 1000 / config.hz ? "gate" : "missed"; return }
     let p = profile(s)
     w.samples = p.samples; w.stacks = p.tree; w.topOurs = p.ours; w.topFramework = p.framework; w.topSelf = p.selfTop
-    w.awakeMs = Stats.round((s.sleep - s.wake) * 1000, 2)
   }
 
   // MARK: costs
