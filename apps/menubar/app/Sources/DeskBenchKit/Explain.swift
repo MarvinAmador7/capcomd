@@ -153,7 +153,7 @@ extension Explain {
     (["LazySubviewPlacements", "_LazyLayoutViewCache", "LazyLayout", "LazyStack"], "a lazy stack placing subviews: ColumnThread's LazyVStack builds rows as they come on screen"),
     (["propagate_dirty"], "AttributeGraph invalidating what depends on a changed value: a value many views read changed"),
     (["ViewGraphRootValueUpdater", "UpdateStack::update", "GraphHost"], "SwiftUI updating its view graph"),
-    (["layoutSubtreeIfNeeded", "_layoutViewTree", "NSHostingView.layout", "sizeThatFits"], "AppKit's layout pass"),
+    (["layoutSubtreeIfNeeded", "_layoutSubtree", "_layoutViewTree", "NSHostingView.layout", "sizeThatFits"], "AppKit's layout pass"),
     (["displayIfNeeded", "drawRect", "drawLayer", "CA::Layer::display"], "drawing"),
     (["CTLine", "CTFramesetter", "CoreText", "NSTextField", "NSTextLayoutManager"], "text layout"),
     (["destroy value witness", "removeFromSuperview", "dealloc", "outlined destroy"], "tearing views or values down"),

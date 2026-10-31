@@ -156,8 +156,9 @@ public struct StackProfile: Sendable, Equatable {
   }
   static let trunkNames: Set<String> = ["start", "main", "$main", "NSApplicationMain", "_NSApplicationMain", "-[NSApplication run]", "App.main", "static App.main",
                                         "BenchScene.$main", "static BenchScene.$main", "runApp", "CFRunLoopRunSpecific", "CFRunLoopRun", "CFRunLoopRunInMode",
-                                        "RunCurrentEventLoopInMode", "ReceiveNextEventCommon", "swift::runJobInEstablishedExecutorContext", "main thread"]
-  static let trunkPrefixes = ["__CFRunLoop", "_CFRunLoopRun", "__CFRUNLOOP_IS_", "_dispatch_", "_DPSNextEvent", "_BlockUntilNextEventMatchingListInMode", "-[NSApplication(NSEventRouting) _nextEventMatchingEventMask",
+                                        "RunCurrentEventLoopInMode", "ReceiveNextEventCommon", "swift::runJobInEstablishedExecutorContext", "main thread",
+                                        "-[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:]"]
+  static let trunkPrefixes = ["__CFRunLoop", "_CFRunLoopRun", "__CFRUNLOOP_IS_", "_dispatch_", "_DPSNextEvent", "_BlockUntilNextEventMatchingListInMode", "_DPSBlockUntilNextEventMatchingListInMode", "-[NSApplication(NSEventRouting) _nextEventMatchingEventMask",
                               "_NSAppKitThreadSafety", "start_wqthread", "thread_start", "_pthread_start", "dyld", "swift_job_run"]
 }
 
