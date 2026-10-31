@@ -37,6 +37,8 @@ Debug builds are 5–20× slower in SwiftUI's own code and will fail every budge
 | Which views re-rendered when X happened? | any `run`, look at `reps[].steps[].bodies` and `worstStretches[].bodies` | per view type; `Column`, `EntryRow` etc. carry the agent id internally for the isolation checks |
 | What ran inside a long stretch (stacks)? | `profile <scenario> --template time` | `timeProfile.burstFrames` (what the ≥16 ms bursts were doing), `inclusiveOurs` |
 | What did the compositor count as hitches? | `profile <scenario> --template hitches` | `hitches.hitches`, `causes`, `potentialHangsMs` |
+| Where did a step's main-thread time go? | `profile <scenario> --template time`, or `trace <file.trace>` | `msPerStep`, `treeInSteps`, `treePerStep` (call trees per `step` signpost) |
+| What did build B make cheaper or dearer than A, and where? | `diff a.trace b.trace` (or two profile JSONs) | the grew/shrank lists, ms per step; `--json` → `perfloop.diff/1` |
 | Did commit B regress commit A? | build both, `ab --a A/CapcomdDeskBench --b B/CapcomdDeskBench step --reps 5` | the `comparison` lines; exit 4 on a regression beyond noise |
 | Gate in a script | `run … --baseline saved.json` or `compare a.json b.json` | exit code |
 
@@ -49,7 +51,8 @@ NSWindow by hand with the same content view and chrome (what `open` always uses:
 The result's `params.host` says which. The two differ (see *What the bench found*), so compare like with like.
 
 `trace <file.trace>` summarises a trace you already have (one recorded by hand, or from an earlier session) the same
-way `profile` does.
+way `profile` does. `diff A B` (or `trace --diff A B`) compares two time profiles, `.trace` files or profile JSONs:
+see *Comparing two builds' call trees* below.
 
 ## Scenarios and their budgets
 
@@ -152,6 +155,46 @@ The `.trace` stays in DIR for Instruments.app; the child's own in-process result
 The bench emits `os_signpost` intervals (`dev.capcomd.deskbench`, points of interest, one interval named `step` per
 scenario step with the step's name as its message), so steps line up on the Instruments timeline.
 
+With a time profile, the JSON (`perfloop.profile/2`; `deskbench.profile/1` files still read) also carries the main
+thread's **call tree**, root first, `{ "n": frame, "v": samples, "c": [callees, heaviest first] }` (`"o": true` on
+frames from the bench's own binary; a run of frames that never branches is written once, the rest of it in `chain`):
+`steps` (the `step` signpost intervals), `tree` (the whole recording), `treeInSteps` (samples inside steps only),
+`treePerStep`, `msPerStep` (main-thread ms per step inside steps), `stepsCovered`/`stepsExpected`. The text prints the
+heaviest subtrees per step as folded chains (`outer;next;…(k);inner`). Frame names lose their argument lists, but
+Objective-C names keep category and selector (`-[NSApplication(NSEventRouting) sendEvent:]`).
+
+## Comparing two builds' call trees: `diff`
+
+```sh
+$B diff base/step-time.trace new/step-time.trace           # or two profile JSONs, or one of each; --json for the data
+$B trace --diff base/step-time.trace new/step-time.trace   # the same
+```
+
+Both sides are normalised to **ms per step** (samples inside the `step` signposts × the sample interval ÷ steps), so a
+recording that covered 14 steps compares with one that covered 16; samples outside steps (settling, the hold) are left
+out and counted in a note. `--per run` compares whole recordings instead. `.trace` files are exported on the fly (both
+sides at once; about 6 s for two 25 MB step traces), a profile JSON is read as it is (an old one without a tree is
+rebuilt from its `trace` if that still exists).
+
+What it prints, in one screen:
+
+- **grew in b** and **shrank in b**: the subtrees that moved most, each once. A subtree is a frame over all its call
+  paths (`[3 paths]`); frames that moved together by about the same amount are one folded chain, outermost first; a
+  smaller move inside a bigger one is listed under it (`↳`). A frame whose net change is the remainder of large opposite
+  moves (the run loop, `main`) is never "the" answer, nor is a noise frame (`objc_msgSend`, retain/release).
+  `attrib.` is the part of Δ that did not just move to another caller; a subtree whose change mostly moved (the same
+  frame with the same callees grew elsewhere) is listed under **moved** instead.
+- **largest in b**: the heaviest subtrees left in b, run-loop plumbing left out: what to attack next.
+- **provenance**: the builds each side was recorded on, when the profile says (`build` in the JSON; traces carry none
+  until the build stamp). `--champion BUILD` (a commit or `sha256:` hash) refuses, exit 6, when side a is not that
+  build or can't be told (unstamped); `--allow-stale` compares anyway. Two OS builds refuse unless `--allow-cross-os`
+  (symbol names change between them).
+
+Options: `--top N` (default 8 a side), `--min-ms X` (smallest move reported; default 0.5 % of the larger side),
+`--process NAME` (default `CapcomdDeskBench`). The JSON (`perfloop.diff/1`) has the merged tree (`a`, `b`, `d` in ms
+per step per node), `gains` (b faster) and `losses` (b slower) with each item's `chain`, heaviest `path`, `paths`,
+`under` (the nearest frame of ours above it), `inside`, `attributable`; `remaining`, `moved`, `provenance`, `notes`.
+
 ## Fidelity: what is real and what isn't
 
 - **Real**: the views, model, store and thread renderer are the app's own (CapcomdDesk, CapcomdUI, CapcomdStore).
@@ -248,6 +291,8 @@ already gone once the reel left the title bar's band (3a6b5b7); it no longer sho
 - A fixture: a `FixtureSpec` in `Fixtures.swift`; the generator takes care of the rest.
 - A view worth counting: `DeskProbe.body("Name")` (or `body("Name", id: agentId)` for per-agent views) as the first
   statement of its `body`.
-- Tests: `swift test --filter DeskBenchKitTests` (fixtures, statistics, budgets, xctrace parsing: no window needed).
+- Tests: `swift test --filter DeskBenchKitTests` (fixtures, statistics, budgets, xctrace parsing, call trees and
+  `diff`: no window needed; the exports in `Tests/DeskBenchKitTests/Fixtures` are hand-made. Never commit a real
+  export or `.trace`: a trace records the profiled process's environment, tokens included).
 
 The views only ever see `DeskProbe`, a nil-checked static; nothing else from the bench is linked into the app.
