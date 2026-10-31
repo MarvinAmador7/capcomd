@@ -33,6 +33,50 @@ public struct StackTree: Codable, Sendable, Equatable {
   }
 
   public var nodeCount: Int { 1 + c.reduce(0) { $0 + $1.nodeCount } }
+
+  /// Trees folded into one under `root`: nodes on the same path add their weights.
+  public static func merge(_ ts: [StackTree], root: String = "main thread") -> StackTree {
+    var out = StackTree(n: root, v: ts.reduce(0) { $0 + $1.v })
+    out.c = mergeChildren(ts.flatMap(\.c))
+    return out
+  }
+
+  static func mergeChildren(_ xs: [StackTree]) -> [StackTree] {
+    var byName: [String: [StackTree]] = [:]
+    for x in xs { byName[x.n, default: []].append(x) }
+    return byName.map { n, group in StackTree(n: n, v: group.reduce(0) { $0 + $1.v }, c: mergeChildren(group.flatMap(\.c))) }
+      .sorted { ($0.v, $1.n) > ($1.v, $0.n) }
+  }
+
+  /// Every topmost node named `name` (not those inside another one), folded into one: its weight is the frame's
+  /// inclusive weight in the tree, its children what it called. nil when the frame isn't in the tree.
+  public func gather(_ name: String) -> StackTree? {
+    var found: [StackTree] = []
+    func walk(_ t: StackTree) { if t.n == name { found.append(t) } else { t.c.forEach(walk) } }
+    c.forEach(walk)
+    guard !found.isEmpty else { return nil }
+    return StackTree(n: name, v: found.reduce(0) { $0 + $1.v }, c: Self.mergeChildren(found.flatMap(\.c)))
+  }
+
+  public func contains(_ name: String) -> Bool { c.contains { $0.n == name || $0.contains(name) } }
+
+  /// Down the heaviest callee while it still holds `share` of this node, stopping before frames that only say "a
+  /// message was sent" or "memory moved": where this node's time mostly went. nil when no callee holds that share.
+  /// Thunks, closures and image-only frames are passed through, never named.
+  public func mostlyIn(share: Double = 0.5) -> StackTree? {
+    let generic: Set<String> = ["objc_msgSend", "swift_retain", "swift_release", "_platform_memmove", "?", "objc_retain", "objc_release"]
+    var node = self, last: StackTree?
+    while let next = node.c.max(by: { ($0.v, $1.n) < ($1.v, $0.n) }), next.v >= v * share, !generic.contains(next.n) {
+      if Self.informative(next.n) { last = next }
+      node = next
+    }
+    return last
+  }
+
+  /// Whether a frame's name says anything by itself: not a thunk, a bare closure, or an image without a symbol.
+  public static func informative(_ n: String) -> Bool {
+    !(n == "(thunk)" || n.hasPrefix("(") || n == "?" || n.hasPrefix("closure #") || n.hasPrefix("implicit closure #") || n.hasPrefix("thunk"))
+  }
 }
 
 /// A symbol and how many samples it was in. `under` (framework frames only): the nearest of our frames above it in

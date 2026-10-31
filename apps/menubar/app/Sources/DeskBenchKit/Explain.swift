@@ -70,10 +70,16 @@ public enum Explain {
   public static func stretchLines(_ w: Stretch) -> [String] {
     let b = w.bodies.sorted { $0.value > $1.value }.prefix(6).map { "\($0.key)×\($0.value)" }.joined(separator: " ")
     let noBodies = w.samples == nil ? "(no view bodies: AppKit/layout/text or the fixture)" : "(no view bodies)"
-    var o = ["  \(String(format: "%7.1f", w.durationMs)) ms wall \(String(format: "%6.1f", w.cpuMs)) ms cpu  during \(w.step)  \(b.isEmpty ? noBodies : b)"]
+    let when = w.step.hasPrefix("before ") || w.step.hasPrefix("after ") ? w.step : "during \(w.step)"
+    var o = ["  \(String(format: "%7.1f", w.durationMs)) ms wall \(String(format: "%6.1f", w.cpuMs)) ms cpu  \(when)  \(b.isEmpty ? noBodies : b)"]
     guard let n = w.samples else { return o }
     let pad = "             "
-    guard n > 0, let tree = w.stacks else { o.append(pad + "not sampled (shorter than the sampler's gate)"); return o }
+    guard n > 0, let tree = w.stacks else {
+      o.append(pad + (w.unsampled == "missed" ? "not sampled: it passed the gate, but the sampler thread got no core in time (a loaded machine)"
+                      : w.unsampled == "gate" ? "not sampled (shorter than the sampler's gate)"
+                      : "not sampled (shorter than the sampler's gate, or cut off: an older bench's sampler stopped at a run-loop exit)"))
+      return o
+    }
     func pct(_ v: Int) -> String { "\(Int((Double(v) / Double(n) * 100).rounded())) %" }
     let ours = w.topOurs ?? [], fw = w.topFramework ?? []
     let oursSet = Set(ours.map(\.symbol))
@@ -95,21 +101,26 @@ public enum Explain {
     return o
   }
 
-  /// Patterns the desktop work has met before, matched on the body counts inside long stretches.
+  /// What the long stretches' samples say first (where the time went, by frame), then the patterns the desktop work
+  /// has met before, matched on the body counts inside long stretches.
   public static func suggestions(_ r: BenchResult) -> [String] {
-    var out: [String] = []
+    var out = stackCauses(r)
     let s = r.summary
     let stretches = r.reps.flatMap(\.worstStretches)
     let scrolling = ["step", "jump", "fling", "follow"].contains(r.scenario)
-    func total(_ view: String) -> Int { stretches.reduce(0) { $0 + ($1.bodies[view] ?? 0) } }
+    // Bodies only in the stretches that belong to a step: the setup (rewinding the reel, building columns) is meant to build.
+    let inSteps = stretches.filter { !$0.step.hasPrefix("before ") && !$0.step.hasPrefix("after ") }
+    func total(_ view: String) -> Int { inSteps.reduce(0) { $0 + ($1.bodies[view] ?? 0) } }
+    // The reel (Reel.swift's ReelView) gives each column its own hosting view, and a slide moves the scroll offset once
+    // and animates the document layer in the render server: a step should update a column at most once.
     if scrolling, total("Column") > 2 * max(1, r.reps.count) {
-      out.append("Column bodies ran while the reel moved (\(total("Column")) in the long stretches): columns are being rebuilt mid-scroll. A lazy stack, a changed ForEach identity, or a model property every Column reads (focusedAgent, onScreen) that changes per frame. Columns should move, not re-evaluate: see Reel.swift's HStack and .geometryGroup().")
+      out.append("Column bodies ran in the steps' long stretches (\(total("Column"))): more than the once per step a slide needs. Look for a model property every Column reads that changes during a step (focusedAgent, onScreen) or a changed identity; ReelView.slide moves the offset once, so columns shouldn't re-evaluate on the way.")
     }
     if scrolling, total("EntryRow") > 20 * max(1, r.reps.count) {
-      out.append("EntryRow bodies ran during a scroll (\(total("EntryRow"))): thread rows were created or re-evaluated on the way. Threads should be warmed while the reel stands still (DeskModel.warm) and rows are Equatable; check that ThreadSlice isn't reassigned with equal data.")
+      out.append("EntryRow bodies ran during the steps (\(total("EntryRow"))): thread rows were created or re-evaluated on the way (ColumnThread's LazyVStack building rows of a column that wasn't warm, or rows re-evaluated). Threads should be warmed while the reel stands still (DeskModel.warm) and rows are Equatable; check that ThreadSlice isn't reassigned with equal data.")
     }
     if scrolling, total("TitleBar") + total("OpenGroup") + total("CrewTab") > 4 * max(1, r.reps.count) {
-      out.append("Title bar views re-evaluated while scrolling (TitleBar/OpenGroup/CrewTab): the reel position is being reported per frame instead of once per column crossed (Reel's onScrollGeometryChange rounds to a column index; scrollPosition(id:) did not).")
+      out.append("Title bar views re-evaluated in the steps (TitleBar/OpenGroup/CrewTab, \(total("TitleBar") + total("OpenGroup") + total("CrewTab"))): the reel position reaches the model once per column crossed (ReelView.scrolled → DeskModel.reelScrolled(toIndex:)), so something else they read changes during a step.")
     }
     if r.scenario == "burst", s.checksFailed.contains(where: { $0.hasPrefix("isolation") }) {
       out.append("A thread item re-rendered views outside its column. The store's change keys (ChangeKey.thread(agentId)) or DeskModel.apply are too broad, or a view reads a whole-model property (model.columns, model.decks) that changed.")
@@ -130,6 +141,78 @@ public enum Explain {
       out.append("The machine was busy. Re-run with the window frontmost and other heavy apps quiet, or use `ab` (alternating runs) to take the noise out of a comparison.")
     }
     return out
+  }
+}
+
+extension Explain {
+  /// Our frames that are the bench driving the window, not the app: never a cause.
+  static let benchTypes: Set<String> = ["Drive", "Harness", "Runner", "Commands", "SelfTest", "BenchScene", "MainThreadSampler", "StretchClock", "main"]
+
+  /// Framework frames worth naming as a cause, and what each means for the desktop window.
+  static let families: [(match: [String], meaning: String)] = [
+    (["LazySubviewPlacements", "_LazyLayoutViewCache", "LazyLayout", "LazyStack"], "a lazy stack placing subviews: ColumnThread's LazyVStack builds rows as they come on screen"),
+    (["propagate_dirty"], "AttributeGraph invalidating what depends on a changed value: a value many views read changed"),
+    (["ViewGraphRootValueUpdater", "UpdateStack::update", "GraphHost"], "SwiftUI updating its view graph"),
+    (["layoutSubtreeIfNeeded", "_layoutViewTree", "NSHostingView.layout", "sizeThatFits"], "AppKit's layout pass"),
+    (["displayIfNeeded", "drawRect", "drawLayer", "CA::Layer::display"], "drawing"),
+    (["CTLine", "CTFramesetter", "CoreText", "NSTextField", "NSTextLayoutManager"], "text layout"),
+    (["destroy value witness", "removeFromSuperview", "dealloc", "outlined destroy"], "tearing views or values down"),
+    (["CA::Transaction::commit", "CA::Context::commit_transaction"], "Core Animation's commit"),
+    (["decode", "JSON"], "decoding"),
+  ]
+
+  static func isBench(_ symbol: String) -> Bool {
+    let last = symbol.components(separatedBy: " in ").last ?? symbol
+    return benchTypes.contains(String(last.prefix { $0 != "." && $0 != "(" && $0 != " " }))
+  }
+
+  static func family(_ symbol: String) -> String? { families.first { f in f.match.contains { symbol.contains($0) } }?.meaning }
+
+  /// Causes from the samples of the long stretches (over 16.7 ms; the steps' own when there are any): their call trees
+  /// merged, the heaviest frames that are ours (the app's, not the bench's) or a known framework hot spot, each with its
+  /// share of the samples, where inside it the time mostly went and, for a framework frame, which of our frames it ran
+  /// under. A frame inside one already named that holds most of its weight replaces it: the more specific one is the cause.
+  public static func stackCauses(_ r: BenchResult, limit: Int = 3) -> [String] {
+    let all = r.reps.flatMap(\.worstStretches).filter { ($0.samples ?? 0) > 0 && $0.stacks != nil && $0.durationMs > 16.7 }
+    let inSteps = all.filter { !$0.step.hasPrefix("before ") }
+    let sampled = inSteps.isEmpty ? all : inSteps
+    guard !sampled.isEmpty else { return [] }
+    let tree = StackTree.merge(sampled.compactMap(\.stacks))
+    let total = tree.v
+    guard total > 0 else { return [] }
+    var weight: [String: Int] = [:], under: [String: [String: Int]] = [:], ours: Set<String> = []
+    for w in sampled {
+      for x in w.topOurs ?? [] where !isBench(x.symbol) && StackTree.informative(x.symbol) { weight[x.symbol, default: 0] += x.samples; ours.insert(x.symbol) }
+      for x in w.topFramework ?? [] where family(x.symbol) != nil && StackTree.informative(x.symbol) {
+        weight[x.symbol, default: 0] += x.samples
+        if let u = x.under, !isBench(u) { under[x.symbol, default: [:]][u, default: 0] += x.samples }
+      }
+    }
+    var picked: [(sym: String, node: StackTree)] = []
+    // Ours first (what an agent can change), then the framework hot spots; heaviest first within each.
+    let order = weight.sorted { (ours.contains($0.key) ? 1 : 0, $0.value, $1.key) > (ours.contains($1.key) ? 1 : 0, $1.value, $0.key) }
+    for (sym, _) in order {
+      guard let node = tree.gather(sym), node.v >= total * 0.1 else { continue }
+      // Inside one already named and holding most of it: the more specific frame replaces it.
+      if let i = picked.firstIndex(where: { $0.node.contains(sym) && node.v >= $0.node.v * 0.8 && ours.contains(sym) == ours.contains($0.sym) }) { picked[i] = (sym, node); continue }
+      // A wrapper (or a callee) holding about the same time as one already named says nothing new.
+      if picked.contains(where: { (node.contains($0.sym) || $0.node.contains(sym)) && abs(node.v - $0.node.v) < max(node.v, $0.node.v) * 0.2 }) { continue }
+      picked.append((sym, node))
+      if picked.count == limit { break }
+    }
+    let span = "\(sampled.count) long stretch\(sampled.count == 1 ? "" : "es"), \(Int(total)) samples"
+    return picked.enumerated().map { i, p in
+      let (sym, node) = p
+      func pct(_ v: Double) -> String { "\(Int((v / total * 100).rounded())) %" }
+      var line = "\(pct(node.v)) of the samples in the long stretches\(i == 0 ? " (\(span))" : "") were under \(sym)"
+      if ours.contains(sym) { line += " (our code)" } else if let m = family(sym) { line += " (\(m))" }
+      if !ours.contains(sym), let u = under[sym]?.max(by: { ($0.value, $1.key) < ($1.value, $0.key) })?.key { line += ", beneath \(u)" }
+      if let m = node.mostlyIn(), m.n != sym {
+        let meaning = family(m.n).flatMap { $0 == family(sym) ? nil : $0 }
+        line += "; mostly in \(m.n) (\(pct(m.v)))" + (meaning.map { ": \($0)" } ?? "")
+      }
+      return line + "."
+    }
   }
 }
 

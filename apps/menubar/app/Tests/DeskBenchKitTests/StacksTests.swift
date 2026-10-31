@@ -149,7 +149,7 @@ final class StacksTests: XCTestCase {
     XCTAssertTrue(text.contains("AG::Graph::propagate_dirty 90 % (under ReelView.slide)"), text)
     XCTAssertTrue(text.contains("path: ReelView.slide 90 % › ScrollViewCommitMutation.commit 90 % › AG::Graph::propagate_dirty 90 %"), text)
     XCTAssertTrue(text.contains("self: AG::Graph::propagate_dirty 90 %"), text)
-    XCTAssertTrue(text.contains("not sampled (shorter than the sampler's gate)"), text)
+    XCTAssertTrue(text.contains("not sampled (shorter than the sampler's gate"), text)
     XCTAssertTrue(text.contains("(sampler: 100 samples at 1000 Hz"), text)
     XCTAssertFalse(text.contains("CFRunLoopRunSpecific"), text)   // the trunk is never shown
   }
