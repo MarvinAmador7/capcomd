@@ -15,6 +15,7 @@ cd apps/menubar/app
 swift build -c release --product CapcomdDeskBench      # ~3 min the first time; always bench a release build
 B=.build/release/CapcomdDeskBench
 $B list                                                 # this build's commit, scenarios → budgets, fixtures
+$B describe --json                                      # the perfloop.manifest/1: scenarios, objectives, guards, knobs
 $B run step --fixture crew17 --reps 5                   # one scenario, text verdict (add --json for the result)
 $B suite --reps 3 --out /tmp/bench                      # everything, one line each; JSON per scenario in /tmp/bench
 $B snapshot --out /tmp/snap                             # window.png + window.json (view tree, scroll geometry, model)
@@ -49,6 +50,8 @@ true. Results from before the stamp have no `build` and often no `commit`.
 | Where did a step's main-thread time go? | `profile <scenario> --template time`, or `trace <file.trace>` | `msPerStep`, `treeInSteps`, `treePerStep` (call trees per `step` signpost) |
 | What did build B make cheaper or dearer than A, and where? | `diff a.trace b.trace` (or two profile JSONs) | the grew/shrank lists, ms per step; `--json` → `perfloop.diff/1` |
 | Did commit B regress commit A? | build both, `ab --a A/CapcomdDeskBench --b B/CapcomdDeskBench step --reps 5` | the `[objective]` and `[guard]` lines; exit 4 on a regression beyond noise |
+| Was a decision right (the slide, the build rate)? | `ab step --a-knobs reel.slide=ca --b-knobs reel.slide=clip --reps 5`: one binary, two knob settings | the same lines; the `knobs:` line says what differed |
+| What can a runner drive, decide on, sweep? | `describe --json` | `scenarios[]` (`objective`, `guards`, `checks`, `params`), `fixtures`, `knobs` |
 | Gate in a script | `run … --baseline saved.json` or `compare a.json b.json` | exit code |
 
 Exit codes: `0` pass · `1` usage · `2` harness error · `3` budget failed · `4` regression beyond noise · `5` untrusted
@@ -229,6 +232,47 @@ band on a given day. The result carries both binaries' `build` blocks.
 To gate on a saved baseline instead: `run step --json --out base.json` on the good commit, later
 `run step --baseline base.json` (exit 4 on regression) or `compare base.json new.json`; both take `--objective`.
 
+## Runtime knobs: two variants in one binary
+
+A knob (design/perf-loop CAPABILITIES.md C4) is a decision the window makes at one site, kept switchable so the bench
+can measure it again without a rebuild. The window's knobs are in `CapcomdDesk/DeskKnobs.swift`; `describe` lists them:
+
+| Knob | Values | Default (the window as it is) | What it switches |
+|---|---|---|---|
+| `reel.slide` | `ca`, `clip` | `ca` | `ca`: an animated move sets the scroll offset once and slides the document layer in the render server (`ReelView.slide`). `clip`: the clip view scrolls frame by frame (NSClipView's animator), as the reel did before, so every column's hosting view updates on each frame |
+| `build.perFrame` | `1`…`8` | `1` | how many off-screen columns the reel builds per frame after a project opens (heads-first open), nearest first |
+
+```sh
+$B run step --knob reel.slide=clip                    # or --set knob:reel.slide=clip; several: --knob a=1,b=2
+$B ab step --a-knobs reel.slide=ca --b-knobs reel.slide=clip --reps 5    # one binary (this one), two settings
+$B ab switch --a-knobs build.perFrame=1 --b-knobs build.perFrame=4 --reps 5
+$B ab step --a OTHER/CapcomdDeskBench --a-knobs reel.slide=clip --b-knobs reel.slide=clip   # --b defaults to --a
+$B knobs --json                                       # what this process would run with (PERFLOOP_KNOBS + --knob)
+```
+
+The window reads knobs only from `PERFLOOP_KNOBS=name=value,name=value` (the app too: without it every knob reads its
+default and the window runs the code it always ran). The bench puts `--knob` into its own environment before anything
+reads a knob, and gives each `ab` side its setting there, on top of `--knob` and the inherited variable (`ab` never
+forwards knobs as `--set`, so a side's setting is never overridden). A knob is read once, when the reel is made; there is
+no per-frame lookup. A name the binary doesn't have, or a value outside a knob's choices or range, stops the command with
+exit 1 before a window shows (`ab` checks each side's setting first when the side is this binary).
+
+Every result has `knobs`: the full vector the run used, defaults included (`{"build.perFrame": "1", "reel.slide":
+"ca"}`); `ab` has `knobsA` and `knobsB`. Two results compare like for like only when their vectors agree or the
+difference is the experiment. A knob is for an experiment: once the loop promotes a setting, the setting becomes the
+code and the knob is deleted (SPEC §7.6), so knobs don't pile up.
+
+## The manifest: `describe`
+
+`describe --json` prints `perfloop.manifest/1` (design/perf-loop SCHEMAS.md §2), everything a generic runner needs
+without importing the app: `build` (this binary's stamp), `protocol` (1: `run <scenario> --json` prints a result on
+stdout, `--wait-for FILE` holds the window until FILE exists and writes FILE.done after the reps, knobs come in
+`PERFLOOP_KNOBS`), `scenarios[]` (`name`, `kind`, `budget`, `rule`, `latencyBudgetMs`, `params` with defaults,
+`objective` that `ab` decides on, `guards` that may not get worse, `checks` the driver records, `host` when it is fixed),
+`suite`, `fixtures`, `defaultFixture`, `knobs[]` (`name`, `type`, `default`, `choices` or `range`, numbers for numeric
+knobs), `objectives`, `hosts`, `defaultHost`, `probes` (the view bodies counted) and `exitCodes`. Without `--json` it
+is the same as text. `describe` and `knobs` run headless (no NSApplication, no window).
+
 ## Profiling without reading XML
 
 `profile <scenario> --template hitches|time|swiftui --out DIR` spawns the bench as a child, lets it show the window,
@@ -387,10 +431,13 @@ already gone once the reel left the title bar's band (3a6b5b7); it no longer sho
 - A scenario: a `ScenarioSpec` in `DeskBenchKit/Scenarios.swift` (name, budget, rule, kind, params) and a driver in
   `CapcomdDeskBench/Drive.swift` returning `([StepResult], [Check])`; add its name to `Scenarios.suite`.
 - A fixture: a `FixtureSpec` in `Fixtures.swift`; the generator takes care of the rest.
+- A knob: a `static let` `Knob(…)` in `CapcomdDesk/DeskKnobs.swift`, added to `DeskKnobs.knobs`, read once into a
+  stored property where it is used (never a lookup per frame), with the default reproducing today's behaviour.
 - A view worth counting: `DeskProbe.body("Name")` (or `body("Name", id: agentId)` for per-agent views) as the first
   statement of its `body`.
 - Tests: `swift test --filter DeskBenchKitTests` (fixtures, statistics, budgets, xctrace parsing, call trees and
-  `diff`: no window needed; the exports in `Tests/DeskBenchKitTests/Fixtures` are hand-made. Never commit a real
+  `diff`, the manifest, the knobs' defaults: no window needed; the knob library's own tests: `cd tools/perfloop && swift test`; the exports in `Tests/DeskBenchKitTests/Fixtures` are hand-made. Never commit a real
   export or `.trace`: a trace records the profiled process's environment, tokens included).
 
-The views only ever see `DeskProbe`, a nil-checked static; nothing else from the bench is linked into the app.
+The views only ever see `DeskProbe`, a nil-checked static, and `DeskKnobs` (tools/perfloop's `PerfLoopProbe`,
+Foundation only, values stored once); nothing else from the bench is linked into the app.
