@@ -479,7 +479,8 @@ the finger deltas that could be on screen by then:
   the reel snaps, so there's nothing to hold it to. A delta due but not delivered (the main thread busy) counts.
 - `stalls`: frames while the fingers moved ≥ 1 pt and the content didn't (< 0.5 pt), plus every vsync the main thread
   missed meanwhile (the screen kept the old frame). `--set inject-block-ms=60` sleeps the main thread mid-gesture: the
-  meter's self-check (2026-10-31: 27–30 stalls a drag where the same run without it had 0).
+  meter's self-check, the stalls go up by at least the frames it held (60 ms: 7 at 120 Hz; 2026-10-31: 27–30 on a
+  drag that had 0 without it, and one 16 pt error).
 - `jerkP95`: the shown position's third derivative, p95, from touch to settle, in pt/frame³ at the display's rate. It
   sees a frame that sticks or jumps and a hand-off at release that changes the acceleration at once.
 
@@ -493,23 +494,29 @@ isn't known until real recordings give one.
 event (due, delivered, the clip view's offset before and after) and tick (time, last commit, shown, clip offset) as
 JSON lines: what AppKit did with them.
 
-What the first replays showed (2026-10-31, release, crew17, a busy machine: `untrusted`, so the absolute numbers are
-high; the comparisons were made back to back):
+What the first replays showed (2026-10-31, ce66497's reel, release, crew17, 3 reps × 4 swipes a gesture; `untrusted`:
+the idle check saw most idle frames late, so absolute frame numbers are high; the comparisons ran back to back):
 
-- On the champion the content follows the fingers exactly a frame behind: position error 0 pt (p95 and max) in all
-  36 gestures (`flick-forward`, `flick-back`, `drag-forward`, 3 reps × 4), `latencyFrames` 1; jerk p95 20–100
-  pt/frame³ on the flicks (the snap's hand-off), 1–21 on the drag. Stalls 0–27 a gesture, all from late frames on the
-  loaded machine (late frame time 200–310 ms/s).
-- The reel doesn't rest on a column edge after a swipe with real timestamps: 48–219 pt off after a flick, 5–35 pt after
-  the slow drag (no momentum at all). The trace shows why: after the fingers lift the reel sets the offset to its
-  target and slides, then NSScrollView runs its own deceleration from the release velocity it read in the events'
-  timestamps (+127 pt over 0.5 s in one flick) and carries the reel past the edge. The reel swallows the system's
-  momentum, not this. With timestamps 0 (`fling`, `--set timestamps=zero`) it snaps (0.2 pt).
-- That deceleration is also the expensive part: one after the other, `fling` 322 ms main-thread CPU per step and 55
-  ms/s late frame time, `swipe --set timestamps=zero` 242 ms and 52 ms/s, `swipe` 647 ms and 230 ms/s. `fling`
-  understates what a hand's swipe costs.
+| | position error p95 (max) | latency | stalls a gesture | jerk p95 | CPU ms/step | late frame ms/s | rest off an edge |
+|---|---|---|---|---|---|---|---|
+| `flick-forward` | 0 pt (0) in 12/12 | 1 frame | 0–3 | 1.6–22 | 665 | 194 | 17–212 pt |
+| `flick-back` | 0 pt (0) in 12/12 | 1 frame | 1–3 | 2.0–21 | 689 | 220 | 0.7–223 pt |
+| `drag-forward` | 0 pt (3) in 12/12 | 1 frame | 0–4 or 24–27 | 1.3–28 | 567 | 253 | 6–46 pt |
+| `flick-forward`, `timestamps=zero` | 0 pt (0) in 12/12 | 1 frame | 1–3 | 0.9–1.4 | 322 | 89 | 0.2 pt |
+| `fling` | – | – | – | – | 366 | 82 | (snapped) |
+
+- The content follows the fingers exactly, a frame behind. The stalls are late frames while the fingers were down:
+  on the drag, either a handful or a run of 24–27 (the main thread over a frame 29 times a rep, in AppKit's layout
+  pass inside the commit): the reel's cost under a hand, what the loop can now climb on.
+- The reel doesn't rest on a column edge after a swipe with real timestamps, even the slow drag with no momentum at
+  all. The trace shows why: when the fingers lift the reel sets the offset to its target and slides, then NSScrollView
+  runs its own deceleration from the release velocity it read in the events' timestamps (+127 pt over 0.5 s in one
+  flick) and carries the reel past the edge. The reel swallows the system's momentum, not this. With timestamps 0
+  (`fling`, `--set timestamps=zero`) it snaps.
+- That deceleration is also the dear part: `swipe` costs about twice the main-thread CPU and 2–3× the late frame time
+  of the same gesture with timestamps 0, or of `fling`. `fling` understates what a hand's swipe costs.
 - A delta queued when the fingers lift can be dropped: the reel's slide starts from the offset AppKit has applied so
-  far and overwrites the one still queued (20 pt in one zero-timestamp replay). The jerk at release shows it.
+  far and overwrites the one still queued (20 pt in one replay).
 
 ## A worked example
 
