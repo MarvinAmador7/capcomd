@@ -194,6 +194,9 @@ public struct RepResult: Codable, Sendable, Equatable {
   public var sampler: SamplerStats? = nil
   /// How the bench measured stretches, CPU and instructions (`currentMeasure`, Objective.swift); nil = 1, from before it.
   public var measure: Int? = nil
+  /// Correctness guards judged after the rep settled (Guards.swift, C6), when the run was asked for them
+  /// (`--guards`, PERFLOOP_GUARDS); absent otherwise.
+  public var guards: [GuardResult]? = nil
   public init(index: Int, variant: String? = nil, steps: [StepResult], frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], checks: [Check], worstStretches: [Stretch], window: WindowState?) {
     self.index = index; self.variant = variant; self.steps = steps; self.frames = frames; self.mainThread = mainThread; self.bodies = bodies; self.checks = checks; self.worstStretches = worstStretches; self.window = window
   }
@@ -225,6 +228,8 @@ public struct Summary: Codable, Sendable, Equatable {
   /// nil where the counters read zero (a VM) or an older bench made the reps.
   public var instructionsPerStep: Dist?
   public var hitchTimeRatioMsPerS: Dist?
+  /// Guards that failed in any rep (Guards.swift); nil when no rep ran guards.
+  public var guardsFailed: [String]?
   /// `objective`: what to record as the objective; by default latency when the reps measured one, else CPU per step.
   public init(reps rs: [RepResult], objective: Objective? = nil) {
     reps = rs.count
@@ -244,6 +249,7 @@ public struct Summary: Codable, Sendable, Equatable {
     func dist(_ xs: [Double]) -> Dist? { xs.isEmpty ? nil : Dist(xs) }
     mainThreadCpuMsPerStep = dist(rs.compactMap(\.cpuMsPerStep)); instructionsPerStep = dist(rs.compactMap(\.instructionsPerStep))
     hitchTimeRatioMsPerS = dist(rs.compactMap(\.frames.hitchTimeRatioMsPerS))
+    guardsFailed = rs.contains { $0.guards != nil } ? Summary.guardsFailed(rs) : nil
     let o = objective ?? (lat.isEmpty ? .cpu : .latency)
     self.objective = rs.isEmpty ? nil : ObjectiveValue(o, reps: rs)
   }

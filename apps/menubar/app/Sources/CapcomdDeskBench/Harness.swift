@@ -42,6 +42,9 @@ import PerfLoopProbe
   var sampler: MainThreadSampler?
   /// Sequence numbers for events the scenarios make up (asks, decisions): never reused, the store drops duplicate ids.
   var liveSeq = 900_000
+  /// When the open project's columns were last made anew (a project switch, a fresh window): the guards count a
+  /// column's bodies from here (Guards.swift).
+  var columnsSince = 0.0
   func nextSeq() -> Int { liveSeq += 1; return liveSeq }
 
   init(world w: World) {

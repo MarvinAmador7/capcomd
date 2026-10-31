@@ -32,6 +32,7 @@ import DeskBenchKit
   func open(rep: Int, size: CGSize, activate: Bool) async -> ([StepResult], [Check]) {
     if h.window != nil { h.closeWindow() }
     let t = h.now()
+    h.columnsSince = t
     h.showWindow(size: size, activate: activate)
     let m = h.begin("open#\(rep)")
     let committed = await h.nextCommit()
@@ -57,6 +58,7 @@ import DeskBenchKit
       let target = decks[(i + 1) % 2]
       let m = h.begin("switch#\(i)→\(target.title.prefix(18))")
       let t = h.now()
+      h.columnsSince = t
       h.model.open(project: target.id)
       let shown = await h.nextCommit()
       let landed = h.model.openProjectId == target.id && !h.model.columns.isEmpty

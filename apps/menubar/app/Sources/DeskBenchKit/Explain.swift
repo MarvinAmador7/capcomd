@@ -41,6 +41,7 @@ public enum Explain {
     let bodies = s.bodies.sorted { $0.value > $1.value }.prefix(8).map { "\($0.key) \(Int($0.value))" }
     if !bodies.isEmpty { o.append("  bodies/rep    " + bodies.joined(separator: "  ")) }
     if !s.checksFailed.isEmpty { o.append("  checks failed " + s.checksFailed.joined(separator: ", ")) }
+    for rep in r.reps { for g in rep.guards ?? [] { o.append("  guard \(g.name) rep \(rep.index): \(g.pass ? "pass" : g.review == true ? "REVIEW" : "FAIL") · \(g.detail)") } }
 
     // The worst stretches, with the views evaluated in them.
     let worst = r.reps.flatMap(\.worstStretches).sorted { $0.durationMs > $1.durationMs }.prefix(6)

@@ -26,6 +26,8 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// View bodies the probe seam counts (a rep's `bodies`).
   public var probes: [String]
   public var exitCodes: [String: Int]
+  /// Scenarios whose checks run on every promotion, whatever the experiment climbs (C6: isolation, Guards.swift).
+  public var isolationGuards: [String]? = Guards.isolation
 
   public struct Scenario: Codable, Sendable, Equatable {
     public var name: String
@@ -37,8 +39,13 @@ public struct Manifest: Codable, Sendable, Equatable {
     public var params: [String: String]
     /// What `ab` and `compare` decide on unless told otherwise (lower is better).
     public var objective: String
-    /// Metrics that may not get worse beyond their band for a candidate to win, whatever the objective.
+    /// Correctness guards that gate acceptance (SCHEMAS.md §2, Guards.swift): `checks` (the scenario's own checks),
+    /// `built-within`, `snapshot-diff`. The runner reads them from the champion's manifest, never the candidate's.
     public var guards: [String]
+    /// Their parameters (`built-within.ms`, `snapshot-diff.tolerance`, …).
+    public var guardParams: [String: Double]? = nil
+    /// Metrics that may not get worse beyond their band for a candidate to win, whatever the objective.
+    public var frameGuards: [String]? = nil
     /// The scenario's own checks: one failing in most reps fails the budget.
     public var checks: [String]
     /// A host the scenario always uses, whatever `--host` says (`open` needs a fresh window per rep).
@@ -51,7 +58,8 @@ public struct Manifest: Codable, Sendable, Equatable {
     scenarios = Scenarios.all.map { s in
       let o = Objective.default(for: s)
       return Scenario(name: s.name, summary: s.summary, kind: s.kind.rawValue, budget: s.budget, rule: s.rule, latencyBudgetMs: s.latencyBudgetMs,
-                      params: s.params, objective: o.metric, guards: (o == .frames ? [] : [Objective.frames.metric]) + ["longestStretchMs"],
+                      params: s.params, objective: o.metric, guards: Guards.forScenario(s.name), guardParams: Guards.params(for: s.name),
+                      frameGuards: (o == .frames ? [] : [Objective.frames.metric]) + ["longestStretchMs"],
                       checks: Self.checks[s.name] ?? [], host: s.name == "open" ? "window" : nil)
     }
     suite = Scenarios.suite
@@ -75,9 +83,9 @@ public struct Manifest: Codable, Sendable, Equatable {
 
   /// The manifest as text, for a person.
   public var text: String {
-    var o = ["\(app) via \(adapter), protocol \(`protocol`) · \(build.line)", "scenarios (objective; guards; checks):"]
+    var o = ["\(app) via \(adapter), protocol \(`protocol`) · \(build.line)", "scenarios (objective; correctness guards; frame guards; checks):"]
     for s in scenarios {
-      o.append("  \(s.name.padding(toLength: 8, withPad: " ", startingAt: 0)) \(s.kind): \(s.objective); \(s.guards.joined(separator: ", ")); \(s.checks.joined(separator: ", "))"
+      o.append("  \(s.name.padding(toLength: 8, withPad: " ", startingAt: 0)) \(s.kind): \(s.objective); \(s.guards.joined(separator: ", ")); \((s.frameGuards ?? []).joined(separator: ", ")); \(s.checks.joined(separator: ", "))"
                + (s.params.isEmpty ? "" : "  params " + s.params.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")))
     }
     o.append("fixtures: " + fixtures.map(\.name).joined(separator: ", ") + " (default \(defaultFixture))")

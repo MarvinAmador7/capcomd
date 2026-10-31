@@ -43,6 +43,10 @@ commands
                                                   regression check between two saved results of the same scenario
   explain <result.json>                           a saved result as text: verdict, numbers, longest stretches, causes
   selftest sampler [--json]                       check the main-thread sampler headless (no window): gate, attribution, cost
+  snapdiff A.png B.png [--diff-out D.png] [--guard-param k=v] [--json]
+                                                  the snapshot-diff guard, headless: A (the champion's snapshot after settle)
+                                                  against B, outside what moved by itself (A/B.later.png), per column
+                                                  (A/B.layout.json); exit 3 over tolerance (the owner reviews it)
   help
 
 run options
@@ -71,6 +75,10 @@ run options
                         DESKBENCH_SAMPLER=off in the environment also turns it off, for `ab`'s children)
   --sample-hz N         sampling rate while a stretch is open (default 1000)
   --sample-gate-ms N    sample a stretch only once it has lasted N ms (default 4)
+  --guards LIST         correctness guards to judge after each rep (reps[].guards[]): built-within (the on-screen columns
+                        built, by N ms after settle), snapshot-diff (a PNG + layout after settle into --artifacts DIR, for
+                        snapdiff); also PERFLOOP_GUARDS, PERFLOOP_ARTIFACTS (what perfloop sets, from the champion's manifest)
+  --guard-param k=v     a guard parameter: built-within.ms (300), snapshot-diff.tolerance (0.005), … (PERFLOOP_GUARD_PARAMS)
 
 exit codes  0 pass · 1 usage · 2 harness error · 3 budget failed · 4 regression beyond noise · 5 untrusted (failed on a noisy machine: run again)
             6 refused (a profiled result in a comparison)
@@ -85,7 +93,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs", "from", "run", "token-file", "name"] + SamplerConfig.flags
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs", "from", "run", "token-file", "name", "guards", "guard-param", "diff-out"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -115,6 +123,7 @@ func kv(_ xs: [String]) -> [String: String] {
     objective = o
   }
   SamplerConfig.current = SamplerConfig(args)
+  GuardPhase.config = GuardConfig(env: ProcessInfo.processInfo.environment, names: args.all("guards"), params: args.all("guard-param"), dir: args.one("artifacts"))
   switch cmd {
   case "help", "-h", "--help": out(help); return 0
 
@@ -281,10 +290,14 @@ func kv(_ xs: [String]) -> [String: String] {
       if let x = args.one("quiet-wait").flatMap(Double.init) { ao.quietWaitS = x }
       if let x = args.one("quiet-busy").flatMap(Double.init) { ao.quietBusyPct = x }
       ao.sampler = args.one("sampler") == "on"
+      // Guards asked for on ab's command line reach its children the way perfloop's do: in the environment.
+      let gc = GuardPhase.config
+      let genv: [String: String] = gc.names.isEmpty ? [:] : [GuardConfig.namesVariable: gc.names.sorted().joined(separator: ","),
+        GuardConfig.paramsVariable: gc.params.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ","), GuardConfig.dirVariable: gc.dir?.path ?? ""].filter { !$0.value.isEmpty }
       // Knobs reach the children in PERFLOOP_KNOBS, never as --set: a side's setting must not be overridden.
       let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", params: args.all("set").filter { !KnobArgs.isKnob($0) },
                                       activate: !args.has("no-activate"), objective: objective, options: ao,
-                                      envA: [Knobs.variable: Knobs.format(ka)], envB: [Knobs.variable: Knobs.format(kb)])
+                                      envA: genv.merging([Knobs.variable: Knobs.format(ka)]) { $1 }, envB: genv.merging([Knobs.variable: Knobs.format(kb)]) { $1 })
       if let p = args.one("out") { try? JSONOut.encode(r).write(toFile: p, atomically: true, encoding: .utf8) }
       out(json ? JSONOut.encode(r) : r.text)
       return Int32(code)
@@ -317,6 +330,9 @@ func kv(_ xs: [String]) -> [String: String] {
       }
       return Int32(c.regression ? ExitCode.regression : ExitCode.ok)
     } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
+
+  case "snapdiff":
+    return SnapDiff.run(Array(args.positional.dropFirst()), params: args.all("guard-param"), diffOut: args.one("diff-out"), json: json)
 
   case "selftest":
     guard args.positional.dropFirst().first == "sampler" else { err("usage: deskbench selftest sampler [--json]"); return Int32(ExitCode.usage) }
@@ -358,7 +374,7 @@ Task { @MainActor in
 }
 if MainActor.assumeIsolated({ Harness.current != nil }) {
   BenchScene.main()
-} else if ["selftest", "describe", "knobs", "fixture"].contains(startup.positional.first ?? "") {
+} else if ["selftest", "describe", "knobs", "fixture", "snapdiff"].contains(startup.positional.first ?? "") {
   // Headless: the main run loop without NSApplication (no Dock icon, no window server connection).
   CFRunLoopRun()
 } else {
