@@ -42,6 +42,9 @@ import DeskBenchKit
     var holdSeconds: Double = 0
     var variant: String?
     var host = "window"
+    /// A profiler is attached: the result says so and is never compared.
+    var profiled = false
+    var objective: Objective?
   }
 
   static func run(_ o: Options) async -> Result<BenchResult, CLIError> {
@@ -116,7 +119,9 @@ import DeskBenchKit
       await h.sleep(ms: 200)
     }
     _ = repStart
-    let summary = Summary(reps: repResults)
+    // `profile` stops its recording here, while the window holds (no fixed time limit cutting the run short).
+    if let wf = o.waitFor { FileManager.default.createFile(atPath: wf.path + ".done", contents: Data()) }
+    let summary = Summary(reps: repResults, objective: o.objective ?? .default(for: spec))
     let machine = MachineInfo.capture(screenHz: h.nominalHz)
     let windowState = h.windowState()
     let noise = Noise(idle: noiseFrames, idleMain: noiseMain, machine: machine, window: windowState)
@@ -126,27 +131,22 @@ import DeskBenchKit
       do {
         let base = try JSONOut.decode(BenchResult.self, from: Data(contentsOf: b))
         guard base.scenario == spec.name else { return .failure(.usage("baseline is for scenario '\(base.scenario)', not '\(spec.name)'")) }
-        comparison = compare(spec, baseline: base.reps, candidate: repResults)
+        if base.profiled == true || o.profiled { return .failure(.refused("a profiled run is never compared (the profiler's cost is in its numbers): record the baseline and this run without one")) }
+        comparison = Comparison(spec, objective: o.objective, baseline: base.reps, candidate: repResults).rows
       } catch { return .failure(.harness("couldn't read the baseline: \(error)")) }
     }
     if o.holdSeconds > 0 { await h.sleep(ms: o.holdSeconds * 1000) }
     let result = BenchResult(tool: tool(), scenario: spec.name, fixture: o.fixture, params: runParams, startedAt: startedAt, durationMs: Stats.round((CACurrentMediaTime() - began) * 1000, 0),
-                             machine: machine, noise: noise, window: windowState, reps: repResults, summary: summary, budget: budget, comparison: comparison, artifacts: artifacts)
+                             machine: machine, noise: noise, window: windowState, reps: repResults, summary: summary, budget: budget, comparison: comparison, artifacts: artifacts, profiled: o.profiled)
     h.closeWindow()
     return .success(result)
-  }
-
-  static func compare(_ spec: ScenarioSpec, baseline: [RepResult], candidate: [RepResult]) -> [Regression] {
-    Budgets.metrics(for: spec).map { m in
-      Regression(metric: m.name, baseline: baseline.compactMap(m.pick), candidate: candidate.compactMap(m.pick), floorPct: m.floorPct, absoluteFloor: m.absoluteFloor)
-    }
   }
 }
 
 enum CLIError: Error, CustomStringConvertible {
-  case usage(String), harness(String)
-  var description: String { switch self { case .usage(let s), .harness(let s): s } }
-  var code: Int { switch self { case .usage: ExitCode.usage; case .harness: ExitCode.harness } }
+  case usage(String), harness(String), refused(String)
+  var description: String { switch self { case .usage(let s), .harness(let s), .refused(let s): s } }
+  var code: Int { switch self { case .usage: ExitCode.usage; case .harness: ExitCode.harness; case .refused: ExitCode.refused } }
 }
 
 /// Subcommands that spawn this executable again (profile, ab) and the pure ones (compare, explain, list).
@@ -165,10 +165,11 @@ enum Commands {
   }
 
   /// A and B alternate, one process each, `reps` times a side; the medians are compared with the noise band.
-  static func ab(a: String, b: String, scenario: String, fixture: String, reps: Int, params: [String], activate: Bool = true) throws -> (ABResult, Int) {
+  static func ab(a: String, b: String, scenario: String, fixture: String, reps: Int, params: [String], activate: Bool = true, objective: Objective? = nil) throws -> (ABResult, Int) {
     guard let spec = Scenarios.spec(scenario) else { throw CLIError.usage("unknown scenario '\(scenario)'") }
     var ra: [RepResult] = [], rb: [RepResult] = []
     var failures: [String] = []
+    var builds: [String: BuildInfo] = [:]
     for i in 0..<reps {
       for (label, exe) in [("A", a), ("B", b)] {
         var args = ["run", scenario, "--fixture", fixture, "--reps", "1", "--json", "--quiet-check", "0", "--variant", label]
@@ -178,13 +179,14 @@ enum Commands {
         let (r, code, text) = try child(exe, args)
         guard let r else { failures.append("\(label) rep \(i): exit \(code): \(text.prefix(300))"); continue }
         if label == "A" { ra += r.reps } else { rb += r.reps }
+        if let b = r.tool.build { builds[label] = b }
       }
     }
-    let regs = ra.isEmpty || rb.isEmpty ? [] : Budgets.metrics(for: spec).map { m in
-      Regression(metric: m.name, baseline: ra.compactMap(m.pick), candidate: rb.compactMap(m.pick), floorPct: m.floorPct, absoluteFloor: m.absoluteFloor)
-    }
-    let res = ABResult(scenario: scenario, fixture: fixture, a: a, b: b, repsPerSide: reps, summaryA: Summary(reps: ra), summaryB: Summary(reps: rb), comparison: regs, failures: failures,
-                       regression: regs.contains { $0.regression }, improvement: regs.contains { $0.improvement } && !regs.contains { $0.regression })
+    let c = ra.isEmpty || rb.isEmpty ? nil : Comparison(spec, objective: objective, baseline: ra, candidate: rb)
+    let used = c.flatMap { Objective(argument: $0.objective) } ?? objective ?? .default(for: spec)
+    let res = ABResult(scenario: scenario, fixture: fixture, a: a, b: b, repsPerSide: reps, summaryA: Summary(reps: ra, objective: used), summaryB: Summary(reps: rb, objective: used),
+                       comparison: c?.rows ?? [], failures: failures, regression: c?.regression ?? false, improvement: c?.improvement ?? false,
+                       objective: used.metric, guardsFailed: c?.guardsFailed ?? [], notes: c?.notes ?? [], buildA: ra.isEmpty ? nil : builds["A"], buildB: rb.isEmpty ? nil : builds["B"])
     return (res, failures.count == reps * 2 ? ExitCode.harness : res.regression ? ExitCode.regression : ExitCode.ok)
   }
 
@@ -194,50 +196,92 @@ enum Commands {
     var summaryA: Summary, summaryB: Summary
     var comparison: [Regression]
     var failures: [String]
+    /// The objective or a guard got worse beyond its band (exit 4); information rows never set it.
     var regression: Bool, improvement: Bool
+    var objective: String?
+    var guardsFailed: [String]?
+    var notes: [String]?
+    var buildA: BuildInfo?, buildB: BuildInfo?
     var text: String {
-      var o = ["ab \(scenario) on \(fixture): \(repsPerSide) reps a side", "  A: \(a)", "  B: \(b)"]
-      for c in comparison { o.append("  \(c.regression ? "✗ REGRESSION" : c.improvement ? "✓ better" : "· same") \(c.reason)") }
-      func line(_ s: Summary) -> String {
-        var p = ["late \(s.lateFrames.median)/rep", "frame p95 \(s.frameP95Ms.median) ms", "longest stretch \(s.longestStretchMs.median) ms", ">16.7 ms \(s.stretchesOver16.median)/rep"]
-        if let l = s.latencyMs { p.insert("latency \(l.median) ms", at: 0) }
-        return p.joined(separator: "  ")
-      }
+      var o = ["ab \(scenario) on \(fixture): \(repsPerSide) reps a side, decided on \(objective ?? "?")",
+               "  A: \(a)" + (buildA.map { "  [\($0.line)]" } ?? ""), "  B: \(b)" + (buildB.map { "  [\($0.line)]" } ?? "")]
+      o += Commands.rows(comparison)
+      for n in notes ?? [] { o.append("  note: " + n) }
+      func line(_ s: Summary) -> String { Commands.medians(s) }
       o.append("  A medians: " + line(summaryA)); o.append("  B medians: " + line(summaryB))
       for f in failures { o.append("  ! " + f) }
       return o.joined(separator: "\n")
     }
   }
 
+  /// Comparison rows as text: what decides first, information after.
+  static func rows(_ rs: [Regression]) -> [String] {
+    rs.map { r in
+      let mark = r.regression ? (r.decides ? "✗ REGRESSION" : "· worse (info)") : r.improvement ? (r.decides ? "✓ better" : "· better (info)") : "· same"
+      return "  \(mark) [\(r.role ?? "metric")] " + (r.reason.hasPrefix(r.metric) ? r.reason : "\(r.metric): \(r.reason)")
+    }
+  }
+
+  /// One summary's medians in a line: the objectives first, the frame counts after.
+  static func medians(_ s: Summary) -> String {
+    var p: [String] = []
+    if let l = s.latencyMs { p.append("latency \(l.median) ms") }
+    if let c = s.mainThreadCpuMsPerStep { p.append("cpu \(c.median) ms/step") }
+    if let i = s.instructionsPerStep { p.append(String(format: "%.1f M instr/step", i.median / 1e6)) }
+    if let h = s.hitchTimeRatioMsPerS { p.append("late \(h.median) ms/s") }
+    p += ["longest stretch \(s.longestStretchMs.median) ms", "late frames \(s.lateFrames.median)/rep", "frame p95 \(s.frameP95Ms.median) ms", ">16.7 ms \(s.stretchesOver16.median)/rep"]
+    return p.joined(separator: "  ")
+  }
+
   /// Records the scenario under xctrace: a child of this executable shows the window, waits for `go`, runs; the parent
-  /// attaches, then exports and summarises the tables an agent wants.
+  /// attaches, then exports and summarises the tables an agent wants. The recording is stopped with SIGINT (xctrace
+  /// saves, as on Ctrl-C) when the child says its reps are done, so it covers every step; `--seconds` is only a safety
+  /// limit. The child and xctrace get a scrubbed environment: a trace keeps the recorded process's.
   static func profile(scenario: String, fixture: String, template: String, out: URL, reps: Int, params: [String], seconds: Double?, activate: Bool = true, host: String? = nil) throws -> (ProfileResult, Int) {
     let templates = ["hitches": "Animation Hitches", "time": "Time Profiler", "swiftui": "SwiftUI"]
     guard let tname = templates[template] else { throw CLIError.usage("template must be one of \(templates.keys.sorted().joined(separator: ", "))") }
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
     let go = out.appendingPathComponent("go"), trace = out.appendingPathComponent("\(scenario)-\(template).trace"), resultPath = out.appendingPathComponent("\(scenario)-inprocess.json")
-    try? FileManager.default.removeItem(at: go); try? FileManager.default.removeItem(at: trace)
-    let limit = seconds ?? Double(max(10, reps * (scenario == "burst" ? 10 : 6)))
-    var args = ["run", scenario, "--fixture", fixture, "--reps", String(reps), "--json", "--wait-for", go.path, "--out", resultPath.path, "--quiet-check", "0", "--hold", "1"]
+    let done = URL(fileURLWithPath: go.path + ".done")
+    for f in [go, done, trace, resultPath] { try? FileManager.default.removeItem(at: f) }
+    let limit = seconds ?? 600
+    var args = ["run", scenario, "--fixture", fixture, "--reps", String(reps), "--json", "--wait-for", go.path, "--out", resultPath.path, "--quiet-check", "0", "--hold", "1", "--profiled"]
     for p in params { args += ["--set", p] }
     if !activate { args.append("--no-activate") }
     if let host { args += ["--host", host] }
-    let childProc = Process(); childProc.executableURL = URL(fileURLWithPath: selfPath()); childProc.arguments = args
+    let env = TracePrivacy.scrub(ProcessInfo.processInfo.environment)
+    let childProc = Process(); childProc.executableURL = URL(fileURLWithPath: selfPath()); childProc.arguments = args; childProc.environment = env
     childProc.standardOutput = FileHandle.nullDevice; childProc.standardError = FileHandle.standardError
     try childProc.run()
     Thread.sleep(forTimeInterval: 2.5)   // the window and the noise floor
-    let rec = Process(); rec.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+    let rec = Process(); rec.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun"); rec.environment = env
     rec.arguments = ["xctrace", "record", "--template", tname, "--attach", String(childProc.processIdentifier), "--output", trace.path, "--time-limit", "\(Int(limit))s"]
     let recErr = Pipe(); rec.standardError = recErr; rec.standardOutput = recErr
+    let log = LogBuffer()
+    recErr.fileHandleForReading.readabilityHandler = { h in log.append(h.availableData) }
+    let recStart = Date()
     try rec.run()
-    Thread.sleep(forTimeInterval: 3.0)   // xctrace needs a moment to attach before the scenario moves
+    // xctrace prints "Ctrl-C to stop the recording" once it is attached (≈1 s after "Starting", through a pipe too);
+    // a little more so the first step is surely inside the recording.
+    let ready = Date().addingTimeInterval(20)
+    while !log.text.contains("Ctrl-C"), rec.isRunning, Date() < ready { Thread.sleep(forTimeInterval: 0.05) }
+    Thread.sleep(forTimeInterval: 1.0)
     FileManager.default.createFile(atPath: go.path, contents: Data())
+    while childProc.isRunning, !FileManager.default.fileExists(atPath: done.path) { Thread.sleep(forTimeInterval: 0.05) }
+    let stoppedAt = Date(), hitLimit = !rec.isRunning && childProc.isRunning
+    if rec.isRunning { rec.interrupt() }   // SIGINT: stop and save
     childProc.waitUntilExit()
-    rec.waitUntilExit()
-    let recLog = String(decoding: recErr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    let saveBy = Date().addingTimeInterval(180)
+    while rec.isRunning, Date() < saveBy { Thread.sleep(forTimeInterval: 0.1) }
+    if rec.isRunning { rec.terminate(); rec.waitUntilExit() }
+    recErr.fileHandleForReading.readabilityHandler = nil
+    log.append(recErr.fileHandleForReading.readDataToEndOfFile())
+    let recLog = log.text
     try recLog.write(to: out.appendingPathComponent("xctrace.log"), atomically: true, encoding: .utf8)
     guard FileManager.default.fileExists(atPath: trace.path) else { throw CLIError.harness("xctrace produced no trace:\n\(recLog.suffix(800))") }
-    var result = ProfileResult(template: tname, trace: trace.path, scenario: scenario, fixture: fixture, process: "CapcomdDeskBench", durationS: limit)
+    FileHandle.standardError.write(Data((TracePrivacy.warning(trace: trace.path) + "\n").utf8))
+    var result = ProfileResult(template: tname, trace: trace.path, scenario: scenario, fixture: fixture, process: "CapcomdDeskBench", durationS: Stats.round(stoppedAt.timeIntervalSince(recStart), 1))
+    if hitLimit { result.notes.append("xctrace stopped before the reps were done (the --seconds \(Int(limit)) limit?): later steps may be missing") }
     result.inProcess = try? JSONOut.decode(BenchResult.self, from: Data(contentsOf: resultPath))
     let toc = try xctrace(["export", "--input", trace.path, "--toc"])
     func table(_ schema: String) -> XCTable? {
@@ -316,6 +360,14 @@ enum Commands {
     for n in r.notes { o.append("note: " + n) }
     return o.joined(separator: "\n")
   }
+}
+
+/// xctrace's output, collected from the pipe's handler thread while the main thread waits on it.
+final class LogBuffer: @unchecked Sendable {
+  private let lock = NSLock()
+  private var data = Data()
+  func append(_ d: Data) { lock.lock(); data.append(d); lock.unlock() }
+  var text: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
 }
 
 extension XCTable {
