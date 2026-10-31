@@ -1,4 +1,5 @@
 import Foundation
+import PerfLoopProbe
 
 /// The scenarios the bench drives, each tied to one SPEC §1 budget. The bench's `Harness` knows how to drive them;
 /// this is what `list` prints and what `Budgets.evaluate` judges by.
@@ -34,6 +35,9 @@ public enum Scenarios {
     ScenarioSpec(name: "fling", summary: "A synthetic trackpad swipe with momentum, delivered to the reel's NSScrollView (see DESKBENCH.md for its fidelity).",
                  budget: "Reel scroll: no dropped frames at 120 Hz with 17 agents", rule: "no late frame while the reel moves; it lands on a column edge",
                  kind: .smooth, latencyBudgetMs: nil, params: ["flings": "6", "velocity": "2400"]),
+    ScenarioSpec(name: "swipe", summary: "A recorded trackpad gesture (perfloop.gesture/1, --gesture FILE) replayed into the reel's NSScrollView at its recorded times, in-process; how closely the content followed the fingers.",
+                 budget: "Reel scroll: no dropped frames at 120 Hz with 17 agents", rule: "no late frame while the reel moves; the content within 1 pt of the fingers (p95) with no stall; it lands on a column edge",
+                 kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "middle"]),
     ScenarioSpec(name: "burst", summary: "Thread items arrive for one on-screen agent at a steady rate while the reel stands still, then again while it steps.",
                  budget: "A thread item arrives: re-renders its own column only", rule: "no Column, ColumnHead, CrewTab, TitleBar or other column's thread body during the burst; no late frame",
                  kind: .isolation, latencyBudgetMs: nil, params: ["itemsPerSecond": "20", "seconds": "3"]),
@@ -82,6 +86,8 @@ public enum Budgets {
     case .isolation:
       lateFrames()
     }
+    // A replayed gesture: the content follows the fingers (Gestures.swift).
+    reasons += Smoothness.budgetReasons(summary)
     // Checks fail the budget when they failed in most reps (one wild rep is noise, not a verdict).
     for name in summary.checksFailed {
       let failed = reps.filter { $0.checks.contains { $0.name == name && !$0.pass } }

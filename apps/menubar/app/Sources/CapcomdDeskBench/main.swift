@@ -41,6 +41,10 @@ commands
                                                   K = name=value[,name=value] on top of --knob and PERFLOOP_KNOBS
   compare <baseline.json> <candidate.json> [--objective O]
                                                   regression check between two saved results of the same scenario
+  record-gesture [--name N] [--out FILE] [--count N] [--timeout S]
+                                                  the window on a fixture, recording your swipes on the reel (deltas,
+                                                  phases, times; nothing else) as perfloop.gesture/1 for run swipe --gesture
+  gestures [FILE…] [--write DIR] [--json]         the synthetic gestures swipe has built in, and whether each FILE replays
   explain <result.json>                           a saved result as text: verdict, numbers, longest stretches, causes
   selftest sampler [--json]                       check the main-thread sampler headless (no window): gate, attribution, cost
   snapdiff A.png B.png [--diff-out D.png] [--guard-param k=v] [--json]
@@ -54,6 +58,8 @@ run options
                         asks=A,seed=S] varies one (what perfloop sweep sends); file:PATH runs on a captured fixture
   --reps N              repetitions (default 3; medians are reported, one rep proves nothing)
   --set key=value       a scenario parameter (see `list --json` → params)
+  --gesture FILE        swipe: the gesture to replay (perfloop.gesture/1, or synthetic:flick-forward | flick-back |
+                        drag-forward); repeat it for several, taken in turn (= --set gesture=A,B)
   --knob name=value     a runtime knob (see `describe`), also `--set knob:name=value`; exported to the window as
                         PERFLOOP_KNOBS. The result's `knobs` has the full vector, defaults included
   --json                print the result JSON (otherwise the text explanation)
@@ -93,7 +99,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs", "from", "run", "token-file", "name", "guards", "guard-param", "diff-out"] + SamplerConfig.flags
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs", "from", "run", "token-file", "name", "guards", "guard-param", "diff-out", "gesture", "count", "timeout", "device", "write"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -176,6 +182,7 @@ func kv(_ xs: [String]) -> [String: String] {
     if let f = args.one("fixture") { o.fixture = f }
     if let r = args.one("reps").flatMap(Int.init) { o.reps = r }
     o.params = kv(args.all("set").filter { !KnobArgs.isKnob($0) })
+    if args.has("gesture") { o.params["gesture"] = args.all("gesture").joined(separator: ",") }
     if let s = args.one("size") { let p = s.lowercased().split(separator: "x"); if p.count == 2, let w = Double(p[0]), let h = Double(p[1]) { o.width = w; o.height = h } }
     o.activate = !args.has("no-activate")
     o.quietCheck = args.one("quiet-check") != "0"
@@ -331,6 +338,9 @@ func kv(_ xs: [String]) -> [String: String] {
       return Int32(c.regression ? ExitCode.regression : ExitCode.ok)
     } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
 
+  case "record-gesture": return await RecordGesture.run(args)
+  case "gestures": return GestureList.run(args)
+
   case "snapdiff":
     return SnapDiff.run(Array(args.positional.dropFirst()), params: args.all("guard-param"), diffOut: args.one("diff-out"), json: json)
 
@@ -359,7 +369,7 @@ if ["run", "suite", "snapshot", "profile", "ab"].contains(startup.positional.fir
   let p = DeskKnobs.problems
   if !p.isEmpty { err("deskbench: " + p.joined(separator: "\ndeskbench: ")); exit(Int32(ExitCode.usage)) }
 }
-let sceneCommands = ["run", "suite", "snapshot"]
+let sceneCommands = ["run", "suite", "snapshot", "record-gesture"]
 let wantsScene = sceneCommands.contains(startup.positional.first ?? "") && (startup.one("host") ?? "scene") == "scene"
   && !(startup.positional.first == "run" && startup.positional.dropFirst().first == "open")
 MainActor.assumeIsolated {
@@ -374,7 +384,7 @@ Task { @MainActor in
 }
 if MainActor.assumeIsolated({ Harness.current != nil }) {
   BenchScene.main()
-} else if ["selftest", "describe", "knobs", "fixture", "snapdiff"].contains(startup.positional.first ?? "") {
+} else if ["selftest", "describe", "knobs", "fixture", "snapdiff", "gestures"].contains(startup.positional.first ?? "") {
   // Headless: the main run loop without NSApplication (no Dock icon, no window server connection).
   CFRunLoopRun()
 } else {
@@ -382,7 +392,7 @@ if MainActor.assumeIsolated({ Harness.current != nil }) {
   // A regular app (Dock icon, can become active): SwiftUI flushes state changes promptly only in an active app. The
   // commands that only spawn or read (ab, profile, compare, …) never show a window: they stay out of the way of the
   // child that does, and never take activation from it.
-  let windowless = !["run", "suite", "snapshot"].contains(startup.positional.first ?? "")
+  let windowless = !["run", "suite", "snapshot", "record-gesture"].contains(startup.positional.first ?? "")
   app.setActivationPolicy(CommandLine.arguments.contains("--no-activate") || windowless ? .accessory : .regular)
   app.run()
 }

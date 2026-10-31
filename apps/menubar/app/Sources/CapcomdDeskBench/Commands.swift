@@ -94,6 +94,7 @@ import DeskBenchKit
       case "step": (steps, checks) = await drive.step()
       case "jump": (steps, checks) = await drive.jump()
       case "fling": (steps, checks) = await drive.fling()
+      case "swipe": (steps, checks) = await drive.swipe()
       case "burst": (steps, checks) = await drive.burst()
       case "typing": (steps, checks) = await drive.typing()
       case "resize": (steps, checks) = await drive.resize()

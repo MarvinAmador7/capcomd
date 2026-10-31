@@ -37,7 +37,16 @@ public enum Explain {
     o.append("  frames        \(hitch)display at \(s.steadyHz.median.clean) Hz  p95 \(s.frameP95Ms.median) ms  p99 \(s.frameP99Ms.median) ms  late \(s.lateFrames.median)/rep (max \(s.lateFrames.max))  dropped \(s.droppedFrames.median)/rep")
     o.append("  main thread   longest \(s.longestStretchMs.median) ms (max \(s.longestStretchMs.max))  >16.7 ms: \(s.stretchesOver16.median)/rep  >100 ms: \(s.hangsOver100.median)/rep  cpu share while awake \(Int(s.mainThreadCpuShare * 100)) %")
     if s.mainThreadCpuShare < 0.6 { o.append("  !! the main thread had \(Int(s.mainThreadCpuShare * 100)) % of a core while awake: it was preempted by other processes. Stretch lengths below are wall time; the cpu column is the work.") }
-    if s.steadyHz.median < r.machine.screenHz - 0.5, ["step", "jump", "fling", "follow", "burst"].contains(r.scenario) { o.append("  !! the display ran at \(s.steadyHz.median.clean) Hz during the scenario on a \(r.machine.screenHz.clean) Hz panel (adaptive refresh, or a 60 Hz display setting); late frames are judged at that rate") }
+    if s.steadyHz.median < r.machine.screenHz - 0.5, ["step", "jump", "fling", "swipe", "follow", "burst"].contains(r.scenario) { o.append("  !! the display ran at \(s.steadyHz.median.clean) Hz during the scenario on a \(r.machine.screenHz.clean) Hz panel (adaptive refresh, or a 60 Hz display setting); late frames are judged at that rate") }
+    if let m = s.smoothness {
+      let e = m.positionErrorP95Pt.map { "position error p95 \($0.median) pt (max \($0.max))" } ?? "position error: no tick while the fingers were down"
+      o.append("  smoothness    \(e)  stalls \(m.stalls.median)/rep (max \(m.stalls.max))  jerk p95 \(m.jerkP95.map { "\($0.median) pt/frame³" } ?? "-")")
+      for rep in r.reps.prefix(2) {
+        for st in rep.steps { if let x = st.smoothness {
+          o.append("    rep \(rep.index) \(st.name): error p95 \(x.positionErrorP95Pt.map { "\($0) pt" } ?? "-") (max \(x.positionErrorMaxPt.map { "\($0)" } ?? "-"), \(x.trackingTicks) ticks fingers down, \(x.latencyFrames.map { "\($0) frame(s) behind" } ?? "-"))  stalls \(x.stalls)  jerk p95 \(x.jerkP95.map { "\($0)" } ?? "-") over \(x.ticks) ticks")
+        } }
+      }
+    }
     let bodies = s.bodies.sorted { $0.value > $1.value }.prefix(8).map { "\($0.key) \(Int($0.value))" }
     if !bodies.isEmpty { o.append("  bodies/rep    " + bodies.joined(separator: "  ")) }
     if !s.checksFailed.isEmpty { o.append("  checks failed " + s.checksFailed.joined(separator: ", ")) }
@@ -110,7 +119,7 @@ public enum Explain {
     var out = stackCauses(r)
     let s = r.summary
     let stretches = r.reps.flatMap(\.worstStretches)
-    let scrolling = ["step", "jump", "fling", "follow"].contains(r.scenario)
+    let scrolling = ["step", "jump", "fling", "swipe", "follow"].contains(r.scenario)
     // Bodies only in the stretches that belong to a step: the setup (rewinding the reel, building columns) is meant to build.
     let inSteps = stretches.filter { !$0.step.hasPrefix("before ") && !$0.step.hasPrefix("after ") }
     func total(_ view: String) -> Int { inSteps.reduce(0) { $0 + ($1.bodies[view] ?? 0) } }

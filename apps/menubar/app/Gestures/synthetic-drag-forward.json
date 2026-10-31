@@ -1,0 +1,418 @@
+{
+  "device" : "trackpad",
+  "events" : [
+    {
+      "dx" : 0,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "mayBegin",
+      "precise" : true,
+      "t" : 0
+    },
+    {
+      "dx" : 0,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "began",
+      "precise" : true,
+      "t" : 8.333
+    },
+    {
+      "dx" : -1,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 16.667
+    },
+    {
+      "dx" : -1,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 25
+    },
+    {
+      "dx" : -2,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 33.333
+    },
+    {
+      "dx" : -3,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 41.667
+    },
+    {
+      "dx" : -3,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 50
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 58.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 66.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 75
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 83.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 91.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 100
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 108.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 116.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 125
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 133.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 141.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 150
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 158.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 166.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 175
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 183.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 191.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 200
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 208.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 216.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 225
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 233.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 241.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 250
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 258.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 266.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 275
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 283.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 291.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 300
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 308.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 316.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 325
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 333.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 341.667
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 350
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 358.333
+    },
+    {
+      "dx" : -4,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 366.667
+    },
+    {
+      "dx" : -3,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 375
+    },
+    {
+      "dx" : -3,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 383.333
+    },
+    {
+      "dx" : -2,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 391.667
+    },
+    {
+      "dx" : -1,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 400
+    },
+    {
+      "dx" : -1,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "changed",
+      "precise" : true,
+      "t" : 408.333
+    },
+    {
+      "dx" : 0,
+      "dy" : 0,
+      "momentum" : "none",
+      "phase" : "ended",
+      "precise" : true,
+      "t" : 416.667
+    }
+  ],
+  "hz" : 120,
+  "name" : "synthetic-drag-forward",
+  "schema" : "perfloop.gesture/1",
+  "source" : "deskbench drag: 480 pt/s forward for 48 frames, ramped over 6 at each end, no momentum, 120 Hz",
+  "synthetic" : true
+}
