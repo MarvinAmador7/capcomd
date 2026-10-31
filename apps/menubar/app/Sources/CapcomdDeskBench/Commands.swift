@@ -88,6 +88,7 @@ import DeskBenchKit
     let repStart = h.mark()
     for rep in 0..<max(1, o.reps) {
       let m = h.mark()
+      let samplerMark = h.sampler?.mark()
       let (steps, checks): ([StepResult], [Check])
       switch spec.name {
       case "open": (steps, checks) = await drive.open(rep: rep, size: size, activate: o.activate)
@@ -117,6 +118,7 @@ import DeskBenchKit
       let worst = h.worstStretches(from: m.stretch, steps: steps)
       repResults.append(RepResult(index: rep, variant: o.variant, steps: steps, frames: FrameStats(intervalsMs: its, nominalHz: h.nominalHz),
                                   mainThread: MainThreadStats(stretchesMs: st, cpuMs: cpu), bodies: bodies, checks: checks, worstStretches: worst, window: h.windowState()))
+      if let s = h.sampler, let sm = samplerMark { repResults[repResults.count - 1].sampler = s.stats(since: sm) }
       if let dir = o.artifacts { artifacts += h.snapshot(into: dir, name: "\(spec.name)-rep\(rep)") }
       await h.sleep(ms: 200)
     }

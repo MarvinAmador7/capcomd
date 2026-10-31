@@ -39,6 +39,10 @@ run options
                         made by hand (the default for `open`, which needs a fresh window per rep)
   --hold S              keep the window up S seconds after the run (to look at it)
   --wait-for FILE       show the window, then wait until FILE exists before running (what `profile` uses to attach)
+  --sampler on|off      sample the main thread's stacks inside long stretches (default on; worstStretches[].stacks;
+                        DESKBENCH_SAMPLER=off in the environment also turns it off, for `ab`'s children)
+  --sample-hz N         sampling rate while a stretch is open (default 1000)
+  --sample-gate-ms N    sample a stretch only once it has lasted N ms (default 4)
 
 exit codes  0 pass · 1 usage · 2 harness error · 3 budget failed · 4 regression beyond noise · 5 untrusted (failed on a noisy machine: run again)
 """
@@ -52,7 +56,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host"]
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -76,6 +80,7 @@ func kv(_ xs: [String]) -> [String: String] {
   let args = Args(argv)
   guard let cmd = args.positional.first else { out(help); return Int32(ExitCode.usage) }
   let json = args.has("json")
+  SamplerConfig.current = SamplerConfig(args)
   switch cmd {
   case "help", "-h", "--help": out(help); return 0
 

@@ -35,6 +35,8 @@ import DeskBenchKit
   var waiters: [(id: Int, check: () -> Bool, resume: () -> Void)] = []
   var waiterSerial = 0
   var nominalHz: Double = 60
+  /// Main-thread stacks inside long stretches (Sampler.swift); nil with `--sampler off`.
+  var sampler: MainThreadSampler?
   /// Sequence numbers for events the scenarios make up (asks, decisions): never reused, the store drops duplicate ids.
   var liveSeq = 900_000
   func nextSeq() -> Int { liveSeq += 1; return liveSeq }
@@ -141,11 +143,13 @@ import DeskBenchKit
     }
     CFRunLoopAddObserver(CFRunLoopGetMain(), o, CFRunLoopMode.commonModes)
     observer = o
+    if SamplerConfig.current.enabled, MainThreadSampler.supported { sampler = sampler ?? MainThreadSampler(config: SamplerConfig.current); sampler?.attach() }
   }
 
   func stopSampling() {
     link?.invalidate(); link = nil
     if let o = observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), o, CFRunLoopMode.commonModes); observer = nil }
+    sampler?.detach()
   }
 
   /// The calling thread's CPU time (user + system) in ms.
@@ -248,13 +252,16 @@ import DeskBenchKit
     bodies.filter { range.contains($0.t) }.map { ($0.view, $0.id) }
   }
 
-  /// The longest main-thread stretches since `from`, each with the bodies evaluated inside it.
+  /// The longest main-thread stretches since `from`, each with the bodies evaluated inside it (and its stacks, with the sampler on).
   func worstStretches(from index: Int, steps: [StepResult], limit: Int = 8) -> [Stretch] {
-    stretches[index...].sorted { $0.dur > $1.dur }.prefix(limit).map { s in
+    if let first = stretches[index...].first { sampler?.discard(before: t0 + first.at / 1000 - 0.001) }
+    return stretches[index...].sorted { $0.dur > $1.dur }.prefix(limit).map { s in
       let step = steps.last { $0.atMs <= s.at + 0.01 }?.name ?? "idle"
       var b: [String: Int] = [:]
       for x in bodies(in: s.at...(s.at + s.dur)) { b[x.view, default: 0] += 1 }
-      return Stretch(step: step, atMs: Stats.round(s.at, 1), durationMs: Stats.round(s.dur, 2), cpuMs: Stats.round(s.cpu, 2), bodies: b)
+      var w = Stretch(step: step, atMs: Stats.round(s.at, 1), durationMs: Stats.round(s.dur, 2), cpuMs: Stats.round(s.cpu, 2), bodies: b)
+      sampler?.annotate(&w, wokeAt: t0 + s.at / 1000)
+      return w
     }
   }
 
