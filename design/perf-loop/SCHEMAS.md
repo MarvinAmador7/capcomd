@@ -39,8 +39,10 @@ machine; rerun).
       "objective": "mainThreadCpuMsPerStep" | "instructionsPerStep" | "latencyMs",
       "guards": [ "landed", "built-within", "snapshot-diff" ],
       "guardParams": { "built-within.ms": 300, "snapshot-diff.tolerance": 0.005 },
+      "frameGuards": [ "hitchTimeRatioMsPerS", "longestStretchMs" ],   // judged by their bands (Acceptance)
       "secondFixture": "swarm64"                 // promotion needs not-worse here
   } ],
+  "isolationGuards": [ "burst", "typing" ],      // their checks run on every promotion, whatever the experiment climbs
   "fixtures": [ { …FixtureSpec as today…, "parametric": { "agents": [1, 64], "items": [50, 600] } } ],
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"], "since": "0.7" },
              { "name": "build.perFrame", "type": "int", "default": 2, "range": [1, 8] } ],
@@ -79,7 +81,8 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
                  "topOurs": [ { "symbol": "ReelView.slide", "samples": 180 } ],
                  "topFramework": [ { "symbol": "LayoutEngineBox.sizeThatFits", "samples": 229, "under": "ReelRepresentable" } ],
                  "causes": [ … ] } ],
-    "guards": [ { "name": "snapshot-diff", "pass": true, "detail": "0.1 % of pixels differ", "artifacts": ["…/step-rep0.png"] } ]
+    "guards": [ { "name": "snapshot-diff", "pass": true, "detail": "0.1 % of pixels differ", "artifacts": ["…/step-rep0.png"],
+                  "value": 0.001, "limit": 0.005, "review": null } ]   // review: true = over tolerance, the owner decides
   } ] }
 ```
 
@@ -129,10 +132,13 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
   "build": { …build… } | null,
   "scenario": "step", "fixture": "crew17", "secondFixture": "swarm64",
   "screen": { "pairs": 3, "results": [ "screen/a1.json", "screen/b1.json", … ], "objective": { "a": [..], "b": [..] },
-              "wins": 3, "medianGainPct": 61.2, "band": 8.1, "guardsPassed": true, "verdict": "promising" },
+              "wins": 3, "medianGainPct": 61.2, "band": 8.1, "guardsPassed": true, "guardReviews": null, "verdict": "promising" },   // needsReview: a guard asks the owner
   "full":   { "repsPerSide": 5, "extendedTo": 8, "mwuP": 0.004, "effectPct": 58.9, "band": 7.0,
               "frameGuards": { "hitchTimeRatioMsPerS": { "a": 41.0, "b": 2.1, "pass": true }, "longestStretchMs": { … } },
               "verdict": "won" },
+  "isolation": [ { "scenario": "burst", "pair": { … }, "pass": true, "failures": [] } ],   // after a won full
+  "guardRuns": [ { "at": "…", "pair": { … }, "isolation": [ … ], "params": { … }, "override": null, "failures": [], "reviews": [] } ],
+  "guardParams": { "snapshot-diff.tolerance": 0.01 } | null,     // the owner's, from perfloop guards --guard-tolerance
   "confirmation": { "hitchesTrace": "/Users/…/.perfloop/capcomd-desktop/traces/0007-step-hitches.trace", "timeTrace": "…", "profile": "exp/0007/profile.json",
                     "compositorHitchTimeRatioMsPerS": 3.4 },
   "diff": "exp/0007/diff.json", "explain": "exp/0007/explain.txt",

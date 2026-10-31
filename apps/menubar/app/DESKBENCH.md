@@ -52,6 +52,7 @@ true. Results from before the stamp have no `build` and often no `commit`.
 | Did commit B regress commit A? | build both, `ab --a A/CapcomdDeskBench --b B/CapcomdDeskBench step --reps 5` | the `[objective]` and `[guard]` lines; exit 4 on a regression beyond noise |
 | Was a decision right (the slide, the build rate)? | `ab step --a-knobs reel.slide=ca --b-knobs reel.slide=clip --reps 5`: one binary, two knob settings | the same lines; the `knobs:` line says what differed |
 | What can a runner drive, decide on, sweep? | `describe --json` | `scenarios[]` (`objective`, `guards`, `checks`, `params`), `fixtures`, `knobs` |
+| Did my change leave a column blank or change the look? | `run switch --guards built-within,snapshot-diff --artifacts DIR`, then `snapdiff A.png B.png` | `reps[].guards[]`; see *Correctness guards* |
 | Gate in a script | `run … --baseline saved.json` or `compare a.json b.json` | exit code |
 
 Exit codes: `0` pass · `1` usage · `2` harness error · `3` budget failed · `4` regression beyond noise · `5` untrusted
@@ -268,10 +269,51 @@ code and the knob is deleted (SPEC §7.6), so knobs don't pile up.
 without importing the app: `build` (this binary's stamp), `protocol` (1: `run <scenario> --json` prints a result on
 stdout, `--wait-for FILE` holds the window until FILE exists and writes FILE.done after the reps, knobs come in
 `PERFLOOP_KNOBS`), `scenarios[]` (`name`, `kind`, `budget`, `rule`, `latencyBudgetMs`, `params` with defaults,
-`objective` that `ab` decides on, `guards` that may not get worse, `checks` the driver records, `host` when it is fixed),
+`objective` that `ab` decides on, `guards` (the correctness guards that gate acceptance, with `guardParams`), `frameGuards`
+that may not get worse, `checks` the driver records, `host` when it is fixed), `isolationGuards` (scenarios whose checks
+run on every promotion),
 `suite`, `fixtures`, `defaultFixture`, `knobs[]` (`name`, `type`, `default`, `choices` or `range`, numbers for numeric
 knobs), `objectives`, `hosts`, `defaultHost`, `probes` (the view bodies counted) and `exitCodes`. Without `--json` it
 is the same as text. `describe` and `knobs` run headless (no NSApplication, no window).
+
+## Correctness guards
+
+A blank column is fast. The guards (design/perf-loop CAPABILITIES.md C6) make "fast because wrong" lose; perfloop
+reads which ones gate a scenario from the champion's manifest (`guards`, `guardParams`) and asks both sides of every
+pair for them. By hand: `run <scenario> --guards built-within,snapshot-diff --artifacts DIR` (`--guard-param k=v`;
+perfloop sets `PERFLOOP_GUARDS`, `PERFLOOP_GUARD_PARAMS`, `PERFLOOP_ARTIFACTS`). They run after each rep, outside its
+measured steps (a run without `--guards` times exactly as before), and land in `reps[].guards[]` (`name`, `pass`,
+`detail`, `artifacts`, `value`, `limit`, `review`), `summary.guardsFailed`, and `ab`'s `guardsA`/`guardsB`.
+
+- **Settle** is the window at rest after the last step: the main thread quiet (no stretch over 4 ms of CPU) for 300 ms,
+  never before the step's own settle point. Not the frame the step measured: a switched-to project shows its heads
+  first and warms its threads after, nearest first, which took 2.2–3.3 s on crew17.
+- **`built-within`** (all scenarios): every column at least half in view has had its `Column`, `ColumnHead`,
+  `ColumnThread` and (when the fixture gives the agent a thread) one `EntryRow` body since its project opened (a switch,
+  a fresh window), the last of them at most `built-within.ms` (300) after settle; it is warm; its view in the reel is a
+  hosting view with something in it, not the reel's blank placeholder. `value` is how long after settle the last column
+  was built (negative: before).
+- **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `follow`, `resize`; not `burst` or `typing`): after
+  settle the run writes `<scenario>-rep<i>.settled.png`, `.layout.json` (where the columns and their threads are, in
+  pixels) and `.later.png` 1.1 s later. `snapdiff A.png B.png [--diff-out D.png] [--json]` compares the champion's (A)
+  with the candidate's (B), headless, in the champion's binary: pixel by pixel (a channel off by more than 16 of 255)
+  outside what changed by itself between a side's two pictures (the system-drawn clocks tick every second; masked 56 pt
+  to the left, the clock's width) and outside the threads' viewports; the share of differing pixels against
+  `snapshot-diff.tolerance` (0.5 %), per column against `columnTolerance` (2 %) and its ink box (what is drawn in it)
+  against `bboxPt` (4 pt); each thread by how much of its viewport is drawn, at least `threadInkMin` (20 %) of the
+  champion's. Threads aren't compared pixel by pixel because the same build rests them at different scroll offsets
+  after a switch. Exit 3 over tolerance; perfloop then sends the experiment to the owner (`needsReview`) and keeps both
+  PNGs and the diff in `exp/<id>/<stage>/p<n>/`.
+
+Same build against itself (2026-10-31, crew17, two binaries of one source): 0 differing pixels outside the threads on
+`switch` and `step` in every pair, within and across processes; threads drawn 31 % or more of each other's (once in a
+while a thread rests after a switch with most of its viewport still empty: 3.7 % drawn vs 11.6 %). A build that leaves
+the columns blank after a switch (the reel's placeholders) won `switch` by 31 % (8 + 8, p = 0.003) and lost on
+`built-within` in every pair, with 1.75 % of the window and 3.4–4.4 % of each column differing and its threads 0 % drawn.
+
+What they showed about the window as it is: after a switch the reel shows the first columns while the model's `onScreen`
+is the asking agent's (the non-animated reel request is served before the new columns are in the reel), so the threads
+in view warm last, 2–3 s after the frame `switch` measures.
 
 ## Profiling without reading XML
 

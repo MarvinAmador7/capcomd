@@ -40,7 +40,10 @@ Start each session with `perfloop session start` and `perfloop exp status`. Then
    - `promising`: `perfloop exp full <id>` (5 + 5 pairs, ~3 min; extends itself to 8 + 8, 10 + 10 while unsure).
    - `won`: `perfloop exp promote <id>`, then open a PR with explain.txt and the patch. The champion moves now; you may
      climb on it before the PR merges. After the merge, the owner runs `perfloop champion merged <sha>`.
-   - `lost`, `needsReview`: drop it, or ask the owner (needsReview means no decision at 10 + 10, or a guard asked).
+   - `lost`, `needsReview`: drop it, or ask the owner (needsReview means no decision at 10 + 10, or a snapshot that
+     doesn't look like the champion's: the guards lines in explain.txt name both PNGs and the diff).
+   - `perfloop guards --exp <id>` re-runs the correctness guards alone (one pair, plus `burst` and `typing`). Only the
+     owner passes `--guard-tolerance`; no `exp` verb takes it.
 6. **Stop** when `exp status` prints a `stop:` line (SPEC §5.3): the scenario meets its budget, no attributable subtree
    ≥ 5 % remains, 5 non-promising candidates in a row, or the session's 2 h / 20 candidates are spent. Say what you
    tried and what's left, from `perfloop ledger`.
@@ -57,7 +60,11 @@ Start each session with `perfloop session start` and `perfloop exp status`. Then
 
 A screen is promising when the candidate wins every pair and the median gain is ≥ max(5 %, the noise band). A full wins
 when Mann-Whitney gives p < 0.05, the effect is ≥ the band, and the frame guards (hitch time ratio, longest stretch)
-are not worse beyond theirs. Correctness guards (`landed`, the scenario's checks) veto any win. A win must not be worse
+are not worse beyond theirs. Correctness guards veto any win (DESKBENCH.md, *Correctness guards*): the scenario's checks
+(`landed`, …), `built-within` (the columns in view built once the window is at rest) and `snapshot-diff` (the window then
+looks like the champion's; over tolerance it is `needsReview`, never a win). They come from the champion's manifest, so
+a candidate can't drop one. Once a full has won, the isolation scenarios (`burst`, `typing`) run one pair each, whatever
+you climb; a broken one loses the experiment. A win must not be worse
 on the second fixture (`swarm64`). Late-frame counts and frame p95 are information: when the frame rate changed
 between builds, `explain` says so, and they mean nothing on their own (a 48 Hz build has twice the chances to be late).
 
