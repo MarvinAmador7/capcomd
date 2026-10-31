@@ -78,7 +78,7 @@ public struct MainThreadStats: Codable, Sendable, Equatable {
   public static let empty = MainThreadStats(stretchesMs: [])
 }
 
-/// One long main-thread stretch and what SwiftUI evaluated inside it: the bench's substitute for a stack sample.
+/// One long main-thread stretch, what SwiftUI evaluated inside it and, with the sampler on, the stacks it sampled.
 public struct Stretch: Codable, Sendable, Equatable {
   public var step: String
   public var atMs: Double
@@ -87,6 +87,21 @@ public struct Stretch: Codable, Sendable, Equatable {
   public var cpuMs: Double
   /// View bodies evaluated during the stretch, by view type ("Column", "EntryRow", …).
   public var bodies: [String: Int]
+  // The in-process sampler's view of the stretch (Sampler.swift); all absent when it was off (`--sampler off`) or in
+  // results from before it existed.
+  /// Main-thread stacks sampled inside the stretch (1 per ms once it passed the gate); 0 when it was shorter than the gate.
+  public var samples: Int? = nil
+  /// The samples folded into a call tree (`v` = samples), symbolised in-process with dladdr after the rep.
+  public var stacks: CallTree? = nil
+  /// Our frames (the app's and the bench's code), inclusive, heaviest first.
+  public var topOurs: [SymbolCount]? = nil
+  /// Framework frames, inclusive, outside the run loop's own; `under` is our frame they ran beneath.
+  public var topFramework: [SymbolCount]? = nil
+  /// Where the samples landed (leaf frames).
+  public var topSelf: [SymbolCount]? = nil
+  /// Wall time from the first observer of the wake-up to the last one before the thread slept: covers the Core
+  /// Animation commit, which `durationMs` (measured at observer order 0) ends before.
+  public var awakeMs: Double? = nil
   public init(step: String, atMs: Double, durationMs: Double, cpuMs: Double, bodies: [String: Int]) { self.step = step; self.atMs = atMs; self.durationMs = durationMs; self.cpuMs = cpuMs; self.bodies = bodies }
 }
 
@@ -149,6 +164,8 @@ public struct RepResult: Codable, Sendable, Equatable {
   public var checks: [Check]
   public var worstStretches: [Stretch]
   public var window: WindowState?
+  /// What the in-process sampler did and cost during the rep; absent when it was off.
+  public var sampler: SamplerStats? = nil
   public init(index: Int, variant: String? = nil, steps: [StepResult], frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], checks: [Check], worstStretches: [Stretch], window: WindowState?) {
     self.index = index; self.variant = variant; self.steps = steps; self.frames = frames; self.mainThread = mainThread; self.bodies = bodies; self.checks = checks; self.worstStretches = worstStretches; self.window = window
   }

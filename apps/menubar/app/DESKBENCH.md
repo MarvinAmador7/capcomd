@@ -19,6 +19,7 @@ $B run step --fixture crew17 --reps 5                   # one scenario, text ver
 $B suite --reps 3 --out /tmp/bench                      # everything, one line each; JSON per scenario in /tmp/bench
 $B snapshot --out /tmp/snap                             # window.png + window.json (view tree, scroll geometry, model)
 $B profile step --template hitches --out /tmp/prof      # the same run under Instruments, summarised
+$B selftest sampler                                     # headless check of the stack sampler (no window)
 ```
 
 Debug builds are 5–20× slower in SwiftUI's own code and will fail every budget: the result says `"configuration":
@@ -42,7 +43,8 @@ true. Results from before the stamp have no `build` and often no `commit`.
 | Does Follow go to the ask, and how fast? | `run follow` | `latencyMs` (ask → reel starts), `settleMs`, check `landed` |
 | What does the window look like / why does it scroll vertically? | `snapshot` | `window.png`; `window.json → scrollViews` (doc vs clip size, insets, safe area) |
 | Which views re-rendered when X happened? | any `run`, look at `reps[].steps[].bodies` and `worstStretches[].bodies` | per view type; `Column`, `EntryRow` etc. carry the agent id internally for the isolation checks |
-| What ran inside a long stretch (stacks)? | `profile <scenario> --template time` | `timeProfile.burstFrames` (what the ≥16 ms bursts were doing), `inclusiveOurs` |
+| What ran inside a long stretch (stacks)? | any `run` (the sampler is on by default), then `explain` | `worstStretches[].topOurs`, `topFramework` (with `under`), `topSelf`, `stacks` (the tree) |
+| The same, confirmed by Instruments | `profile <scenario> --template time` | `timeProfile.burstFrames` (what the ≥16 ms bursts were doing), `inclusiveOurs` |
 | What did the compositor count as hitches? | `profile <scenario> --template hitches` | `hitches.hitches`, `causes`, `potentialHangsMs` |
 | Did commit B regress commit A? | build both, `ab --a A/CapcomdDeskBench --b B/CapcomdDeskBench step --reps 5` | the `[objective]` and `[guard]` lines; exit 4 on a regression beyond noise |
 | Gate in a script | `run … --baseline saved.json` or `compare a.json b.json` | exit code |
@@ -100,7 +102,7 @@ numbers (medians across reps):
   main thread   longest 6.9 ms (max 11.2)  >16.7 ms: 0.0/rep  >100 ms: 0.0/rep
   bodies/rep    Column 136  CrewTab 128  Reel 8  OpenGroup 8
 
-longest main-thread stretches (what SwiftUI evaluated inside each):
+longest main-thread stretches (what SwiftUI evaluated inside each, and where the sampled stacks were):
      11.2 ms  during step#3 9→12  Column×17 CrewTab×16 OpenGroup×1
 ```
 
@@ -125,8 +127,9 @@ longest main-thread stretches (what SwiftUI evaluated inside each):
 - **bodies**: SwiftUI `body` evaluations per view type (the views call `DeskProbe.body` first thing; with no sink
   attached, as in the app, that is a nil check). `Column×17` after a tab click means every column re-evaluated once;
   `Column` counts growing with the length of a jump means columns are being rebuilt mid-scroll.
-- **stretches**: the longest awakenings, with the bodies evaluated inside each. A long stretch with no bodies is
-  AppKit layout, text, or the fixture: use `profile --template time`.
+- **stretches**: the longest awakenings, with the bodies evaluated inside each and, under it, what the sampler saw
+  (next section): the top inclusive frames that are ours or SwiftUI/AppKit hot spots, the hottest path through the
+  stack, and the leaf frames. A long stretch with no bodies is AppKit layout, text, or the fixture; its stacks say which.
 - **noise** and **window**: the idle floor measured before the scenario, the load average, thermal state, busy
   processes, and whether the window was active, key and unoccluded. SwiftUI flushes timer-driven state changes
   late (seconds) when the app is in the background, so the bench activates itself; `window.trustworthy` in the JSON
@@ -137,7 +140,60 @@ JSON: `BenchResult` in `Results.swift`. The useful paths: `.verdict`, `.exitCode
 (and the frame counts `lateFrames`, `frameP95Ms`), `.reps[].steps[]` (per step: `latencyMs`, `settleMs`, `cpuMs`,
 `instructions`, `frames` with `hitchTimeRatioMsPerS`, `mainThread`, `bodies`, `notes`), `.reps[].checks[]`,
 `.reps[].worstStretches[]`, `.noise`, `.window`, `.machine`, `.tool.build`, `.profiled`, `.comparison[]` (each row
-with its `role`). Fields are only ever added: older results still decode, with the new ones absent.
+with its `role`). Fields are only ever added: older results still decode, with the new ones absent. With the sampler, `.reps[].worstStretches[].{samples,topOurs,topFramework,topSelf,stacks}`
+and `.reps[].sampler`.
+
+## Stacks inside stretches: the sampler
+
+While a `run` (or `suite`, `ab`'s children, `profile`'s child) has its window up, a background thread samples the main
+thread's stack, but only inside a stretch that has already lasted `--sample-gate-ms` (default 4 ms), at `--sample-hz`
+(default 1000): it suspends the main thread, reads its registers, walks the frame pointers, resumes it. Idle time and
+short wake-ups cost two observer callouts and nothing else. After each rep the stacks of the worst stretches are
+symbolised in-process (`dladdr`, demangled, cleaned to xctrace-style names such as `ScrollViewCommitMutation.commit`,
+`AG::Graph::propagate_dirty`) and attached to `worstStretches[]`:
+
+| field | what |
+|---|---|
+| `samples` | stacks taken in the stretch; `0` = shorter than the gate (not sampled) |
+| `topOurs` | our frames (anything in the bench's executable: CapcomdDesk, CapcomdUI, the store, the bench), inclusive |
+| `topFramework` | framework frames, inclusive, minus the run loop's own (`CFRunLoopRun…`, `_dispatch_…`, `main`); `under` = our frame they ran beneath |
+| `topSelf` | the leaf frames: where the samples landed |
+| `stacks` | the folded tree (`{n, v, c}`, `v` = samples, heaviest child first, nodes under 0.5 % pruned) |
+| `awakeMs` | the wake-up as the sampler saw it (see below) |
+
+`reps[].sampler` has what it did and cost: `samples`, `sampledStretches`, `failures`, `truncated`, `costP50Us`
+(per sample), `stallMs` (time the main thread was held suspended), `overheadPct` (the sampler thread's CPU over the
+main thread's). `--sampler off` (or `DESKBENCH_SAMPLER=off` in the environment) turns it all off: the fields are then absent, as in
+results from before it existed.
+In `explain` each sampled stretch gets up to three lines (this one is from `selftest sampler`, whose burn is
+`selftestBurn` → 90 % `selftestHot` → `selftestHotInner` → `selftestSpin`, 10 % `selftestCold` → `selftestSpin`):
+
+```
+    120.1 ms wall  120.1 ms cpu  during selftest  (no view bodies)
+             116 samples: SelfTest.sampler 100 % · selftestBurn 100 % · selftestSpin 99 % · selftestHot 89 % · selftestHotInner 89 %
+             path: SelfTest.sampler 100 % › selftestBurn 100 % › selftestHot 89 % › selftestHotInner 89 % › selftestSpin 88 %
+             self: selftestSpin 99 % · selftestHotInner 1 %
+```
+
+The first line is the top five inclusive frames that are ours or SwiftUI/AppKit hot spots; `path` follows the
+heaviest callee down from the run loop, printing the frames where the time splits; `self` is where it landed.
+
+`selftest sampler` checks it headless, with no window: a known 90/10 workload on a bare main run loop must come out
+90/10, wake-ups under the gate must not be sampled, and two seconds of allocation under sampling must not deadlock.
+On an M1 Pro at a load average of 7–10 it reported ~10 µs a sample, the sampler thread at ~1.3 % of the main thread's
+CPU, ~1 % less work per CPU ms in sampled stretches, and 0.4–6 % more wall time (each suspension gives up the core,
+so on a loaded machine wall time pays more than CPU time; compare CPU, or turn the sampler off for both sides).
+
+Read it with care:
+
+- **Names are `dladdr`'s**: the nearest symbol before the address. In a stripped stretch of code that can be a
+  neighbour's name. `profile --template time` is the confirmation when a name looks wrong.
+- **`awakeMs` vs `durationMs`**: the harness measures a stretch with observers at order 0, which run *before* Core
+  Animation's commit and AppKit's display cycle (both `beforeWaiting` observers at higher orders). The sampler's
+  observers are the first and the last, so its samples include the commit; `awakeMs` > `durationMs` is that tail.
+- **`ab` against a build from before the sampler**: the new side pays the sampler and the old side doesn't. `ab`
+  doesn't forward flags, but the environment reaches its children: `DESKBENCH_SAMPLER=off $B ab …` (or compare CPU).
+- arm64 only (the bench's architecture); elsewhere the sampler is off.
 
 ## Comparing two builds
 

@@ -24,6 +24,7 @@ commands
   compare <baseline.json> <candidate.json> [--objective O]
                                                   regression check between two saved results of the same scenario
   explain <result.json>                           a saved result as text: verdict, numbers, longest stretches, causes
+  selftest sampler [--json]                       check the main-thread sampler headless (no window): gate, attribution, cost
   help
 
 run options
@@ -45,6 +46,10 @@ run options
   --objective O         what --baseline, ab and compare decide on: cpu (main-thread CPU ms per step; the default) |
                         instructions (per step, the least noisy) | frames (late frame ms per second) | latency (the
                         default for open, switch, follow). Frame metrics are guards: worse beyond their band also fails
+  --sampler on|off      sample the main thread's stacks inside long stretches (default on; worstStretches[].stacks;
+                        DESKBENCH_SAMPLER=off in the environment also turns it off, for `ab`'s children)
+  --sample-hz N         sampling rate while a stretch is open (default 1000)
+  --sample-gate-ms N    sample a stretch only once it has lasted N ms (default 4)
 
 exit codes  0 pass · 1 usage · 2 harness error · 3 budget failed · 4 regression beyond noise · 5 untrusted (failed on a noisy machine: run again)
             6 refused (a profiled result in a comparison)
@@ -59,7 +64,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective"]
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -88,6 +93,7 @@ func kv(_ xs: [String]) -> [String: String] {
     guard let o = Objective(argument: s) else { err("deskbench: --objective must be one of \(Objective.allCases.map(\.rawValue).joined(separator: ", "))"); return Int32(ExitCode.usage) }
     objective = o
   }
+  SamplerConfig.current = SamplerConfig(args)
   switch cmd {
   case "help", "-h", "--help": out(help); return 0
 
@@ -259,6 +265,10 @@ func kv(_ xs: [String]) -> [String: String] {
       return Int32(c.regression ? ExitCode.regression : ExitCode.ok)
     } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
 
+  case "selftest":
+    guard args.positional.dropFirst().first == "sampler" else { err("usage: deskbench selftest sampler [--json]"); return Int32(ExitCode.usage) }
+    return await SelfTest.sampler(json: json)
+
   case "explain":
     guard let f = args.positional.dropFirst().first else { err("usage: deskbench explain <result.json>"); return Int32(ExitCode.usage) }
     do { out(Explain.text(try JSONOut.decode(BenchResult.self, from: Data(contentsOf: URL(fileURLWithPath: f))))); return 0 }
@@ -288,6 +298,9 @@ Task { @MainActor in
 }
 if MainActor.assumeIsolated({ Harness.current != nil }) {
   BenchScene.main()
+} else if startup.positional.first == "selftest" {
+  // Headless: the main run loop without NSApplication (no Dock icon, no window server connection).
+  CFRunLoopRun()
 } else {
   let app = NSApplication.shared
   // A regular app (Dock icon, can become active): SwiftUI flushes state changes promptly only in an active app.
