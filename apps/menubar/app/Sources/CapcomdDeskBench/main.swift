@@ -19,6 +19,8 @@ commands
   profile <scenario> --template hitches|time|swiftui [--out DIR]
                                                   run the scenario under xctrace and summarise the trace as JSON/text
   trace <file.trace> [--process NAME] [--json]     summarise an existing trace (hitches, hangs, time profile) the same way
+  diff <a> <b> [--top N] [--per step|run] [--json] differential main-thread call tree of two time profiles (.trace or
+                                                  profile JSON), ms per step: what grew, what shrank (also `trace --diff a b`)
   ab --a EXE --b EXE <scenario> [--reps N] [--objective O]
                                                   alternate two builds of this bench, compare medians within the noise
   compare <baseline.json> <candidate.json> [--objective O]
@@ -64,7 +66,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective"] + SamplerConfig.flags
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -219,7 +221,11 @@ func kv(_ xs: [String]) -> [String: String] {
       return Int32(code)
     } catch let e as CLIError { err("deskbench: \(e)"); return Int32(e.code) } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
 
+  case "diff":
+    return DiffCommand.run(Array(args.positional.dropFirst()), args: args)
+
   case "trace":
+    if args.has("diff") { return DiffCommand.run(Array(args.positional.dropFirst()), args: args) }
     guard let f = args.positional.dropFirst().first else { err("usage: deskbench trace <file.trace> [--process NAME]"); return Int32(ExitCode.usage) }
     do {
       let r = try Commands.summarise(trace: URL(fileURLWithPath: f), template: "existing", scenario: "-", process: args.one("process") ?? "Capcomd")

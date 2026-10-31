@@ -4,7 +4,7 @@ import Foundation
 // raw return addresses; after the run they are symbolised (dladdr), cleaned here, and folded into a call tree per
 // stretch with its inclusive, self, ours and framework tops (`Stretch.stacks`, `topOurs`, `topFramework`, `topSelf`).
 
-/// A folded call tree (SCHEMAS.md's common `tree` object): `n` the frame, `v` its inclusive weight (samples in a
+/// A folded call tree of sampled stacks (SCHEMAS.md's common `tree` object): `n` the frame, `v` its inclusive weight (samples in a
 /// profile, ms in a diff), `c` its callees, heaviest first. A leaf has no `c` in the JSON.
 public struct CallTree: Codable, Sendable, Equatable {
   public var n: String

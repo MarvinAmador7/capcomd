@@ -92,7 +92,7 @@ public struct Stretch: Codable, Sendable, Equatable {
   /// Main-thread stacks sampled inside the stretch (1 per ms once it passed the gate); 0 when it was shorter than the gate.
   public var samples: Int? = nil
   /// The samples folded into a call tree (`v` = samples), symbolised in-process with dladdr after the rep.
-  public var stacks: CallTree? = nil
+  public var stacks: StackTree? = nil
   /// Our frames (the app's and the bench's code), inclusive, heaviest first.
   public var topOurs: [SymbolCount]? = nil
   /// Framework frames, inclusive, outside the run loop's own; `under` is our frame they ran beneath.
