@@ -370,7 +370,9 @@ if ["run", "suite", "snapshot", "profile", "ab"].contains(startup.positional.fir
   if !p.isEmpty { err("deskbench: " + p.joined(separator: "\ndeskbench: ")); exit(Int32(ExitCode.usage)) }
 }
 let sceneCommands = ["run", "suite", "snapshot", "record-gesture"]
-let wantsScene = sceneCommands.contains(startup.positional.first ?? "") && (startup.one("host") ?? "scene") == "scene"
+// `record-gesture --help` (and a refused --out) print and exit: no window for them.
+let helpOnly = startup.positional.first == "record-gesture" && (startup.has("help") || MainActor.assumeIsolated { if case .failure = RecordGesture.destination(startup) { true } else { false } })
+let wantsScene = sceneCommands.contains(startup.positional.first ?? "") && (startup.one("host") ?? "scene") == "scene" && !helpOnly
   && !(startup.positional.first == "run" && startup.positional.dropFirst().first == "open")
 MainActor.assumeIsolated {
   if wantsScene, let w = Fixtures.make(startup.one("fixture") ?? "crew17") {
@@ -384,7 +386,7 @@ Task { @MainActor in
 }
 if MainActor.assumeIsolated({ Harness.current != nil }) {
   BenchScene.main()
-} else if ["selftest", "describe", "knobs", "fixture", "snapdiff", "gestures"].contains(startup.positional.first ?? "") {
+} else if ["selftest", "describe", "knobs", "fixture", "snapdiff", "gestures"].contains(startup.positional.first ?? "") || helpOnly {
   // Headless: the main run loop without NSApplication (no Dock icon, no window server connection).
   CFRunLoopRun()
 } else {

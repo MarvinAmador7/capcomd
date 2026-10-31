@@ -20,6 +20,16 @@ import PerfLoopProbe
     --device   what to call the device (default: trackpad when the deltas are precise with phases, else mouse)
   """
 
+  /// Where the recording goes, or why not there. Checked before the window shows (main.swift: a refused --out opens none).
+  static func destination(_ args: Args) -> Result<URL, GestureError> {
+    let name = args.one("name") ?? "gesture"
+    let dest = args.one("out").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) } ?? Gestures.defaultDirectory.appendingPathComponent("\(name).json")
+    if let repo = Capture.checkout(containing: dest), !args.has("allow-in-repo") {
+      return .failure(GestureError("\(dest.path) is inside the git checkout \(repo.path): a recording of a hand stays out of the repo (--out elsewhere, or --allow-in-repo if the owner says so)"))
+    }
+    return .success(dest)
+  }
+
   /// How far the reel's offset is from the nearest column edge, in pt.
   static func restOffset(_ h: Harness) -> Double? {
     guard let sv = h.reelScrollView(), let doc = sv.documentView else { return nil }
@@ -31,12 +41,9 @@ import PerfLoopProbe
 
   static func run(_ args: Args) async -> Int32 {
     if args.has("help") { out(usage); return 0 }
-    let name = args.one("name") ?? args.one("out").map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "gesture"
-    let dest = args.one("out").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) } ?? Gestures.defaultDirectory.appendingPathComponent("\(name).json")
-    if let repo = Capture.checkout(containing: dest), !args.has("allow-in-repo") {
-      err("deskbench: \(dest.path) is inside the git checkout \(repo.path): a recording of a hand stays out of the repo (--out elsewhere, or --allow-in-repo if the owner says so)")
-      return Int32(ExitCode.refused)
-    }
+    let dest: URL
+    switch destination(args) { case .success(let u): dest = u; case .failure(let e): err("deskbench: \(e)"); return Int32(ExitCode.refused) }
+    let name = args.one("name") ?? dest.deletingPathExtension().lastPathComponent
     let count = max(1, args.one("count").flatMap(Int.init) ?? 1)
     let timeout = args.one("timeout").flatMap(Double.init) ?? 60
     let fixture = args.one("fixture") ?? "crew17"
