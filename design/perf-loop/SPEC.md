@@ -1,5 +1,5 @@
 ---
-title: Ascent: an agent-first performance loop for native macOS apps
+title: PerfLoop: an agent-first performance loop for native macOS apps
 subtitle: Turning CapcomdDeskBench into a project a coding agent can run almost alone
 date: 2026-10-30
 status: design, for the owner's review; nothing here is implemented
@@ -47,17 +47,16 @@ XML, and two wrong turns. This spec is what the tool must become so the next ses
 ## 2.1 Recommendation
 
 1. **Stay in the capcomd repo for now; build it as a separate Swift package that could leave.** New package at
-   `tools/ascent/` with its own `Package.swift`, no dependency on any capcomd module, its own tests that run on Linux
+   `tools/perfloop/` with its own `Package.swift`, no dependency on any capcomd module, its own tests that run on Linux
    where the code is pure. `apps/menubar/app` depends on it by path. Extraction criterion: a second app adopts it, or
    the result/manifest schemas have gone a month without a breaking change. Until then one PR changes both sides,
    which is what the churn of the next two months needs.
-2. **Generic core, capcomd adapter.** Nothing in `tools/ascent` knows what a reel is. Scenarios, fixtures, drivers,
+2. **Generic core, capcomd adapter.** Nothing in `tools/perfloop` knows what a reel is. Scenarios, fixtures, drivers,
    knobs and guards live in the app's adapter (today's `CapcomdDeskBench` target, kept under the name `deskbench`).
    The generic runner learns an app's scenarios from the adapter's `describe` output (§3.3), never from code.
 3. **Agent interface = CLI + JSON files + an append-only ledger.** No MCP server in the first four phases (§3.5).
-4. **Name: Ascent** (hill climbing on a performance objective). CLI `ascent`; libraries `AscentProbe`, `AscentHost`,
-   `AscentKit`. Alternatives if taken: Hillclimb, Cadence. The capcomd adapter stays `deskbench`. No repos are
-   created by this spec.
+4. **Name: PerfLoop** (the owner's choice, 2026-10-30). CLI `perfloop`; libraries `PerfLoopProbe`,
+   `PerfLoopHost`, `PerfLoopKit`. The capcomd adapter stays `deskbench`. No repos are created by this spec.
 
 ## 2.2 Tradeoffs considered
 
@@ -65,34 +64,34 @@ XML, and two wrong turns. This spec is what the tool must become so the next ses
 |---|---|---|---|
 | Keep growing `CapcomdDeskBench` in place | Zero plumbing; everything already links | Generic parts keep absorbing capcomd types (`FixtureThread`, `DeskModel`); no way to reuse; test target needs AppKit | No: it is already at the edge (`XCTrace.swift` and `Stats.swift` are generic, `Harness.swift` is not) |
 | Standalone repo now | Clean genericity pressure; its own release cadence | Two PRs per change while the schemas churn; CI, tagging, Homebrew for a tool with one user; no second app to validate against | Not yet |
-| Separate package inside capcomd (chosen) | One PR, one CI; `swift build` inside `tools/ascent` alone proves it has no capcomd imports; `git subtree split` later | Path dependency between packages; a package-level CI job to add | Yes |
+| Separate package inside capcomd (chosen) | One PR, one CI; `swift build` inside `tools/perfloop` alone proves it has no capcomd imports; `git subtree split` later | Path dependency between packages; a package-level CI job to add | Yes |
 | capcomd-specific forever | Simpler APIs (`model.scroll(to:)` directly) | The owner's other Swift apps and the menu bar app get nothing; scenario ideas stay locked to one window | No: the adapter boundary costs one protocol and one JSON document |
 
-Genericity gate in CI: `cd tools/ascent && swift build && swift test` on macOS, `swift test --filter AscentKitTests` on
-Linux, and a grep that fails on `import Capcomd` under `tools/ascent/Sources`.
+Genericity gate in CI: `cd tools/perfloop && swift build && swift test` on macOS, `swift test --filter PerfLoopKitTests` on
+Linux, and a grep that fails on `import Capcomd` under `tools/perfloop/Sources`.
 
 # 3. Architecture
 
 ## 3.1 Packages
 
 ```
-tools/ascent/                              Swift package "Ascent", no capcomd imports
-  Sources/AscentProbe/                     linked by the app itself (macOS only, tiny, no deps)
+tools/perfloop/                              Swift package "PerfLoop", no capcomd imports
+  Sources/PerfLoopProbe/                     linked by the app itself (macOS only, tiny, no deps)
     Probe.swift                            body/event seam (today's DeskProbe, made public); nil check when no sink
     Knobs.swift                            runtime knobs: register, read (cached), set from env/CLI       (C4)
     Mutations.swift                        optional "property X changed" records for @Observable models     (C7)
     Stretch.swift                          run-loop observer + gated main-thread sampler                 (C1)
-    Signposts.swift                        os_signpost step/animation intervals (dev.ascent.step)
+    Signposts.swift                        os_signpost step/animation intervals (dev.perfloop.step)
     BuildStamp.swift                       reads the stamp the build plugin embeds                         (C5)
-  Plugins/AscentStamp/                     build-tool plugin: writes commit, dirty flag, build time, config
-  Sources/AscentHost/                      linked by the app's bench executable (macOS only)
+  Plugins/PerfLoopStamp/                     build-tool plugin: writes commit, dirty flag, build time, config
+  Sources/PerfLoopHost/                      linked by the app's bench executable (macOS only)
     Host.swift                             window hosting (scene / hand-made), display link, noise floor
     Protocol.swift                         the bench protocol over stdin/stdout (§3.3, §4.1)
     Drivers.swift                          protocols a scenario driver implements; wait/settle helpers
     Gesture.swift                          recorded-gesture replay into an NSScrollView                   (C9)
     Guards.swift                           snapshot diff, built-within, isolation helpers                  (C6)
     Snapshot.swift                         window PNG + view dump (today's Harness.dump)
-  Sources/AscentKit/                       pure: builds and tests on Linux
+  Sources/PerfLoopKit/                       pure: builds and tests on Linux
     Schemas/                               result, profile, diff, manifest, experiment, ledger, gesture   (SCHEMAS.md)
     Stats.swift                            Dist, MAD bands, Mann-Whitney U, sign test, sequential rule
     Objective.swift                        objective + guards + acceptance rule                            (§5)
@@ -100,50 +99,50 @@ tools/ascent/                              Swift package "Ascent", no capcomd im
     Diff.swift                             differential call tree, per-step normalisation                   (C2)
     Ledger.swift                           experiment store model, champion pointer                          (C5)
     Explain.swift                          result/diff/experiment → text for an agent
-  Sources/ascent/                          the CLI (runner)
+  Sources/perfloop/                          the CLI (runner)
     run, ab, screen, profile, trace, diff, exp, sweep, queue, explain, describe, mcp? (§3.5)
     Store/                                 content-addressed builds, experiments, traces (paths only)      (C5)
     Runners/                               local (idle-gated), ssh, vm                                      (C10)
-  Tests/AscentKitTests                     Linux-safe
-  Tests/AscentHostTests                    macOS, no window (gesture maths, guard maths)
+  Tests/PerfLoopKitTests                     Linux-safe
+  Tests/PerfLoopHostTests                    macOS, no window (gesture maths, guard maths)
 
 apps/menubar/app/Sources/CapcomdDeskBench/ the capcomd adapter ("deskbench"): scenarios, fixtures, drivers, knobs,
-                                           guards; links AscentHost + CapcomdDesk. ~What exists today minus the
+                                           guards; links PerfLoopHost + CapcomdDesk. ~What exists today minus the
                                            generic parts.
-apps/menubar/app/Sources/CapcomdDesk/      the app: links AscentProbe; `DeskProbe` becomes a typealias.
+apps/menubar/app/Sources/CapcomdDesk/      the app: links PerfLoopProbe; `DeskProbe` becomes a typealias.
 ```
 
 What moves where, from today's files:
 
 | Today | Goes to |
 |---|---|
-| `DeskBenchKit/Results.swift`, `Stats.swift`, `XCTrace.swift`, `Explain.swift` | `AscentKit` (schemas renamed `ascent.*`, v1 decoders kept) |
+| `DeskBenchKit/Results.swift`, `Stats.swift`, `XCTrace.swift`, `Explain.swift` | `PerfLoopKit` (schemas renamed `perfloop.*`, v1 decoders kept) |
 | `DeskBenchKit/Scenarios.swift`, `Fixtures.swift` | stay in the adapter (`ScenarioSpec` becomes a protocol conformance that `describe` serialises) |
-| `CapcomdDeskBench/Harness.swift` sampling, window, waiters, dump | `AscentHost`; the model-specific helpers (`reelScrollView`, `composerField`, `reelMoving`) stay in the adapter |
-| `CapcomdDeskBench/Commands.swift` `ab`, `profile`, `summarise` | `ascent` CLI, driven by the manifest |
+| `CapcomdDeskBench/Harness.swift` sampling, window, waiters, dump | `PerfLoopHost`; the model-specific helpers (`reelScrollView`, `composerField`, `reelMoving`) stay in the adapter |
+| `CapcomdDeskBench/Commands.swift` `ab`, `profile`, `summarise` | `perfloop` CLI, driven by the manifest |
 | `CapcomdDeskBench/Drive.swift` | adapter |
-| `CapcomdDesk/DeskProbe.swift` | `AscentProbe.Probe`; `DeskDebug.swift` keeps its env-var hooks |
+| `CapcomdDesk/DeskProbe.swift` | `PerfLoopProbe.Probe`; `DeskDebug.swift` keeps its env-var hooks |
 
 ## 3.2 What an app must expose (adopter checklist)
 
 1. **Probe seam.** `Probe.body("Name")` / `Probe.body("Name", id:)` as the first statement of the bodies worth counting
    (exists: 14 call sites in `CapcomdDesk`). `Probe.event("reel.phase", 1)` for state the drivers wait on (exists).
-2. **A bench executable** (the adapter) that links `AscentHost`, hosts the app's real views on fixture data, and
+2. **A bench executable** (the adapter) that links `PerfLoopHost`, hosts the app's real views on fixture data, and
    speaks the bench protocol (§3.3): `describe`, `run`, `snapshot`. It owns scenario drivers, fixture loading, guards.
 3. **Knobs** at the sites an experiment wants to vary: `static let slide = Knob("reel.slide", default: "ca", choices: ["ca", "clip"])`.
    Read cost after the first read: one static load. The adapter's `describe` lists them.
-4. **Build stamp**: adopt the `AscentStamp` plugin (or write `build.json` next to the binary). Without it the runner
+4. **Build stamp**: adopt the `PerfLoopStamp` plugin (or write `build.json` next to the binary). Without it the runner
    refuses `exp` and `ab` on the binary ("unstamped").
 5. **Optional**: mutation records on the models whose changes drive bodies (C7); recorded gestures (C9); a fixture
    capture command (C8).
 
 ## 3.3 How the generic tool learns an app's scenarios
 
-The adapter prints a manifest (`ascent.manifest/1`, SCHEMAS.md §2):
+The adapter prints a manifest (`perfloop.manifest/1`, SCHEMAS.md §2):
 
 ```sh
 $ deskbench describe --json
-{ "schema": "ascent.manifest/1", "app": "capcomd-desktop", "adapter": "deskbench",
+{ "schema": "perfloop.manifest/1", "app": "capcomd-desktop", "adapter": "deskbench",
   "build": { "commit": "9bcd41a", "dirty": false, "configuration": "release", "hash": "sha256:…" },
   "scenarios": [ { "name": "step", "kind": "smooth", "budget": "…", "rule": "…", "params": {"steps": "8"},
                    "objective": "mainThreadCpuMsPerStep", "guards": ["landed", "built-within", "snapshot"] }, … ],
@@ -152,20 +151,20 @@ $ deskbench describe --json
   "hosts": ["scene", "window"], "protocol": 1 }
 ```
 
-The runner (`ascent`) does everything from this document: which scenario to run, which metric is the objective,
-which guards gate acceptance, what can be swept. It never imports the app. `ascent describe --bench PATH` prints it;
-`ascent list` reads it from the champion in the store.
+The runner (`perfloop`) does everything from this document: which scenario to run, which metric is the objective,
+which guards gate acceptance, what can be swept. It never imports the app. `perfloop describe --bench PATH` prints it;
+`perfloop list` reads it from the champion in the store.
 
 ## 3.4 The agent's view
 
 The agent uses five verbs and reads JSON:
 
 ```
-ascent exp new "sizeThatFits answers itself"      → exp/0007/, builds the working tree into the store, screens vs champion
-ascent exp status 0007 | ascent explain exp/0007  → verdict, numbers, what to look at next
-ascent diff --champion --exp 0007 step            → differential call tree, per step, ours first
-ascent exp full 0007 && ascent exp promote 0007   → 5+5 ab, guards, confirmation trace, champion pointer moves
-ascent sweep step --set build.perFrame=1..8       → a knob sweep against the champion, one table
+perfloop exp new "sizeThatFits answers itself"      → exp/0007/, builds the working tree into the store, screens vs champion
+perfloop exp status 0007 | perfloop explain exp/0007  → verdict, numbers, what to look at next
+perfloop diff --champion --exp 0007 step            → differential call tree, per step, ours first
+perfloop exp full 0007 && perfloop exp promote 0007   → 5+5 ab, guards, confirmation trace, champion pointer moves
+perfloop sweep step --set build.perFrame=1..8       → a knob sweep against the champion, one table
 ```
 
 Everything the agent needs to decide the next step is in `exp/<id>/explain.txt` (C5). A `PROGRAM.md` in the adapter
@@ -185,7 +184,7 @@ wants to drive it; the manifest already is the tool description such a server wo
 ## 4.1 Host, children, profiler
 
 ```
-ascent (host, no UI)
+perfloop (host, no UI)
   ├─ child: deskbench run step --fixture crew17 --reps 1 --protocol      (one fresh process per rep)
   │     stdout:  ready pid=123 hz=120 noise=quiet          ← window up, noise floor measured
   │     stdin:   go                                        ← host says go (after xctrace attached, if profiling)
@@ -207,8 +206,8 @@ app and its window key. That is what steals focus on a shared Mac; §4.2 is abou
 
 | Runner | What it is | Objective | Frame guards | Notes |
 |---|---|---|---|---|
-| `local` | This Mac | CPU ms, instructions | yes | Refuses to start unless the console has been idle ≥ `--idle 120` s (IOKit `HIDIdleTime`); between reps, if the user becomes active, pauses and marks the rep `interrupted` (re-run); `--force` for a bench nobody minds. `ascent queue` holds experiments and runs them when idle. |
-| `ssh://mac2` | A spare Mac with Xcode, same user | CPU ms, instructions | yes | `ascent` rsyncs the store entry (binary + fixtures), runs itself remotely with `--runner local --force`, pulls results and trace paths. The only runner that gives unattended real-hardware hitch numbers. |
+| `local` | This Mac | CPU ms, instructions | yes | Refuses to start unless the console has been idle ≥ `--idle 120` s (IOKit `HIDIdleTime`); between reps, if the user becomes active, pauses and marks the rep `interrupted` (re-run); `--force` for a bench nobody minds. `perfloop queue` holds experiments and runs them when idle. |
+| `ssh://mac-mini` | A spare Mac with Xcode, same user | CPU ms, instructions | yes | `perfloop` rsyncs the store entry (binary + fixtures), runs itself remotely with `--runner local --force`, pulls results and trace paths. The only runner that gives unattended real-hardware hitch numbers. |
 | `vm` | A macOS VM (Tart) on this Mac | CPU ms only | no | Metal is paravirtualised, so the window renders; PMU counters are not available in guests (FEASIBILITY.md ref 15) and `ri_instructions` may read zero; display-link cadence and hitch numbers in a guest are not trusted. Good for screening code changes that cut main-thread work; final acceptance stays on hardware. |
 
 A second login session on the same Mac was considered and rejected: a background session's windows do not get
@@ -216,11 +215,11 @@ display passes, so CADisplayLink and activation are meaningless there (assumed, 
 
 ## 4.3 Store and privacy
 
-Store at `${ASCENT_HOME:-~/.ascent}/<app>/`: `builds/<sha256>/` (binary, bundles, `build.json`), `exp/<id>/`,
+Store at `${PERFLOOP_HOME:-~/.perfloop}/<app>/`: `builds/<sha256>/` (binary, bundles, `build.json`), `exp/<id>/`,
 `traces/` (paths recorded in the ledger; never copied into a repo), `ledger.jsonl`, `champion.json`. Project-local
-`.ascent/` is allowed and gitignored. **Traces are private**: `xctrace export --toc` of this session's traces
+`.perfloop/` is allowed and gitignored. **Traces are private**: `xctrace export --toc` of this session's traces
 contains the recorded process's full environment, including tokens (verified today). The ledger stores trace paths
-and summaries only; `ascent` warns when a trace path is inside a git checkout.
+and summaries only; `perfloop` warns when a trace path is inside a git checkout.
 
 # 5. The loop
 
@@ -259,10 +258,10 @@ and summaries only; `ascent` warns when a trace path is inside a git checkout.
 
 ## 5.2 Where candidates come from
 
-1. **Knob sweep** (no build): `ascent sweep` over a knob's choices or range; the best setting becomes a candidate
+1. **Knob sweep** (no build): `perfloop sweep` over a knob's choices or range; the best setting becomes a candidate
    experiment with `kind: knob`. Promotion of a knob means "make it the default and delete the knob" in a follow-up
    code change, so knobs do not accumulate.
-2. **Agent code change**: the agent reads `ascent explain --champion` (stretch stacks, the profile call tree with
+2. **Agent code change**: the agent reads `perfloop explain --champion` (stretch stacks, the profile call tree with
    per-step ms, cause records), picks the largest subtree that is ours or attributable (a framework subtree whose
    nearest app frame is known), writes a hypothesis, edits, and runs `exp new`. The attributable-subtree list is
    the agent's work queue; the session's own history is the pattern: `sizeThatFits` (65 % of the middle build's
@@ -298,7 +297,7 @@ session spent on `ab` alone pays for 15–20 candidates.
 | Noisy machine | 26 vs 709 hitches on one build; `dtsecurity` at 172 % | Idle-gated runner; interleaving; the noise floor and `heavyProcesses` as fidelity guards; profiled runs excluded from the objective; the low-noise objective |
 | Profiler overhead mistaken for the app | 1.5 cores of profiler during the only run that had stacks | In-process sampler is the default source of stacks; xctrace is confirmation only and marked `profiled` |
 | Cut-short recording | 14 of 16 steps | Host stops xctrace with SIGINT when the child is done |
-| Wrong binary | `v3-dir` reporting the cwd's commit | Content-addressed store; `build.json` beside the binary; `ascent` refuses unstamped binaries for `exp` |
+| Wrong binary | `v3-dir` reporting the cwd's commit | Content-addressed store; `build.json` beside the binary; `perfloop` refuses unstamped binaries for `exp` |
 | Over-fitting one fixture | crew17 everywhere | Promotion requires the screen on a second fixture (`swarm64` or `crew17-long`) to be not-worse |
 | Agent fatigue / drift | Hour-long sessions, state in the agent's head | The ledger is the memory; `exp status` says what is next; `PROGRAM.md` is the procedure |
 
@@ -315,7 +314,7 @@ SIGINT; `profiled` flag. Trace-privacy warning. CHANGELOG lines for each.
 Mac has a CPU-ms band ≤ 10 % and an instructions band ≤ 2 %; `profile step --reps 2` covers 16/16 steps.
 
 **Phase 1: see inside stretches, compare builds (1–2 weeks).** C1 sampler behind the run-loop observer, stacks on
-`worstStretches[]`, symbolised with `dladdr` in-process. Call tree in `ascent.profile/2` from xctrace exports, per
+`worstStretches[]`, symbolised with `dladdr` in-process. Call tree in `perfloop.profile/2` from xctrace exports, per
 step via signposts. `diff` (C2).
 *Acceptance (uses only files in the session's scratch `bench/`):* `deskbench trace --diff bench/deep/base-step-time/step-time.trace bench/profs-v3/step-time.trace`
 ranks the `sizeThatFits` subtree as the largest gain and the `NSScrollAnimationHelper`/`ScrollViewCommitMutation`
@@ -326,7 +325,7 @@ and `AG::Graph::propagate_dirty`, without xctrace.
 **Phase 2: the loop's bones (2 weeks).** Package split (§3.1). Manifest + `describe`. Knobs (C4) with two real
 knobs in the reel (`reel.slide=ca|clip`, `build.perFrame`). Store, `exp new/status/full/promote`, ledger,
 `explain` for experiments (C5). `PROGRAM.md`.
-*Acceptance:* `ascent exp new "…"` → build → screen → verdict with no paths typed by the agent; the replay below.
+*Acceptance:* `perfloop exp new "…"` → build → screen → verdict with no paths typed by the agent; the replay below.
 
 **Phase 3: guards and causes (2 weeks).** Snapshot-diff and `built-within` guards (C6); mutation records and cause
 attribution on stretches (C7); SwiftUI-template export of `swiftui-causes` as confirmation; sweeps and a fixture
@@ -340,7 +339,7 @@ metric (C9); `ssh://` and `vm` runners, idle-gated `local`, `queue` (C10).
 *Acceptance:* a recorded swipe replays on the champion with a per-frame position error ≤ 1 pt (p95) and reports jerk;
 an `exp full` runs unattended on a second Mac from `queue` and lands in the ledger.
 
-**Phase 5: extraction (when the criterion in §2.1 holds).** `git subtree split` of `tools/ascent`; the adapter
+**Phase 5: extraction (when the criterion in §2.1 holds).** `git subtree split` of `tools/perfloop`; the adapter
 depends on a tagged version.
 
 ## 6.1 The replay: this session, re-run by the loop
@@ -348,9 +347,9 @@ depends on a tagged version.
 The strong acceptance test for Phase 2. Inputs: the six binaries kept in the scratch `bench/` (`base-dir` = 3a6b5b7's
 bench; `v1-dir` = per-column flags, H1; `v2-dir`; `v3-dir` = the first AppKit reel, with the Auto Layout
 `sizeThatFits` wall; `v4-dir` = `sizeThatFits` answered by the representable; `v5-dir` = 9bcd41a, slides in the render
-server and heads-first open), imported with `ascent store import --commit <sha> --note <hypothesis>` since they predate
+server and heads-first open), imported with `perfloop store import --commit <sha> --note <hypothesis>` since they predate
 the stamp. The mapping of `v1`–`v5` to hypotheses is read from the session's `ab-*.txt` names and the essay; the
-agent that built them should confirm it before the replay plan is written. Then `ascent exp replay replay.json` runs the session's order as experiments against a moving champion,
+agent that built them should confirm it before the replay plan is written. Then `perfloop exp replay replay.json` runs the session's order as experiments against a moving champion,
 on `step` and `switch`, screens first, full only when promising. It must be run when nobody is using the Mac (it
 opens windows), ideally on the `ssh://` runner.
 
@@ -364,21 +363,21 @@ What the report must show:
    → `PlatformViewLayoutEngine.sizeThatFits` as the top inclusive subtree of the stretch, and `explain` says so.
 3. **The render-server slide find.** `diff v4 vs champion` on `step` shows `NSScrollAnimationHelper` /
    `ViewGraph.invalidateTransform` as the largest remaining attributable subtree, which is what v5 removed.
-4. **Wrong turn 1 (H2, stale trace) caught.** The replay includes `ascent diff` with a trace recorded on `base-dir`
+4. **Wrong turn 1 (H2, stale trace) caught.** The replay includes `perfloop diff` with a trace recorded on `base-dir`
    against champion v3: it must refuse ("trace build 3a6b5b7 ≠ champion …") unless `--allow-stale`.
 5. **Wrong turn 2 (H5, metric artifact) caught.** v1 → v3 on `step`: `lateFrames` 8 → 30 must not be a regression in
    the verdict; hitch time ratio and CPU ms per step decide, and `explain` reports the rate change (24 → 48 Hz).
 
-# 7. Open questions for the owner
+# 7. Decisions (owner, 2026-10-30)
 
-1. **Name**: Ascent, or one of the alternatives?
-2. **A machine**: is there a spare Mac (or can one be bought) for the `ssh://` runner? Without it, hardware runs
-   only happen when this Mac is idle, and the loop is slow by the owner's schedule.
-3. **Fixtures from a real daemon** (C8): may the adapter capture anonymised thread data from the owner's daemon, or
-   are generated fixtures the only source? (Text replaced by same-length generated text, structure kept.)
-4. **Gesture recording** (C9): is an opt-in recorder in the dev build of the desktop app acceptable (it writes scroll
-   deltas and phases, nothing else, to a file the owner names)?
-5. **Promotion policy**: may the loop keep climbing on top of an unmerged champion, or does each promotion wait for
-   a merged PR?
-6. **Knob debt**: agree that a promoted knob must be removed (default baked in) within the same phase?
-7. **Where the tool lives** if extracted: the owner's GitHub org, MIT like capcomd?
+1. **Name**: PerfLoop.
+2. **A machine**: the Mac mini, reached over SSH, is the `ssh://mac-mini` runner. Unattended hardware runs (hitches,
+   ProMotion) go there; this Mac runs only idle-gated work.
+3. **Fixtures from a real daemon** (C8): yes, anonymised (text replaced by same-length generated text, structure kept).
+4. **Gesture recording** (C9): yes, as proposed: an opt-in recorder in the desktop dev build that writes scroll
+   deltas and phases only, to a file the owner names.
+5. **Promotion policy**: the loop may climb on an unmerged champion. The ledger records each champion's parent chain
+   (`champion.json` → the experiment it came from → its parent champion), so any champion can be traced back to a
+   merged commit.
+6. **Knob debt**: agreed. A promoted knob is removed, its winning value baked in, within the same phase.
+7. **If extracted**: its own new repo, MIT licence.

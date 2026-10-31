@@ -1,8 +1,8 @@
 # Schemas
 
-Every document `ascent` or an adapter writes carries `"schema": "ascent.<kind>/<n>"`. Rules, kept from
+Every document `perfloop` or an adapter writes carries `"schema": "perfloop.<kind>/<n>"`. Rules, kept from
 `deskbench.result/1`: within a version a field is never renamed or removed, only added; a reader of version n reads
-n−1 (decoders for `deskbench.*/1` stay in `AscentKit` and upgrade in memory); numbers are measured values rounded
+n−1 (decoders for `deskbench.*/1` stay in `PerfLoopKit` and upgrade in memory); numbers are measured values rounded
 as today (`Stats.round`), never interpolations; times are ms since the harness started unless named `*At` (ISO 8601).
 JSON is pretty-printed with sorted keys (`JSONOut.encode`), so diffs of results are readable.
 
@@ -13,7 +13,7 @@ machine; rerun).
 ## 1. Common objects
 
 ```jsonc
-"build": {                       // ascent.build/1, embedded wherever a binary is involved
+"build": {                       // perfloop.build/1, embedded wherever a binary is involved
   "hash": "sha256:…",            // of the executable file; the store's key
   "commit": "9bcd41a" | null,    // from the build stamp, not the cwd
   "dirty": false,                // uncommitted changes in tracked sources at build time
@@ -23,14 +23,14 @@ machine; rerun).
   "toolchain": "Xcode 27.1 (27A9275)",
   "stamp": true                  // false for binaries imported with `store import` (pre-stamp)
 }
-"machine": { …as today…, "runner": "local" | "ssh://mac2" | "vm:tart/…" }   // runner added
+"machine": { …as today…, "runner": "local" | "ssh://mac-mini" | "vm:tart/…" }   // runner added
 "tree": { "n": "symbol", "v": 123, "c": [ …tree… ] }     // folded call tree; v = samples (profile) or ms (diff)
 ```
 
-## 2. `ascent.manifest/1` (adapter `describe --json`)
+## 2. `perfloop.manifest/1` (adapter `describe --json`)
 
 ```jsonc
-{ "schema": "ascent.manifest/1", "protocol": 1,
+{ "schema": "perfloop.manifest/1", "protocol": 1,
   "app": "capcomd-desktop", "adapter": "deskbench", "build": { …build… },
   "scenarios": [ {
       "name": "step", "summary": "…", "kind": "latency|smooth|isolation",
@@ -49,12 +49,12 @@ machine; rerun).
   "exitCodes": { "ok": 0, … } }
 ```
 
-## 3. `ascent.result/2` (from `deskbench.result/1`)
+## 3. `perfloop.result/2` (from `deskbench.result/1`)
 
 Everything in `deskbench.result/1` (`Results.swift`) stays with the same names and meaning. Added:
 
 ```jsonc
-{ "schema": "ascent.result/2",
+{ "schema": "perfloop.result/2",
   "tool": { …, "build": { …build… } },                 // ToolInfo.commit kept, now equal to build.commit
   "params": { …, "knobs": { "reel.slide": "ca", "build.perFrame": "2" } },   // the full knob vector, defaults included
   "profiled": false,                                   // true when a profiler was attached: never an objective input
@@ -86,13 +86,13 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
 `checks[]` is unchanged; `guards[]` is the subset that gates acceptance plus the new ones. `Budgets.evaluate` keeps
 its rule text and adds nothing: the verdict words (`pass|fail|untrusted|regression`) are kept.
 
-## 4. `ascent.profile/2` (from `deskbench.profile/1`)
+## 4. `perfloop.profile/2` (from `deskbench.profile/1`)
 
 Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitches`, `timeProfile`, `swiftUI`,
 `signposts`, `inProcess`, `notes`. Added:
 
 ```jsonc
-{ "schema": "ascent.profile/2", "build": { …build… }, "machine": { … }, "runner": "local",
+{ "schema": "perfloop.profile/2", "build": { …build… }, "machine": { … }, "runner": "local",
   "steps": [ { "name": "step#3 9→12", "startNs": …, "endNs": …, "source": "signpost|inProcess" } ],
   "tree": { …tree… },                    // main thread, whole recording, v = samples
   "treePerStep": [ { "step": "step#3 9→12", "tree": { …tree… } } ],
@@ -103,10 +103,10 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
                "longUpdates": [ { "view": "Column", "ms": 23.1, "cause": "…", "severity": "…" } ] } }
 ```
 
-## 5. `ascent.diff/1`
+## 5. `perfloop.diff/1`
 
 ```jsonc
-{ "schema": "ascent.diff/1", "scenario": "step", "normalisation": "msPerStep",
+{ "schema": "perfloop.diff/1", "scenario": "step", "normalisation": "msPerStep",
   "a": { "build": { … }, "profile": "…/base-step-time.json", "msPerStep": 630.5, "steps": 16 },
   "b": { "build": { … }, "profile": "…/v3-step-time.json",   "msPerStep": 590.7, "steps": 16 },
   "deltaMsPerStep": -39.8, "deltaPct": -6.3,
@@ -118,10 +118,10 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
   "notes": [ "signposts missing in a: steps aligned on the in-process result" ] }
 ```
 
-## 6. `ascent.experiment/1` and the ledger
+## 6. `perfloop.experiment/1` and the ledger
 
 ```jsonc
-{ "schema": "ascent.experiment/1", "id": "0007", "createdAt": "…", "state": "new|built|screened|promising|rejected|full|won|lost|needsReview|promoted|abandoned",
+{ "schema": "perfloop.experiment/1", "id": "0007", "createdAt": "…", "state": "new|built|screened|promising|rejected|full|won|lost|needsReview|promoted|abandoned",
   "hypothesis": "sizeThatFits answers itself so Auto Layout never sizes 16 hosting views",
   "kind": "code" | "knob", "behaviourChange": false,
   "parent": { "experiment": "0005", "build": { …build… } },     // the champion at creation
@@ -133,30 +133,32 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
   "full":   { "repsPerSide": 5, "extendedTo": 8, "mwuP": 0.004, "effectPct": 58.9, "band": 7.0,
               "frameGuards": { "hitchTimeRatioMsPerS": { "a": 41.0, "b": 2.1, "pass": true }, "longestStretchMs": { … } },
               "verdict": "won" },
-  "confirmation": { "hitchesTrace": "/Users/…/.ascent/capcomd-desktop/traces/0007-step-hitches.trace", "timeTrace": "…", "profile": "exp/0007/profile.json",
+  "confirmation": { "hitchesTrace": "/Users/…/.perfloop/capcomd-desktop/traces/0007-step-hitches.trace", "timeTrace": "…", "profile": "exp/0007/profile.json",
                     "compositorHitchTimeRatioMsPerS": 3.4 },
   "diff": "exp/0007/diff.json", "explain": "exp/0007/explain.txt",
   "promotedAt": "…" | null, "pr": "https://github.com/…/pull/48" | null,
   "notes": [ "ran on local, idle-gated; 1 rep interrupted and redone" ] }
 ```
 
-`ledger.jsonl`: one line per state change, `{ "schema": "ascent.ledger/1", "at": "…", "experiment": "0007",
+`ledger.jsonl`: one line per state change, `{ "schema": "perfloop.ledger/1", "at": "…", "experiment": "0007",
 "state": "promoted", "objective": { "before": 41.2, "after": 16.9 }, "build": "sha256:…", "by": "agent|owner" }`.
-`champion.json`: `{ "schema": "ascent.champion/1", "experiment": "0007", "build": { … }, "merged": false,
-"objectives": { "step": 16.9, "switch": 153.2 }, "since": "…" }`.
+`champion.json`: `{ "schema": "perfloop.champion/1", "experiment": "0007", "build": { … }, "merged": false,
+"parents": ["0005", "0002"], "mergedAncestor": "9bcd41a", "objectives": { "step": 16.9, "switch": 153.2 }, "since": "…" }`.
+`parents` is the chain of earlier champions back to the newest merged one, and `mergedAncestor` is that merged commit,
+so the loop can climb on unmerged champions (owner's decision, SPEC §7) and every champion still traces back to `main`.
 
-## 7. `ascent.sweep/1`
+## 7. `perfloop.sweep/1`
 
 ```jsonc
-{ "schema": "ascent.sweep/1", "scenario": "step", "build": { … }, "axis": [ { "name": "agents", "values": [4, 8, …, 64] } ],
+{ "schema": "perfloop.sweep/1", "scenario": "step", "build": { … }, "axis": [ { "name": "agents", "values": [4, 8, …, 64] } ],
   "points": [ { "agents": 4, "objective": 6.1, "dist": { … }, "hitchTimeRatioMsPerS": 0.0, "guardsPassed": true } ],
   "fit": { "model": "linear", "slope": 0.92, "intercept": 2.3, "r2": 0.98, "unit": "ms per step per agent" } }
 ```
 
-## 8. `ascent.gesture/1`
+## 8. `perfloop.gesture/1`
 
 ```jsonc
-{ "schema": "ascent.gesture/1", "name": "flick-left", "recordedAt": "…", "device": "trackpad", "hz": 120,
+{ "schema": "perfloop.gesture/1", "name": "flick-left", "recordedAt": "…", "device": "trackpad", "hz": 120,
   "events": [ { "t": 0.0, "dx": -3.0, "dy": 0.0, "phase": "began", "momentum": "none", "precise": true }, … ] }
 ```
 

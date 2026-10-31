@@ -4,7 +4,7 @@ Each entry: what it is, its API and CLI, the data it writes (schema names in SCH
 verified (probes in `probes/`, FEASIBILITY.md) and what is assumed, and risks. Numbering follows the ranked list
 from the session. "Today" refers to `apps/menubar/app/Sources/CapcomdDeskBench` and `DeskBenchKit` at 9bcd41a.
 
-## C1. In-process main-thread sampler (`AscentProbe.Stretch`)
+## C1. In-process main-thread sampler (`PerfLoopProbe.Stretch`)
 
 **What.** A background thread that, while a main-thread stretch is open (the run-loop observer has seen
 `afterWaiting` and not yet `beforeWaiting`), suspends the main thread every 1 ms, reads its registers
@@ -21,14 +21,14 @@ tree per stretch. Every `worstStretches[]` entry carries its stacks; xctrace bec
 - Stack walk bounds: `pthread_get_stackaddr_np`/`pthread_get_stacksize_np` of the main thread; stop on misaligned fp,
   fp not increasing, depth 128.
 - Attribution: a sample belongs to the stretch open at its time; stretches keep `[sampleIndexRange]`. The call tree
-  per stretch is built in `AscentKit` from addresses + symbols (same tree type as C2).
+  per stretch is built in `PerfLoopKit` from addresses + symbols (same tree type as C2).
 - Costs reported in the result: `sampler.samples`, `sampler.overheadPct` (sampler thread CPU / main-thread CPU).
 
 **CLI.** On by default in `run`; `--no-sampler` turns it off; `--sample-hz 2000` for short stretches.
 `explain` prints, per worst stretch, the top 5 inclusive frames that are ours or in the hot list, then the hottest
 framework subtree.
 
-**Data.** `ascent.result/2`: `reps[].worstStretches[].stacks` (folded tree, `{n, v, c}` nodes with symbol names;
+**Data.** `perfloop.result/2`: `reps[].worstStretches[].stacks` (folded tree, `{n, v, c}` nodes with symbol names;
 addresses dropped after symbolisation), `reps[].sampler`.
 
 **Feasibility.** Verified today on this Mac (M1 Pro, macOS 27.0.1), probe `probes/sampler`: 3000 samples in 3 s at
@@ -47,14 +47,14 @@ Prior art: Sentry's iOS profiler and Emerge's ETTrace sample the main thread thi
 - The sampler thread competes for a core on a loaded machine; its own CPU is measured and reported.
 - Not for arm64e processes (pointer authentication would need `ptrauth_strip`); the bench is arm64.
 
-## C2. `ascent diff`: differential call tree
+## C2. `perfloop diff`: differential call tree
 
 **What.** Two profiles (xctrace exports or sampler trees), normalised per step, folded into one tree where each node
 has `a`, `b`, `delta` in ms per step; the top gains and losses as subtrees, "moved" subtrees detected by name, and
 an `explain` that says what to look at.
 
 **Design.**
-- Input: `ascent.profile/2` (which carries the tree already) or `.trace` files (exported on the fly; 3 s and 6 MB for
+- Input: `perfloop.profile/2` (which carries the tree already) or `.trace` files (exported on the fly; 3 s and 6 MB for
   10 k samples, verified). Steps come from the `step` signposts (`os-signpost` table); samples outside steps are a
   separate "idle" bucket so settle time and warming are not blamed on a step.
 - Normalisation: ms per step (samples × interval ÷ steps), so a 12 s recording with 14 steps compares with one
@@ -67,10 +67,10 @@ an `explain` that says what to look at.
 - Provenance: both sides' `build.hash` must be the champion's or an experiment's in the ledger; otherwise refuse
   unless `--allow-stale` (defence for incident 5).
 
-**CLI.** `ascent diff A B [--scenario step] [--per step|run] [--top 12] [--json]`; `ascent diff --champion --exp 0007 step`.
+**CLI.** `perfloop diff A B [--scenario step] [--per step|run] [--top 12] [--json]`; `perfloop diff --champion --exp 0007 step`.
 `deskbench trace --diff A.trace B.trace` in Phase 1 before the split.
 
-**Data.** `ascent.diff/1`.
+**Data.** `perfloop.diff/1`.
 
 **Feasibility.** Verified: the export path, timing and the tree construction (`parse.py` did it in Python today).
 The signpost table was empty in two of the session's recordings (`signposts:` printed nothing in
@@ -122,18 +122,18 @@ swept without rebuilding.
 
 **Design.**
 - `public struct Knob<T: KnobValue>`: `Knob("reel.slide", default: "ca", choices: ["ca", "clip"])`,
-  `Knob("build.perFrame", default: 2, range: 1...8)`. First read parses `ASCENT_KNOBS` (`k=v,k=v`), caches in a static;
+  `Knob("build.perFrame", default: 2, range: 1...8)`. First read parses `PERFLOOP_KNOBS` (`k=v,k=v`), caches in a static;
   later reads are a load. Registration is static so `describe` can list all knobs with defaults and choices.
-- The runner passes `--set knob:reel.slide=clip` to the child, which exports `ASCENT_KNOBS`. Results carry the full
+- The runner passes `--set knob:reel.slide=clip` to the child, which exports `PERFLOOP_KNOBS`. Results carry the full
   knob vector (`params.knobs`), including defaults, so two results are comparable only if their vectors agree or
   the difference is the experiment.
 - Knobs are for experiments: a promoted knob becomes the default in a follow-up change and the knob is deleted
   (§5.4 of SPEC.md). The ledger flags knobs older than one phase.
 
-**CLI.** `ascent run step --set knob:reel.slide=clip`; `ascent ab --a-knobs … --b-knobs …` for same-binary A/B;
-`ascent sweep step --set knob:build.perFrame=1..8 --reps 3`.
+**CLI.** `perfloop run step --set knob:reel.slide=clip`; `perfloop ab --a-knobs … --b-knobs …` for same-binary A/B;
+`perfloop sweep step --set knob:build.perFrame=1..8 --reps 3`.
 
-**Data.** `manifest.knobs[]`, `result.params.knobs`, `ascent.sweep/1`.
+**Data.** `manifest.knobs[]`, `result.params.knobs`, `perfloop.sweep/1`.
 
 **Feasibility.** Straightforward Swift. The two first knobs are real: the reel's slide (`ReelView.slide`, a
 `CABasicAnimation` on `position.x`) vs the clip-view scroll animation it replaced; the per-frame column build count
@@ -161,15 +161,15 @@ and full results, verdict and trace paths; a champion pointer; `exp` verbs; resu
   lists open experiments and what each needs next. `exp replay <plan.json>` runs a list (SPEC §6.1).
 - Resumable: every step writes before it starts the next; `exp resume` picks up at the first missing file.
 
-**CLI.** As above, plus `ascent store import <bin> --commit <sha> --note …` for pre-stamp binaries, `ascent ledger
-[--json]`, `ascent champion`.
+**CLI.** As above, plus `perfloop store import <bin> --commit <sha> --note …` for pre-stamp binaries, `perfloop ledger
+[--json]`, `perfloop champion`.
 
-**Data.** `ascent.build/1`, `ascent.experiment/1`, `ascent.ledger/1` (JSONL of experiment states).
+**Data.** `perfloop.build/1`, `perfloop.experiment/1`, `perfloop.ledger/1` (JSONL of experiment states).
 
 **Feasibility.** Plain file plumbing. The plugin needs `git` at build time; when absent (CI tarball) the stamp says
 `commit: null, dirty: true` and promotion is refused.
 
-**Risks.** Store size: binaries are 46 MB each (today's `bench-good`); keep the last 20 and every champion, `ascent
+**Risks.** Store size: binaries are 46 MB each (today's `bench-good`); keep the last 20 and every champion, `perfloop
 store gc`. Patches must never include secrets: `exp new` refuses diffs touching `.relay/`, `.traces/`, `~/.capcomd`
 paths (the repo's rule).
 
@@ -192,7 +192,7 @@ candidate's.
 - Guards are declared in the adapter and listed in the manifest; the runner takes the champion's list so a candidate
   cannot drop one.
 
-**CLI.** `ascent guards --exp 0007` re-runs guards only; `--guard-tolerance` is refused inside `exp` (owner-only).
+**CLI.** `perfloop guards --exp 0007` re-runs guards only; `--guard-tolerance` is refused inside `exp` (owner-only).
 
 **Data.** `result.guards[]` (name, pass, detail, artifacts), alongside `checks[]` which stays as is.
 
@@ -222,7 +222,7 @@ in-process mutation records, and the SwiftUI instrument's cause tables as confir
   (`description`, `backtrace`). Columns verified today from the template's table schemas (FEASIBILITY.md §1.5); the
   rows' content on a real run is not yet seen. `ProfileResult.swiftUI` becomes a summary of root causes by view.
 
-**CLI.** `explain` prints, per worst stretch, `causes: onScreen (Column×17, CrewTab×16), focused (…)`. `ascent causes
+**CLI.** `explain` prints, per worst stretch, `causes: onScreen (Column×17, CrewTab×16), focused (…)`. `perfloop causes
 <result.json>` prints the whole table.
 
 **Data.** `reps[].worstStretches[].causes[]`, `reps[].steps[].causes`, `profile.swiftUI.rootCauses[]`.
@@ -242,7 +242,7 @@ confirmation only.
 captured from a daemon and anonymised.
 
 **Design.**
-- Sweep: `ascent sweep step --fixture crew --set agents=4..64/4 --set items=50..400/50 --reps 3` runs the grid
+- Sweep: `perfloop sweep step --fixture crew --set agents=4..64/4 --set items=50..400/50 --reps 3` runs the grid
   (fixtures generated on the fly from a parametric spec, which `Fixtures` already is), reports the objective per
   point and a fitted linear/quadratic slope with residuals; the `swarm64` fixture is one point of it.
 - Capture: `deskbench fixture capture --from <socket> --run <id> --out crew-real.json --anonymise`: reads the thread
@@ -250,7 +250,7 @@ captured from a daemon and anonymised.
   kept, identifiers hashed), drops attachments' bytes, keeps timings. Stored outside the repo unless the owner says
   otherwise.
 
-**CLI.** As above; `ascent sweep --json` → `ascent.sweep/1`; `explain` prints "ms/step grows 0.9 ms per agent (r² 0.98)".
+**CLI.** As above; `perfloop sweep --json` → `perfloop.sweep/1`; `explain` prints "ms/step grows 0.9 ms per agent (r² 0.98)".
 
 **Feasibility.** Fixtures are already a seeded generator with a `FixtureSpec`; the daemon's thread route is already
 the one `FixtureThread` imitates. Capture needs the owner's permission and `CAPCOMD_HOME`/socket set to the owner's
@@ -267,16 +267,16 @@ global), with a metric for how closely the content followed the gesture.
 **Design.**
 - Record: dev build, `CAPCOMD_DESK_RECORD_GESTURE=file`: `ReelView`'s scroll view subclass logs each `scrollWheel`
   event (`t`, `scrollingDeltaX/Y`, `phase`, `momentumPhase`, `hasPreciseScrollingDeltas`) and nothing else →
-  `ascent.gesture/1`.
+  `perfloop.gesture/1`.
 - Replay: the existing fling path (CGEvent-built `NSEvent`s delivered to `scrollWheel(with:)`) replays the file at
   the recorded times from the run loop; AppKit's gesture handling and the reel's snapping run as in the app.
 - Smoothness: per display tick, read the document layer's `presentation()` position; compute the expected position
   from the integrated deltas (the gesture's own curve); report position error (p95 pt), frames where the finger
   moved but the content did not (`stalls`), and jerk (third derivative of position, p95), all per gesture.
 
-**CLI.** `deskbench run swipe --gesture ~/gestures/flick-left.json`; `ascent gestures list`.
+**CLI.** `deskbench run swipe --gesture ~/gestures/flick-left.json`; `perfloop gestures list`.
 
-**Data.** `ascent.gesture/1`; `StepResult.smoothness {positionErrorP95Pt, stalls, jerkP95}`.
+**Data.** `perfloop.gesture/1`; `StepResult.smoothness {positionErrorP95Pt, stalls, jerkP95}`.
 
 **Feasibility.** The fling driver already synthesises phased scroll events; replay changes the source of deltas.
 `CALayer.presentation()` is public. Recording needs a human hand once per gesture (an owner checkpoint).
@@ -290,7 +290,7 @@ and not for "feel". Feel stays a human checkpoint.
 **What.** Runners (SPEC §4.2): `local` idle-gated, `ssh://` to a spare Mac, `vm` via Tart; a `queue` that runs
 experiments when a runner is free.
 
-**Design.** `ascent queue add <exp>`; `ascent queue run --runner ssh://mac2 --until 07:00`. Each runner implements
+**Design.** `perfloop queue add <exp>`; `perfloop queue run --runner ssh://mac-mini --until 07:00`. Each runner implements
 `prepare(buildHash)`, `run(args) → result path`, `fetch`. The `local` runner polls `HIDIdleTime` and the frontmost
 app; it starts a rep only when idle ≥ threshold and aborts the rep (marked `interrupted`, redone) on input.
 
