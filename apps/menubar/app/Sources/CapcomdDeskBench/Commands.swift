@@ -119,6 +119,8 @@ import DeskBenchKit
                                   mainThread: MainThreadStats(stretchesMs: st, cpuMs: cpu), bodies: bodies, checks: checks, worstStretches: worst, window: h.windowState()))
       repResults[repResults.count - 1].measure = currentMeasure
       if let s = h.sampler, let sm = samplerMark { repResults[repResults.count - 1].sampler = s.stats(since: sm) }
+      // Correctness guards (Guards.swift), when asked for: after the rep's numbers, so they cost the objective nothing.
+      if let g = await GuardPhase.after(rep: rep, scenario: spec.name, steps: steps, h: h, label: o.variant) { repResults[repResults.count - 1].guards = g }
       if let dir = o.artifacts { artifacts += h.snapshot(into: dir, name: "\(spec.name)-rep\(rep)") }
       await h.sleep(ms: 200)
     }
@@ -253,7 +255,8 @@ enum Commands {
                        comparison: c?.rows ?? [], failures: failures, regression: c?.regression ?? false, improvement: c?.improvement ?? false,
                        objective: used.metric, guardsFailed: c?.guardsFailed ?? [], notes: notes, buildA: ra.isEmpty ? nil : builds["A"], buildB: rb.isEmpty ? nil : builds["B"],
                        order: order, orderMode: o.order, seed: seed, pairs: pairs.count, runs: runs, orderEffectPct: orderEffect.isEmpty ? nil : Stats.round(Stats.median(orderEffect), 1),
-                       samplerInChildren: o.sampler, pauseMs: o.pauseMs, quietBusyPct: o.quietBusyPct, knobsA: knobs["A"], knobsB: knobs["B"])
+                       samplerInChildren: o.sampler, pauseMs: o.pauseMs, quietBusyPct: o.quietBusyPct, knobsA: knobs["A"], knobsB: knobs["B"],
+                       guardsA: ra.contains { $0.guards != nil } ? ra.flatMap { $0.guards ?? [] } : nil, guardsB: rb.contains { $0.guards != nil } ? rb.flatMap { $0.guards ?? [] } : nil)
     return (res, pairs.isEmpty ? ExitCode.harness : res.regression ? ExitCode.regression : ExitCode.ok)
   }
 
@@ -284,6 +287,8 @@ enum Commands {
     var quietBusyPct: Double? = nil
     /// Each side's knob vector, as its runs reported it.
     var knobsA: [String: String]?, knobsB: [String: String]?
+    /// Each side's correctness guards (Guards.swift), every rep's in order; nil when the runs weren't asked for them.
+    var guardsA: [GuardResult]? = nil, guardsB: [GuardResult]? = nil
     var text: String {
       var o = ["ab \(scenario) on \(fixture): \(pairs.map { "\($0) pairs" } ?? "\(repsPerSide) reps a side"), decided on \(objective ?? "?")",
                "  A: \(a)" + (buildA.map { "  [\($0.line)]" } ?? ""), "  B: \(b)" + (buildB.map { "  [\($0.line)]" } ?? "")]
@@ -301,6 +306,7 @@ enum Commands {
       func line(_ s: Summary) -> String { Commands.medians(s) }
       o.append("  A medians: " + line(summaryA)); o.append("  B medians: " + line(summaryB))
       for f in failures { o.append("  ! " + f) }
+      for (side, gs) in [("A", guardsA), ("B", guardsB)] { for g in gs ?? [] { o.append("  guard \(side) \(g.name): \(g.pass ? "pass" : "FAIL") \(g.detail)") } }
       return o.joined(separator: "\n")
     }
   }
