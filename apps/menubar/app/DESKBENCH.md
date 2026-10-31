@@ -452,6 +452,61 @@ new place once, and the title bar follows); a swipe still updates every column's
 fingers move; `switch` builds the target run's columns synchronously. The per-frame focus walk listed above was
 already gone once the reel left the title bar's band (3a6b5b7); it no longer shows in profiles.
 
+## Sweeps and real fixtures
+
+**Parametric fixtures.** Any generated fixture takes parameters in its name: `--fixture crew17@agents=40` (40 agents
+in the open project), `crew@agents=24,items=100` (`items=100` is 80–120 items a thread; `items=40-60` an exact
+range), plus `projects`, `asks` and `seed`. Parameters keep the base name's seed, so `crew17@agents=17` is `crew17`
+byte for byte and the points of a sweep differ only where the parameters do. `crew` is the family the sweeps vary
+(crew17's shape). `describe` lists each fixture's `parametric` ranges; `fixture NAME@…` shows what a name builds.
+
+**Cost curves.** `perfloop sweep` (tools/perfloop) runs a grid and fits curves through the objective:
+
+```sh
+perfloop sweep step --bench $B --set agents=4..64/12 --reps 2 --dry-run      # the grid, the commands, an estimate
+perfloop sweep step --bench $B --set agents=4..64/12 --reps 2 --lock /tmp/window.lock
+perfloop sweep step --bench $B --fixture crew --set agents=4..64/4 --set items=50..400/50 --reps 3 --budget-min 60
+perfloop sweep step --bench $B --set reel.slide=ca,clip --set agents=8,32,64   # a knob against the size
+perfloop explain ~/.perfloop/capcomd-desktop/sweeps/<dir>/sweep.json          # the table and the fits again
+```
+
+A `--set` is a knob if the manifest has one by that name, a fixture parameter if the fixture's `parametric` has it,
+else a scenario param (`knob:`, `fixture:`, `param:` force one). One value is fixed, several are an axis. Points run in
+a fixed shuffled order (drift spreads over the curve instead of tilting it), one `run --reps N` child each, and each is
+written as it lands: the same command resumes, `--redo agents=28` measures one again. The result is
+`perfloop.sweep/1` (design/perf-loop/SCHEMAS.md §7): per point the objective's median and spread, late frame time,
+the checks, and whether the machine was busy; a line (and, with ≥ 4 x values, a quadratic) per axis per slice of the
+others, a plane through every numeric axis. The text says it plainly: `ms/step grows 0.9 ms per agent (r² 0.98)`.
+Every point opens the window: `--lock DIR` holds a mkdir lock for each point so window runs on one Mac take turns.
+
+The first curve (2026-10-31, dbdb80c, release, 2 reps a point, a busy machine at 5 of 6 points): `step` on
+`crew17@agents=N` cost 28 ms of main-thread CPU a step at 4 agents, 99 at 16, 230 at 28, then ~310 flat from 40 to
+64: "ms/step grows 4.98 ms per agent (r² 0.84)", and the quadratic (r² 0.97) says it bends. The plateau starts past
+the warm cap (32), which is consistent with every warm column paying on every step. A 2-D grid on `crew` gave
+"ms/step ≈ 55.5 + 6.72 ms per agent + 0.036 ms per item (r² 0.98)": agents matter, thread length barely does.
+Measure again on a quiet machine before quoting the numbers.
+
+**Real fixtures.** `fixture capture` reads runs from a daemon the way the app does (`GET /v1/events?scope=<run>`,
+`/v1/runs/<run>/agents`, every agent's `/thread` pages; never attachment bytes) and writes a `deskbench.fixture/1`:
+
+```sh
+capcomd clients add deskbench-capture --scopes read          # prints a token once: put it in a 0600 file
+$B fixture capture --from ~/.capcomd/harness.sock --run run-… --token-file ~/.perfloop/capture-token --name crew-real
+$B run step --fixture file:crew-real --reps 5                 # a bare name is ~/.perfloop/capcomd-desktop/fixtures/NAME.json
+```
+
+Anonymised by default (`Sources/DeskBenchKit/Anonymise.swift`): every string is replaced by generated text of the
+same length and shape (words of the same lengths, digits for digits; whitespace, punctuation and markdown markers
+kept, so headings, lists, code, tables and diffs lay out as before); ids are hashed with a random per-capture salt
+(prefixes kept, consistent across events, items and links); URLs become `https://example.com/…` of the same length
+and hosts `example.com`; times move so the earliest is 2026-01-01 (intervals and durations kept); kinds, statuses,
+block types, common tool names, models and numbers are kept. Unknown fields are replaced as text. Attachments keep
+their kind, mime and size; the bench draws a placeholder. The file is written 0600 and never inside a git checkout
+(`--allow-in-repo` overrides); it goes to `${PERFLOOP_HOME:-~/.perfloop}/capcomd-desktop/fixtures/` unless `--out`
+says otherwise. `--raw` keeps the real text, for a file that never leaves the Mac. The token is `--token-file`,
+`$CAPCOMD_TOKEN`, or `--keychain` (the desktop app's own). On load the times move again so the newest is a minute
+ago, and the threads are served from the captured items' own bytes.
+
 ## Adding to the bench
 
 - A scenario: a `ScenarioSpec` in `DeskBenchKit/Scenarios.swift` (name, budget, rule, kind, params) and a driver in

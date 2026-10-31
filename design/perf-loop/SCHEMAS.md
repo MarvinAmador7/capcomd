@@ -44,7 +44,7 @@ machine; rerun).
   "fixtures": [ { …FixtureSpec as today…, "parametric": { "agents": [1, 64], "items": [50, 600] } } ],
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"], "since": "0.7" },
              { "name": "build.perFrame", "type": "int", "default": 2, "range": [1, 8] } ],
-  "hosts": [ "scene", "window" ], "defaultHost": "scene",
+  "hosts": [ "scene", "window" ], "defaultHost": "scene", "defaultFixture": "crew17",
   "probes": [ "Column", "ColumnHead", "ColumnThread", "EntryRow", "ColumnComposer", "CrewTab", "TitleBar", "OpenGroup", "Reel", "RootView", "DecisionBar", "FoldedDeck" ],
   "exitCodes": { "ok": 0, … } }
 ```
@@ -152,10 +152,26 @@ so the loop can climb on unmerged champions (owner's decision, SPEC §7) and eve
 ## 7. `perfloop.sweep/1`
 
 ```jsonc
-{ "schema": "perfloop.sweep/1", "scenario": "step", "build": { … }, "axis": [ { "name": "agents", "values": [4, 8, …, 64] } ],
-  "points": [ { "agents": 4, "objective": 6.1, "dist": { … }, "hitchTimeRatioMsPerS": 0.0, "guardsPassed": true } ],
-  "fit": { "model": "linear", "slope": 0.92, "intercept": 2.3, "r2": 0.98, "unit": "ms per step per agent" } }
+{ "schema": "perfloop.sweep/1", "scenario": "step", "fixture": "crew", "objective": "mainThreadCpuMsPerStep",
+  "build": { … }, "reps": 2, "fixed": { "items": "100" },                       // --set with one value: not swept
+  "axis": [ { "name": "agents", "role": "fixture", "values": [4, 16, 28, 40, 52, 64] } ],   // role: fixture | knob | param
+  "points": [ { "agents": 4, "values": { "agents": 4 },                         // axis values flat (as here) and under values
+                "objective": 6.1, "dist": { …Dist… }, "hitchTimeRatioMsPerS": 0.0, "longestStretchMs": 9.8,
+                "guardsPassed": true, "checksFailed": [], "reps": 2, "result": "points/agents=4.json", "wallS": 21.4,
+                "busy": false, "noise": null, "failure": null, "finishedAt": "…" } ],
+  "fit": { "model": "linear", "axis": "agents", "n": 6, "slope": 0.92, "intercept": 2.3, "r2": 0.98, "adjustedR2": 0.975,
+           "residuals": [ 0.1, -0.3, … ], "rmse": 0.2, "unit": "ms per step per agent" },
+  "fits": [ { …linear… }, { "model": "quadratic", "quadratic": 0.004, … },      // per numeric axis, per slice of the others (`at`)
+            { "model": "plane", "coefficients": { "agents": 0.9, "items": 0.02 }, … } ],   // every numeric axis at once (2+ axes)
+  "notes": [ "budget of 10 min spent with 3 point(s) left: run the same command again to resume" ],
+  "startedAt": "…", "finishedAt": "…", "complete": true }
 ```
+
+`fit` is the headline: the line through the only numeric axis, or the plane when there are several. A quadratic is
+fitted when an axis has ≥ 4 distinct values and reported as curving only when its adjusted r² beats the line's by more
+than 0.02. Fits use every point with a number, busy ones included (they are marked; `--redo KEY` measures one again).
+Fixture parameters reach the adapter in the fixture's name (manifest protocol 1): `--fixture crew@agents=24,items=100`,
+for any fixture whose manifest entry has `parametric` (`{ "agents": [1, 128] }`: each parameter's accepted range).
 
 ## 8. `perfloop.gesture/1`
 

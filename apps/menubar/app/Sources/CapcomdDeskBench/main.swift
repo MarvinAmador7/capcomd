@@ -17,7 +17,12 @@ commands
   describe [--json]                               the perfloop.manifest/1: build, scenarios with objective and guards,
                                                   fixtures, knobs, hosts (what a generic runner reads)
   knobs [--json]                                  the runtime knobs this process would run with (PERFLOOP_KNOBS, --knob)
-  fixture <name> [--json]                         describe a fixture: projects, agents, items, asks
+  fixture <name> [--json]                         describe a fixture: projects, agents, items, asks (NAME@agents=24,items=100 varies
+                                                  a generated one; file:PATH is a captured one)
+  fixture capture --from SOCKET --run ID --out FILE [--token-file F] [--raw]
+                                                  read runs from a daemon as the app does, anonymised (text replaced by
+                                                  same-length generated text, ids hashed, URLs stripped, no attachment
+                                                  bytes): a deskbench.fixture/1 the bench runs on as --fixture file:FILE
   run <scenario> [options]                        drive one scenario in-process on a fixture, judge it against its budget
   suite [options]                                 every scenario in turn; one line each, exit non-zero if any fails
   snapshot [--fixture F] [--out DIR] [--at N]     the window as PNG + a view/geometry dump (JSON), no scenario
@@ -41,7 +46,8 @@ commands
   help
 
 run options
-  --fixture NAME        solo | trio | crew17 (default) | crew17-long | swarm64
+  --fixture NAME        solo | trio | crew17 (default) | crew17-long | swarm64 | crew; NAME@agents=N,items=M[,projects=P,
+                        asks=A,seed=S] varies one (what perfloop sweep sends); file:PATH runs on a captured fixture
   --reps N              repetitions (default 3; medians are reported, one rep proves nothing)
   --set key=value       a scenario parameter (see `list --json` → params)
   --knob name=value     a runtime knob (see `describe`), also `--set knob:name=value`; exported to the window as
@@ -79,7 +85,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs"] + SamplerConfig.flags
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs", "from", "run", "token-file", "name"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -140,7 +146,10 @@ func kv(_ xs: [String]) -> [String: String] {
   case "knobs": return KnobArgs.show(json: json)
 
   case "fixture":
-    guard let name = args.positional.dropFirst().first, let w = Fixtures.make(name) else { err("usage: deskbench fixture <name>  (see `list fixtures`)"); return Int32(ExitCode.usage) }
+    if args.positional.dropFirst().first == "capture" { return await Capture.run(args) }
+    guard let name = args.positional.dropFirst().first, let w = Fixtures.make(name) else {
+      err("usage: deskbench fixture <name>  (see `list fixtures`)" + (args.positional.dropFirst().first.flatMap(Fixtures.problem).map { "\n" + $0 } ?? "")); return Int32(ExitCode.usage)
+    }
     struct F: Codable { var spec: FixtureSpec; var runs: [String]; var openRun: String?; var agents: [String: [String]]; var asking: [String: [String]]; var items: [String: Int]; var events: Int; var attachments: Int; var kinds: [String: Int] }
     var kinds: [String: Int] = [:]
     for (_, items) in w.threads { for i in items { kinds[i.kind, default: 0] += 1 } }
@@ -349,7 +358,7 @@ Task { @MainActor in
 }
 if MainActor.assumeIsolated({ Harness.current != nil }) {
   BenchScene.main()
-} else if ["selftest", "describe", "knobs"].contains(startup.positional.first ?? "") {
+} else if ["selftest", "describe", "knobs", "fixture"].contains(startup.positional.first ?? "") {
   // Headless: the main run loop without NSApplication (no Dock icon, no window server connection).
   CFRunLoopRun()
 } else {

@@ -38,7 +38,7 @@ let package = Package(
     // The bench: hosts the desktop window in-process against fixture data and measures it (DESKBENCH.md).
     // BuildStamp embeds the commit, dirty flag and build time, so a copied binary still says what it was built from.
     .executableTarget(name: "CapcomdDeskBench", dependencies: ["DeskBenchKit", "CapcomdDesk", "CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdUI",
-                                                              .product(name: "PerfLoopProbe", package: "perfloop")],
+                                                              .product(name: "PerfLoopProbe", package: "perfloop"), .product(name: "CapcomdClient", package: "client")],
                       plugins: ["BuildStamp"]),
     .plugin(name: "BuildStamp", capability: .buildTool()),
     .testTarget(name: "CapcomdStoreTests", dependencies: ["CapcomdStore", "CapcomdLive", .product(name: "CapcomdClient", package: "client")],

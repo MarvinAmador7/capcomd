@@ -19,6 +19,11 @@ perfloop champion set <hash from store add> --merged --scenario step --fixture c
 `perfloop describe --bench .build/release/CapcomdDeskBench` shows what the bench offers: scenarios, which number each
 climbs on (`objective`), the guards that gate acceptance, fixtures, knobs.
 
+Where a cost grows with the size of the crew, measure the curve before guessing: `perfloop sweep step --set
+agents=4..64/12 --reps 2 --lock <lock>` (DESKBENCH.md, *Sweeps and real fixtures*) prints `ms/step grows 0.9 ms per
+agent (r² 0.98)`; a change that cuts the slope is a better hypothesis than one that shaves the intercept. A sweep opens
+the window for minutes: the same rules as `exp screen` (*The machine*, below).
+
 ## The loop
 
 Start each session with `perfloop session start` and `perfloop exp status`. Then repeat:
