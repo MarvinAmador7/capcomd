@@ -10,6 +10,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   jumps, swipes, thread bursts, typing, resize, Follow), measures frames, main-thread stretches and which views
   re-rendered, judges the result against the SPEC §1 budgets, and compares builds within the machine's noise (`run`,
   `suite`, `ab`, `compare`, `profile` under Instruments, `snapshot`, `explain`; `--json` everywhere, stable exit codes).
+- The desktop bench shows where a slow stretch went and what changed between builds: `run` samples the main thread's
+  stack inside long stretches and `explain` prints each one's top frames (`--sampler off` to disable; `selftest
+  sampler` checks it without a window); `diff A B` compares two time profiles as a call tree in ms per step. Results
+  record the exact build (commit, dirty flag) even for a copied binary. `ab`, `compare` and `run --baseline` decide on
+  main-thread CPU per step (`--objective instructions|frames|latency` to change it), with frame metrics as guards and
+  late frames measured as ms of lateness per second. `profile` records the whole scenario, marks its results as
+  profiled (never compared: exit 6), and warns that `.trace` files hold private data and must never be committed.
   The desktop app's views now live in the `CapcomdDesk` library the app and the bench both link; the app is unchanged.
 - Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
   or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
