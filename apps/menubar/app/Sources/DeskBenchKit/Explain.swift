@@ -54,6 +54,7 @@ public enum Explain {
         o.append("  (sampler: \(n) samples at \(sm.hz.clean) Hz once a stretch passed \(sm.gateMs.clean) ms; cost \(sm.costP50Us.clean) µs a sample, sampler thread \(sm.overheadPct) % of the main thread's CPU)")
       }
     }
+    o += stepCauseLines(r)
     let hints = suggestions(r)
     if !hints.isEmpty {
       o.append("")
@@ -72,6 +73,7 @@ public enum Explain {
     let noBodies = w.samples == nil ? "(no view bodies: AppKit/layout/text or the fixture)" : "(no view bodies)"
     let when = w.step.hasPrefix("before ") || w.step.hasPrefix("after ") ? w.step : "during \(w.step)"
     var o = ["  \(String(format: "%7.1f", w.durationMs)) ms wall \(String(format: "%6.1f", w.cpuMs)) ms cpu  \(when)  \(b.isEmpty ? noBodies : b)"]
+    if let c = w.causes, !c.isEmpty { o.append("             causes: " + causesText(c)) }
     guard let n = w.samples else { return o }
     let pad = "             "
     guard n > 0, let tree = w.stacks else {

@@ -5,6 +5,7 @@ import os
 import CapcomdStore
 import CapcomdDesk
 import DeskBenchKit
+import PerfLoopProbe
 
 /// The desktop window hosted in this process on a fixture, with the instruments around it: a display link for frame
 /// timing, the stretch clock's run-loop observers for main-thread stretches (StretchClock.swift), the views' probe for body counts, signposts for Instruments.
@@ -29,6 +30,9 @@ import DeskBenchKit
   lazy var clock = StretchClock(t0: t0)
   var stretches: [StretchClock.Entry] { clock.entries }
   var bodies: [(t: Double, view: String, id: String?)] = []
+  /// The model's mutation records (`Mutations`, CAPABILITIES.md C7) and the bodies charged to them: each step's and
+  /// long stretch's `causes`. Turns end where stretches close.
+  lazy var causes = CauseRecorder { [unowned self] in now() }
   var events: [(t: Double, name: String, value: Int)] = []
   var link: CADisplayLink?
   var waiters: [(id: Int, check: () -> Bool, resume: () -> Void)] = []
@@ -49,6 +53,7 @@ import DeskBenchKit
     model = DeskModel(store: store)
     fixtureLoadMs = (CACurrentMediaTime() - start) * 1000
     DeskProbe.sink = self
+    Mutations.sink = causes
   }
 
   func now() -> Double { (CACurrentMediaTime() - t0) * 1000 }
@@ -134,7 +139,7 @@ import DeskBenchKit
     l.preferredFrameRateRange = CAFrameRateRange(minimum: hz, maximum: hz, preferred: hz)   // hold ProMotion at its top rate
     l.add(to: .main, forMode: .common)
     link = l
-    clock.closed = { [unowned self] in checkWaiters() }
+    clock.closed = { [unowned self] in causes.turnEnded(); checkWaiters() }
     if SamplerConfig.current.enabled, MainThreadSampler.supported { sampler = sampler ?? MainThreadSampler(config: SamplerConfig.current); sampler?.start() }
     clock.sampler = sampler
     clock.attach()
@@ -160,8 +165,8 @@ import DeskBenchKit
     checkWaiters()
   }
 
-  nonisolated func body(_ view: StaticString) { MainActor.assumeIsolated { bodies.append((now(), view.description, nil)) } }
-  nonisolated func body(_ view: StaticString, id: String) { MainActor.assumeIsolated { bodies.append((now(), view.description, id)) } }
+  nonisolated func body(_ view: StaticString) { MainActor.assumeIsolated { let t = now(), v = view.description; bodies.append((t, v, nil)); causes.body(v, at: t) } }
+  nonisolated func body(_ view: StaticString, id: String) { MainActor.assumeIsolated { let t = now(), v = view.description; bodies.append((t, v, id)); causes.body(v, id: id, at: t) } }
   nonisolated func event(_ name: StaticString, _ value: Int) { MainActor.assumeIsolated { events.append((now(), name.description, value)); checkWaiters() } }
 
   func checkWaiters() {
@@ -231,9 +236,11 @@ import DeskBenchKit
     let end = now()
     let its = intervals(from: m.tick)
     let st = stretches[m.stretch...]
-    return StepResult(name: m.name, atMs: Stats.round(m.at, 1), durationMs: Stats.round(end - m.at, 1), latencyMs: latencyMs.map { Stats.round($0, 2) }, settleMs: settleMs.map { Stats.round($0, 1) },
-                      frames: FrameStats(intervalsMs: its, nominalHz: nominalHz), mainThread: MainThreadStats(stretchesMs: st.map(\.dur), cpuMs: st.map(\.cpu)),
-                      bodies: count(bodies[m.body...]), notes: notes, cpuMs: Stats.round(cpu, 2), instructions: instructions.flatMap { $0 > 0 ? $0 : nil })
+    var r = StepResult(name: m.name, atMs: Stats.round(m.at, 1), durationMs: Stats.round(end - m.at, 1), latencyMs: latencyMs.map { Stats.round($0, 2) }, settleMs: settleMs.map { Stats.round($0, 1) },
+                       frames: FrameStats(intervalsMs: its, nominalHz: nominalHz), mainThread: MainThreadStats(stretchesMs: st.map(\.dur), cpuMs: st.map(\.cpu)),
+                       bodies: count(bodies[m.body...]), notes: notes, cpuMs: Stats.round(cpu, 2), instructions: instructions.flatMap { $0 > 0 ? $0 : nil })
+    r.causes = causes.causes(from: m.at, to: end)
+    return r
   }
 
   func intervals(from tick: Int) -> [Double] {
@@ -259,6 +266,7 @@ import DeskBenchKit
       var b: [String: Int] = [:]
       for x in bodies(in: s.at...(s.at + s.dur)) { b[x.view, default: 0] += 1 }
       var w = Stretch(step: Stretch.label(at: s.at, dur: s.dur, steps: steps), atMs: Stats.round(s.at, 1), durationMs: Stats.round(s.dur, 2), cpuMs: Stats.round(s.cpu, 2), bodies: b)
+      w.causes = causes.causes(from: s.at, to: s.at + s.dur)
       sampler?.annotate(&w, stretch: s.id)
       return w
     }

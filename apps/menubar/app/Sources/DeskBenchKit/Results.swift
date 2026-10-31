@@ -1,4 +1,5 @@
 import Foundation
+import PerfLoopProbe
 
 // The bench's output schema (`deskbench.result/1`). Everything the bench prints with --json is one of these; a field is
 // never renamed within a schema version, only added. DESKBENCH.md documents how to read them.
@@ -109,6 +110,10 @@ public struct Stretch: Codable, Sendable, Equatable {
   /// `durationMs` (then measured at observer order 0) ended before. Since measure 2 both are the same stretch, so it is
   /// no longer written.
   public var awakeMs: Double? = nil
+  /// Which recorded model mutations the stretch's bodies followed (CAPABILITIES.md C7; `Mutations` in PerfLoopProbe):
+  /// each key path with how often it was set and the bodies charged to the updates it was part of. Coarse: a body is
+  /// charged to every mutation since the previous update. nil in results from before it.
+  public var causes: [Cause]? = nil
   public init(step: String, atMs: Double, durationMs: Double, cpuMs: Double, bodies: [String: Int]) { self.step = step; self.atMs = atMs; self.durationMs = durationMs; self.cpuMs = cpuMs; self.bodies = bodies }
 
   /// Which step a stretch at `at` lasting `dur` ms belongs to: the one it overlaps most; between two steps "after" the
@@ -148,6 +153,9 @@ public struct StepResult: Codable, Sendable, Equatable {
   /// Instructions the main thread retired from the step's start to its end (measure 1: the whole process, from
   /// proc_pid_rusage); nil where the counters read zero (a VM) or can't be read.
   public var instructions: Int?
+  /// The step's bodies by the recorded mutations they followed, as for a stretch (`Stretch.causes`). nil in results
+  /// from before it.
+  public var causes: [Cause]? = nil
   public init(name: String, atMs: Double, durationMs: Double, latencyMs: Double? = nil, settleMs: Double? = nil, frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], notes: [String] = [],
               cpuMs: Double? = nil, instructions: Int? = nil) {
     self.name = name; self.atMs = atMs; self.durationMs = durationMs; self.latencyMs = latencyMs; self.settleMs = settleMs
