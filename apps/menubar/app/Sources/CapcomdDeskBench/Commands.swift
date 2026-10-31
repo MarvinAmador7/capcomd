@@ -68,6 +68,7 @@ import DeskBenchKit
     if spec.name == "open" {
       // open makes its own windows; the noise floor comes from the first one after its measurement.
     } else {
+      await h.sceneWindowReady()
       h.showWindow(size: size, activate: o.activate)
       _ = await h.nextCommit()
       _ = await h.ensureActive(o.activate)
