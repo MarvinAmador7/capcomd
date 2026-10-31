@@ -41,5 +41,6 @@ let package = Package(
     .testTarget(name: "CapcomdThreadTests", dependencies: ["CapcomdThread"]),
     // Checks the port against packages/bot-avatar/fixtures (golden bots and the catalog), read in place.
     .testTarget(name: "CapcomdBotTests", dependencies: ["CapcomdBot"]),
-    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore"]),
+    // Fixtures/ holds hand-made xctrace exports, read in place.
+    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore"], exclude: ["Fixtures"]),
   ])

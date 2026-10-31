@@ -4,7 +4,7 @@ import Foundation
 // <col><mnemonic> names, then <row>s whose cells either carry an id (first occurrence) or a ref to an earlier cell.
 // Backtraces are the same: a <backtrace> or <tagged-backtrace> whose <frame>s have a `name` attribute, by id or ref.
 
-/// A light DOM for the export (XMLParser is SAX only).
+/// A light DOM for the export, built by `XMLLite`.
 public final class XNode {
   public let name: String
   public var attrs: [String: String]
@@ -13,16 +13,6 @@ public final class XNode {
   init(_ n: String, _ a: [String: String]) { name = n; attrs = a }
   public func first(_ n: String) -> XNode? { children.first { $0.name == n } }
   public func all(_ n: String) -> [XNode] { children.filter { $0.name == n } }
-}
-
-final class XBuilder: NSObject, XMLParserDelegate {
-  var stack: [XNode] = [XNode("#root", [:])]
-  var root: XNode { stack[0] }
-  func parser(_ p: XMLParser, didStartElement e: String, namespaceURI: String?, qualifiedName: String?, attributes a: [String: String]) {
-    let n = XNode(e, a); stack.last!.children.append(n); stack.append(n)
-  }
-  func parser(_ p: XMLParser, didEndElement e: String, namespaceURI: String?, qualifiedName: String?) { stack.removeLast() }
-  func parser(_ p: XMLParser, foundCharacters s: String) { stack.last!.text += s }
 }
 
 /// One exported table, with ids resolved.
@@ -34,21 +24,30 @@ public struct XCTable {
   /// Every cell with an id, for resolving refs inside backtraces.
   public var ids: [String: XNode]
 
+  /// Every `<node>` of the export: one table can come in several (a schema-only node, then the rows; or one per
+  /// matching table, as `table[@schema="os-signpost"]` matches four). Ids are global to the document, so refs cross
+  /// nodes. A `<sentinel/>` is an empty cell: it keeps its column's place and is absent from the row.
   public init(xml: Data) throws {
-    let p = XMLParser(data: xml); let b = XBuilder(); p.delegate = b
-    guard p.parse(), let node = b.root.first("trace-query-result")?.first("node") else { throw XCTraceError.badXML(p.parserError?.localizedDescription ?? "no <node>") }
-    schema = node.first("schema")?.attrs["name"] ?? "?"
-    columns = node.first("schema")?.all("col").compactMap { $0.first("mnemonic")?.text } ?? []
+    let root = try XMLLite.parse(xml)
+    let nodes = root.first("trace-query-result")?.all("node") ?? []
+    guard !nodes.isEmpty else { throw XCTraceError.badXML("no <node>") }
+    var schema: String?, columns: [String] = []
     var ids: [String: XNode] = [:]
     func register(_ n: XNode) { if let id = n.attrs["id"] { ids[id] = n }; n.children.forEach(register) }
     var rows: [[String: XNode]] = []
-    for r in node.all("row") {
-      register(r)
-      var out: [String: XNode] = [:]
-      let cells = r.children.filter { $0.name != "sentinel" }
-      for (c, cell) in zip(columns, cells) { out[c] = cell.attrs["ref"].flatMap { ids[$0] } ?? cell }
-      rows.append(out)
+    for node in nodes {
+      if let s = node.first("schema") {
+        if schema == nil { schema = s.attrs["name"] }
+        columns = s.all("col").compactMap { $0.first("mnemonic")?.text }
+      }
+      for r in node.all("row") {
+        register(r)
+        var out: [String: XNode] = [:]
+        for (c, cell) in zip(columns, r.children) where cell.name != "sentinel" { out[c] = cell.attrs["ref"].flatMap { ids[$0] } ?? cell }
+        rows.append(out)
+      }
     }
+    self.schema = schema ?? "?"; self.columns = columns
     self.rows = rows; self.ids = ids
   }
 
@@ -148,11 +147,8 @@ public struct ProfileSummary: Codable, Sendable, Equatable {
     burstFrames = top(bi.filter { $0.value >= floor }, 60) { k in Self.ours.contains { k.contains($0) } || Self.hot.contains { k.contains($0) } }
   }
 
-  /// A symbol without its argument list, cut to 110 characters (as the Python scripts did).
-  static func clean(_ s: String) -> String {
-    let base = s.split(separator: "(", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? s
-    return String(base.prefix(110))
-  }
+  /// A symbol without its argument list, cut to 110 characters (`Symbol.clean`).
+  static func clean(_ s: String) -> String { Symbol.clean(s) }
 }
 
 /// SwiftUI template: view body evaluations by view type, from the SwiftUI instruments' tables when present.
@@ -173,7 +169,8 @@ public struct SwiftUISummary: Codable, Sendable, Equatable {
 
 /// What `profile` prints.
 public struct ProfileResult: Codable, Sendable, Equatable {
-  public var schema = "deskbench.profile/1"
+  /// `perfloop.profile/2`; documents written as `deskbench.profile/1` still decode (every added field is optional).
+  public var schema = "perfloop.profile/2"
   public var template: String
   public var trace: String
   public var scenario: String
@@ -187,6 +184,20 @@ public struct ProfileResult: Codable, Sendable, Equatable {
   /// The in-process result of the same run (frames, stretches, bodies), when the child wrote one.
   public var inProcess: BenchResult?
   public var notes: [String]
+  // perfloop.profile/2 (CallTree.swift, `addCallTrees`): the main thread's call tree, per `step` signpost interval.
+  /// The steps the signposts marked.
+  public var steps: [StepInterval]?
+  /// Main thread, whole recording, v = samples.
+  public var tree: CallTree?
+  /// Main thread, samples inside steps only (what `diff` compares).
+  public var treeInSteps: CallTree?
+  public var treePerStep: [StepTree]?
+  /// Main-thread ms per step: samples inside steps × sampleIntervalMs ÷ steps.
+  public var msPerStep: Double?
+  public var sampleIntervalMs: Double?
+  public var stepsCovered: Int?
+  /// Steps the in-process result ran, when the profile carries it.
+  public var stepsExpected: Int?
   public init(template: String, trace: String, scenario: String, fixture: String, process: String, durationS: Double) {
     self.template = template; self.trace = trace; self.scenario = scenario; self.fixture = fixture; self.process = process; self.durationS = durationS; notes = []
   }
