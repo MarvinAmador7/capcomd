@@ -6,17 +6,17 @@ import Foundation
 
 /// A folded call tree of sampled stacks (SCHEMAS.md's common `tree` object): `n` the frame, `v` its inclusive weight (samples in a
 /// profile, ms in a diff), `c` its callees, heaviest first. A leaf has no `c` in the JSON.
-public struct CallTree: Codable, Sendable, Equatable {
+public struct StackTree: Codable, Sendable, Equatable {
   public var n: String
   public var v: Double
-  public var c: [CallTree]
-  public init(n: String, v: Double, c: [CallTree] = []) { self.n = n; self.v = v; self.c = c }
+  public var c: [StackTree]
+  public init(n: String, v: Double, c: [StackTree] = []) { self.n = n; self.v = v; self.c = c }
 
   enum CodingKeys: String, CodingKey { case n, v, c }
   public init(from d: Decoder) throws {
     let k = try d.container(keyedBy: CodingKeys.self)
     n = try k.decode(String.self, forKey: .n); v = try k.decode(Double.self, forKey: .v)
-    c = try k.decodeIfPresent([CallTree].self, forKey: .c) ?? []
+    c = try k.decodeIfPresent([StackTree].self, forKey: .c) ?? []
   }
   public func encode(to e: Encoder) throws {
     var k = e.container(keyedBy: CodingKeys.self)
@@ -25,10 +25,10 @@ public struct CallTree: Codable, Sendable, Equatable {
   }
 
   /// From the root, the heaviest child at each level down to a leaf (the root itself excluded).
-  public var hotPath: [CallTree] {
-    var out: [CallTree] = []
+  public var hotPath: [StackTree] {
+    var out: [StackTree] = []
     var node = self
-    while let next = node.c.max(by: { ($0.v, $1.n) < ($1.v, $0.n) }) { out.append(CallTree(n: next.n, v: next.v)); node = next }
+    while let next = node.c.max(by: { ($0.v, $1.n) < ($1.v, $0.n) }) { out.append(StackTree(n: next.n, v: next.v)); node = next }
     return out
   }
 
@@ -57,7 +57,7 @@ public struct StackFrame: Hashable, Sendable {
 /// with the same name are one frame (a thunk and its implementation, the link register repeating the caller).
 public struct StackProfile: Sendable, Equatable {
   public var samples: Int
-  public var tree: CallTree
+  public var tree: StackTree
   /// Our frames, inclusive, outside the run-loop trunk.
   public var ours: [SymbolCount]
   /// Framework frames, inclusive, outside the run-loop trunk, each with the our-frame it ran under.
@@ -91,9 +91,9 @@ public struct StackProfile: Sendable, Equatable {
       }
     }
     let floor = max(1, Int((Double(samples) * minShare).rounded(.up)))
-    func fold(_ name: String, _ n: Node) -> CallTree {
+    func fold(_ name: String, _ n: Node) -> StackTree {
       let kids = n.kids.filter { $0.value.v >= floor }.map { fold($0.key, $0.value) }.sorted { ($0.v, $1.n) > ($1.v, $0.n) }
-      return CallTree(n: name, v: Double(n.v), c: kids)
+      return StackTree(n: name, v: Double(n.v), c: kids)
     }
     tree = fold("main thread", root)
     func rank(_ xs: [(String, Int)]) -> [(String, Int)] { xs.sorted { ($0.1, $1.0) > ($1.1, $0.0) }.prefix(top).map { $0 } }

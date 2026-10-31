@@ -79,7 +79,7 @@ final class StacksTests: XCTestCase {
     var stacks = knownStacks()
     stacks += (0..<2).map { _ in [StackFrame("rare"), StackFrame("ReelView.slide", ours: true), StackFrame("main", ours: true), StackFrame("start")] }
     let p = StackProfile(stacks: stacks, minShare: 0.05)   // 102 samples: nodes under 6 samples go
-    func find(_ t: CallTree, _ n: String) -> CallTree? { t.n == n ? t : t.c.lazy.compactMap { find($0, n) }.first }
+    func find(_ t: StackTree, _ n: String) -> StackTree? { t.n == n ? t : t.c.lazy.compactMap { find($0, n) }.first }
     XCTAssertNil(find(p.tree, "rare"))
     XCTAssertEqual(p.tree.v, 102)
     XCTAssertTrue(p.framework.contains { $0.symbol == "rare" })   // the tops aren't pruned
@@ -106,13 +106,13 @@ final class StacksTests: XCTestCase {
   // MARK: schema
 
   func testCallTreeJSONOmitsEmptyChildren() throws {
-    let t = CallTree(n: "main thread", v: 3, c: [CallTree(n: "a", v: 2, c: [CallTree(n: "b", v: 1)]), CallTree(n: "d", v: 1)])
+    let t = StackTree(n: "main thread", v: 3, c: [StackTree(n: "a", v: 2, c: [StackTree(n: "b", v: 1)]), StackTree(n: "d", v: 1)])
     let j = JSONOut.encode(t)
     XCTAssertTrue(j.contains("\"v\" : 3"))           // whole numbers stay integers in the JSON
     XCTAssertFalse(j.contains("\"c\" : [\n\n"))
     XCTAssertEqual(j.components(separatedBy: "\"c\" :").count - 1, 2)   // root and "a" only
-    XCTAssertEqual(try JSONOut.decode(CallTree.self, from: Data(j.utf8)), t)
-    XCTAssertEqual(try JSONOut.decode(CallTree.self, from: Data(#"{"n":"x","v":1.5}"#.utf8)), CallTree(n: "x", v: 1.5))
+    XCTAssertEqual(try JSONOut.decode(StackTree.self, from: Data(j.utf8)), t)
+    XCTAssertEqual(try JSONOut.decode(StackTree.self, from: Data(#"{"n":"x","v":1.5}"#.utf8)), StackTree(n: "x", v: 1.5))
   }
 
   func testOldResultsStillDecodeAndRoundTrip() throws {
