@@ -21,8 +21,12 @@ commands
   trace <file.trace> [--process NAME] [--json]     summarise an existing trace (hitches, hangs, time profile) the same way
   diff <a> <b> [--top N] [--per step|run] [--json] differential main-thread call tree of two time profiles (.trace or
                                                   profile JSON), ms per step: what grew, what shrank (also `trace --diff a b`)
-  ab --a EXE --b EXE <scenario> [--reps N] [--objective O]
-                                                  alternate two builds of this bench, compare medians within the noise
+  ab --a EXE --b EXE <scenario> [--reps N] [--objective O] [--order random|abba] [--seed N] [--pause-ms N]
+     [--quiet-wait S] [--quiet-busy PCT] [--sampler on]
+                                                  N pairs of runs of two builds of this bench, the first side of each pair
+                                                  counterbalanced (seeded, recorded), a pause and a quiet check before every
+                                                  run; a paired verdict: the per-pair differences beyond their band and
+                                                  Mann-Whitney p < 0.05 (exit 4 on a regression)
   compare <baseline.json> <candidate.json> [--objective O]
                                                   regression check between two saved results of the same scenario
   explain <result.json>                           a saved result as text: verdict, numbers, longest stretches, causes
@@ -66,7 +70,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion"] + SamplerConfig.flags
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -236,8 +240,16 @@ func kv(_ xs: [String]) -> [String: String] {
   case "ab":
     guard let a = args.one("a"), let b = args.one("b"), let sc = args.positional.dropFirst().first else { err("usage: deskbench ab --a EXE --b EXE <scenario> [--fixture F] [--reps N]"); return Int32(ExitCode.usage) }
     do {
-      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", reps: args.one("reps").flatMap(Int.init) ?? 5, params: args.all("set"),
-                                      activate: !args.has("no-activate"), objective: objective)
+      var ao = Commands.ABOptions()
+      if let r = args.one("reps").flatMap(Int.init) { ao.reps = r }
+      if let x = args.one("order") { ao.order = x }
+      ao.seed = args.one("seed").flatMap(UInt64.init)
+      if let x = args.one("pause-ms").flatMap(Double.init) { ao.pauseMs = x }
+      if let x = args.one("quiet-wait").flatMap(Double.init) { ao.quietWaitS = x }
+      if let x = args.one("quiet-busy").flatMap(Double.init) { ao.quietBusyPct = x }
+      ao.sampler = args.one("sampler") == "on"
+      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", params: args.all("set"),
+                                      activate: !args.has("no-activate"), objective: objective, options: ao)
       if let p = args.one("out") { try? JSONOut.encode(r).write(toFile: p, atomically: true, encoding: .utf8) }
       out(json ? JSONOut.encode(r) : r.text)
       return Int32(code)
@@ -309,7 +321,10 @@ if MainActor.assumeIsolated({ Harness.current != nil }) {
   CFRunLoopRun()
 } else {
   let app = NSApplication.shared
-  // A regular app (Dock icon, can become active): SwiftUI flushes state changes promptly only in an active app.
-  app.setActivationPolicy(CommandLine.arguments.contains("--no-activate") ? .accessory : .regular)
+  // A regular app (Dock icon, can become active): SwiftUI flushes state changes promptly only in an active app. The
+  // commands that only spawn or read (ab, profile, compare, …) never show a window: they stay out of the way of the
+  // child that does, and never take activation from it.
+  let windowless = !["run", "suite", "snapshot"].contains(startup.positional.first ?? "")
+  app.setActivationPolicy(CommandLine.arguments.contains("--no-activate") || windowless ? .accessory : .regular)
   app.run()
 }

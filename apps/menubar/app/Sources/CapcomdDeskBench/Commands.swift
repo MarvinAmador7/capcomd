@@ -110,12 +110,14 @@ import DeskBenchKit
       let stepWindows = steps.map { ($0.atMs, $0.atMs + $0.durationMs) }
       let allTicks = h.ticks[m.tick...]
       for (a, b) in zip(allTicks.dropFirst(), allTicks) where stepWindows.contains(where: { b >= $0.0 && a <= $0.1 }) { its.append(a - b) }
-      for s in h.stretches[m.stretch...] where stepWindows.contains(where: { s.at >= $0.0 && s.at <= $0.1 }) { st.append(s.dur); cpu.append(s.cpu) }
+      // A stretch counts when it overlaps a step: the one in which a step starts began before it.
+      for s in h.stretches[m.stretch...] where stepWindows.contains(where: { s.at <= $0.1 && s.at + s.dur >= $0.0 }) { st.append(s.dur); cpu.append(s.cpu) }
       var bodies: [String: Int] = [:]
       for s in steps { for (k, v) in s.bodies { bodies[k, default: 0] += v } }
       let worst = h.worstStretches(from: m.stretch, steps: steps)
       repResults.append(RepResult(index: rep, variant: o.variant, steps: steps, frames: FrameStats(intervalsMs: its, nominalHz: h.nominalHz),
                                   mainThread: MainThreadStats(stretchesMs: st, cpuMs: cpu), bodies: bodies, checks: checks, worstStretches: worst, window: h.windowState()))
+      repResults[repResults.count - 1].measure = currentMeasure
       if let s = h.sampler, let sm = samplerMark { repResults[repResults.count - 1].sampler = s.stats(since: sm) }
       if let dir = o.artifacts { artifacts += h.snapshot(into: dir, name: "\(spec.name)-rep\(rep)") }
       await h.sleep(ms: 200)
@@ -166,30 +168,89 @@ enum Commands {
     return ((try? JSONOut.decode(BenchResult.self, from: data)), p.terminationStatus, text)
   }
 
-  /// A and B alternate, one process each, `reps` times a side; the medians are compared with the noise band.
-  static func ab(a: String, b: String, scenario: String, fixture: String, reps: Int, params: [String], activate: Bool = true, objective: Objective? = nil) throws -> (ABResult, Int) {
+  /// How `ab` runs its pairs (`--order`, `--seed`, `--pause-ms`, `--quiet-wait`, `--quiet-busy`, `--sampler`).
+  struct ABOptions {
+    var reps = 5
+    /// random: each pair's first side drawn from a seeded shuffle with as many AB as BA pairs (one more of either
+    /// when the count is odd); abba: AB BA AB BA …
+    var order = "random"
+    var seed: UInt64?
+    /// After each run, before the quiet check: the window torn down, the last child's teardown and our decode done.
+    var pauseMs = 1500.0
+    /// Before each run, wait up to this long for the machine to be quiet (then run anyway, and say so).
+    var quietWaitS = 10.0
+    /// Quiet: at most this share of all cores busy over half a second, and no compiler or linker running.
+    var quietBusyPct = 30.0
+    /// The children's in-process sampler (off by default: it costs ~1 % and older builds don't have it).
+    var sampler = false
+  }
+
+  /// A side of one pair, as `ab` ran it.
+  struct ABRun: Codable {
+    var pair: Int
+    var side: String
+    /// 1 or 2: which of the pair ran first.
+    var position: Int
+    /// Share of all cores busy (other processes: none of ours runs then) over the last half second before the run.
+    var busyPct: Double
+    /// Compilers and linkers running then (another agent's `swift build`, say).
+    var builds: [String]
+    var waitedS: Double
+    var quiet: Bool
+    var exit: Int32
+    /// The objective's value for this run (filled in once the objective is known).
+    var objective: Double?
+  }
+
+  /// A and B in pairs, one process each, `reps` pairs; within a pair the first side is counterbalanced (seeded, recorded),
+  /// every run waits for a settle pause and a quiet machine, and the verdict is paired (Regression(metric:pairs:)): the
+  /// per-pair differences against their own spread, and Mann-Whitney U on the two sides.
+  static func ab(a: String, b: String, scenario: String, fixture: String, params: [String], activate: Bool = true, objective: Objective? = nil, options o: ABOptions = ABOptions()) throws -> (ABResult, Int) {
     guard let spec = Scenarios.spec(scenario) else { throw CLIError.usage("unknown scenario '\(scenario)'") }
-    var ra: [RepResult] = [], rb: [RepResult] = []
+    guard ["random", "abba"].contains(o.order) else { throw CLIError.usage("--order must be random or abba") }
+    let seed = o.seed ?? UInt64.random(in: 1...999_999)
+    let order = PairOrder.draw(pairs: o.reps, mode: o.order, seed: seed)
+    var got: [Int: [String: RepResult]] = [:]
+    var runs: [ABRun] = []
     var failures: [String] = []
     var builds: [String: BuildInfo] = [:]
-    for i in 0..<reps {
-      for (label, exe) in [("A", a), ("B", b)] {
+    let env = o.sampler ? [:] : ["DESKBENCH_SAMPLER": "off"]
+    for (i, first) in order.enumerated() {
+      for (pos, label) in (first == "AB" ? ["A", "B"] : ["B", "A"]).enumerated() {
+        let exe = label == "A" ? a : b
         var args = ["run", scenario, "--fixture", fixture, "--reps", "1", "--json", "--quiet-check", "0", "--variant", label]
         for p in params { args += ["--set", p] }
         if !activate { args.append("--no-activate") }
-        FileHandle.standardError.write(Data("ab: \(label) rep \(i + 1)/\(reps)\n".utf8))
-        let (r, code, text) = try child(exe, args)
-        guard let r else { failures.append("\(label) rep \(i): exit \(code): \(text.prefix(300))"); continue }
-        if label == "A" { ra += r.reps } else { rb += r.reps }
+        let q = Quiet.wait(pauseMs: o.pauseMs, maxS: o.quietWaitS, busyPct: o.quietBusyPct)
+        FileHandle.standardError.write(Data("ab: pair \(i + 1)/\(order.count) \(first) · \(label)\(q.quiet ? "" : "  (not quiet after \(Int(q.waitedS)) s: \(q.busyPct) % busy\(q.builds.isEmpty ? "" : ", " + q.builds.joined(separator: ", ")))")\n".utf8))
+        let (r, code, text) = try child(exe, args, env: env)
+        runs.append(ABRun(pair: i, side: label, position: pos + 1, busyPct: q.busyPct, builds: q.builds, waitedS: q.waitedS, quiet: q.quiet, exit: code))
+        guard let r, let rep = r.reps.first else { failures.append("\(label) pair \(i + 1): exit \(code): \(text.prefix(300))"); continue }
+        got[i, default: [:]][label] = rep
         if let b = r.tool.build { builds[label] = b }
       }
     }
-    let c = ra.isEmpty || rb.isEmpty ? nil : Comparison(spec, objective: objective, baseline: ra, candidate: rb)
+    let ra = order.indices.compactMap { got[$0]?["A"] }, rb = order.indices.compactMap { got[$0]?["B"] }
+    let pairs = order.indices.compactMap { i in got[i].flatMap { g in g["A"].flatMap { x in g["B"].map { (a: x, b: $0) } } } }
+    let c = pairs.isEmpty ? nil : Comparison(spec, objective: objective, pairs: pairs)
     let used = c.flatMap { Objective(argument: $0.objective) } ?? objective ?? .default(for: spec)
-    let res = ABResult(scenario: scenario, fixture: fixture, a: a, b: b, repsPerSide: reps, summaryA: Summary(reps: ra, objective: used), summaryB: Summary(reps: rb, objective: used),
+    for k in runs.indices { runs[k].objective = got[runs[k].pair]?[runs[k].side].flatMap(used.value) }
+    // The order effect: how much the second run of a pair differed from the first, whichever build it was.
+    var orderEffect: [Double] = []
+    for i in order.indices {
+      let rs = runs.filter { $0.pair == i }.sorted { $0.position < $1.position }
+      if rs.count == 2, let x = rs[0].objective, let y = rs[1].objective, x != 0 { orderEffect.append((y - x) / abs(x) * 100) }
+    }
+    var notes = c?.notes ?? []
+    if pairs.count < order.count { notes.append("\(order.count - pairs.count) of \(order.count) pairs lost a side (see failures): the verdict uses the \(pairs.count) complete ones") }
+    let noisy = runs.filter { !$0.quiet }
+    if !noisy.isEmpty { notes.append("\(noisy.count) of \(runs.count) runs started on a busy machine (> \(Int(o.quietBusyPct)) % of the cores, or a build running) after waiting \(Int(o.quietWaitS)) s") }
+    let res = ABResult(scenario: scenario, fixture: fixture, a: a, b: b, repsPerSide: o.reps, summaryA: Summary(reps: ra, objective: used), summaryB: Summary(reps: rb, objective: used),
                        comparison: c?.rows ?? [], failures: failures, regression: c?.regression ?? false, improvement: c?.improvement ?? false,
-                       objective: used.metric, guardsFailed: c?.guardsFailed ?? [], notes: c?.notes ?? [], buildA: ra.isEmpty ? nil : builds["A"], buildB: rb.isEmpty ? nil : builds["B"])
-    return (res, failures.count == reps * 2 ? ExitCode.harness : res.regression ? ExitCode.regression : ExitCode.ok)
+                       objective: used.metric, guardsFailed: c?.guardsFailed ?? [], notes: notes, buildA: ra.isEmpty ? nil : builds["A"], buildB: rb.isEmpty ? nil : builds["B"],
+                       order: order, orderMode: o.order, seed: seed, pairs: pairs.count, runs: runs, orderEffectPct: orderEffect.isEmpty ? nil : Stats.round(Stats.median(orderEffect), 1),
+                       samplerInChildren: o.sampler, pauseMs: o.pauseMs, quietBusyPct: o.quietBusyPct)
+    return (res, pairs.isEmpty ? ExitCode.harness : res.regression ? ExitCode.regression : ExitCode.ok)
   }
 
   struct ABResult: Codable {
@@ -198,15 +259,33 @@ enum Commands {
     var summaryA: Summary, summaryB: Summary
     var comparison: [Regression]
     var failures: [String]
-    /// The objective or a guard got worse beyond its band (exit 4); information rows never set it.
+    /// The objective or a guard got worse beyond its band, significantly (exit 4); information rows never set it.
     var regression: Bool, improvement: Bool
     var objective: String?
     var guardsFailed: [String]?
     var notes: [String]?
     var buildA: BuildInfo?, buildB: BuildInfo?
+    /// Each pair's order ("AB" = A ran first), how it was drawn, and the seed that redraws it (`--seed`).
+    var order: [String]? = nil
+    var orderMode: String? = nil
+    var seed: UInt64? = nil
+    /// Complete pairs the verdict used.
+    var pairs: Int? = nil
+    var runs: [ABRun]? = nil
+    /// Median over pairs of (second run − first run) / first on the objective, whichever build ran second: what
+    /// running second costs or saves on this machine (the order is counterbalanced, so it doesn't bias the verdict).
+    var orderEffectPct: Double? = nil
+    var samplerInChildren: Bool? = nil
+    var pauseMs: Double? = nil
+    var quietBusyPct: Double? = nil
     var text: String {
-      var o = ["ab \(scenario) on \(fixture): \(repsPerSide) reps a side, decided on \(objective ?? "?")",
+      var o = ["ab \(scenario) on \(fixture): \(pairs.map { "\($0) pairs" } ?? "\(repsPerSide) reps a side"), decided on \(objective ?? "?")",
                "  A: \(a)" + (buildA.map { "  [\($0.line)]" } ?? ""), "  B: \(b)" + (buildB.map { "  [\($0.line)]" } ?? "")]
+      if let order { o.append("  order: \(order.joined(separator: " "))\(seed.map { " (\(orderMode ?? "random"), seed \($0))" } ?? "")\(orderEffectPct.map { "; running second moved the objective \($0 > 0 ? "+" : "")\($0) % (median)" } ?? "")") }
+      if let runs, !runs.isEmpty {
+        let busy = runs.map(\.busyPct)
+        o.append("  machine before each run: \(Stats.round(Stats.median(busy), 0)) % of the cores busy (median, max \(Stats.round(busy.max() ?? 0, 0)) %); \(runs.filter(\.quiet).count)/\(runs.count) runs started quiet")
+      }
       o += Commands.rows(comparison)
       for n in notes ?? [] { o.append("  note: " + n) }
       func line(_ s: Summary) -> String { Commands.medians(s) }
@@ -219,7 +298,7 @@ enum Commands {
   /// Comparison rows as text: what decides first, information after.
   static func rows(_ rs: [Regression]) -> [String] {
     rs.map { r in
-      let mark = r.regression ? (r.decides ? "✗ REGRESSION" : "· worse (info)") : r.improvement ? (r.decides ? "✓ better" : "· better (info)") : "· same"
+      let mark = r.regression ? (r.decides ? "✗ REGRESSION" : "· worse (info)") : r.improvement ? (r.decides ? "✓ better" : "· better (info)") : r.unsure == true ? "? unsure" : "· same"
       return "  \(mark) [\(r.role ?? "metric")] " + (r.reason.hasPrefix(r.metric) ? r.reason : "\(r.metric): \(r.reason)")
     }
   }
@@ -376,4 +455,50 @@ final class LogBuffer: @unchecked Sendable {
 extension XCTable {
   /// A table with no rows, for summaries that only have hangs.
   static var emptyHitches: XCTable { try! XCTable(xml: Data("<trace-query-result><node><schema name=\"hitches\"></schema></node></trace-query-result>".utf8)) }
+}
+
+/// Whether the machine is quiet enough to start a measured run: the share of all cores busy over half a second
+/// (host CPU ticks; between `ab`'s runs nothing of ours is running) and whether a compiler or linker is running.
+enum Quiet {
+  static let buildTools: Set<String> = ["swift-build", "swift-frontend", "swiftc", "swift-driver", "clang", "clang++", "ld", "ld64", "xcodebuild", "swift-test", "swift-package"]
+
+  struct Reading { var busyPct: Double; var builds: [String]; var waitedS: Double; var quiet: Bool }
+
+  /// Sleeps `pauseMs`, then reads the machine every half second until it is quiet or `maxS` have passed.
+  static func wait(pauseMs: Double, maxS: Double, busyPct limit: Double) -> Reading {
+    let start = Date()
+    Thread.sleep(forTimeInterval: pauseMs / 1000)
+    while true {
+      let busy = busyShare(over: 0.5), b = builds()
+      let waited = Date().timeIntervalSince(start)
+      let quiet = busy <= limit && b.isEmpty
+      if quiet || waited >= maxS { return Reading(busyPct: Stats.round(busy, 1), builds: b, waitedS: Stats.round(waited, 1), quiet: quiet) }
+    }
+  }
+
+  static func busyShare(over s: Double) -> Double {
+    func ticks() -> (busy: Double, all: Double)? {
+      var info = host_cpu_load_info()
+      var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info>.size / MemoryLayout<integer_t>.size)
+      let r = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count) } }
+      guard r == KERN_SUCCESS else { return nil }
+      let t = info.cpu_ticks   // user, system, idle, nice
+      let user = Double(t.0), sys = Double(t.1), idle = Double(t.2), nice = Double(t.3)
+      return (user + sys + nice, user + sys + idle + nice)
+    }
+    guard let a = ticks() else { return 0 }
+    Thread.sleep(forTimeInterval: s)
+    guard let b = ticks(), b.all > a.all else { return 0 }
+    return (b.busy - a.busy) / (b.all - a.all) * 100
+  }
+
+  /// Build tools running now, by name (once each).
+  static func builds() -> [String] {
+    let ps = Process(); ps.executableURL = URL(fileURLWithPath: "/bin/ps"); ps.arguments = ["-Ao", "comm="]
+    let out = Pipe(); ps.standardOutput = out; ps.standardError = FileHandle.nullDevice
+    guard (try? ps.run()) != nil else { return [] }
+    let data = out.fileHandleForReading.readDataToEndOfFile(); ps.waitUntilExit()
+    let names = String(decoding: data, as: UTF8.self).split(separator: "\n").map { $0.split(separator: "/").last.map(String.init) ?? "" }
+    return Array(Set(names.filter(buildTools.contains))).sorted()
+  }
 }
