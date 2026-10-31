@@ -29,6 +29,8 @@ import QuartzCore
 
   var attached: Bool { !observers.isEmpty }
   var isOpen: Bool { openAt != nil }
+  /// The CPU ms of the stretch still open (the one the caller is in), nil while asleep.
+  var openCpuMs: Double? { openAt == nil ? nil : Harness.threadCpuMs() - openCpu }
 
   func attach() {
     guard observers.isEmpty else { return }

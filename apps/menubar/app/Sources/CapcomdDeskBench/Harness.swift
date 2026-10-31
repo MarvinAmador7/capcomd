@@ -266,11 +266,13 @@ import DeskBenchKit
 
   /// Waits until the main thread has done no stretch of more than `maxCpuMs` of CPU for `quietMs` (CPU, not wall time,
   /// so a preempted short stretch doesn't count): what building columns and warming threads leave behind when they're
-  /// done. Returns how long it waited, nil when it gave up after `timeoutMs`.
+  /// done. The stretch this runs in counts too: when the main thread never sleeps, the setup and these polls share one
+  /// long stretch (a step once started 1 s into one). Returns how long it waited, nil when it gave up after `timeoutMs`.
   func waitQuiet(quietMs: Double = 300, maxCpuMs: Double = 4, timeoutMs: Double = 5000) async -> Double? {
     let start = now()
     while now() - start < timeoutMs {
-      let lastBusy = stretches.last { $0.cpu > maxCpuMs }.map { $0.at + $0.dur } ?? 0
+      var lastBusy = stretches.last { $0.cpu > maxCpuMs }.map { $0.at + $0.dur } ?? 0
+      if let open = clock.openCpuMs, open > maxCpuMs { lastBusy = now() }
       if now() - max(lastBusy, start) >= quietMs { return now() - start }
       await sleep(ms: 50)
     }
