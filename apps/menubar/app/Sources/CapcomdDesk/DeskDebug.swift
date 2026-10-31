@@ -7,6 +7,7 @@ import AppKit
 /// and back (or first ↔ last with CAPCOMD_DESK_AUTOSCROLL_ENDS=1), every <seconds>, for Instruments. Release builds get it with -Xswiftc -DDESK_PROBE.
 /// With CAPCOMD_DESK_BODIES=<file>, it counts view bodies (DeskProbe) and appends one line per autoscroll tick: what
 /// the app itself evaluated for that step, to check the bench's hosts against the real one.
+/// With CAPCOMD_DESK_RECORD_GESTURE=<file>, it records swipes on the reel (GestureTap).
 @MainActor package enum DeskDebug {
   final class BodyCounter: DeskProbeSink {
     var counts: [String: Int] = [:]
@@ -23,6 +24,18 @@ import AppKit
   }
 
   package static func start(_ model: DeskModel) {
+    // CAPCOMD_DESK_RECORD_GESTURE=<file>: each swipe on the reel (scroll deltas, phases, times; nothing else) to <file>,
+    // the next ones to <name>-2.json, … (perfloop.gesture/1, for `deskbench run swipe --gesture <file>`).
+    if let path = ProcessInfo.processInfo.environment["CAPCOMD_DESK_RECORD_GESTURE"], !path.isEmpty {
+      GestureTap.record(to: URL(fileURLWithPath: (path as NSString).expandingTildeInPath)) { r in
+        let line: String
+        switch r {
+        case .success(let (url, g)): line = "capcomd: recorded gesture \(g.name) (\(g.events.count) events, \(Int(g.durationMs)) ms) → \(url.path)\n"
+        case .failure(let e): line = "capcomd: couldn't write the gesture: \(e)\n"
+        }
+        FileHandle.standardError.write(Data(line.utf8))
+      }
+    }
     let counter = ProcessInfo.processInfo.environment["CAPCOMD_DESK_BODIES"].map { (BodyCounter(), URL(fileURLWithPath: $0)) }
     if let counter { DeskProbe.sink = counter.0 }
     if let s = ProcessInfo.processInfo.environment["CAPCOMD_DESK_AUTOSCROLL"].flatMap(Double.init) {
