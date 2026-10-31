@@ -22,6 +22,7 @@ commands
   ab --a EXE --b EXE <scenario> [--reps N]        alternate two builds of this bench, compare medians within the noise
   compare <baseline.json> <candidate.json>        regression check between two saved results of the same scenario
   explain <result.json>                           a saved result as text: verdict, numbers, longest stretches, causes
+  selftest sampler [--json]                       check the main-thread sampler headless (no window): gate, attribution, cost
   help
 
 run options
@@ -239,6 +240,10 @@ func kv(_ xs: [String]) -> [String: String] {
       return Int32(c.regression ? ExitCode.regression : ExitCode.ok)
     } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
 
+  case "selftest":
+    guard args.positional.dropFirst().first == "sampler" else { err("usage: deskbench selftest sampler [--json]"); return Int32(ExitCode.usage) }
+    return await SelfTest.sampler(json: json)
+
   case "explain":
     guard let f = args.positional.dropFirst().first else { err("usage: deskbench explain <result.json>"); return Int32(ExitCode.usage) }
     do { out(Explain.text(try JSONOut.decode(BenchResult.self, from: Data(contentsOf: URL(fileURLWithPath: f))))); return 0 }
@@ -268,6 +273,9 @@ Task { @MainActor in
 }
 if MainActor.assumeIsolated({ Harness.current != nil }) {
   BenchScene.main()
+} else if startup.positional.first == "selftest" {
+  // Headless: the main run loop without NSApplication (no Dock icon, no window server connection).
+  CFRunLoopRun()
 } else {
   let app = NSApplication.shared
   // A regular app (Dock icon, can become active): SwiftUI flushes state changes promptly only in an active app.
