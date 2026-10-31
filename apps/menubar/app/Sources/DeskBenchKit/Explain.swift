@@ -36,10 +36,12 @@ public enum Explain {
     let worst = r.reps.flatMap(\.worstStretches).sorted { $0.durationMs > $1.durationMs }.prefix(6)
     if !worst.isEmpty {
       o.append("")
-      o.append("longest main-thread stretches (what SwiftUI evaluated inside each):")
-      for w in worst {
-        let b = w.bodies.sorted { $0.value > $1.value }.prefix(6).map { "\($0.key)×\($0.value)" }.joined(separator: " ")
-        o.append("  \(String(format: "%7.1f", w.durationMs)) ms wall \(String(format: "%6.1f", w.cpuMs)) ms cpu  during \(w.step)  \(b.isEmpty ? "(no view bodies: AppKit/layout/text or the fixture)" : b)")
+      let sampled = worst.contains { $0.samples != nil }
+      o.append("longest main-thread stretches (what SwiftUI evaluated inside each\(sampled ? ", and where the sampled stacks were" : "")):")
+      for w in worst { o += stretchLines(w) }
+      if let sm = r.reps.compactMap(\.sampler).first {
+        let n = r.reps.compactMap(\.sampler).reduce(0) { $0 + $1.samples }
+        o.append("  (sampler: \(n) samples at \(sm.hz.clean) Hz once a stretch passed \(sm.gateMs.clean) ms; cost \(sm.costP50Us.clean) µs a sample, sampler thread \(sm.overheadPct) % of the main thread's CPU)")
       }
     }
     let hints = suggestions(r)
@@ -51,6 +53,36 @@ public enum Explain {
     o.append("")
     o.append("next: `deskbench profile \(r.scenario) --fixture \(r.fixture) --template hitches` for the compositor's hitch list, `--template time` for stacks inside the stretches.")
     return o.joined(separator: "\n")
+  }
+
+  /// One worst stretch: its line, then (with the sampler on) where its samples were: the top inclusive frames that are
+  /// ours or SwiftUI/AppKit hot spots, the hottest path through the framework, and the leaf frames.
+  public static func stretchLines(_ w: Stretch) -> [String] {
+    let b = w.bodies.sorted { $0.value > $1.value }.prefix(6).map { "\($0.key)×\($0.value)" }.joined(separator: " ")
+    let noBodies = w.samples == nil ? "(no view bodies: AppKit/layout/text or the fixture)" : "(no view bodies)"
+    var o = ["  \(String(format: "%7.1f", w.durationMs)) ms wall \(String(format: "%6.1f", w.cpuMs)) ms cpu  during \(w.step)  \(b.isEmpty ? noBodies : b)"]
+    guard let n = w.samples else { return o }
+    let pad = "             "
+    guard n > 0, let tree = w.stacks else { o.append(pad + "not sampled (shorter than the sampler's gate)"); return o }
+    func pct(_ v: Int) -> String { "\(Int((Double(v) / Double(n) * 100).rounded())) %" }
+    let ours = w.topOurs ?? [], fw = w.topFramework ?? []
+    let oursSet = Set(ours.map(\.symbol))
+    func notable(_ s: String) -> Bool { oursSet.contains(s) || ProfileSummary.hot.contains { s.contains($0) } }
+    var top = (ours + fw.filter { notable($0.symbol) }).sorted { ($0.samples, $1.symbol) > ($1.samples, $0.symbol) }
+    if top.count < 3 { top += fw.filter { f in !top.contains { $0.symbol == f.symbol } }.prefix(3 - top.count) }
+    let awake = w.awakeMs.map { $0 > w.durationMs + 1 ? ", awake \(Stats.round($0, 1)) ms" : "" } ?? ""
+    o.append(pad + "\(n) samples\(awake): " + top.prefix(5).map { "\($0.symbol) \(pct($0.samples))\($0.under.map { " (under \($0))" } ?? "")" }.joined(separator: " · "))
+    // The hottest path below the run loop: the first frame, every frame that is ours or a hot spot or where the time
+    // splits (the share falls by ≥ 3 points), and the last frame still holding ≥ 10 %.
+    let path = tree.hotPath.filter { !StackProfile.isTrunk($0.n) && $0.v >= Double(n) * 0.1 }
+    var shown: [String] = [], last: Double?, skipped = false
+    for (i, p) in path.enumerated() {
+      let keep = i == 0 || i == path.count - 1 || notable(p.n) || (last.map { p.v <= $0 - Double(n) * 0.03 } ?? true)
+      if keep, shown.count < 8 { shown.append((skipped ? "… › " : "") + "\(p.n) \(pct(Int(p.v)))"); last = p.v; skipped = false } else { skipped = true }
+    }
+    if !shown.isEmpty { o.append(pad + "path: " + shown.joined(separator: " › ")) }
+    if let s = w.topSelf, !s.isEmpty { o.append(pad + "self: " + s.prefix(4).map { "\($0.symbol) \(pct($0.samples))" }.joined(separator: " · ")) }
+    return o
   }
 
   /// Patterns the desktop work has met before, matched on the body counts inside long stretches.
@@ -81,7 +113,7 @@ public enum Explain {
     if stretches.contains(where: { $0.durationMs > 50 && $0.cpuMs < $0.durationMs * 0.5 }) {
       out.append("Long stretches had less than half their length in CPU time: the main thread was preempted (another process, Spotlight indexing a fresh .build, a build). Those are the machine's, not the reel's; quiet it or use `ab`.")
     }
-    if s.hangsOver100.max > 0, stretches.contains(where: { $0.durationMs > 100 && $0.bodies.isEmpty && $0.cpuMs > $0.durationMs * 0.5 }) {
+    if s.hangsOver100.max > 0, stretches.contains(where: { $0.durationMs > 100 && $0.bodies.isEmpty && $0.cpuMs > $0.durationMs * 0.5 && $0.stacks == nil }) {
       out.append("A stretch over 100 ms had no SwiftUI bodies in it: AppKit layout, text layout (CoreText) or the fixture itself. `profile --template time` shows the stack.")
     }
     if !r.noise.quiet, !r.budget.pass {
