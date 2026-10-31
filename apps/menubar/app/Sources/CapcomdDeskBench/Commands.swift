@@ -255,7 +255,7 @@ enum Commands {
       if let h = table("hitches") { result.hitches = HitchSummary(hitches: h, hangs: table("potential-hangs"), process: "CapcomdDeskBench") }
       else { result.notes.append("no hitches table in the trace (did the recording attach? see xctrace.log)") }
     case "time":
-      if let t = table("time-profile") { result.timeProfile = ProfileSummary(timeProfile: t, ids: t.ids) } else { result.notes.append("no time-profile table") }
+      if let t = table("time-profile") { result.timeProfile = ProfileSummary(timeProfile: t, ids: t.ids); result.addCallTrees(timeProfile: t, signposts: table("os-signpost"), process: "CapcomdDeskBench") } else { result.notes.append("no time-profile table") }
       if let h = table("potential-hangs") { result.hitches = HitchSummary(hitches: XCTable.emptyHitches, hangs: h, process: "CapcomdDeskBench") }
     default:
       // The SwiftUI template's tables vary by Xcode version: take every table whose schema mentions a view or update.
@@ -287,7 +287,7 @@ enum Commands {
     }
     if let h = table("hitches") { result.hitches = HitchSummary(hitches: h, hangs: table("potential-hangs"), process: process) }
     else if let h = table("potential-hangs") { result.hitches = HitchSummary(hitches: XCTable.emptyHitches, hangs: h, process: process) }
-    if let t = table("time-profile") { result.timeProfile = ProfileSummary(timeProfile: t, ids: t.ids) }
+    if let t = table("time-profile") { result.timeProfile = ProfileSummary(timeProfile: t, ids: t.ids); result.addCallTrees(timeProfile: t, signposts: table("os-signpost"), process: process) }
     if result.hitches == nil && result.timeProfile == nil { result.notes.append("no hitches, potential-hangs or time-profile table in the trace") }
     return result
   }
@@ -317,6 +317,7 @@ enum Commands {
     }
     if let s = r.swiftUI { for t in s { o.append("swiftui table \(t.table): \(t.rows) rows"); for (k, v) in t.byView.sorted(by: { $0.value > $1.value }).prefix(20) { o.append("  \(v)× \(k)") } } }
     if let sp = r.signposts { o.append("signposts: " + sp.map { "\($0.key)×\($0.value)" }.sorted().joined(separator: " ")) }
+    if r.tree != nil { o.append(Explain.callTreeText(r)) }
     if let ip = r.inProcess { o.append(""); o.append("in-process (same run):"); o.append(Explain.text(ip).split(separator: "\n").prefix(14).joined(separator: "\n")) }
     for n in r.notes { o.append("note: " + n) }
     return o.joined(separator: "\n")
