@@ -49,7 +49,7 @@ import DeskBenchKit
 
   static func run(_ o: Options) async -> Result<BenchResult, CLIError> {
     guard let spec = Scenarios.spec(o.scenario) else { return .failure(.usage("unknown scenario '\(o.scenario)'; see `deskbench list`")) }
-    guard let world = Fixtures.make(o.fixture) else { return .failure(.usage("unknown fixture '\(o.fixture)'; see `deskbench list fixtures`")) }
+    guard let world = Fixtures.make(o.fixture) else { return .failure(.usage(Fixtures.problem(o.fixture) ?? "unknown fixture '\(o.fixture)'; see `deskbench list fixtures`")) }
     var params = spec.params; for (k, v) in o.params { params[k] = v }
     let startedAt = ISO8601DateFormatter().string(from: Date())
     let began = CACurrentMediaTime()

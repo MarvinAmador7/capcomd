@@ -15,6 +15,9 @@ public struct FixtureSpec: Sendable, Codable, Hashable {
   public var itemsPerThread: ClosedRange<Int>
   public var projects: Int
   public var asks: Int
+  /// The parameters `NAME@key=value,…` may set, each with the range it accepts (the manifest's `parametric`; see
+  /// FixtureParams.swift). Nil for a fixture that can't be varied (a captured one).
+  public var parametric: [String: [Int]]? = nil
 }
 
 /// What one fixture generates: lifecycle events per run scope, thread items per agent, media bytes by attachment id.
@@ -31,6 +34,9 @@ public struct World: Sendable {
   public var asking: [String: [String]] = [:]
   /// The highest item seq handed out, so live replays continue after it.
   public var lastSeq = 0
+  /// Items exactly as a daemon served them, by item id (a captured fixture): FixtureThread serves these bytes
+  /// instead of re-encoding the decoded item, so fields this client doesn't decode still reach the page.
+  public var wire: [String: Data] = [:]
 
   /// Feeds every event into the store, in order, and follows every run's threads so live frames are kept.
   @MainActor public func load(into s: CapcomdStore) {
@@ -53,7 +59,7 @@ public final class FixtureThread: ThreadFetching, @unchecked Sendable {
     pagesServed += 1
     let all = (world.threads[agentId] ?? []).filter { $0.seq > after }
     let page = Array(all.prefix(limit))
-    return try JSONDecoder().decode(Page.self, from: Fixtures.pageJSON(page, next: all.count > page.count ? page.last?.seq : nil))
+    return try JSONDecoder().decode(Page.self, from: Fixtures.pageJSON(page, next: all.count > page.count ? page.last?.seq : nil, wire: world.wire))
   }
   public func attachment(runId: String, id: String) async throws -> Data {
     guard let d = world.attachments[id] else { throw DetailUnavailable.failed("no such attachment in the fixture") }
@@ -70,28 +76,33 @@ public enum Fixtures {
     FixtureSpec(name: "crew17", summary: "SPEC §1's reference: 17 agents (planner, 3 leads, 12 workers, critic) with markdown, tools, diffs, thinking, a handoff and one ask; two folded projects.", openAgents: 17, itemsPerThread: 60...120, projects: 3, asks: 1),
     FixtureSpec(name: "crew17-long", summary: "crew17 with 400–600 items a thread: the memory and first-page budgets.", openAgents: 17, itemsPerThread: 400...600, projects: 3, asks: 1),
     FixtureSpec(name: "swarm64", summary: "64 agents under 8 leads, three asks, five projects: past warmCap (32), the title bar overflows.", openAgents: 64, itemsPerThread: 30...80, projects: 5, asks: 3),
-  ]
+    FixtureSpec(name: "crew", summary: "The family the sweeps vary: crew17's shape (3 projects, one ask, 60–120 items a thread) for `crew@agents=N,items=M` (M ± 20 % a thread; also projects, asks, seed).", openAgents: 17, itemsPerThread: 60...120, projects: 3, asks: 1),
+  ].map { var s = $0; s.parametric = Fixtures.parameterRanges; return s }
 
-  public static func spec(_ name: String) -> FixtureSpec? { all.first { $0.name == name } }
+  /// A named fixture, a named one with parameters (`crew@agents=24,items=100`), or nil.
+  public static func spec(_ name: String) -> FixtureSpec? { resolve(name)?.spec }
 
-  /// Builds the world for a fixture. The same name and seed always give the same world.
+  /// Builds the world for a fixture: a name from `all`, one with parameters (`crew@agents=24`), or a captured file
+  /// (`file:PATH`, CapturedFixture.swift). The same name and seed always give the same world; parameters keep the
+  /// base name's seed, so the points of a sweep share their generator and differ only where the parameters do.
   public static func make(_ name: String, seed: UInt64 = 7) -> World? {
-    guard let spec = spec(name) else { return nil }
-    var g = Gen(seed: seed ^ UInt64(name.utf8.reduce(0) { ($0 &* 31) &+ UInt64($1) }))
+    if name.hasPrefix(CapturedFixture.prefix) { return try? CapturedFixture.world(name) }
+    guard let (family, spec, seedOverride) = resolve(name) else { return nil }
+    var g = Gen(seed: (seedOverride ?? seed) ^ UInt64(family.utf8.reduce(0) { ($0 &* 31) &+ UInt64($1) }))
     var w = World(spec: spec)
     var seq = 0
     // Half an hour ago, to the minute: the clocks read like a live run; ids, text and structure never depend on it.
     let base = (Int(Date().timeIntervalSince1970 * 1000) / 60_000) * 60_000 - 30 * 60_000
     let openIndex = 0
     for p in 0..<spec.projects {
-      let runId = "run-\(name)-\(p + 1)"
+      let runId = "run-\(family)-\(p + 1)"
       let count = p == openIndex ? spec.openAgents : [1, 3, 5, 2][p % 4]
       let start = base + p * 90_000
       let title = Goals.pick(&g, p)
       func ev(_ type: String, _ agent: String?, _ d: [String: JSONValue] = [:], at: Int) {
         seq += 1
         w.events.append((runId, Envelope(id: "e\(seq)", scope: runId, seq: seq, entity: agent ?? runId, type: type, epochMs: at,
-                                         projectId: "prj-\(name)-\(p + 1)", runId: runId, agentId: agent, data: d)))
+                                         projectId: "prj-\(family)-\(p + 1)", runId: runId, agentId: agent, data: d)))
       }
       ev("run.created", nil, ["goal": .string(title), "sandbox": .string(p % 2 == 0 ? "docker" : "boxd")], at: start)
       ev("run.started", nil, at: start + 1)
@@ -211,10 +222,11 @@ public enum Fixtures {
     return (try! JSONEncoder().encode(JSONValue.object(o)), media)
   }
 
-  static func pageJSON(_ items: [Item], next: Int?) throws -> Data {
-    // Items are already decoded; re-encode the minimum the Page decoder needs through their original fields.
+  static func pageJSON(_ items: [Item], next: Int?, wire: [String: Data] = [:]) throws -> Data {
+    // Items are already decoded; re-encode the minimum the Page decoder needs through their original fields (or
+    // serve a captured item's own bytes).
     var out = "{\"items\":["
-    out += items.map(itemBack).joined(separator: ",")
+    out += items.map { i in wire[i.id].map { String(decoding: $0, as: UTF8.self) } ?? itemBack(i) }.joined(separator: ",")
     out += "],\"next\":\(next.map(String.init) ?? "null")}"
     return Data(out.utf8)
   }
