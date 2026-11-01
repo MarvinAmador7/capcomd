@@ -800,7 +800,7 @@ struct ColumnThread: View {
         if case .failed(let why)? = thread.unavailable {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
         }
-        ForEach(thread.pending) { p in SteerBubble(runId: runId, text: p.body, state: p.state) }
+        ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
       }
       .padding(Theme.Desk.bodyPadding)
     }
@@ -809,6 +809,18 @@ struct ColumnThread: View {
   }
   static func bottomMargin(_ e: ThreadEntry) -> CGFloat {
     switch e { case .item(let i, _): ThreadItemRow.bottomMargin(i); case .event: Theme.Content.proseBottom }
+  }
+}
+
+/// A steer on its way: Retry and Discard when it didn't go through.
+struct ColumnSteer: View {
+  @Environment(DeskModel.self) private var model
+  let runId: String
+  let agentId: String
+  let steer: PendingSteer
+  var body: some View {
+    SteerBubble(runId: runId, text: steer.body, state: steer.state,
+                onRetry: { model.retrySteer(agentId: agentId, steer) }, onDiscard: { model.discardSteer(agentId: agentId, id: steer.id) })
   }
 }
 

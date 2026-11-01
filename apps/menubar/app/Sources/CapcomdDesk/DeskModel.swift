@@ -222,6 +222,13 @@ package final class DeskModel {
     reelPosition = deck?.askingAgentId; focusedAgent = deck?.askingAgentId; syncFlags()
     reelRequest = ReelRequest(agentId: deck?.askingAgentId, animated: false, serial: (reelRequest?.serial ?? 0) + 1)
     store.followThreads(runId: run, holder: CapcomdStore.reelHolder)
+    // The run's own stream carries its messages (your steers, agents' messages to each other), which the lifecycle
+    // feed doesn't: without it a sent steer never settles into the thread. Opened after this change is applied, since
+    // opening reports a change itself.
+    Task { @MainActor [weak self] in
+      guard let self, self.openRunId == run else { return }
+      if let run { self.store.openRun(run) } else { self.store.closeRun() }
+    }
     return true
   }
 
@@ -318,6 +325,12 @@ package final class DeskModel {
     guard let runId = openRunId else { return }
     Task { await store.steer(runId: runId, agentId: agentId, body: body) }
   }
+
+  package func retrySteer(agentId: String, _ p: PendingSteer) {
+    guard let runId = openRunId else { return }
+    Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) }
+  }
+  package func discardSteer(agentId: String, id: String) { store.discardSteer(agentId: agentId, id: id) }
 
   package func decide(_ approvalId: String, _ d: ApprovalDecision) { Task { _ = await store.decide(approvalId, d) } }
 }
