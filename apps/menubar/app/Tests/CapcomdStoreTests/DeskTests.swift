@@ -37,10 +37,25 @@ final class DeskTests: XCTestCase {
     let d = store().decks()
     XCTAssertEqual(d.map(\.title), ["Migrate matchkey to v3.2", "Fix proration rounding in billing"])
     XCTAssertEqual(d[0].runId, "run-a")
-    XCTAssertEqual(d[0].askingAgentId, "w2")
-    XCTAssertEqual(d[0].askingName, "worker 4423")
+    // w2's work waits to merge, but its lead is the one waiting (an older daemon's approval: no subject.askedBy).
+    XCTAssertEqual(d[0].askingAgentId, "ld")
+    XCTAssertEqual(d[0].askingName, "lead")
     XCTAssertNil(d[1].askingAgentId)
     XCTAssertEqual(d[0].agentIds, ["pl", "ld", "w1", "w2", "cr"])
+  }
+
+  func testAMergeWaitsOnTheAgentThatAskedForIt() {
+    let s = store()
+    // The planner merges its grandchild's work: subject.askedBy names it, over the merged agent's parent.
+    ev(s, "run-a", "approval.requested", "w1", ["approvalId": .string("apr-2"), "kind": .string("merge"), "question": .string("Merge?"),
+                                                "requestedBy": .object(["agentId": .string("w1"), "runId": .string("run-a")]),
+                                                "subject": .object(["target": .string("main"), "askedBy": .string("pl")])], at: 1_009)
+    let a = s.approvals(forRun: "run-a").first { $0.id == "apr-2" }!
+    XCTAssertEqual(a.askedBy, "pl")
+    XCTAssertEqual(s.waitingAgent(a), "pl")
+    // An asker that isn't in the run falls back to the merged agent's parent.
+    var stray = a; stray.askedBy = "agt-elsewhere"
+    XCTAssertEqual(s.waitingAgent(stray), "ld")
   }
 
   func testReelColumnsFollowTheTree() {

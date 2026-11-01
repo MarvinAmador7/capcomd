@@ -1117,6 +1117,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "added",
         "removed"
       ]
+    },
+    "askedBy": {
+      "description": "The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge",
+      "type": "string"
     }
   },
   "required": [
@@ -1645,6 +1649,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
+        },
+        "askedBy": {
+          "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
+          "type": "string"
         }
       },
       "additionalProperties": {},
@@ -3112,6 +3120,10 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "askedBy": {
+                "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
+                "type": "string"
               }
             },
             "additionalProperties": {},

@@ -166,7 +166,7 @@ package final class DeskModel {
       let ids = cols.map(\.agentId)
       defer { syncFlags() }
       let bots = all ? team(runId) : nil
-      let asks = all ? Dictionary(store.approvals(forRun: runId).compactMap { a in a.agentId.map { ($0, a) } }, uniquingKeysWith: { a, _ in a }) : nil
+      let asks = all ? Dictionary(store.approvals(forRun: runId).compactMap { a in store.waitingAgent(a).map { ($0, a) } }, uniquingKeysWith: { a, _ in a }) : nil
       // Slices first, added in one assignment, then the columns: a column or tab that read `agents` mid-way would
       // render empty first and then once per agent added.
       var added: [String: AgentSlice] = [:]

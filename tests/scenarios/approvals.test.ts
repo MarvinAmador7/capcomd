@@ -63,6 +63,10 @@ test("protected target: the agent's merge is parked; approve lands it, deny fail
   const pending = await rivetSource().approvals(run);
   const apA = pending.find((p) => p.approvalId === approvalIdFor(run, ma))!;
   expect(apA.subject).toMatchObject({ target: "trunk", filesTotal: 1, files: [{ path: "src/a.txt" }] });
+  // The planner asked (it waits on the decision); requestedBy stays the worker whose work merges.
+  expect(parkA.data.askedBy).toBe(root);
+  expect(apA.subject.askedBy).toBe(root);
+  expect(apA.requestedBy.agentId).not.toBe(root);
   expect(Date.parse(apA.requestedAt!)).toBeGreaterThan(0);
 
   const ok = await w.cj(["approve", run, ma, "--by", "reviewer@ops"]);

@@ -1162,6 +1162,8 @@ export interface MergeOpts {
   runId: string; ref: string; require?: string; target?: string; operator?: boolean; key?: string;
   /** In-VM merges: a protected target parks the merge for `capcomd approve <runId> <mrgId>` instead of refusing. */
   requestApproval?: boolean;
+  /** The agent that asked for the merge (in-VM merges): it waits on the decision, so the approval shows on its column. */
+  askedBy?: string;
 }
 
 /** Land a ref. Requires a passing vfy for that exact commit and target, unless --operator. */
@@ -1189,7 +1191,8 @@ export async function mergeRef(o: MergeOpts) {
   if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
   const mrgId = stableId("mrg", `${o.runId}\0${o.ref}\0${target}`, o.key);
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
-  const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data }).catch(asRelay);
+  // Who asked is not a parameter of the merge: a retry by another caller is the same merge.
+  const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data: o.askedBy ? { ...data, askedBy: o.askedBy } : data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   if (needsApproval) {
     // The person deciding sees what lands: the files the verified commit changes (best effort, never blocks the park).

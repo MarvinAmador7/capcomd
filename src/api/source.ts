@@ -129,7 +129,7 @@ export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
  * A parked merge's question and subject. The merge's `ref` is often just the agent's id (`capcomd_merge ref: agt-…`),
  * which made "Merge agt-mvqa… into main?": name the work as the agent's, and give the branch it pushed as the subject's ref.
  */
-export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown }): { question: string; subject: { target: string | null; ref: string | null } & Partial<ApprovalDiff> } {
+export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown; askedBy?: unknown }): { question: string; subject: { target: string | null; ref: string | null; askedBy?: string } & Partial<ApprovalDiff> } {
 	const ref = typeof d.ref === "string" ? d.ref : null, branch = typeof d.branch === "string" ? d.branch : null;
 	const target = typeof d.target === "string" ? d.target : null;
 	const byAgent = ref !== null && /^agt-/.test(ref);
@@ -137,7 +137,8 @@ export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?
 	// The files the branch changes, as read when the merge was parked (op data / the park event's `diff`).
 	const diff = d.diff && typeof d.diff === "object" && Array.isArray((d.diff as ApprovalDiff).files) ? (d.diff as ApprovalDiff) : null;
 	const files = diff ? { files: diff.files, filesTotal: diff.filesTotal, added: diff.added, removed: diff.removed } : {};
-	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref, ...files } };
+	const asker = typeof d.askedBy === "string" ? { askedBy: d.askedBy } : {};
+	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref, ...files, ...asker } };
 }
 
 export const approvalIdFor = (runId: string, opId: string) => `apr-${Buffer.from(`${runId}\u0000${opId}`).toString("hex")}`;

@@ -201,6 +201,7 @@ const ApprovalSubject = z.looseObject({
 	filesTotal: z.number().int().nonnegative().optional().describe("merge: how many files the branch changes (files lists at most the first ones)"),
 	added: z.number().int().nonnegative().optional().describe("merge: lines added across all its files (binary files not counted)"),
 	removed: z.number().int().nonnegative().optional().describe("merge: lines removed across all its files (binary files not counted)"),
+	askedBy: z.string().optional().describe("merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons"),
 }).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
 
 /** Frames on GET /v1/streams/{scope}/events besides ordinary events (SSE `event:` names). */
