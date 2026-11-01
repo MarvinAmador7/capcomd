@@ -136,13 +136,10 @@ final class ReelView: NSView {
     }
     h.frame = blanks[id]?.frame ?? frame(of: i)
     hosts[id] = h
-    if windowing, gestures + slides == 0, let r = near(at), !r.contains(i) {
-      blanks.removeValue(forKey: id)?.removeFromSuperview()
-      put(away: id, at: i)
-      return
-    }
-    doc.addSubview(h)
+    let away = windowing && gestures + slides == 0 && near(at).map { !$0.contains(i) } ?? false
+    if !(away && parkColumns) { doc.addSubview(h) }
     blanks.removeValue(forKey: id)?.removeFromSuperview()
+    if away { put(away: id, at: i) }
   }
 
   /// The columns that must exist now: those on screen and one each side.
@@ -253,7 +250,13 @@ final class ReelView: NSView {
         v.frame = s.frame
         doc.addSubview(v)
         s.removeFromSuperview()
-      } else if v.isHidden { v.isHidden = false }
+      } else if v.isHidden {
+        v.isHidden = false
+        // A hosting view doesn't render while hidden; shown again it waits for something to invalidate it. Lay it
+        // out now, before the move shows it.
+        v.needsLayout = true
+        v.layoutSubtreeIfNeeded()
+      }
     }
   }
 
