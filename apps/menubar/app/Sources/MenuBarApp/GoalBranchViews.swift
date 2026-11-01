@@ -105,10 +105,9 @@ struct GoalReadyBar: View {
 
   @ViewBuilder private func deciding(_ c: GoalCard) -> some View {
     VStack(alignment: .leading, spacing: Theme.Goal.barGap) {
-      HStack(spacing: Theme.Ask.barGap) {
+      VStack(alignment: .leading, spacing: Theme.Goal.lineGap) {
         label(icon: c.stopped ? "exclamationmark.triangle" : "arrow.triangle.branch", head: c.stopped ? "Stopped:" : "Ready:", c.branch, tail: "→ \(c.base)")
-        Spacer(minLength: 0)
-        if let line = c.compareLine { Text(verbatim: line).font(Theme.Ask.statsFont).foregroundStyle(Theme.Ask.text3).lineLimit(1).fixedSize() }
+        if let line = c.compareError ?? c.compareLine { Text(verbatim: line).font(Theme.Ask.statsFont).foregroundStyle(Theme.Ask.text3).lineLimit(1) }
       }
       if let q = c.confirm {
         Text(verbatim: q).font(Theme.Ask.noteFont).foregroundStyle(Theme.Ask.text).fixedSize(horizontal: false, vertical: true)
@@ -152,7 +151,8 @@ struct GoalReadyBar: View {
         Spacer(minLength: 0)
       case .kept(let line), .refused(let line):
         Image(systemName: "arrow.triangle.branch").font(Theme.Goal.icon).foregroundStyle(Theme.Ask.text3).accessibilityHidden(true)
-        Text(verbatim: line).font(Theme.Ask.statsFont).foregroundStyle(Theme.Ask.text2).lineLimit(2).truncationMode(.middle)
+        // "Kept on <branch>" stays one line (the name gives way in its middle); a refusal's sentence may take two.
+        Text(verbatim: line).font(Theme.Ask.statsFont).foregroundStyle(Theme.Ask.text2).lineLimit(c.phase == .kept ? 1 : 2).truncationMode(.middle).help(line)
         Spacer(minLength: 0)
         if c.phase == .kept, case .button = c.openPR { openButton(c, title: "Open PR") { model.openPullRequest(c) } }
       }
@@ -162,8 +162,8 @@ struct GoalReadyBar: View {
   private func label(icon: String, head: String, _ branch: String, tail: String) -> some View {
     HStack(spacing: Theme.Goal.labelGap) {
       Image(systemName: icon).font(Theme.Goal.icon).foregroundStyle(Theme.Ask.text3).accessibilityHidden(true)
-      Text(verbatim: head).font(Theme.Ask.statsFont.weight(.medium)).foregroundStyle(Theme.Ask.text2)
-      Text(verbatim: branch).font(Theme.Ask.monoFont).foregroundStyle(Theme.Ask.text).lineLimit(1).truncationMode(.middle)
+      Text(verbatim: head).font(Theme.Ask.statsFont.weight(.medium)).foregroundStyle(Theme.Ask.text2).fixedSize()
+      Text(verbatim: branch).font(Theme.Ask.monoFont).foregroundStyle(Theme.Ask.text).lineLimit(1).truncationMode(.middle).layoutPriority(1)
       Text(verbatim: tail).font(Theme.Ask.monoFont).foregroundStyle(Theme.Ask.text3).lineLimit(1).fixedSize()
     }
     .accessibilityElement(children: .combine)

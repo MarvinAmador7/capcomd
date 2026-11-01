@@ -87,6 +87,10 @@ struct StartProjectField: View {
     // checkout, else 400 ms after the last keystroke.
     .task(id: branches ? model.startRepo : nil) { model.goalSetup.open(path: branches ? model.startRepo : nil); model.goalSetup.setGoal(goal) }
     .onChange(of: goal) { _, g in model.goalSetup.setGoal(g) }
+    #if DEBUG
+    .onReceive(NotificationCenter.default.publisher(for: MenuBarDebug.goal)) { goal = $0.object as? String ?? "" }
+    .onReceive(NotificationCenter.default.publisher(for: MenuBarDebug.start)) { _ in submit() }
+    #endif
     .task(id: model.goalSetup.query) {
       guard let q = model.goalSetup.query else { return }
       if !model.goalSetup.awaitingFirstAnswer { try? await Task.sleep(for: .milliseconds(400)) }

@@ -98,6 +98,9 @@ final class AppModel {
     let m = AppModel(makeStore(token: ""), tokenMissing: false)   // not started until the token is in
     m.tokenPending = true
     ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
+    #if DEBUG
+    DispatchQueue.main.async { MenuBarDebug.start(m) }   // CAPCOMD_MENUBAR_CONTROL (MenuBarDebug.swift)
+    #endif
     if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { m.tokenFromEnvironment = true; m.connect(token: env); return m }
     Task.detached(priority: .userInitiated) {
       let token = Keychain.token()
