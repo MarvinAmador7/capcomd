@@ -94,6 +94,21 @@ between builds, `explain` says so, and they mean nothing on their own (a 48 Hz b
 when the owner says the Mac is free; never send synthetic input to the system. `describe`, `store`, `explain`,
 `status`, `ledger`, `diff` are headless and always fine.
 
+Better: queue them and let a runner take them when a machine is free (SPEC §4.2, C10).
+
+```sh
+perfloop queue add <id>                                   # the screen, then the full when promising
+perfloop queue run --runner ssh://mar@Marvins-Mac-mini.local --until 07:00   # the Mac mini: unattended, real hardware
+perfloop queue run --runner local --idle 120              # this Mac: only while nobody touches it
+perfloop queue list                                       # what is queued, what ran where, why a runner waited
+```
+
+`local` starts a rep only when the Mac has been idle for `--idle` seconds (120), the screen is unlocked and no call or
+presentation app is frontmost; input during a rep kills it and the pair is redone. `ssh://` copies the build into
+`~/.perfloop/<app>` there and opens the window in the logged-in user's session (`perfloop runner check R` says whether
+it can). Results carry their runner and machine: a stage never mixes runners, so finish a stage where it started.
+`exp screen|full --runner R` runs one stage on a runner directly.
+
 ## Ask the owner
 
 - Anything that changes behaviour: declare it with `--behaviour-change`; promotion then needs the owner.
