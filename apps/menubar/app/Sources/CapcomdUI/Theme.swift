@@ -422,6 +422,13 @@ package enum Theme {
     package static let rowMark = Font.system(size: 11, weight: .medium), rowMarkGap: CGFloat = 4
     package static let rowSubText = Theme.label(dark: 0.55, light: 0.72), rowHover = Color.white.opacity(0.07)
   }
+  /// Goal branches (runs.goal_branch): the composer's branch row (in the setup's controls) and the run's Ready bar (in
+  /// the Active card's bar). No board yet: these follow the setup and the card.
+  package enum Goal {
+    package static let rowGap: CGFloat = 6, lineGap: CGFloat = 4, labelGap: CGFloat = 5, barGap: CGFloat = 8
+    package static let icon = Font.system(size: 11, weight: .medium)
+    package static let spinnerOffset: CGFloat = 18
+  }
   /// The composer's inline project setup (design/setup/Inline*.dc.html): a picked folder's next steps in the card.
   package enum Setup {
     package static let orange = Color(red: 1, green: 0x9F / 255, blue: 0x0A / 255)                  // #ff9f0a: the dot, what needs doing

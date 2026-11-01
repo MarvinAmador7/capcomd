@@ -208,6 +208,8 @@ final class AppModel {
 
   func startRun(_ goal: String) async -> Bool {
     var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+    // The goal branch rows chose for this checkout: the base and the branch as shown (GoalBranchRows.swift).
+    if goalBranchesOffered, goalSetup.path == choice.repo { (choice.base, choice.goalBranch) = goalSetup.choice }
     var state = await store.startRun(goal: goal, choice)
     if case .needsRepo = state, let folder = await ProjectFolderPicker.choose() {
       // A folder that isn't set up yet shows its next steps in the composer (the goal stays: Set Up and Start). A set-up
@@ -220,6 +222,42 @@ final class AppModel {
     return false
   }
   func clearStart() { store.clearStart() }
+
+  // Goal branches (capability runs.goal_branch): the composer's rows (GoalBranchRows.swift) and the ready card.
+  /// The base and goal branch for the next run, for the checkout it goes to.
+  var goalSetup = GoalBranchSetup()
+  /// The rows show for a project checkout on a daemon with goal branches; the default project and older daemons keep
+  /// today's composer.
+  var goalBranchesOffered: Bool { _ = revision; return store.capabilities.contains(Capability.runsGoalBranch) && store.prefs.startRepo != nil }
+  /// The field the last Start's refusal is about ("base", "goalBranch").
+  var startRefusedField: String? { _ = revision; return store.startRefusedField }
+  /// Asks the daemon about the rows' question and files its answer against it (an older question's answer is dropped).
+  func loadBranches(_ q: GoalBranchSetup.Query) async {
+    if let f = await store.loadProjectBranches(path: q.path, goal: q.goal, goalBranch: q.goalBranch, base: q.base) { goalSetup.receive(f, for: q) }
+  }
+  /// The run's goal card (nil without a goal branch).
+  func goalCard(_ runId: String) -> GoalCard? { _ = revision; return store.goalCard(runId: runId) }
+  /// The goal view behind the card, read once per run here (the store reads it again on the goal events).
+  @ObservationIgnored private var goalsAsked: Set<String> = []
+  func loadGoal(_ runId: String) {
+    guard goalsAsked.insert(runId).inserted else { return }
+    Task { await store.loadGoal(runId: runId) }
+  }
+  /// Open PR: a stopped run asks the daemon's question first; else it opens (the daemon may still ask).
+  func openPullRequest(_ card: GoalCard) {
+    switch card.openTap {
+    case .ask(let q): store.askToOpenStoppedPullRequest(runId: card.runId, question: q)
+    case .open: Task { _ = await store.openPullRequest(runId: card.runId) }
+    }
+  }
+  /// The person said yes to the stopped run's question.
+  func confirmPullRequest(_ runId: String) { Task { _ = await store.openPullRequest(runId: runId, stopped: true) } }
+  func cancelGoalAction(_ runId: String) { store.cancelGoalAction(runId: runId) }
+  func keepBranch(_ runId: String) { Task { _ = await store.keepBranch(runId: runId) } }
+  /// View diff: the compare on GitHub, else the run's Files tab.
+  func viewGoalDiff(_ card: GoalCard) {
+    if let u = card.diffURL { NSWorkspace.shared.open(u) } else { viewDiff(runId: card.runId) }
+  }
 
   // Bot avatars (brand direction B): one team per run, siblings kept distinct (botTeam). Agents join in spawn order, so
   // a newcomer never changes an earlier agent's bot. Recomputed only when the run's agents change.
