@@ -67,7 +67,7 @@ import AppKit
   /// CAPCOMD_DESK_CONTROL=<dir>: drives the window without touching the screen, for checks against a live daemon. Each
   /// half second it runs the lines of <dir>/cmd (then deletes it) and writes the model's state to <dir>/state.txt.
   /// Lines: `project N`, `agent N`, `focus ±1`, `scroll <agentId>`, `follow on|off`, `steer <agentId> <text>`,
-  /// `decide <approvalId> approve|deny`, `key <char|return|escape|left|right> [cmd] [ctrl] [shift]` (a key event handed to
+  /// `decide <approvalId> approve|deny`, `snap <name>` (the window, now, into <dir>/<name>.png), `key <char|return|escape|left|right> [cmd] [ctrl] [shift]` (a key event handed to
   /// this app's own window and menu, never posted to the system).
   static func control(_ model: DeskModel, _ dir: URL) {
     let cmd = dir.appendingPathComponent("cmd")
@@ -84,6 +84,7 @@ import AppKit
         case "steer": if w.count > 2 { model.steer(agentId: w[1], body: w[2]) }
         case "decide": if w.count > 2 { model.decide(w[1], w[2] == "deny" ? .deny : .approve) }
         case "key": key(w.dropFirst().joined(separator: " "))
+        case "snap": if w.count > 1 { snapshot(into: dir, name: w[1]) }
         default: break
         }
       }
@@ -129,13 +130,13 @@ import AppKit
     return out.joined(separator: "\n") + "\n"
   }
 
-  static func snapshot(into dir: URL) {
+  static func snapshot(into dir: URL, name: String = "window") {
     guard let w = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
           let frame = w.contentView?.superview ?? w.contentView,
           let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
     frame.layoutSubtreeIfNeeded()   // an occluded window gets no display passes: catch up before drawing it
     frame.cacheDisplay(in: frame.bounds, to: rep)
-    try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("window.png"))
+    try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(name).png"))
     var lines = ["window \(w.frame.size) contentLayoutRect \(w.contentLayoutRect) visible \(w.occlusionState.contains(.visible)) key \(w.isKeyWindow)"]
     func walk(_ v: NSView) {
       if let s = v as? NSScrollView {
