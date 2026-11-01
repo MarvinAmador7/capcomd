@@ -451,9 +451,10 @@ async function main(argv: string[]): Promise<number> {
           const { GOAL_KV } = await import("../primitives/ops");
           const pv: any = (await (await import("../core/relay")).existingActor("scope", [runId]).then((x) => x?.kvGet({ k: GOAL_KV }) ?? null).catch(() => null))?.value;
           const prior = typeof pv?.branch === "string" && typeof pv?.base === "string" ? { branch: pv.branch as string, base: pv.base as string } : undefined;
+          // The remote itself (git ls-remote) says which branches exist; the GitHub API is for the setup screen's menu.
           const r = await G.resolveGoalBranch({
             goal: rawGoal, base: (values.base as string | undefined) ?? targetBranch ?? prior?.base ?? null, goalBranch: (values["goal-branch"] as string | undefined) ?? prior?.branch ?? null,
-            projectTarget: d.target ?? envVar("MERGE_TARGET") ?? null, remote: cfg?.remote ?? null, github: cfg?.github.repo || null, cwd: process.cwd(), reuse: prior?.branch ?? null,
+            projectTarget: d.target ?? envVar("MERGE_TARGET") ?? null, remote: cfg?.remote ?? null, cwd: process.cwd(), reuse: prior?.branch ?? null,
           });
           goalBranch = { branch: r.goalBranch, base: r.base };
           targetBranch = undefined;
