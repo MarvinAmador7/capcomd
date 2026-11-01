@@ -62,11 +62,17 @@ package enum DeskKnobs {
     /// rests; the rest wait in a hidden container that never moves, with a blank stand-in in their place. A scroll
     /// moves (and SwiftUI re-places) five hosting views instead of every column's.
     case park
+    /// Virtualised: a fixed set of AppKit column slots (two screens and one each side) stays in the document for good,
+    /// placed by frame; as the reel moves, a slot that leaves is configured in place with the agent coming into view,
+    /// before the move starts, and spare slots prefetch the next screen while the reel rests. Nothing is added,
+    /// removed or re-parented; the columns without a slot are a replicated placeholder layer. Always AppKit columns
+    /// (`desk.column` is ignored): a slot is a native column.
+    case reuse
   }
 
   /// What the reel's scrolling document holds.
   package static let reelColumns = Knob("reel.columns", default: Columns.keep, choices: Columns.allCases,
-                                        summary: "keep = every built column in the scrolling document; park = only those near the screen, the rest in a still, hidden container",
+                                        summary: "keep = every built column in the scrolling document; park = only those near the screen, the rest in a still, hidden container; reuse = a fixed set of native column slots configured in place as the reel moves",
                                         since: "0.7")
 
   /// Every knob of the window. A new knob goes here too, or `describe` won't list it.

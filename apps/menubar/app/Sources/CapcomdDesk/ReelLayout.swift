@@ -11,6 +11,15 @@ import CapcomdUI
 /// offset. With fractional columns (437.33 pt at 1440 pt) each step put every column's thread at a new sub-pixel
 /// position, and each one's SwiftUI scroll view re-snapped its origin by a sixth of a point, which posts a scroll and
 /// updates that column's view graph: every column, on every step, on screen or not.
+/// What the bench asks the reel (its guards and drivers), whatever the reel keeps in its document: how many columns,
+/// where column `i` is in the document, and the view showing it (nil: none, the placeholder shows). With a view per
+/// column that is the column's view; with reused slots (`reel.columns=reuse`) the slot configured with it.
+@MainActor package protocol ReelColumnViews: AnyObject {
+  var columnCount: Int { get }
+  func columnFrame(at i: Int) -> CGRect
+  func columnView(at i: Int) -> NSView?
+}
+
 struct ReelGeometry: Equatable {
   /// Columns across, the column width and the pitch (width + gap), in points.
   var across = 0
