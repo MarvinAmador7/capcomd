@@ -55,8 +55,22 @@ package enum DeskKnobs {
                                        summary: "what a column is: swiftui = one hosting view of Column, native = an AppKit column (layer frame and stroke) placing a head and a body hosting view",
                                        since: "0.7")
 
+  package enum Columns: String, KnobValue, CaseIterable {
+    /// One view per column in the reel's document, built once and kept while its agent is in the run.
+    case keep
+    /// The same views, but only the columns on screen and one each side are in the scrolling document while the reel
+    /// rests; the rest wait in a hidden container that never moves, with a blank stand-in in their place. A scroll
+    /// moves (and SwiftUI re-places) five hosting views instead of every column's.
+    case park
+  }
+
+  /// What the reel's scrolling document holds.
+  package static let reelColumns = Knob("reel.columns", default: Columns.keep, choices: Columns.allCases,
+                                        summary: "keep = every built column in the scrolling document; park = only those near the screen, the rest in a still, hidden container",
+                                        since: "0.7")
+
   /// Every knob of the window. A new knob goes here too, or `describe` won't list it.
-  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn] }
+  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns] }
   /// What `describe` lists, by name.
   package static var all: [KnobInfo] { knobs.map(\.info).sorted { $0.name < $1.name } }
   /// The full knob vector this process runs with, defaults included (a result's `knobs`).
