@@ -75,13 +75,31 @@ import DeskBenchKit
     guard let sv = h.reelScrollView(), let doc = sv.documentView else {
       return ids.filter(h.model.onScreen.contains).map { Shown(column: col($0, view: "missing"), rectInWindow: nil) }
     }
-    let views = doc.subviews.sorted { $0.frame.minX < $1.frame.minX }
-    guard views.count == ids.count else {
-      return ids.filter(h.model.onScreen.contains).map { Shown(column: col($0, view: nil), rectInWindow: nil) }
+    // The reel says which view shows each column (a view per column, or a reused slot); an older reel is read by
+    // position, one document view per column.
+    var reel: ReelColumnViews?
+    h.walk(h.window.contentView!) { if reel == nil, let r = $0 as? ReelColumnViews { reel = r } }
+    let views: [NSView?]
+    if let reel, reel.columnCount == ids.count {
+      views = ids.indices.map { reel.columnView(at: $0) }
+    } else {
+      let byX = doc.subviews.sorted { $0.frame.minX < $1.frame.minX }
+      guard byX.count == ids.count else {
+        return ids.filter(h.model.onScreen.contains).map { Shown(column: col($0, view: nil), rectInWindow: nil) }
+      }
+      views = byX
     }
     let visible = sv.documentVisibleRect
     var out: [Shown] = []
-    for (v, id) in zip(views, ids) {
+    for (i, (view, id)) in zip(views, ids).enumerated() {
+      guard let v = view else {
+        // No view shows this column: the reel's placeholder, if it is in view.
+        let f = reel?.columnFrame(at: i) ?? .null, part = f.intersection(visible)
+        if !part.isNull, part.width >= 1 {
+          out.append(Shown(column: col(id, view: "placeholder"), rectInWindow: doc.convert(part, to: nil), partial: part.width < f.width / 2))
+        }
+        continue
+      }
       let part = v.frame.intersection(visible)
       guard !part.isNull, part.width >= 1 else { continue }
       // Its content: the view itself when it is a hosting view (a SwiftUI column), else the hosting views inside it (an

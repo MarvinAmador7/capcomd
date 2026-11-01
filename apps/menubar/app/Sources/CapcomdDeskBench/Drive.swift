@@ -120,9 +120,15 @@ import DeskBenchKit
     guard let sv = h.reelScrollView() else { return ([], [Check("reel-scroll-view", false, "no horizontal NSScrollView found under the window")]) }
     var steps: [StepResult] = []; var snapped = true
     // A column edge: one view per column (the AppKit reel) gives the pitch exactly; otherwise estimate it.
+    var reel: ReelColumnViews?
+    h.walk(h.window.contentView!) { if reel == nil, let r = $0 as? ReelColumnViews { reel = r } }
     let views = sv.documentView!.subviews.map(\.frame.minX).sorted()
-    let pitch = views.count == h.model.columns.count && views.count > 1 ? Double(views[1] - views[0])
-      : Double(sv.documentView!.frame.width) / Double(max(1, h.model.columns.count))
+    var pitch = Double(sv.documentView!.frame.width) / Double(max(1, h.model.columns.count))
+    if views.count == h.model.columns.count, views.count > 1 { pitch = Double(views[1] - views[0]) }
+    if let r = reel, r.columnCount > 1 {
+      let p = Double(r.columnFrame(at: 1).minX - r.columnFrame(at: 0).minX)
+      if p > 0 { pitch = p }
+    }
     let v0 = Double(int("velocity", 2400))   // pt/s at release
     for i in 0..<int("flings", 6) {
       let sign: Double = i % 2 == 0 ? -1 : 1   // negative deltaX scrolls content left (forward)
