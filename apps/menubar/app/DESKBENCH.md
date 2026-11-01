@@ -266,7 +266,8 @@ can measure it again without a rebuild. The window's knobs are in `CapcomdDesk/D
 | `build.perFrame` | `1`…`8` | `1` | how many off-screen columns the reel builds per frame after a project opens (heads-first open), nearest first |
 | `desk.layout` | `auto`, `frames`, `frames-hide` | `auto` | the reel's frame engine (LAYOUT.md): pixel-snapped column frames placed once per geometry change; `frames-hide` also hides far columns at rest |
 | `desk.column` | `swiftui`, `native` | `swiftui` | a column as one hosting view of `Column`, or an AppKit column (layer frame and stroke) placing a head and a body hosting view |
-| `reel.columns` | `keep`, `park` | `keep` | every built column in the scrolling document, or only those near the screen (the rest parked, still and hidden) |
+| `reel.columns` | `keep`, `park`, `reuse` | `keep` | every built column in the scrolling document; only those near the screen (the rest parked, still and hidden); or a fixed set of native column slots configured in place as the reel moves |
+| `reel.cache` | `off`, `bitmap` | `off` | the live columns slide, or cached bitmaps of them slide in an overlay and the reel moves under it at rest |
 
 ```sh
 $B run step --knob reel.slide=clip                    # or --set knob:reel.slide=clip; several: --knob a=1,b=2
@@ -317,7 +318,8 @@ measured steps (a run without `--guards` times exactly as before), and land in `
   `ColumnThread` and (when the fixture gives the agent a thread) one `EntryRow` body since its project opened (a switch,
   a fresh window), the last of them at most `built-within.ms` (300) after settle; it is warm; its view in the reel is a
   hosting view with something in it (or an AppKit column holding one, `desk.column=native`), not the reel's blank
-  placeholder and not hidden. `value` is how long after settle the last column
+  placeholder and not hidden. The reel says which view shows each column (`ReelColumnViews`: with reused slots the
+  document holds fewer views than columns); an older reel is read by position. `value` is how long after settle the last column
   was built (negative: before).
 - **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `follow`, `resize`; not `burst` or `typing`): after
   settle the run writes `<scenario>-rep<i>.settled.png`, `.layout.json` (where the columns and their threads are, in

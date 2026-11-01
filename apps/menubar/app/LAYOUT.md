@@ -67,13 +67,33 @@ with a blank stand-in in the document (`park`). A move brings back the columns i
 target, the leading column as a swipe crosses it). A hosting view doesn't render while hidden, so a column shown again
 is laid out at once.
 
+**Virtualisation (`reel.columns=reuse`).** A fixed set of AppKit column slots (two screens and one column each side:
+8 at three across) stays in the document for good; nothing is added, removed or re-parented after they are made.
+The document is sized for every column; a column without a slot is one instance of a replicated placeholder layer
+(no view). A slide gives the columns it passes their slots before it starts (a free slot already showing that agent
+first); at rest the spare slots prefetch the next screen in the direction of travel, a turn later; during a swipe a
+slot follows the leading column. Configuring a slot swaps its head's and body's root views for the agent's
+(identified by agent, so no state leaks between agents). What follows the agent: the message box's draft (the slots'
+memory). What doesn't: the thread's scroll position (a reconfigured slot shows the thread at its foot, where a
+thread rests) and unfolded thinking rows. A project switch makes every slot rebuild (the model's slices are new).
+Always AppKit columns. The bench reads which view shows which column through `ReelColumnViews`.
+
+**Bitmap cache (`reel.cache=bitmap`).** The columns a slide shows are drawn into layer contents (`cacheDisplay`)
+and kept until the agent's content changes (observed: header, bot, ask, focus, warmth, thread items, media) or the
+column is clicked, scrolled or typed in. They slide in an overlay above the reel in the render server; the reel's
+offset moves under the overlay when the slide ends and the overlay goes a turn later, once the live columns are
+drawn. A column that changes mid-slide shows its bitmap until the slide ends, then its live view, so it is never
+stale at rest (built-within and snapshot-diff passed). The leading column is reported when the slide starts, as a
+live slide does.
+
 ## The knobs
 
 | Knob | Values (default first) | What it switches |
 |---|---|---|
 | `desk.layout` | `auto`, `frames`, `frames-hide` | fractional frames (today) · the frame engine with pixel snapping · plus far columns hidden at rest |
 | `desk.column` | `swiftui`, `native` | one hosting view of `Column` (today) · an AppKit column with a head and a body hosting view |
-| `reel.columns` | `keep`, `park` | every built column in the scrolling document (today) · only those near the screen |
+| `reel.columns` | `keep`, `park`, `reuse` | every built column in the scrolling document (today) · only those near the screen · a fixed set of native slots configured in place |
+| `reel.cache` | `off`, `bitmap` | the live columns slide (today) · cached bitmaps slide, the live reel moves once at rest |
 
 ```sh
 $B ab step --a-knobs desk.layout=auto --b-knobs desk.column=native --reps 5 --objective instructions
@@ -95,6 +115,41 @@ Sweep `step --set desk.column=swiftui,native --set agents=4..64/12 --reps 2` (in
 busy machine): 17.2 M instructions per agent with SwiftUI columns, 16.0 M with AppKit columns; both bend the same way
 past the warm cap. The AppKit column trims a constant, not the slope.
 
+Second round (champion d170474, its defaults today's window; `ab` 5 + 5 against `keep`/`off`):
+
+| Setting | step: instructions/step | step: guards | fling: instructions/step | switch: latency | switch: CPU, instructions |
+|---|---|---|---|---|---|
+| `native` + `reuse` | +37.7 % (402 → 584 M, worse, p = 0.008) | late frame time 26 → 146 ms/s, longest 61 → 116 ms (worse) | +60 % (worse; longest 34 → 179 ms) | same (93 → 81 ms, in band) | −31 % CPU, −39 % instructions (better, p = 0.008) |
+| `bitmap` | +778 % (395 M → 3.4 G, worse) | longest 50 → 872 ms (worse) | +241 % (worse; longest 40 → 894 ms) | | |
+| `native` + `reuse` + `bitmap` | `exp` screen: 110–147 → 451–486 ms CPU, rejected | | | | |
+
+`perfloop exp` screens (CPU objective, 3 pairs, guards): 0008 `native,reuse` rejected (band ±41 %, a busy pair),
+0009 `bitmap` rejected (+130–270 %, built-within and snapshot-diff pass), 0010 `native,reuse,bitmap` rejected
+(+230–320 %). All guards passed at rest; `native` columns go to `needsReview` on one antialiased corner pixel of the
+stroke that crosses the ink-box threshold (0.0 % of pixels differ outside threads).
+
+Profile split, `step`, ms per step (one rep pair each; the 4 → 40 growth is the point):
+
+| | 4 agents, today | 40 agents, today | 4, `native,reuse` | 40, `native,reuse` |
+|---|---:|---:|---:|---:|
+| total | 62.6 | 239.1 | 56.4 | 203.0 |
+| auto-layout search | 2.9 | 42.1 | 2.4 | 19.2 |
+| tracking areas | 3.4 | 34.8 | 1.9 | 21.8 |
+| column hosting layout | 8.9 | 40.5 | 5.3 | 29.7 |
+| root (title bar) hosting layout | 8.7 | 18.5 | 7.3 | 40.2 |
+| SwiftUI transactions | 16.6 | 45.7 | 12.1 | 27.4 |
+| tab strip scroll (display link) | — | 14.3 | — | 18.5 |
+
+Sweep, `step`, `agents=4..64/12`, 2 reps a point (most points on a busy machine), main-thread CPU fitted per agent:
+SwiftUI columns 3.28 ms/agent (50 → 261 ms), AppKit columns 2.96 (46 → 237), AppKit columns + `reuse` 2.40
+(43 → 212; 171 at 16 agents against 140 kept). In instructions: 17.2, 16.0 and 11.0 M per agent. Reuse halves the
+auto-layout search and cuts the tracking areas by a third at 40 agents, but the step at 40 agents is ~190 ms, not the
+~63 of 4 agents: what grows with agents then is the title bar (one tab per agent: its hosting layout 7 → 40 ms, its
+strip scroll, and its views in the window walks) and reconfiguring slots, which rebuilds a column's SwiftUI rows
+(EntryRow bodies inside steps; prefetch at rest moves some of it off the step, not all, and a direction change
+finds the wrong screen prefetched). The bitmap cache loses outright: `cacheDisplay` rasterises a column on the CPU
+(~100–150 ms each), and the reel still moves its live columns once per slide.
+
 So: the column's chrome is not where a step's time is, and moving columns around in AppKit (hiding them, parking
 them) costs more than it saves, because SwiftUI's hosting views pay to come back (re-render on unhide, re-attach on a
 new superview). The win available is in the number of NSViews SwiftUI makes for threads and in the work every moved
@@ -109,12 +164,15 @@ hosting view does, which only native rows remove.
    nothing in SwiftUI, and text selection becomes the column's own (a selection model over the cached Core Text lines,
    with copy), with VoiceOver through an `NSAccessibilityElement` per row. This is where the
    per-agent slope is.
-2. **Column reuse** pays only once a column is cheap to configure: with SwiftUI threads a recycled column rebuilds
-   its rows (~55 ms each), and parking (moving a hosting view between superviews) measured slower than keeping. With
-   native rows and cached measurements, a pool of `across + 2` columns configured with an agent's cached rows is the
-   next stage (`reel.columns=reuse`).
+2. **Column reuse** (`reel.columns=reuse`, built) pays only once a column is cheap to configure: with SwiftUI
+   threads a recycled column rebuilds its rows (~55 ms each), and parking (moving a hosting view between superviews) measured slower than keeping. With
+   native rows and cached measurements, the slots configured with an agent's cached rows is the
+   next step for the knob that exists now. The bitmap cache needs a GPU snapshot (none is public on macOS without
+   screen recording) or native rows that can draw themselves into a bitmap cheaply; until then it stays off.
 3. **The title bar's tab strip** animates its scroll frame by frame on the main thread on every step (~12 ms plus the
    layout passes it causes); moving that scroll to the render server, as the reel's slide already is, is a separate,
    small experiment.
 4. Re-measure `frames` on a quiet machine: it removes the threads' sub-pixel re-snapping while columns build, which
    should show in `open` and `switch` settle time rather than in a step.
+5. **The title bar** grows with agents once the reel doesn't: one SwiftUI tab per agent re-laid out on each step.
+   Folding (SPEC §2, swarms) or an AppKit strip are the candidates.
