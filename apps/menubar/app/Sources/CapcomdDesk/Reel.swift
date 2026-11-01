@@ -105,8 +105,78 @@ final class ReelView: NSView, ReelColumnViews {
     if parkColumns { parking.isHidden = true; addSubview(parking, positioned: .below, relativeTo: scroll) }
     if bitmapCache { startBitmapCache() }
     NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    swipeMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+      nonisolated(unsafe) let event = e   // local monitors run on the main thread
+      return MainActor.assumeIsolated { self?.took(event) ?? false } ? nil : e
+    }
   }
   required init?(coder: NSCoder) { fatalError() }
+
+  // MARK: sideways gestures over a column
+
+  /// A column's thread scrolls vertically only, but its scroll view takes the whole gesture under the pointer, so a
+  /// sideways swipe over a column never reached the reel. Each gesture is routed once, on its first movement: mostly
+  /// sideways goes to the reel (unless it starts over something that scrolls sideways itself, a wide code block),
+  /// anything else stays with the view under the pointer. Its momentum follows the same way.
+  private var swipeMonitor: Any?
+  private enum Route { case none, waiting(NSEvent), reel, through }
+  private var gestureRoute: Route = .none
+
+  /// Whether the reel took the event (the view under the pointer then never sees it).
+  private func took(_ e: NSEvent) -> Bool {
+    guard let window, e.window === window else { return false }
+    let dx = abs(e.scrollingDeltaX), dy = abs(e.scrollingDeltaY)
+    if e.phase.isEmpty && e.momentumPhase.isEmpty {   // a mouse wheel (Shift turns it sideways): no gesture to follow
+      guard dx > dy, over(e), !overSidewaysScroller(e) else { return false }
+      scroll.scrollWheel(with: e); return true
+    }
+    if !e.momentumPhase.isEmpty {
+      guard case .reel = gestureRoute else { return false }
+      scroll.scrollWheel(with: e)
+      if e.momentumPhase.contains(.ended) || e.momentumPhase.contains(.cancelled) { gestureRoute = .none }
+      return true
+    }
+    if e.phase.contains(.mayBegin) { return false }
+    if e.phase.contains(.began) {
+      guard over(e) else { gestureRoute = .through; return false }
+      gestureRoute = .waiting(e)
+      if dx == 0 && dy == 0 { return true }   // decided on the first movement
+    }
+    switch gestureRoute {
+    case .waiting(let began):
+      let done = e.phase.contains(.ended) || e.phase.contains(.cancelled)
+      if dx == 0 && dy == 0 && !done { return true }
+      if dx > dy && !overSidewaysScroller(began) {
+        gestureRoute = .reel
+        if began !== e { scroll.scrollWheel(with: began) }
+        scroll.scrollWheel(with: e); return true
+      }
+      gestureRoute = .through
+      if began !== e { view(under: began)?.scrollWheel(with: began) }
+      return false
+    case .reel:
+      scroll.scrollWheel(with: e); return true
+    case .none, .through:
+      return false
+    }
+  }
+
+  private func over(_ e: NSEvent) -> Bool { bounds.contains(convert(e.locationInWindow, from: nil)) }
+
+  private func view(under e: NSEvent) -> NSView? {
+    guard let cv = window?.contentView else { return nil }
+    return cv.hitTest(cv.superview?.convert(e.locationInWindow, from: nil) ?? e.locationInWindow)
+  }
+
+  /// Whether the event starts over a scroll view, other than the reel's, with room to scroll sideways.
+  private func overSidewaysScroller(_ e: NSEvent) -> Bool {
+    var v = view(under: e)
+    while let s = v, s !== scroll {
+      if let sv = s as? NSScrollView, let d = sv.documentView, d.frame.width > sv.contentView.bounds.width + 1 { return true }
+      v = s.superview
+    }
+    return false
+  }
   override var isFlipped: Bool { true }
   override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
 
