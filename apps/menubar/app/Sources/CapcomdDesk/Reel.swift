@@ -735,7 +735,7 @@ struct Column: View {
         } else {
           Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        if let ap = a.approval { DecisionBar(approval: ap) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
+        if let ap = a.approval { DecisionBar(approval: ap, focused: focused) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }
       .background(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous).fill(Theme.Desk.column))
       .overlay(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous)
@@ -880,9 +880,12 @@ struct SlotDraft: ViewModifier {
 }
 
 /// The decision an agent waits on, docked at its column's foot: the question, then View diff · Deny · Approve ↩.
+/// Return approves only while its column has focus (SPEC §4): with asks in several columns, or focus elsewhere, a
+/// Return must not approve one you aren't looking at. Esc is never bound.
 struct DecisionBar: View {
   @Environment(DeskModel.self) private var model
   let approval: PendingApproval
+  let focused: Bool
   var body: some View {
     DeskProbe.body("DecisionBar")
     let busy = approval.decision != .idle
@@ -898,7 +901,7 @@ struct DecisionBar: View {
           HStack(spacing: 6) { Text("Approve"); Text("↩").font(.system(size: 10.5, weight: .semibold)).padding(.horizontal, 4).background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.12))) }
         }
         .buttonStyle(DeskButton(kind: .primary))
-        .keyboardShortcut(.defaultAction)
+        .keyboardShortcut(focused ? .defaultAction : nil)
       }
       .disabled(busy).opacity(busy ? 0.5 : 1)
     }
