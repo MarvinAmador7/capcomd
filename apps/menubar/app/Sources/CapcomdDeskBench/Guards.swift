@@ -65,8 +65,8 @@ import DeskBenchKit
   struct Shown { var column: BuiltWithin.Column; var rectInWindow: CGRect?; var threadInWindow: CGRect? = nil; var partial = false }
 
   /// The columns the reel shows: its document's views, left to right, those in the visible part (`partial` when less
-  /// than half of one shows), mapped to the model's columns by position (one view per column: a hosting view, or the
-  /// blank before it is built), each with its thread's scroll view.
+  /// than half of one shows), mapped to the model's columns by position (one view per column: a hosting view, an
+  /// AppKit column holding hosting views, or the blank before it is built), each with its thread's scroll view.
   static func onScreen(_ h: Harness) -> [Shown] {
     let ids = h.model.columns
     func col(_ id: String, view: String?) -> BuiltWithin.Column {
@@ -84,9 +84,14 @@ import DeskBenchKit
     for (v, id) in zip(views, ids) {
       let part = v.frame.intersection(visible)
       guard !part.isNull, part.width >= 1 else { continue }
+      // Its content: the view itself when it is a hosting view (a SwiftUI column), else the hosting views inside it (an
+      // AppKit column, desk.column=native). The reel's blank placeholder has none; a hidden view shows nothing.
+      var hosting: [NSView] = []
+      h.walk(v) { x in if String(describing: type(of: x)).contains("HostingView") { hosting.append(x) } }
       let kind: String
-      if String(describing: type(of: v)).contains("HostingView") { kind = v.subviews.isEmpty && (v.layer?.sublayers ?? []).isEmpty ? "empty" : "hosting" }
-      else { kind = "placeholder" }
+      if hosting.isEmpty { kind = "placeholder" }
+      else if v.isHidden || v.alphaValue == 0 { kind = "hidden" }
+      else { kind = hosting.allSatisfy { $0.subviews.isEmpty && ($0.layer?.sublayers ?? []).isEmpty } ? "empty" : "hosting" }
       // The thread: the biggest vertical scroll view inside the column, clipped to what shows.
       var thread: CGRect?
       h.walk(v) { x in
