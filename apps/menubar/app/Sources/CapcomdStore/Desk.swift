@@ -35,6 +35,8 @@ public struct ColumnHeader: Sendable, Hashable, Identifiable {
   public var activity: String?
   public var repo: String?
   public var spawnedAtMs: Int
+  /// When it was spawned, when known: the header's elapsed clock (none when the daemon didn't say).
+  public var startedAtMs: Int?
   public var provider: Provider?
   public var depth: Int
 }
@@ -69,6 +71,6 @@ extension CapcomdStore {
 
   func header(_ n: AgentNode, _ a: Agent, _ runId: String) -> ColumnHeader {
     ColumnHeader(agentId: a.id, runId: runId, name: n.name, suffix: n.suffix, kind: n.kind, status: n.status, waiting: n.waiting,
-                 activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, provider: a.provider, depth: n.depth)
+                 activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
   }
 }

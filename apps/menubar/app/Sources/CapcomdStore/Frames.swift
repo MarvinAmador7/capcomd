@@ -75,6 +75,8 @@ public struct SnapshotAgent: Codable, Sendable, Hashable {
   /// `{summary, artifacts}` once finished; summary is agent-written (untrusted).
   public var result: JSONValue?
   public var updatedAt: String?
+  /// When it was spawned; older daemons don't send it.
+  public var createdAt: String?
   /// "claude" | "codex" | null, and the model it runs (both optional: older daemons send neither).
   public var provider: String?
   public var model: String?

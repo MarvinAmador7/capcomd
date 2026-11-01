@@ -49,7 +49,10 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// Where it works: `Agent.workspace.label` (harness #46), shown verbatim as its folder chip. Older daemons: `repo` or
   /// `agent.repo` on agent.spawned when present.
   public var repo: String?
+  /// Spawn order among its siblings: the spawn time when known, else its place in the snapshot that listed it.
   public var spawnedAtMs: Int
+  /// When it was spawned, when the daemon says (snapshot `createdAt`, or agent.spawned): its column's elapsed clock.
+  public var createdAtMs: Int? = nil
   /// When its status last changed (snapshot `updatedAt`, or the event that changed it): a finished run's end.
   public var updatedAtMs: Int? = nil
   /// What it is doing now (`Agent.activity.text`, daemon-written, trusted): shown under a running agent's row.

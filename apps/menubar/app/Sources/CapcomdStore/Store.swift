@@ -252,6 +252,8 @@ public final class CapcomdStore {
     for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }   // live activity rides along (Live adds ?activity=1)
   }
   public var activeScopes: [String] { subs.keys.sorted() }
+  /// The daemon feed's first snapshot has been applied (an empty project list is then really empty).
+  public var daemonLoaded: Bool { floor["daemon"] != nil }
 
   func subscribe(_ scope: String) { subscribe(scope, scope: scope, feed: nil) }
   func subscribe(_ key: String, scope: String, feed: String?) {
@@ -334,9 +336,10 @@ public final class CapcomdStore {
     for (rid, st) in state { runs[rid]?.state = st }          // the snapshot's state wins over replayed transitions
     // Agents: the snapshot is authoritative for status/text/task; replay supplies key/repo/spawn order.
     for (i, a) in b.agents.enumerated() {
-      let old = runs[a.runId]?.agents[a.id]
+      let old = runs[a.runId]?.agents[a.id], created = epochMs(iso: a.createdAt) ?? old?.createdAtMs
       var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                     task: a.task.map(UntrustedText.init), key: old?.key, repo: a.workspace?.label ?? old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.activity?.text)
+                     task: a.task.map(UntrustedText.init), key: old?.key, repo: a.workspace?.label ?? old?.repo, spawnedAtMs: old?.spawnedAtMs ?? created ?? i, activity: a.activity?.text)
+      ag.createdAtMs = created
       ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
       ag.activityKind = a.activity?.kind
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
@@ -400,6 +403,7 @@ public final class CapcomdStore {
       a.taskAttachment = AttachmentRef(d["taskAttachment"])
       a.provider = Provider(wire: d["agent"]?["provider"]?.string ?? d["agent"]?["kind"]?.string)
       a.model = d["agent"]?["model"]?.string
+      a.createdAtMs = e.epochMs
       runs[runId]?.agents[id] = a
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
                                     phase: Self.phase(a.kind), text: a.displayName, detail: a.task, status: .queued))
@@ -524,11 +528,13 @@ public final class CapcomdStore {
         old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs; old.repo = a.workspace?.label ?? old.repo
         old.provider = Provider(wire: a.provider) ?? old.provider; old.model = a.model ?? old.model
         old.activityAtMs = epochMs(iso: a.activity?.at) ?? old.activityAtMs
+        old.createdAtMs = epochMs(iso: a.createdAt) ?? old.createdAtMs
         old.read(result: a.result)
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                       task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: i, activity: a.activity?.text)
+                       task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: epochMs(iso: a.createdAt) ?? i, activity: a.activity?.text)
+        ag.createdAtMs = epochMs(iso: a.createdAt)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
         ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
         ag.provider = Provider(wire: a.provider); ag.model = a.model

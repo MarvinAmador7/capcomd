@@ -82,4 +82,40 @@ final class DeskTests: XCTestCase {
     ev(s, "run-d", "run.created", nil, ["goal": .string("Older daemon")], at: 2)
     XCTAssertEqual(s.decks().map(\.sandbox), ["boxd", nil])
   }
+
+  /// A column's clock starts when its agent was spawned. A lifecycle snapshot lists agents without their agent.spawned
+  /// events, so their order fell back to the snapshot's index (0, 1, 2…) and the clock read 498196 hours. The daemon's
+  /// `createdAt` is the clock now; a daemon that doesn't send it shows no clock rather than a wrong one.
+  func testAColumnClockStartsWhenTheAgentWasSpawned() throws {
+    func agents(_ json: String) throws -> [SnapshotAgent] { try JSONDecoder().decode([SnapshotAgent].self, from: Data(json.utf8)) }
+    let s = CapcomdStore()
+    let key = CapcomdStore.lifecycleKey("run-s")
+    s.receive(.reset(snapshotSeq: 5, reason: "compacted"), scope: "daemon")
+    s.receive(.snapshotRun(SnapshotRun(id: "run-s", projectId: "p", label: nil, state: "running", goal: "g", createdAt: nil)), scope: "daemon")
+    s.receive(.snapshotEnd(snapshotSeq: 5), scope: "daemon")
+    s.receive(.reset(snapshotSeq: 9, reason: "compacted"), scope: key)
+    s.receive(.snapshotRun(SnapshotRun(id: "run-s", projectId: "p", label: nil, state: "running", goal: "g", createdAt: nil)), scope: key)
+    s.receive(.snapshotAgents(try agents("""
+      [{"id":"a","runId":"run-s","parent":null,"depth":0,"profile":"lead","status":"running","createdAt":"2026-11-01T04:16:48.115Z"},
+       {"id":"b","runId":"run-s","parent":"a","depth":1,"profile":"worker","status":"running"}]
+      """)), scope: key)
+    s.receive(.snapshotEnd(snapshotSeq: 9), scope: key)
+    let cols = s.reelColumns(runId: "run-s")
+    XCTAssertEqual(cols.map(\.agentId), ["a", "b"])
+    XCTAssertEqual(cols[0].startedAtMs, epochMs(iso: "2026-11-01T04:16:48.115Z"))
+    XCTAssertNil(cols[1].startedAtMs)   // an older daemon: no clock
+    // A live spawn starts the clock at its event.
+    ev(s, "run-s", "agent.spawned", "c", ["profile": .string("worker"), "parent": .string("a")], at: 1_793_506_700_000)
+    XCTAssertEqual(s.columnHeader(runId: "run-s", agentId: "c")?.startedAtMs, 1_793_506_700_000)
+  }
+
+  func testTheDaemonIsLoadedOnceItsFirstSnapshotArrives() {
+    let s = CapcomdStore()
+    XCTAssertFalse(s.daemonLoaded)
+    s.receive(.reset(snapshotSeq: 1, reason: "compacted"), scope: "daemon")
+    XCTAssertFalse(s.daemonLoaded)
+    s.receive(.snapshotEnd(snapshotSeq: 1), scope: "daemon")
+    XCTAssertTrue(s.daemonLoaded)
+    XCTAssertTrue(s.decks().isEmpty)   // loaded and empty: nothing running
+  }
 }

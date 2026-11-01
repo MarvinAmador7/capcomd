@@ -763,8 +763,8 @@ struct ColumnHead: View {
         .foregroundStyle(slice.approval != nil ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.secondary)
       Spacer(minLength: 0)
       if let r = h.repo { Text(verbatim: r).font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary).lineLimit(1) }
-      if h.status == .running {
-        Text(Date(timeIntervalSince1970: Double(h.spawnedAtMs) / 1000), style: .timer)
+      if h.status == .running, let start = h.startedAtMs {
+        Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
           .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()
       }
     }
