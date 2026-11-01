@@ -61,6 +61,9 @@ struct TokenView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Connect to capcomd").font(.system(size: 15, weight: .semibold))
+      if model.tokenRejected {
+        Text("capcomd didn't accept the token this app has. Paste a new one.").font(Theme.Desk.label).foregroundStyle(Theme.amber)
+      }
       Text("In Terminal, run `capcomd clients add desktop --scopes read,steer,approve` and paste the token it prints.")
         .font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary).fixedSize(horizontal: false, vertical: true)
       HStack(spacing: 8) {

@@ -211,7 +211,7 @@ struct FoldedDeck: View {
 struct OfflineBadge: View {
   @Environment(DeskModel.self) private var model
   var body: some View {
-    if model.unreachable {
+    if model.unreachable, model.openRunId != nil {   // with nothing read, the window itself says so
       Label("Can't reach capcomd", systemImage: "bolt.horizontal.circle")
         .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.amber)
         .padding(.horizontal, 10).frame(height: Theme.Desk.iconButton)

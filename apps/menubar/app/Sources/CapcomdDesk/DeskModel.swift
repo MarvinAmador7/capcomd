@@ -63,6 +63,8 @@ package final class DeskModel {
   @ObservationIgnored package private(set) var store: CapcomdStore
   @ObservationIgnored private var transport: UnixSocketTransport?
   package private(set) var link: Link = .connecting { didSet { Mutations.record("DeskModel.link") } }
+  /// The daemon refused the token it was given (rather than there being none).
+  package private(set) var tokenRejected = false { didSet { Mutations.record("DeskModel.tokenRejected") } }
   /// The daemon's feed is down (it keeps retrying): the window says so instead of showing stale state as live.
   package private(set) var unreachable = false { didSet { Mutations.record("DeskModel.unreachable") } }
   /// The daemon's first snapshot arrived: until then an empty title bar means "not read yet", not "nothing running".
@@ -131,6 +133,7 @@ package final class DeskModel {
     if let old { Task { try? await old.shutdown() } }
     store.onChanges = { [weak self] keys in self?.apply(keys) }
     store.start()
+    tokenRejected = false
     link = .ready
     apply([.all])
   }
@@ -146,7 +149,7 @@ package final class DeskModel {
 
   /// The store changed: refresh only what the keys name. `.all` refreshes everything, comparing before assigning.
   package func apply(_ keys: Set<ChangeKey>) {
-    if store.unauthorized { link = .needsToken; return }
+    if store.unauthorized { tokenRejected = true; link = .needsToken; return }
     let all = keys.contains(.all)
     if all {
       if unreachable != store.daemonUnreachable { unreachable = store.daemonUnreachable }
