@@ -24,8 +24,39 @@ package enum DeskKnobs {
                                           summary: "off-screen columns built per frame after a project opens (heads-first open), nearest first",
                                           since: "0.7")
 
+  package enum Layout: String, KnobValue, CaseIterable {
+    /// The reel's columns at the fractional width the window divides into (today's reel).
+    case auto
+    /// The frame engine (ReelLayout.swift): column width and pitch snapped to device pixels, frames placed once per
+    /// geometry change. A column then sits on a pixel at every scroll offset, so a step no longer makes each column's
+    /// SwiftUI scroll view re-snap its origin (and update its graph).
+    case frames
+    /// `frames`, and the columns away from the screen are hidden while the reel rests: AppKit's per-frame passes
+    /// (tracking areas, display) skip hidden subtrees. A move shows the columns it will pass first.
+    case framesHide = "frames-hide"
+  }
+
+  /// How the reel lays out its columns (design note: apps/menubar/app/LAYOUT.md).
+  package static let deskLayout = Knob("desk.layout", default: Layout.auto, choices: Layout.allCases,
+                                       summary: "how the reel places its columns: auto = fractional widths (today), frames = pixel-snapped frames placed once per geometry change, frames-hide = frames + far columns hidden at rest",
+                                       since: "0.7")
+
+  package enum ColumnKind: String, KnobValue, CaseIterable {
+    /// One SwiftUI hosting view per column: `Column` (head, thread, box, frame and stroke).
+    case swiftui
+    /// An AppKit column (NativeColumn.swift): the frame, fill, corner and stroke are its layer's, the head and the body
+    /// (thread and box) are two hosting views it places by frame. A focus or ask change sets a layer border instead of
+    /// re-rendering and re-laying out the column's SwiftUI tree.
+    case native
+  }
+
+  /// What a column is made of.
+  package static let deskColumn = Knob("desk.column", default: ColumnKind.swiftui, choices: ColumnKind.allCases,
+                                       summary: "what a column is: swiftui = one hosting view of Column, native = an AppKit column (layer frame and stroke) placing a head and a body hosting view",
+                                       since: "0.7")
+
   /// Every knob of the window. A new knob goes here too, or `describe` won't list it.
-  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame] }
+  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn] }
   /// What `describe` lists, by name.
   package static var all: [KnobInfo] { knobs.map(\.info).sorted { $0.name < $1.name } }
   /// The full knob vector this process runs with, defaults included (a result's `knobs`).

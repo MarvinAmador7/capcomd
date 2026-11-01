@@ -43,7 +43,7 @@ final class ReelView: NSView {
   private let model: DeskModel
   private let scroll = SnapScrollView()
   private let doc = Flipped()
-  private var hosts: [String: NSHostingView<AnyView>] = [:]
+  private var hosts: [String: NSView] = [:]
   private var order: [String] = []
   private var across = 0, pitch: CGFloat = 0, width: CGFloat = 0
   /// The leading column, as the scroll offset last put it.
@@ -54,6 +54,11 @@ final class ReelView: NSView {
   /// Runtime knobs (DeskKnobs), read once: how a slide moves the reel, and how many far columns each frame builds.
   private let clipSlide = DeskKnobs.reelSlide.value == .clip
   private let perFrame = DeskKnobs.buildPerFrame.value
+  /// `desk.layout`, `desk.column` (LAYOUT.md): the frame engine and its geometry, hiding far columns at rest, and
+  /// AppKit columns.
+  private let layoutMode = DeskKnobs.deskLayout.value
+  private let nativeColumns = DeskKnobs.deskColumn.value == .native
+  private var geometry = ReelGeometry()
 
   init(model: DeskModel) {
     self.model = model
@@ -104,11 +109,18 @@ final class ReelView: NSView {
   private func build(_ i: Int) {
     guard order.indices.contains(i), hosts[order[i]] == nil else { return }
     let id = order[i]
-    let h = NSHostingView(rootView: AnyView(Column(agentId: id)
-      .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark)))
-    h.safeAreaRegions = []
-    h.sizingOptions = []   // the reel sets its frame; nothing to measure
+    let h: NSView
+    if nativeColumns {
+      h = NativeColumnView(agentId: id, model: model)
+    } else {
+      let hv = NSHostingView(rootView: AnyView(Column(agentId: id)
+        .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark)))
+      hv.safeAreaRegions = []
+      hv.sizingOptions = []   // the reel sets its frame; nothing to measure
+      h = hv
+    }
     h.frame = blanks[id]?.frame ?? frame(of: i)
+    if layoutMode == .framesHide, gestures + slides == 0, let r = geometry.around(at), !r.contains(i) { h.isHidden = true }
     doc.addSubview(h)
     hosts[id] = h
     blanks.removeValue(forKey: id)?.removeFromSuperview()
@@ -118,6 +130,7 @@ final class ReelView: NSView {
   private func buildAround(_ i: Int) {
     guard !order.isEmpty, across > 0 else { return }
     for j in max(0, i - 1)...min(order.count - 1, i + across) { build(j) }
+    if layoutMode == .framesHide { reveal(geometry.around(i)) }
   }
 
   /// The rest, one per turn of the run loop (`build.perFrame`) while the reel stands still, nearest the leading column
@@ -146,6 +159,7 @@ final class ReelView: NSView {
 
   override func layout() {
     super.layout()
+    if layoutMode != .auto { return framesLayout() }
     scroll.frame = bounds
     let gap = Theme.Desk.gap, inset = Theme.Desk.peek + gap
     let n = Theme.Desk.columnsAcross(bounds.width)
@@ -177,6 +191,44 @@ final class ReelView: NSView {
     stopSlide()
     scroll.contentView.setBoundsOrigin(NSPoint(x: x(i), y: 0))
     scrolled()
+    if layoutMode == .framesHide { rest() }
+  }
+
+  // MARK: desk.layout=frames
+
+  /// The frame engine's layout pass (ReelLayout.swift): measure the geometry, and place the columns only when it
+  /// changed (a width, the column count, the backing scale); otherwise a layout pass of the reel moves nothing.
+  private func framesLayout() {
+    if scroll.frame != bounds { scroll.frame = bounds }
+    let g = ReelGeometry.measure(bounds: bounds.size, count: order.count, scale: window?.backingScaleFactor ?? 2)
+    if g != geometry {
+      let moved = g.pitch != pitch
+      geometry = g; across = g.across; width = g.width; pitch = g.pitch
+      for (i, id) in order.enumerated() { (hosts[id] ?? blanks[id])?.frame = g.frame(of: i) }
+      doc.frame = CGRect(x: 0, y: 0, width: g.documentWidth, height: bounds.height)
+      if moved { jump(to: at) }   // a new width keeps the same leading column
+    }
+    let n = across
+    if model.across != n { DispatchQueue.main.async { [model] in if model.across != n { model.across = n } } }
+    if let p = pending, bounds.width > 0 { pending = nil; perform(p) }
+    buildAround(at)
+  }
+
+  /// `frames-hide`: shows the built columns in `r` (before a move shows them).
+  private func reveal(_ r: ClosedRange<Int>?) {
+    guard let r else { return }
+    for i in r { if let v = hosts[order[i]], v.isHidden { v.isHidden = false } }
+  }
+
+  /// `frames-hide`, the reel at rest: only the columns on screen and one each side are shown. A hidden subtree is
+  /// skipped by AppKit's per-frame passes (tracking areas, display); its SwiftUI content keeps updating.
+  private func rest() {
+    guard gestures + slides == 0, let r = geometry.around(at) else { return }
+    for (i, id) in order.enumerated() {
+      guard let v = hosts[id] else { continue }
+      let hide = !r.contains(i)
+      if v.isHidden != hide { v.isHidden = hide }
+    }
   }
 
   /// Slides to column `i` in the render server: the scroll offset moves to the target at once (one update for the
@@ -266,6 +318,7 @@ final class ReelView: NSView {
   /// A swipe began: it takes over from a slide in flight.
   fileprivate func gestureBegan() {
     gestures = 1
+    if layoutMode == .framesHide, !order.isEmpty { reveal(0...(order.count - 1)) }   // the fingers may go anywhere
     stopSlide()
     moving()
   }
@@ -290,6 +343,7 @@ final class ReelView: NSView {
 
   private func moving() {
     let m = gestures + slides > 0
+    if !m, layoutMode == .framesHide { rest() }
     guard model.reelMoving != m else { return }
     model.reelMoving = m
     DeskProbe.event("reel.phase", m ? 1 : 0)
