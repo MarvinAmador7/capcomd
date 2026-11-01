@@ -59,6 +59,13 @@ final class ReelView: NSView {
   private let layoutMode = DeskKnobs.deskLayout.value
   private let nativeColumns = DeskKnobs.deskColumn.value == .native
   private var geometry = ReelGeometry()
+  /// `reel.columns=park`: built columns away from the screen, in `parking` (hidden, never scrolled), and the blank
+  /// stand-ins that hold their place in the document.
+  private let parkColumns = DeskKnobs.reelColumns.value == .park
+  private let parking = Flipped()
+  private var standIns: [String: NSView] = [:]
+  /// Whether columns away from the screen are hidden or parked while the reel rests.
+  private var windowing: Bool { layoutMode == .framesHide || parkColumns }
 
   init(model: DeskModel) {
     self.model = model
@@ -74,6 +81,7 @@ final class ReelView: NSView {
     scroll.reel = self
     scroll.contentView.postsBoundsChangedNotifications = true
     addSubview(scroll)
+    if parkColumns { parking.isHidden = true; addSubview(parking, positioned: .below, relativeTo: scroll) }
     NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
   }
   required init?(coder: NSCoder) { fatalError() }
@@ -87,14 +95,11 @@ final class ReelView: NSView {
     guard ids != order else { return }
     for id in Set(hosts.keys).subtracting(ids) { hosts.removeValue(forKey: id)?.removeFromSuperview() }
     for id in Set(blanks.keys).subtracting(ids) { blanks.removeValue(forKey: id)?.removeFromSuperview() }
+    for id in Set(standIns.keys).subtracting(ids) { standIns.removeValue(forKey: id)?.removeFromSuperview() }
     order = ids
     at = min(at, max(0, ids.count - 1))
     for id in ids where hosts[id] == nil && blanks[id] == nil {
-      let b = NSView()
-      b.wantsLayer = true
-      b.layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
-      b.layer?.cornerRadius = Theme.Desk.columnRadius
-      b.layer?.cornerCurve = .continuous
+      let b = Self.blank()
       doc.addSubview(b)
       blanks[id] = b
     }
@@ -104,6 +109,16 @@ final class ReelView: NSView {
 
   private var blanks: [String: NSView] = [:]
   private var building = false
+
+  /// A column before it is built: its fill and corner, nothing else.
+  private static func blank() -> NSView {
+    let b = NSView()
+    b.wantsLayer = true
+    b.layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
+    b.layer?.cornerRadius = Theme.Desk.columnRadius
+    b.layer?.cornerCurve = .continuous
+    return b
+  }
 
   /// Builds column `i`'s hosting view in place of its blank.
   private func build(_ i: Int) {
@@ -120,9 +135,13 @@ final class ReelView: NSView {
       h = hv
     }
     h.frame = blanks[id]?.frame ?? frame(of: i)
-    if layoutMode == .framesHide, gestures + slides == 0, let r = geometry.around(at), !r.contains(i) { h.isHidden = true }
-    doc.addSubview(h)
     hosts[id] = h
+    if windowing, gestures + slides == 0, let r = near(at), !r.contains(i) {
+      blanks.removeValue(forKey: id)?.removeFromSuperview()
+      put(away: id, at: i)
+      return
+    }
+    doc.addSubview(h)
     blanks.removeValue(forKey: id)?.removeFromSuperview()
   }
 
@@ -130,7 +149,7 @@ final class ReelView: NSView {
   private func buildAround(_ i: Int) {
     guard !order.isEmpty, across > 0 else { return }
     for j in max(0, i - 1)...min(order.count - 1, i + across) { build(j) }
-    if layoutMode == .framesHide { reveal(geometry.around(i)) }
+    if windowing { reveal(near(i)) }
   }
 
   /// The rest, one per turn of the run loop (`build.perFrame`) while the reel stands still, nearest the leading column
@@ -167,6 +186,7 @@ final class ReelView: NSView {
     let moved = w + gap != pitch
     across = n; width = w; pitch = w + gap
     for (i, id) in order.enumerated() { (hosts[id] ?? blanks[id])?.frame = frame(of: i) }
+    if !standIns.isEmpty { for (i, id) in order.enumerated() { standIns[id]?.frame = frame(of: i) } }
     doc.frame = CGRect(x: 0, y: 0, width: max(bounds.width, 2 * inset + CGFloat(order.count) * pitch - gap), height: bounds.height)
     if moved { jump(to: at) }   // a new width keeps the same leading column
     if model.across != n { DispatchQueue.main.async { [model] in if model.across != n { model.across = n } } }
@@ -191,7 +211,7 @@ final class ReelView: NSView {
     stopSlide()
     scroll.contentView.setBoundsOrigin(NSPoint(x: x(i), y: 0))
     scrolled()
-    if layoutMode == .framesHide { rest() }
+    if windowing { rest() }
   }
 
   // MARK: desk.layout=frames
@@ -204,7 +224,7 @@ final class ReelView: NSView {
     if g != geometry {
       let moved = g.pitch != pitch
       geometry = g; across = g.across; width = g.width; pitch = g.pitch
-      for (i, id) in order.enumerated() { (hosts[id] ?? blanks[id])?.frame = g.frame(of: i) }
+      for (i, id) in order.enumerated() { (hosts[id] ?? blanks[id])?.frame = g.frame(of: i); standIns[id]?.frame = g.frame(of: i) }
       doc.frame = CGRect(x: 0, y: 0, width: g.documentWidth, height: bounds.height)
       if moved { jump(to: at) }   // a new width keeps the same leading column
     }
@@ -214,20 +234,49 @@ final class ReelView: NSView {
     buildAround(at)
   }
 
-  /// `frames-hide`: shows the built columns in `r` (before a move shows them).
-  private func reveal(_ r: ClosedRange<Int>?) {
-    guard let r else { return }
-    for i in r { if let v = hosts[order[i]], v.isHidden { v.isHidden = false } }
+  // MARK: windowing (desk.layout=frames-hide, reel.columns=park)
+
+  /// The columns on screen with column `i` leading, and one each side: those a move may show.
+  private func near(_ i: Int) -> ClosedRange<Int>? {
+    guard !order.isEmpty, across > 0 else { return nil }
+    return max(0, min(i, order.count - 1) - 1)...min(order.count - 1, i + across)
   }
 
-  /// `frames-hide`, the reel at rest: only the columns on screen and one each side are shown. A hidden subtree is
-  /// skipped by AppKit's per-frame passes (tracking areas, display); its SwiftUI content keeps updating.
-  private func rest() {
-    guard gestures + slides == 0, let r = geometry.around(at) else { return }
-    for (i, id) in order.enumerated() {
+  /// Brings the built columns in `r` back before a move shows them: unhidden, or out of parking into the document.
+  private func reveal(_ r: ClosedRange<Int>?) {
+    guard let r else { return }
+    for i in r {
+      let id = order[i]
       guard let v = hosts[id] else { continue }
-      let hide = !r.contains(i)
-      if v.isHidden != hide { v.isHidden = hide }
+      if parkColumns {
+        guard let s = standIns.removeValue(forKey: id) else { continue }
+        v.frame = s.frame
+        doc.addSubview(v)
+        s.removeFromSuperview()
+      } else if v.isHidden { v.isHidden = false }
+    }
+  }
+
+  /// Column `i`, away from the screen: hidden (frames-hide) or parked with a blank stand-in in the document (park).
+  private func put(away id: String, at i: Int) {
+    guard let v = hosts[id] else { return }
+    if parkColumns {
+      guard standIns[id] == nil else { return }
+      let s = Self.blank()
+      s.frame = v.superview === doc ? v.frame : frame(of: i)
+      doc.addSubview(s)
+      standIns[id] = s
+      parking.addSubview(v)   // keeps its size: back in the document it needs no new layout
+    } else if !v.isHidden { v.isHidden = true }
+  }
+
+  /// The reel at rest: only the columns on screen and one each side stay in view. A hidden subtree is skipped by
+  /// AppKit's per-frame passes (tracking areas, display); a parked one is also not moved by a scroll, so SwiftUI
+  /// doesn't re-place it. Their SwiftUI content keeps updating either way.
+  private func rest() {
+    guard gestures + slides == 0, let r = near(at) else { return }
+    for (i, id) in order.enumerated() where hosts[id] != nil {
+      if r.contains(i) { reveal(i...i) } else { put(away: id, at: i) }
     }
   }
 
@@ -319,6 +368,7 @@ final class ReelView: NSView {
   fileprivate func gestureBegan() {
     gestures = 1
     if layoutMode == .framesHide, !order.isEmpty { reveal(0...(order.count - 1)) }   // the fingers may go anywhere
+    // (park: the columns come out of parking as the leading column changes, `scrolled` → `buildAround`)
     stopSlide()
     moving()
   }
@@ -343,7 +393,7 @@ final class ReelView: NSView {
 
   private func moving() {
     let m = gestures + slides > 0
-    if !m, layoutMode == .framesHide { rest() }
+    if !m, windowing { rest() }
     guard model.reelMoving != m else { return }
     model.reelMoving = m
     DeskProbe.event("reel.phase", m ? 1 : 0)
