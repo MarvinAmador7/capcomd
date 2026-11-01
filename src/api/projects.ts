@@ -13,6 +13,9 @@ import {
 	remoteBranches, suggestCheck, writeProject, type ProjectValues,
 } from "../config/project-setup";
 import { addProject, nameFor, readProjects, samePath } from "../config/projects";
+import { projectConfigPath, readConfig } from "../config/store";
+import * as G from "../merge/goal";
+import { listBranches, type BranchListing } from "../merge/goal";
 
 type Env = Record<string, string | undefined>;
 /** contract.ts BranchName's pattern (importing contract.ts from here makes an import cycle through source.ts). */
@@ -30,7 +33,7 @@ export interface ProjectAgent {
 }
 export interface ProjectInspection {
 	path: string; root: string | null; name: string | null; configured: boolean; values: ProjectValues | null;
-	repo: string | null; github: string | null; ghReady: boolean; defaultBranch: string; branches: string[]; suggestedCheck: string;
+	repo: string | null; github: string | null; ghReady: boolean; defaultBranch: string | null; branches: string[]; suggestedCheck: string;
 	suggestedMode: "pr" | "direct"; suggestedAgents: SetupAgent[]; agents: ProjectAgent[]; budgetAsked: boolean; problems: ProjectProblem[];
 }
 export interface ProjectSetupInput {
@@ -75,7 +78,7 @@ export async function inspectProject(path: string, deps: ProjectDeps): Promise<P
 	const agents = agentsFrom(await deps.logins().catch(() => []));
 	const suggestedAgents = agents.filter((a) => a.loggedIn).map((a) => a.provider);
 	const base: ProjectInspection = {
-		path, root: null, name: null, configured: false, values: null, repo: null, github: null, ghReady: false, defaultBranch: "main", branches: [],
+		path, root: null, name: null, configured: false, values: null, repo: null, github: null, ghReady: false, defaultBranch: null, branches: [],
 		suggestedCheck: "", suggestedMode: "direct", suggestedAgents: suggestedAgents.length ? suggestedAgents : ["claude"], agents, budgetAsked: false, problems: [],
 	};
 	base.budgetAsked = asks(agents, base.suggestedAgents);
@@ -101,9 +104,44 @@ export async function inspectProject(path: string, deps: ProjectDeps): Promise<P
 	if (!repo) problems.push({ code: "no_origin", message: `${at} has no origin remote, so agents have no repository to push to. Add one (\`git remote add origin <url>\`), or choose another checkout.` });
 	else if (!github) problems.push({ code: "not_github", message: `${at}'s origin (${repo}) isn't on GitHub. The app sets up GitHub checkouts; set this one up with \`capcomd setup project\` in Terminal.` });
 	return {
-		...out, configured: values !== null, values, repo, github, ghReady, defaultBranch: head || "main",
+		// The default branch only when git knows it (origin/HEAD): never a guessed "main". The app asks GET /v1/projects/branches.
+		...out, configured: values !== null, values, repo, github, ghReady, defaultBranch: head || null,
 		branches: head && !branches.includes(head) ? [head, ...branches] : branches, suggestedCheck: suggestCheck(root) ?? "",
 		suggestedMode: ghReady ? "pr" : "direct", problems,
+	};
+}
+
+/** GET /v1/projects/branches (capability runs.goal_branch): the run setup screen's base menu and goal branch. */
+export interface ProjectBranchesQuery { path: string; goal?: string; goalBranch?: string; base?: string }
+export interface ProjectBranchesResult {
+	path: string; root: string | null; github: string | null; source: BranchListing["source"]; note: string | null;
+	defaultBranch: string | null; branches: string[]; projectTarget: string | null; suggestedBase: string | null;
+	suggestedGoalBranch: string | null; goalBranchProblem: string | null; baseProblem: string | null;
+}
+/** What the branches route reads the remote with (tests pass a stand-in; the daemon: GitHub, then git, then local refs). */
+export type BranchLister = (o: Parameters<typeof listBranches>[0]) => Promise<BranchListing>;
+
+export async function projectBranches(q: ProjectBranchesQuery, deps: ProjectDeps & { listBranches?: BranchLister }): Promise<ProjectBranchesResult> {
+	const dir = resolve(q.path);
+	const isDir = (() => { try { return existsSync(dir) && statSync(dir).isDirectory(); } catch { return false; } })();
+	const root = isDir ? gitRoot(dir) : null;
+	const origin = root ? originUrl(root) : "";
+	const github = origin ? githubRepoOf(httpsRemote(origin)) : null;
+	const listing: BranchListing = root
+		? await (deps.listBranches ?? listBranches)({ remote: origin ? "origin" : null, github, cwd: root, local: () => ({ defaultBranch: originHead(root) || null, branches: remoteBranches(root, 500) }) })
+		: { defaultBranch: null, branches: [], source: "local", note: `${tilde(dir, deps.env)} isn't a git checkout.` };
+	const projectTarget = root ? projectValues(root)?.target ?? null : null;
+	const suggestedBase = q.base ?? projectTarget ?? listing.defaultBranch;
+	// The project's own protected branches (its .capcomd/config.json env) count, as they do for its runs.
+	const cfgPath = root ? projectConfigPath(root, deps.env) : null;
+	const env: Env = { ...deps.env, ...((cfgPath ? readConfig(cfgPath).env : undefined) ?? {}) };
+	const listed = listing.source !== "local" && listing.branches.length > 0;
+	const baseProblem = q.base === undefined ? null : (G.baseProblem(q.base) ?? (listed && !listing.branches.includes(q.base) ? `${q.base} isn't a branch of ${github ?? "the repository"}. Pick one of its branches.` : null));
+	const goalBranchProblem = q.goalBranch === undefined ? null : (G.goalBranchProblem(q.goalBranch, { base: suggestedBase, env })
+		?? (G.collides(q.goalBranch, listing.branches) ? `${q.goalBranch} already exists on the remote (or clashes with a branch there): each run's work lands on a branch of its own. Pick another name.` : null));
+	return {
+		path: q.path, root, github, source: listing.source, note: listing.note, defaultBranch: listing.defaultBranch, branches: listing.branches, projectTarget, suggestedBase,
+		suggestedGoalBranch: q.goal !== undefined && q.goal.trim() ? G.suggestGoalBranch(q.goal, listing.branches) : null, goalBranchProblem, baseProblem,
 	};
 }
 

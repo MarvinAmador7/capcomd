@@ -104,6 +104,114 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `run.goal_completed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "branch": {
+      "type": "string",
+      "description": "The run's goal branch"
+    },
+    "base": {
+      "type": "string",
+      "description": "The branch it was cut from, which a pull request goes into"
+    },
+    "plannerId": {
+      "type": "string",
+      "description": "The planner agent whose finish made the run ready"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "branch",
+    "base",
+    "plannerId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.pr_opened`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "branch": {
+      "type": "string"
+    },
+    "base": {
+      "type": "string"
+    },
+    "number": {
+      "type": "number",
+      "description": "The pull request's number on GitHub"
+    },
+    "url": {
+      "description": "Its page on GitHub",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "by": {
+      "type": "string",
+      "description": "Who opened it: client:<id>, operator or driver"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "branch",
+    "base",
+    "number",
+    "url",
+    "by"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `run.branch_kept`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "branch": {
+      "type": "string"
+    },
+    "base": {
+      "type": "string"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who chose to keep it: client:<id>, operator or driver"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "branch",
+    "base",
+    "by"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `agent.spawned`
 
 ```json
@@ -1692,9 +1800,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
   },
   "required": [
@@ -1792,9 +1903,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
   },
   "required": [
@@ -1835,9 +1949,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
     "agentId": {
       "description": "Agent whose change moved the run, if any",
@@ -1890,9 +2007,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
     "agentId": {
       "description": "Agent whose change moved the run, if any",
@@ -1945,9 +2065,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
     "agentId": {
       "description": "Agent whose change moved the run, if any",
@@ -2000,9 +2123,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
     "agentId": {
       "description": "Agent whose change moved the run, if any",
@@ -2055,9 +2181,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
     "agentId": {
       "description": "Agent whose change moved the run, if any",
@@ -2110,9 +2239,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
     "agentId": {
       "description": "Agent whose change moved the run, if any",
@@ -2165,9 +2297,12 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approval_needed",
         "approved",
         "denied",
-        "deleted"
+        "deleted",
+        "planner_done",
+        "pull_request_opened",
+        "branch_kept"
       ],
-      "description": "Why the state changed (trusted, machine-readable)"
+      "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
     "agentId": {
       "description": "Agent whose change moved the run, if any",
@@ -2500,7 +2635,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 
 # Lifecycle feed
 
-Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
+Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
 Activity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).
 
@@ -2628,6 +2763,81 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             {
               "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
             }
+          ]
+        },
+        "goalBranch": {
+          "description": "Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "branch": {
+              "type": "string",
+              "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+            },
+            "base": {
+              "type": "string",
+              "description": "The branch it was cut from, which the pull request goes into (e.g. dev)"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "working",
+                "ready",
+                "stopped",
+                "pr_opened",
+                "kept"
+              ],
+              "description": "working: the planner is at it (reviewed work lands as it goes); ready: the planner finished, the user decides (open a pull request or keep the branch); stopped: the planner failed or was cancelled (the branch keeps what landed; a pull request can still be opened); pr_opened: a pull request into the base is open (or was merged on GitHub); kept: the user kept the branch without one. Treat a state you don't know as working"
+            },
+            "readyAt": {
+              "description": "When the planner finished (run.goal_completed); null before",
+              "type": [
+                "string",
+                "null"
+              ],
+              "allOf": [
+                {
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                },
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ]
+            },
+            "pullRequest": {
+              "description": "The pull request opened from it (run.pr_opened); null before",
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "number": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "url": {
+                  "description": "Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "number",
+                "url"
+              ]
+            }
+          },
+          "required": [
+            "branch",
+            "base",
+            "state",
+            "readyAt",
+            "pullRequest"
           ]
         }
       },

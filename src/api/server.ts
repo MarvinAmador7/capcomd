@@ -80,6 +80,7 @@ export function harnessApp(o: ServerOptions) {
 			gitInit: os.projects.gitInit.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 			publishOptions: os.projects.publishOptions.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 			publish: os.projects.publish.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			branches: os.projects.branches.handler(({ input }) => src.projectBranches(input)),
 		},
 		runs: {
 			list: os.runs.list.handler(() => src.runs()),
@@ -97,6 +98,10 @@ export function harnessApp(o: ServerOptions) {
 				const [events, repo] = await Promise.all([src.events(input.runId, 0), src.repo(input.runId)]);
 				return runFiles({ runId: input.runId, events, repo, ...(input.agentId ? { agentId: input.agentId } : {}), ...(input.limit ? { limit: input.limit } : {}) });
 			}),
+			goal: os.runs.goal.handler(async ({ input }) => (await src.goal(input.runId)) ?? (() => { throw nf(`goal branch of ${input.runId}`); })()),
+			// Served natively below (Idempotency-Key, the steer scope): never reached.
+			pullRequest: os.runs.pullRequest.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			keepBranch: os.runs.keepBranch.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
 		agents: {
 			tree: os.agents.tree.handler(async ({ input }) => (await src.agents(input.runId)) ?? (() => { throw nf(input.runId); })()),
@@ -231,7 +236,7 @@ export function harnessApp(o: ServerOptions) {
 		const parsed = CreateRunBody.safeParse(await c.req.json().catch(() => undefined));
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
-			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?, driver?, effort?, sandbox?}");
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?, driver?, effort?, sandbox?, base?, goalBranch?}", i?.path.length ? { field: String(i.path[0]) } : {});
 		}
 		const p = parsed.data;
 		if (p.profile !== undefined && p.driver !== undefined) return err(c, 422, "invalid", "profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
@@ -253,11 +258,13 @@ export function harnessApp(o: ServerOptions) {
 			const fit = p.sandbox !== undefined ? d?.sandboxes?.[p.sandbox] : undefined;
 			if (fit && !fit.available) return err(c, 422, "invalid", `${d!.label} can't drive a run in ${PROVIDER_LABEL[p.sandbox as keyof typeof PROVIDER_LABEL] ?? p.sandbox}: ${fit.reason ?? "unavailable"}`);
 		}
-		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox as NonNullable<CreateRunInput["sandbox"]> } : {}) };
+		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox as NonNullable<CreateRunInput["sandbox"]> } : {}),
+			...(p.base !== undefined ? { base: p.base } : {}), ...(p.goalBranch !== undefined ? { goalBranch: p.goalBranch } : {}) };
 		const kid = `${c.get("client").clientId}\u0000runs.create\u0000${key}`;
 		// driver and sandbox are part of the body (another value: idempotency_conflict); a request without them hashes as
 		// before they existed, so a retry across the upgrade still replays.
-		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null, ...(input.driver || input.sandbox || input.effort ? [input.driver ?? null, input.sandbox ?? null, ...(input.effort ? [input.effort] : [])] : [])]);
+		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null, ...(input.driver || input.sandbox || input.effort ? [input.driver ?? null, input.sandbox ?? null, ...(input.effort ? [input.effort] : [])] : []),
+			...(input.base !== undefined || input.goalBranch !== undefined ? [{ base: input.base ?? null, goalBranch: input.goalBranch ?? null }] : [])]);
 		const conflict = () => err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different body");
 		const replay = (r: Outcome) => c.json(r.body, r.status as 201, r.status === 201 ? { "idempotent-replayed": "true" } : {});
 		const prior = state.key(kid);
@@ -273,7 +280,7 @@ export function harnessApp(o: ServerOptions) {
 			resolve({ status: 201, body: run });
 			return c.json(run, 201);
 		} catch (e) {
-			const out: Outcome = e instanceof CreateRunError ? { status: 422, body: { code: "invalid", message: e.message } } : { status: 500, body: { code: "internal", message: (e as Error).message } };
+			const out: Outcome = e instanceof CreateRunError ? { status: 422, body: { code: "invalid", message: e.message, ...(e.field ? { field: e.field } : {}) } } : { status: 500, body: { code: "internal", message: (e as Error).message } };
 			resolve(out);
 			return c.json(out.body, out.status as 422);
 		} finally { creating.delete(kid); }
@@ -387,6 +394,23 @@ export function harnessApp(o: ServerOptions) {
 			// The scope's own message key: a retry after a daemon restart (or after the 24h key window) still sends once.
 			const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`, sk.skills);
 			return { status: 200, body: { runId, to: agentId, from: "operator", seq: r.seq, note: r.note } };
+		});
+	});
+
+	// Goal branches (capability runs.goal_branch; the steer scope): open a pull request from the run's goal branch into its
+	// base, or keep the branch. Both are idempotent in themselves; the Idempotency-Key rules are the other write routes'.
+	app.post("/v1/runs/:runId/pull-request", (c) => {
+		const runId = c.req.param("runId");
+		return idempotent(c, ["runs.pullRequest", runId], async (client) => {
+			const r = await src.openPullRequest(runId, `client:${client.clientId}`);
+			return r.ok ? { status: 200, body: r.body } : { status: r.status, body: { code: r.code, message: r.message } };
+		});
+	});
+	app.post("/v1/runs/:runId/keep-branch", (c) => {
+		const runId = c.req.param("runId");
+		return idempotent(c, ["runs.keepBranch", runId], async (client) => {
+			const r = await src.keepBranch(runId, `client:${client.clientId}`);
+			return r.ok ? { status: 200, body: r.body } : { status: r.status, body: { code: r.code, message: r.message } };
 		});
 	});
 
