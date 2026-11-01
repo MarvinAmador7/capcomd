@@ -50,6 +50,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   (`--idle 120`) and redoes a rep you interrupt. `ssh://` copies the build to a spare Mac and opens the window in its
   logged-in session, waiting while its screen is locked. Results record their runner and machine and are never
   mixed; `perfloop runner check R` shows a runner's state.
+- Fix: deskbench's scene-hosted runs (the default) opened a second desktop window and measured both, so earlier
+  numbers were about twice one window's cost. Compare new results only with results recorded after this fix.
 - Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
   or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
   coming back, and whoever awaits it (you, or a parent agent's `capcomd await`) gets its result.
