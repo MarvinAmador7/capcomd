@@ -264,6 +264,9 @@ can measure it again without a rebuild. The window's knobs are in `CapcomdDesk/D
 |---|---|---|---|
 | `reel.slide` | `ca`, `clip` | `ca` | `ca`: an animated move sets the scroll offset once and slides the document layer in the render server (`ReelView.slide`). `clip`: the clip view scrolls frame by frame (NSClipView's animator), as the reel did before, so every column's hosting view updates on each frame |
 | `build.perFrame` | `1`…`8` | `1` | how many off-screen columns the reel builds per frame after a project opens (heads-first open), nearest first |
+| `desk.layout` | `auto`, `frames`, `frames-hide` | `auto` | the reel's frame engine (LAYOUT.md): pixel-snapped column frames placed once per geometry change; `frames-hide` also hides far columns at rest |
+| `desk.column` | `swiftui`, `native` | `swiftui` | a column as one hosting view of `Column`, or an AppKit column (layer frame and stroke) placing a head and a body hosting view |
+| `reel.columns` | `keep`, `park` | `keep` | every built column in the scrolling document, or only those near the screen (the rest parked, still and hidden) |
 
 ```sh
 $B run step --knob reel.slide=clip                    # or --set knob:reel.slide=clip; several: --knob a=1,b=2
@@ -313,7 +316,8 @@ measured steps (a run without `--guards` times exactly as before), and land in `
 - **`built-within`** (all scenarios): every column at least half in view has had its `Column`, `ColumnHead`,
   `ColumnThread` and (when the fixture gives the agent a thread) one `EntryRow` body since its project opened (a switch,
   a fresh window), the last of them at most `built-within.ms` (300) after settle; it is warm; its view in the reel is a
-  hosting view with something in it, not the reel's blank placeholder. `value` is how long after settle the last column
+  hosting view with something in it (or an AppKit column holding one, `desk.column=native`), not the reel's blank
+  placeholder and not hidden. `value` is how long after settle the last column
   was built (negative: before).
 - **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `follow`, `resize`; not `burst` or `typing`): after
   settle the run writes `<scenario>-rep<i>.settled.png`, `.layout.json` (where the columns and their threads are, in
@@ -468,7 +472,11 @@ ours, but every run was `UNTRUSTED` by the noise rule; re-measure on a quiet mac
   all 16 `CrewTab`s once per column crossed (200+ bodies, ~200 ms in one stretch): the bracket's `onScreen` set.
 - Under the SwiftUI `Window` scene host every changed body is evaluated **twice** per update (Column 34 per step, not
   17) and a step runs at ~24 Hz instead of 120; `.commands` and the hosting view's sizing options are not the cause.
-  The app uses the same scene; confirming this on the app itself is the first follow-up.
+  The app uses the same scene; confirming this on the app itself is the first follow-up. **Corrected 2026-10-31:**
+  the bench's own doing. Its command started before SwiftUI had made the scene's window, so it made a hand-made
+  window in front of it, and every scene-hosted run measured two windows on one model. The harness now waits for the
+  scene's window (`sceneWindowReady`); bodies are counted once, and every scene-hosted number from before is about
+  twice what one window costs (step on crew17: ~180 → ~120 ms of main-thread CPU at that commit).
 - `burst`: isolation holds (no other column, no title bar body), but one arriving item costs ~60 ms of main thread
   (ColumnThread + 2 EntryRow bodies, then layout).
 - `typing`: isolation holds (only `ColumnComposer` bodies), but a keystroke costs 20–75 ms of main thread.
