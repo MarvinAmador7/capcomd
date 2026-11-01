@@ -372,7 +372,7 @@ export function rivetSource(): HarnessSource {
 			try { return await (await import("../primitives/goal")).goalView(runId); }
 			catch (e) { if (e instanceof RelayError && e.code === "not_found") return null; throw e; }
 		},
-		openPullRequest: (runId, by) => goalAction(async () => (await import("../primitives/goal")).openGoalPullRequest(runId, { by })),
+		openPullRequest: (runId, by, o) => goalAction(async () => (await import("../primitives/goal")).openGoalPullRequest(runId, { by, stopped: o?.stopped === true })),
 		keepBranch: (runId, by) => goalAction(async () => (await import("../primitives/goal")).keepGoalBranch(runId, { by }) as Promise<{ runId: string; branch: string; base: string; kept: true; changed: boolean }>),
 	};
 }
@@ -383,7 +383,7 @@ async function goalAction<T>(f: () => Promise<T>): Promise<GoalOutcome<T>> {
 	catch (e) {
 		if (!(e instanceof RelayError)) throw e;
 		if (e.code === "not_found") return { ok: false, status: 404, code: "not_found", message: e.message };
-		if (e.code === "conflict") return { ok: false, status: 409, code: "conflict", message: e.message };
+		if (e.code === "conflict") return { ok: false, status: 409, code: e.reason === "stopped" ? "stopped" : "conflict", message: e.message };
 		if (e.code === "usage" || e.code === "config") return { ok: false, status: 422, code: "invalid", message: e.message };
 		throw e;
 	}

@@ -57,7 +57,7 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 | `capcomd_events` | `runId`, `cursor?`, `limit?` | `{events[], nextCursor, total, truncated}` |
 | `capcomd_trace` | `runId`, `cursor?`, `limit?` | `{traceId, durationMs, spans[], nextCursor, total, truncated}` |
 | `capcomd_goal` | `runId` | a goal-branch run's result: `{branch, base, state, summary, compare, landed[], notLanded[], pullRequest, openPullRequest: {available, reason}}` |
-| `capcomd_pr_open` | `runId` | `{created, branch, base, pullRequest: {number, url, state}}`: a pull request from the goal branch into its base, with the user's gh login (idempotent; never merged by capcomd) |
+| `capcomd_pr_open` | `runId`, `stopped?` | `{created, branch, base, pullRequest: {number, url, state}}`: a pull request from the goal branch into its base, with the user's gh login (idempotent; never merged by capcomd). A run whose planner stopped is refused (reason `stopped`, with the question to ask the user) until `stopped: true` says they agreed |
 
 Tools carry MCP annotations: reads are `readOnlyHint`; `capcomd_merge`, `capcomd_cancel`, `capcomd_approve` and
 `capcomd_pr_open` are `destructiveHint`, so clients ask before calling them. `capcomd_approve` is never `idempotentHint` (a client may

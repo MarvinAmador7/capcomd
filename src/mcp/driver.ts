@@ -83,14 +83,15 @@ export async function goal(a: { runId: string }) {
     notLanded: v.notLanded.map((n) => ({ ...n, task: f(n.agentId, n.task), detail: f(n.agentId, n.detail) })),
     compare: { ...v.compare, commits: v.compare.commits.map((c) => ({ ...c, subject: fence("commit", c.subject).text })) },
     next: v.pullRequest ? `The pull request is #${v.pullRequest.number}${v.pullRequest.url ? ` (${v.pullRequest.url})` : ""}: the user reviews and merges it on GitHub.`
+      : v.openPullRequest.available && v.openPullRequest.confirm ? `${v.openPullRequest.confirm} Ask the user this, showing what landed and what didn't; only if they say yes, call capcomd_pr_open with stopped: true.`
       : v.openPullRequest.available ? `Show the user what landed and the summary, and ask whether to open a pull request into ${v.base} (capcomd_pr_open) or keep the branch.`
       : `${v.openPullRequest.reason}`,
   };
 }
 
 /** Open a pull request from the run's goal branch into its base (idempotent; capcomd never merges it). */
-export async function prOpen(a: { runId: string }) {
-  const r = await (await import("../primitives/goal")).openGoalPullRequest(a.runId, { by: DRIVER });
+export async function prOpen(a: { runId: string; stopped?: boolean }) {
+  const r = await (await import("../primitives/goal")).openGoalPullRequest(a.runId, { by: DRIVER, stopped: a.stopped === true });
   return { ...r, next: `Tell the user: pull request #${r.pullRequest.number}${r.pullRequest.url ? ` (${r.pullRequest.url})` : ""} from ${r.branch} into ${r.base}. They review and merge it on GitHub.` };
 }
 

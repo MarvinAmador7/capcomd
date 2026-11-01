@@ -26,8 +26,8 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
-	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "invalid", "internal", "unavailable"])
-		.describe("conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"),
+	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "stopped", "invalid", "internal", "unavailable"])
+		.describe("stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
 	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub"),
@@ -776,6 +776,7 @@ export const GoalView = z.object({
 		available: z.boolean().describe("POST …/pull-request would open (or return) one now"),
 		reason: z.string().nullable().describe("Why not, a sentence for the person (daemon-written, trusted) that says what to do: not on GitHub (the branch name is in it), no GitHub login (`gh auth login`), the planner still working, nothing landed yet; null when available"),
 		repo: z.string().nullable().describe("owner/name on GitHub; null when it isn't on GitHub"),
+		confirm: z.string().nullable().optional().describe("State stopped (the planner failed or was cancelled before it finished): the question to ask the person before opening a pull request with what landed (daemon-written, trusted), e.g. \"The planner stopped before it finished (it failed): 2 of 3 tasks landed on capcomd/add-x. Open a pull request with what landed?\"; then POST …/pull-request with `{\"stopped\": true}`. null otherwise. Older daemons don't send it"),
 	}),
 	decision: z.object({ choice: z.enum(["pull_request", "keep"]), by: z.string(), at: Timestamp }).nullable().describe("What the user chose; null before"),
 });
@@ -786,8 +787,12 @@ export const GoalPullRequestResult = z.object({
 	created: z.boolean().describe("This call opened it; false: it was open (or merged) already and is returned as it is"),
 	pullRequest: GoalPullRequest.extend({ state: z.string().describe("open, closed or merged") }),
 });
-export const PULL_REQUEST_DOC = "Capability runs.goal_branch. Open a GitHub pull request from the run's goal branch into its base (no body), with the user's own GitHub login on the daemon's machine (GITHUB_TOKEN, GH_TOKEN, else `gh auth token`). Title: the run's goal; description: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. capcomd never merges it. " +
+export const PullRequestBody = z.object({
+	stopped: z.boolean().optional().describe("The person was asked about a stopped run (GET …/goal `openPullRequest.confirm`, or the 409 `stopped` message) and wants the pull request anyway. Ignored for a run that isn't stopped"),
+});
+export const PULL_REQUEST_DOC = "Capability runs.goal_branch. Open a GitHub pull request from the run's goal branch into its base (body optional: `{\"stopped\": true}`), with the user's own GitHub login on the daemon's machine (GITHUB_TOKEN, GH_TOKEN, else `gh auth token`). Title: the run's goal; description: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. capcomd never merges it. " +
 	"Idempotent: a pull request GitHub already has from the branch into the base (open or merged) is returned with `created: false`. Confirmed by run.pr_opened on the run stream (Run.goalBranch.state pr_opened). " +
+	"A run whose planner stopped before it finished (state stopped: it failed or was cancelled) is 409 `stopped` with the question to ask the person (\"The planner stopped before it finished (it failed): 2 of 3 tasks landed on <branch>. Open a pull request with what landed?\"); once they agree, send `{\"stopped\": true}`, and the description says near the top that the run stopped. " +
 	"409 `conflict` (the message says why and what to do): the planner is still working, nothing landed on the goal branch, the repository isn't on GitHub or there is no GitHub login (GET …/goal `openPullRequest` says so first), or GitHub refused it. 404 for an unknown run or one without a goal branch. " +
 	"Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. " + WRITE_DOC;
 export const KEEP_BRANCH_DOC = "Capability runs.goal_branch. Keep the goal branch without a pull request (no body): recorded so clients stop asking (Run.goalBranch.state kept; run.branch_kept on the run stream). Opening a pull request later is still allowed. 409 `conflict` while the planner works, or once a pull request was opened. Needs the steer scope. " + WRITE_DOC;
@@ -824,7 +829,7 @@ export const contract = {
 			.input(z.object({ runId: z.string(), agentId: z.string().optional(), limit: z.coerce.number().int().positive().max(FILES_MAX).optional() })).output(RunFiles),
 		goal: oc.route({ method: "GET", path: "/v1/runs/{runId}/goal", description: GOAL_DOC }).input(z.object({ runId: z.string() })).output(GoalView),
 		pullRequest: oc.route({ method: "POST", path: "/v1/runs/{runId}/pull-request", inputStructure: "detailed", description: PULL_REQUEST_DOC })
-			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(GoalPullRequestResult),
+			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders, body: PullRequestBody.optional() })).output(GoalPullRequestResult),
 		keepBranch: oc.route({ method: "POST", path: "/v1/runs/{runId}/keep-branch", inputStructure: "detailed", description: KEEP_BRANCH_DOC })
 			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(z.object({ runId: z.string(), branch: z.string(), base: z.string(), kept: z.literal(true), changed: z.boolean().describe("This call recorded it (false: it was kept already)") })),
 		pause: oc.route({

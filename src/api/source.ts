@@ -31,7 +31,7 @@ export class CreateRunError extends Error {
 	constructor(message: string, readonly field?: string) { super(message); }
 }
 /** A goal-branch action's outcome (POST …/pull-request, …/keep-branch): the body, or a refusal with its status. */
-export type GoalOutcome<T> = { ok: true; body: T } | { ok: false; status: 404 | 409 | 422; code: "not_found" | "conflict" | "invalid"; message: string };
+export type GoalOutcome<T> = { ok: true; body: T } | { ok: false; status: 404 | 409 | 422; code: "not_found" | "conflict" | "stopped" | "invalid"; message: string };
 
 /** A project groups runs on one repository: its id is derived from the run's repository (CAPCOMD_REPO). */
 export const projectIdOf = (repo: string | null) => (repo ? `prj-${createHash("sha256").update(repo).digest("hex").slice(0, 12)}` : null);
@@ -111,8 +111,8 @@ export interface HarnessSource {
 	projectBranches(q: ProjectBranchesQuery): Promise<ProjectBranchesResult>;
 	/** GET /v1/runs/{runId}/goal: null for an unknown run or one without a goal branch (404). */
 	goal(runId: string): Promise<O<typeof GoalView> | null>;
-	/** POST /v1/runs/{runId}/pull-request (`by`: client:<id>). */
-	openPullRequest(runId: string, by: string): Promise<GoalOutcome<O<typeof GoalPullRequestResult>>>;
+	/** POST /v1/runs/{runId}/pull-request (`by`: client:<id>; `stopped`: the person agreed to open one for a stopped run). */
+	openPullRequest(runId: string, by: string, o?: { stopped?: boolean }): Promise<GoalOutcome<O<typeof GoalPullRequestResult>>>;
 	/** POST /v1/runs/{runId}/keep-branch (`by`: client:<id>). */
 	keepBranch(runId: string, by: string): Promise<GoalOutcome<{ runId: string; branch: string; base: string; kept: true; changed: boolean }>>;
 }
@@ -361,12 +361,13 @@ export function memorySource(seed: Partial<{
 		publishProject: (input) => publishProject(input, projectDeps),
 		projectBranches: (q) => projectBranches(q, { ...projectDeps, listBranches: seed.listBranches ?? (async (o) => ({ ...(o.local?.() ?? { defaultBranch: null, branches: [] }), source: "local" as const, note: "memory source: local refs only" })) }),
 		goal: async (runId) => goals[runId] ?? null,
-		openPullRequest: async (runId, by) => {
+		openPullRequest: async (runId, by, o) => {
 			const g = goals[runId];
 			const no = goalRefusal(g, runId);
 			if (no) return no;
 			if (g!.pullRequest) return { ok: true, body: { runId, branch: g!.branch, base: g!.base, created: false, pullRequest: { ...g!.pullRequest, state: "open" } } };
 			if (!g!.openPullRequest.available) return { ok: false, status: 409, code: "conflict", message: g!.openPullRequest.reason ?? "a pull request can't be opened" };
+			if (g!.state === "stopped" && !o?.stopped) return { ok: false, status: 409, code: "stopped", message: g!.openPullRequest.confirm ?? `The planner stopped before it finished: open a pull request from ${g!.branch} with what landed?` };
 			g!.pullRequest = { number: 1, url: g!.openPullRequest.repo ? `https://github.com/${g!.openPullRequest.repo}/pull/1` : null };
 			g!.state = "pr_opened"; g!.decision = { choice: "pull_request", by, at: isoTs(Date.now()) };
 			push(runId, { at: Date.now(), type: "RUN_PR_OPENED", agentId: null, data: { branch: g!.branch, base: g!.base, number: 1, url: g!.pullRequest.url, by } });

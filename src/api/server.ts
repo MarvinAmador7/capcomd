@@ -5,7 +5,7 @@
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
@@ -399,10 +399,17 @@ export function harnessApp(o: ServerOptions) {
 
 	// Goal branches (capability runs.goal_branch; the steer scope): open a pull request from the run's goal branch into its
 	// base, or keep the branch. Both are idempotent in themselves; the Idempotency-Key rules are the other write routes'.
-	app.post("/v1/runs/:runId/pull-request", (c) => {
+	app.post("/v1/runs/:runId/pull-request", async (c) => {
 		const runId = c.req.param("runId");
-		return idempotent(c, ["runs.pullRequest", runId], async (client) => {
-			const r = await src.openPullRequest(runId, `client:${client.clientId}`);
+		// The body is optional (`{"stopped": true}`: the person agreed to open one for a stopped run).
+		const raw = await c.req.text().catch(() => "");
+		let body: unknown = null;
+		if (raw.trim()) { try { body = JSON.parse(raw); } catch { return err(c, 422, "invalid", "the body must be JSON: {\"stopped\": true}, or none"); } }
+		const parsed = PullRequestBody.safeParse(body ?? {});
+		if (!parsed.success) return err(c, 422, "invalid", "the body must be {\"stopped\": true}, or none");
+		const stopped = parsed.data.stopped === true;
+		return idempotent(c, ["runs.pullRequest", runId, ...(stopped ? ["stopped"] : [])], async (client) => {
+			const r = await src.openPullRequest(runId, `client:${client.clientId}`, { stopped });
 			return r.ok ? { status: 200, body: r.body } : { status: r.status, body: { code: r.code, message: r.message } };
 		});
 	});
