@@ -253,6 +253,8 @@ package final class DeskModel {
   }
 
   package func agent(_ id: String) -> AgentSlice? { agents[id] }
+  /// The column's thread slice if its column made one (DeskDebug), without making it.
+  package func peekThread(_ id: String) -> ThreadSlice? { threads[id] }
 
   /// A folded deck's heads: its run's bots, cached per run until its agents change.
   package func heads(_ deck: DeckInfo) -> [BotTraits] { let t = team(deck.runId); return deck.agentIds.compactMap { t[$0] } }
