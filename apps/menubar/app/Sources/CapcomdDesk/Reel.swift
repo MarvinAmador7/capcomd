@@ -223,12 +223,25 @@ final class ReelView: NSView, ReelColumnViews {
     guard bounds.width > 0, pitch > 0 else { pending = r; return }
     served = r.serial
     let i = r.agentId.flatMap { order.firstIndex(of: $0) } ?? 0
+    defer { reportLanding() }
     guard r.animated else { jump(to: i); return }
     // A long jump would slide every column it passes past the screen. Cut to one column short, then slide the last.
     if abs(i - at) > across { slide(to: i, from: x(i < at ? i + 1 : i - 1)) } else { slide(to: i) }
   }
 
   private func x(_ i: Int) -> CGFloat { min(max(0, CGFloat(i) * pitch), max(0, doc.frame.width - bounds.width)) }
+
+  /// The reel can't put every column first: near the end (or with fewer columns than fit) it stops at the last
+  /// screen. The model asked for one leading column and the reel shows another; tell it which, or the title bar's
+  /// bracket and the on-screen flags describe a scroll that didn't happen (opening a project at its ask, the
+  /// last of two columns, bracketed only the asker while both showed). Deferred: this runs inside a view update.
+  private func reportLanding() {
+    let landed = at
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.order.indices.contains(landed), self.at == landed, self.model.reelPosition != self.order[landed] else { return }
+      self.model.reelScrolled(toIndex: landed)
+    }
+  }
 
   private func jump(to i: Int) {
     stopSlide()
