@@ -158,7 +158,20 @@ public protocol RunControlling: Sendable {
 /// new run's id. A 422 is `StartRefused` with the daemon's sentence (`needsRepo` when it has no default repository).
 public struct StartRefused: Error, Sendable, Hashable {
   public var message: String; public var needsRepo: Bool
-  public init(_ m: String, needsRepo: Bool = false) { message = m; self.needsRepo = needsRepo }
+  /// The body field the refusal is about (`runs.goal_branch`: "base" or "goalBranch", so the setup screen shows it there).
+  public var field: String?
+  public init(_ m: String, needsRepo: Bool = false, field: String? = nil) { message = m; self.needsRepo = needsRepo; self.field = field }
+}
+/// `POST /v1/runs`'s body: only the fields chosen (a daemon without `runs.goal_branch` never sees base or goalBranch).
+public enum StartWire {
+  public static func body(goal: String, choice c: RunChoice) throws -> Data {
+    var body: [String: Any] = ["goal": goal]
+    if let v = c.repo { body["repo"] = v }; if let v = c.driver { body["driver"] = v }
+    if let v = c.sandbox { body["sandbox"] = v }; if let v = c.effort { body["effort"] = v }
+    if let v = c.base { body["base"] = v }
+    if c.noGoalBranch { body["goalBranch"] = false } else if let v = c.goalBranch { body["goalBranch"] = v }
+    return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+  }
 }
 public protocol RunStarting: Sendable {
   func start(goal: String, choice: RunChoice, idempotencyKey: String) async throws -> String
@@ -169,8 +182,13 @@ public protocol RunStarting: Sendable {
 /// this machine, "boxd" VMs); `effort`: the driver's reasoning effort, one of its `DriverInfo.efforts`.
 public struct RunChoice: Sendable, Hashable {
   public var repo: String?, driver: String?, sandbox: String?, effort: String?
-  public init(repo: String? = nil, driver: String? = nil, sandbox: String? = nil, effort: String? = nil) {
-    self.repo = repo; self.driver = driver; self.sandbox = sandbox; self.effort = effort
+  /// `runs.goal_branch`: the origin branch the run starts from and its pull request goes into (the setup screen's base
+  /// menu; nil: the daemon picks the project's target, else the default branch, or refuses with field "base"), and
+  /// the goal branch's name (nil: the daemon's suggestion). `noGoalBranch`: merge into the target as before.
+  public var base: String?, goalBranch: String?
+  public var noGoalBranch: Bool
+  public init(repo: String? = nil, driver: String? = nil, sandbox: String? = nil, effort: String? = nil, base: String? = nil, goalBranch: String? = nil, noGoalBranch: Bool = false) {
+    self.repo = repo; self.driver = driver; self.sandbox = sandbox; self.effort = effort; self.base = base; self.goalBranch = goalBranch; self.noGoalBranch = noGoalBranch
   }
 }
 

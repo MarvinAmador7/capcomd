@@ -29,7 +29,7 @@ extension SettingsLiveMockTests {
     XCTAssertTrue(i.canSetUp && i.pullRequestsAvailable && !i.configured && !i.budgetAsked)
     XCTAssertEqual(i.branches, ["capcomd/staging", "main"])
     XCTAssertEqual(i.agents.map(\.auth), ["subscription", "subscription"])
-    await s.setUpProject(path: i.path, mode: i.suggestedMode, target: i.defaultBranch, check: i.suggestedCheck, agents: i.suggestedAgents)
+    await s.setUpProject(path: i.path, mode: i.suggestedMode, target: i.defaultBranch!, check: i.suggestedCheck, agents: i.suggestedAgents)
     guard case .done(let r) = s.projectSetup else { return XCTFail("\(s.projectSetup)") }
     XCTAssertEqual(r.project.values, ProjectSettings(repo: "https://github.com/acme/app.git", mode: "pr", target: "main", check: "bun run test", agents: ["claude"]))
     XCTAssertTrue(r.changed)

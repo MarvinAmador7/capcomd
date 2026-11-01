@@ -176,10 +176,7 @@ public struct LiveStarter: RunStarting {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
   public func start(goal: String, choice c: RunChoice, idempotencyKey: String) async throws -> String {
-    var body: [String: String] = ["goal": goal]
-    if let v = c.repo { body["repo"] = v }; if let v = c.driver { body["driver"] = v }
-    if let v = c.sandbox { body["sandbox"] = v }; if let v = c.effort { body["effort"] = v }
-    let (status, data) = try await transport.post("/v1/runs", headers: [("Idempotency-Key", idempotencyKey)], json: try JSONEncoder().encode(body))
+    let (status, data) = try await transport.post("/v1/runs", headers: [("Idempotency-Key", idempotencyKey)], json: try StartWire.body(goal: goal, choice: c))
     let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     let message = obj?["message"] as? String ?? "capcomd refused"
     switch status {
@@ -187,7 +184,7 @@ public struct LiveStarter: RunStarting {
     case 401: throw Unauthorized()
     case 403: throw StartRefused("This app's capcomd token can't start runs (needs the steer scope)")
     case 404: throw DetailUnavailable.unsupported
-    case 409, 422: throw StartRefused(message, needsRepo: message.hasPrefix("repo is required"))
+    case 409, 422: throw StartRefused(message, needsRepo: message.hasPrefix("repo is required"), field: obj?["field"] as? String)
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }
@@ -315,6 +312,54 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
     case 422:
       let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
       throw MessageRefused((o?["message"] as? String) ?? "This folder isn't a capcomd project")
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
+
+/// Goal branches (capability `runs.goal_branch`), on the daemon adapter so the store picks them up from it.
+extension LiveDaemonInfo: GoalBranchActing {
+  public func goal(runId: String) async throws -> GoalView {
+    let (status, data) = try await transport.get("/v1/runs/\(LiveDetail.seg(runId))/goal")
+    switch status {
+    case 200: do { return try GoalWire.view(data) } catch { throw DetailUnavailable.failed("unexpected response") }
+    case 401: throw Unauthorized()
+    case 404 where Self.code(data) == "not_found" && Self.message(data).contains("goal branch"): throw GoalActionRefused(Self.message(data))
+    case 404: throw DetailUnavailable.unsupported
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+  /// 200 the pull request (`created` false when it was open already); 409 `conflict` and 404 for a run without a goal
+  /// branch carry the daemon's sentence.
+  public func openPullRequest(runId: String, idempotencyKey: String) async throws -> GoalPullRequestResult {
+    let (status, data) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/pull-request", headers: [("Idempotency-Key", idempotencyKey)])
+    if status == 200 { do { return try GoalWire.pullRequest(data) } catch { throw DetailUnavailable.failed("unexpected response") } }
+    try Self.refusal(status, data, scope: "open pull requests")
+  }
+  public func keepBranch(runId: String, idempotencyKey: String) async throws {
+    let (status, data) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/keep-branch", headers: [("Idempotency-Key", idempotencyKey)])
+    if status == 200 { return }
+    try Self.refusal(status, data, scope: "keep branches")
+  }
+  public func projectBranches(path: String, goal: String?, goalBranch: String?, base: String?) async throws -> ProjectBranches {
+    let (status, data) = try await transport.get("/v1/projects/branches?\(GoalWire.branchesQuery(path: path, goal: goal, goalBranch: goalBranch, base: base))")
+    switch status {
+    case 200: do { return try GoalWire.branches(data) } catch { throw DetailUnavailable.failed("unexpected response") }
+    case 401: throw Unauthorized()
+    case 404: throw DetailUnavailable.unsupported
+    case 422: throw GoalActionRefused(Self.message(data))
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+  static func code(_ data: Data) -> String? { ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["code"] as? String }
+  static func message(_ data: Data) -> String { (((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["message"] as? String) ?? "capcomd refused" }
+  static func refusal(_ status: Int, _ data: Data, scope: String) throws -> Never {
+    switch status {
+    case 401: throw Unauthorized()
+    case 403: throw GoalActionRefused("This app's capcomd token can't \(scope) (needs the steer scope)")
+    case 404 where code(data) == "not_found" && message(data).contains("run"): throw GoalActionRefused(message(data))
+    case 404: throw DetailUnavailable.unsupported
+    case 409, 422: throw GoalActionRefused(message(data))
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }

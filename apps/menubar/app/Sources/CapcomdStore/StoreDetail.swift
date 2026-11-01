@@ -144,17 +144,17 @@ extension CapcomdStore {
     guard let starter, !goal.isEmpty else { return .idle }
     let key = pendingStartKey.flatMap { $0.goal == goal && $0.choice == choice ? $0.key : nil } ?? makeKey()
     pendingStartKey = (goal, choice, key)
-    startState = .starting; changed()
+    startState = .starting; startRefusedField = nil; changed()
     do {
       let id = try await starter.start(goal: goal, choice: choice, idempotencyKey: key)
       pendingStartKey = nil; startState = .started(runId: id)
     } catch let e as StartRefused {
-      pendingStartKey = nil; startState = e.needsRepo ? .needsRepo(e.message) : .failed(e.message)
+      pendingStartKey = nil; startState = e.needsRepo ? .needsRepo(e.message) : .failed(e.message); startRefusedField = e.field
     } catch is Unauthorized { unauthorized = true; startState = .failed("capcomd rejected the token") }
     catch DetailUnavailable.unsupported { pendingStartKey = nil; startState = .failed("This capcomd can't start runs from here yet") }
     catch { startState = .failed("Couldn't reach capcomd") }   // key kept: a retry replays instead of starting twice
     changed()
     return startState
   }
-  public func clearStart() { startState = .idle; changed() }
+  public func clearStart() { startState = .idle; startRefusedField = nil; changed() }
 }

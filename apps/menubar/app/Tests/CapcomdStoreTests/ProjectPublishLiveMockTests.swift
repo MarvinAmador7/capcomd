@@ -31,7 +31,7 @@ extension SettingsLiveMockTests {
     await s.initGit(path: folder)
     XCTAssertEqual(s.projectPublish, .refused(message: "\(folder) is already in a git checkout (\(folder)). Look at the folder again.", field: "path"))
     // Set up with the suggested check and .capcomd/ ignored.
-    await s.setUpProject(path: folder, mode: "pr", target: published.defaultBranch, agents: ["claude"], gitignore: true)
+    await s.setUpProject(path: folder, mode: "pr", target: published.defaultBranch!, agents: ["claude"], gitignore: true)
     guard case .done(let r) = s.projectSetup else { return XCTFail("\(s.projectSetup)") }
     XCTAssertEqual(r.project.values, ProjectSettings(repo: "https://github.com/marvin/my-app.git", mode: "pr", target: "main", check: "bun run test", agents: ["claude"]))
   }

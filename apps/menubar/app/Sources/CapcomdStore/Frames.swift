@@ -60,6 +60,8 @@ public struct SnapshotRun: Codable, Sendable, Hashable {
   public var createdAt: String?
   /// Where the run's agents run ("docker", "boxd"; capability-free, newer daemons only). Unknown names are allowed.
   public var sandbox: String?
+  /// The run's goal branch and where it stands (`runs.goal_branch`); nil for a run without one and from older daemons.
+  public var goalBranch: GoalBranchSummary?
 }
 public struct SnapshotAgent: Codable, Sendable, Hashable {
   public var id: String; public var runId: String; public var parent: String?; public var depth: Int; public var profile: String?; public var status: String

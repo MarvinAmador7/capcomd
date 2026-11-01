@@ -83,7 +83,8 @@ public struct ProjectInspection: Decodable, Sendable, Hashable {
   public var github: String?
   /// `gh` is logged in on the daemon's machine: pull requests can be used.
   public var ghReady: Bool
-  public var defaultBranch: String
+  /// origin's default branch as the checkout's refs know it; nil when they don't (the daemon never guesses main).
+  public var defaultBranch: String?
   public var branches: [String]
   /// "" for none.
   public var suggestedCheck: String
@@ -101,7 +102,7 @@ public struct ProjectInspection: Decodable, Sendable, Hashable {
   public func budgetAsked(for chosen: [String]) -> Bool { agents.contains { chosen.contains($0.provider) && $0.billsAPIKey } }
 
   public init(path: String, root: String? = nil, name: String? = nil, configured: Bool = false, values: ProjectSettings? = nil, repo: String? = nil,
-              github: String? = nil, ghReady: Bool = false, defaultBranch: String = "main", branches: [String] = [], suggestedCheck: String = "",
+              github: String? = nil, ghReady: Bool = false, defaultBranch: String? = nil, branches: [String] = [], suggestedCheck: String = "",
               suggestedMode: String = "direct", suggestedAgents: [String] = ["claude"], agents: [ProjectAgent] = [], budgetAsked: Bool = false, problems: [ProjectProblem] = []) {
     self.path = path; self.root = root; self.name = name; self.configured = configured; self.values = values; self.repo = repo; self.github = github
     self.ghReady = ghReady; self.defaultBranch = defaultBranch; self.branches = branches; self.suggestedCheck = suggestedCheck; self.suggestedMode = suggestedMode
@@ -114,7 +115,7 @@ public struct ProjectInspection: Decodable, Sendable, Hashable {
     root = try c.decodeIfPresent(String.self, forKey: .root); name = try c.decodeIfPresent(String.self, forKey: .name)
     configured = try c.decodeIfPresent(Bool.self, forKey: .configured) ?? false; values = try c.decodeIfPresent(ProjectSettings.self, forKey: .values)
     repo = try c.decodeIfPresent(String.self, forKey: .repo); github = try c.decodeIfPresent(String.self, forKey: .github)
-    ghReady = try c.decodeIfPresent(Bool.self, forKey: .ghReady) ?? false; defaultBranch = try c.decodeIfPresent(String.self, forKey: .defaultBranch) ?? "main"
+    ghReady = try c.decodeIfPresent(Bool.self, forKey: .ghReady) ?? false; defaultBranch = try c.decodeIfPresent(String.self, forKey: .defaultBranch)
     branches = try c.decodeIfPresent([String].self, forKey: .branches) ?? []; suggestedCheck = try c.decodeIfPresent(String.self, forKey: .suggestedCheck) ?? ""
     suggestedMode = try c.decodeIfPresent(String.self, forKey: .suggestedMode) ?? "direct"
     suggestedAgents = try c.decodeIfPresent([String].self, forKey: .suggestedAgents) ?? ["claude"]

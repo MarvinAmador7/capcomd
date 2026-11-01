@@ -230,6 +230,9 @@ public struct Run: Sendable, Hashable, Identifiable {
   /// Where the run's agents run (`run.created` / the snapshot's `sandbox`): "docker" (Local), "boxd" (Cloud), or a
   /// place this app doesn't know. Nil from a daemon that doesn't say.
   public var sandbox: String? = nil
+  /// The run's goal branch (`runs.goal_branch`): from the snapshot, then run.goal_completed / run.pr_opened /
+  /// run.branch_kept. Nil for a run without one. `goalBranch.awaitsDecision`: show Open PR / Keep the branch.
+  public var goalBranch: GoalBranchSummary? = nil
   public var agents: [String: Agent] = [:]
   public var steps: [Step] = []
   /// `run.*` lifecycle transitions applied to this run, in order (lifecycle feed).
