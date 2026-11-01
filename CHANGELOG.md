@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- A desktop app (`CapcomdDesktop`, a regular Dock app you can install without the menu bar one): the open project's
+  agents as full-height columns that stream their threads live, each with its own message box, and an agent's ask
+  docked at its column's foot (Approve ↩ / Deny; Return approves only the focused column's ask, Esc never denies).
+  Other projects fold into decks in the title bar (⌘1–9); ⌃1–9 and ⌃←/→ move between agents. Follow (on by default,
+  ⇧⌘F) scrolls to an agent that asks or fails, and scrolling yourself turns it off. A steer you send settles into the
+  thread, and one that failed offers Retry or Discard. The window says when capcomd can't be reached (and reconnects
+  by itself), when nothing is running, and when your token was refused.
+- Fix: in the menu bar app, a long thread no longer opens on its oldest items and catches up over several seconds; it
+  shows once it has been read.
+- API: agents have `createdAt`, when they were spawned (null when unknown; older daemons omit it).
+
 - Desktop window bench for coding agents (`apps/menubar/app/DESKBENCH.md`): `swift run -c release CapcomdDeskBench`
   hosts the desktop window on generated runs (1 to 64 agents, no daemon), drives it (open, project switch, reel steps,
   jumps, swipes, thread bursts, typing, resize, Follow), measures frames, main-thread stretches and which views
