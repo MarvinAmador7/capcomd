@@ -67,7 +67,8 @@ import AppKit
   /// CAPCOMD_DESK_CONTROL=<dir>: drives the window without touching the screen, for checks against a live daemon. Each
   /// half second it runs the lines of <dir>/cmd (then deletes it) and writes the model's state to <dir>/state.txt.
   /// Lines: `project N`, `agent N`, `focus ±1`, `scroll <agentId>`, `follow on|off`, `steer <agentId> <text>`,
-  /// `decide <approvalId> approve|deny`, `snap <name>` (the window, now, into <dir>/<name>.png), `key <char|return|escape|left|right> [cmd] [ctrl] [shift]` (a key event handed to
+  /// `decide <approvalId> approve|deny`, `swipe <dx>` (a two-finger swipe of dx points handed to the reel's scroll
+  /// view, as deskbench's swipes are; negative scrolls toward later columns), `snap <name>` (the window, now, into <dir>/<name>.png), `key <char|return|escape|left|right> [cmd] [ctrl] [shift]` (a key event handed to
   /// this app's own window and menu, never posted to the system).
   static func control(_ model: DeskModel, _ dir: URL) {
     let cmd = dir.appendingPathComponent("cmd")
@@ -85,11 +86,30 @@ import AppKit
         case "decide": if w.count > 2 { model.decide(w[1], w[2] == "deny" ? .deny : .approve) }
         case "key": key(w.dropFirst().joined(separator: " "))
         case "snap": if w.count > 1 { snapshot(into: dir, name: w[1]) }
+        case "swipe": if let dx = w.dropFirst().first.flatMap(Double.init) { swipe(dx) }
         default: break
         }
       }
     }
     try? state(model).write(to: dir.appendingPathComponent("state.txt"), atomically: true, encoding: .utf8)
+  }
+
+  static func swipe(_ dx: Double) {
+    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    func find(_ v: NSView) -> SnapScrollView? { (v as? SnapScrollView) ?? v.subviews.lazy.compactMap(find).first }
+    guard let root = win.contentView?.superview ?? win.contentView, let sv = find(root) else { return }
+    let steps = 12, t0 = ProcessInfo.processInfo.systemUptime
+    for n in 0...(steps + 1) {
+      let phase: Int64 = n == 0 ? 1 : n <= steps ? 2 : 4   // CGScrollPhase: began, changed, ended
+      let d = n == 0 || n > steps ? 0 : Int32(dx / Double(steps))
+      guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: d, wheel3: 0) else { return }
+      cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+      cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: Double(d))
+      cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: Double(d))
+      cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+      cg.timestamp = CGEventTimestamp((t0 + Double(n) * 0.012) * 1e9)
+      if let e = NSEvent(cgEvent: cg) { sv.scrollWheel(with: e) }
+    }
   }
 
   static func key(_ spec: String) {
