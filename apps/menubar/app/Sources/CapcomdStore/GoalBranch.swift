@@ -387,10 +387,12 @@ extension CapcomdStore {
 
   /// Reads the setup screen's branches for a project checkout (`GET /v1/projects/branches`) into `projectBranches`:
   /// the base menu, what to preselect, the suggested goal branch for `goal`, and the daemon's checks of a typed
-  /// `goalBranch` / `base`. An answer for another path than the latest asked is dropped.
-  public func loadProjectBranches(path: String, goal: String? = nil, goalBranch: String? = nil, base: String? = nil) async {
+  /// `goalBranch` / `base`. An answer to an older question than the latest asked is dropped (and nil returned); else it is
+  /// returned too, for the setup screen to file against what it asked.
+  @discardableResult
+  public func loadProjectBranches(path: String, goal: String? = nil, goalBranch: String? = nil, base: String? = nil) async -> Fetched<ProjectBranches>? {
     await ensureCapabilities()
-    guard let goalActor, goalBranchSupported else { projectBranches = .unavailable(.unsupported); changed(); return }
+    guard let goalActor, goalBranchSupported else { projectBranches = .unavailable(.unsupported); changed(); return projectBranches }
     let ask = [path, goal ?? "", goalBranch ?? "", base ?? ""].joined(separator: "\u{0}")
     branchesAsked = ask
     if projectBranches?.value?.path != path { projectBranches = .loading; changed() }
@@ -399,8 +401,9 @@ extension CapcomdStore {
     catch is Unauthorized { unauthorized = true; next = .unavailable(.failed(Self.tokenRejected)) }
     catch let e as DetailUnavailable { next = .unavailable(e) }
     catch { next = .unavailable(.failed("Couldn't read the repository's branches just now")) }
-    guard branchesAsked == ask else { return }
+    guard branchesAsked == ask else { return nil }
     projectBranches = next; changed()
+    return next
   }
 
   /// run.goal_completed / run.pr_opened / run.branch_kept: the run's goal branch moves on, and an open goal view is read again.
