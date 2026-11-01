@@ -67,7 +67,7 @@ package final class DeskModel {
   package private(set) var tokenRejected = false { didSet { Mutations.record("DeskModel.tokenRejected") } }
   /// The daemon's feed is down (it keeps retrying): the window says so instead of showing stale state as live.
   package private(set) var unreachable = false { didSet { Mutations.record("DeskModel.unreachable") } }
-  /// The daemon's first snapshot arrived: until then an empty title bar means "not read yet", not "nothing running".
+  /// The daemon has answered: until then an empty title bar means "not read yet", not "nothing running".
   package private(set) var loaded = false { didSet { Mutations.record("DeskModel.loaded") } }
   /// Every project with something to show, oldest first (never reordered by activity).
   package private(set) var decks: [DeckInfo] = [] { didSet { Mutations.record("DeskModel.decks") } }
