@@ -201,7 +201,8 @@ package final class DeskModel {
   /// An agent of the open project that fails scrolls the reel to it while Follow is on (SPEC §3). Agents that had
   /// already failed when the project opened don't: the first look at a project only learns them.
   private func followFailures(_ failed: Set<String>) {
-    guard let known = knownFailures else { knownFailures = failed; return }
+    // Learned from the first read that has the run's agents (the feed may answer with the run before its agents).
+    guard let known = knownFailures else { if !columns.isEmpty { knownFailures = failed }; return }
     let new = failed.subtracting(known)
     knownFailures = failed
     guard follow, let first = columns.first(where: new.contains) else { return }

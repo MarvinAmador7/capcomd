@@ -54,6 +54,35 @@ final class DeskModelTests: XCTestCase {
     XCTAssertFalse(m.onScreen.contains("w5"))
   }
 
+  /// The window opens a project as soon as the daemon lists its run, before the run's own feed has sent its agents.
+  /// The failures in that first snapshot of the agents were already there: they don't move the reel; a later one does.
+  @MainActor func testFailuresInTheFirstSnapshotOfTheAgentsDontMoveTheReel() throws {
+    let s = CapcomdStore()
+    s.receive(.reset(snapshotSeq: 1, reason: "compacted"), scope: "daemon")
+    s.receive(.snapshotRun(SnapshotRun(id: "run-a", projectId: "p", label: nil, state: "running", goal: "g", createdAt: nil)), scope: "daemon")
+    s.receive(.snapshotEnd(snapshotSeq: 1), scope: "daemon")
+    let m = DeskModel(store: s)
+    m.across = 2
+    XCTAssertEqual(m.openRunId, "run-a")
+    XCTAssertTrue(m.columns.isEmpty)
+    let key = CapcomdStore.lifecycleKey("run-a")
+    let agents = try JSONDecoder().decode([SnapshotAgent].self, from: Data("""
+      [{"id":"ld","runId":"run-a","parent":null,"depth":0,"profile":"lead","status":"running"},
+       {"id":"w1","runId":"run-a","parent":"ld","depth":1,"profile":"worker","status":"running"},
+       {"id":"w2","runId":"run-a","parent":"ld","depth":1,"profile":"worker","status":"running"},
+       {"id":"w3","runId":"run-a","parent":"ld","depth":1,"profile":"worker","status":"failed"}]
+      """.utf8))
+    s.receive(.reset(snapshotSeq: 9, reason: "compacted"), scope: key)
+    s.receive(.snapshotAgents(agents), scope: key)
+    s.receive(.snapshotEnd(snapshotSeq: 9), scope: key)
+    XCTAssertEqual(m.columns, ["ld", "w1", "w2", "w3"])
+    XCTAssertNil(m.focusedAgent)
+    XCTAssertFalse(m.onScreen.contains("w3"))
+    s.receive(.event(Envelope(id: "f", scope: key, seq: 10, entity: "w2", type: "agent.failed", epochMs: 2_000, projectId: "p", runId: "run-a",
+                              agentId: "w2", data: [:])), scope: key)
+    XCTAssertEqual(m.focusedAgent, "w2")
+  }
+
   @MainActor func testWithFollowOffAFailureStaysPut() {
     let s = store()
     let m = DeskModel(store: s)
