@@ -51,6 +51,10 @@ final class ReelView: NSView, ReelColumnViews {
   private var served = -1
   private var pending: ReelRequest?
   private var gestures = 0, slides = 0
+  /// The leading column when the current swipe (or mouse wheel turn) began.
+  private var gestureStart = 0
+  private var wheelStart: Int?
+  fileprivate func wheelTurned() { if wheelStart == nil { wheelStart = at } }
   /// Runtime knobs (DeskKnobs), read once: how a slide moves the reel, and how many far columns each frame builds.
   private let clipSlide = DeskKnobs.reelSlide.value == .clip
   private let perFrame = DeskKnobs.buildPerFrame.value
@@ -398,6 +402,7 @@ final class ReelView: NSView, ReelColumnViews {
   /// A swipe began: it takes over from a slide in flight.
   fileprivate func gestureBegan() {
     gestures = 1
+    gestureStart = at
     if layoutMode == .framesHide, !order.isEmpty { reveal(0...(order.count - 1)) }   // the fingers may go anywhere
     // (park: the columns come out of parking as the leading column changes, `scrolled` → `buildAround`)
     stopSlide()
@@ -413,14 +418,21 @@ final class ReelView: NSView, ReelColumnViews {
     let start = Int((now / pitch).rounded())
     var i = Int((projected / pitch).rounded())
     i = min(max(i, start - across, 0), min(start + across, order.count - 1))
+    if i != gestureStart { scrolledByHand() }
     slide(to: i)
   }
 
   /// A mouse wheel (no gesture phases): settle on the nearest column once the wheel stops.
   fileprivate func wheelStopped() {
     guard pitch > 0 else { return }
-    slide(to: Int((scroll.contentView.bounds.origin.x / pitch).rounded()))
+    let i = Int((scroll.contentView.bounds.origin.x / pitch).rounded())
+    if i != (wheelStart ?? i) { scrolledByHand() }
+    wheelStart = nil
+    slide(to: i)
   }
+
+  /// Scrolling yourself to another column turns Follow off (SPEC §3); a swipe that lands back where it began doesn't.
+  private func scrolledByHand() { if model.follow { model.follow = false } }
 
   private func moving() {
     let m = gestures + slides > 0
@@ -698,6 +710,7 @@ final class SnapScrollView: NSScrollView {
       return super.scrollWheel(with: e)
     }
     if e.phase.isEmpty {
+      reel.wheelTurned()
       super.scrollWheel(with: e)
       wheelTimer?.invalidate()
       wheelTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak reel] _ in MainActor.assumeIsolated { reel?.wheelStopped() } }

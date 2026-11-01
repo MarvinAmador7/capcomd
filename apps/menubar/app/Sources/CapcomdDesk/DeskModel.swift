@@ -100,6 +100,8 @@ package final class DeskModel {
   @ObservationIgnored let mediaSlice = MediaSlice()
   @ObservationIgnored private var teams: [String: (sig: String, bots: [String: BotTraits])] = [:]
   @ObservationIgnored private var knownAsks: Set<String> = []
+  /// The open run's failed agents, once its columns were first read (nil: not yet).
+  @ObservationIgnored private var knownFailures: Set<String>?
 
   /// The app's model: connected to the daemon's socket with the Keychain token (or `CAPCOMD_TOKEN`).
   package init() {
@@ -180,6 +182,7 @@ package final class DeskModel {
         startWarming()
       }
       if let asks { followAsks(Set(asks.keys)) }
+      followFailures(Set(cols.filter { $0.status == .failed }.map(\.agentId)))
     }
     for (id, t) in threads where all || keys.contains(.thread(id)) {
       t.set(entries: store.threadEntries(agentId: id), pending: store.pendingSteers(agentId: id), unavailable: store.threadUnavailable[id])
@@ -191,6 +194,16 @@ package final class DeskModel {
   private func followAsks(_ asking: Set<String>) {
     let new = asking.subtracting(knownAsks)
     knownAsks = asking
+    guard follow, let first = columns.first(where: new.contains) else { return }
+    scroll(to: first)
+  }
+
+  /// An agent of the open project that fails scrolls the reel to it while Follow is on (SPEC §3). Agents that had
+  /// already failed when the project opened don't: the first look at a project only learns them.
+  private func followFailures(_ failed: Set<String>) {
+    guard let known = knownFailures else { knownFailures = failed; return }
+    let new = failed.subtracting(known)
+    knownFailures = failed
     guard follow, let first = columns.first(where: new.contains) else { return }
     scroll(to: first)
   }
@@ -225,6 +238,7 @@ package final class DeskModel {
     openRunId = run
     agents = [:]; threads = [:]; columns = []; warmOrder = []
     knownAsks = Set(deck?.askingAgentId.map { [$0] } ?? [])
+    knownFailures = nil
     reelPosition = deck?.askingAgentId; focusedAgent = deck?.askingAgentId; syncFlags()
     reelRequest = ReelRequest(agentId: deck?.askingAgentId, animated: false, serial: (reelRequest?.serial ?? 0) + 1)
     store.followThreads(runId: run, holder: CapcomdStore.reelHolder)
