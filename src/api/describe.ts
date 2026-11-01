@@ -16,6 +16,10 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "run.deleted": return "The run was deleted.";
 		case "run.granted": return "The run's budget was raised.";
 		case "run.ended": return d.state === "failed" ? "The run could not start." : "The run was cancelled.";
+		// Branch names are ref-safe (letters, digits, . _ - /), checked when the run was created.
+		case "run.goal_completed": return `The work is ready on ${d.branch ?? "the goal branch"}: open a pull request into ${d.base ?? "the base"}, or keep the branch.`;
+		case "run.pr_opened": return `Pull request #${Number(d.number) || "?"} opened from ${d.branch ?? "the goal branch"} into ${d.base ?? "the base"}.`;
+		case "run.branch_kept": return `Kept ${d.branch ?? "the goal branch"} without a pull request.`;
 		case "agent.spawned": return `${a} was started${d.parent ? ` by ${d.parent}` : ""}${d.profile ? ` as ${String(d.profile).toLowerCase()}` : ""}.`;
 		case "agent.started": return `${a} began working.`;
 		case "agent.done": return `${a} finished.`;

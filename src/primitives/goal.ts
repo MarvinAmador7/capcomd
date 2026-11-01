@@ -1,0 +1,241 @@
+// A run's goal branch once its planner is done (capability runs.goal_branch): what landed on it and what didn't, the
+// branch against its base, the planner's summary, and the user's choice: a pull request from the goal branch into the
+// base (opened with the user's own GitHub login, never merged by capcomd), or keeping the branch. The CLI
+// (`capcomd goal`, `capcomd pr open`), the MCP tools and the harness API all come here.
+import { assertEngine, existingActor } from "../core/relay";
+import { RelayError } from "../core/errors";
+import { TERMINAL_AGENT } from "./policy";
+import type { GoalDecision, GoalState, ScopeAgent, ScopeOp } from "../actors/scope";
+
+/** Where a goal branch stands. working: the planner is at it; ready: it finished, the user decides; stopped: it failed
+ *  or was cancelled (the branch keeps what landed); pr_opened / kept: the user decided. */
+export type GoalBranchState = "working" | "ready" | "stopped" | "pr_opened" | "kept";
+export const GOAL_STATES: readonly GoalBranchState[] = ["working", "ready", "stopped", "pr_opened", "kept"];
+
+/** Why a child's work isn't on the goal branch (a stable code; `detail` says more, agent-written). */
+export type NotLandedReason =
+	| "checks_failed" | "review_failed" | "merge_failed" | "denied" | "awaiting_approval" | "verifying" | "not_verified" | "not_merged"
+	| "failed" | "cancelled" | "still_working";
+
+const isReview = (a: Pick<ScopeAgent, "contract">) => !!(a.contract as Record<string, unknown> | null)?.review;
+const isPlanner = (a: Pick<ScopeAgent, "parent" | "contract">) => !a.parent && !isReview(a);
+const LIVE = new Set(["pending", "running", "paused"]);
+
+/** The goal branch's state from what the scope records and how its planners stand. */
+export function goalStateOf(g: GoalState, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status">>, ended: boolean): GoalBranchState {
+	if (g.decision?.choice === "pull_request") return "pr_opened";
+	if (g.decision?.choice === "keep") return "kept";
+	if (g.ready) return "ready";
+	const planners = agents.filter(isPlanner);
+	if (ended || (planners.length > 0 && planners.every((a) => TERMINAL_AGENT.has(a.status)))) return "stopped";
+	return "working";
+}
+
+/** Run.goalBranch: the light summary GET /v1/runs carries. */
+export function goalSummary(g: GoalState | null | undefined, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status">>, ended: boolean) {
+	if (!g) return null;
+	const pr = g.decision?.choice === "pull_request" && g.decision.pr ? { number: g.decision.pr.number, url: g.decision.pr.url } : null;
+	return { branch: g.branch, base: g.base, state: goalStateOf(g, agents, ended), readyAt: g.ready ? new Date(g.ready.at).toISOString() : null, pullRequest: pr };
+}
+
+const firstLine = (t: unknown, max = 200) => {
+	const l = String(t ?? "").split(/\r?\n/).map((x) => x.trim()).find(Boolean) ?? "";
+	return l.length > max ? `${l.slice(0, max - 1)}…` : l;
+};
+const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+
+export interface LandedWork {
+	agentId: string; parent: string | null; profile: string | null; task: string; branch: string | null;
+	mergeId: string; sha: string | null; verifyId: string | null; mergedBy: string | null;
+	checks: { passed: boolean } | null;
+	review: { passed: boolean; agentId: string | null; reasons: string[] } | null;
+}
+export interface NotLandedWork {
+	agentId: string; parent: string | null; profile: string | null; task: string; branch: string | null; status: string;
+	reason: NotLandedReason; detail: string | null;
+}
+
+/** What landed on the goal branch and what didn't, from the run's agents and its verify and merge records. */
+export function landedOf(goal: { branch: string }, agents: ScopeAgent[], ops: ScopeOp[]): { landed: LandedWork[]; notLanded: NotLandedWork[] } {
+	const landed: LandedWork[] = [], notLanded: NotLandedWork[] = [];
+	const byAgent = (kind: string, id: string) => ops.filter((o) => o.kind === kind && o.data.agentId === id).sort((a, b) => a.updatedAt - b.updatedAt);
+	const hasKids = new Set(agents.map((a) => a.parent).filter(Boolean) as string[]);
+	for (const a of agents) {
+		if (isPlanner(a) || isReview(a)) continue;
+		const merges = byAgent("merge", a.agentId).filter((m) => m.data.target === goal.branch);
+		const verifies = byAgent("verify", a.agentId);
+		const r = (a.result ?? {}) as Record<string, any>;
+		const base = { agentId: a.agentId, parent: a.parent, profile: a.profile ? a.profile.toLowerCase() : null, task: firstLine(a.task), branch: str(r.branch) };
+		const merged = merges.find((m) => m.state === "merged");
+		if (merged) {
+			const v = merged.data.require ? ops.find((o) => o.id === merged.data.require) : verifies.filter((x) => x.state === "passed").at(-1);
+			const rv = (v?.result?.review ?? null) as Record<string, any> | null;
+			landed.push({
+				...base, branch: str(merged.data.branch) ?? base.branch, mergeId: merged.id, sha: str(merged.result?.sha), verifyId: v?.id ?? null, mergedBy: str(merged.data.askedBy),
+				checks: v?.result?.checks ? { passed: v.result.checks.passed === true } : null,
+				review: rv ? { passed: rv.passed === true, agentId: str(rv.agentId), reasons: Array.isArray(rv.reasons) ? rv.reasons.map(String) : [] } : null,
+			});
+			continue;
+		}
+		const no = (reason: NotLandedReason, detail: unknown = null) => notLanded.push({ ...base, status: a.status, reason, detail: detail == null || detail === "" ? null : String(detail).slice(0, 1000) });
+		const lastMerge = merges.at(-1), lastVerify = verifies.at(-1);
+		if (lastMerge?.state === "awaiting_approval") { no("awaiting_approval"); continue; }
+		if (lastMerge && lastMerge.state !== "running") { no(lastMerge.result?.status === "denied" ? "denied" : "merge_failed", lastMerge.result?.reason ?? lastMerge.result?.status); continue; }
+		if (lastVerify?.state === "running" || lastMerge?.state === "running") { no("verifying"); continue; }
+		if (lastVerify?.state === "failed") {
+			const res = (lastVerify.result ?? {}) as Record<string, any>;
+			if (res.checks && res.checks.passed === false) no("checks_failed", res.checks.reason ?? res.checks.status);
+			else no("review_failed", res.review ? (res.review.error ?? (Array.isArray(res.review.reasons) ? res.review.reasons.join("; ") : null)) : null);
+			continue;
+		}
+		if (LIVE.has(a.status)) { no("still_working"); continue; }
+		if (a.status === "failed") { no("failed", r.error); continue; }
+		if (a.status === "cancelled") { no("cancelled", r.error ?? null); continue; }
+		// Done with nothing of its own to land: a report, no changes, or a lead whose children landed their work.
+		if (!str(r.commit) || (hasKids.has(a.agentId) && !verifies.length)) continue;
+		if (lastVerify?.state === "passed") no("not_merged");
+		else no("not_verified");
+	}
+	return { landed, notLanded };
+}
+
+/** Whether a pull request can be opened from here, and why not (a sentence for the person). */
+export type PullRequestFit = { available: boolean; reason: string | null; repo: string | null };
+
+const GH_TTL_MS = 30_000;
+let ghLogin: { at: number; ok: Promise<boolean> } | null = null;
+/** The user's GitHub login is at hand (GITHUB_TOKEN, GH_TOKEN or `gh auth token`), asked at most every 30 s. */
+async function haveGitHubLogin(): Promise<boolean> {
+	if ((await import("../merge/service")).hasGitHubOverride()) return true;
+	if (ghLogin && Date.now() - ghLogin.at < GH_TTL_MS) return ghLogin.ok;
+	const ok = (async () => !!(await (await import("../merge/goal")).defaultGitHub()))();
+	ghLogin = { at: Date.now(), ok };
+	return ok;
+}
+
+async function pullRequestFit(runId: string, branch: string): Promise<PullRequestFit & { cfg: import("../merge/config").MergeConfig | null }> {
+	const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId).catch(() => null);
+	if (!cfg) return { available: false, reason: "This run has no repository, so there is no pull request to open.", repo: null, cfg };
+	const repo = cfg.github.repo || null;
+	if (!repo) return { available: false, reason: `The repository (${cfg.remote}) isn't on GitHub, so capcomd can't open a pull request. The work is on ${branch}: open one or merge it with your own tools.`, repo, cfg };
+	if (!(await haveGitHubLogin())) return { available: false, reason: `capcomd opens pull requests with your GitHub login, and there is none on this machine: run \`gh auth login\` (or set GITHUB_TOKEN), then try again. The work is on ${branch}.`, repo, cfg };
+	return { available: true, reason: null, repo, cfg };
+}
+
+async function scopeOf(runId: string) {
+	const s = await existingActor("scope", [runId]);
+	const meta = s ? ((await s.getScope({}).catch(() => null)) as Record<string, any> | null) : null;
+	if (!s || !meta) throw new RelayError("not_found", `run ${runId} not found`, "List runs with `capcomd runs` (or GET /v1/runs).");
+	const g = meta.goalBranch as GoalState | null;
+	if (!g) throw new RelayError("not_found", `run ${runId} has no goal branch`, "Runs started with a goal branch (`capcomd run <goal>`, the app) have one; this one merged straight into its target.", { code: "no_goal_branch" });
+	return { s, meta, g };
+}
+
+/** The goal branch as the user sees it once the planner is done (also while it works): GET /v1/runs/{runId}/goal. */
+export async function goalView(runId: string) {
+	await assertEngine();
+	const { s, meta, g } = await scopeOf(runId);
+	const [agents, ops] = await Promise.all([s.listAgents({}) as Promise<ScopeAgent[]>, s.listOps({}) as Promise<ScopeOp[]>]);
+	const state = goalStateOf(g, agents, !!meta.ended);
+	const planner = agents.find((a) => a.agentId === g.ready?.plannerId) ?? agents.filter(isPlanner).at(-1) ?? null;
+	const { landed, notLanded } = landedOf(g, agents, ops);
+	const fit = await pullRequestFit(runId, g.branch);
+	const live = agents.some((a) => isPlanner(a) && LIVE.has(a.status));
+	const compare = await compareOf(fit.cfg, g);
+	const open: PullRequestFit = fit.available && live ? { available: false, reason: "The planner is still working: open a pull request when the run is ready.", repo: fit.repo }
+		: fit.available && !g.decision?.pr && "ahead" in compare && compare.ahead === 0 ? { available: false, reason: `Nothing landed on ${g.branch} yet, so there is nothing to open a pull request for.`, repo: fit.repo }
+		: { available: fit.available, reason: fit.reason, repo: fit.repo };
+	const decision = g.decision ? { choice: g.decision.choice, by: g.decision.by, at: new Date(g.decision.at).toISOString() } : null;
+	const pr = g.decision?.pr ? { number: g.decision.pr.number, url: g.decision.pr.url } : null;
+	const pres = (await import("../api/run-files")).summarizeDiff;
+	return {
+		runId, branch: g.branch, base: g.base, state, goal: (meta.goal as string | null) ?? null,
+		readyAt: g.ready ? new Date(g.ready.at).toISOString() : null, plannerId: planner?.agentId ?? null,
+		summary: planner && typeof (planner.result as any)?.summary === "string" ? String((planner.result as any).summary).slice(0, 64 * 1024) : null,
+		compare: "error" in compare
+			? { baseSha: null, headSha: null, ahead: null, behind: null, commits: [], commitsTotal: null, files: [], filesTotal: null, added: null, removed: null, error: compare.error }
+			: { baseSha: compare.baseSha, headSha: compare.headSha, ahead: compare.ahead, behind: compare.behind, commits: compare.commits, commitsTotal: compare.ahead,
+				...((d) => ({ files: compare.files.slice(0, GOAL_FILES_MAX).map((f) => ({ path: f.path, oldPath: f.oldPath, status: f.status, added: f.added, removed: f.removed })), filesTotal: d.filesTotal, added: d.added, removed: d.removed }))(pres(compare.files)),
+				error: null },
+		landed, notLanded, pullRequest: pr, openPullRequest: { available: open.available, reason: open.reason, repo: open.repo }, decision,
+	};
+}
+export const GOAL_FILES_MAX = 200;
+
+type Compare = import("../api/run-files").BranchCompare;
+async function compareOf(cfg: import("../merge/config").MergeConfig | null, g: { branch: string; base: string }): Promise<Compare> {
+	if (!cfg) return { error: "no repository is configured for this run" };
+	const { mirrorFor } = await import("../api/run-files");
+	return mirrorFor({ remote: cfg.remote, target: g.base, workdir: cfg.workdir }).compare(g.base, g.branch).catch((e) => ({ error: String((e as Error)?.message ?? e).slice(0, 200) }));
+}
+
+/** The pull request's body: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. */
+export function pullRequestBody(o: { runId: string; branch: string; summary: string | null; landed: LandedWork[]; notLanded: NotLandedWork[] }): string {
+	const lines: string[] = [];
+	if (o.summary?.trim()) lines.push(o.summary.trim().slice(0, 20_000), "");
+	lines.push(`## What landed on \`${o.branch}\``, "");
+	if (!o.landed.length) lines.push("Nothing was merged by the run's agents.");
+	for (const l of o.landed) {
+		const review = l.review ? (l.review.passed ? `reviewed and approved${l.review.agentId ? ` by ${l.review.agentId}` : ""}` : "review did not pass") : "no reviewer";
+		const checks = l.checks ? (l.checks.passed ? "checks passed" : "checks failed") : "no checks recorded";
+		lines.push(`- ${l.task || "(no task)"} (${l.agentId}${l.profile ? `, ${l.profile}` : ""}): ${checks}, ${review}${l.sha ? `; ${l.sha.slice(0, 12)}` : ""}`);
+		for (const r of l.review?.reasons.slice(0, 5) ?? []) lines.push(`  - ${firstLine(r, 300)}`);
+	}
+	if (o.notLanded.length) {
+		lines.push("", "## Not landed", "");
+		for (const n of o.notLanded) lines.push(`- ${n.task || "(no task)"} (${n.agentId}): ${n.reason.replace(/_/g, " ")}${n.detail ? `: ${firstLine(n.detail, 300)}` : ""}`);
+	}
+	lines.push("", "---", `Opened by capcomd from run ${o.runId}. capcomd never merges this pull request: review and merge it on GitHub.`);
+	// GitHub caps a body at 65536 characters.
+	return lines.join("\n").slice(0, 60_000);
+}
+
+/** Refuse a choice while the planner works (the user decides once the run is ready). */
+function assertDecidable(agents: ScopeAgent[], g: GoalState) {
+	if (agents.some((a) => isPlanner(a) && LIVE.has(a.status)))
+		throw new RelayError("conflict", `the planner is still working on ${g.branch}`, "Wait until the run is ready (run.goal_completed), then open the pull request.", { code: "not_ready" });
+}
+
+/**
+ * Open a pull request from the run's goal branch into its base, with the user's own GitHub login. Idempotent: a pull
+ * request GitHub already has for the branch (open or merged) is returned, not opened again. capcomd never merges it.
+ */
+export async function openGoalPullRequest(runId: string, o: { by: string }) {
+	await assertEngine();
+	const { s, meta, g } = await scopeOf(runId);
+	const [agents, ops] = await Promise.all([s.listAgents({}) as Promise<ScopeAgent[]>, s.listOps({}) as Promise<ScopeOp[]>]);
+	assertDecidable(agents, g);
+	const fit = await pullRequestFit(runId, g.branch);
+	if (!fit.available || !fit.cfg || !fit.repo) throw new RelayError("conflict", fit.reason ?? "a pull request can't be opened", "Open it with your own tools; the branch is pushed.", { code: "github" });
+	const { github } = await import("../merge/service");
+	let gh;
+	try { gh = await github(fit.cfg); } catch (e) { throw new RelayError("conflict", (e as Error).message, "Run `gh auth login` (or set GITHUB_TOKEN), then try again.", { code: "github" }); }
+	const view = (p: import("../merge/github").PullRequest, created: boolean) => ({
+		runId, branch: g.branch, base: g.base, created,
+		pullRequest: { number: p.number, url: p.html_url ?? (fit.cfg!.github.api.replace(/\/$/, "") === "https://api.github.com" ? `https://github.com/${fit.repo}/pull/${p.number}` : null), state: p.merged ? "merged" : p.state },
+	});
+	const record = async (v: ReturnType<typeof view>) => { await s.goalDecision({ choice: "pull_request", by: o.by, pr: { number: v.pullRequest.number, url: v.pullRequest.url } }); return v; };
+	const existing = await gh.findPullByHead(fit.repo, g.branch, g.base).catch((e) => { throw new RelayError("conflict", `GitHub: ${(e as Error).message}`, "Check your GitHub login (`gh auth status`) and try again.", { code: "github" }); });
+	if (existing) return record(view(existing, false));
+	const compare = await compareOf(fit.cfg, g);
+	if (!("error" in compare) && compare.ahead === 0) throw new RelayError("conflict", `nothing landed on ${g.branch}: it has no commits that ${g.base} doesn't`, "There is nothing to open a pull request for.", { code: "empty" });
+	const { landed, notLanded } = landedOf(g, agents, ops);
+	const planner = agents.find((a) => a.agentId === g.ready?.plannerId) ?? agents.filter(isPlanner).at(-1);
+	const goal = (meta.goal as string | null) ?? (meta.label as string | null) ?? g.branch;
+	const title = firstLine(goal, 120) || g.branch;
+	const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : null, landed, notLanded });
+	const pr = await gh.createPull(fit.repo, { head: g.branch, base: g.base, title, body }).catch((e) => { throw new RelayError("conflict", `GitHub refused the pull request: ${(e as Error).message}`, "Check the branch on GitHub and your access to the repository.", { code: "github" }); });
+	return record(view(pr, true));
+}
+
+/** Keep the goal branch without a pull request (clients stop asking). Refused after a pull request was opened. */
+export async function keepGoalBranch(runId: string, o: { by: string }) {
+	await assertEngine();
+	const { s, g } = await scopeOf(runId);
+	assertDecidable((await s.listAgents({})) as ScopeAgent[], g);
+	const r = (await s.goalDecision({ choice: "keep", by: o.by }).catch((e: any) => {
+		if (e?.code === "conflict") throw new RelayError("conflict", String(e.message), "The pull request is open on GitHub: close it there if you don't want it.", { code: "pr_open" });
+		throw e;
+	})) as { changed: boolean; decision: GoalDecision };
+	return { runId, branch: g.branch, base: g.base, kept: true, changed: r.changed };
+}

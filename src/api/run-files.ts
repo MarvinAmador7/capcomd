@@ -76,6 +76,10 @@ export function parseDiff(numstat: string, nameStatus: string): FileStat[] {
 }
 
 type Diff = { base: string; files: FileStat[] } | { error: string };
+/** FilesMirror.compare: a goal branch against its base. Commit subjects are agent-written. */
+export type BranchCompare =
+	| { baseSha: string; headSha: string; mergeBase: string; ahead: number; behind: number; commits: Array<{ sha: string; subject: string; at: string | null }>; files: FileStat[] }
+	| { error: string };
 
 /**
  * A bare mirror of one repository, kept next to capcomd's merge clones (its workdir). Never a source of truth: it only
@@ -113,6 +117,39 @@ export class FilesMirror {
 			await git.ok(["remote", "add", "origin", this.remote]);
 		}
 		return git;
+	}
+
+	/**
+	 * A goal branch against its base, as a pull request from it would show them: both fetched now (branches move), the
+	 * commits on `head` that aren't on `base` (newest first, at most `maxCommits`), and the files of `git diff` from their
+	 * merge base to `head`. Never cached: a goal branch takes merges while its run works.
+	 */
+	compare(base: string, head: string, o: { maxCommits?: number } = {}): Promise<BranchCompare> {
+		const maxCommits = o.maxCommits ?? 50;
+		return this.serial(async () => {
+			if (!SAFE_NAME.test(base) || !SAFE_NAME.test(head)) return { error: "not a branch name" };
+			let git: Git;
+			try { git = await this.git(); } catch { return { error: "could not open a local mirror of the run's repository" }; }
+			const ref = (b: string) => `refs/remotes/origin/${b}`;
+			const f = await git.run(["fetch", "-q", "--no-tags", "origin", `+refs/heads/${base}:${ref(base)}`, `+refs/heads/${head}:${ref(head)}`], { timeoutMs: this.fetchTimeoutMs });
+			if (f.code !== 0) {
+				// One of them is missing on the remote: say which.
+				for (const b of [base, head]) if ((await git.run(["fetch", "-q", "--no-tags", "origin", `+refs/heads/${b}:${ref(b)}`], { timeoutMs: this.fetchTimeoutMs })).code !== 0)
+					return { error: f.timedOut ? "fetching from the remote timed out" : `branch ${b} not found on the remote` };
+			}
+			const [baseSha, headSha] = [await git.revParse(ref(base)), await git.revParse(ref(head))];
+			if (!baseSha || !headSha) return { error: "the branches could not be read" };
+			const mb = (await git.run(["merge-base", baseSha, headSha])).stdout.trim();
+			if (!mb) return { error: `${head} and ${base} have no common history` };
+			const count = async (range: string) => Number((await git.run(["rev-list", "--count", range])).stdout.trim()) || 0;
+			const ahead = await count(`${baseSha}..${headSha}`), behind = await count(`${headSha}..${baseSha}`);
+			const log = await git.run(["-c", "core.quotepath=off", "log", "--no-color", `--max-count=${maxCommits}`, "--format=%H%x00%s%x00%aI", `${baseSha}..${headSha}`]);
+			const commits = log.stdout.split("\n").filter(Boolean).map((l) => { const [sha, subject, at] = l.split("\0"); return { sha: sha!, subject: subject ?? "", at: at ? new Date(at).toISOString() : null }; });
+			const args = ["-c", "core.quotepath=off", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "-M", "-z"];
+			const [num, names] = await Promise.all([git.run([...args, "--numstat", mb, headSha]), git.run([...args, "--name-status", mb, headSha])]);
+			if (num.code !== 0 || names.code !== 0) return { error: "git diff failed" };
+			return { baseSha, headSha, mergeBase: mb, ahead, behind, commits, files: parseDiff(num.stdout, names.stdout) };
+		});
 	}
 
 	/** A regular file (no tree, symlink or submodule) of one agent's latest work, at most WORKSPACE_FILE_MAX_BYTES. */

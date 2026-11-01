@@ -68,6 +68,9 @@ export const REVIEWER_KV = "_reviewer";
 export const TARGET_KV = "_target";
 /** Where the run's spans are written (CAPCOMD_TRACE_DIR when the run was created), for readers in other shells. */
 export const TRACE_KV = "_trace";
+/** The run's goal branch (`run new --goal-branch G --base B`): {branch, base}. Its target is that branch, and reviewed
+ *  work lands on it by a direct push with no approval, whatever the repo's merge mode (src/primitives/goal.ts). */
+export const GOAL_KV = "_goal";
 
 /** The run's recorded trace directory, if any. */
 export async function runTraceDir(runId: string): Promise<string | undefined> {
@@ -83,6 +86,14 @@ export async function runTarget(runId: string): Promise<string | undefined> {
   return typeof v?.branch === "string" ? v.branch : undefined;
 }
 
+/** The run's goal branch and base, when it has one. */
+export async function runGoal(runId: string): Promise<{ branch: string; base: string } | undefined> {
+  const v: any = (await client().scope.getOrCreate([runId]).kvGet({ k: GOAL_KV }).catch(() => null))?.value;
+  return typeof v?.branch === "string" && typeof v?.base === "string" ? { branch: v.branch, base: v.base } : undefined;
+}
+/** A merge or verify into the run's goal branch: pushed directly (no PR per child), never parked for approval. */
+const onGoal = (goal: { branch: string } | undefined, target: string) => !!goal && goal.branch === target;
+
 const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,200}(?<![./])$/;
 /** Create `branch` on the remote from `from` if it doesn't exist yet (a per-run staging branch). */
 async function ensureBranch(runId: string, branch: string, from: string): Promise<{ created: boolean }> {
@@ -97,6 +108,14 @@ async function ensureBranch(runId: string, branch: string, from: string): Promis
   const push = await git.run(["push", "--porcelain", "origin", `${base}:refs/heads/${branch}`]);
   if (push.code !== 0 && !(await git.ok(["ls-remote", "--heads", "origin", branch]).catch(() => ""))) throw new RelayError("conflict", `could not create ${branch}: ${(push.stdout + push.stderr).trim().slice(-300)}`, "Check push access to the repository.");
   return { created: true };
+}
+/** The remote (CAPCOMD_REPO) has `branch` (false without a repository: the push that creates it reports that). */
+async function remoteHasBranch(branch: string): Promise<boolean> {
+  const cfg = (await import("../merge/config")).loadMergeConfig();
+  if (!cfg) return false;
+  const { Git } = await import("../merge/git");
+  const r = await new Git(process.cwd()).run(["ls-remote", "--heads", cfg.remote, `refs/heads/${branch}`], { timeoutMs: 20_000 });
+  return r.code === 0 && r.stdout.trim().length > 0;
 }
 const CHECK_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -127,7 +146,10 @@ export async function namedCheck(runId: string, name: string): Promise<string> {
 
 export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string;
   /** The run's own sandbox (`capcomd run --sandbox`): its agents and checks run there, not on the daemon's CAPCOMD_SANDBOX. */
-  sandbox?: string }
+  sandbox?: string;
+  /** The run's goal branch (`--goal-branch G --base B`): cut from `base`, the run's target; reviewed work lands on it
+   *  directly and the user opens a pull request from it into `base` when the planner is done. Needs `base`. */
+  goalBranch?: string; base?: string }
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
   const runId = o.runId ?? stableId("run", "run", o.key);
@@ -135,8 +157,23 @@ export async function runNew(o: RunNewOpts) {
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
   if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
-  if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from main.");
-  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}) });
+  if (o.goalBranch !== undefined || o.base !== undefined) {
+    // A goal branch is the run's target, cut from its base: never "main" by default, never protected, never the base.
+    if (o.goalBranch === undefined || o.base === undefined) throw new RelayError("usage", "--goal-branch and --base go together", "Pass both: --goal-branch capcomd/<topic> --base <the branch it starts from>.", { code: o.base === undefined ? "base" : "goalBranch" });
+    if (o.target !== undefined && o.target !== o.goalBranch) throw new RelayError("usage", "--target and --goal-branch name different branches", "A goal branch is the run's target: pass only --goal-branch.");
+    const G = await import("../merge/goal");
+    const bp = G.baseProblem(o.base);
+    if (bp) throw new RelayError("usage", `--base: ${bp}`, "Name the branch the goal branch starts from.", { code: "base" });
+    const gp = G.goalBranchProblem(o.goalBranch, { base: o.base, env: await (await import("../merge/run-config")).runEnv(undefined) });
+    if (gp) throw new RelayError("usage", `--goal-branch: ${gp}`, "Pick another goal branch name.", { code: "goalBranch" });
+    // A new run's goal branch is a new branch: another run's (or anyone's) work must not end up in this run's pull request.
+    const prior = await runGoal(runId);
+    if (prior && (prior.branch !== o.goalBranch || prior.base !== o.base)) throw new RelayError("conflict", `run ${runId} already has goal branch ${prior.branch} (from ${prior.base})`, "Start a new run for another goal branch.", { code: "goalBranch" });
+    if (!prior && (await remoteHasBranch(o.goalBranch))) throw new RelayError("conflict", `goal branch ${o.goalBranch} already exists on the remote`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+    o = { ...o, target: o.goalBranch, targetFrom: o.base };
+  }
+  if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from <base>.");
+  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}), ...(o.base ? { base: o.base } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, ...(o.goal ? { goal: o.goal } : {}), paramsHash: ph }).catch(asRelay);
   // The run carries its repository settings, so the engine (e.g. a background service) needn't have them.
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
@@ -164,13 +201,15 @@ export async function runNew(o: RunNewOpts) {
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
   if (o.target) {
     if (o.targetFrom) await ensureBranch(runId, o.target, o.targetFrom);
+    // The goal first: a merge that reads the target and finds no goal would go the repo's way (a PR, an approval).
+    if (o.goalBranch) await (await import("./state")).kvWrite(runId, { k: GOAL_KV, value: { branch: o.goalBranch, base: o.base }, writer: "operator" });
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
   if (res.created) await (await import("./state")).kvWrite(runId, { k: TRACE_KV, value: { dir: (await import("../utils/tracing-simple")).traceDir() }, writer: "operator" }).catch(() => {});
   if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now() });
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
-  return { runId, created: res.created, budget: res.budget };
+  return { runId, created: res.created, budget: res.budget, ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
 }
 
 /**
@@ -800,7 +839,8 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
   const { provider } = await (await import("../dependencies")).providerForRun(runId);
   const { orchestrationSkill } = await import("../subagents/skill");
   const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
-  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true }), kind };
+  const goal = await runGoal(runId).catch(() => undefined);
+  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true, goal: goal ?? null, root: !a.parent }), kind };
   return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn) };
 }
 
@@ -1120,7 +1160,9 @@ async function verifyOnce(o: VerifyOpts) {
   const c = client();
   const s = c.scope.getOrCreate([o.runId]);
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(o.runId);
+  // No repository (cfg null) is a dry run: "main" only labels it, nothing is merged anywhere.
   const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
+  const direct = onGoal(await runGoal(o.runId), target);
   const { branch, agentId, label, pinnedCheck } = await resolveRef(o.runId, o.ref);
   if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
   // A child pinned to a check at spawn is verified with it unless the caller names another.
@@ -1134,7 +1176,7 @@ async function verifyOnce(o: VerifyOpts) {
   const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   const res: any = await c.verifier.getOrCreate([o.runId, vfyId]).verify({
-    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(checks ? { testCommand: checks } : {}),
+    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(checks ? { testCommand: checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   // Already on the target (merged earlier): nothing new to check or review, so it passes as already merged.
@@ -1175,7 +1217,9 @@ export async function mergeRef(o: MergeOpts) {
   const RC = await import("../merge/run-config");
   const runEnv = await RC.runEnv(o.runId);
   const cfg = (await import("../merge/config")).loadMergeConfig(runEnv);
+  // No repository (cfg null) is a dry run: "main" only labels it, nothing is merged anywhere.
   const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
+  const goal = onGoal(await runGoal(o.runId), target);
   const { branch, agentId } = await resolveRef(o.runId, o.ref);
   let expectSha: string | undefined;
   if (!o.require && !o.operator) throw new RelayError("usage", "merge needs --require <vfyId> (a passing `capcomd verify` of this ref)", "Run `capcomd verify <runId> --ref <ref>` first, or pass --operator to merge unverified.");
@@ -1187,7 +1231,9 @@ export async function mergeRef(o: MergeOpts) {
     expectSha = (v.result?.commit as string | null) ?? undefined;
   }
   // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
-  const needsApproval = !!cfg && isProtectedBranch(target, runEnv) && !o.operator;
+  // The run's goal branch takes reviewed work with no human step: the person decides once, on the pull request into the
+  // base, when the planner is done (it can't be a protected branch: `run new` refuses that).
+  const needsApproval = !!cfg && !goal && isProtectedBranch(target, runEnv) && !o.operator;
   if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
   const mrgId = stableId("mrg", `${o.runId}\0${o.ref}\0${target}`, o.key);
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
@@ -1216,8 +1262,9 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   // Re-run the checks that verification passed with (the target may have moved), not the repo default.
   const v = d.require ? await s.getOp({ opId: d.require }) : null;
   const checks = typeof v?.data.checks === "string" && v.data.checks ? (v.data.checks as string) : undefined;
+  const direct = onGoal(await runGoal(runId), d.target);
   const res: any = await c.verifier.getOrCreate([runId, op.id]).verify({
-    verifierId: op.id, taskId: label, branch: d.branch, runId, target: d.target, testOnly: false, ...(d.expectSha ? { expectSha: d.expectSha } : {}), ...(checks ? { testCommand: checks } : {}),
+    verifierId: op.id, taskId: label, branch: d.branch, runId, target: d.target, testOnly: false, ...(d.expectSha ? { expectSha: d.expectSha } : {}), ...(checks ? { testCommand: checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const merged = out.status === "merged";
