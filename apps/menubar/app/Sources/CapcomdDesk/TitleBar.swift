@@ -21,6 +21,7 @@ struct TitleBar: View {
       }
       .modifier(KeepBracketInView())
       Spacer(minLength: 0)
+      OfflineBadge()
       FollowButton()
     }
     .padding(.leading, Theme.Desk.titleLeading).padding(.trailing, 10)
@@ -203,6 +204,19 @@ struct FoldedDeck: View {
     }
     .buttonStyle(PressableStyle())
     .accessibilityLabel(deck.title + (asks ? ", \(deck.askingName ?? "an agent") asks" : ""))
+  }
+}
+
+/// The daemon's feed dropped: what the window shows is as of then, until it reconnects (by itself).
+struct OfflineBadge: View {
+  @Environment(DeskModel.self) private var model
+  var body: some View {
+    if model.unreachable {
+      Label("Can't reach capcomd", systemImage: "bolt.horizontal.circle")
+        .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.amber)
+        .padding(.horizontal, 10).frame(height: Theme.Desk.iconButton)
+        .help("The window shows what it last read; it reconnects by itself when capcomd is back.")
+    }
   }
 }
 

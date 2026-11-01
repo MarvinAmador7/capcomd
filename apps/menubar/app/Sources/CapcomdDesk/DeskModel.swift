@@ -63,6 +63,10 @@ package final class DeskModel {
   @ObservationIgnored package private(set) var store: CapcomdStore
   @ObservationIgnored private var transport: UnixSocketTransport?
   package private(set) var link: Link = .connecting { didSet { Mutations.record("DeskModel.link") } }
+  /// The daemon's feed is down (it keeps retrying): the window says so instead of showing stale state as live.
+  package private(set) var unreachable = false { didSet { Mutations.record("DeskModel.unreachable") } }
+  /// The daemon's first snapshot arrived: until then an empty title bar means "not read yet", not "nothing running".
+  package private(set) var loaded = false { didSet { Mutations.record("DeskModel.loaded") } }
   /// Every project with something to show, oldest first (never reordered by activity).
   package private(set) var decks: [DeckInfo] = [] { didSet { Mutations.record("DeskModel.decks") } }
   /// The project the reel shows, and its run.
@@ -143,6 +147,8 @@ package final class DeskModel {
     if store.unauthorized { link = .needsToken; return }
     let all = keys.contains(.all)
     if all {
+      if unreachable != store.daemonUnreachable { unreachable = store.daemonUnreachable }
+      if !loaded, store.daemonLoaded { loaded = true }
       let d = store.decks()
       if decks != d { decks = d }
       if openProjectId == nil || !d.contains(where: { $0.id == openProjectId }) { select(d.first(where: { $0.askingAgentId != nil })?.id ?? d.first?.id) }

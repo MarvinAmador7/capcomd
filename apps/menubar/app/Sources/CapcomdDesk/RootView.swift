@@ -17,7 +17,10 @@ package struct RootView: View {
       case .connecting: Color.clear
       case .needsToken: TokenView()
       case .ready:
-        if model.openRunId == nil { EmptyReel() } else { ReelHost() }
+        if model.openRunId != nil { ReelHost() }
+        else if model.unreachable { Unreachable() }
+        else if model.loaded { EmptyReel() }
+        else { Color.clear }   // the daemon's first snapshot is on its way: nothing to say yet
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -32,6 +35,18 @@ struct EmptyReel: View {
     VStack(spacing: 14) {
       PixelWordmark()
       Text("Nothing running. Start a project from the menu bar or with capcomd run.")
+        .font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+}
+
+/// The daemon can't be reached and nothing has been read from it: say so, rather than "nothing running".
+struct Unreachable: View {
+  var body: some View {
+    VStack(spacing: 8) {
+      Text("Can't reach capcomd").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.Desk.text)
+      Text("Start it with capcomd serve, or from the menu bar app. This window connects as soon as it's up.")
         .font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
