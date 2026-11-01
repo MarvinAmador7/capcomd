@@ -27,7 +27,8 @@ public struct GoalBranchSetup: Sendable, Hashable {
   public private(set) var goal = ""
   /// The base the person picked; nil: the daemon's suggestion.
   public private(set) var pickedBase: String?
-  /// The goal branch as typed; nil: the daemon's suggestion (an emptied field follows it again).
+  /// The goal branch as typed; nil: the daemon's suggestion. An emptied field stays empty and shows the suggestion as
+  /// its placeholder (Start then lets the daemon name it).
   public private(set) var typedBranch: String?
   /// The daemon's latest answer, and the question it answered (its problems are about that question's names).
   public private(set) var answer: ProjectBranches?
@@ -44,17 +45,15 @@ public struct GoalBranchSetup: Sendable, Hashable {
   }
   public mutating func setGoal(_ g: String) { goal = g }
   public mutating func pickBase(_ b: String) { pickedBase = b }
-  public mutating func typeBranch(_ t: String) {
-    let v = t.trimmingCharacters(in: .whitespaces)
-    typedBranch = v.isEmpty ? nil : v
-  }
+  public mutating func typeBranch(_ t: String) { typedBranch = t.trimmingCharacters(in: .whitespaces) }
 
   /// What to ask the daemon now. A typed name is checked against the base it would be cut from, and a picked base is
   /// checked too; otherwise only the goal goes, so the daemon suggests both.
   public var query: Query? {
     guard let path else { return nil }
     let g = goal.trimmingCharacters(in: .whitespacesAndNewlines)
-    return Query(path: path, goal: g.isEmpty ? nil : g, goalBranch: typedBranch, base: pickedBase ?? (typedBranch != nil ? base : nil))
+    let typed = typedBranch.flatMap { $0.isEmpty ? nil : $0 }
+    return Query(path: path, goal: g.isEmpty ? nil : g, goalBranch: typed, base: pickedBase ?? (typed != nil ? base : nil))
   }
 
   /// The daemon answered `q` (or reading failed). An answer about another checkout is dropped.
@@ -82,10 +81,12 @@ public struct GoalBranchSetup: Sendable, Hashable {
   /// The goal branch field's text: as typed, else the suggestion for the goal (empty without a goal yet).
   public var goalBranch: String { typedBranch ?? answer?.suggestedGoalBranch ?? "" }
   public var followsSuggestion: Bool { typedBranch == nil }
+  /// The field's placeholder: the suggestion (what Start gets with the field empty), else a hint at the shape.
+  public var placeholder: String { answer?.suggestedGoalBranch ?? "capcomd/…" }
 
   /// The daemon's sentence about the typed name, while it's still the name in the field.
   var branchProblem: String? {
-    guard let t = typedBranch, answered?.goalBranch == t, answered?.base == query?.base else { return nil }
+    guard let t = typedBranch, !t.isEmpty, answered?.goalBranch == t, answered?.base == query?.base else { return nil }
     return answer?.goalBranchProblem
   }
   var baseProblem: String? {

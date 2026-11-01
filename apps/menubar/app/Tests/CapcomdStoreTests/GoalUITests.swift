@@ -27,9 +27,10 @@ final class GoalSetupTests: XCTestCase {
     s.setGoal("Something else"); s.receive(.loaded(answer(suggested: "capcomd/something-else")), for: s.query!)
     XCTAssertEqual(s.goalBranch, "feature/mine"); XCTAssertFalse(s.followsSuggestion)
     XCTAssertEqual(s.choice.goalBranch, "feature/mine")
-    // Emptied: back to the suggestion.
+    // Emptied: the field stays empty with the suggestion as its placeholder, and Start lets the daemon name it.
     s.typeBranch("  ")
-    XCTAssertEqual(s.goalBranch, "capcomd/something-else")
+    XCTAssertEqual(s.goalBranch, ""); XCTAssertEqual(s.placeholder, "capcomd/something-else")
+    XCTAssertNil(s.choice.goalBranch); XCTAssertNil(s.query?.goalBranch)
   }
 
   func testNeverMainByItselfAndStartWaitsForAPick() {
