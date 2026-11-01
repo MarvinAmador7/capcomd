@@ -33,6 +33,8 @@ extension Theme {
     static let bodyPadding = EdgeInsets(top: 6, leading: 16, bottom: 12, trailing: 16)
     static let composerHeight: CGFloat = 40, composerRadius: CGFloat = 10, composerFill = Color.white.opacity(0.06)
     static let decisionFill = Color(red: 0x1F / 255, green: 0x1C / 255, blue: 0x17 / 255)
+    /// The goal branch's ready card at the planner's foot: a neutral step down from the column (no board yet).
+    static let goalFill = Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x1E / 255)
 
     // Type.
     static let name = Font.system(size: 12.5, weight: .semibold)
@@ -40,6 +42,7 @@ extension Theme {
     static let meta = Font.system(size: 11.5)
     static let mono = Font.system(size: 11, design: .monospaced)
     static let question = Font.system(size: 15, weight: .semibold)
+    static let goalTitle = Font.system(size: 13, weight: .semibold, design: .monospaced)
 
     /// Columns across: three at 1440 pt, two at 1100, one under 760 (SPEC §2).
     static func columnsAcross(_ width: CGFloat) -> Int { width >= 1280 ? 3 : width >= 900 ? 2 : 1 }

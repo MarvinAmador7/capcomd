@@ -661,7 +661,7 @@ final class ReelView: NSView, ReelColumnViews {
     bitmaps[id] = img
     withObservationTracking { [weak self] in
       guard let self, let a = self.model.agent(id) else { return }
-      _ = (a.header, a.bot, a.approval, a.focused, a.warm)
+      _ = (a.header, a.bot, a.approval, a.focused, a.warm, a.goal)
       let t = self.model.thread(id)
       _ = (t.entries, t.pending, t.unavailable)
       _ = self.model.mediaSlice.items.count
@@ -831,7 +831,9 @@ struct Column: View {
         } else {
           Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        if let ap = a.approval { DecisionBar(approval: ap, focused: focused) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
+        if let ap = a.approval { DecisionBar(approval: ap, focused: focused) }
+        else if let g = a.goal, g.docks || g.outcome != nil { GoalDock(card: g) }
+        else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }
       .background(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous).fill(Theme.Desk.column))
       .overlay(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous)
@@ -858,7 +860,16 @@ struct ColumnHead: View {
       Text(verbatim: "· " + Self.state(h, asks: slice.approval != nil)).font(Theme.Desk.meta)
         .foregroundStyle(slice.approval != nil ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.secondary)
       Spacer(minLength: 0)
-      if let r = h.repo { Text(verbatim: r).font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary).lineLimit(1) }
+      // The planner's column names the goal branch, quietly, so it's plain where the work lands.
+      if let g = slice.goal {
+        HStack(spacing: 4) {
+          Image(systemName: "arrow.triangle.branch").font(.system(size: 10, weight: .medium))
+          Text(verbatim: g.branch).font(Theme.Desk.mono).lineLimit(1).truncationMode(.middle)
+        }
+        .foregroundStyle(Theme.Desk.tertiary)
+        .help("Reviewed work lands on \(g.branch), cut from \(g.base)")
+        .accessibilityElement(children: .combine).accessibilityLabel("Goal branch \(g.branch), from \(g.base)")
+      } else if let r = h.repo { Text(verbatim: r).font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary).lineLimit(1) }
       if h.status == .running, let start = h.startedAtMs {
         Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
           .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()
