@@ -74,7 +74,7 @@ import PerfLoopProbe
   /// chrome. Either way this process is activated, so SwiftUI flushes state changes promptly (in the background it can
   /// hold them for seconds).
   func showWindow(size: CGSize, activate: Bool) {
-    if sceneHosted, let w = NSApp.windows.first(where: { $0.title == BenchScene.title }) {
+    if sceneHosted, let w = sceneWindow {
       window = w
       if w.contentView?.frame.size != size { w.setContentSize(size) }
       w.center()
@@ -101,6 +101,18 @@ import PerfLoopProbe
     activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .suddenTerminationDisabled], reason: "deskbench scenario")
     if activate { w.makeKeyAndOrderFront(nil) } else { w.orderFrontRegardless() }
     startSampling()
+  }
+
+  /// The scene's window, once SwiftUI has made it.
+  var sceneWindow: NSWindow? { NSApp.windows.first { $0.title == BenchScene.title && !($0.contentView is NSHostingView<DeskWindowContent>) } }
+
+  /// Waits (up to 5 s) for the scene to make its window. The bench's command starts before SwiftUI has made the
+  /// scene's window; showing the window before then made a second, hand-made one in front of it, and every scene-hosted
+  /// run measured both windows: two reels, every body twice, on one model.
+  func sceneWindowReady() async {
+    guard sceneHosted else { return }
+    for _ in 0..<250 where sceneWindow == nil { await sleep(ms: 20) }
+    if sceneWindow == nil { log.info("the scene's window didn't appear within 5 s; showing a hand-made window instead") }
   }
 
   /// Activation is asynchronous: ask again until the window is key (or give up after ~1 s) and say whether it is.

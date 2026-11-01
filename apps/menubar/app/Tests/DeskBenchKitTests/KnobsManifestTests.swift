@@ -12,11 +12,20 @@ final class KnobsManifestTests: XCTestCase {
     // The render-server slide and one far column per frame: the reel as it was before knobs.
     XCTAssertEqual(DeskKnobs.reelSlide.defaultValue, .ca)
     XCTAssertEqual(DeskKnobs.buildPerFrame.defaultValue, 1)
-    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "reel.slide"])
+    // The native path's knobs default to today's code: fractional frames, SwiftUI columns, every column in the scrolling document.
+    XCTAssertEqual(DeskKnobs.deskLayout.defaultValue, .auto)
+    XCTAssertEqual(DeskKnobs.deskColumn.defaultValue, .swiftui)
+    XCTAssertEqual(DeskKnobs.reelColumns.defaultValue, .keep)
+    XCTAssertEqual(DeskKnobs.reelCache.defaultValue, .off)
+    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "reel.cache", "reel.columns", "reel.slide"])
     try XCTSkipIf(ProcessInfo.processInfo.environment[Knobs.variable] != nil, "PERFLOOP_KNOBS is set for this test run")
     XCTAssertEqual(DeskKnobs.reelSlide.value, .ca)
     XCTAssertEqual(DeskKnobs.buildPerFrame.value, 1)
-    XCTAssertEqual(DeskKnobs.vector, ["reel.slide": "ca", "build.perFrame": "1"])
+    XCTAssertEqual(DeskKnobs.deskLayout.value, .auto)
+    XCTAssertEqual(DeskKnobs.deskColumn.value, .swiftui)
+    XCTAssertEqual(DeskKnobs.reelColumns.value, .keep)
+    XCTAssertEqual(DeskKnobs.reelCache.value, .off)
+    XCTAssertEqual(DeskKnobs.vector, ["reel.slide": "ca", "build.perFrame": "1", "desk.layout": "auto", "desk.column": "swiftui", "reel.columns": "keep", "reel.cache": "off"])
     XCTAssertEqual(DeskKnobs.problems.filter { !$0.contains("t.") }, [])
   }
 

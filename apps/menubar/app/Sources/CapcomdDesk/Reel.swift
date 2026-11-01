@@ -39,11 +39,11 @@ struct ReelRepresentable: NSViewRepresentable {
 
 /// The reel's AppKit side: the scroll view, a hosting view per column laid out on the column pitch, snapping, and the
 /// leading column reported to the model only when it changes. Slides run in the render server (`slide`).
-final class ReelView: NSView {
+final class ReelView: NSView, ReelColumnViews {
   private let model: DeskModel
   private let scroll = SnapScrollView()
   private let doc = Flipped()
-  private var hosts: [String: NSHostingView<AnyView>] = [:]
+  private var hosts: [String: NSView] = [:]
   private var order: [String] = []
   private var across = 0, pitch: CGFloat = 0, width: CGFloat = 0
   /// The leading column, as the scroll offset last put it.
@@ -54,6 +54,35 @@ final class ReelView: NSView {
   /// Runtime knobs (DeskKnobs), read once: how a slide moves the reel, and how many far columns each frame builds.
   private let clipSlide = DeskKnobs.reelSlide.value == .clip
   private let perFrame = DeskKnobs.buildPerFrame.value
+  /// `desk.layout`, `desk.column` (LAYOUT.md): the frame engine and its geometry, hiding far columns at rest, and
+  /// AppKit columns.
+  private let layoutMode = DeskKnobs.deskLayout.value
+  private let nativeColumns = DeskKnobs.deskColumn.value == .native
+  private var geometry = ReelGeometry()
+  /// `reel.columns=park`: built columns away from the screen, in `parking` (hidden, never scrolled), and the blank
+  /// stand-ins that hold their place in the document.
+  private let parkColumns = DeskKnobs.reelColumns.value == .park
+  private let parking = Flipped()
+  private var standIns: [String: NSView] = [:]
+  /// `reel.columns=reuse`: the slots, the column each shows (nil: free), the draft memory they share, the columns a
+  /// move in flight needs, and the placeholder layer under them.
+  private let reuseColumns = DeskKnobs.reelColumns.value == .reuse
+  private var slots: [NativeColumnView] = []
+  private var slotColumn: [Int?] = []
+  private let slotMemory = SlotMemory()
+  private var moveNeeds: Set<Int> = []
+  private var lastDirection = 1
+  private let placeholder = CAReplicatorLayer()
+  /// `reel.cache=bitmap`: the columns' bitmaps by agent (dropped when the agent's content changes or you touch the
+  /// column), the overlay a slide moves them in, and the slide in flight.
+  private let bitmapCache = DeskKnobs.reelCache.value == .bitmap
+  private var bitmaps: [String: CGImage] = [:]
+  private let overlay = BitmapOverlay()
+  private var cached: (serial: Int, from: CGFloat, to: CGFloat, base: CGPoint)?
+  private var cachedSerial = 0
+  private var touchMonitor: Any?
+  /// Whether columns away from the screen are hidden or parked while the reel rests.
+  private var windowing: Bool { layoutMode == .framesHide || parkColumns }
 
   init(model: DeskModel) {
     self.model = model
@@ -69,6 +98,8 @@ final class ReelView: NSView {
     scroll.reel = self
     scroll.contentView.postsBoundsChangedNotifications = true
     addSubview(scroll)
+    if parkColumns { parking.isHidden = true; addSubview(parking, positioned: .below, relativeTo: scroll) }
+    if bitmapCache { startBitmapCache() }
     NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
   }
   required init?(coder: NSCoder) { fatalError() }
@@ -80,16 +111,14 @@ final class ReelView: NSView {
   /// of the run loop, nearest first (a project with 17 agents took ~200 ms to its first frame building them all).
   func show(_ ids: [String]) {
     guard ids != order else { return }
+    if reuseColumns { return showSlots(ids) }
     for id in Set(hosts.keys).subtracting(ids) { hosts.removeValue(forKey: id)?.removeFromSuperview() }
     for id in Set(blanks.keys).subtracting(ids) { blanks.removeValue(forKey: id)?.removeFromSuperview() }
+    for id in Set(standIns.keys).subtracting(ids) { standIns.removeValue(forKey: id)?.removeFromSuperview() }
     order = ids
     at = min(at, max(0, ids.count - 1))
     for id in ids where hosts[id] == nil && blanks[id] == nil {
-      let b = NSView()
-      b.wantsLayer = true
-      b.layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
-      b.layer?.cornerRadius = Theme.Desk.columnRadius
-      b.layer?.cornerCurve = .continuous
+      let b = Self.blank()
       doc.addSubview(b)
       blanks[id] = b
     }
@@ -100,24 +129,44 @@ final class ReelView: NSView {
   private var blanks: [String: NSView] = [:]
   private var building = false
 
+  /// A column before it is built: its fill and corner, nothing else.
+  private static func blank() -> NSView {
+    let b = NSView()
+    b.wantsLayer = true
+    b.layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
+    b.layer?.cornerRadius = Theme.Desk.columnRadius
+    b.layer?.cornerCurve = .continuous
+    return b
+  }
+
   /// Builds column `i`'s hosting view in place of its blank.
   private func build(_ i: Int) {
-    guard order.indices.contains(i), hosts[order[i]] == nil else { return }
+    guard !reuseColumns, order.indices.contains(i), hosts[order[i]] == nil else { return }
     let id = order[i]
-    let h = NSHostingView(rootView: AnyView(Column(agentId: id)
-      .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark)))
-    h.safeAreaRegions = []
-    h.sizingOptions = []   // the reel sets its frame; nothing to measure
+    let h: NSView
+    if nativeColumns {
+      h = NativeColumnView(agentId: id, model: model)
+    } else {
+      let hv = NSHostingView(rootView: AnyView(Column(agentId: id)
+        .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark)))
+      hv.safeAreaRegions = []
+      hv.sizingOptions = []   // the reel sets its frame; nothing to measure
+      h = hv
+    }
     h.frame = blanks[id]?.frame ?? frame(of: i)
-    doc.addSubview(h)
     hosts[id] = h
+    let away = windowing && gestures + slides == 0 && near(at).map { !$0.contains(i) } ?? false
+    if !(away && parkColumns) { doc.addSubview(h) }
     blanks.removeValue(forKey: id)?.removeFromSuperview()
+    if away { put(away: id, at: i) }
   }
 
   /// The columns that must exist now: those on screen and one each side.
   private func buildAround(_ i: Int) {
     guard !order.isEmpty, across > 0 else { return }
     for j in max(0, i - 1)...min(order.count - 1, i + across) { build(j) }
+    if windowing { reveal(near(i)) }
+    if reuseColumns { assignSlots(around: i) }
   }
 
   /// The rest, one per turn of the run loop (`build.perFrame`) while the reel stands still, nearest the leading column
@@ -146,6 +195,8 @@ final class ReelView: NSView {
 
   override func layout() {
     super.layout()
+    if bitmapCache, overlay.frame != bounds { overlay.frame = bounds; bitmaps = [:] }
+    if layoutMode != .auto { return framesLayout() }
     scroll.frame = bounds
     let gap = Theme.Desk.gap, inset = Theme.Desk.peek + gap
     let n = Theme.Desk.columnsAcross(bounds.width)
@@ -153,11 +204,13 @@ final class ReelView: NSView {
     let moved = w + gap != pitch
     across = n; width = w; pitch = w + gap
     for (i, id) in order.enumerated() { (hosts[id] ?? blanks[id])?.frame = frame(of: i) }
+    if !standIns.isEmpty { for (i, id) in order.enumerated() { standIns[id]?.frame = frame(of: i) } }
     doc.frame = CGRect(x: 0, y: 0, width: max(bounds.width, 2 * inset + CGFloat(order.count) * pitch - gap), height: bounds.height)
     if moved { jump(to: at) }   // a new width keeps the same leading column
     if model.across != n { DispatchQueue.main.async { [model] in if model.across != n { model.across = n } } }
     if let p = pending, bounds.width > 0 { pending = nil; perform(p) }
     buildAround(at)
+    if reuseColumns { placeSlots() }
   }
 
   /// A crew tab, a shortcut or Follow asked for a column.
@@ -177,14 +230,91 @@ final class ReelView: NSView {
     stopSlide()
     scroll.contentView.setBoundsOrigin(NSPoint(x: x(i), y: 0))
     scrolled()
+    if windowing { rest() }
+  }
+
+  // MARK: desk.layout=frames
+
+  /// The frame engine's layout pass (ReelLayout.swift): measure the geometry, and place the columns only when it
+  /// changed (a width, the column count, the backing scale); otherwise a layout pass of the reel moves nothing.
+  private func framesLayout() {
+    if scroll.frame != bounds { scroll.frame = bounds }
+    let g = ReelGeometry.measure(bounds: bounds.size, count: order.count, scale: window?.backingScaleFactor ?? 2)
+    if g != geometry {
+      let moved = g.pitch != pitch
+      geometry = g; across = g.across; width = g.width; pitch = g.pitch
+      for (i, id) in order.enumerated() { (hosts[id] ?? blanks[id])?.frame = g.frame(of: i); standIns[id]?.frame = g.frame(of: i) }
+      doc.frame = CGRect(x: 0, y: 0, width: g.documentWidth, height: bounds.height)
+      if moved { jump(to: at) }   // a new width keeps the same leading column
+    }
+    let n = across
+    if model.across != n { DispatchQueue.main.async { [model] in if model.across != n { model.across = n } } }
+    if let p = pending, bounds.width > 0 { pending = nil; perform(p) }
+    buildAround(at)
+    if reuseColumns { placeSlots() }
+  }
+
+  // MARK: windowing (desk.layout=frames-hide, reel.columns=park)
+
+  /// The columns on screen with column `i` leading, and one each side: those a move may show.
+  private func near(_ i: Int) -> ClosedRange<Int>? {
+    guard !order.isEmpty, across > 0 else { return nil }
+    let lo = max(0, min(i, order.count - 1) - 1), hi = min(order.count - 1, i + across)
+    return lo <= hi ? lo...hi : nil
+  }
+
+  /// Brings the built columns in `r` back before a move shows them: unhidden, or out of parking into the document.
+  private func reveal(_ r: ClosedRange<Int>?) {
+    guard let r else { return }
+    for i in r {
+      let id = order[i]
+      guard let v = hosts[id] else { continue }
+      if parkColumns {
+        guard let s = standIns.removeValue(forKey: id) else { continue }
+        v.frame = s.frame
+        doc.addSubview(v)
+        s.removeFromSuperview()
+      } else if v.isHidden {
+        v.isHidden = false
+        // A hosting view doesn't render while hidden; shown again it waits for something to invalidate it. Lay it
+        // out now, before the move shows it.
+        v.needsLayout = true
+        v.layoutSubtreeIfNeeded()
+      }
+    }
+  }
+
+  /// Column `i`, away from the screen: hidden (frames-hide) or parked with a blank stand-in in the document (park).
+  private func put(away id: String, at i: Int) {
+    guard let v = hosts[id] else { return }
+    if parkColumns {
+      guard standIns[id] == nil else { return }
+      let s = Self.blank()
+      s.frame = v.superview === doc ? v.frame : frame(of: i)
+      doc.addSubview(s)
+      standIns[id] = s
+      parking.addSubview(v)   // keeps its size: back in the document it needs no new layout
+    } else if !v.isHidden { v.isHidden = true }
+  }
+
+  /// The reel at rest: only the columns on screen and one each side stay in view. A hidden subtree is skipped by
+  /// AppKit's per-frame passes (tracking areas, display); a parked one is also not moved by a scroll, so SwiftUI
+  /// doesn't re-place it. Their SwiftUI content keeps updating either way.
+  private func rest() {
+    guard gestures + slides == 0, let r = near(at) else { return }
+    for (i, id) in order.enumerated() where hosts[id] != nil {
+      if r.contains(i) { reveal(i...i) } else { put(away: id, at: i) }
+    }
   }
 
   /// Slides to column `i` in the render server: the scroll offset moves to the target at once (one update for the
   /// columns, which then don't move again) and the document layer is animated from where it showed. Scrolling the
   /// clip view frame by frame made every column's hosting view update its graph each frame (~20 ms a frame).
   fileprivate func slide(to i: Int, from start: CGFloat? = nil) {
+    if reuseColumns { prepareSlots(to: i, from: start) }
     if clipSlide { return clipViewSlide(to: i, from: start) }
     let from = start ?? shownOffset(), to = x(i)
+    if bitmapCache, bitmapSlide(to: i, from: from, toX: to) { return }
     buildAround(i)
     stopSlide()
     scroll.contentView.setBoundsOrigin(NSPoint(x: to, y: 0))
@@ -207,6 +337,7 @@ final class ReelView: NSView {
 
   /// The offset on screen: the scroll offset less what a slide in flight still has to go.
   private func shownOffset() -> CGFloat {
+    if let c = cached { return cachedShown(c) }
     let o = scroll.contentView.bounds.origin.x
     guard let l = doc.layer, l.animation(forKey: "slide") != nil, let p = l.presentation() else { return o }
     return o - (p.position.x - l.position.x)
@@ -214,6 +345,7 @@ final class ReelView: NSView {
 
   /// Ends a slide where it shows now (a new slide or a swipe takes over from there).
   private func stopSlide() {
+    if cached != nil { return stopBitmapSlide() }
     if clipSlide { return stopClipViewSlide() }
     guard let l = doc.layer, l.animation(forKey: "slide") != nil else { return }
     let shown = shownOffset()
@@ -266,6 +398,8 @@ final class ReelView: NSView {
   /// A swipe began: it takes over from a slide in flight.
   fileprivate func gestureBegan() {
     gestures = 1
+    if layoutMode == .framesHide, !order.isEmpty { reveal(0...(order.count - 1)) }   // the fingers may go anywhere
+    // (park: the columns come out of parking as the leading column changes, `scrolled` → `buildAround`)
     stopSlide()
     moving()
   }
@@ -290,6 +424,8 @@ final class ReelView: NSView {
 
   private func moving() {
     let m = gestures + slides > 0
+    if !m, windowing { rest() }
+    if !m, reuseColumns { slotsAtRest() }
     guard model.reelMoving != m else { return }
     model.reelMoving = m
     DeskProbe.event("reel.phase", m ? 1 : 0)
@@ -305,7 +441,244 @@ final class ReelView: NSView {
     model.reelScrolled(toIndex: i)
   }
 
+  // MARK: reel.columns=reuse
+
+  /// How many slots: two screens and one column each side, so a step (one screen) shows real columns all the way.
+  private var slotCount: Int { min(order.count, 2 * max(1, across) + 2) }
+
+  /// A new project's columns: every slot is free (the next assignment configures them), the placeholder covers all.
+  private func showSlots(_ ids: [String]) {
+    order = ids
+    at = min(at, max(0, ids.count - 1))
+    slotColumn = slotColumn.map { _ in nil }
+    for s in slots { s.forget() }
+    moveNeeds = []
+    needsLayout = true
+  }
+
+  /// Makes the slots that are missing (the first layout, or a wider window). They are added once and never removed.
+  private func ensureSlots() {
+    while slots.count < slotCount, let first = order.first {
+      let s = NativeColumnView(agentId: first, model: model, memory: slotMemory)
+      s.frame = CGRect(x: -2 * max(width, 320), y: 0, width: width, height: max(0, bounds.height - Theme.Desk.gap))
+      doc.addSubview(s)
+      slots.append(s)
+      slotColumn.append(nil)
+    }
+  }
+
+  /// Gives every column in `needed` a slot, nearest `at` first: a slot already showing that agent if one is free, else
+  /// any free slot, configured in place. Slots whose column isn't needed are freed first; a free slot keeps its agent
+  /// (it may be wanted again) and waits off the document's edge.
+  private func assign(_ needed: Set<Int>) {
+    guard !order.isEmpty, across > 0 else { return }
+    ensureSlots()
+    let want = needed.filter { order.indices.contains($0) }
+    for k in slots.indices where slotColumn[k].map({ !want.contains($0) }) ?? false { slotColumn[k] = nil }
+    let shown = Set(slotColumn.compactMap { $0 })
+    for j in want.subtracting(shown).sorted(by: { abs($0 - at) < abs($1 - at) }) {
+      guard let k = slots.indices.first(where: { slotColumn[$0] == nil && slots[$0].agentId == order[j] })
+              ?? slots.indices.first(where: { slotColumn[$0] == nil }) else { break }
+      slotColumn[k] = j
+      slots[k].configure(order[j])
+      slots[k].frame = frame(of: j)
+    }
+    for k in slots.indices where slotColumn[k] == nil && slots[k].frame.minX >= 0 {
+      slots[k].frame.origin.x = -2 * max(width, 320)
+    }
+  }
+
+  /// The columns near column `i` (on screen and one each side), plus those a move in flight still shows.
+  private func assignSlots(around i: Int) {
+    var need = moveNeeds
+    if let r = near(i) { need.formUnion(r) }
+    assign(need)
+  }
+
+  /// Before a slide starts: the columns it passes get their slots now, not during its frames.
+  private func prepareSlots(to i: Int, from start: CGFloat?) {
+    let from = start.map { pitch > 0 ? Int(($0 / pitch).rounded()) : at } ?? at
+    if i != from { lastDirection = i > from ? 1 : -1 }
+    moveNeeds = Set(near(from) ?? 0...0).union(near(i) ?? 0...0).union(near(at) ?? 0...0)
+    assign(moveNeeds)
+  }
+
+  /// At rest: the move's columns are let go, and the spare slots prefetch the next screen in the direction of travel,
+  /// a turn later (off the frame that ended the move).
+  private func slotsAtRest() {
+    moveNeeds = []
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.gestures + self.slides == 0, let r = self.near(self.at) else { return }
+      var need = Set(r)
+      if let ahead = self.near(self.at + self.lastDirection * self.across) { need.formUnion(ahead) }
+      self.assign(need)
+    }
+  }
+
+  /// After a layout: the slots on their columns' frames and the placeholder (one replicated layer, no views) under
+  /// every column.
+  private func placeSlots() {
+    for k in slots.indices { if let j = slotColumn[k], order.indices.contains(j) { slots[k].frame = frame(of: j) } }
+    guard let l = doc.layer else { return }
+    if placeholder.superlayer == nil {
+      let cell = CALayer()
+      cell.backgroundColor = NSColor(Theme.Desk.column).cgColor
+      cell.cornerRadius = Theme.Desk.columnRadius
+      cell.cornerCurve = .continuous
+      placeholder.addSublayer(cell)
+      l.insertSublayer(placeholder, at: 0)
+    }
+    CATransaction.begin(); CATransaction.setDisableActions(true)
+    placeholder.frame = l.bounds
+    placeholder.instanceCount = order.count
+    placeholder.instanceTransform = CATransform3DMakeTranslation(pitch, 0, 0)
+    placeholder.sublayers?.first?.frame = frame(of: 0)
+    CATransaction.commit()
+  }
+
+  // MARK: reel.cache=bitmap
+
+  private func startBitmapCache() {
+    overlay.isHidden = true
+    addSubview(overlay)   // above the scroll view
+    // A column you touch (click, scroll its thread, type in it) may look different without the model changing: its
+    // bitmap goes.
+    touchMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .scrollWheel, .keyDown]) { [weak self] e in
+      MainActor.assumeIsolated {
+        guard let self, e.window === self.window, !self.bitmaps.isEmpty else { return }
+        if e.type == .keyDown { if let f = self.model.focusedAgent { self.bitmaps[f] = nil } ; return }
+        let p = self.doc.convert(e.locationInWindow, from: nil)
+        if let j = self.order.indices.first(where: { self.frame(of: $0).contains(p) }) { self.bitmaps[self.order[j]] = nil }
+      }
+      return e
+    }
+  }
+
+  /// Column `j` drawn once into a bitmap, kept until its agent's content changes (observed) or it is touched.
+  private func bitmap(_ j: Int) -> CGImage? {
+    let id = order[j]
+    if let b = bitmaps[id] { return b }
+    guard let v = columnView(at: j), v.superview === doc, !v.isHidden, v.bounds.width > 0,
+          let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return nil }
+    v.layoutSubtreeIfNeeded()   // a slot configured just now has not been laid out yet
+    v.cacheDisplay(in: v.bounds, to: rep)
+    guard let img = rep.cgImage else { return nil }
+    bitmaps[id] = img
+    withObservationTracking { [weak self] in
+      guard let self, let a = self.model.agent(id) else { return }
+      _ = (a.header, a.bot, a.approval, a.focused, a.warm)
+      let t = self.model.thread(id)
+      _ = (t.entries, t.pending, t.unavailable)
+      _ = self.model.mediaSlice.items.count
+    } onChange: { [weak self] in
+      RunLoop.main.perform { MainActor.assumeIsolated { _ = self?.bitmaps.removeValue(forKey: id) } }
+    }
+    return img
+  }
+
+  /// A slide of bitmaps: the columns it shows, as they are now, in the overlay at the offset the reel shows; the
+  /// overlay's content slides in the render server, and the reel's offset moves under it when the slide ends. The
+  /// leading column is reported at once, as a live slide does. A column whose content changes mid-slide shows its
+  /// bitmap until the slide ends, then its live view.
+  private func bitmapSlide(to i: Int, from: CGFloat, toX to: CGFloat) -> Bool {
+    guard pitch > 0, abs(to - from) > 0.5, let content = overlay.content else { return false }
+    stopSlide()
+    let fromIndex = Int((from / pitch).rounded())
+    let cols = Set(near(fromIndex) ?? 0...0).union(near(i) ?? 0...0).filter { order.indices.contains($0) }
+    let h = overlay.bounds.height, scale = window?.backingScaleFactor ?? 2
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    content.sublayers = nil
+    content.frame = overlay.bounds
+    for j in cols.sorted() {
+      let f = frame(of: j), l = CALayer()
+      l.frame = CGRect(x: f.minX - from, y: h - f.maxY, width: f.width, height: f.height)   // the overlay isn't flipped
+      if let img = bitmap(j) {
+        l.contents = img; l.contentsScale = scale; l.contentsGravity = .resize
+      } else {
+        l.backgroundColor = NSColor(Theme.Desk.column).cgColor; l.cornerRadius = Theme.Desk.columnRadius; l.cornerCurve = .continuous
+      }
+      content.addSublayer(l)
+    }
+    overlay.isHidden = false
+    let base = content.position
+    content.position.x = base.x - (to - from)
+    CATransaction.commit()
+    cachedSerial += 1
+    let serial = cachedSerial
+    cached = (serial, from, to, base)
+    if i != at { at = i; buildAround(i); DeskProbe.event("reel.position", i); model.reelScrolled(toIndex: i) }
+    slides += 1; moving()
+    let a = CABasicAnimation(keyPath: "position.x")
+    a.isAdditive = true
+    a.fromValue = to - from
+    a.toValue = 0
+    a.duration = 0.35
+    a.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+    CATransaction.begin()
+    CATransaction.setCompletionBlock { [weak self] in
+      MainActor.assumeIsolated { guard let self, self.cached?.serial == serial else { return }; self.endBitmapSlide(at: to) }
+    }
+    content.add(a, forKey: "slide")
+    CATransaction.commit()
+    return true
+  }
+
+  /// Where a bitmap slide in flight shows the document.
+  private func cachedShown(_ c: (serial: Int, from: CGFloat, to: CGFloat, base: CGPoint)) -> CGFloat {
+    guard let content = overlay.content, let p = content.presentation() else { return c.to }
+    return c.from + (c.base.x - p.position.x)
+  }
+
+  /// The slide is over (or taken over at `offset`): the reel moves there under the overlay, and the overlay goes a turn
+  /// later, once the live columns have been drawn at their new place.
+  private func endBitmapSlide(at offset: CGFloat) {
+    cached = nil
+    overlay.content?.removeAnimation(forKey: "slide")
+    scroll.contentView.setBoundsOrigin(NSPoint(x: offset, y: 0))
+    scrolled()
+    slides -= 1
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.cached == nil else { return }
+      CATransaction.begin(); CATransaction.setDisableActions(true)
+      self.overlay.isHidden = true
+      self.overlay.content?.sublayers = nil
+      CATransaction.commit()
+    }
+    moving()
+  }
+
+  private func stopBitmapSlide() {
+    guard let c = cached else { return }
+    endBitmapSlide(at: cachedShown(c))
+  }
+
+  // MARK: ReelColumnViews (the bench's guards and drivers)
+
+  var columnCount: Int { order.count }
+  func columnFrame(at i: Int) -> CGRect { frame(of: i) }
+  func columnView(at i: Int) -> NSView? {
+    guard order.indices.contains(i) else { return nil }
+    if reuseColumns { return slotColumn.firstIndex(of: i).map { slots[$0] } }
+    let id = order[i]
+    return hosts[id].flatMap { $0.superview === doc ? $0 : nil } ?? standIns[id] ?? blanks[id]
+  }
+
   final class Flipped: NSView { override var isFlipped: Bool { true } }
+
+  /// `reel.cache=bitmap`: the layer a slide moves bitmaps in, above the reel; never hit.
+  final class BitmapOverlay: NSView {
+    private(set) var content: CALayer?
+    override init(frame: CGRect) {
+      super.init(frame: frame)
+      wantsLayer = true
+      let c = CALayer()
+      layer?.addSublayer(c)
+      content = c
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+  }
 }
 
 /// The reel's scroll view: it follows the fingers during a swipe and hands the landing to the reel instead of the
@@ -457,6 +830,8 @@ struct EntryRow: View, Equatable {
 /// while you type.
 struct ColumnComposer: View {
   @Environment(DeskModel.self) private var model
+  /// A reused reel slot's memory (reel.columns=reuse): the draft is kept there per agent. nil in a kept column.
+  @Environment(\.slotMemory) private var memory
   let agentId: String
   let name: String
   @State private var draft = ""
@@ -478,11 +853,29 @@ struct ColumnComposer: View {
     .frame(minHeight: Theme.Desk.composerHeight)
     .background(RoundedRectangle(cornerRadius: Theme.Desk.composerRadius, style: .continuous).fill(Theme.Desk.composerFill))
     .padding([.horizontal, .bottom], 12)
+    .modifier(SlotDraft(memory: memory, agentId: agentId, draft: $draft))
   }
   private func send() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return }
     model.steer(agentId: agentId, body: text); draft = ""
+  }
+}
+
+/// In a reused slot, the draft is restored when the agent's box appears and saved as it changes; in a kept column
+/// (no memory) it adds nothing.
+struct SlotDraft: ViewModifier {
+  let memory: SlotMemory?
+  let agentId: String
+  @Binding var draft: String
+  func body(content: Content) -> some View {
+    if let memory {
+      content
+        .onAppear { if draft.isEmpty, let d = memory.drafts[agentId] { draft = d } }
+        .onChange(of: draft) { _, d in memory.drafts[agentId] = d.isEmpty ? nil : d }
+    } else {
+      content
+    }
   }
 }
 

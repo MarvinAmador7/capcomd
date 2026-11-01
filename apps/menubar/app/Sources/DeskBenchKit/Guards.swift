@@ -126,8 +126,9 @@ public enum BuiltWithin {
     public var expectsRows: Bool
     /// The model's warm flag: a cold column draws no thread at all. nil when unknown.
     public var warm: Bool?
-    /// What its view in the reel is: "hosting" (a hosting view with something in it), "empty" (a hosting view with
-    /// no subviews and no sublayers), "placeholder" (the reel's blank before it builds the column), "missing".
+    /// What its view in the reel is: "hosting" (a hosting view with something in it, or an AppKit column holding one),
+    /// "empty" (a hosting view with no subviews and no sublayers), "placeholder" (the reel's blank before it builds the
+    /// column), "hidden" (a column view hidden while in view), "missing".
     public var view: String?
     public init(id: String, expectsRows: Bool, warm: Bool? = nil, view: String? = nil) { self.id = id; self.expectsRows = expectsRows; self.warm = warm; self.view = view }
   }
@@ -151,7 +152,7 @@ public enum BuiltWithin {
       let missing = want.filter { firsts[$0] == nil }
       if !missing.isEmpty { problems.append("\(c.id): no \(missing.joined(separator: "/")) body since its project opened") }
       if c.warm == false { problems.append("\(c.id): cold (its thread isn't shown)") }
-      if let v = c.view, v != "hosting" { problems.append("\(c.id): \(v == "placeholder" ? "still the reel's blank placeholder" : v == "empty" ? "an empty hosting view" : "no view in the reel")") }
+      if let v = c.view, v != "hosting" { problems.append("\(c.id): \(v == "placeholder" ? "still the reel's blank placeholder" : v == "empty" ? "an empty hosting view" : v == "hidden" ? "hidden while in view" : "no view in the reel")") }
       if missing.isEmpty, let when = want.compactMap({ firsts[$0] }).max() {
         let late = when - settleAt
         latest = max(latest ?? late, late)

@@ -236,6 +236,7 @@ func kv(_ xs: [String]) -> [String: String] {
     let h = Harness.current ?? Harness(world: w)
     var size = CGSize(width: 1440, height: 900)
     if let s = args.one("size") { let p = s.lowercased().split(separator: "x"); if p.count == 2, let w = Double(p[0]), let hh = Double(p[1]) { size = CGSize(width: w, height: hh) } }
+    await h.sceneWindowReady()
     h.showWindow(size: size, activate: !args.has("no-activate"))
     _ = await h.nextCommit()
     _ = await h.ensureActive(!args.has("no-activate"))
