@@ -93,6 +93,26 @@ final class DeskModelTests: XCTestCase {
     XCTAssertFalse(m.onScreen.contains("w4"))
   }
 
+  /// The open project's run is deleted: the window opens another project (or says nothing is running), never a reel
+  /// of a run that's gone.
+  @MainActor func testADeletedRunClosesItsProject() {
+    let s = store()
+    s.receive(.event(Envelope(id: "b1", scope: "run-b", seq: 1, entity: "run-b", type: "run.created", epochMs: 5_000, projectId: "prj-b",
+                              runId: "run-b", agentId: nil, data: ["goal": .string("Another goal")])), scope: "run-b")
+    s.receive(.event(Envelope(id: "b2", scope: "run-b", seq: 2, entity: "pb", type: "agent.spawned", epochMs: 5_001, projectId: "prj-b",
+                              runId: "run-b", agentId: "pb", data: ["profile": .string("planner")])), scope: "run-b")
+    let m = DeskModel(store: s)
+    XCTAssertEqual(m.openRunId, "run-a")
+    ev(s, "run.deleted", nil, at: 6_000)
+    XCTAssertEqual(m.decks.map(\.runId), ["run-b"])
+    XCTAssertEqual(m.openRunId, "run-b")
+    XCTAssertEqual(m.columns, ["pb"])
+    s.receive(.event(Envelope(id: "b3", scope: "run-b", seq: 3, entity: "run-b", type: "run.deleted", epochMs: 6_001, projectId: "prj-b",
+                              runId: "run-b", agentId: nil, data: [:])), scope: "run-b")
+    XCTAssertNil(m.openRunId)
+    XCTAssertTrue(m.columns.isEmpty)
+  }
+
   /// Before the daemon's first snapshot the window has nothing to say (not "nothing running"); when its feed drops the
   /// window says so, and says so no more once it's back.
   @MainActor func testLoadedAndUnreachableFollowTheDaemonFeed() {
