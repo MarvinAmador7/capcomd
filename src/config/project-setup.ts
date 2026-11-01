@@ -82,7 +82,8 @@ export interface ProjectAnswers {
   /** The repository agents work on, as an https URL. */
   repo: string;
   mode: string;
-  target: string;
+  /** The branch runs start from and merge into; null: none known (runs then ask for their base; never a guessed main). */
+  target: string | null;
   /** The check every change must pass ("" for none). */
   check: string;
   /** claude and/or codex, in the order chosen. */
@@ -118,7 +119,7 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
   return {
     dir: a.dir, configPath: join(a.dir, ".capcomd", "config.json"), agentsPath: join(a.dir, ".capcomd", "agents.json"), cap: a.cap, profiles,
     patch: {
-      env: { CAPCOMD_REPO: a.repo, CAPCOMD_MERGE_MODE: a.mode, CAPCOMD_MERGE_TARGET: a.target, ...(gh ? { CAPCOMD_GITHUB_REPO: gh } : {}) },
+      env: { CAPCOMD_REPO: a.repo, CAPCOMD_MERGE_MODE: a.mode, ...(a.target ? { CAPCOMD_MERGE_TARGET: a.target } : {}), ...(gh ? { CAPCOMD_GITHUB_REPO: gh } : {}) },
       run: { ...(a.check ? { checks: { unit: a.check } } : {}), reviewer: "reviewer" },
     },
   };
