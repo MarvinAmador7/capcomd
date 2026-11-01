@@ -133,7 +133,7 @@ test("capcomd send --skill: the running worker reads the skill's SKILL.md with t
   const skills = (await cj(["skills"])).j?.skills ?? [];
   expect(skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: "capcomd-orchestration", source: "bundled" })]));
   const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen] wait for a skill", "--key", "listen-skill"])).j?.agentId;
+  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen:30] wait for a skill", "--key", "listen-skill"])).j?.agentId;
   const bad = await cj(["send", run, id, "x", "--skill", "no-such-skill"]);
   expect(bad.code).not.toBe(0);
   expect(bad.j?.error?.message).toBe('There is no skill named "no-such-skill": `capcomd skills` lists the skills you can attach.');
