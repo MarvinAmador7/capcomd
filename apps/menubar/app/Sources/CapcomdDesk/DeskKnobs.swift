@@ -75,8 +75,22 @@ package enum DeskKnobs {
                                         summary: "keep = every built column in the scrolling document; park = only those near the screen, the rest in a still, hidden container; reuse = a fixed set of native column slots configured in place as the reel moves",
                                         since: "0.7")
 
+  package enum Cache: String, KnobValue, CaseIterable {
+    /// The live columns move with the reel (today).
+    case off
+    /// A slide moves bitmaps: the columns it shows are drawn once into layer contents (kept until the column's
+    /// content changes or you touch it), those layers slide in an overlay, and the reel's offset moves under them once
+    /// the slide ends; then the live columns show again.
+    case bitmap
+  }
+
+  /// What moves during a slide.
+  package static let reelCache = Knob("reel.cache", default: Cache.off, choices: Cache.allCases,
+                                      summary: "off = the live columns slide (today); bitmap = cached bitmaps of the columns slide in an overlay, the live reel moves once at rest",
+                                      since: "0.7")
+
   /// Every knob of the window. A new knob goes here too, or `describe` won't list it.
-  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns] }
+  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns, reelCache] }
   /// What `describe` lists, by name.
   package static var all: [KnobInfo] { knobs.map(\.info).sorted { $0.name < $1.name } }
   /// The full knob vector this process runs with, defaults included (a result's `knobs`).

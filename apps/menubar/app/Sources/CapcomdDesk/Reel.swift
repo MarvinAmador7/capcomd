@@ -73,6 +73,14 @@ final class ReelView: NSView, ReelColumnViews {
   private var moveNeeds: Set<Int> = []
   private var lastDirection = 1
   private let placeholder = CAReplicatorLayer()
+  /// `reel.cache=bitmap`: the columns' bitmaps by agent (dropped when the agent's content changes or you touch the
+  /// column), the overlay a slide moves them in, and the slide in flight.
+  private let bitmapCache = DeskKnobs.reelCache.value == .bitmap
+  private var bitmaps: [String: CGImage] = [:]
+  private let overlay = BitmapOverlay()
+  private var cached: (serial: Int, from: CGFloat, to: CGFloat, base: CGPoint)?
+  private var cachedSerial = 0
+  private var touchMonitor: Any?
   /// Whether columns away from the screen are hidden or parked while the reel rests.
   private var windowing: Bool { layoutMode == .framesHide || parkColumns }
 
@@ -91,6 +99,7 @@ final class ReelView: NSView, ReelColumnViews {
     scroll.contentView.postsBoundsChangedNotifications = true
     addSubview(scroll)
     if parkColumns { parking.isHidden = true; addSubview(parking, positioned: .below, relativeTo: scroll) }
+    if bitmapCache { startBitmapCache() }
     NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
   }
   required init?(coder: NSCoder) { fatalError() }
@@ -186,6 +195,7 @@ final class ReelView: NSView, ReelColumnViews {
 
   override func layout() {
     super.layout()
+    if bitmapCache, overlay.frame != bounds { overlay.frame = bounds; bitmaps = [:] }
     if layoutMode != .auto { return framesLayout() }
     scroll.frame = bounds
     let gap = Theme.Desk.gap, inset = Theme.Desk.peek + gap
@@ -304,6 +314,7 @@ final class ReelView: NSView, ReelColumnViews {
     if reuseColumns { prepareSlots(to: i, from: start) }
     if clipSlide { return clipViewSlide(to: i, from: start) }
     let from = start ?? shownOffset(), to = x(i)
+    if bitmapCache, bitmapSlide(to: i, from: from, toX: to) { return }
     buildAround(i)
     stopSlide()
     scroll.contentView.setBoundsOrigin(NSPoint(x: to, y: 0))
@@ -326,6 +337,7 @@ final class ReelView: NSView, ReelColumnViews {
 
   /// The offset on screen: the scroll offset less what a slide in flight still has to go.
   private func shownOffset() -> CGFloat {
+    if let c = cached { return cachedShown(c) }
     let o = scroll.contentView.bounds.origin.x
     guard let l = doc.layer, l.animation(forKey: "slide") != nil, let p = l.presentation() else { return o }
     return o - (p.position.x - l.position.x)
@@ -333,6 +345,7 @@ final class ReelView: NSView, ReelColumnViews {
 
   /// Ends a slide where it shows now (a new slide or a swipe takes over from there).
   private func stopSlide() {
+    if cached != nil { return stopBitmapSlide() }
     if clipSlide { return stopClipViewSlide() }
     guard let l = doc.layer, l.animation(forKey: "slide") != nil else { return }
     let shown = shownOffset()
@@ -523,6 +536,123 @@ final class ReelView: NSView, ReelColumnViews {
     CATransaction.commit()
   }
 
+  // MARK: reel.cache=bitmap
+
+  private func startBitmapCache() {
+    overlay.isHidden = true
+    addSubview(overlay)   // above the scroll view
+    // A column you touch (click, scroll its thread, type in it) may look different without the model changing: its
+    // bitmap goes.
+    touchMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .scrollWheel, .keyDown]) { [weak self] e in
+      MainActor.assumeIsolated {
+        guard let self, e.window === self.window, !self.bitmaps.isEmpty else { return }
+        if e.type == .keyDown { if let f = self.model.focusedAgent { self.bitmaps[f] = nil } ; return }
+        let p = self.doc.convert(e.locationInWindow, from: nil)
+        if let j = self.order.indices.first(where: { self.frame(of: $0).contains(p) }) { self.bitmaps[self.order[j]] = nil }
+      }
+      return e
+    }
+  }
+
+  /// Column `j` drawn once into a bitmap, kept until its agent's content changes (observed) or it is touched.
+  private func bitmap(_ j: Int) -> CGImage? {
+    let id = order[j]
+    if let b = bitmaps[id] { return b }
+    guard let v = columnView(at: j), v.superview === doc, !v.isHidden, v.bounds.width > 0,
+          let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return nil }
+    v.layoutSubtreeIfNeeded()   // a slot configured just now has not been laid out yet
+    v.cacheDisplay(in: v.bounds, to: rep)
+    guard let img = rep.cgImage else { return nil }
+    bitmaps[id] = img
+    withObservationTracking { [weak self] in
+      guard let self, let a = self.model.agent(id) else { return }
+      _ = (a.header, a.bot, a.approval, a.focused, a.warm)
+      let t = self.model.thread(id)
+      _ = (t.entries, t.pending, t.unavailable)
+      _ = self.model.mediaSlice.items.count
+    } onChange: { [weak self] in
+      RunLoop.main.perform { MainActor.assumeIsolated { _ = self?.bitmaps.removeValue(forKey: id) } }
+    }
+    return img
+  }
+
+  /// A slide of bitmaps: the columns it shows, as they are now, in the overlay at the offset the reel shows; the
+  /// overlay's content slides in the render server, and the reel's offset moves under it when the slide ends. The
+  /// leading column is reported at once, as a live slide does. A column whose content changes mid-slide shows its
+  /// bitmap until the slide ends, then its live view.
+  private func bitmapSlide(to i: Int, from: CGFloat, toX to: CGFloat) -> Bool {
+    guard pitch > 0, abs(to - from) > 0.5, let content = overlay.content else { return false }
+    stopSlide()
+    let fromIndex = Int((from / pitch).rounded())
+    let cols = Set(near(fromIndex) ?? 0...0).union(near(i) ?? 0...0).filter { order.indices.contains($0) }
+    let h = overlay.bounds.height, scale = window?.backingScaleFactor ?? 2
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    content.sublayers = nil
+    content.frame = overlay.bounds
+    for j in cols.sorted() {
+      let f = frame(of: j), l = CALayer()
+      l.frame = CGRect(x: f.minX - from, y: h - f.maxY, width: f.width, height: f.height)   // the overlay isn't flipped
+      if let img = bitmap(j) {
+        l.contents = img; l.contentsScale = scale; l.contentsGravity = .resize
+      } else {
+        l.backgroundColor = NSColor(Theme.Desk.column).cgColor; l.cornerRadius = Theme.Desk.columnRadius; l.cornerCurve = .continuous
+      }
+      content.addSublayer(l)
+    }
+    overlay.isHidden = false
+    let base = content.position
+    content.position.x = base.x - (to - from)
+    CATransaction.commit()
+    cachedSerial += 1
+    let serial = cachedSerial
+    cached = (serial, from, to, base)
+    if i != at { at = i; buildAround(i); DeskProbe.event("reel.position", i); model.reelScrolled(toIndex: i) }
+    slides += 1; moving()
+    let a = CABasicAnimation(keyPath: "position.x")
+    a.isAdditive = true
+    a.fromValue = to - from
+    a.toValue = 0
+    a.duration = 0.35
+    a.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+    CATransaction.begin()
+    CATransaction.setCompletionBlock { [weak self] in
+      MainActor.assumeIsolated { guard let self, self.cached?.serial == serial else { return }; self.endBitmapSlide(at: to) }
+    }
+    content.add(a, forKey: "slide")
+    CATransaction.commit()
+    return true
+  }
+
+  /// Where a bitmap slide in flight shows the document.
+  private func cachedShown(_ c: (serial: Int, from: CGFloat, to: CGFloat, base: CGPoint)) -> CGFloat {
+    guard let content = overlay.content, let p = content.presentation() else { return c.to }
+    return c.from + (c.base.x - p.position.x)
+  }
+
+  /// The slide is over (or taken over at `offset`): the reel moves there under the overlay, and the overlay goes a turn
+  /// later, once the live columns have been drawn at their new place.
+  private func endBitmapSlide(at offset: CGFloat) {
+    cached = nil
+    overlay.content?.removeAnimation(forKey: "slide")
+    scroll.contentView.setBoundsOrigin(NSPoint(x: offset, y: 0))
+    scrolled()
+    slides -= 1
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.cached == nil else { return }
+      CATransaction.begin(); CATransaction.setDisableActions(true)
+      self.overlay.isHidden = true
+      self.overlay.content?.sublayers = nil
+      CATransaction.commit()
+    }
+    moving()
+  }
+
+  private func stopBitmapSlide() {
+    guard let c = cached else { return }
+    endBitmapSlide(at: cachedShown(c))
+  }
+
   // MARK: ReelColumnViews (the bench's guards and drivers)
 
   var columnCount: Int { order.count }
@@ -535,6 +665,20 @@ final class ReelView: NSView, ReelColumnViews {
   }
 
   final class Flipped: NSView { override var isFlipped: Bool { true } }
+
+  /// `reel.cache=bitmap`: the layer a slide moves bitmaps in, above the reel; never hit.
+  final class BitmapOverlay: NSView {
+    private(set) var content: CALayer?
+    override init(frame: CGRect) {
+      super.init(frame: frame)
+      wantsLayer = true
+      let c = CALayer()
+      layer?.addSublayer(c)
+      content = c
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+  }
 }
 
 /// The reel's scroll view: it follows the fingers during a swipe and hands the landing to the reel instead of the
