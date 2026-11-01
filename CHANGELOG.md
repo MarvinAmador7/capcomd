@@ -20,6 +20,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - API: agents have `createdAt`, when they were spawned (null when unknown; older daemons omit it).
 - API: a merge approval's `subject.askedBy` names the agent that asked for the merge and waits on the decision
   (`requestedBy.agentId` stays the agent whose work merges); absent for an operator's merge.
+- **Breaking:** `capcomd run <goal>` with a planner (and every run the apps start) now works on a goal branch of its
+  own, `capcomd/<goal-slug>`, cut from `--base` (default: the project's target, else the repository's default branch;
+  never a guessed `main`). Its agents' reviewed work lands there with no approval and no pull request per child, even
+  when the project merges by pull request. Pass `--no-goal-branch` to merge into the target as before.
+- When the planner is done, `capcomd goal <runId>` shows the goal branch against its base, what landed (with its
+  checks and review), what didn't and why, and the planner's summary. `capcomd pr open <runId>` opens one pull request
+  from it into the base with your `gh` login (capcomd never merges it); `capcomd goal keep <runId>` keeps the branch
+  without one. `capcomd run new --goal-branch G --base B` starts a scope on a goal branch; MCP `capcomd_run_new` takes
+  `goalBranch` and `base`, and the new MCP tools `capcomd_goal` and `capcomd_pr_open` do the same (your agent asks you
+  before opening a pull request).
+- API (capability `runs.goal_branch`): `POST /v1/runs` takes `base` and `goalBranch` (a bad one is a 422 naming the
+  `field`); runs carry `goalBranch` (its branch, base, state and pull request); `GET /v1/projects/branches` lists a
+  checkout's branches for a base menu with a suggested base and goal branch; `GET /v1/runs/{runId}/goal` is the
+  finished branch; `POST /v1/runs/{runId}/pull-request` and `/keep-branch` record the choice; new events
+  `run.goal_completed`, `run.pr_opened` and `run.branch_kept`.
+- Fix: capcomd no longer guesses `main` as a project's target. `GET /v1/projects/inspect` sends `defaultBranch: null`
+  when the checkout doesn't say, `capcomd setup project` suggests origin's real default branch, and running it again
+  keeps the target you set instead of resetting it to `main`.
 
 - Desktop window bench for coding agents (`apps/menubar/app/DESKBENCH.md`): `swift run -c release CapcomdDeskBench`
   hosts the desktop window on generated runs (1 to 64 agents, no daemon), drives it (open, project switch, reel steps,
