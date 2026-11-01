@@ -42,6 +42,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `--dry-run` shows the grid and an estimate, and running the same command again resumes. Generated fixtures take
   parameters (`crew@agents=32,items=200`). `deskbench fixture capture --from <socket> --run <id> --token-file <file>`
   saves a run as an anonymised fixture outside the repo, and the bench runs on it with `--fixture file:<name>`.
+- `deskbench run swipe --gesture FILE` replays a recorded trackpad gesture into the desktop window's reel and reports
+  how closely the content followed your fingers (position error, stalls, jerk). Record one with `deskbench
+  record-gesture --name NAME` and list them with `perfloop gestures list`.
+- perfloop experiments can run on a machine nobody is using. `perfloop queue add ID` and `perfloop queue run --runner
+  local|ssh://user@host --until HH:MM` run queued screens and fulls. `local` waits until this Mac has been idle
+  (`--idle 120`) and redoes a rep you interrupt. `ssh://` copies the build to a spare Mac and opens the window in its
+  logged-in session, waiting while its screen is locked. Results record their runner and machine and are never
+  mixed; `perfloop runner check R` shows a runner's state.
 - Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
   or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
   coming back, and whoever awaits it (you, or a parent agent's `capcomd await`) gets its result.
