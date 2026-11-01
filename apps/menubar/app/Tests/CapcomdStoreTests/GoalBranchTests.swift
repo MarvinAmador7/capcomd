@@ -7,11 +7,14 @@ final class FakeGoals: GoalBranchActing, @unchecked Sendable {
   var view: GoalView?
   var prAnswers: [Result<GoalPullRequestResult, Error>] = []
   var prKeys: [String] = []
+  var prStopped: [Bool] = []
   var keepAnswers: [Error?] = []
   var branchQueries: [[String?]] = []
   var branches = ProjectBranches(path: "/src/app", root: "/src/app", source: "github", defaultBranch: "develop", branches: ["develop", "main"], suggestedBase: "develop")
   func goal(runId: String) async throws -> GoalView { guard let view else { throw GoalActionRefused("run \(runId) has no goal branch") }; return view }
-  func openPullRequest(runId: String, idempotencyKey: String) async throws -> GoalPullRequestResult { prKeys.append(idempotencyKey); return try prAnswers.removeFirst().get() }
+  func openPullRequest(runId: String, stopped: Bool, idempotencyKey: String) async throws -> GoalPullRequestResult {
+    prKeys.append(idempotencyKey); prStopped.append(stopped); return try prAnswers.removeFirst().get()
+  }
   func keepBranch(runId: String, idempotencyKey: String) async throws { if let e = keepAnswers.isEmpty ? nil : keepAnswers.removeFirst() { throw e } }
   func projectBranches(path: String, goal: String?, goalBranch: String?, base: String?) async throws -> ProjectBranches {
     branchQueries.append([path, goal, goalBranch, base]); return branches
@@ -101,6 +104,29 @@ final class GoalBranchTests: XCTestCase {
     XCTAssertTrue(m.contains("nothing to keep"))
     await s.loadGoal(runId: "run-none")
     XCTAssertEqual(s.goalViews["run-none"], .unavailable(.failed("run run-none has no goal branch")))
+  }
+
+  func testAStoppedRunAsksBeforeItOpensAPullRequest() async throws {
+    let f = FakeGoals()
+    let ask = "The planner stopped before it finished (it failed): 1 of 2 tasks landed on capcomd/add-x. Open a pull request with what landed?"
+    let pr = GoalPullRequestResult(runId: "run-g", branch: "capcomd/add-x", base: "dev", created: true, pullRequest: GoalPullRequest(number: 2, url: nil, state: "open"))
+    f.prAnswers = [.failure(GoalActionRefused(ask, code: GoalActionRefused.stopped)), .success(pr)]
+    let s = store(f)
+    // The daemon's 409 `stopped` is the question, not a refusal.
+    let first = await s.openPullRequest(runId: "run-g")
+    XCTAssertEqual(first, .confirmStopped(ask))
+    // Cancel puts it away; the person's yes asks again with `stopped` and a key of its own.
+    s.cancelGoalAction(runId: "run-g")
+    XCTAssertEqual(s.goalActions["run-g"], .idle)
+    s.askToOpenStoppedPullRequest(runId: "run-g", question: ask)
+    XCTAssertEqual(s.goalActions["run-g"], .confirmStopped(ask))
+    let second = await s.openPullRequest(runId: "run-g", stopped: true)
+    XCTAssertEqual(second, .opened(pr))
+    XCTAssertEqual(f.prStopped, [false, true]); XCTAssertEqual(f.prKeys, ["k1", "k2"])
+    // A goal view of a stopped run carries the question.
+    let v = try GoalWire.view(Data(goalJSON.replacingOccurrences(of: #""state":"ready""#, with: #""state":"stopped""#)
+      .replacingOccurrences(of: #""repo":"acme/app"}"#, with: #""repo":"acme/app","confirm":"Open it?"}"#).utf8))
+    XCTAssertTrue(v.awaitsDecision); XCTAssertEqual(v.openPullRequest.confirm, "Open it?")
   }
 
   func testWithoutTheCapabilityItSaysUpdate() async {
