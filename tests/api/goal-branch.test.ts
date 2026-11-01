@@ -194,7 +194,7 @@ describe("GET /v1/projects/branches", () => {
 		if (o.target) { mkdirSync(join(co, ".capcomd")); writeFileSync(join(co, ".capcomd", "config.json"), JSON.stringify({ env: { CAPCOMD_REPO: "https://github.com/acme/app.git", CAPCOMD_MERGE_TARGET: o.target } })); }
 		return co;
 	};
-	const app = (listBranches?: Parameters<typeof memorySource>[0]["listBranches"]) => {
+	const app = (listBranches?: NonNullable<Parameters<typeof memorySource>[0]>["listBranches"]) => {
 		const a = harnessApp({ source: memorySource({ ...(listBranches ? { listBranches } : {}), projects: { env: { HOME: dir, CAPCOMD_HOME: join(dir, ".capcomd") } } }), clients: () => loadClients(cpath), state: harnessState(null) });
 		return async (q: Record<string, string>) => { const r = await a.request(`/v1/projects/branches?${new URLSearchParams(q)}`, { headers: { authorization: `Bearer ${reader}` } }); return { status: r.status, body: (await r.json()) as any }; };
 	};
