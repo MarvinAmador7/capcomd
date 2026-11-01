@@ -75,7 +75,7 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
     "steps": [ { …as today…, "cpuMs": 38.9, "instructions": 61200000, "hitchTimeRatioMsPerS": 0.0,
                  "causes": [ { "keyPath": "AgentSlice.onScreen", "count": 2, "ids": 2,      // sets, distinct objects
                                "bodies": { "Column": 34, "CrewTab": 4 }, "objects": { "Column": 17, "CrewTab": 2 } } ],
-                 "smoothness": { "positionErrorP95Pt": 0.8, "stalls": 0, "jerkP95": 1.9 } | null } ],
+                 "smoothness": { "positionErrorP95Pt": 0.8, "stalls": 0, "jerkP95": 1.9, "latencyFrames": 1, … } | null } ],   // §8
     "worstStretches": [ { …as today…,
                  "stacks": { …tree… } | null,          // folded, symbolised; null when the sampler was off
                  "samples": 231,
@@ -183,7 +183,33 @@ for any fixture whose manifest entry has `parametric` (`{ "agents": [1, 128] }`:
 
 ```jsonc
 { "schema": "perfloop.gesture/1", "name": "flick-left", "recordedAt": "…", "device": "trackpad", "hz": 120,
+  "synthetic": true | null, "source": "deskbench fling curve: …" | null,      // generated ones only
   "events": [ { "t": 0.0, "dx": -3.0, "dy": 0.0, "phase": "began", "momentum": "none", "precise": true }, … ] }
 ```
 
-No text, no window contents, no identifiers: a gesture file is safe to commit.
+One gesture per file: the fingers touching (`mayBegin`/`began`) → lifting (`ended`/`cancelled`) → the system's
+momentum ending, or 0.3 s after lifting when no momentum follows (PerfLoopProbe `GestureRecorder`). `t` is ms since the
+first event; `dx`/`dy` are `scrollingDeltaX/Y` (points when `precise`, lines otherwise); `phase` and `momentum` are
+`none | mayBegin | began | stationary | changed | ended | cancelled` (NSEvent's phases). `device` is `trackpad` (precise
+deltas with phases) or `mouse` unless the recorder was told. `hz`: 1000 / the median interval of the events that moved.
+A recorder writing several gestures names them `NAME`, `NAME-2`, … No text, no window contents, no identifiers; still,
+recordings of a hand stay out of the repo (only synthetic ones are committed).
+
+What a replay of one reports (`perfloop.result/2` `reps[].steps[].smoothness`; the rep's gestures together in
+`reps[].smoothness`: the worst error, every stall, the median jerk; medians across reps in `summary.smoothness` as
+`Dist`s):
+
+```jsonc
+"smoothness": { "positionErrorP95Pt": 0.0, "positionErrorMaxPt": 0.0, "latencyFrames": 1, "stalls": 0, "jerkP95": 32.1,
+                "trackingTicks": 6, "ticks": 41 }
+```
+
+`latencyFrames`: the whole number of display frames (0–3) the content was behind the fingers, the alignment the error
+is taken at; `positionErrorP95Pt`: |shown − expected| while the fingers were down (nil when no tick fell there);
+`stalls`: frames the fingers moved ≥ 1 pt and the content < 0.5 pt, plus vsyncs with no tick meanwhile; `jerkP95`:
+the shown position's third derivative, p95, touch to settle, in pt/frame³. The manifest's scenario lists
+`positionErrorP95Pt` and `stalls` in `frameGuards`, and the manifest's `gestures` names the adapter's built-in ones
+(`synthetic:flick-forward`, …), which its scenario's `gesture` parameter takes as well as a path.
+`perfloop gestures list --json` prints `{ "schema": "perfloop.gestures/1", "dirs": [ … ], "gestures": [ { "path",
+"name", "device", "events", "durationMs", "finger": [dx, dy], "momentum": [dx, dy], "synthetic", "problems" } ],
+"builtIn": [ … ] }`.

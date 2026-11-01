@@ -60,14 +60,16 @@ Start each session with `perfloop session start` and `perfloop exp status`. Then
 | Scenario | Objective (lower is better) | Budget (design/desktop/SPEC.md §1) |
 |---|---|---|
 | `step`, `jump`, `fling` | `mainThreadCpuMsPerStep` (instructions per step when CPU is noisy) | no dropped frame at 120 Hz with 17 agents |
+| `swipe` (`--set gesture=FILE`: a recording, `perfloop gestures list`) | `mainThreadCpuMsPerStep` | the same, and the content within 1 pt of the fingers (p95) with no stall |
 | `switch` | `latencyMs` | first frame ≤ 50 ms |
 | `open` | `latencyMs` | first frame ≤ 100 ms |
 | `follow` | `latencyMs` | moving within 50 ms of the ask |
 | `burst`, `typing` | guards only | a thread item re-renders its own column; typing stays in the composer |
 
 A screen is promising when the candidate wins every pair and the median gain is ≥ max(5 %, the noise band). A full wins
-when Mann-Whitney gives p < 0.05, the effect is ≥ the band, and the frame guards (hitch time ratio, longest stretch)
-are not worse beyond theirs. Correctness guards veto any win (DESKBENCH.md, *Correctness guards*): the scenario's checks
+when Mann-Whitney gives p < 0.05, the effect is ≥ the band, and the frame guards (hitch time ratio, longest stretch;
+on `swipe` also the position error and stalls, DESKBENCH.md *Recorded gestures*) are not worse beyond theirs; jerk is
+information. Correctness guards veto any win (DESKBENCH.md, *Correctness guards*): the scenario's checks
 (`landed`, …), `built-within` (the columns in view built once the window is at rest) and `snapshot-diff` (the window then
 looks like the champion's; over tolerance it is `needsReview`, never a win). They come from the champion's manifest, so
 a candidate can't drop one. Once a full has won, the isolation scenarios (`burst`, `typing`) run one pair each, whatever
@@ -96,5 +98,7 @@ when the owner says the Mac is free; never send synthetic input to the system. `
 
 - Anything that changes behaviour: declare it with `--behaviour-change`; promotion then needs the owner.
 - Feel: a new animation curve, spring or gesture handling is judged on a real trackpad, not by the bench.
+- A recorded gesture: only a hand makes one (`deskbench record-gesture --name NAME`, DESKBENCH.md *Recorded gestures*).
+  Ask for one when `swipe` on the synthetic gestures isn't enough to judge a change; never commit a recording.
 - Taste: anything that looks different (spacing, what a column shows while it builds).
 - A `needsReview` verdict, a guard you think is wrong, a scenario or fixture you think is missing.

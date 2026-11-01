@@ -156,6 +156,9 @@ public struct StepResult: Codable, Sendable, Equatable {
   /// The step's bodies by the recorded mutations they followed, as for a stretch (`Stretch.causes`). nil in results
   /// from before it.
   public var causes: [Cause]? = nil
+  /// How closely the content followed a replayed gesture (`swipe`; PerfLoopProbe's Smoothness.swift, CAPABILITIES.md
+  /// C9). nil in every other scenario and in results from before it.
+  public var smoothness: Smoothness? = nil
   public init(name: String, atMs: Double, durationMs: Double, latencyMs: Double? = nil, settleMs: Double? = nil, frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], notes: [String] = [],
               cpuMs: Double? = nil, instructions: Int? = nil) {
     self.name = name; self.atMs = atMs; self.durationMs = durationMs; self.latencyMs = latencyMs; self.settleMs = settleMs
@@ -197,8 +200,12 @@ public struct RepResult: Codable, Sendable, Equatable {
   /// Correctness guards judged after the rep settled (Guards.swift, C6), when the run was asked for them
   /// (`--guards`, PERFLOOP_GUARDS); absent otherwise.
   public var guards: [GuardResult]? = nil
+  /// The rep's gestures together (`Smoothness.rep`: the worst gesture's error, all stalls, the median jerk); nil
+  /// unless a step measured smoothness.
+  public var smoothness: Smoothness? = nil
   public init(index: Int, variant: String? = nil, steps: [StepResult], frames: FrameStats, mainThread: MainThreadStats, bodies: [String: Int], checks: [Check], worstStretches: [Stretch], window: WindowState?) {
     self.index = index; self.variant = variant; self.steps = steps; self.frames = frames; self.mainThread = mainThread; self.bodies = bodies; self.checks = checks; self.worstStretches = worstStretches; self.window = window
+    smoothness = Smoothness.rep(steps)
   }
   public var latencies: [Double] { steps.compactMap(\.latencyMs) }
   public var settles: [Double] { steps.compactMap(\.settleMs) }
@@ -230,6 +237,8 @@ public struct Summary: Codable, Sendable, Equatable {
   public var hitchTimeRatioMsPerS: Dist?
   /// Guards that failed in any rep (Guards.swift); nil when no rep ran guards.
   public var guardsFailed: [String]?
+  /// Medians of the reps' smoothness (`swipe`); nil when no rep measured it.
+  public var smoothness: SmoothnessSummary? = nil
   /// `objective`: what to record as the objective; by default latency when the reps measured one, else CPU per step.
   public init(reps rs: [RepResult], objective: Objective? = nil) {
     reps = rs.count
@@ -250,6 +259,7 @@ public struct Summary: Codable, Sendable, Equatable {
     mainThreadCpuMsPerStep = dist(rs.compactMap(\.cpuMsPerStep)); instructionsPerStep = dist(rs.compactMap(\.instructionsPerStep))
     hitchTimeRatioMsPerS = dist(rs.compactMap(\.frames.hitchTimeRatioMsPerS))
     guardsFailed = rs.contains { $0.guards != nil } ? Summary.guardsFailed(rs) : nil
+    smoothness = SmoothnessSummary(reps: rs)
     let o = objective ?? (lat.isEmpty ? .cpu : .latency)
     self.objective = rs.isEmpty ? nil : ObjectiveValue(o, reps: rs)
   }

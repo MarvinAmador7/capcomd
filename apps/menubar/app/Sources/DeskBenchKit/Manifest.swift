@@ -28,6 +28,9 @@ public struct Manifest: Codable, Sendable, Equatable {
   public var exitCodes: [String: Int]
   /// Scenarios whose checks run on every promotion, whatever the experiment climbs (C6: isolation, Guards.swift).
   public var isolationGuards: [String]? = Guards.isolation
+  /// The gestures `swipe` has built in (`--set gesture=synthetic:NAME`); recorded ones are files (`perfloop.gesture/1`,
+  /// `--set gesture=PATH`, `perfloop gestures list`).
+  public var gestures: [String]? = Gestures.synthetic.map(Gestures.spec)
 
   public struct Scenario: Codable, Sendable, Equatable {
     public var name: String
@@ -59,7 +62,7 @@ public struct Manifest: Codable, Sendable, Equatable {
       let o = Objective.default(for: s)
       return Scenario(name: s.name, summary: s.summary, kind: s.kind.rawValue, budget: s.budget, rule: s.rule, latencyBudgetMs: s.latencyBudgetMs,
                       params: s.params, objective: o.metric, guards: Guards.forScenario(s.name), guardParams: Guards.params(for: s.name),
-                      frameGuards: (o == .frames ? [] : [Objective.frames.metric]) + ["longestStretchMs"],
+                      frameGuards: (o == .frames ? [] : [Objective.frames.metric]) + ["longestStretchMs"] + (s.name == "swipe" ? ["positionErrorP95Pt", "stalls"] : []),
                       checks: Self.checks[s.name] ?? [], host: s.name == "open" ? "window" : nil)
     }
     suite = Scenarios.suite
@@ -74,7 +77,7 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// `isolation-still`, `delivered-moving`, …
   public static let checks: [String: [String]] = [
     "open": ["columns-at-first-frame"], "switch": ["two-projects", "switched"], "step": ["landed"], "jump": ["enough-columns", "landed"],
-    "fling": ["reel-scroll-view", "snapped"], "burst": ["isolation-*", "delivered-*"], "typing": ["composer-found", "typed", "isolation"],
+    "fling": ["reel-scroll-view", "snapped"], "swipe": ["reel-scroll-view", "gesture", "snapped"], "burst": ["isolation-*", "delivered-*"], "typing": ["composer-found", "typed", "isolation"],
     "resize": ["columns-follow-width"], "follow": ["enough-columns", "landed"],
   ]
 

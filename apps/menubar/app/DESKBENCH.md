@@ -39,6 +39,7 @@ true. Results from before the stamp have no `build` and often no `commit`.
 |---|---|---|
 | Is the reel smooth / did my change hurt it? | `run step` (or `jump`, `fling`) `--reps 5` | `verdict`, `summary.hitchTimeRatioMsPerS`, `summary.mainThreadCpuMsPerStep`, `summary.longestStretchMs`, then the stretches |
 | Does the window open / switch fast enough? | `run open`, `run switch` | `summary.latencyMs.median` vs the budget (100 / 50 ms) |
+| Does the reel follow my fingers, and how much does a real swipe cost? | `run swipe --gesture FILE` (a recording: `record-gesture`) | `summary.smoothness` (`positionErrorP95Pt`, `stalls`, `jerkP95`), `summary.mainThreadCpuMsPerStep`; see *Recorded gestures* |
 | Does a thread item re-render only its column? | `run burst` | `checks` named `isolation-*`; `reps[].steps[].notes` has the counts |
 | Does typing stay inside the composer? | `run typing` | `checks` `isolation`; which views leaked is in the detail |
 | Does Follow go to the ask, and how fast? | `run follow` | `latencyMs` (ask → reel starts), `settleMs`, check `landed` |
@@ -80,6 +81,9 @@ see *Comparing two builds' call trees* below.
   while the reel moves (judged as late frame time: `hitchTimeRatioMsPerS` must be 0), no main-thread stretch over a
   frame.
 - `fling`: a swipe with momentum, see *Fidelity* below. Also checks the reel rested on a column edge.
+- `swipe`: a recorded gesture (`--gesture FILE`, `perfloop.gesture/1`; default the synthetic `flick-forward`) replayed
+  into the reel at its recorded times, `swipes` (4) times from the middle column; budget as `fling` plus the content
+  within 1 pt of the fingers (p95) with no stall. See *Recorded gestures* below. Not in `suite`.
 - `burst`: thread items for one on-screen agent at N/s (default 20/s for 3 s), standing still and then while stepping.
   Passes when no other column's thread, no `Column`/`ColumnHead`/`CrewTab`/`TitleBar` body ran.
 - `typing`: key events into an on-screen composer. Passes when only `ColumnComposer` bodies ran.
@@ -315,7 +319,7 @@ measured steps (a run without `--guards` times exactly as before), and land in `
   a fresh window), the last of them at most `built-within.ms` (300) after settle; it is warm; its view in the reel is a
   hosting view with something in it, not the reel's blank placeholder. `value` is how long after settle the last column
   was built (negative: before).
-- **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `follow`, `resize`; not `burst` or `typing`): after
+- **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `swipe`, `follow`, `resize`; not `burst` or `typing`): after
   settle the run writes `<scenario>-rep<i>.settled.png`, `.layout.json` (where the columns and their threads are, in
   pixels) and `.later.png` 1.1 s later. `snapdiff A.png B.png [--diff-out D.png] [--json]` compares the champion's (A)
   with the candidate's (B), headless, in the champion's binary: pixel by pixel (a channel off by more than 16 of 255)
@@ -415,8 +419,13 @@ per step per node), `gains` (b faster) and `losses` (b slower) with each item's 
 - **Fling**: scroll-wheel `NSEvent`s built from `CGEvent`s with trackpad phases (began/changed/ended, then momentum
   began/changed/ended) are delivered straight to the reel's `NSScrollView.scrollWheel(with:)`. AppKit's gesture handling
   and the reel's snapping run; the WindowServer, hit-testing and the trackpad driver's momentum curve do not (the decay is
-  the bench's: 4 % a frame from the release velocity). Good for "does scrolling by hand drop frames"; not for comparing
-  deceleration feel.
+  the bench's: 4 % a frame from the release velocity). Its events carry timestamp 0, which hides AppKit's own
+  deceleration after release (see *Recorded gestures*): `swipe` is the closer one. Good for "does scrolling by hand
+  drop frames"; not for comparing deceleration feel.
+- **Swipe**: a recording's events, at its times and with real timestamps, built and delivered the same way as
+  `fling`'s; real are AppKit's gesture handling (its queueing of deltas to the next refresh, its deceleration), the
+  reel's snapping and the per-frame work. Not real: the WindowServer and hit-testing; a recorded momentum curve is the
+  recording machine's (what A/B wants, not "feel").
 - **Typing**: `NSEvent.keyEvent` pairs sent with `window.sendEvent` to the composer made first responder: the real
   field editor path, minus the input method.
 - **Frames**: a `CADisplayLink` callback on the main run loop, not Core Animation's commit log. A late tick means the
@@ -426,6 +435,88 @@ per step per node), `gains` (b faster) and `losses` (b slower) with each item's 
   live items are `agent.thread_item_changed` frames on the run's lifecycle feed, as the daemon sends them.
 - **Open**: in one process the first rep is cold and the rest are warm windows; use `suite`/`ab` (fresh process per
   run) or `params.processLaunchToFirstFrameMs` for launch-to-frame.
+
+## Recorded gestures: `swipe` and `record-gesture`
+
+A real swipe, recorded once by a hand, replayed into the reel as often as the loop likes (design/perf-loop
+CAPABILITIES.md C9). In-process only: the events go to the reel's `NSScrollView.scrollWheel(with:)` from a main-queue
+timer at their recorded times; nothing is posted to the system.
+
+**Record** (the owner, once per gesture; the window opens on `crew17` at its middle column):
+
+```sh
+cd apps/menubar/app && swift build -c release --product CapcomdDeskBench
+.build/release/CapcomdDeskBench record-gesture --name flick-left           # swipe once with two fingers over the columns
+.build/release/CapcomdDeskBench record-gesture --name drags --count 3 --timeout 90
+```
+
+It writes `${PERFLOOP_HOME:-~/.perfloop}/capcomd-desktop/gestures/NAME.json` (`--out FILE`; more gestures: `NAME-2.json`,
+…; never inside a git checkout unless `--allow-in-repo`), says where the reel came to rest after each gesture (it
+should be a column edge), and exits 2 if nothing was recorded within `--timeout` (60 s). A dev build of the app records
+too: `CAPCOMD_DESK_RECORD_GESTURE=~/g/flick.json` (DeskDebug; release builds with `-Xswiftc -DDESK_PROBE`). The file is
+`perfloop.gesture/1` (design/perf-loop SCHEMAS.md §8): per event `t` (ms since the first), `dx`, `dy`
+(`scrollingDeltaX/Y`), `phase`, `momentum`, `precise`, and nothing else. A gesture is the fingers touching → lifting →
+the system's momentum ending (or 0.3 s after lifting with no momentum). Real recordings stay out of the repo; the
+synthetic ones are in `Gestures/` (`gestures --write Gestures` regenerates them, a test checks they match):
+`synthetic:flick-forward` and `flick-back` (`fling`'s curve: 6 frames to 2400 pt/s, momentum −4 %/frame) and
+`drag-forward` (480 pt/s for 48 frames, no momentum). `gestures [FILE…]` lists them and checks files;
+`perfloop gestures list` finds the recorded ones.
+
+**Replay**: `run swipe --gesture FILE` (repeat `--gesture` for several, taken in turn; `--set swipes=N`, `from=I`
+for the start column). Deltas go out in whole points (a CGEvent's point delta is an integer; the remainder is carried,
+so the sum stays within half a point) with the recorded phases and real timestamps. The `gesture` check fails when an
+event didn't go out as recorded; `snapped` when the reel didn't rest on a column edge.
+
+**Smoothness** (`reps[].steps[].smoothness`, the rep's in `reps[].smoothness`, medians in `summary.smoothness`; the
+meter is tools/perfloop's PerfLoopProbe `SmoothnessMeter`). A display link on the scroll view reads the document
+layer's `presentation()` position every tick (a render-server slide counts); the expected position is the start plus
+the finger deltas that could be on screen by then:
+
+- `latencyFrames`: AppKit doesn't move the clip view inside `scrollWheel(with:)`; it queues the delta and applies it
+  on the next refresh, so the reel shows the fingers' position one frame late (ce66497's reel, every gesture:
+  1). The meter aligns by the whole number of frames (0–3) that fits best and reports it: latency, not error.
+- `positionErrorP95Pt` (and `positionErrorMaxPt`): |shown − expected| while the fingers are down, p95. After they lift
+  the reel snaps, so there's nothing to hold it to. A delta due but not delivered (the main thread busy) counts.
+- `stalls`: frames while the fingers moved ≥ 1 pt and the content didn't (< 0.5 pt), plus every vsync the main thread
+  missed meanwhile (the screen kept the old frame). `--set inject-block-ms=60` sleeps the main thread mid-gesture: the
+  meter's self-check, the stalls go up by at least the frames it held (60 ms: 7 at 120 Hz; 2026-10-31: 27–30 on a
+  drag that had 0 without it, and one 16 pt error).
+- `jerkP95`: the shown position's third derivative, p95, from touch to settle, in pt/frame³ at the display's rate. It
+  sees a frame that sticks or jumps and a hand-off at release that changes the acceleration at once.
+
+Budget: the content within 1 pt (p95, median of reps) and no stall, on top of `fling`'s. In `compare`/`ab` (and
+perfloop's full stage) `positionErrorP95Pt` (band 25 %, at least 0.5 pt) and `stalls` (at least 1 a rep) are guards:
+both sit at 0 on a main thread that keeps up, and content that stops following the fingers is what a user sees at
+once. `jerkP95` is information: it differentiates three times, swings with the display link's jitter, and its band
+isn't known until real recordings give one.
+
+`--set timestamps=zero` sends every event with timestamp 0, as `fling` does. `DESKBENCH_SWIPE_TRACE=FILE` appends every
+event (due, delivered, the clip view's offset before and after) and tick (time, last commit, shown, clip offset) as
+JSON lines: what AppKit did with them.
+
+What the first replays showed (2026-10-31, ce66497's reel, release, crew17, 3 reps × 4 swipes a gesture; `untrusted`:
+the idle check saw most idle frames late, so absolute frame numbers are high; the comparisons ran back to back):
+
+| | position error p95 (max) | latency | stalls a gesture | jerk p95 | CPU ms/step | late frame ms/s | rest off an edge |
+|---|---|---|---|---|---|---|---|
+| `flick-forward` | 0 pt (0) in 12/12 | 1 frame | 0–3 | 1.6–22 | 665 | 194 | 17–212 pt |
+| `flick-back` | 0 pt (0) in 12/12 | 1 frame | 1–3 | 2.0–21 | 689 | 220 | 0.7–223 pt |
+| `drag-forward` | 0 pt (3) in 12/12 | 1 frame | 0–4 or 24–27 | 1.3–28 | 567 | 253 | 6–46 pt |
+| `flick-forward`, `timestamps=zero` | 0 pt (0) in 12/12 | 1 frame | 1–3 | 0.9–1.4 | 322 | 89 | 0.2 pt |
+| `fling` | – | – | – | – | 366 | 82 | (snapped) |
+
+- The content follows the fingers exactly, a frame behind. The stalls are late frames while the fingers were down:
+  on the drag, either a handful or a run of 24–27 (the main thread over a frame 29 times a rep, in AppKit's layout
+  pass inside the commit): the reel's cost under a hand, what the loop can now climb on.
+- The reel doesn't rest on a column edge after a swipe with real timestamps, even the slow drag with no momentum at
+  all. The trace shows why: when the fingers lift the reel sets the offset to its target and slides, then NSScrollView
+  runs its own deceleration from the release velocity it read in the events' timestamps (+127 pt over 0.5 s in one
+  flick) and carries the reel past the edge. The reel swallows the system's momentum, not this. With timestamps 0
+  (`fling`, `--set timestamps=zero`) it snaps.
+- That deceleration is also the dear part: `swipe` costs about twice the main-thread CPU and 2–3× the late frame time
+  of the same gesture with timestamps 0, or of `fling`. `fling` understates what a hand's swipe costs.
+- A delta queued when the fingers lift can be dropped: the reel's slide starts from the offset AppKit has applied so
+  far and overwrites the one still queued (20 pt in one replay).
 
 ## A worked example
 

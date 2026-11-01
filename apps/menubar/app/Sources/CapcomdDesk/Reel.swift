@@ -317,6 +317,7 @@ final class SnapScrollView: NSScrollView {
   private var wheelTimer: Timer?
 
   override func scrollWheel(with e: NSEvent) {
+    GestureTap.scrollWheel(e)   // nil unless a gesture recording was asked for (GestureTap.swift)
     guard let reel else { return super.scrollWheel(with: e) }
     if !e.momentumPhase.isEmpty {
       // The system's momentum after a swipe: the reel already chose where to land.

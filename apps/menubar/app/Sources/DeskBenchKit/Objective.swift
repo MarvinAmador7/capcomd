@@ -1,4 +1,5 @@
 import Foundation
+import PerfLoopProbe
 
 // What `ab`, `compare` and `run --baseline` decide on (design/perf-loop/SPEC.md §5.1): one objective, lower is
 // better, plus frame guards that must not get worse beyond their band. Every other metric is printed as information
@@ -154,6 +155,8 @@ public struct Comparison: Codable, Sendable, Equatable {
     var longest = row("longestStretchMs", { $0.mainThread.longestMs }, 25, 4)
     longest.role = sameMeasure ? "guard" : "info"; rows.append(longest)
     if !sameMeasure { notes.append("longestStretchMs is information only: \(measures) draw stretches differently") }
+    // A replayed gesture's smoothness (swipe): error and stalls guard, jerk informs (Gestures.swift says why).
+    rows += Smoothness.comparisonRows(a, b, row: row)
     // Information: the other objectives and the frame counts the bench has always printed.
     for x in Objective.allCases where x != o && !rows.contains(where: { $0.metric == x.metric }) && available(x) { rows.append(make(x, "info")) }
     for m in Budgets.metrics(for: spec) where !rows.contains(where: { $0.metric == m.name }) {
