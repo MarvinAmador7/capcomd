@@ -63,6 +63,35 @@ final class ThreadItemsTests: XCTestCase {
     XCTAssertEqual(t.afters.last, 9)
   }
 
+  /// A long thread read over several pages goes into the book once the read ends: a change in between (here a live
+  /// frame) doesn't show the thread as read so far, its oldest items first.
+  func testAThreadReadOverSeveralPagesShowsWhenItIsAllRead() async {
+    final class Paused: ThreadFetching, @unchecked Sendable {
+      let base = FakeThread()
+      var between: (@MainActor () -> Void)?
+      func thread(runId: String, agentId: String, after: Int, limit: Int) async throws -> CapcomdThread.Page {
+        let p = try await base.thread(runId: runId, agentId: agentId, after: after, limit: limit)
+        if after == 5, let between { await MainActor.run { between() } }
+        return p
+      }
+      func attachment(runId: String, id: String) async throws -> Data { Data() }
+      func workspaceFile(runId: String, agentId: String, path: String) async throws -> Data { Data() }
+    }
+    let t = Paused()
+    t.base.pages[0] = page([itemJSON("i1", seq: 3, order: 0), itemJSON("i2", seq: 5, order: 1)], next: 5)
+    t.base.pages[5] = page([itemJSON("i3", seq: 9, order: 2)], next: nil)
+    let s = CapcomdStore(thread: t); spawn(s)
+    s.openThread(runId: "run-x", agentId: "agt-1")
+    var midway: [String]?
+    t.between = { [unowned self] in
+      self.frame(s, self.itemJSON("i9", seq: 40, order: 8))   // a live item while the second page is on its way
+      midway = s.threadEntries(agentId: "agt-1").map(\.id)
+    }
+    await s.refreshThread(runId: "run-x", agentId: "agt-1")
+    XCTAssertEqual(midway, ["itm:i9"])   // the newest, live; not i1 and i2 alone
+    XCTAssertEqual(s.books["agt-1"]?.items.map(\.id), ["i1", "i2", "i3", "i9"])
+  }
+
   func testFramesForOtherRunsAreIgnored() {
     let s = CapcomdStore(thread: FakeThread()); spawn(s)
     frame(s, itemJSON("i1", seq: 1, order: 0))     // no thread open
