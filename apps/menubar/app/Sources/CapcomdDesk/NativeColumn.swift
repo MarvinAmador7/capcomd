@@ -18,6 +18,9 @@ final class NativeColumnView: NSView {
   /// The size the head and body were placed for: placing is skipped until it changes.
   private var placed: CGSize = .zero
   private var stroke: (asks: Bool, focused: Bool)?
+  /// The stroke, drawn over the head and body as SwiftUI's `strokeBorder` draws it: the same continuous rounded
+  /// rectangle, inset by half the line (a layer border antialiases its corners differently).
+  private let edge = StrokeView()
 
   init(agentId: String, model: DeskModel) {
     self.agentId = agentId
@@ -36,6 +39,7 @@ final class NativeColumnView: NSView {
       h.sizingOptions = []   // placed by frame; nothing to measure
       addSubview(h)
     }
+    addSubview(edge)
     observe()
   }
   required init?(coder: NSCoder) { fatalError() }
@@ -48,6 +52,8 @@ final class NativeColumnView: NSView {
     let h = Theme.Desk.columnHeader
     head.frame = CGRect(x: 0, y: 0, width: bounds.width, height: h)
     body.frame = CGRect(x: 0, y: h, width: bounds.width, height: max(0, bounds.height - h))
+    edge.frame = bounds
+    edge.update()
   }
 
   /// The stroke reads the agent's `approval` and `focused`; when either changes the column applies it again, once the
@@ -62,12 +68,41 @@ final class NativeColumnView: NSView {
     DeskProbe.body("Column", id: agentId)
     let a = model.agent(agentId)
     let asks = a?.approval != nil, focused = a?.focused ?? false
-    guard stroke.map({ $0 != (asks, focused) }) ?? true, let layer else { return }
+    guard stroke.map({ $0 != (asks, focused) }) ?? true else { return }
     stroke = (asks, focused)
+    edge.color = NSColor(asks ? Theme.Desk.askStroke : focused ? Theme.accent.opacity(0.45) : Theme.Desk.columnStroke).cgColor
+    edge.lineWidth = asks || focused ? 1 : 0.5
+    edge.update()
+  }
+}
+
+/// The column's stroke: a shape layer over the column, never hit (clicks go to what is under it).
+final class StrokeView: NSView {
+  var color: CGColor?
+  var lineWidth: CGFloat = 0.5
+  private let shape = CAShapeLayer()
+  private var drawn: (CGSize, CGFloat)?
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    wantsLayer = true
+    shape.fillColor = nil
+    layer?.addSublayer(shape)
+  }
+  required init?(coder: NSCoder) { fatalError() }
+  override var isFlipped: Bool { true }
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  func update() {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    layer.borderColor = NSColor(asks ? Theme.Desk.askStroke : focused ? Theme.accent.opacity(0.45) : Theme.Desk.columnStroke).cgColor
-    layer.borderWidth = asks || focused ? 1 : 0.5
+    shape.strokeColor = color
+    shape.lineWidth = lineWidth
+    if drawn.map({ $0 != (bounds.size, lineWidth) }) ?? true {
+      drawn = (bounds.size, lineWidth)
+      shape.frame = bounds
+      let r = bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2)
+      shape.path = RoundedRectangle(cornerRadius: max(0, Theme.Desk.columnRadius - lineWidth / 2), style: .continuous).path(in: r).cgPath
+    }
     CATransaction.commit()
   }
 }
