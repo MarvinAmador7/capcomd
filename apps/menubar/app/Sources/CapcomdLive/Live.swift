@@ -36,9 +36,11 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
       var last = after, attempts = 0, down = false
       while !Task.isCancelled {
         do {
+          var answered = false
           for try await item in t.sseItems(path, lastEventID: last > 0 ? String(last) : nil, idleTimeout: idle) {
             attempts = 0   // anything from the daemon, heartbeats included, means it's up
-            if down { down = false; await onFrame(.link(up: true)) }
+            // The first thing on each connection (the daemon's `: connected`) says it answered, after a drop or not.
+            if down || !answered { down = false; answered = true; await onFrame(.link(up: true)) }
             guard case .frame(let f) = item else { continue } // heartbeat: activity only
             let frame = StreamFrame.parse(event: f.event, data: f.data)
             if case .snapshotEnd(let s) = frame, f.id == nil { last = s }

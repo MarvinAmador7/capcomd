@@ -252,8 +252,8 @@ public final class CapcomdStore {
     for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }   // live activity rides along (Live adds ?activity=1)
   }
   public var activeScopes: [String] { subs.keys.sorted() }
-  /// The daemon feed's first snapshot has been applied (an empty project list is then really empty).
-  public var daemonLoaded: Bool { floor["daemon"] != nil }
+  /// The daemon feed has answered (an empty project list is then really empty, not unread).
+  public internal(set) var daemonLoaded = false
 
   func subscribe(_ scope: String) { subscribe(scope, scope: scope, feed: nil) }
   func subscribe(_ key: String, scope: String, feed: String?) {
@@ -286,7 +286,14 @@ public final class CapcomdStore {
     case .unauthorized:
       unauthorized = true
     case .link(let up):
-      guard scope == "daemon", daemonUnreachable == up else { return }   // the panel follows the daemon feed only
+      guard scope == "daemon" else { return }   // the panel follows the daemon feed only
+      if up, !daemonLoaded {
+        // The daemon answered. Its run list follows on the same connection (the daemon scope has no snapshot to end);
+        // say so a moment later, so an empty list isn't shown before the runs that were on their way.
+        daemonLoaded = true
+        Task { [weak self] in try? await Task.sleep(for: .milliseconds(300)); self?.changed() }
+      }
+      guard daemonUnreachable == up else { return }
       daemonUnreachable = !up
       // Back: what the daemon can do and offers may have changed (a restart, an upgrade), and a first read made while it
       // was down got nothing, which hid the composer's Local/VM and driver row until the app was restarted.

@@ -16,7 +16,8 @@ public enum StreamFrame: Sendable, Hashable {
   case cursor(Int)
   /// The daemon answered 401: the token is missing or wrong.
   case unauthorized
-  /// The subscriber's view of the connection: down after repeated failed attempts, up again on the next data.
+  /// The subscriber's view of the connection: down after repeated failed attempts; up on the first data of each
+  /// connection (so also once the daemon first answers).
   case link(up: Bool)
   case ignored(String)
 

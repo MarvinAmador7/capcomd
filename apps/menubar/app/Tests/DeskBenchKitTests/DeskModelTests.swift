@@ -115,13 +115,13 @@ final class DeskModelTests: XCTestCase {
 
   /// Before the daemon's first snapshot the window has nothing to say (not "nothing running"); when its feed drops the
   /// window says so, and says so no more once it's back.
-  @MainActor func testLoadedAndUnreachableFollowTheDaemonFeed() {
+  @MainActor func testLoadedAndUnreachableFollowTheDaemonFeed() async throws {
     let s = CapcomdStore()
     let m = DeskModel(store: s)
     XCTAssertFalse(m.loaded)
     XCTAssertFalse(m.unreachable)
-    s.receive(.reset(snapshotSeq: 1, reason: "compacted"), scope: "daemon")
-    s.receive(.snapshotEnd(snapshotSeq: 1), scope: "daemon")
+    s.receive(.link(up: true), scope: "daemon")   // the daemon's `: connected`, and no runs
+    for _ in 0..<100 where !m.loaded { try await Task.sleep(for: .milliseconds(10)) }
     XCTAssertTrue(m.loaded)
     XCTAssertNil(m.openRunId)
     s.receive(.link(up: false), scope: "daemon")

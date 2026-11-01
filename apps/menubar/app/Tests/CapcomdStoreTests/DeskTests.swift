@@ -109,13 +109,20 @@ final class DeskTests: XCTestCase {
     XCTAssertEqual(s.columnHeader(runId: "run-s", agentId: "c")?.startedAtMs, 1_793_506_700_000)
   }
 
-  func testTheDaemonIsLoadedOnceItsFirstSnapshotArrives() {
+  /// The daemon scope sends no snapshot (an empty daemon sends nothing but `: connected`): the first answer on its feed
+  /// is what says an empty project list is really empty. A run's feed answering says nothing about the daemon's list.
+  func testTheDaemonIsLoadedOnceItsFeedAnswers() async throws {
     let s = CapcomdStore()
+    var changes = 0
+    s.onChange = { changes += 1 }
+    s.receive(.link(up: true), scope: CapcomdStore.lifecycleKey("run-x"))
     XCTAssertFalse(s.daemonLoaded)
-    s.receive(.reset(snapshotSeq: 1, reason: "compacted"), scope: "daemon")
-    XCTAssertFalse(s.daemonLoaded)
-    s.receive(.snapshotEnd(snapshotSeq: 1), scope: "daemon")
+    s.receive(.link(up: true), scope: "daemon")
     XCTAssertTrue(s.daemonLoaded)
     XCTAssertTrue(s.decks().isEmpty)   // loaded and empty: nothing running
+    XCTAssertEqual(changes, 0)         // reported a moment later, after the run list on its way
+    for _ in 0..<100 where changes == 0 { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(changes, 1)
+    XCTAssertFalse(s.daemonUnreachable)
   }
 }
