@@ -3386,6 +3386,15 @@
                           "null"
                         ]
                       },
+                      "createdAt": {
+                        "description": "When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it",
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
+                      },
                       "updatedAt": {
                         "type": [
                           "string",
@@ -10188,6 +10197,15 @@
                     "string",
                     "null"
                   ]
+                },
+                "createdAt": {
+                  "description": "When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time"
                 },
                 "updatedAt": {
                   "type": [
