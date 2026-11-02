@@ -24,7 +24,7 @@ A git checkout keeps state next to the code: `.relay/` (auth profiles, env snaps
 logs, driver pids), `.traces/` (spans) and `.capcomd/agents.json`. An installed CLI, or any CLI with
 `CAPCOMD_HOME` set, uses `~/.capcomd` (`state/`, `traces/`, `agents.json`). `src/utils/home.ts` decides; the
 per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_QUOTA_LEDGER`, `CAPCOMD_TRACE_DIR`,
-`CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`, `CAPCOMD_MACHINES_LEDGER`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
+`CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`, `CAPCOMD_MACHINES_LEDGER`, `CAPCOMD_RUNS_INDEX`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
 
 The Rivet engine's data is always under the capcomd home (`~/.capcomd`, or `$CAPCOMD_HOME`), checkout or not, one
 directory per port (`src/engine/data.ts`; `CAPCOMD_ENGINE_DATA` names another): `engine/<port>/db` (RocksDB),
@@ -46,7 +46,7 @@ Design documents live in `docs/`. Start with:
 - `adr-017-subagents-in-vm.md` - agents orchestrating agents from inside their VMs
 - `adr-018-agent-plugins.md` - capcomd as a plugin for your agent: MCP tools, skills, the driver role
 - `adr-019-agents-report-up.md` - (proposed) agents report up to their parents; turn, time and money limits are optional
-- `adr-022-agent-lifecycle-workflow.md` - (spike, `CAPCOMD_AGENT_WORKFLOW=1`) an agent's lifecycle as a Rivet workflow in its worker actor
+- `adr-022-agent-lifecycle-workflow.md` - an agent's lifecycle as a Rivet workflow in its worker actor (the default; `CAPCOMD_AGENT_WORKFLOW=0` on the engine brings back `agent-drive` processes for one release), and the rule for changing the workflow
 - `adr-015-agent-envs-secrets-codex.md` - agent profiles, credentials, env snapshots
 - `actors-v1.md`, `adr-008-lifecycle-state-machines.md`, `durability.md` - actors, state machines, failure handling
 - `output-contract.md` - the JSON, events and spans that callers can rely on
@@ -96,7 +96,7 @@ packages/
                   blocks/1 tree; pure functions (no imports from src/), own tsconfig, tests and golden fixtures
   bot-avatar/   - (proposal) deterministic pixel bot avatars: agent id + role + size → SVG, from a parts catalog;
                   pure, no dependencies; catalog.json and golden bots for the Swift renderer
-tests/          - unit, scenario, chaos, agent and merge suites
+tests/          - unit, scenario, agent and merge suites
 scripts/        - live e2e scripts (boxd + GitHub) and helpers
 docs/           - design documents and ADRs
 ```
@@ -106,7 +106,8 @@ docs/           - design documents and ADRs
 ```bash
 bun run typecheck
 bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP (~1 min)
-bun run test:scenarios         # sub-agent scenarios, primitives policy (the CI regression suite)
+bun run test:scenarios         # sub-agent scenarios, primitives policy (the CI regression suite, six shards in CI)
+bun run test:scenarios:timings # the same, then refresh tests/scenario-timings.json (per-file times that balance the shards)
 bun test tests/agents tests/primitives tests/merge
 (cd apps/tui && bun test)
 ```
@@ -134,17 +135,10 @@ a private GitHub repo (it prints the delete command) and ends with `E2E PASS` or
 loads `plugins/capcomd` and may use only the plugin's MCP tools and skills (no shell, no edits). It needs `claude`
 logged in as well, and fails if the session used any other tool.
 
-### Chaos tests
+### Killpoints
 
-```bash
-bun run test:chaos             # named killpoints and seeded iterations (long)
-bun run chaos:fast             # parallel workers; strict when CI=true
-
-# Run with a specific killpoint
-CAPCOMD_KILLPOINT=tx.mid:1 bun test tests/chaos/killpoints.test.ts
-```
-
-Named killpoints:
+`CAPCOMD_KILLPOINT=<name>[:n]` kills the process (SIGKILL) the n-th time it reaches a named point, which the merge
+and workflow tests use to check that a crashed step resumes. Named killpoints:
 
 - `tx.mid` - Kill during transaction
 - `model.after_return.before_commit` - Kill after model call
@@ -171,8 +165,8 @@ the changelog, what never to do by hand). By hand, before tagging:
 3. Merge to `main`, let CI pass, then tag that commit: `git tag -a vX.Y.Z -m "capcomd X.Y.Z" <sha> && git push origin vX.Y.Z`.
 
 The tag runs the release workflow: it checks the tag is on `main`, matches `package.json` and has a changelog
-section; runs typecheck, `test:fast`, the TUI tests and `test:scenarios` on Linux and macOS, and one strict chaos
-round; packs the package and installs it with a fresh `HOME` on both (`scripts/release-smoke.sh`: `setup demo`, a run
+section; runs typecheck, `test:fast`, the TUI tests and `test:scenarios` on Linux and macOS; packs the package and
+installs it with a fresh `HOME` on both (`scripts/release-smoke.sh`: `setup demo`, a run
 with fake agents, `setup check`, the service definition, state only in `~/.capcomd`); then publishes that package
 to npm and the GitHub release with `capcomd-X.Y.Z.tgz`, the four binaries, their `.sha256` files and the changelog
 section. Any failure publishes nothing; fix, then

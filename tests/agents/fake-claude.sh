@@ -2,6 +2,7 @@
 # Fake `claude` for adapter tests. Behaviour is selected by markers in the -p prompt:
 #   [leak] print the API key everywhere   [sleep] hang   [nochange] edit nothing   [fail] error result
 #   [slow] keep working for ~5s, one event every 0.25s (liveness)
+#   [slower] the same for ~10s (liveness: longer than its stuck window on a slow runner)
 #   [quota] or [quota:N] edit, then stop at a plan usage limit resetting in N seconds (default 3600), as
 #           claude 2.1.303 does; a resumed run (its prompt says it was stopped earlier) works normally
 #   [steady] edit, then keep working for ~3s (checkpoints, supervisor heartbeats)
@@ -9,8 +10,10 @@
 #   [spin] or [spin:N] edit, then make the same Read call N times (default 30, 0.15s apart), then finish normally (stuck: spinning)
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
 #           error differing only in numbers, then finish normally (stuck: failing)
-#   [listen] edit, then work for ~8s, writing each message it reads on stdin to messages.txt (send mid-run)
+#   [listen] edit, then work for ~8s ([listen:N]: ~N s), writing each message it reads on stdin to messages.txt (send mid-run)
 #   [steps] read two files (thinking in between) before the edit and run the tests after it, all inside a second (agent.step)
+#   [title:WORDS] name its tab: a Bash call `capcomd title "WORDS"`, run (the shim's answer and exit code in ../title-out.txt)
+#   [title-chained:WORDS] a Bash call `capcomd title WORDS && rm -rf /`, never run (not a rename)
 #   [hold:N] the first run works N seconds (default 30) before editing (a daemon restart mid-run); a run started again
 #           in the same work dir finishes at once. Each run logs start, stopped (on SIGTERM) and finished to ../hold.log
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
@@ -33,6 +36,18 @@ case "$prompt" in *"[leak]"*)
   echo "stderr leak $ANTHROPIC_API_KEY" >&2;;
 esac
 case "$prompt" in *"[sleep]"*) sleep 120;; esac
+case "$prompt" in *"[title:"*)
+  t=$(printf '%s' "$prompt" | sed -n 's/.*\[title:\([^]]*\)\].*/\1/p')
+  emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"n1\",\"name\":\"Bash\",\"input\":{\"command\":\"capcomd title \\\"$t\\\"\"}}]}}"
+  { capcomd title "$t"; echo "exit $?"; } > ../title-out.txt 2>&1
+  emit "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"n1\",\"content\":\"$(head -1 ../title-out.txt | tr -d '"\\')\"}]}}";;
+esac
+# [title-chained:WORDS]: a Bash call that names the tab and does something else too (never run): not a rename
+case "$prompt" in *"[title-chained:"*)
+  t=$(printf '%s' "$prompt" | sed -n 's/.*\[title-chained:\([^]]*\)\].*/\1/p')
+  emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"n2\",\"name\":\"Bash\",\"input\":{\"command\":\"capcomd title $t && rm -rf /\"}}]}}"
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"n2","content":"refused"}]}}';;
+esac
 case "$prompt" in *"[hold:"*)
   n=$(printf '%s' "$prompt" | sed -n 's/.*\[hold:\([0-9]*\)\].*/\1/p')
   again=0; [ -f ../hold.log ] && again=1
@@ -40,7 +55,9 @@ case "$prompt" in *"[hold:"*)
   trap 'echo stopped >> ../hold.log; exit 143' TERM
   [ "$again" = 1 ] || sleep "${n:-30}";;
 esac
-case "$prompt" in *"[slow]"*)
+case "$prompt" in *"[slower]"*)
+  for i in $(seq 1 40); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
+*"[slow]"*)
   for i in $(seq 1 20); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
 esac
 if [[ "$prompt" == *"[fail]"* ]]; then
@@ -92,9 +109,14 @@ esac
 case "$prompt" in *"[steady]"*)
   for i in $(seq 1 12); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
 esac
-case "$prompt" in *"[listen]"*)
-  for i in $(seq 1 8); do
-    if [ "$stream" = 1 ] && IFS= read -r -t 1 line; then
+case "$prompt" in *"[listen]"*|*"[listen:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[listen:\([0-9]*\)\].*/\1/p')
+  for i in $(seq 1 "${n:-8}"); do
+    # Wait up to 1 s for a message's first byte, then read the rest of its line without a timeout: a timeout in the
+    # middle of a line throws away what it read, and a long line can arrive in pieces (or just take a while to read).
+    if [ "$stream" = 1 ] && IFS= read -r -t 1 -n 1 c; then
+      [ -z "$c" ] && continue
+      IFS= read -r line; line="$c$line"
       printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
       emit '{"type":"assistant","message":{"content":[{"type":"text","text":"heard a message"}]}}'
     else [ "$stream" = 1 ] || sleep 1; emit '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'; fi

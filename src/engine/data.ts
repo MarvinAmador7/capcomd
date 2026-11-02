@@ -23,13 +23,13 @@ type Env = Record<string, string | undefined>;
 export const DEFAULT_PORT = 6420;
 export const KEEP_BACKUPS = 3;
 
-/** The data dir for an engine on `port`: CAPCOMD_ENGINE_DATA (or the chaos harness's) wins, else <home>/engine/<port>. */
+/** The data dir for an engine on `port`: CAPCOMD_ENGINE_DATA (or the test engine's, CAPCOMD_TEST_ENGINE_DATA) wins, else <home>/engine/<port>. */
 export function engineDataDir(port: number, env: Env = process.env): string {
-  return env.CAPCOMD_ENGINE_DATA ?? env.CAPCOMD_CHAOS_ENGINE_DATA ?? join(capcomdHome(env), "engine", String(port));
+  return env.CAPCOMD_ENGINE_DATA ?? env.CAPCOMD_TEST_ENGINE_DATA ?? join(capcomdHome(env), "engine", String(port));
 }
 
 /** True when the data dir is capcomd's default for the port (no explicit override). */
-export const isDefaultDataDir = (env: Env = process.env) => !env.CAPCOMD_ENGINE_DATA && !env.CAPCOMD_CHAOS_ENGINE_DATA;
+export const isDefaultDataDir = (env: Env = process.env) => !env.CAPCOMD_ENGINE_DATA && !env.CAPCOMD_TEST_ENGINE_DATA;
 
 /**
  * Whether `serve` on `port` makes the one-time copy from ~/.rivetkit: the default port on capcomd's default data dir.

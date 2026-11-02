@@ -133,9 +133,9 @@ ChatGPT connects only to remote HTTPS MCP servers. `capcomd mcp --http` serves S
 the engine runs somewhere reachable:
 
 - **(a) Your machine, through a tunnel** (OpenAI's Secure MCP Tunnel, Cloudflare Tunnel): no hosting, but the
-  laptop must stay awake for the endpoint, and for the run: each agent's driver (`agent-drive`) is a process on
-  the engine's host, so while it sleeps the agents' VMs keep running but nothing relays their requests, pushes
-  their branches or records their results; the run resumes when it wakes (durability), it doesn't progress.
+  laptop must stay awake for the endpoint, and for the run: each agent is driven by the engine on that host (ADR-022),
+  so while it sleeps the agents' VMs keep running but nothing relays their requests, pushes their branches or
+  records their results; the run resumes when it wakes (durability), it doesn't progress.
 - **(b) A hosted engine in a provider VM** (boxd gives `https://<name>.boxd.sh` and persistent disk): always on,
   the same durable state, VM backups; it needs the user's provider key and agent logins to live there, so it is
   its own design (credentials, OAuth, multi-user) before it ships.

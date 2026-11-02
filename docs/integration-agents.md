@@ -38,7 +38,7 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 | `capcomd_projects` | | `{default, here, projects: [{name, path, default, ready}]}`: the projects this capcomd serves |
 | `capcomd_setup` | `project?` | `{ready, steps[], gates: {checks, reviewer, target}, driver: {approvals, maxRunBudget}, project}` |
 | `capcomd_profiles` | | `{default, profiles: [{name, provider, auth, model, canSpawn, ready, detail}]}` |
-| `capcomd_run_new` | `budget?` (none: unlimited), `label?`, `target?`, `targetFrom?`, `key?` | `{runId, created, budget, gates}` |
+| `capcomd_run_new` | `budget?` (none: unlimited), `label?`, `target?`, `targetFrom?`, `goalBranch?`, `base?`, `key?` | `{runId, created, budget, gates}`; with `goalBranch`/`base`, the run's goal branch (verified merges land on it with no approval) |
 | `capcomd_runs` | `limit?`, `project?` (only its runs) | `{runs: [{runId, label, repo, cwd, project, createdAt, agents: {status: n}, pendingApprovals}]}` |
 | `capcomd_spawn` | `runId`, `task`, `profile?`, `budget?`, `check?`, `report?`, `children?`, `key?` | the agent: `{agentId, status, …}` |
 | `capcomd_await` | `runId`, `agents[]`, `mode?` (`all`\|`any`), `timeoutMs?` (≤ 55000) | `{done[], pending[], first?, next}` |
@@ -56,9 +56,11 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 | `capcomd_inspect` | `runId`, `agent`, `tail?` | one agent: record, children, VM, logs, events |
 | `capcomd_events` | `runId`, `cursor?`, `limit?` | `{events[], nextCursor, total, truncated}` |
 | `capcomd_trace` | `runId`, `cursor?`, `limit?` | `{traceId, durationMs, spans[], nextCursor, total, truncated}` |
+| `capcomd_goal` | `runId` | a goal-branch run's result: `{branch, base, state, summary, compare, landed[], notLanded[], pullRequest, openPullRequest: {available, reason}}` |
+| `capcomd_pr_open` | `runId`, `stopped?` | `{created, branch, base, pullRequest: {number, url, state}}`: a pull request from the goal branch into its base, with the user's gh login (idempotent; never merged by capcomd). A run whose planner stopped is refused (reason `stopped`, with the question to ask the user) until `stopped: true` says they agreed |
 
-Tools carry MCP annotations: reads are `readOnlyHint`; `capcomd_merge`, `capcomd_cancel` and `capcomd_approve`
-are `destructiveHint`, so clients ask before calling them. `capcomd_approve` is never `idempotentHint` (a client may
+Tools carry MCP annotations: reads are `readOnlyHint`; `capcomd_merge`, `capcomd_cancel`, `capcomd_approve` and
+`capcomd_pr_open` are `destructiveHint`, so clients ask before calling them. `capcomd_approve` is never `idempotentHint` (a client may
 replay an idempotent call) and carries `_meta: {"anthropic/requiresUserInteraction": true}` (Claude Code then asks a
 person before every call, even in bypass and auto modes). Every write takes `key`: a retry with the same key returns
 the first result. Every tool that acts on a project (all but `capcomd_projects`, `capcomd_events` and
@@ -350,5 +352,5 @@ A task parks in `awaiting_approval` after verification passes when its target br
 `main,master,release/*`). The engine process reads that variable. The task stays there until
 `capcomd approve` or `capcomd_approve` moves it to `merged` (event `APPROVED`, recorded with
 `approvedBy`). Cancelling the run cancels tasks that are parked. Without `--target-branch`, tasks
-merge their own `task/<id>/e<epoch>` branches, which are unprotected, so the default path and the
-chaos suite never wait for approval.
+merge their own `task/<id>/e<epoch>` branches, which are unprotected, so the default path never
+waits for approval.

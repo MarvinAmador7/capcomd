@@ -18,7 +18,7 @@ import { selfArgv } from "../../utils/self";
 import { ORCHESTRATION_SKILL } from "../../utils/assets";
 import { projectConfigPath, readConfig, userConfigPath, writeConfig } from "../../config/store";
 import { keychainGet, keychainKind, keychainSet } from "../../config/keychain";
-import { githubRepoOf, gitRoot, httpsRemote, isUserConfigDir, originHead, originUrl, parseBudget, planProject, suggestCheck, writeProject } from "../../config/project-setup";
+import { githubRepoOf, gitRoot, httpsRemote, isUserConfigDir, originHead, originUrl, parseBudget, planProject, projectValues, suggestCheck, writeProject } from "../../config/project-setup";
 import { prompter, type Prompter } from "../prompt";
 
 export interface Step { step: string; ok: boolean; detail: string; hint?: string }
@@ -253,7 +253,15 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
   const gh = githubRepoOf(repo);
   const ghOk = !!gh && sh("gh", ["auth", "status"]).code === 0;
   const mode = String(v.mode ?? await p.choose("How should verified work land?", [{ value: "pr", label: "as a pull request merged by capcomd (GitHub)" }, { value: "direct", label: "pushed directly to the target branch" }], ghOk ? "pr" : "direct"));
-  const target = String(v.target ?? await p.ask("Target branch (agent merges into protected branches like main wait for `capcomd approve`)", head || "main"));
+  // The suggestion is origin's default branch as git knows it (origin/HEAD, else what the remote reports): never a
+  // guessed "main". Without one, the person names it (with --yes: --target).
+  // Re-running setup keeps the project's target. Unknown: none is written, and each run asks for its base.
+  const had = projectValues(dir)?.target ?? "";
+  const remoteHead = had || head || (originUrl(dir) ? (() => {
+    const r = spawnSync("git", ["ls-remote", "--symref", "origin", "HEAD"], { cwd: dir, encoding: "utf8", timeout: 15_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes -o ConnectTimeout=5" } });
+    return /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(r.stdout ?? "")?.[1] ?? "";
+  })() : "");
+  const target = String(v.target ?? await p.ask("Target branch: where runs start from and where their pull requests go (e.g. main, dev or develop; empty: each run asks)", remoteHead)).trim() || null;
   const check = String(v.check ?? await p.ask("The check every change must pass (a command; empty for none)", suggestCheck(dir) ?? ""));
   const agents: string[] = (v as any)._agents ?? String(v.agents ?? "claude").split(",");
   const authOf = (a: string) => String((v as any)._auths?.[a] ?? v.auth ?? "subscription");
@@ -268,7 +276,7 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
   const plan = planProject({ dir, repo, mode, target, check, agents, authOf, cap });
   const { made, kept } = writeProject(plan);
   return [
-    { step: "project", ok: true, detail: `${repo} → ${target} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${plan.configPath}` },
+    { step: "project", ok: true, detail: `${repo} → ${target ?? "no target branch (each run asks for its base; --target B sets one)"} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${plan.configPath}` },
     { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${plan.agentsPath})` },
   ];
 }
@@ -455,8 +463,8 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
   const auth = json(self(["auth", "status", "--json"]).stdout)?.profiles ?? [];
   for (const a of auth) out.push({ step: `${a.agent} login`, ok: !!a.present && a.valid !== false, detail: a.detail ?? (a.present ? a.store : "not logged in") });
   const repo = process.env.CAPCOMD_REPO ?? proj.env?.CAPCOMD_REPO;
-  const target = proj.run?.target ?? process.env.CAPCOMD_MERGE_TARGET ?? proj.env?.CAPCOMD_MERGE_TARGET ?? "main";
-  out.push({ step: "project", ok: !!repo, detail: repo ? `${repo} → ${target}${projPath ? ` (${projPath})` : " (environment)"}` : "no .capcomd/config.json here or above", ...(repo ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
+  const target = proj.run?.target ?? process.env.CAPCOMD_MERGE_TARGET ?? proj.env?.CAPCOMD_MERGE_TARGET ?? null;
+  out.push({ step: "project", ok: !!repo, detail: repo ? `${repo} → ${target ?? "no target branch set (each run asks for its base)"}${projPath ? ` (${projPath})` : " (environment)"}` : "no .capcomd/config.json here or above", ...(repo ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
   const plugin = runs(claudeBin()) && claudePluginInstalled();
   const skill = existsSync(join(legacySkill(), "SKILL.md"));
   const hermes = (await import("./hermes")).hermesStatus();

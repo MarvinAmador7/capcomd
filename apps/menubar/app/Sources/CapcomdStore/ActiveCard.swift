@@ -20,7 +20,7 @@ public struct ActiveCard: Sendable, Hashable {
   public struct Ask: Sendable, Hashable {
     public var approval: PendingApproval
     public var asker: Member?
-    /// Client-worded from structured fields for a merge ("Merge worker's work into main?"), else the approval's own
+    /// Client-worded from structured fields for a merge ("Merge work from worker · login redirect into main?"), else the approval's own
     /// question (untrusted: shown as plain text).
     public var question: String
     /// Agents that can't go on until this is decided: the asker's live ancestors and the agents still queued.
@@ -68,9 +68,12 @@ public struct ActiveCard: Sendable, Hashable {
 
 /// A finished project's outcome (the newest Recent row, unfolded): how its latest run ended, then what landed.
 public struct CardOutcome: Sendable, Hashable {
+  /// How it ended, as the card's mark shows it.
+  public enum End: Sendable, Hashable { case merged, done, mergeDenied, mergeFailed, failed, stopped }
   public var runId: String
-  /// "Merged into main", "Merge denied", "Merge failed", or "Done", "Failed", "Stopped".
+  /// "Merged into main", "Merge denied", "Merge failed", or "Done", "Failed", "Stopped": the mark's label.
   public var head: String
+  public var end: End
   /// Its work was up for merging and didn't land (denied or failed, nothing merged): the files are what it proposed.
   public var notMerged = false
   public var durationMs: Int?
@@ -106,7 +109,7 @@ extension CapcomdStore {
     var body = ActiveCard.Body.working, reason: String?
     if let (_, a) = asks {
       let asker = a.agentId.flatMap { run.agents[$0] != nil ? member($0) : nil }
-      let question = a.kind == "merge" && asker != nil && a.target != nil ? "Merge \(asker!.name)'s work into \(a.target!)?" : a.question.plain
+      let question = a.kind == "merge" && asker != nil && a.target != nil ? "Merge work from \(asker!.name) into \(a.target!)?" : a.question.plain
       body = .ask(ActiveCard.Ask(approval: a, asker: asker, question: question, waiters: waiters(run, asker: a.agentId).map(member)))
       reason = "ask:\(a.id)"
     } else if let (_, ag) = failed {
@@ -138,7 +141,12 @@ extension CapcomdStore {
     let took = run.startedAtMs.flatMap { s in run.endedAtMs.flatMap { e in e >= s ? e - s : nil } }
     let checked = agents.compactMap(\.checks)
     let cost = agents.compactMap(\.costUsd).reduce(0, +)
-    var out = CardOutcome(runId: run.id, head: head, durationMs: took,
+    let end: CardOutcome.End = switch run.outcome {
+    case .failed: .failed
+    case .stopped: .stopped
+    default: merged != nil ? .merged : unmerged == "denied" ? .mergeDenied : unmerged != nil ? .mergeFailed : .done
+    }
+    var out = CardOutcome(runId: run.id, head: head, end: end, durationMs: took,
                           crew: agents.prefix(ActiveCard.crewShown).map { ActiveCard.Member(runId: run.id, agentId: $0.id, name: names[$0.id] ?? $0.displayName) },
                           checksPassed: checked.isEmpty ? nil : checked.allSatisfy(\.passed), costUsd: cost > 0 ? cost : nil)
     out.notMerged = unmerged != nil
@@ -189,7 +197,7 @@ extension CapcomdStore {
   /// Each agent's name as its tree row shows it: the profile, plus the suffix siblings of one profile get.
   func memberNames(_ runId: String) -> [String: String] {
     var out: [String: String] = [:]
-    func walk(_ ns: [AgentNode]) { for n in ns { out[n.id] = n.name + (n.suffix.map { " \($0)" } ?? ""); walk(n.children) } }
+    func walk(_ ns: [AgentNode]) { for n in ns { out[n.id] = n.label; walk(n.children) } }
     walk(agentTree(runId: runId))
     return out
   }

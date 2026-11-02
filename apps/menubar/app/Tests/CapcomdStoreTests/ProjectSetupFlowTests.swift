@@ -10,7 +10,7 @@ final class ProjectSetupFlowTests: XCTestCase {
   let codex = ProjectAgent(provider: "codex", label: "Codex", places: [.init(sandbox: "docker", loggedIn: false), .init(sandbox: "boxd", loggedIn: false)])
   var ready: ProjectInspection {
     ProjectInspection(path: "/Users/me/src/my-app", root: "/Users/me/src/my-app", name: "my-app", repo: "https://github.com/acme/my-app.git", github: "acme/my-app",
-                      ghReady: true, branches: ["develop", "main", "release/2.0"], suggestedCheck: "bun run test", suggestedMode: "pr", agents: [claude, codex])
+                      ghReady: true, defaultBranch: "main", branches: ["develop", "main", "release/2.0"], suggestedCheck: "bun run test", suggestedMode: "pr", agents: [claude, codex])
   }
 
   struct Rig { let daemon: FakeProjectDaemon; let store: CapcomdStore; let flow: ProjectSetupFlow; let prefs: InMemoryPreferences }

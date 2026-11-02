@@ -9,6 +9,17 @@
 //   SETTINGS=mixed SANDBOXES=readonly|envlocked|noconfigure|conflict|owners …   changing settings, capcomd's own machines
 //   SETTINGS=mixed SANDBOXES=changed|unavailable|noactions …          deleting machines (409, 503, a phase 2 daemon)
 //   PROJECTS=ready|configured|notgit|noorigin|nogh-publish|secrets|taken|notgithub|nogh|apikey|refuse|old …   setting a folder up as a project, starting its repository and publishing it (projects.ts)
+//   SCENARIO=goal [GOAL_READY_AFTER=ms GOAL_BASE=dev|none GOAL_SOURCE=github|git GOAL_GITHUB=yes|no|nologin]   goal branches (goal.ts):
+//     run-gb01 working → ready with landed and not-landed work, run-gl01 stopped (its planner failed); the setup's branches
+//     route, POST /v1/runs base/goalBranch refusals, Open PR and Keep branch. Start the app with -capcomd.startRepo /src/app
+//     for the composer's goal branch row.
+//   LIVE_STARTS=1 …   a run started with POST /v1/runs comes alive (the desktop's new project column): run.created, its
+//     planner spawned and started with the goal as its first message, a reply on its thread, then a lead and two workers
+//     a few seconds apart (LIVE_SPAWN_MS, default 2500).
+//   TITLES=1 …   agent titles (capability agents.title): every agent has one (the scenes' own, else derived from its task or
+//     its key, as the daemon does), agent.spawned carries it, PUT/DELETE …/agents/{agentId}/title rename it (agent.titled on
+//     the run streams a moment later; the person's sticks), and the planner of the first run renames a worker every
+//     TITLE_EVERY_MS (default 20000) while it runs, under the person's title once they set one.
 //
 // Scenes: card-running | card-ask | card-stopped | card-finished | card-long | cards (the Active card, design/active-card),
 // panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
@@ -21,6 +32,9 @@ import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
 import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
 import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
+import { runTitle } from "../../../../src/api/run-title";
+import { applyTitle, derivedTitle, normalizeTitle, shownTitle, type TitleState } from "../../../../src/primitives/agent-title";
+import { clampGoal, goalCaps, goalCreateRefusal, goalRoute, goalSummary, ledgerGoal, type GoalSpec } from "./goal";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
@@ -41,7 +55,9 @@ type ApprovalSpec = { id: string; agentId: string; question: string; ref: string
 type SpanSpec = { id: string; parent?: string; name: string; from: number; took: number; error?: boolean; attrs?: Record<string, unknown> };   // from/took: seconds after the run started
 type FileSpec = { path: string; status: string; added: number | null; removed: number | null; agentId: string };
 type RunSpec = { id: string; projectId: string; goal: string; state: string; startedAgo: number; lastAgo: number; agents: AgentSpec[]; approvals?: ApprovalSpec[];
-  spans?: SpanSpec[]; transcript?: Record<string, string[]>; files?: FileSpec[] };
+  spans?: SpanSpec[]; transcript?: Record<string, string[]>; files?: FileSpec[];
+  /** Run.goalBranch and GET …/goal (goal.ts). */
+  goalSpec?: GoalSpec };
 
 const scenes: Record<string, RunSpec[]> = {
   // tree-card-v3.png: approval-tinted card with a nested tree, a quiet running card, one finished project.
@@ -172,8 +188,53 @@ scenes["cards"] = [{ ...clamp("ask") }, proration("failed"), { ...matchkey() }, 
   { ...clamp("done"), id: "run-cl03", projectId: "prj-e2e3", goal: "Ship the clamp helper",
     agents: clamp("done").agents.map((a) => ({ ...a, id: a.id.replace("cl-", "cl3-"), parent: a.parent?.replace("cl-", "cl3-") })),
     files: clampFiles.map((f) => ({ ...f, agentId: "agt-cl3-wk" })) }];
+// Goal branches (goal.ts): one run working toward its ready card, one whose planner failed after landing some work.
+scenes["goal"] = (() => {
+  const g = clampGoal(), working = g.state === "working";
+  return [
+    { id: "run-gb01", projectId: "prj-clamp", goal: "Add a clamp helper and its tests", state: working ? "running" : "completed", startedAgo: 6 * min, lastAgo: working ? 0.05 * min : 0.2 * min,
+      agents: [
+        { id: "agt-gb-pl", profile: "planner", provider: "claude", status: working ? "running" : "done", repo: "app", activity: working ? "Reviewing 3 workers" : "Wrote the summary", kind: "spawn", ago: 6 * min,
+          result: working ? undefined : { summary: g.summary } },
+        { id: "agt-gb-w1", parent: "agt-gb-pl", profile: "worker", provider: "claude", status: "done", repo: "app", key: "task-clamp", activity: "Edited src/math.ts", kind: "edit", ago: 4 * min },
+        { id: "agt-gb-w2", parent: "agt-gb-pl", profile: "worker", provider: "codex", status: "done", repo: "app", key: "task-tests", activity: "Ran bun test", kind: "test", ago: 3.5 * min },
+        { id: "agt-gb-w3", parent: "agt-gb-pl", profile: "worker", provider: "codex", status: "done", repo: "app", key: "task-docs", activity: "Ran markdownlint", kind: "test", ago: 3 * min },
+      ], goalSpec: g },
+    { id: "run-gl01", projectId: "prj-ledger", goal: "Migrate the ledger to v2", state: "failed", startedAgo: 40 * min, lastAgo: 12 * min,
+      agents: [
+        { id: "agt-gl-pl", profile: "planner", provider: "claude", status: "failed", repo: "ledger", ago: 40 * min, result: { error: "usage limit reached" } },
+        { id: "agt-gl-w1", parent: "agt-gl-pl", profile: "worker", provider: "codex", status: "done", repo: "ledger", key: "task-schema", ago: 38 * min },
+        { id: "agt-gl-w2", parent: "agt-gl-pl", profile: "worker", provider: "claude", status: "failed", repo: "ledger", key: "task-backfill", ago: 30 * min, result: { error: "usage limit reached (resets 18:40)" } },
+        { id: "agt-gl-w3", parent: "agt-gl-pl", profile: "worker", provider: "codex", status: "cancelled", repo: "ledger", key: "task-readers", ago: 20 * min },
+      ], goalSpec: ledgerGoal() },
+  ] as RunSpec[];
+})();
 const runs = scenes[SCENARIO];
 if (!runs) { console.error(`unknown SCENARIO ${SCENARIO}; one of ${Object.keys(scenes).join(", ")}`); process.exit(2); }
+
+// TITLES=1: what each agent would have named its tab (agents.title). The scenes' agents by id; any other is derived from
+// its task, else its key ("task-clamp" → "clamp").
+const TITLES = process.env.TITLES === "1";
+const SCENE_TITLES: Record<string, [string, "self" | "parent" | "derived"]> = {
+  "agt-pl01": ["plan matchkey v3.2", "self"], "agt-wk01": ["matchkey keys", "self"], "agt-ld01": ["ids backfill", "self"],
+  "agt-wk02": ["parquet shards to r2", "self"], "agt-wk04": ["shard retries", "parent"], "agt-wk03": ["ids v1 readers", "self"],
+  "agt-cr01": ["row count checks", "parent"], "agt-cr02": ["matchkey commit", "parent"],
+  "agt-m-pl": ["plan matchkey v3.2", "self"], "agt-m-w1": ["matchkey keys", "self"], "agt-m-l1": ["ids backfill", "self"],
+  "agt-m-w2": ["keys refactor", "self"], "agt-m-w3": ["key normalizer", "self"], "agt-m-w4": ["shard retries", "parent"],
+  "agt-m-l2": ["addriva api", "self"], "agt-m-w5": ["schema readers", "self"], "agt-m-w6": ["api docs", "parent"], "agt-m-cr": ["row count checks", "parent"],
+  "agt-gb-pl": ["plan clamp helper", "self"], "agt-gb-w1": ["clamp helper", "self"], "agt-gb-w2": ["clamp tests", "self"], "agt-gb-w3": ["clamp docs", "parent"],
+  "agt-pl02": ["proration rounding", "self"], "agt-pr-pl": ["proration plan", "self"], "agt-pr-w1": ["proration rounding", "self"], "agt-pr-w2": ["ledger totals", "parent"],
+};
+/** Each agent's title state, as the daemon keeps it (TITLES=1). */
+const titleStates = new Map<string, TitleState>();
+/** What its title is derived from: its task, else its key. */
+const taskText = (a: AgentSpec) => a.task ?? a.key?.replace(/^task-/, "").replace(/-/g, " ") ?? null;
+const titleOf = (a: AgentSpec): { title: string | null; titleSource: string | null } =>
+  TITLES ? shownTitle(titleStates.get(a.id), taskText(a)) : { title: null, titleSource: null };
+for (const r of runs) for (const a of r.agents) {
+  const s = SCENE_TITLES[a.id];
+  if (TITLES && s && s[1] !== "derived") titleStates.set(a.id, { agent: { title: s[0], by: s[1], setBy: s[1] === "self" ? a.id : a.parent ?? "driver", at: NOW - a.ago } });
+}
 
 // Envelopes in seq order across all runs (run.created, agent.spawned, approval.requested).
 /** Which AI an agent runs on (Agent.provider / agent.spawned agent.provider): workers on Codex, the rest on Claude, a mixed team. */
@@ -190,7 +251,8 @@ const env = (r: RunSpec, type: string, entity: string, agentId: string | null, m
 for (const r of runs) {
   env(r, "run.created", r.id, null, NOW - r.startedAgo, { runId: r.id, budget: {}, label: null, goal: r.goal });
   for (const a of r.agents) env(r, "agent.spawned", a.id, a.id, NOW - a.ago, { parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile,
-    budget: {}, limits: {}, agent: specOf(a), task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a) });
+    budget: {}, limits: {}, agent: specOf(a), task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a),
+    ...(TITLES && titleOf(a).title ? titleOf(a) : {}) });
   for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - (p.askedAgo ?? r.lastAgo), { approvalId: p.id, kind: "merge", question: p.question,
     requestedBy: { agentId: p.agentId, runId: r.id }, subject: subjectOf(p), expiresAt: null });
   env(r, "run.started", r.id, null, NOW - r.lastAgo, { cause: "started" });   // bumps lastEventMs to the run's recency
@@ -212,11 +274,12 @@ function subjectOf(p: ApprovalSpec) {
 function depthOf(r: RunSpec, a: AgentSpec): number { let d = 0, p = a.parent; while (p) { d++; p = r.agents.find(x => x.id === p)?.parent; } return d; }
 const HEAD = seq;
 
-const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, repo: null, createdAt: iso(NOW - r.startedAgo) });
+const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, ...runTitle({ label: null, goal: r.goal }), repo: null, createdAt: iso(NOW - r.startedAgo),
+  ...(r.goalSpec ? { goalBranch: goalSummary(r.goalSpec) } : {}) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
   text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
   task: a.task ?? null, taskAttachment: null, result: a.result ?? null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago),
-  provider: providerOf(a), model: specOf(a).model });
+  provider: providerOf(a), model: specOf(a).model, ...(TITLES ? titleOf(a) : {}) });
 const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind: "merge", status: decided.has(p.id) ? decided.get(p.id).status : "pending",
   question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: subjectOf(p), expiresAt: null, requestedAt: iso(NOW - (p.askedAgo ?? r.lastAgo)) });
 const decided = new Map<string, any>();
@@ -224,7 +287,7 @@ const decided = new Map<string, any>();
 // Agent threads: the lead's, plus the steer that opens it (snapshot.threads).
 const threads = new ThreadStore(), leadRun = runs.find(r => r.agents.some(a => a.id === "agt-ld01")), T0 = NOW - 5 * min;
 if (leadRun) for (const d of process.env.THREAD === "golden" ? goldenThread() : withDiff(leadThread(T0))) threads.write("agt-ld01", d);
-const steers = leadRun ? [{ seq: 1, from: "operator", to: "agt-ld01", at: iso(T0), text: "Skip shards above 200 and keep it on the staging bucket.", attachment: null }] : [];
+const steers: Array<{ seq: number; from: string; to: string; at: string; text: string; attachment: null }> = leadRun ? [{ seq: 1, from: "operator", to: "agt-ld01", at: iso(T0), text: "Skip shards above 200 and keep it on the staging bucket.", attachment: null }] : [];
 // A 1×1 png for attachment media.
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 
@@ -254,6 +317,84 @@ const threadWrite = (run: RunSpec, agentId: string, d: any) => {
     durability: "ephemeral", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId, data: { agentId, item } };
   for (const c of liveThread.get(run.id) ?? []) { try { c.enqueue(new TextEncoder().encode(sse(null, e.type, e))); } catch { /* closed */ } }
 };
+// Goal branches: the runs that have one, and their events on the daemon and run streams (seqs past everything else).
+const goals = new Map(runs.filter((r) => r.goalSpec).map((r) => [r.id, { goal: r.goal, spec: r.goalSpec! }]));
+let goalSeq = HEAD + 30_000;
+const emitGoal = (runId: string, type: string, data: Record<string, unknown>, agentId: string | null = null) => {
+  const r = runs.find((x) => x.id === runId)!, ms = Date.now();
+  const e = { v: 1, id: `evt_goal_${++goalSeq}`, scope: runId, seq: goalSeq, entity: agentId ?? runId, entitySeq: 1, type, typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms,
+    projectId: r.projectId, runId, agentId, data };
+  broadcast("daemon", e); broadcast(runId, e);
+};
+for (const r of runs) {
+  const g = r.goalSpec;
+  if (!g || g.readyAfter === null) continue;
+  setTimeout(() => {   // the planner finishes: the run is ready, and completes
+    const planner = r.agents.find((a) => a.id === g.plannerId)!;
+    planner.status = "done"; planner.activity = "Wrote the summary"; planner.result = { summary: g.summary };
+    g.state = "ready"; g.readyAt = Date.now(); r.state = "completed";
+    emitGoal(r.id, "agent.done", { result: { summary: g.summary } }, planner.id);
+    emitGoal(r.id, "run.goal_completed", { branch: g.branch, base: g.base, plannerId: planner.id }, planner.id);
+    emitGoal(r.id, "run.completed", { cause: "completed" });
+    console.log(`goal: ${r.id} is ready on ${g.branch}`);
+  }, g.readyAfter);
+}
+// TITLES=1: the first run's planner renames its first running worker now and then (agent.titled by parent), under the
+// person's title once they gave it one (shown: false), so a rename in the app can be seen to stick.
+if (TITLES) {
+  const r = runs[0], names = ["redirect loop", "login redirect"];
+  let turn = 0;
+  setInterval(() => {
+    const a = r.agents.find((x) => x.parent && x.status === "running");
+    if (!a) return;
+    const title = names[turn++ % names.length]!, ms = Date.now();
+    const ch = applyTitle(titleStates.get(a.id), taskText(a), { title, by: "parent", setBy: a.parent!, now: ms });
+    titleStates.set(a.id, ch.next);
+    broadcast(r.id, { v: 1, id: `evt_title_${ms}`, scope: r.id, seq: HEAD + 500 + (++msgSeq), entity: a.id, entitySeq: 1, type: "agent.titled", typeVersion: 1,
+      durability: "durable", ts: iso(ms), epochMs: ms, projectId: r.projectId, runId: r.id, agentId: a.id,
+      data: { agentId: a.id, title, by: "parent", setBy: a.parent, shown: ch.shown, titleSource: ch.titleSource } });
+  }, Number(process.env.TITLE_EVERY_MS ?? 20_000));
+}
+
+// LIVE_STARTS=1: a run started from the app comes alive, on the daemon and run streams (seqs past everything else).
+let liveSeq = HEAD + 20_000;
+function liveStart(rid: string, goal: string, sandbox: string) {
+  const pid = `prj-${rid}`, r: RunSpec = { id: rid, projectId: pid, goal, state: "running", startedAgo: 0, lastAgo: 0, agents: [] };
+  const ev = (type: string, entity: string, agentId: string | null, data: any) => {
+    const ms = Date.now();
+    const e = { v: 1, id: `evt_live_${++liveSeq}`, scope: rid, seq: liveSeq, entity, entitySeq: 1, type, typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms,
+      projectId: pid, runId: rid, agentId, data };
+    broadcast("daemon", e); broadcast(rid, e);
+  };
+  const spawn = (id: string, parent: string | null, profile: string, task: string) => {
+    const a: AgentSpec = { id, parent: parent ?? undefined, profile, status: "running", ago: 0, task, repo: "matchkey" };
+    r.agents.push(a);
+    ev("agent.spawned", id, id, { parent, depth: parent ? 1 : 0, profile, budget: {}, limits: {}, agent: specOf(a), task, key: null, operator: false,
+      workspace: workspaceOf(a), ...(TITLES ? titleOf(a) : {}) });
+    ev("agent.started", id, id, {});
+  };
+  const spawnMs = Number(process.env.LIVE_SPAWN_MS ?? 2500);
+  setTimeout(() => {
+    runs.push(r);
+    ev("run.created", rid, null, { runId: rid, budget: {}, label: null, goal, sandbox });
+    ev("run.started", rid, null, { cause: "started" });
+  }, 300);
+  const planner = `agt-${rid}-pl`;
+  setTimeout(() => {
+    spawn(planner, null, "planner", goal);
+    // The goal is the planner's first message, then it answers on its thread.
+    const mseq = ++msgSeq, ms = Date.now();
+    steers.push({ seq: mseq, from: "operator", to: planner, at: iso(ms), text: goal, attachment: null });
+    broadcast(rid, { v: 1, id: `evt_msg_${mseq}`, scope: rid, seq: HEAD + mseq, entity: `msg-${mseq}`, entitySeq: 1, type: "message.sent", typeVersion: 1,
+      durability: "durable", ts: iso(ms), epochMs: ms, projectId: pid, runId: rid, agentId: "operator", data: { from: "operator", to: planner, seq: mseq, text: goal, bytes: goal.length } });
+  }, 900);
+  setTimeout(() => threadWrite(r, planner, { id: `itm-${rid}-1`, rev: 1, kind: "say", status: "done", at: iso(Date.now()), durationMs: null, format: "blocks/1", redacted: false,
+    tool: null, error: null, truncated: null, child: null, text: "Reading the repository to plan the work.",
+    blocks: [{ t: "paragraph", children: [{ t: "text", text: "Reading the repository to plan the work." }] }] }), 1800);
+  [["lead", "Split the backfill by shard"], ["worker", "Backfill shards 1–128"], ["worker", "Backfill shards 129–256"]].forEach(([profile, task], i) =>
+    setTimeout(() => spawn(`agt-${rid}-${i + 1}`, i === 0 ? planner : `agt-${rid}-1`, profile!, task!), 900 + spawnMs * (i + 1)));
+}
+
 if (existsSync(sock)) unlinkSync(sock);
 Bun.serve({
   unix: sock,
@@ -261,12 +402,17 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
     // CAPS=steer.skills,agent.pause advertises features the thread input checks for.
-    const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : []), ...(PROJECTS ? projectsCaps(PROJECTS) : [])])];
+    const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : []), ...(PROJECTS ? projectsCaps(PROJECTS) : []),
+      ...(goals.size ? goalCaps : []), ...(TITLES ? ["agents.title"] : [])])];
     if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: SETTINGS ? "0.6.0" : `mock-ui-${SCENARIO}`,
       ...(caps.length ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
     if (PROJECTS) {
       const r = projectsRoute(url, PROJECTS, req) ?? projectsRunOptionsRefusal(url, PROJECTS);
+      if (r) return r;
+    }
+    if (goals.size) {
+      const r = await goalRoute(url, req, goals, (runId, type, data) => emitGoal(runId, type, data));
       if (r) return r;
     }
     if (p === "/v1/skills") return Response.json([
@@ -327,7 +473,14 @@ Bun.serve({
       if (body.effort !== undefined && !levels[body.driver ?? "claude"].includes(body.effort)) return err(422, "invalid", `effort must be one of ${levels[body.driver ?? "claude"].join(", ")}`);
       console.log(`runs.create goal=${JSON.stringify(body.goal)} driver=${body.driver ?? "(default)"} sandbox=${body.sandbox ?? "(default)"} effort=${body.effort ?? "(default)"}`);
       if (process.env.NO_REPO && !body.repo) return err(422, "invalid", "repo is required: this daemon has no default repository (CAPCOMD_REPO).");
-      return Response.json({ id: `run-new${Date.now() % 100000}`, projectId: "prj-new", label: body.goal, state: "starting", goal: body.goal, repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
+      if (goals.size) {
+        console.log(`  base=${body.base ?? "(default)"} goalBranch=${JSON.stringify(body.goalBranch ?? "(suggested)")}`);
+        const no = goalCreateRefusal(body);
+        if (no) return no;
+      }
+      const newId = `run-new${Date.now() % 100000}`;
+      if (process.env.LIVE_STARTS) liveStart(newId, body.goal, body.sandbox ?? "boxd");
+      return Response.json({ id: newId, projectId: process.env.LIVE_STARTS ? `prj-${newId}` : "prj-new", label: body.goal, state: "starting", goal: body.goal, ...runTitle({ label: body.goal, goal: body.goal }), repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
     }
     if (p === "/v1/runs") return Response.json(runs.map(runBody));
     const r1 = p.match(/^\/v1\/runs\/([^/]+)\/(trace|files)$/), run1 = r1 && runs.find(r => r.id === r1[1]);
@@ -343,6 +496,29 @@ Bun.serve({
     if (th) return Response.json(threads.page(th[2], Number(url.searchParams.get("after") ?? 0), Math.min(500, Number(url.searchParams.get("limit") ?? 100))));
     if (/^\/v1\/runs\/[^/]+\/attachments\/[^/]+\/content$/.test(p)) return new Response(PNG, { headers: { "content-type": "image/png", "x-content-type-options": "nosniff" } });
     if (/^\/v1\/runs\/[^/]+\/agents\/[^/]+\/workspace$/.test(p)) return err(404, "not_found", "not in the agent's latest work");
+    const ttl = TITLES ? p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/title$/) : null;
+    if (ttl && (req.method === "PUT" || req.method === "DELETE")) {   // agents.title: the person's name; agent.titled confirms it a moment later
+      if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+      const run = runs.find(r => r.id === ttl[1]), agent = run?.agents.find(a => a.id === ttl[2]);
+      if (!run) return err(404, "not_found", `run ${ttl[1]} not found`);
+      if (!agent) return err(404, "not_found", `agent ${ttl[2]} not found`);
+      let title: string | null = null;
+      if (req.method === "PUT") {
+        const n = normalizeTitle(((await req.json().catch(() => null)) as any)?.title);
+        if (!n.ok) return Response.json({ code: "invalid", message: n.error, field: "title" }, { status: 422 });
+        title = n.title;
+      }
+      const ch = applyTitle(titleStates.get(agent.id), taskText(agent), { title, by: "user", setBy: "user", now: Date.now() });
+      if (ch.changed) {
+        titleStates.set(agent.id, ch.next);
+        const shown = titleOf(agent), ms = Date.now() + 300;
+        setTimeout(() => broadcast(run.id, { v: 1, id: `evt_title_${ms}`, scope: run.id, seq: HEAD + 500 + (++msgSeq), entity: agent.id, entitySeq: 1, type: "agent.titled", typeVersion: 1,
+          durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: agent.id,
+          data: { agentId: agent.id, title: title ?? shown.title, by: title === null ? "cleared" : "user", setBy: "user", shown: true, titleSource: shown.titleSource } }), 300);
+      }
+      const shown = titleOf(agent);
+      return Response.json({ runId: run.id, agentId: agent.id, ...shown, changed: ch.changed });
+    }
     const actl = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/(pause|resume)$/);
     if (actl && req.method === "POST") {   // harness #68: one agent and its subtree; the lifecycle confirms it a moment later
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");

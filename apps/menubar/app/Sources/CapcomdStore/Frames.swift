@@ -16,7 +16,8 @@ public enum StreamFrame: Sendable, Hashable {
   case cursor(Int)
   /// The daemon answered 401: the token is missing or wrong.
   case unauthorized
-  /// The subscriber's view of the connection: down after repeated failed attempts, up again on the next data.
+  /// The subscriber's view of the connection: down after repeated failed attempts; up on the first data of each
+  /// connection (so also once the daemon first answers).
   case link(up: Bool)
   case ignored(String)
 
@@ -52,8 +53,15 @@ public enum StreamFrame: Sendable, Hashable {
 
 public struct SnapshotRun: Codable, Sendable, Hashable {
   public var id: String; public var projectId: String?; public var label: String?; public var state: String; public var goal: String?
+  /// The daemon's title for the run (`Run.title`, untrusted) and where it came from (`titleSource`); older daemons
+  /// send neither.
+  public var title: String?; public var titleSource: String?
   /// When the run was created: a finished run's start when its run.created isn't replayed.
   public var createdAt: String?
+  /// Where the run's agents run ("docker", "boxd"; capability-free, newer daemons only). Unknown names are allowed.
+  public var sandbox: String?
+  /// The run's goal branch and where it stands (`runs.goal_branch`); nil for a run without one and from older daemons.
+  public var goalBranch: GoalBranchSummary?
 }
 public struct SnapshotAgent: Codable, Sendable, Hashable {
   public var id: String; public var runId: String; public var parent: String?; public var depth: Int; public var profile: String?; public var status: String
@@ -70,9 +78,14 @@ public struct SnapshotAgent: Codable, Sendable, Hashable {
   /// `{summary, artifacts}` once finished; summary is agent-written (untrusted).
   public var result: JSONValue?
   public var updatedAt: String?
+  /// When it was spawned; older daemons don't send it.
+  public var createdAt: String?
   /// "claude" | "codex" | null, and the model it runs (both optional: older daemons send neither).
   public var provider: String?
   public var model: String?
+  /// Its title (`agents.title`; agent-written, untrusted) and where it comes from; older daemons send neither.
+  public var title: String?
+  public var titleSource: String?
 }
 public struct SnapshotApproval: Codable, Sendable, Hashable {
   public var approvalId: String; public var kind: String; public var status: String; public var question: String

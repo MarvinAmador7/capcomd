@@ -138,13 +138,33 @@ export function buildServer(): McpServer {
     description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Returns runId and the gates.",
     inputSchema: {
       budget: z.string().optional().describe('Budget, e.g. "usd=5,turns=200,wallSeconds=3600"; omit for none'),
-      label: z.string().optional().describe("What the run is for"),
+      label: z.string().optional().describe("What the run is for, as a short title the way you'd title a pull request (\"Add multiply to src/math.ts\"): the capcomd app names the run by it"),
       target: z.string().optional().describe("A staging branch to land on instead of the project's target (not a protected branch)"),
-      targetFrom: z.string().optional().describe("Create target from this branch, e.g. main"),
+      targetFrom: z.string().optional().describe("Create target from this branch"),
+      goalBranch: z.string().optional().describe("The run's goal branch, e.g. capcomd/add-multiply: created from base; verified, reviewed merges land on it with no approval, and the user opens a pull request from it at the end (capcomd_pr_open). Omit it with base set to get a suggested name"),
+      base: z.string().optional().describe("The branch the goal branch starts from and the pull request goes into (ask the user; default: the project's target, else the repository's default branch)"),
       key, project,
     },
     annotations: WRITE,
   }, routed("capcomd_run_new", (a) => D.runNew(a)));
+
+  server.registerTool("capcomd_goal", {
+    title: "Goal branch",
+    description: "A goal-branch run's result: the goal branch against its base (commits, files, lines), what each agent landed and how it was reviewed, what didn't land and why, the planner's summary, and whether a pull request can be opened. Show it to the user before capcomd_pr_open.",
+    inputSchema: { runId: run, project }, annotations: READ,
+  }, routed("capcomd_goal", (a) => D.goal(a)));
+
+  server.registerTool("capcomd_pr_open", {
+    title: "Open a pull request",
+    description: "Open a GitHub pull request from the run's goal branch into its base, with the user's own GitHub login (gh). Only once the run is ready, and only when the user asked for it. Idempotent: a second call returns the same pull request. capcomd never merges it. " +
+      "When the planner stopped before it finished (capcomd_goal state stopped), it is refused with reason `stopped` and a question: ask the person that question first, and call again with stopped: true only if they say yes.",
+    // Destructive in the MCP sense: it publishes on GitHub, so clients (Claude Code, Hermes) ask the person first.
+    inputSchema: {
+      runId: run,
+      stopped: z.boolean().optional().describe("The person was asked about a stopped run (the planner failed or was cancelled) and wants the pull request with what landed. Never set it without asking them"),
+      project,
+    }, annotations: DESTRUCTIVE,
+  }, routed("capcomd_pr_open", (a) => D.prOpen(a)));
 
   server.registerTool("capcomd_runs", {
     title: "Recent runs",
@@ -178,6 +198,7 @@ export function buildServer(): McpServer {
     inputSchema: {
       runId: run,
       task: z.string().min(1).describe("What the agent should do, with acceptance criteria"),
+      title: z.string().optional().describe("Its tab's name: 1-4 lowercase words for what it works on, at most 32 characters (e.g. \"login redirect\"); default: the agent names itself, else capcomd takes the task's first words"),
       profile: z.string().optional().describe("Agent profile (capcomd_profiles); default: the default profile"),
       budget: z.string().optional().describe(`This agent's share, e.g. "usd=1,turns=40,wallSeconds=900". A unit you leave out reserves the profile's own cap (maxTurns, timeoutMs, maxBudgetUsd) if it sets one, else nothing: the agent's spend is metered as it works and counts against your budget and the run's, and it is stopped when one runs out. Name a unit to give a child its own cap. Omit it in a run without a budget: the agent works until done`),
       check: z.string().optional().describe("One of the run's check names (capcomd_setup gates.checks)"),
@@ -201,6 +222,12 @@ export function buildServer(): McpServer {
     description: "Send a message to a running agent (for example a failed check's output to fix). A Claude agent reads it within seconds, at its next step; a Codex agent can't read messages while it runs.",
     inputSchema: { runId: run, to: z.string().min(1), body: z.string().min(1), key, project }, annotations: WRITE,
   }, routed("capcomd_send", (a) => D.send(a)));
+
+  server.registerTool("capcomd_title", {
+    title: "Name an agent",
+    description: "Name an agent's tab (what the desktop and menu bar apps call it): 1-4 lowercase words for what it works on, at most 32 characters, e.g. \"login redirect\". Agents name themselves once they understand their task, so you rarely need this. The agent's own later renames replace yours; a title the user gave in the apps stays until they clear it (the call then says shown: false).",
+    inputSchema: { runId: run, agentId: z.string().min(1), title: z.string().min(1), key, project }, annotations: WRITE,
+  }, routed("capcomd_title", (a) => D.title(a)));
 
   server.registerTool("capcomd_cancel", {
     title: "Cancel",

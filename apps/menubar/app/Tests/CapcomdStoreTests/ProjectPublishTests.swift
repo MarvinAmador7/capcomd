@@ -111,7 +111,7 @@ final class ProjectPublishTests: XCTestCase {
 
   func testAnOlderCapcomdSaysToUpdateAndGetsACheck() async throws {
     let d = FakeProjectDaemon(); d.caps.remove(Capability.projectsGit)
-    let ready = ProjectInspection(path: path, root: path, repo: "https://github.com/acme/app.git", github: "acme/app", suggestedCheck: "npm test")
+    let ready = ProjectInspection(path: path, root: path, repo: "https://github.com/acme/app.git", github: "acme/app", defaultBranch: "main", suggestedCheck: "npm test")
     d.inspections[path] = ready
     let s = store(d)
     await s.refreshDaemonInfo()

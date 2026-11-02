@@ -8,8 +8,8 @@ import Foundation
 /// connection (the store drops local state and applies the snapshot; the cursor jumps to snapshotSeq); `: heartbeat`
 /// every 15s, so `idleTimeout` (default 45s) of silence is a dead socket and we reconnect. A feed must outlive the
 /// daemon: a clean close (daemon restart, a cut connection), a 5xx or a transport error reconnects from the cursor,
-/// backing off up to `maxBackoff`, for as long as the subscription lives. Only 401 (bad token) and 404 (no such
-/// scope) end it.
+/// backing off exponentially with full jitter up to `maxBackoff` (so a restart doesn't get every feed back at once), for
+/// as long as the subscription lives. Only 401 (bad token) and 404 (no such scope) end it.
 public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   let transport: UnixSocketTransport
   let backoff: Duration; let maxBackoff: Duration; let idleTimeout: Duration
@@ -36,9 +36,11 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
       var last = after, attempts = 0, down = false
       while !Task.isCancelled {
         do {
+          var answered = false
           for try await item in t.sseItems(path, lastEventID: last > 0 ? String(last) : nil, idleTimeout: idle) {
             attempts = 0   // anything from the daemon, heartbeats included, means it's up
-            if down { down = false; await onFrame(.link(up: true)) }
+            // The first thing on each connection (the daemon's `: connected`) says it answered, after a drop or not.
+            if down || !answered { down = false; answered = true; await onFrame(.link(up: true)) }
             guard case .frame(let f) = item else { continue } // heartbeat: activity only
             let frame = StreamFrame.parse(event: f.event, data: f.data)
             if case .snapshotEnd(let s) = frame, f.id == nil { last = s }
@@ -53,7 +55,7 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
         catch { if Task.isCancelled { return } }
         attempts += 1
         if attempts >= 2, !down { down = true; await onFrame(.link(up: false)) }   // not on one quick reconnect
-        try? await Task.sleep(for: min(bo * attempts * attempts, cap))
+        try? await Task.sleep(for: jitteredBackoff(base: bo, attempt: attempts, cap: cap))
       }
     }
     return h
@@ -174,10 +176,7 @@ public struct LiveStarter: RunStarting {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
   public func start(goal: String, choice c: RunChoice, idempotencyKey: String) async throws -> String {
-    var body: [String: String] = ["goal": goal]
-    if let v = c.repo { body["repo"] = v }; if let v = c.driver { body["driver"] = v }
-    if let v = c.sandbox { body["sandbox"] = v }; if let v = c.effort { body["effort"] = v }
-    let (status, data) = try await transport.post("/v1/runs", headers: [("Idempotency-Key", idempotencyKey)], json: try JSONEncoder().encode(body))
+    let (status, data) = try await transport.post("/v1/runs", headers: [("Idempotency-Key", idempotencyKey)], json: try StartWire.body(goal: goal, choice: c))
     let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     let message = obj?["message"] as? String ?? "capcomd refused"
     switch status {
@@ -185,7 +184,7 @@ public struct LiveStarter: RunStarting {
     case 401: throw Unauthorized()
     case 403: throw StartRefused("This app's capcomd token can't start runs (needs the steer scope)")
     case 404: throw DetailUnavailable.unsupported
-    case 409, 422: throw StartRefused(message, needsRepo: message.hasPrefix("repo is required"))
+    case 409, 422: throw StartRefused(message, needsRepo: message.hasPrefix("repo is required"), field: obj?["field"] as? String)
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }
@@ -211,6 +210,29 @@ public struct LiveMessenger: AgentMessaging {
     case 404 where (obj?["code"] as? String) == "not_found" && (message.hasPrefix("run ") || message.hasPrefix("agent ")): throw MessageRefused(message)
     case 404: throw DetailUnavailable.unsupported
     case 409, 422: throw MessageRefused(message)
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
+
+/// `PUT` / `DELETE /v1/runs/{runId}/agents/{agentId}/title` (capability `agents.title`, steer scope): the person's name
+/// for an agent. The messenger's transport carries it (both are the steer scope's per-agent writes).
+extension LiveMessenger: AgentTitling {
+  public func setTitle(runId: String, agentId: String, title: String?, idempotencyKey: String) async throws -> (title: String?, titleSource: String?) {
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/title"
+    let headers = [("Idempotency-Key", idempotencyKey)]
+    let (status, data): (Int, Data)
+    if let title { (status, data) = try await transport.put(path, headers: headers, json: try JSONSerialization.data(withJSONObject: ["title": title])) }
+    else { (status, data) = try await transport.delete(path, headers: headers) }
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let message = obj?["message"] as? String ?? "capcomd refused"
+    switch status {
+    case 200: return (obj?["title"] as? String, obj?["titleSource"] as? String)
+    case 401: throw Unauthorized()
+    case 403: throw AgentTitle.Refused("This app's capcomd token can't rename agents (needs the steer scope)")
+    case 404 where (obj?["code"] as? String) == "not_found" && (message.hasPrefix("run ") || message.hasPrefix("agent ")): throw AgentTitle.Refused(message)
+    case 404, 405: throw DetailUnavailable.unsupported
+    case 409, 422: throw AgentTitle.Refused(message)
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }
@@ -313,6 +335,56 @@ public struct LiveDaemonInfo: DaemonInfoFetching {
     case 422:
       let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
       throw MessageRefused((o?["message"] as? String) ?? "This folder isn't a capcomd project")
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
+
+/// Goal branches (capability `runs.goal_branch`), on the daemon adapter so the store picks them up from it.
+extension LiveDaemonInfo: GoalBranchActing {
+  public func goal(runId: String) async throws -> GoalView {
+    let (status, data) = try await transport.get("/v1/runs/\(LiveDetail.seg(runId))/goal")
+    switch status {
+    case 200: do { return try GoalWire.view(data) } catch { throw DetailUnavailable.failed("unexpected response") }
+    case 401: throw Unauthorized()
+    case 404 where Self.code(data) == "not_found" && Self.message(data).contains("goal branch"): throw GoalActionRefused(Self.message(data))
+    case 404: throw DetailUnavailable.unsupported
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+  /// 200 the pull request (`created` false when it was open already); 409 `conflict` (or `stopped`: the question to ask
+  /// about a run whose planner stopped) and 404 for a run without a goal branch carry the daemon's sentence. `stopped`
+  /// sends `{"stopped": true}`: the person agreed.
+  public func openPullRequest(runId: String, stopped: Bool, idempotencyKey: String) async throws -> GoalPullRequestResult {
+    let (status, data) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/pull-request", headers: [("Idempotency-Key", idempotencyKey)],
+                                                  json: stopped ? Data(#"{"stopped":true}"#.utf8) : nil)
+    if status == 200 { do { return try GoalWire.pullRequest(data) } catch { throw DetailUnavailable.failed("unexpected response") } }
+    try Self.refusal(status, data, scope: "open pull requests")
+  }
+  public func keepBranch(runId: String, idempotencyKey: String) async throws {
+    let (status, data) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/keep-branch", headers: [("Idempotency-Key", idempotencyKey)])
+    if status == 200 { return }
+    try Self.refusal(status, data, scope: "keep branches")
+  }
+  public func projectBranches(path: String, goal: String?, goalBranch: String?, base: String?) async throws -> ProjectBranches {
+    let (status, data) = try await transport.get("/v1/projects/branches?\(GoalWire.branchesQuery(path: path, goal: goal, goalBranch: goalBranch, base: base))")
+    switch status {
+    case 200: do { return try GoalWire.branches(data) } catch { throw DetailUnavailable.failed("unexpected response") }
+    case 401: throw Unauthorized()
+    case 404: throw DetailUnavailable.unsupported
+    case 422: throw GoalActionRefused(Self.message(data))
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+  static func code(_ data: Data) -> String? { ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["code"] as? String }
+  static func message(_ data: Data) -> String { (((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["message"] as? String) ?? "capcomd refused" }
+  static func refusal(_ status: Int, _ data: Data, scope: String) throws -> Never {
+    switch status {
+    case 401: throw Unauthorized()
+    case 403: throw GoalActionRefused("This app's capcomd token can't \(scope) (needs the steer scope)")
+    case 404 where code(data) == "not_found" && message(data).contains("run"): throw GoalActionRefused(message(data))
+    case 404: throw DetailUnavailable.unsupported
+    case 409, 422: throw GoalActionRefused(message(data), code: code(data))
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }

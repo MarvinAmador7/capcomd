@@ -1,0 +1,763 @@
+#if canImport(SwiftUI) && os(macOS)
+import SwiftUI
+import CapcomdStore
+
+/// SPEC §6 tokens; where a mockup in design/ measures differently, its HTML value wins (noted per token).
+/// System blue is the single accent.
+package enum Theme {
+  /// #0A84FF, fixed: `Color.accentColor` turns graphite whenever the menu bar app isn't the active app.
+  package static let accent = Color(red: 0x0A / 255, green: 0x84 / 255, blue: 1.0)
+  package static let accentTint = accent.opacity(0.16)
+  package static let amber = Color(red: 1.0, green: 0xB0 / 255, blue: 0x20 / 255)      // #FFB020, approvals only
+  package static let red = Color(red: 1.0, green: 0x69 / 255, blue: 0x61 / 255)        // #FF6961, failures only
+  package static let green = Color(red: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255)
+  package static let cardFill = Color.white.opacity(0.06)
+  package static let hairline = Color.white.opacity(0.10)
+
+  package static let panelWidth: CGFloat = 380, panelRadius: CGFloat = 16, inset: CGFloat = 16
+  package static let cardRadius: CGFloat = 11, cardPadding: CGFloat = 12, cardGap: CGFloat = 8
+
+  /// Project list and cards, measured from tree-card-v3.html (`.panel`, `.sec`, `.card`, `.chips`, `.tree`).
+  package enum Card {
+    package static let listPadding: CGFloat = 10                     // .panel padding (SPEC's 16 inset is for pushed views)
+    package static let sectionTop: CGFloat = 14, sectionLeading: CGFloat = 6, sectionBottom: CGFloat = 6
+    package static let sectionFont = Font.system(size: 11, weight: .semibold)
+    package static let sectionText = Theme.label(dark: 0.45, light: 0.7, white: true)
+    package static let titleFont = Font.system(size: 14, weight: .semibold)   // mockup 14; SPEC §6 says 13
+    package static let titleTracking: CGFloat = -0.14                         // -0.01em
+    package static let titleText = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
+    package static let paddingTop: CGFloat = 12, paddingHorizontal: CGFloat = 12
+  }
+  /// Agent tree geometry (tree-card-v3.html `.gd`, `.cv`, `.ic`): a 16 pt guide per level, a 12 pt chevron column,
+  /// then the 16 pt icon with 2/6 margins. Anything indented "to the name column" uses `nameInset`.
+  package enum Tree {
+    package static let indent: CGFloat = 16, chevron: CGFloat = 12, icon: CGFloat = 16
+    package static let iconLeading: CGFloat = 2, iconTrailing: CGFloat = 6
+    package static func nameInset(_ depth: Int) -> CGFloat { CGFloat(depth) * indent + chevron + iconLeading + icon + iconTrailing }
+    /// Live activity under a running agent's row (not in the mockup; sized like the row's repo chip `.rc`).
+    package static let activityFont = Font.system(size: 11.5)
+    package static let activityText = Theme.label(dark: 0.5, light: 0.72)
+    package static let activityHeight: CGFloat = 16, activityTop: CGFloat = -4, activityBottom: CGFloat = 4
+    // Rows (.tr 26 pt, 12.5 pt; .cur running; .dimr queued), guides (.gd), suffix (.sfx), folder chip (.rc), status (.stt).
+    package static let rowHeight: CGFloat = 26
+    package static let nameFont = Font.system(size: 12.5)
+    package static let nameRunningFont = Font.system(size: 12.5, weight: .medium)
+    package static let nameText = Theme.label(dark: 0.78, light: 0.86, white: true)
+    package static let nameRunning = Theme.Ask.text
+    package static let nameQueued = Theme.label(dark: 0.42, light: 0.6)
+    package static let suffixFont = Font.system(size: 10.5, design: .monospaced)
+    package static let suffixText = Theme.label(dark: 0.32, light: 0.55)
+    package static let suffixLeading: CGFloat = 6
+    /// Its title (capability agents.title), where the suffix was: plain words, a step quieter than the name.
+    package static let titleFont = Font.system(size: 12)
+    package static let titleText = Theme.label(dark: 0.5, light: 0.7)
+    package static let titleLeading: CGFloat = 6
+    package static let titleField: CGFloat = 170
+    package static let chipFont = Font.system(size: 11)
+    package static let chipIcon = Font.system(size: 9)
+    package static let chipText = Theme.label(dark: 0.5, light: 0.7)
+    package static let chipGap: CGFloat = 3, chipLeading: CGFloat = 8
+    package static let statusColumn: CGFloat = 14, statusLeading: CGFloat = 8
+    package static let chevronFont = Font.system(size: 9, weight: .semibold)
+    package static let chevronText = Theme.label(dark: 0.35, light: 0.55)
+    /// Profile glyphs on the mockups' 14 pt outline grid (agent-icons.png, tree-card-v3.png): SF Symbols differ in
+    /// natural size, so each gets the point size that lands it at the mockup's ~11–12 pt (measured on 2× captures).
+    package static func iconSize(_ k: ProfileKind) -> CGFloat {
+      switch k { case .planner: 12; case .lead: 11.5; case .worker: 9; case .critic: 10.5; case .other: 11 }
+    }
+    package static let iconBox: CGFloat = 14, iconDot: CGFloat = 3
+    package static let guide = Theme.adaptive(dark: NSColor(white: 1, alpha: 0.18), light: NSColor(white: 0, alpha: 0.25)), guideWidth: CGFloat = 0.5
+    package static let guideX: CGFloat = 7.5, guideElbowY: CGFloat = 13, guideArm: CGFloat = 7   // .gd:before/:after
+  }
+  /// Approval inline under the waiting agent (tree-card-v3.html `.apx`, `.q`, `.cmd`, `.btn`).
+  package enum Approval {
+    package static let leadingExtra: CGFloat = 2                     // .apx sits 2 pt right of the name column
+    package static let top: CGFloat = 2, bottom: CGFloat = 8
+    package static let questionFont = Font.system(size: 12, weight: .medium)
+    package static let questionText = Color.white
+    package static let questionBottom: CGFloat = 3
+    package static let branchFont = Font.system(size: 12, design: .monospaced)
+    package static let branchText = Color.white.opacity(0.6)
+    package static let branchBottom: CGFloat = 8
+    package static let disabledOpacity: Double = 0.5   // a decision on its way (the buttons are ActiveCardView's)
+    package static let statusFont = Font.system(size: 11.5)
+    package static let appearRise: CGFloat = 4                       // SPEC §7: fade + 4 pt rise
+  }
+  /// A finished project's one-line row under the Active cards (tree-card-v3.html / v5-a-final.html `.done`).
+  package enum Finished {
+    package static let gap: CGFloat = 8
+    package static let paddingVertical: CGFloat = 9, paddingHorizontal: CGFloat = 12
+    /// `.done` opens with an empty span, so the flex gap indents the title 8 pt past the cards' text.
+    package static let titleIndent: CGFloat = 8
+    package static let titleFont = Font.system(size: 13)
+    package static let titleText = Color.white.opacity(0.70)
+    package static let trailingFont = Font.system(size: 12)
+    package static let trailingText = Color.white.opacity(0.40)
+    /// The most recent few: the panel is for what's happening, not history.
+    package static let maxRows = 3
+  }
+  /// Run drill-down (view-activity.html / view-trace.html / drill-collapsed.html / drill-a2-files-iconsA.html).
+  package enum Drill {
+    package static let padding: CGFloat = 10                                   // .panel padding
+    // Header (.hdr padding 2 4 10, gap 8)
+    package static let headerPadding = EdgeInsets(top: 2, leading: 4, bottom: 10, trailing: 4)
+    package static let headerGap: CGFloat = 8
+    package static let threadRefreshSeconds: Double = 15                      // live frames carry the thread; this re-read covers a dropped stream
+    package static let backSize: CGFloat = 24   // a round back button, like the composer's round controls
+    package static let backFill = Color.white.opacity(0.07)
+    package static let backIcon = Font.system(size: 11, weight: .semibold)
+    package static let crumbFont = Font.system(size: 11.5)
+    package static let crumbText = Color.white.opacity(0.45)
+    package static let titleFont = Font.system(size: 15, weight: .semibold)
+    package static let titleTracking: CGFloat = -0.15, titleTop: CGFloat = 1
+    package static let switchFont = Font.system(size: 11.5, weight: .medium)
+    package static let switchGap: CGFloat = 5, switchTrailing: CGFloat = 10
+    package static let switchOn = Color.white
+    package static let switchOff = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.3)
+    package static let timerFont = Font.system(size: 13, design: .monospaced)
+    package static let timerText = Color.white.opacity(0.85)
+    // Step bar (.bar margin 0 4 4, gap 3, 3 tall)
+    package static let barGap: CGFloat = 3, barHeight: CGFloat = 3, barRadius: CGFloat = 1.5
+    package static let barPadding = EdgeInsets(top: 0, leading: 4, bottom: 4, trailing: 4)
+    package static let barDone = Theme.accent
+    package static let barCurrent = Theme.accent.opacity(0.45)
+    package static let barQueued = Color.white.opacity(0.12)
+    // Activity (.reg 172, .ph, .ar)
+    package static let regionTop: CGFloat = 10, regionHeight: CGFloat = 172   // .reg margin-top 14 collapses with the bar's 4: 14 under the bar
+    package static let phaseFont = Font.system(size: 10.5, weight: .semibold)
+    package static let phaseText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.3)
+    package static let phaseHeight: CGFloat = 14
+    package static let rowHeight: CGFloat = 18, rowGap: CGFloat = 8, rowPadding: CGFloat = 4, iconColumn: CGFloat = 16
+    package static let rowFont = Font.system(size: 12)
+    package static let rowNowFont = Font.system(size: 12, weight: .medium)
+    package static let rowText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.78)
+    package static let rowQueued = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.32)
+    package static let rowFailed = Color(red: 1, green: 0x69 / 255, blue: 0x61 / 255).opacity(0.8)
+    package static let iconFont = Font.system(size: 12)                       // 14 pt outline glyph
+    package static let iconText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.45)
+    package static let timeFont = Font.system(size: 10.5, design: .monospaced)
+    package static let timeText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.38)
+    package static let timeGap: CGFloat = 6
+    // Times line up row to row ("now" … "10m ago").
+    package static let timeColumn: CGFloat = 46
+    package static let statusFont = Font.system(size: 11)
+    // Collapsed strip (.strip, .si2, .pdv, .cvx)
+    package static let stripTop: CGFloat = 8, stripHeight: CGFloat = 30, stripRadius: CGFloat = 8   // .strip margin-top 12 collapses with the bar's 4
+    package static let stripFill = Color.white.opacity(0.04)
+    package static let stripPadding: CGFloat = 6, cellGap: CGFloat = 2
+    package static let cell: CGFloat = 24, cellRadius: CGFloat = 6
+    package static let cellNow = Theme.accent.opacity(0.16)
+    package static let cellHover = Color.white.opacity(0.10)
+    package static let dividerWidth: CGFloat = 1, dividerHeight: CGFloat = 12, dividerMargin: CGFloat = 6
+    package static let divider = Color.white.opacity(0.14)
+    package static let chevronColumn: CGFloat = 30
+    package static let chevronDivider = Color.white.opacity(0.08)
+    package static let edgeFade: CGFloat = 24
+    // Trace (.sp, .trk, .pill)
+    package static let traceTop: CGFloat = 10, traceFade: CGFloat = 30
+    package static let spanHeight: CGFloat = 22, spanGap: CGFloat = 7, nameColumn: CGFloat = 132, durationColumn: CGFloat = 58
+    package static let spanText = Color.white.opacity(0.75)
+    package static let spanIndent: CGFloat = 14
+    package static let foldFont = Font.system(size: 9)
+    package static let foldOpacity: Double = 0.45, foldOpenOpacity: Double = 0.6, foldTrailing: CGFloat = 5
+    package static let laneHeight: CGFloat = 6
+    package static let laneFill = Color.white.opacity(0.28)
+    package static let laneRing = Theme.accent.opacity(0.22), laneRingWidth: CGFloat = 3
+    package static let laneMin: CGFloat = 4
+    package static let durationFont = Font.system(size: 11, design: .monospaced)
+    package static let durationText = Color.white.opacity(0.45)
+    package static let durationNow = Color.white.opacity(0.85)
+    package static let pillFont = Font.system(size: 11.5, weight: .medium)
+    package static let pillHeight: CGFloat = 22, pillBottom: CGFloat = 6
+    package static let pillPadding = EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 10)
+    // Log | Files (.seg, .pane, .tail, .f)
+    package static let segWidth: CGFloat = 150, segRadius: CGFloat = 7, segInset: CGFloat = 2
+    package static let segPadding = EdgeInsets(top: 12, leading: 4, bottom: 8, trailing: 0)
+    package static let segFill = Color.white.opacity(0.08)
+    package static let segFont = Font.system(size: 11.5, weight: .medium)
+    package static let segItemHeight: CGFloat = 20, segItemRadius: CGFloat = 5
+    package static let segOff = Color.white.opacity(0.6)
+    package static let segOnFill = Color.white.opacity(0.2)
+    package static let paneHeight: CGFloat = 94
+    package static let tailHeight: CGFloat = 84                                // .tail: 4 lines × 17 + 8/8 padding
+    package static let tailFont = Font.system(size: 11, design: .monospaced)
+    package static let tailLine: CGFloat = 17
+    package static let tailPadding = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+    package static let tailRadius: CGFloat = 8
+    package static let tailFill = Color.black.opacity(0.18)
+    package static let tailText = Color.white.opacity(0.55)
+    package static let tailTime = Color.white.opacity(0.30), tailTimeGap: CGFloat = 8
+    package static let tailLast = Color.white.opacity(0.85)
+    package static let tailFade: CGFloat = 14
+    package static let fileHeight: CGFloat = 22, fileGap: CGFloat = 7, fileIcon: CGFloat = 14
+    package static let fileFont = Font.system(size: 12, design: .monospaced)
+    package static let fileText = Color.white.opacity(0.75)
+    package static let fileCountFont = Font.system(size: 11, design: .monospaced)
+    package static let emptyFont = Font.system(size: 11.5)
+    package static let emptyText = Color.white.opacity(0.4)
+    // Footer (.acts, .ab)
+    package static let footerPadding = EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
+    package static let footerTop: CGFloat = 10, footerGap: CGFloat = 8
+    package static let actionHeight: CGFloat = 26, actionPadding: CGFloat = 12, actionRadius: CGFloat = 7
+    package static let actionFont = Font.system(size: 12.5, weight: .medium)
+    package static let actionFill = Color.white.opacity(0.10)
+    package static let actionText = Color.white
+    package static let terminalText = Color.white.opacity(0.75), terminalPadding: CGFloat = 4
+    // The bar under .acts is the panel footer's (Theme.Footer: .bar material, 0.5 pt white 10 % border-top).
+    package static let stopConfirmFill = Theme.red.opacity(0.22)
+    package static let stopConfirmSeconds: Double = 4
+    package static let errorFont = Font.system(size: 11.5)
+    /// While the drill-down is open, its REST parts refresh this often.
+    package static let refreshSeconds: Double = 2
+  }
+  /// Panel footer (v5-a-final.html `.ft`): full-bleed bar over a `.bar` material, so the list scrolling under it blurs
+  /// instead of showing through, with a hairline on top.
+  package enum Footer {
+    package static let paddingVertical: CGFloat = 10, paddingHorizontal: CGFloat = 16
+    package static let font = Font.system(size: 12.5)
+    package static let monoFont = Font.system(size: 12.5, design: .monospaced)
+    package static let text = Theme.Card.titleText                   // inherits the panel's #F2F2F7
+    package static let hintText = Color.white.opacity(0.40)          // .ft .h
+    package static let divider = Color.white.opacity(0.10)
+    package static let dividerHeight: CGFloat = 0.5
+    package static let material: Material = .bar
+  }
+  /// Inputs (v5-a-final `.in`; input-*.html / thread-input.html `.box`, `.box.f`, `.ta`, `.snd`, `.hint`).
+  package enum Composer {
+    // The panel's "Start a project…" field (.in, .kbd)
+    package static let panelHeight: CGFloat = 36, panelRadius: CGFloat = 9, panelPadding: CGFloat = 10, panelGap: CGFloat = 8
+    package static let panelFont = Font.system(size: 13.5)
+    package static let fill = Color.white.opacity(0.07)
+    package static let focusedFill = Color.white.opacity(0.10)
+    package static let focusedStroke = Color.white.opacity(0.18), focusedStrokeWidth: CGFloat = 0.5
+    package static let ring = Theme.accent.opacity(0.28), ringWidth: CGFloat = 3.5
+    package static let placeholder = Color.white.opacity(0.40)
+    package static let text = Color.white
+    package static let plusIcon = Font.system(size: 12, weight: .medium)
+    package static let plusText = Color.white.opacity(0.45)
+    package static let kbdFont = Font.system(size: 11.5)
+    package static let kbdText = Color.white.opacity(0.40)
+    package static let kbdStroke = Color.white.opacity(0.20), kbdRadius: CGFloat = 5
+    package static let kbdPadding = EdgeInsets(top: 1, leading: 5, bottom: 1, trailing: 5)
+    // The thread input box (.box)
+    package static let boxRadius: CGFloat = 10
+    package static let boxPadding = EdgeInsets(top: 9, leading: 10, bottom: 8, trailing: 10)
+    package static let boxFont = Font.system(size: 13.5), boxLine: CGFloat = 19, boxMaxLines = 4   // .ta max-height 76
+    package static let mention = Theme.accent
+    package static let send: CGFloat = 24, sendIdle = Color.white.opacity(0.10), sendIcon = Font.system(size: 11, weight: .bold)
+    package static let sendGap: CGFloat = 6
+    package static let hintFont = Font.system(size: 10.5)
+    package static let hintText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.34)
+    package static let hintPadding = EdgeInsets(top: 5, leading: 30, bottom: 0, trailing: 4), hintGap: CGFloat = 10
+    package static let errorFont = Font.system(size: 11.5)
+    package static let sectionTop: CGFloat = 0                       // .in sits at the list padding; .sec adds 14 below it
+  }
+  /// Panel height follows its content (measured mockups, border to border: list 535.5–576, run view 295.5–439.5, thread 624.5 pt).
+  package enum Panel {
+    package static let maxHeight: CGFloat = 640          // the tallest approved panel (thread-panel-v2, 624.5) fits
+    package static let minHeight: CGFloat = 200          // an empty or loading screen doesn't collapse
+    package static let screenMargin: CGFloat = 48        // never taller than the screen's visible frame minus this
+    package static let initialHeight: CGFloat = 520      // until the first measurement lands
+    package static let radius: CGFloat = 26              // Composer board: our own container, continuous corners
+    package static let stroke = Color.white.opacity(0.16)
+  }
+  /// Agent thread input and steers (thread-panel-v2.html `.ib`, `.strm`, `.me`; skills-picker.html `.skp`, `.sk`;
+  /// input-mention.html `.mpop`, `.mi`; input-with-skill.html `.chip`).
+  package enum Thread {
+    package static let inputPadding = EdgeInsets(top: 7, leading: 8, bottom: 6, trailing: 6)
+    package static let inputMargin = EdgeInsets(top: 8, leading: 4, bottom: 0, trailing: 4)
+    package static let inputRadius: CGFloat = 10, inputGap: CGFloat = 6
+    package static let inputFontSize: CGFloat = 15, inputLine: CGFloat = 21, inputMaxLines = 6, inputInset: CGFloat = 2   // Composer v2: 15 pt
+    package static let inputFont = Font.system(size: inputFontSize)
+    // An @ mention in the text: an 18 pt capsule with the bot and its name (MentionAttachment).
+    package static let pillHeight: CGFloat = 18, pillFontSize: CGFloat = 13, pillLeading: CGFloat = 3, pillGap: CGFloat = 4, pillTrailing: CGFloat = 8
+    package static let pillFill = Color.white.opacity(0.12), pillStroke = Color.white.opacity(0.16), pillText = Color.white.opacity(0.92)
+    package static let lineSpacing: CGFloat = 3                    // 15 pt SF lines to 21 pt
+    package static let inputText = Color.white.opacity(0.92)
+    package static let inputPlaceholder = Color.white.opacity(0.38)
+    package static let button: CGFloat = 22, plusRadius: CGFloat = 6
+    package static let stopFill = Color.white.opacity(0.88), stopSquare: CGFloat = 7
+    // Writing row (.strm)
+    package static let writingFont = Font.system(size: 11)
+    package static let writingText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.45)
+    package static let writingPadding = EdgeInsets(top: 0, leading: 6, bottom: 6, trailing: 4), writingGap: CGFloat = 6
+    package static let dot: CGFloat = 3, dotGap: CGFloat = 2, dotOpacities: [Double] = [0.9, 0.55, 0.3]
+    // Steer bubble (.me)
+    package static let bubbleFill = Color.white.opacity(0.10)
+    package static let bubbleFontSize: CGFloat = 13
+    package static let bubbleFont = Font.system(size: bubbleFontSize), bubbleText = Color.white.opacity(0.90)
+    package static let bubblePadding = EdgeInsets(top: 6, leading: 11, bottom: 6, trailing: 11)
+    package static let bubbleRadius: CGFloat = 13, bubbleTail: CGFloat = 4, bubbleMaxWidth: CGFloat = 0.76
+    package static let bubbleMargin = EdgeInsets(top: 6, leading: 0, bottom: 10, trailing: 0)
+    package static let bubbleSendingOpacity: Double = 0.6
+    package static let bubbleNoteFont = Font.system(size: 11)
+    // Popovers (.skp / .mpop)
+    package static let popFill = Color(red: 40 / 255, green: 44 / 255, blue: 54 / 255)   // opaque: the lists float over the thread
+    package static let popStroke = Color.white.opacity(0.14), popRadius: CGFloat = 10, popPadding: CGFloat = 4
+    package static let popMargin = EdgeInsets(top: 0, leading: 4, bottom: 6, trailing: 4)
+    package static let popShadow = Color.black.opacity(0.4), popShadowRadius: CGFloat = 15, popShadowY: CGFloat = 10
+    package static let popHeaderFont = Font.system(size: 10.5, weight: .semibold)
+    package static let popHeaderText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.38)
+    package static let popHeaderPadding = EdgeInsets(top: 4, leading: 8, bottom: 3, trailing: 8)
+    package static let rowRadius: CGFloat = 6, rowHighlight = Theme.accent
+    package static let skillPadding = EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8), skillGap: CGFloat = 8
+    package static let skillName = Font.system(size: 11.5, design: .monospaced), skillNameText = Color.white.opacity(0.9)
+    package static let skillSource = Font.system(size: 10.5)
+    package static let skillSourceText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.36)
+    package static let skillDesc = Font.system(size: 11)
+    package static let skillDescText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.5)
+    package static let skillMatch = Color(red: 0x40 / 255, green: 0x9C / 255, blue: 1)
+    package static let skillDescOn = Color.white.opacity(0.75)
+    package static let emptyFont = Font.system(size: 12)
+    package static let emptyText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.45)
+    package static let emptyPadding = EdgeInsets(top: 10, leading: 8, bottom: 9, trailing: 8)
+    package static let footFont = Font.system(size: 10)
+    package static let footText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.32)
+    package static let footPadding = EdgeInsets(top: 5, leading: 8, bottom: 2, trailing: 8), footGap: CGFloat = 10, footDivider = Color.white.opacity(0.07)
+    package static let mentionHeight: CGFloat = 28, mentionFont = Font.system(size: 12.5), mentionText = Color.white.opacity(0.85)
+    package static let mentionSuffix = Font.system(size: 10.5, design: .monospaced)
+    package static let mentionSuffixText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.35)
+    package static let mentionStatus = Font.system(size: 11)
+    package static let mentionStatusText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.4)
+    package static let onHighlightSecondary = Color.white.opacity(0.7)
+    package static let popMaxRows = 6
+    // Picked skill chip (.chip in input-with-skill)
+    package static let chipHeight: CGFloat = 20, chipRadius: CGFloat = 6, chipGap: CGFloat = 4
+    package static let chipPadding = EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 5)
+    package static let chipFill = Theme.accent.opacity(0.16)
+    package static let chipText = Color(red: 0x8C / 255, green: 0xC4 / 255, blue: 1)
+    package static let chipFont = Font.system(size: 11, design: .monospaced)
+    package static let chipClose: CGFloat = 14, chipCloseFill = Color.white.opacity(0.08)
+  }
+  /// Thread content (thread-panel-v2.html / thread-states.html `.th` and its blocks). Line spacing is the CSS line height
+  /// minus the font's own (SF 13 ≈ 15.5, SF 12 ≈ 14.3, SF 12.5 ≈ 15, SF Mono 11.5 ≈ 13.7, SF Mono 10.5 ≈ 12.5).
+  package enum Content {
+    package static let label = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255)
+    package static let padding = EdgeInsets(top: 10, leading: 14, bottom: 0, trailing: 14)   // .th: 16 inside the panel's 10, less its 12 bleed
+    package static let fade: CGFloat = 24
+    package static let topFade: CGFloat = 14  // the thread softens under the header instead of cutting off (the top padding at rest)
+    // Prose (.p, .h, ul.l, .icd)
+    package static let proseFont = Font.system(size: 13), proseText = Color.white.opacity(0.86), proseSpacing: CGFloat = 3.5, proseBottom: CGFloat = 9
+    package static let headingFont = Font.system(size: 13, weight: .semibold), headingText = Color.white
+    package static let headingTop: CGFloat = 14, headingBottom: CGFloat = 5
+    package static let listIndent: CGFloat = 16, listItemGap: CGFloat = 2, listMarker = label.opacity(0.4), markerGap: CGFloat = 2
+    package static let codeInlineFont = Font.system(size: 11.5, design: .monospaced), codeInlineFill = Color.white.opacity(0.08), codeInlineText = Color.white.opacity(0.9)
+    package static let link = Color(red: 0x40 / 255, green: 0x9C / 255, blue: 1), linkDetail = label.opacity(0.4)
+    package static let pathText = Color.white.opacity(0.9)
+    // Code block (.pre, .bar2, pre)
+    package static let codeFill = Color.black.opacity(0.28), codeStroke = Color.white.opacity(0.08), codeRadius: CGFloat = 8, codeBottom: CGFloat = 10
+    package static let codeBarFont = Font.system(size: 10.5), codeBarText = label.opacity(0.4)
+    package static let codeBarPadding = EdgeInsets(top: 5, leading: 10, bottom: 0, trailing: 10)
+    package static let codeFont = Font.system(size: 11.5, design: .monospaced), codeText = Color.white.opacity(0.85), codeSpacing: CGFloat = 3.3
+    package static let codePadding = EdgeInsets(top: 4, leading: 10, bottom: 9, trailing: 10)
+    package static let keyword = Color(red: 0x7C / 255, green: 0xB7 / 255, blue: 1), string = Color(red: 0xA8 / 255, green: 0xD4 / 255, blue: 0xA0 / 255)
+    package static let comment = label.opacity(0.36), number = Color(red: 0xE3 / 255, green: 0xB7 / 255, blue: 0x7A / 255)
+    // Table (table.t)
+    package static let tableFont = Font.system(size: 12), tableText = Color.white.opacity(0.85), tableBottom: CGFloat = 10
+    package static let thFont = Font.system(size: 11, weight: .semibold), thText = label.opacity(0.55), thPadding = EdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6)
+    package static let thRule = Color.white.opacity(0.14), tdRule = Color.white.opacity(0.06), tdPadding = EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+    package static let tdMono = Font.system(size: 11, design: .monospaced)
+    // Tool call (.tc, .tx)
+    package static let toolHeight: CGFloat = 26, toolGap: CGFloat = 8, toolIcon: CGFloat = 16, toolChevron: CGFloat = 10, toolRadius: CGFloat = 6, toolInset: CGFloat = 6
+    package static let toolFont = Font.system(size: 12.5), toolText = label.opacity(0.7), toolHover = Color.white.opacity(0.05)
+    package static let toolDuration = Font.system(size: 10.5, design: .monospaced), toolDurationText = label.opacity(0.4)
+    package static let detailFill = Color.black.opacity(0.22), detailRadius: CGFloat = 7, detailPadding = EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9)
+    package static let detailMargin = EdgeInsets(top: 0, leading: 24, bottom: 8, trailing: 0)
+    package static let detailFont = Font.system(size: 10.5, design: .monospaced), detailText = label.opacity(0.7), detailSpacing: CGFloat = 2.5
+    package static let detailLabel = Font.system(size: 10, weight: .semibold), detailLabelText = label.opacity(0.38), detailLabelGap: CGFloat = 2, detailSectionGap: CGFloat = 6
+    package static let detailMaxLines = 40
+    // Thinking (.thk, .thb)
+    package static let thinkHeight: CGFloat = 24, thinkGap: CGFloat = 6, thinkFont = Font.system(size: 12), thinkText = label.opacity(0.42)
+    package static let thoughtMargin = EdgeInsets(top: 0, leading: 6, bottom: 9, trailing: 0), thoughtIndent: CGFloat = 12, thoughtRule = Color.white.opacity(0.12)
+    package static let thoughtFont = Font.system(size: 12), thoughtText = label.opacity(0.55), thoughtSpacing: CGFloat = 2.7
+    // Handoff card (.ho, .art)
+    package static let handoffFill = Color.white.opacity(0.05), handoffStroke = Color.white.opacity(0.10), handoffRadius: CGFloat = 10
+    package static let handoffPadding = EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 10), handoffBottom: CGFloat = 10, handoffGap: CGFloat = 7
+    package static let handoffName = Font.system(size: 12.5, weight: .medium), handoffSuffix = Font.system(size: 10.5, design: .monospaced), handoffSuffixText = label.opacity(0.32)
+    package static let handoffNote = Font.system(size: 11), handoffNoteText = label.opacity(0.45)
+    package static let handoffSummary = Font.system(size: 12.5), handoffSummaryText = Color.white.opacity(0.8), handoffSummarySpacing: CGFloat = 3
+    package static let handoffSummaryMargin = EdgeInsets(top: 5, leading: 0, bottom: 7, trailing: 0)
+    package static let artFont = Font.system(size: 10.5, design: .monospaced), artText = label.opacity(0.6), artFill = Color.white.opacity(0.07)
+    package static let artRadius: CGFloat = 5, artPadding = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6), artGap: CGFloat = 4
+    // The agent's task above its thread, folded like a thought; its first line trails the label, quieter.
+    package static let taskPreviewText = label.opacity(0.32)
+    // Reviewer verdict card: the handoff card's surface; a seal and "Passed review" / "Didn't pass review", then reasons.
+    package static let verdictIcon = Font.system(size: 13), verdictGap: CGFloat = 6, verdictReasonGap: CGFloat = 4, verdictBullet = label.opacity(0.35)
+    // Diff card (.df, .fh, .ln2)
+    package static let diffFill = Color.black.opacity(0.25), diffStroke = Color.white.opacity(0.08), diffRadius: CGFloat = 8, diffBottom: CGFloat = 10
+    package static let diffHeaderFont = Font.system(size: 11, design: .monospaced), diffHeaderText = Color.white.opacity(0.8)
+    package static let diffHeaderPadding = EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10), diffHeaderGap: CGFloat = 7, diffHeaderRule = Color.white.opacity(0.07)
+    package static let diffAdded = Color(red: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255), diffRemoved = Color(red: 1, green: 0x69 / 255, blue: 0x61 / 255)
+    package static let diffFont = Font.system(size: 11, design: .monospaced), diffLine: CGFloat = 16, diffPadding: CGFloat = 10, diffMarker: CGFloat = 12
+    package static let diffContext = label.opacity(0.6), diffMarkerText = label.opacity(0.4)
+    package static let diffAddedFill = diffAdded.opacity(0.10), diffAddedText = Color.white.opacity(0.9)
+    package static let diffRemovedFill = diffRemoved.opacity(0.10), diffRemovedText = Color.white.opacity(0.75)
+    package static let diffGapText = label.opacity(0.35), diffFailedOpacity: Double = 0.6
+    // Error, other, quote, rule, media
+    package static let errorText = Color(red: 1, green: 105 / 255, blue: 97 / 255).opacity(0.85), errorFont = Font.system(size: 12.5)
+    package static let otherFont = Font.system(size: 12), otherText = label.opacity(0.45)
+    package static let ruleColor = Color.white.opacity(0.10), ruleMargin: CGFloat = 8
+    package static let mediaRadius: CGFloat = 8, mediaMaxHeight: CGFloat = 180, mediaStroke = Color.white.opacity(0.08)
+    package static let truncatedFont = Font.system(size: 11), truncatedText = label.opacity(0.4)
+  }
+  /// Composer v2 (canvas "Composer and container v2", after the owner's reference).
+  package enum Composer2 {
+    package static let radius: CGFloat = 20, padding = EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12), gap: CGFloat = 12
+    package static let fill = Color.white.opacity(0.06), stroke = Color.white.opacity(0.12)
+    package static let ring = Theme.accent.opacity(0.22), ringWidth: CGFloat = 3.5
+    package static let projectFont = Font.system(size: 17), projectTracking: CGFloat = -0.17, textInset: CGFloat = 4
+    package static let threadFont = Font.system(size: 15), threadLine: CGFloat = 21
+    package static let chipHeight: CGFloat = 26, chipPadding: CGFloat = 9, chipGap: CGFloat = 8, chipInnerGap: CGFloat = 6
+    // Local | VM switch (the reference's segmented group): the picked segment is a raised capsule.
+    package static let segmentOn = Color.white.opacity(0.12), segmentOnStroke = Color.white.opacity(0.18)
+    package static let unavailableOpacity: CGFloat = 0.55
+    package static let segmentWidth: CGFloat = 36, segmentIcon = Font.system(size: 13, weight: .medium)
+    package static let chipFont = Font.system(size: 12.5), chipMono = Font.system(size: 12, design: .monospaced)
+    package static let chipFill = Color.white.opacity(0.08), chipStroke = Color.white.opacity(0.14), chipX = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55)
+    package static let round: CGFloat = 30, roundFill = Color.white.opacity(0.08), roundStroke = Color.white.opacity(0.16), plusFont = Font.system(size: 14, weight: .regular)
+    package static let pillHeight: CGFloat = 26, pillGroupFill = Color.black.opacity(0.22), pillText = Color.white.opacity(0.7), pillFont = Font.system(size: 12.5)
+    package static let send: CGFloat = 32, sendIcon = Font.system(size: 13, weight: .bold), sendArrowIdle: CGFloat = 0.3
+    package static let effortFont = Font.system(size: 11, weight: .semibold), effortText = Color.white.opacity(0.75)
+    package static let keyFont = Font.system(size: 11.5, weight: .medium), keyText = Color.white.opacity(0.7), keyStroke = Color.white.opacity(0.25)
+    package static let hintFont = Font.system(size: 11), hintText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.4)
+    // Recent rows (.continue)
+    package static let tile: CGFloat = 34, tileRadius: CGFloat = 10, rowRadius: CGFloat = 14, rowPadding = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+    package static let rowTitle = Font.system(size: 13.5, weight: .medium), rowSub = Font.system(size: 12)
+    /// The outcome mark leading the row's second line, 4 pt before its words.
+    package static let rowMark = Font.system(size: 11, weight: .medium), rowMarkGap: CGFloat = 4
+    package static let rowSubText = Theme.label(dark: 0.55, light: 0.72), rowHover = Color.white.opacity(0.07)
+  }
+  /// Goal branches (runs.goal_branch): the composer's branch row (in the setup's controls) and the run's Ready bar (in
+  /// the Active card's bar). No board yet: these follow the setup and the card.
+  package enum Goal {
+    package static let rowGap: CGFloat = 6, lineGap: CGFloat = 4, labelGap: CGFloat = 5, barGap: CGFloat = 8
+    package static let icon = Font.system(size: 11, weight: .medium)
+    package static let spinnerOffset: CGFloat = 18
+    /// The flag on an older Recent row.
+    package static let flagFont = Font.system(size: 10.5, weight: .semibold), flagIcon = Font.system(size: 8.5, weight: .bold)
+    package static let flagPadding: CGFloat = 6, flagHeight: CGFloat = 16
+  }
+  /// The composer's inline project setup (design/setup/Inline*.dc.html): a picked folder's next steps in the card.
+  package enum Setup {
+    package static let orange = Color(red: 1, green: 0x9F / 255, blue: 0x0A / 255)                  // #ff9f0a: the dot, what needs doing
+    package static let dot: CGFloat = 7
+    package static let divider = Color.white.opacity(0.10), top: CGFloat = 10, inset: CGFloat = 2   // .next: hairline, 10 pt above
+    package static let headerGap: CGFloat = 8, headerFont = Font.system(size: 12.5, weight: .medium)
+    package static let headerText = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
+    // Rows (.r): an 84 pt label column, values on the right, 0.07 hairlines between them.
+    package static let rowsTop: CGFloat = 8, rowHeight: CGFloat = 32, rowPaddingV: CGFloat = 3, rowGap: CGFloat = 10
+    package static let rowDivider = Color.white.opacity(0.07)
+    package static let labelWidth: CGFloat = 84, labelFont = Font.system(size: 12)
+    package static let labelText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.55)
+    package static let valueFont = Font.system(size: 12.5), valueText = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255), valueGap: CGFloat = 6
+    package static let githubMark: CGFloat = 13
+    // Notes under a row (.rn) and the callout (.callout).
+    package static let noteFont = Font.system(size: 11), noteLineSpacing: CGFloat = 1.5, noteGap: CGFloat = 8, noteBottom: CGFloat = 8
+    package static let noteText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.5)
+    package static let calloutTop: CGFloat = 8, calloutFont = Font.system(size: 12.5), calloutLineSpacing: CGFloat = 3     // line-height 1.45
+    package static let calloutText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.7)
+    package static let monoFont = Font.system(size: 11, design: .monospaced)
+    // Values that edit in place: menus (.pop) and fields (.fld).
+    package static let controlHeight: CGFloat = 22, controlRadius: CGFloat = 6
+    package static let popFill = Color.white.opacity(0.10), popGap: CGFloat = 5, popLeading: CGFloat = 8, popTrailing: CGFloat = 5
+    package static let popChevron = Font.system(size: 8, weight: .semibold)
+    package static let fieldFont = Font.system(size: 12, design: .monospaced), fieldPadding: CGFloat = 7, prefixGap: CGFloat = 4
+    package static let fieldFill = Color.black.opacity(0.25), fieldStroke = Color.white.opacity(0.16)
+    package static let errorRing: CGFloat = 2.5, errorRingOpacity: Double = 0.25
+    package static let capWidth: CGFloat = 76, nameWidth: CGFloat = 150
+    // Agent chips (.ag).
+    package static let agentHeight: CGFloat = 24, agentLeading: CGFloat = 7, agentTrailing: CGFloat = 9, agentGap: CGFloat = 5, agentMark: CGFloat = 12
+    package static let agentFont = Font.system(size: 12), agentText = Color.white.opacity(0.7)
+    package static let agentFill = Color.white.opacity(0.04), agentStroke = Color.white.opacity(0.14)
+    package static let agentOnFill = Theme.accent.opacity(0.18), agentOnStroke = Theme.accent.opacity(0.55)
+    package static let agentDisabledOpacity: Double = 0.45
+    // Buttons (.acts .b): 27 pt, 7 pt corners; Cancel is text only; Log In… is the 20 pt mini.
+    package static let actionsTop: CGFloat = 12, actionGap: CGFloat = 8
+    package static let buttonHeight: CGFloat = 27, buttonRadius: CGFloat = 7, buttonPadding: CGFloat = 12, quietPadding: CGFloat = 6
+    package static let buttonFont = Font.system(size: 12.5, weight: .medium), buttonFill = Color.white.opacity(0.10)
+    package static let quietText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.7)
+    package static let offOpacity: Double = 0.55, lockedOpacity: Double = 0.5
+    package static let spinner: CGFloat = 11, spinnerGap: CGFloat = 6
+    package static let miniHeight: CGFloat = 20, miniRadius: CGFloat = 5, miniPadding: CGFloat = 8, miniFont = Font.system(size: 11.5)
+  }
+  /// Identity moments (design/brand/moments.png): meet your team, run finished.
+  /// The provider mark (ProviderMark.swift): 11 pt in tree rows, a badge disc on bots of 24 pt and up.
+  package enum Provider {
+    package static let claude = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)   // Claude's coral
+    package static let rowSize: CGFloat = 11, rowText = Theme.label(dark: 0.45, light: 0.6, white: true), rowLeading: CGFloat = 6, chipMark: CGFloat = 12
+    package static func badge(_ side: CGFloat) -> CGFloat { side >= 48 ? 18 : side >= 24 ? 12 : 0 }
+    package static let markRatio: CGFloat = 0.68, badgeOut: CGFloat = 0.18
+    package static let badgeFill = Color(white: 0.13), badgeStroke = Color.white.opacity(0.14)
+  }
+  package enum Moments {
+    package static let meetWindow: Double = 6, cheerFor: Double = 2.2                   // s: a run's first seconds; the cheer
+    package static let maxKids = 4, maxCheer = 5
+    package static let leadCell: CGFloat = 2                                            // the planner at 64 pt
+    package static let padding: CGFloat = 8, labelTop: CGFloat = 4, traceTop: CGFloat = 4, traceHeight: CGFloat = 18, statusTop: CGFloat = 10
+    package static let traceWidth: CGFloat = 1, traceOpacity: Double = 0.8, memberGap: CGFloat = 2, statusGap: CGFloat = 6
+    package static let leadFont = Font.system(size: 12.5), memberFont = Font.system(size: 11.5)
+    package static let roleText = Color.white.opacity(0.85), nameText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.45)
+    package static let statusFont = Font.system(size: 12.5), statusText = Color.white.opacity(0.78)
+    package static let rise: CGFloat = 4, stagger: Double = 0.04, memberFade: Double = 0.2, reducedFade: Double = 0.15
+    package static let cheerGap: CGFloat = 4, cheerPadding: CGFloat = 10, cheerBottom: CGFloat = 12, confettiCount = 26
+    package static let confetti: [Color] = [Theme.Polish.brand, Color(red: 0x94 / 255, green: 0x57 / 255, blue: 0xDC / 255),
+                                    Color(red: 0x5E / 255, green: 0xE6 / 255, blue: 1), Color(red: 0xF7 / 255, green: 0xA3 / 255, blue: 0xDA / 255)]
+  }
+  /// Approved Apple craft (canvas "Craft" and "Materials" boards).
+  package enum Craft {
+    package static let solidControl = Color(red: 0x30 / 255, green: 0x31 / 255, blue: 0x3A / 255)   // Reduce Transparency, macOS 14–15
+    package static let solidPanel = Color(red: 0x23 / 255, green: 0x24 / 255, blue: 0x2C / 255)
+    package static let contrastStroke = Color.white.opacity(0.7), contrastStrokeWidth: CGFloat = 1   // Increase Contrast
+  }
+  /// Approved polish (canvas "Polish" board): identity in lines and light, never in text, controls or chrome.
+  package enum Polish {
+    package static let brand = Color(red: 1, green: 0x7A / 255, blue: 0x10 / 255)        // the wordmark orange
+    package static let dither = brand.opacity(0.45)                                      // 1 pt ordered dither, footer hairlines
+    package static let traceDash: [CGFloat] = [1, 1]                                     // tree guides as dotted traces
+    package static let traceNode: CGFloat = 3                                            // a 3×3 node where a branch splits
+    package static let glowSize = CGSize(width: 20, height: 14), glowOpacity: Double = 0.45
+    package static let blink: Double = 0.12                                              // hover blink, a sprite swap
+    package static let sparkle: CGFloat = 10, sparkleFade: Double = 0.3, sparkleWithin: Double = 10   // s after a run ends
+    package static let wordmarkCell: CGFloat = 3, wordmarkGap: CGFloat = 1               // glyph cells; gap in cells
+  }
+  /// The Settings window (design/settings/*.dc.html). Panes are system grouped Forms, so rows, controls, section headers
+  /// and footers take the system's metrics and colours; these are the few things the boards draw themselves.
+  package enum Settings {
+    package static let width: CGFloat = 620                                   // .win width
+    package static let poll: Double = 5                                       // s between reads while the window is open
+    package static let chrome: CGFloat = 80                                   // title and tab bar, until the window says
+    package static let minPane: CGFloat = 200                                 // never shorter than this before scrolling
+    // Status dots (`.dot`, `.empty`): system colours, so they adapt to light, dark and Increase Contrast.
+    package static let dot: CGFloat = 8, ringWidth: CGFloat = 1.2, valueGap: CGFloat = 6
+    package static let ok = Color(nsColor: .systemGreen), warn = Color(nsColor: .systemOrange), bad = Color(nsColor: .systemRed)
+    package static let ring = Color(nsColor: .systemGray)
+    package static let rowGap: CGFloat = 12                                   // .row gap: value to button
+    package static let footFont = Font.system(size: 11), footMono = Font.system(size: 11, design: .monospaced)
+    // Section headers (`.sh`): a mark before the title, a Default badge or Make Default after it.
+    package static let headerGap: CGFloat = 6
+    package static let providerMark: CGFloat = 14, placeMark: CGFloat = 15
+    package static let badgeFont = Font.system(size: 11, weight: .medium)
+    package static let badgePaddingH: CGFloat = 7, badgePaddingV: CGFloat = 2, badgeRadius: CGFloat = 5, badgeFill: Double = 0.16
+    /// `.badge` text: #4ea1ff in dark (Runs.dc.html), #0062cc in light (GeneralLight.dc.html's accent text).
+    package static let badgeText = Color(nsColor: NSColor(name: nil) { a in
+      a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(srgbRed: 0x4E / 255, green: 0xA1 / 255, blue: 1, alpha: 1)
+                                                          : NSColor(srgbRed: 0, green: 0x62 / 255, blue: 0xCC / 255, alpha: 1)
+    })
+    package static let headerButtonFont = Font.system(size: 12)
+    package static let menuMark: CGFloat = 13                                 // marks inside popup menus
+    // Bot faces preview: the mark on a 32 pt tile.
+    package static let faceTile: CGFloat = 32, faceTileRadius: CGFloat = 7, faceTileFill = Color.primary.opacity(0.06), faceMark: CGFloat = 16
+    package static let progressWidth: CGFloat = 150                           // `.track` while an environment builds
+    package static let sheetWidth: CGFloat = 380, sheetPadding: CGFloat = 20, sheetGap: CGFloat = 10
+    /// A place's details (CloudExplore.dc.html), pushed from Runs.
+    package enum Details {
+      package static let sheetWidth: CGFloat = 560                             // the sheet (`.win` 560 px)
+      package static let actionsHeight: CGFloat = 52, actionsPaddingH: CGFloat = 20   // `.actions`: Done at the bottom right
+      package static let machineGap: CGFloat = 10                              // `.mrow` gap
+      package static let machineFont = Font.system(size: 12)                   // `.mrow` 12 px
+      package static let ageFont = Font.system(size: 11, design: .monospaced)  // `.mono`
+    }
+    /// About (`About.dc.html`): one centred column.
+    package enum About {
+      package static let height: CGFloat = 420                                // the board's 500 pt window less its toolbar
+      package static let botCell: CGFloat = 4                                 // 32 cells × 4 = 128 pt
+      package static let wordmarkCell: CGFloat = 6                            // 7 glyphs → 204 × 30 pt
+      package static let wordmarkTop: CGFloat = 18, taglineTop: CGFloat = 12, versionTop: CGFloat = 6, linksTop: CGFloat = 22
+      package static let linksGap: CGFloat = 8, licenseTop: CGFloat = 18
+      package static let paddingTop: CGFloat = 8, paddingH: CGFloat = 24, paddingBottom: CGFloat = 28
+      package static let taglineFont = Font.system(size: 13), smallFont = Font.system(size: 11)
+    }
+  }
+  /// Secondary text for dark and light: the label grey (or white) at `dark` alpha on dark, #3C3C43 at `light` on light.
+  package static func label(dark: Double, light: Double, white: Bool = false) -> Color {
+    adaptive(dark: white ? NSColor(white: 1, alpha: dark) : NSColor(srgbRed: 235 / 255, green: 235 / 255, blue: 245 / 255, alpha: dark),
+             light: NSColor(srgbRed: 60 / 255, green: 60 / 255, blue: 67 / 255, alpha: light))
+  }
+  /// A colour for dark and light appearance (the panel follows the system's).
+  package static func adaptive(dark: NSColor, light: NSColor) -> Color {
+    Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light })
+  }
+  /// The Active card, direction B "The ask leads" (design/active-card/B.dc.html, card-spec.md): folded to one sentence,
+  /// unfolded to the ask, a failure or a usage-limit pause. Measurements are the board's CSS (`.card.b`, `.b-*`, `.crew`,
+  /// `.files`); colours adapt to light and dark (the board's `.pnl` and `.pnl.lt` tokens).
+  package enum Ask {
+    package static let padding: CGFloat = 12                                              // .card.b
+    // Top row (.b-top): the goal at 13/600 while folded, at 12 once unfolded (the ask leads); elapsed in tabular mono.
+    package static let titleFont = Font.system(size: 13, weight: .semibold), titleTracking: CGFloat = -0.1
+    package static let goalFont = Font.system(size: 12)
+    package static let timeFont = Font.system(size: 11.5, design: .monospaced)
+    package static let topGap: CGFloat = 10
+    // Sentence row (.b-line): 8 below the top row, 20 tall, 8 between its parts.
+    package static let lineTop: CGFloat = 8, lineHeight: CGFloat = 20, lineGap: CGFloat = 8
+    package static let sentenceFont = Font.system(size: 12.5), whoFont = Font.system(size: 12.5, weight: .medium)
+    package static let monoFont = Font.system(size: 11.5, design: .monospaced)
+    // Crew heads (.crew .hd): 18 pt tiles, 5 pt corners, overlapping 4 pt, cut apart by a 1.5 pt ring; the asker's has
+    // a 1 pt amber ring outside it.
+    package static let head: CGFloat = 18, headRadius: CGFloat = 5, headOverlap: CGFloat = 4, headCut: CGFloat = 1.5, headRing: CGFloat = 1
+    package static let moreFont = Font.system(size: 11).monospacedDigit(), moreLeading: CGFloat = 5
+    package static let chevron: CGFloat = 22, chevronRadius: CGFloat = 6
+    package static let chevronFont = Font.system(size: 9, weight: .semibold)
+    // Headline (.b-head): 9 below the top row, 15/600 on a 20 pt line, its mark 7 before it.
+    package static let headTop: CGFloat = 9, headFont = Font.system(size: 15, weight: .semibold), headTracking: CGFloat = -0.25
+    package static let headSpacing: CGFloat = 2, headGap: CGFloat = 7, headIcon: CGFloat = 13
+    // Who asked and who waits (.b-who): 5 below, 11.5, 6 between.
+    package static let whoTop: CGFloat = 5, whoLineFont = Font.system(size: 11.5), whoGap: CGFloat = 6
+    // Files (.files): 10 below, 20 pt rows with a 0.5 pt rule between, counts right-aligned in 36 pt columns.
+    package static let filesTop: CGFloat = 10, fileRow: CGFloat = 20, fileFont = Font.system(size: 11.5, design: .monospaced)
+    package static let countFont = Font.system(size: 11.5).monospacedDigit(), countWidth: CGFloat = 36, maxFiles = 4
+    package static let moreFilesFont = Font.system(size: 11.5)
+    // The failing line (.b-err): 10 below, a sunk 7 pt box, mono 11 on 16.
+    package static let errTop: CGFloat = 10, errRadius: CGFloat = 7, errPadding = EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9)
+    package static let errFont = Font.system(size: 11, design: .monospaced), errSpacing: CGFloat = 3, errMaxLines = 3
+    // Decision bar (.b-bar): docked to the card's foot on a darker step, 12 above, 10 × 12 inside, 8 between.
+    package static let barTop: CGFloat = 12, barPadding = EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12), barGap: CGFloat = 8
+    package static let buttonHeight: CGFloat = 28, buttonRadius: CGFloat = 7, buttonPadding: CGFloat = 12
+    package static let buttonFont = Font.system(size: 12.5, weight: .medium), approveFont = Font.system(size: 12.5, weight: .semibold)
+    package static let approveMinWidth: CGFloat = 112, ghostStrokeWidth: CGFloat = 0.5
+    package static let key: CGFloat = 15, keyRadius: CGFloat = 4, keyFont = Font.system(size: 10.5, weight: .semibold), keyGap: CGFloat = 7
+    package static let textButtonFont = Font.system(size: 12, weight: .medium), noteFont = Font.system(size: 12)
+    package static let statusFont = Font.system(size: 12)
+    // The outcome (a finished run, folded), in the folded card's shape: the run's title and how it ended as a mark by
+    // its time (the top row), the goal 6 below when the title doesn't already say it, then the crew's heads and what
+    // landed (.b-stats) on the sentence's row.
+    package static let outcomeGoalTop: CGFloat = 6, statsFont = Font.system(size: 11.5), statsGap: CGFloat = 6
+    /// How it ended (Recent): a status mark at the title's size class, 4 pt before the time it took.
+    package static let markFont = Font.system(size: 12, weight: .medium), markGap: CGFloat = 4
+    // The tree, unfolded (.b-tree): 10 below, 24 pt rows.
+    package static let treeTop: CGFloat = 10, treeRow: CGFloat = 24
+    package static let ringWidth: CGFloat = 1
+
+    // Colours: the board's dark `.pnl` and light `.pnl.lt` tokens.
+    package static let text = Theme.adaptive(dark: NSColor(srgbRed: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255, alpha: 1), light: NSColor(srgbRed: 0x1D / 255, green: 0x1D / 255, blue: 0x1F / 255, alpha: 1))
+    package static let text2 = Theme.adaptive(dark: NSColor(srgbRed: 235 / 255, green: 235 / 255, blue: 245 / 255, alpha: 0.68), light: NSColor(srgbRed: 60 / 255, green: 60 / 255, blue: 67 / 255, alpha: 0.86))
+    package static let text3 = Theme.adaptive(dark: NSColor(srgbRed: 235 / 255, green: 235 / 255, blue: 245 / 255, alpha: 0.57), light: NSColor(srgbRed: 60 / 255, green: 60 / 255, blue: 67 / 255, alpha: 0.8))
+    package static let fill = Theme.adaptive(dark: NSColor(white: 1, alpha: 0.06), light: NSColor(white: 0, alpha: 0.045))
+    package static let sunk = Theme.adaptive(dark: NSColor(white: 0, alpha: 0.2), light: NSColor(white: 0, alpha: 0.05))
+    package static let rule = Theme.adaptive(dark: NSColor(white: 1, alpha: 0.075), light: NSColor(white: 0, alpha: 0.06))
+    package static let tile = Theme.adaptive(dark: NSColor(white: 1, alpha: 0.10), light: NSColor(white: 0, alpha: 0.06))
+    /// The ring that cuts overlapping heads apart: about the card's own colour on the panel.
+    package static let cut = Theme.adaptive(dark: NSColor(white: 0.17, alpha: 1), light: NSColor(white: 0.9, alpha: 1))
+    package static let amber = Theme.adaptive(dark: NSColor(srgbRed: 1, green: 0xB0 / 255, blue: 0x20 / 255, alpha: 1), light: NSColor(srgbRed: 0xC7 / 255, green: 0x77 / 255, blue: 0, alpha: 1))
+    package static let amberRing = Theme.adaptive(dark: NSColor(srgbRed: 1, green: 0xB0 / 255, blue: 0x20 / 255, alpha: 0.6), light: NSColor(srgbRed: 0xC7 / 255, green: 0x77 / 255, blue: 0, alpha: 0.62))
+    package static let red = Theme.adaptive(dark: NSColor(srgbRed: 1, green: 0x69 / 255, blue: 0x61 / 255, alpha: 1), light: NSColor(srgbRed: 0xC0 / 255, green: 0, blue: 0x13 / 255, alpha: 1))
+    package static let green = Theme.adaptive(dark: NSColor(srgbRed: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255, alpha: 1), light: NSColor(srgbRed: 0x1A / 255, green: 0x6B / 255, blue: 0x32 / 255, alpha: 1))
+    package static let ghostStroke = Theme.adaptive(dark: NSColor(white: 1, alpha: 0.2), light: NSColor(white: 0, alpha: 0.2))
+    package static let ghostPressed = Theme.adaptive(dark: NSColor(white: 1, alpha: 0.08), light: NSColor(white: 0, alpha: 0.05))
+    /// Approve: the inverted fill (near-white in dark, near-black in light), so it reads with any accent, Graphite too.
+    package static let approveFill = Theme.adaptive(dark: NSColor(srgbRed: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255, alpha: 1), light: NSColor(srgbRed: 0x1D / 255, green: 0x1D / 255, blue: 0x1F / 255, alpha: 1))
+    package static let approveText = Theme.adaptive(dark: NSColor(srgbRed: 0x1D / 255, green: 0x1D / 255, blue: 0x1F / 255, alpha: 1), light: .white)
+    package static let keyFill = Color.gray.opacity(0.22)
+
+    // Motion (design/active-card/Motion.dc.html, row B). Springs are response / damping fraction; no bounce anywhere.
+    /// Unfolding to the ask (or a failure, a pause): the card's height.
+    package static let unfold = Animation.spring(response: 0.35, dampingFraction: 1)
+    /// Folding back once decided: faster than the unfold.
+    package static let fold = Animation.spring(response: 0.28, dampingFraction: 1)
+    /// Siblings making room for a head that joins, and the tree's rows.
+    package static let shift = Animation.spring(response: 0.30, dampingFraction: 1)
+    /// The sentence turning into the headline: opacity with a 2 pt blur, 180 ms on a strong ease-out.
+    package static let crossfade = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.18), crossfadeBlur: CGFloat = 2
+    /// The folded sentence when someone else does something: 150 ms with a 1.5 pt blur, at most once per 1.5 s, never
+    /// while the pointer is on the card.
+    package static let ticker = Animation.easeOut(duration: 0.15), tickerBlur: CGFloat = 1.5, tickerHold: Double = 1.5
+    /// A head joining the crew: in from 6 pt to the right with a fade, 200 ms, 40 ms apart (at most 4 steps).
+    package static let join = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.2), joinOffset: CGFloat = 6, joinStagger: Double = 0.04, joinStaggerMax = 4
+    /// Reduce Motion: no height animation, no blur, no travel; a 150 ms crossfade.
+    package static let reduced = Animation.easeOut(duration: 0.15)
+  }
+
+  /// Motion: transform and opacity only, ease-out, under 300 ms; Reduce Motion drops the transform.
+  package enum Motion {
+    package static let pressScale: CGFloat = 0.97
+    package static let pressedOpacity: Double = 0.75                 // Reduce Motion stand-in for the press scale
+    package static let fast = Animation.easeOut(duration: 0.12)
+    package static let standard = Animation.easeOut(duration: 0.2)
+    package static let reduced = Animation.easeOut(duration: 0.15)   // crossfade
+    package static func ease(_ reduceMotion: Bool) -> Animation { reduceMotion ? reduced : standard }
+    /// Drill-down / thread push and back (SPEC §7: 0.25 s).
+    package static let pushDuration: Double = 0.25
+    package static func push(_ reduceMotion: Bool) -> Animation { reduceMotion ? reduced : .easeOut(duration: pushDuration) }
+  }
+
+  package static let panelTitle = Font.system(size: 15, weight: .semibold)
+  package static let body = Font.system(size: 13)
+  package static let chip = Font.system(size: 11)
+  package static let monoTime = Font.system(size: 10.5, design: .monospaced)
+
+  package static func color(_ t: Tint) -> Color {
+    switch t {
+    case .grey: .secondary
+    case .blue: accent
+    case .amber: amber
+    case .red: red
+    case .tertiary: Color(nsColor: .tertiaryLabelColor)
+    }
+  }
+}
+
+extension AnyTransition {
+  package static func push(_ reduceMotion: Bool) -> AnyTransition {
+    reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading))
+  }
+}
+
+/// Profile icon: grey by default, blue running, amber on approval. "other" gets a centre dot.
+package struct ProfileIcon: View {
+  package let kind: ProfileKind
+  package let tint: Tint
+  package init(kind: ProfileKind, tint: Tint) { self.kind = kind; self.tint = tint }
+  package var body: some View {
+    ZStack {
+      Image(systemName: kind.symbol)
+      if kind.hasCentreDot { Circle().frame(width: Theme.Tree.iconDot, height: Theme.Tree.iconDot) }
+    }
+    .font(.system(size: Theme.Tree.iconSize(kind)))
+    .foregroundStyle(Theme.color(tint))
+    .frame(width: Theme.Tree.iconBox, height: Theme.Tree.iconBox)
+    .accessibilityHidden(true)
+  }
+}
+
+package struct StatusMark: View {
+  package let status: StepStatus?
+  package init(status: StepStatus?) { self.status = status }
+  package var body: some View {
+    if let s = status, let sym = s.symbol {
+      Image(systemName: sym).symbolRenderingMode(.hierarchical).foregroundStyle(Theme.color(s.tint)).font(.system(size: 11))
+        .accessibilityLabel(String(describing: s))
+    }
+  }
+}
+
+/// Press feedback for mouse presses: 0.97 scale, or a dim under Reduce Motion. Keyboard activation never sets
+/// `isPressed`, so keyboard-initiated actions stay unanimated.
+package struct PressableStyle: ButtonStyle {
+  package init() {}
+  package func makeBody(configuration: Configuration) -> some View {
+    configuration.label.contentShape(Rectangle()).modifier(PressFeedback(isPressed: configuration.isPressed))
+  }
+}
+
+/// The press scale (or Reduce Motion dim) shared by every custom button style.
+package struct PressFeedback: ViewModifier {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  package let isPressed: Bool
+  package init(isPressed: Bool) { self.isPressed = isPressed }
+  package func body(content: Content) -> some View {
+    content
+      .scaleEffect(isPressed && !reduceMotion ? Theme.Motion.pressScale : 1)
+      .opacity(isPressed && reduceMotion ? Theme.Motion.pressedOpacity : 1)
+      .animation(Theme.Motion.fast, value: isPressed)
+  }
+}
+
+package struct Chip: View {
+  package let text: String
+  package init(text: String) { self.text = text }
+  package var body: some View {
+    Text(verbatim: text).font(Theme.chip).foregroundStyle(.secondary)
+      .padding(.horizontal, 6).padding(.vertical, 2)
+      .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.white.opacity(0.07)))
+  }
+}
+#endif

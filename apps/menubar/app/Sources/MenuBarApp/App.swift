@@ -10,7 +10,7 @@ struct CapcomdMenuBarApp: App {
   @State private var model = AppModel.live()
   var body: some Scene {
     MenuBarExtra {
-      PanelView().environment(model)
+      PanelView().environment(model).environment(\.threadHost, ThreadHostBox(host: model))
     } label: {
       MenuBarLabel(badge: model.badgeCount, face: model.menuBarFace)
     }

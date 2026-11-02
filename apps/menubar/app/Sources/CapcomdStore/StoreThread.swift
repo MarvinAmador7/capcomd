@@ -43,6 +43,9 @@ public enum Capability {
   /// `POST /v1/projects/git-init`, `GET /v1/projects/publish-options`, `POST /v1/projects/publish`: take a plain folder
   /// to a GitHub checkout before setting it up; `POST /v1/projects` takes no check and `gitignore`.
   public static let projectsGit = "projects.git"
+  /// Goal branches: POST /v1/runs `base` / `goalBranch`, Run.goalBranch, GET /v1/projects/branches, GET …/goal,
+  /// POST …/pull-request and …/keep-branch.
+  public static let runsGoalBranch = "runs.goal_branch"
 }
 
 extension CapcomdStore {

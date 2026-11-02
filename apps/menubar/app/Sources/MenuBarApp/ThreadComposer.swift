@@ -42,7 +42,7 @@ struct ThreadComposer: View {
     if first == "/", canAttachSkills { return .skill(String(t.dropFirst()).lowercased()) }
     return nil
   }
-  private func handle(_ n: AgentNode) -> String { "@" + n.name + (n.suffix.map { "-\($0)" } ?? "") }
+  private func handle(_ n: AgentNode) -> String { AgentTitle.handle(n) }
   private var mentionRows: [AgentNode] {
     guard case .mention(let q) = trigger else { return [] }
     return Array(model.descendants(runId: runId, of: agentId).filter { n in
@@ -294,7 +294,8 @@ struct ThreadComposer: View {
   }
 }
 
-/// `.mi`: the bot · its name · role and suffix · status, highlighted blue. The inserted handle stays role-based.
+/// `.mi`: the bot · its name · role, title and suffix · status, highlighted blue. The inserted handle stays role-based
+/// (with its title: `@worker-login-redirect`).
 struct MentionRow: View {
   let node: AgentNode
   let on: Bool
@@ -304,6 +305,7 @@ struct MentionRow: View {
       BotAvatar(traits: bot, size: .xs)
       Text(verbatim: bot?.name ?? node.name).font(Theme.Thread.mentionFont).foregroundStyle(on ? Color.white : Theme.Thread.mentionText)
       if bot != nil { Text(verbatim: node.name).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
+      if let t = node.title { Text(verbatim: t).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText).lineLimit(1) }
       if let s = node.suffix { Text(verbatim: s).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
       Spacer(minLength: 0)
       Text(status).font(Theme.Thread.mentionStatus).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionStatusText)
@@ -349,64 +351,4 @@ struct SkillRow: View {
   }
 }
 
-/// `.me`: a steer to this agent, right-aligned. Pending ones show sending (dimmed) or failed (Retry · Discard).
-struct SteerBubble: View {
-  @Environment(AppModel.self) private var model
-  let runId: String
-  let text: String
-  var state: PendingSteer.State? = nil
-  var onRetry: (() -> Void)? = nil
-  var onDiscard: (() -> Void)? = nil
-  var body: some View {
-    let sending = state == .sending
-    let failure: String? = { if case .failed(let m) = state { return m }; return nil }()
-    HStack {
-      Spacer(minLength: 0)
-      VStack(alignment: .trailing, spacing: 4) {
-        shown   // what the operator typed, with its mentions as pills again
-          .font(Theme.Thread.bubbleFont).foregroundStyle(Theme.Thread.bubbleText)
-          .lineSpacing(Theme.Thread.lineSpacing)
-          .padding(Theme.Thread.bubblePadding)
-          .background(UnevenRoundedRectangle(topLeadingRadius: Theme.Thread.bubbleRadius, bottomLeadingRadius: Theme.Thread.bubbleRadius,
-                                             bottomTrailingRadius: Theme.Thread.bubbleTail, topTrailingRadius: Theme.Thread.bubbleRadius)
-            .fill(Theme.Thread.bubbleFill))
-          .opacity(sending ? Theme.Thread.bubbleSendingOpacity : 1)
-          .textSelection(.enabled)
-        if let failure {
-          HStack(spacing: 8) {
-            Text(verbatim: failure).foregroundStyle(Theme.red)
-            if let onRetry { Button("Retry", action: onRetry).buttonStyle(.plain).foregroundStyle(Theme.accent) }
-            if let onDiscard { Button("Discard", action: onDiscard).buttonStyle(.plain).foregroundStyle(Theme.Thread.writingText) }
-          }
-          .font(Theme.Thread.bubbleNoteFont)
-        }
-      }
-      .containerRelativeFrame(.horizontal, alignment: .trailing) { w, _ in w * Theme.Thread.bubbleMaxWidth }
-    }
-    .padding(Theme.Thread.bubbleMargin)
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel("You: \(text)" + (sending ? ", sending" : "") + (failure.map { ", not sent: \($0)" } ?? ""))
-  }
-
-  /// Hide the line naming the mentioned agents (SteerMentions) and draw each handle it names as its pill; anything
-  /// else shows as typed.
-  private var shown: Text {
-    let (visible, mentions) = SteerMentions.parse(text)
-    guard !mentions.isEmpty else { return Text(verbatim: text) }
-    let agents = Dictionary(mentions.map { ($0.handle, $0.agentId) }, uniquingKeysWith: { a, _ in a })
-    let handles = agents.keys.sorted { $0.count > $1.count }
-    var out = Text(verbatim: ""), rest = Substring(visible)
-    while !rest.isEmpty {
-      let hit = handles.compactMap { h in rest.range(of: h).map { (h, $0) } }.min { $0.1.lowerBound < $1.1.lowerBound }
-      guard let (h, r) = hit else { out = out + Text(verbatim: String(rest)); break }
-      let id = agents[h]!
-      let pill = MentionPill.image(label: model.botName(runId: runId, agentId: id) ?? String(h.dropFirst()), bot: model.bot(runId: runId, agentId: id))
-      out = out + Text(verbatim: String(rest[..<r.lowerBound]))
-        + Text(Image(nsImage: pill)).baselineOffset(MentionPill.baseline(textSize: Theme.Thread.bubbleFontSize))
-      rest = rest[r.upperBound...]
-    }
-    return out
-  }
-
-}
 #endif

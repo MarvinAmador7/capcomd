@@ -2,10 +2,11 @@
 // scope actors (src/primitives/ops.ts); tests use memorySource so tests/api stays fast and engine-free.
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, AgentStatus, Attachment, Decision, Environment, Login, Message, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Agent, AgentStatus, Attachment, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
+import { runTitle } from "./run-title";
 import type { ApprovalDiff, RunRepo } from "./run-files";
 import type { AttachedSkill } from "../agents/skills";
 import type { ListedProvider } from "../providers/registry";
@@ -13,17 +14,27 @@ import { LISTED_PROVIDERS } from "../providers/registry";
 import { sandboxSurface, type ActionOutcome, type MachineOwner, type RecordedMachine, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
 import type { VmInfo } from "../providers/sandbox";
 import { memorySettingsStore, type SettingsStore } from "../providers/settings";
-import { inspectProject, setUpProject, type ProjectDeps, type ProjectInspection, type ProjectSetupInput, type SetupOutcome } from "./projects";
+import { inspectProject, projectBranches, setUpProject, type BranchLister, type ProjectBranchesQuery, type ProjectBranchesResult, type ProjectDeps, type ProjectInspection, type ProjectSetupInput, type SetupOutcome } from "./projects";
 import { initGit, publishOptions, publishProject, type GitInitOutcome, type OptionsOutcome, type PublishInput, type PublishOutcome } from "./project-git";
+import { applyTitle, normalizeTitle, shownTitle, type TitleState } from "../primitives/agent-title";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
 type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
-export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string; driver?: "claude" | "codex"; effort?: string; sandbox?: ListedProvider };
-/** A run that can't be started as asked (bad repo, no repository, refused by `capcomd run`): 422 with this message. */
-export class CreateRunError extends Error {}
+export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string; driver?: "claude" | "codex"; effort?: string; sandbox?: ListedProvider;
+	/** Capability runs.goal_branch: the base the goal branch is cut from, and its name (false: no goal branch). */
+	base?: string; goalBranch?: string | false };
+/** A run that can't be started as asked (bad repo, no repository, refused by `capcomd run`): 422 with this message,
+ *  and the body field it's about when there is one (base, goalBranch). */
+export class CreateRunError extends Error {
+	constructor(message: string, readonly field?: string) { super(message); }
+}
+/** PUT/DELETE …/title (capability agents.title): Agent.title after it, or why the title was refused (422). */
+export type TitleOutcome = { ok: true; title: string | null; titleSource: O<typeof Agent>["titleSource"] | null; changed: boolean } | { ok: false; message: string };
+/** A goal-branch action's outcome (POST …/pull-request, …/keep-branch): the body, or a refusal with its status. */
+export type GoalOutcome<T> = { ok: true; body: T } | { ok: false; status: 404 | 409 | 422; code: "not_found" | "conflict" | "stopped" | "invalid"; message: string };
 
 /** A project groups runs on one repository: its id is derived from the run's repository (CAPCOMD_REPO). */
 export const projectIdOf = (repo: string | null) => (repo ? `prj-${createHash("sha256").update(repo).digest("hex").slice(0, 12)}` : null);
@@ -99,6 +110,17 @@ export interface HarnessSource {
 	publishOptions(path: string): Promise<OptionsOutcome>;
 	/** POST /v1/projects/publish, the body's shape already checked: the first commit if needed, then `gh repo create … --push`. */
 	publishProject(input: PublishInput): Promise<PublishOutcome>;
+	/** GET /v1/projects/branches (capability runs.goal_branch): the base menu and the suggested goal branch. */
+	projectBranches(q: ProjectBranchesQuery): Promise<ProjectBranchesResult>;
+	/** GET /v1/runs/{runId}/goal: null for an unknown run or one without a goal branch (404). */
+	goal(runId: string): Promise<O<typeof GoalView> | null>;
+	/** POST /v1/runs/{runId}/pull-request (`by`: client:<id>; `stopped`: the person agreed to open one for a stopped run). */
+	openPullRequest(runId: string, by: string, o?: { stopped?: boolean }): Promise<GoalOutcome<O<typeof GoalPullRequestResult>>>;
+	/** POST /v1/runs/{runId}/keep-branch (`by`: client:<id>). */
+	keepBranch(runId: string, by: string): Promise<GoalOutcome<{ runId: string; branch: string; base: string; kept: true; changed: boolean }>>;
+	/** PUT …/agents/{agentId}/title (capability agents.title): the user's title; null clears it (DELETE). `key` makes a
+	 *  retry safe across restarts. null for an unknown run or agent (404). */
+	setAgentTitle(runId: string, agentId: string, title: string | null, key: string): Promise<TitleOutcome | null>;
 }
 export type RunAction = "pause" | "resume" | "cancel";
 export type ControlResult = { changed: string[]; pending: string[]; noop: string | null };
@@ -128,7 +150,7 @@ export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
  * A parked merge's question and subject. The merge's `ref` is often just the agent's id (`capcomd_merge ref: agt-…`),
  * which made "Merge agt-mvqa… into main?": name the work as the agent's, and give the branch it pushed as the subject's ref.
  */
-export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown }): { question: string; subject: { target: string | null; ref: string | null } & Partial<ApprovalDiff> } {
+export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown; askedBy?: unknown }): { question: string; subject: { target: string | null; ref: string | null; askedBy?: string } & Partial<ApprovalDiff> } {
 	const ref = typeof d.ref === "string" ? d.ref : null, branch = typeof d.branch === "string" ? d.branch : null;
 	const target = typeof d.target === "string" ? d.target : null;
 	const byAgent = ref !== null && /^agt-/.test(ref);
@@ -136,7 +158,8 @@ export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?
 	// The files the branch changes, as read when the merge was parked (op data / the park event's `diff`).
 	const diff = d.diff && typeof d.diff === "object" && Array.isArray((d.diff as ApprovalDiff).files) ? (d.diff as ApprovalDiff) : null;
 	const files = diff ? { files: diff.files, filesTotal: diff.filesTotal, added: diff.added, removed: diff.removed } : {};
-	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref, ...files } };
+	const asker = typeof d.askedBy === "string" ? { askedBy: d.askedBy } : {};
+	return { question: `Merge ${what} into ${target ?? "the target"}?`, subject: { target, ref: branch ?? ref, ...files, ...asker } };
 }
 
 export const approvalIdFor = (runId: string, opId: string) => `apr-${Buffer.from(`${runId}\u0000${opId}`).toString("hex")}`;
@@ -147,10 +170,12 @@ export function parseApprovalId(id: string): { runId: string; opId: string } | n
 	return runId && opId ? { runId, opId } : null;
 }
 
+/** A seeded run: its title and titleSource may be left out (the source works them out as the daemon does). */
+type SeedRun = Omit<O<typeof Run>, "title" | "titleSource"> & Partial<Pick<O<typeof Run>, "title" | "titleSource">>;
 /** In-memory source for tests and fixtures. */
 const noPlanner = Object.fromEntries(LISTED_PROVIDERS.map((n) => [n, { available: false, reason: "No planner profile (run capcomd setup)" }]));
 export function memorySource(seed: Partial<{
-	runs: O<typeof Run>[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo>;
+	runs: SeedRun[]; agents: Record<string, O<typeof Agent>[]>; events: Record<string, RawEvent[]>; approvals: Record<string, PendingApproval[]>; repos: Record<string, RunRepo>;
 	/** Thread items by run (tests push more as the agent "works"). */
 	items: Record<string, O<typeof ThreadItem>[]>;
 	attachments: Record<string, Record<string, { mime: string; bytes: Uint8Array }>>;
@@ -179,6 +204,11 @@ export function memorySource(seed: Partial<{
 	 *  CAPCOMD_HOME holds the project list (default process.env; CAPCOMD_GH_CLI in it names the gh that publishes), whether
 	 *  `gh` is logged in (default no), the logins (default `logins`). */
 	projects: Partial<ProjectDeps>;
+	/** GET /v1/projects/branches: how the remote is read (default: the checkout's local refs only, no network). */
+	listBranches: BranchLister;
+	/** Goal branches by run (GET /v1/runs/{runId}/goal). POST …/pull-request opens #1 (then returns it) when
+	 *  `openPullRequest.available` and the state isn't working, and pushes run.pr_opened; …/keep-branch pushes run.branch_kept. */
+	goals: Record<string, O<typeof GoalView>>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
@@ -189,6 +219,17 @@ export function memorySource(seed: Partial<{
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
 	const runs = seed.runs ?? [];
+	const autoTitled = new WeakSet<SeedRun>();
+	// Seeded agents without a title get the daemon's (derived from the task, or what PUT …/title set).
+	const autoNamed = new WeakSet<O<typeof Agent>>();
+	const titleStates = new Map<string, TitleState>();
+	const nameAgents = (runId: string, list: O<typeof Agent>[]) => {
+		for (const a of list) {
+			if (a.title === undefined) autoNamed.add(a);
+			if (autoNamed.has(a)) Object.assign(a, shownTitle(titleStates.get(`${runId}\u0000${a.id}`), a.task));
+		}
+		return list;
+	};
 	const decided: Array<{ approvalId: string; approve: boolean; by: string }> = [];
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
@@ -254,6 +295,16 @@ export function memorySource(seed: Partial<{
 	};
 	controlOf = control;
 	const projectDeps: ProjectDeps = { env: process.env, logins: loginsOf, ghReady: async () => false, ...seed.projects };
+	const goals = seed.goals ?? {};
+	// Run.goalBranch follows the seeded goal as it changes (a pull request opened, the branch kept).
+	const syncGoal = (runId: string) => {
+		const g = goals[runId], r = runs.find((x) => x.id === runId);
+		if (g && r) (r as O<typeof Run>).goalBranch = { branch: g.branch, base: g.base, state: g.state, readyAt: g.readyAt, pullRequest: g.pullRequest };
+	};
+	for (const id of Object.keys(goals)) syncGoal(id);
+	const goalRefusal = (g: O<typeof GoalView> | undefined, runId: string) =>
+		!g ? { ok: false as const, status: 404 as const, code: "not_found" as const, message: `run ${runId} has no goal branch` }
+		: g.state === "working" ? { ok: false as const, status: 409 as const, code: "conflict" as const, message: `the planner is still working on ${g.branch}` } : null;
 	return {
 		version: "test",
 		decided,
@@ -271,9 +322,17 @@ export function memorySource(seed: Partial<{
 			sent.set(key, seq);
 			return { seq, note: null };
 		},
-		runs: async () => runs,
+		// A seeded run without a title gets the daemon's, from its label, goal and agents as they are now. The list itself is
+		// returned (tests add and remove runs through it).
+		runs: async () => {
+			for (const r of runs) {
+				if (r.title === undefined) autoTitled.add(r);
+				if (autoTitled.has(r)) Object.assign(r, runTitle({ label: r.label, goal: r.goal, agents: seed.agents?.[r.id] }));
+			}
+			return runs as O<typeof Run>[];
+		},
 		projects: async () => [],
-		agents: async (r) => seed.agents?.[r] ?? (seed.runs?.some((x) => x.id === r) ? [] : null),
+		agents: async (r) => (seed.agents?.[r] ? nameAgents(r, seed.agents[r]) : seed.runs?.some((x) => x.id === r) ? [] : null),
 		events: async (r, after) => (events[r] ?? []).filter((e) => e.seq > after),
 		transcript: async () => [],
 		attachment: async (r, id) => { const a = seed.attachments?.[r]?.[id]; return a ? { attachment: { id, bytes: a.bytes.length, sha256: "0".repeat(64), mediaType: a.mime }, text: Buffer.from(a.bytes).toString(a.mime.startsWith("text/") ? "utf8" : "base64"), encoding: a.mime.startsWith("text/") ? "utf8" as const : "base64" as const } : null; },
@@ -306,7 +365,7 @@ export function memorySource(seed: Partial<{
 		createRun: async (input) => {
 			created.push(input);
 			const repo = input.repo ?? "/default-repo";
-			const run = { id: `run-mem-${created.length}`, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, repo, createdAt: isoTs(Date.now()) };
+			const run = { id: `run-mem-${created.length}`, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, ...runTitle({ label: input.goal, goal: input.goal }), repo, createdAt: isoTs(Date.now()) };
 			runs.push(run);
 			return run;
 		},
@@ -316,6 +375,49 @@ export function memorySource(seed: Partial<{
 		initGit: (path) => initGit(path, projectDeps),
 		publishOptions: (path) => publishOptions(path, projectDeps),
 		publishProject: (input) => publishProject(input, projectDeps),
+		projectBranches: (q) => projectBranches(q, { ...projectDeps, listBranches: seed.listBranches ?? (async (o) => ({ ...(o.local?.() ?? { defaultBranch: null, branches: [] }), source: "local" as const, note: "memory source: local refs only" })) }),
+		goal: async (runId) => goals[runId] ?? null,
+		openPullRequest: async (runId, by, o) => {
+			const g = goals[runId];
+			const no = goalRefusal(g, runId);
+			if (no) return no;
+			if (g!.pullRequest) return { ok: true, body: { runId, branch: g!.branch, base: g!.base, created: false, pullRequest: { ...g!.pullRequest, state: "open" } } };
+			if (!g!.openPullRequest.available) return { ok: false, status: 409, code: "conflict", message: g!.openPullRequest.reason ?? "a pull request can't be opened" };
+			if (g!.state === "stopped" && !o?.stopped) return { ok: false, status: 409, code: "stopped", message: g!.openPullRequest.confirm ?? `The planner stopped before it finished: open a pull request from ${g!.branch} with what landed?` };
+			g!.pullRequest = { number: 1, url: g!.openPullRequest.repo ? `https://github.com/${g!.openPullRequest.repo}/pull/1` : null };
+			g!.state = "pr_opened"; g!.decision = { choice: "pull_request", by, at: isoTs(Date.now()) };
+			push(runId, { at: Date.now(), type: "RUN_PR_OPENED", agentId: null, data: { branch: g!.branch, base: g!.base, number: 1, url: g!.pullRequest.url, by } });
+			syncGoal(runId);
+			return { ok: true, body: { runId, branch: g!.branch, base: g!.base, created: true, pullRequest: { ...g!.pullRequest, state: "open" } } };
+		},
+		setAgentTitle: async (runId, agentId, title, _key) => {
+			const a = seed.agents?.[runId]?.find((x) => x.id === agentId);
+			if (!a) return null;
+			let t: string | null = null;
+			if (title !== null) { const n = normalizeTitle(title); if (!n.ok) return { ok: false, message: n.error }; t = n.title; }
+			autoNamed.add(a);
+			const k = `${runId}\u0000${agentId}`;
+			const ch = applyTitle(titleStates.get(k), a.task, { title: t, by: "user", setBy: "user", now: Date.now() });
+			if (ch.changed) {
+				titleStates.set(k, ch.next);
+				push(runId, { at: Date.now(), type: "AGENT_TITLED", agentId, data: { agentId, title: t ?? ch.title, by: t === null ? "cleared" : "user", setBy: "user", shown: ch.shown, titleSource: ch.titleSource } });
+			}
+			nameAgents(runId, [a]);
+			return { ok: true, title: ch.title, titleSource: ch.titleSource, changed: ch.changed };
+		},
+		keepBranch: async (runId, by) => {
+			const g = goals[runId];
+			const no = goalRefusal(g, runId);
+			if (no) return no;
+			if (g!.pullRequest) return { ok: false, status: 409, code: "conflict", message: `a pull request (#${g!.pullRequest.number}) is open from ${g!.branch}: there's nothing to keep` };
+			const changed = g!.state !== "kept";
+			if (changed) {
+				g!.state = "kept"; g!.decision = { choice: "keep", by, at: isoTs(Date.now()) };
+				push(runId, { at: Date.now(), type: "RUN_BRANCH_KEPT", agentId: null, data: { branch: g!.branch, base: g!.base, by } });
+				syncGoal(runId);
+			}
+			return { ok: true, body: { runId, branch: g!.branch, base: g!.base, kept: true, changed } };
+		},
 	};
 }
 export type { Decision };

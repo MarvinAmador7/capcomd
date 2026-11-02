@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Reel states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.sb{--text:#F2F2F7;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--amber:#FFB020;--green:#30D158;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.mw{width:416px;height:300px;border-radius:12px;background:#0e0e10;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14);display:flex;flex-direction:column;overflow:hidden}
+.mb{height:30px;flex:0 0 30px;display:flex;align-items:center;gap:4px;padding:0 8px;font-size:10px;color:var(--sec)}
+.mt{display:inline-flex;align-items:center;gap:3px;height:18px;padding:0 6px 0 3px;border-radius:5px;white-space:nowrap}
+.mt img{width:12px;height:12px;image-rendering:pixelated}
+.mc{background:#151518;border-radius:7px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.mh{display:flex;align-items:center;gap:4px;height:22px;padding:0 6px;font-size:9.5px;white-space:nowrap}
+.mh img{width:12px;height:12px;image-rendering:pixelated}
+.bar{height:5px;border-radius:2px;background:rgba(255,255,255,.08);margin:0 6px 4px}
+.cap{font-size:13px;line-height:1.5;color:var(--sec);max-width:416px}
+.cap b{color:var(--text);font-weight:600}
+td,th{padding:9px 16px 9px 0;text-align:left;vertical-align:top;border-top:.5px solid rgba(255,255,255,.08);font-size:12.5px}
+th{font-weight:500;color:var(--ter);font-size:12px;border-top:0}
+.ov{background:#151518;border-radius:8px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);padding:8px;display:flex;flex-direction:column;gap:5px;min-width:0}
+.ov img{width:22px;height:22px;image-rendering:pixelated}
+</style>
+</helmet>
+<div class="sb" style="width:1440px;height:900px;box-sizing:border-box;padding:56px 64px;background:#0b0b0c;display:flex;flex-direction:column;gap:44px">
+  <div style="display:grid;grid-template-columns:repeat(3,416px);justify-content:space-between">
+
+    <!-- Overview -->
+    <figure style="margin:0;display:flex;flex-direction:column;gap:16px">
+      <div class="mw">
+        <div class="mb"><span style="font-weight:600;color:var(--text)">Migrate matchkey to v3.2</span><span style="flex:1"></span><span>Overview</span></div>
+        <div style="flex:1;padding:8px 10px 10px;display:flex;flex-direction:column;gap:8px">
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
+            <div class="ov" style="box-shadow:inset 0 0 0 1px rgba(10,132,255,.5)"><img src="bots/mk-planner-0-small.svg" alt=""><span style="font-size:10.5px;font-weight:600">planner</span><span style="font-size:9.5px;color:var(--sec)">holding the critic</span></div>
+            <div class="ov"><img src="bots/mk-lead-1-small.svg" alt=""><span style="font-size:10.5px;font-weight:600">lead</span><span style="font-size:9.5px;color:var(--sec)">running join tests</span></div>
+            <div class="ov"><img src="bots/mk-worker-2-xs.svg" alt=""><span style="font-size:10.5px;font-weight:600">worker d3ce</span><span style="font-size:9.5px;color:var(--sec)">shard 118 of 256</span></div>
+            <div class="ov" style="box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)"><img src="bots/mk-worker-3-xs.svg" alt=""><span style="font-size:10.5px;font-weight:600">worker 4423</span><span style="font-size:9.5px;color:var(--amber)">asks to merge</span></div>
+            <div class="ov" style="opacity:.55"><img src="bots/mk-worker-4-xs.svg" alt=""><span style="font-size:10.5px;font-weight:600">worker 9b1f</span><span style="font-size:9.5px;color:var(--sec)">queued</span></div>
+            <div class="ov" style="opacity:.55"><img src="bots/mk-critic-5-xs.svg" alt=""><span style="font-size:10.5px;font-weight:600">critic</span><span style="font-size:9.5px;color:var(--sec)">queued</span></div>
+          </div>
+        </div>
+      </div>
+      <figcaption class="cap"><b>Overview, ⌘0 or a pinch.</b> Every column shrinks to its head and one live line, in tree order. Click one to land the reel on it. Opening and closing the overview from the keyboard has no animation.</figcaption>
+    </figure>
+
+    <!-- A new agent joins -->
+    <figure style="margin:0;display:flex;flex-direction:column;gap:16px">
+      <div class="mw">
+        <div class="mb">
+          <span class="mt"><img src="bots/mk-lead-1-small.svg" alt="">lead</span>
+          <span class="mt"><img src="bots/mk-worker-2-xs.svg" alt="">d3ce</span>
+          <span class="mt"><img src="bots/mk-worker-3-xs.svg" alt="">4423</span>
+          <span class="mt" style="opacity:.6"><img src="bots/mk-worker-4-xs.svg" alt="">9b1f</span>
+          <span class="mt" style="background:rgba(10,132,255,.16);color:#6CB4FF"><img src="bots/mk-worker-3-small.svg" alt="">7c20 new</span>
+        </div>
+        <div style="flex:1;display:flex;gap:6px;padding:0 0 8px 8px;min-height:0">
+          <div class="mc" style="flex:0 0 150px"><div class="mh"><img src="bots/mk-lead-1-small.svg" alt="">lead</div><div class="bar" style="width:70%"></div><div class="bar" style="width:55%"></div><div class="bar" style="width:62%"></div></div>
+          <div class="mc" style="flex:0 0 150px"><div class="mh"><img src="bots/mk-worker-4-xs.svg" alt="">worker 9b1f</div><div class="bar" style="width:60%"></div><div class="bar" style="width:40%"></div></div>
+          <div class="mc" style="flex:0 0 96px;box-shadow:inset 0 0 0 1px rgba(10,132,255,.45)"><div class="mh"><img src="bots/mk-worker-3-small.svg" alt="">worker 7c20</div><div class="bar" style="width:50%"></div></div>
+        </div>
+      </div>
+      <figcaption class="cap"><b>A new agent gets a column beside its siblings.</b> The column opens from zero width with a 0.3 s spring and its tab appears in the index. The reel doesn't jump to it: only an ask or a failure moves the reel while Follow is on.</figcaption>
+    </figure>
+
+    <!-- Zoom -->
+    <figure style="margin:0;display:flex;flex-direction:column;gap:16px">
+      <div class="mw">
+        <div class="mb">
+          <span class="mt" style="opacity:.6"><img src="bots/mk-planner-0-small.svg" alt="">planner</span>
+          <span class="mt" style="opacity:.6"><img src="bots/mk-lead-1-small.svg" alt="">lead</span>
+          <span class="mt" style="opacity:.6"><img src="bots/mk-worker-2-xs.svg" alt="">d3ce</span>
+          <span class="mt" style="background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55);color:var(--text)"><img src="bots/mk-worker-3-xs.svg" alt="">4423</span>
+          <span style="flex:1"></span><span>⇧⌘↩</span>
+        </div>
+        <div style="flex:1;padding:0 8px 8px;min-height:0;display:flex">
+          <div class="mc" style="flex:1;box-shadow:inset 0 0 0 1px rgba(255,176,32,.6);align-items:center">
+            <div style="width:62%;padding-top:14px;display:flex;flex-direction:column;gap:7px">
+              <div class="bar" style="margin:0;width:90%"></div><div class="bar" style="margin:0;width:75%"></div>
+              <div style="height:70px;border-radius:5px;background:#0f0f11"></div>
+              <div style="font-size:10.5px;font-weight:600;margin-top:6px">Merge worker 4423's work into main?</div>
+              <div style="display:flex;gap:4px;justify-content:flex-end"><span style="font-size:9px;padding:3px 7px;border-radius:4px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.25)">Deny</span><span style="font-size:9px;padding:3px 9px;border-radius:4px;background:#F2F2F7;color:#1D1D1F;font-weight:600">Approve</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption class="cap"><b>Zoom, ⇧⌘↩.</b> One column takes the window; its text stays at a reading width in the middle. The index keeps the rest one click away. The same keys bring the reel back.</figcaption>
+    </figure>
+  </div>
+
+  <table style="border-collapse:collapse;width:100%">
+    <thead><tr><th style="width:280px">Reel rule</th><th>Behaviour</th></tr></thead>
+    <tbody>
+      <tr><td>Order</td><td>Tree order, left to right: planner, then each lead followed by its workers, then the critic. A column never moves on its own.</td></tr>
+      <tr><td>Width</td><td>Three columns fit a 1440 pt window, two at 1100, one under 760. Drag a column's edge to widen it; the reel keeps that width for this agent.</td></tr>
+      <tr><td>Follow (the eye)</td><td>When on, an ask or a failure scrolls the reel to that column in 0.35 s, spring, no bounce. Scrolling the reel yourself turns Follow off until you press it again.</td></tr>
+      <tr><td>Keyboard</td><td>⌃← and ⌃→ move focus one column; ⌃1–9 jump to an agent. Focus moves at once; the reel only scrolls, 180 ms ease-out, when the focused column would leave the window.</td></tr>
+      <tr><td>Trackpad</td><td>Two-finger swipe scrolls with momentum and snaps to a column edge. Past the first or last column the reel resists with friction instead of stopping hard.</td></tr>
+    </tbody>
+  </table>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

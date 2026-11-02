@@ -59,6 +59,16 @@ public final class UnixSocketTransport: @unchecked Sendable {
     try await send(.PATCH, path, headers: extra, json: json)
   }
 
+  /// PUT with a JSON body; returns the status and body, as `post`.
+  public func put(_ path: String, headers extra: [(String, String)] = [], json: Data) async throws -> (Int, Data) {
+    try await send(.PUT, path, headers: extra, json: json)
+  }
+
+  /// DELETE with no body; returns the status and body, as `post`.
+  public func delete(_ path: String, headers extra: [(String, String)] = []) async throws -> (Int, Data) {
+    try await send(.DELETE, path, headers: extra, json: nil)
+  }
+
   func send(_ method: HTTPMethod, _ path: String, headers extra: [(String, String)], json: Data?, timeout: TimeAmount = .seconds(30)) async throws -> (Int, Data) {
     var r = try request(path, headers: extra + (json == nil ? [] : [("Content-Type", "application/json")]))
     r.method = method

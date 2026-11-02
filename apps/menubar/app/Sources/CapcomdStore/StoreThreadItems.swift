@@ -27,21 +27,27 @@ extension CapcomdStore {
   /// of an id wins, so an item that arrives both ways is shown once.
   public func openThread(runId: String, agentId: String) {
     openThreadAgent = agentId
-    if threadStreamRun != runId {
-      let old = threadStreamRun
-      threadStreamRun = runId
-      if let old { resubscribeLifecycle(old) }
-      resubscribeLifecycle(runId)
-    }
+    followThreads(runId: runId, holder: Self.panelHolder)
     changed()
   }
 
-  /// The thread view closed: the run's lifecycle feed goes back to lifecycle frames only. Items already read stay.
+  /// The thread view closed: the run's lifecycle feed goes back to lifecycle frames only (unless the reel still
+  /// follows it). Items already read stay.
   public func closeThread() {
     openThreadAgent = nil
-    guard let run = threadStreamRun else { return }
-    threadStreamRun = nil
-    resubscribeLifecycle(run)
+    followThreads(runId: nil, holder: Self.panelHolder)
+  }
+
+  public static let panelHolder = "panel"
+  public static let reelHolder = "reel"
+
+  /// `holder` (the panel's thread view, the desktop reel) now follows `runId`'s live thread items for all its agents,
+  /// or nothing. A run's feed is reopened only when whether anyone follows it changes.
+  public func followThreads(runId: String?, holder: String) {
+    let before = threadStreamRuns
+    if let runId { threadHolders[holder] = runId } else { threadHolders.removeValue(forKey: holder) }
+    let after = threadStreamRuns
+    for run in before.symmetricDifference(after) { resubscribeLifecycle(run) }
   }
 
   func resubscribeLifecycle(_ runId: String) {
@@ -53,25 +59,37 @@ extension CapcomdStore {
 
   /// Reads the agent's thread from the route's cursor to the end, a page at a time. The cursor is the highest seq the
   /// route returned, never one from a live frame: a frame can run ahead of items the route hasn't returned yet.
+  ///
+  /// The pages go into the book together, once the read ends. Applied page by page, any change in between (a live
+  /// frame, an activity line) showed the thread as far as it had been read: the oldest items, oldest first, so a long
+  /// thread opened on its first hundred items and reached its newest seconds later.
   public func refreshThread(runId: String, agentId: String) async {
     guard let threadSource else { return }
+    var read: [CapcomdThread.Item] = [], cursor = threadCursor[agentId] ?? 0
+    var failure: Error?
     do {
       for _ in 0..<50 {   // bounded: a long thread catches up over a few refreshes
-        let after = threadCursor[agentId] ?? 0
-        let page = try await threadSource.thread(runId: runId, agentId: agentId, after: after, limit: Self.threadPage)
-        books[agentId, default: Book()].apply(page.items)   // into the live book: frames applied meanwhile stay
-        threadCursor[agentId] = max(after, page.items.map(\.seq).max() ?? after, page.next ?? after)
+        let page = try await threadSource.thread(runId: runId, agentId: agentId, after: cursor, limit: Self.threadPage)
+        read += page.items
+        cursor = max(cursor, page.items.map(\.seq).max() ?? cursor, page.next ?? cursor)
         guard page.next != nil, !page.items.isEmpty else { break }
       }
-      threadUnavailable[agentId] = nil
-    } catch is Unauthorized { unauthorized = true }
-    catch { threadUnavailable[agentId] = error as? DetailUnavailable ?? .failed("Couldn't reach capcomd") }
+    } catch { failure = error }
+    if !read.isEmpty || failure == nil {
+      books[agentId, default: Book()].apply(read)   // into the live book: frames applied meanwhile stay (highest rev wins)
+      threadCursor[agentId] = max(threadCursor[agentId] ?? 0, cursor)
+    }
+    switch failure {
+    case nil: threadUnavailable[agentId] = nil; mark(.thread(agentId))
+    case is Unauthorized?: unauthorized = true
+    case let e?: threadUnavailable[agentId] = e as? DetailUnavailable ?? .failed("Couldn't reach capcomd"); mark(.thread(agentId))
+    }
     changed()
   }
 
   /// `agent.thread_item_changed` (ephemeral, `?thread=1`): a full item, latest rev wins.
   func applyThreadFrame(runId: String?, agentId: String?, _ d: [String: JSONValue]) {
-    guard let runId, runId == threadStreamRun, let agentId, case .object(let o)? = d["item"],
+    guard let runId, threadStreamRuns.contains(runId), let agentId, case .object(let o)? = d["item"],
           let item = try? JSONDecoder().decode(CapcomdThread.Item.self, from: StreamFrame.reencode(o)) else { return }
     books[agentId, default: Book()].apply(item)
   }

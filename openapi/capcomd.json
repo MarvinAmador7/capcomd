@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`; `runs.goal_branch`: Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events; `agents.title`: Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -511,8 +511,11 @@
                       "description": "`gh auth status` succeeds on the daemon's machine: pull requests (mode pr) can be opened and merged. false when it fails or origin isn't on GitHub"
                     },
                     "defaultBranch": {
-                      "type": "string",
-                      "description": "origin's default branch as the local refs know it (origin/HEAD), else main: the target to suggest"
+                      "description": "origin's default branch as the local refs know it (origin/HEAD): the target to suggest. null when the local refs don't say (never a guessed main): ask, or read GET /v1/projects/branches (capability runs.goal_branch), which asks the remote",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "branches": {
                       "type": "array",
@@ -847,8 +850,11 @@
                       "description": "`gh auth status` succeeds on the daemon's machine: pull requests (mode pr) can be opened and merged. false when it fails or origin isn't on GitHub"
                     },
                     "defaultBranch": {
-                      "type": "string",
-                      "description": "origin's default branch as the local refs know it (origin/HEAD), else main: the target to suggest"
+                      "description": "origin's default branch as the local refs know it (origin/HEAD): the target to suggest. null when the local refs don't say (never a guessed main): ask, or read GET /v1/projects/branches (capability runs.goal_branch), which asks the remote",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "branches": {
                       "type": "array",
@@ -1376,8 +1382,11 @@
                       "description": "`gh auth status` succeeds on the daemon's machine: pull requests (mode pr) can be opened and merged. false when it fails or origin isn't on GitHub"
                     },
                     "defaultBranch": {
-                      "type": "string",
-                      "description": "origin's default branch as the local refs know it (origin/HEAD), else main: the target to suggest"
+                      "description": "origin's default branch as the local refs know it (origin/HEAD): the target to suggest. null when the local refs don't say (never a guessed main): ask, or read GET /v1/projects/branches (capability runs.goal_branch), which asks the remote",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "branches": {
                       "type": "array",
@@ -1590,6 +1599,214 @@
         }
       }
     },
+    "/v1/projects/branches": {
+      "get": {
+        "operationId": "projects.branches",
+        "description": "Capability runs.goal_branch. What the run setup screen needs for a project checkout: the repository's branches and default branch for the base menu (GitHub first, with the user's own GitHub login on the daemon's machine; else `git ls-remote origin`; else the checkout's local refs), the base to preselect (the project's target, else the default branch), and, with `goal`, the suggested goal branch; with `goalBranch` and `base`, whether that name can be used. Needs the `read` scope. Writes nothing; asks the remote (the GitHub API or git, at most 15 s each), so call it when the screen opens and when the goal or a name changes (debounced), not in a loop. 422 `invalid` for a relative path. A folder that isn't a checkout is 200 with `root` null.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "description": "Absolute path of the project checkout (or a folder inside it), as POST /v1/runs `repo`"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "goal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 16384,
+              "description": "The goal as typed: suggestedGoalBranch is made from its first line"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "goalBranch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256,
+              "description": "A goal branch name the user typed: goalBranchProblem says whether it can be used"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "base",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256,
+              "description": "The base the user picked (checked; preselected)"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "The path as given"
+                    },
+                    "root": {
+                      "description": "The checkout it is in; null when it isn't one (then everything else is empty)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "github": {
+                      "description": "owner/name when origin is on GitHub",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "source": {
+                      "enum": [
+                        "github",
+                        "git",
+                        "local"
+                      ],
+                      "type": "string",
+                      "description": "Where the branches were read: github (the GitHub API with the user's own gh login), git (`git ls-remote origin`), local (the checkout's own refs: the remote couldn't be asked; see note)"
+                    },
+                    "note": {
+                      "description": "Why a better source wasn't used (daemon-written, trusted), e.g. \"GitHub: no login (GITHUB_TOKEN, GH_TOKEN or `gh auth login`)\"; null when it was",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "defaultBranch": {
+                      "description": "The repository's default branch as the remote reports it; null when it doesn't (never a guessed main)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "branches": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The repository's branches, sorted (at most 500): the base menu"
+                    },
+                    "projectTarget": {
+                      "description": "The project's configured target branch (`capcomd setup project`), when it has one",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "suggestedBase": {
+                      "description": "What to preselect: `base` when given, else the project's target, else defaultBranch; null when none is known: the user must pick one (never a guessed main)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "suggestedGoalBranch": {
+                      "description": "With `goal`: capcomd/<goal-slug> (lowercase, hyphens, at most 40 characters of slug), with -2, -3… when the repository has that branch already; null without `goal`",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "goalBranchProblem": {
+                      "description": "With `goalBranch`: why it can't be used (daemon-written, trusted: not a branch name, the base itself, protected, or already on the remote), shown under the field; null when it can",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "baseProblem": {
+                      "description": "With `base`: why it can't be used (not a branch name, or not one of `branches` when they were read from the remote); null when it can",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "root",
+                    "github",
+                    "source",
+                    "note",
+                    "defaultBranch",
+                    "branches",
+                    "projectTarget",
+                    "suggestedBase",
+                    "suggestedGoalBranch",
+                    "goalBranchProblem",
+                    "baseProblem"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/runs": {
       "get": {
         "operationId": "runs.list",
@@ -1630,6 +1847,29 @@
                         "description": "Agent-written text: render as plain text, never markdown, links or actions",
                         "x-untrusted": true
                       },
+                      "title": {
+                        "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "x-untrusted": true
+                      },
+                      "titleSource": {
+                        "description": "Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), agent (capability agents.title: its planner named the run, `capcomd title --run` in its VM; run.titled), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added",
+                        "enum": [
+                          "label",
+                          "agent",
+                          "merge",
+                          "goal",
+                          "task",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
                       "repo": {
                         "description": "Repository the run works in (absolute path or remote URL)",
                         "type": [
@@ -1645,6 +1885,76 @@
                         "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
                         "format": "date-time",
                         "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                      },
+                      "goalBranch": {
+                        "description": "Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "branch": {
+                            "type": "string",
+                            "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+                          },
+                          "base": {
+                            "type": "string",
+                            "description": "The branch it was cut from, which the pull request goes into (e.g. dev)"
+                          },
+                          "state": {
+                            "enum": [
+                              "working",
+                              "ready",
+                              "stopped",
+                              "pr_opened",
+                              "kept"
+                            ],
+                            "type": "string",
+                            "description": "working: the planner is at it (reviewed work lands as it goes); ready: the planner finished, the user decides (open a pull request or keep the branch); stopped: the planner failed or was cancelled (the branch keeps what landed; a pull request can still be opened); pr_opened: a pull request into the base is open (or was merged on GitHub); kept: the user kept the branch without one. Treat a state you don't know as working"
+                          },
+                          "readyAt": {
+                            "description": "When the planner finished (run.goal_completed); null before",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time"
+                          },
+                          "pullRequest": {
+                            "description": "The pull request opened from it (run.pr_opened); null before",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "number": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991,
+                                "exclusiveMinimum": 0
+                              },
+                              "url": {
+                                "description": "Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "number",
+                              "url"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "branch",
+                          "base",
+                          "state",
+                          "readyAt",
+                          "pullRequest"
+                        ]
                       }
                     },
                     "required": [
@@ -1653,6 +1963,8 @@
                       "label",
                       "state",
                       "goal",
+                      "title",
+                      "titleSource",
                       "repo",
                       "createdAt"
                     ]
@@ -1705,7 +2017,7 @@
       },
       "post": {
         "operationId": "runs.create",
-        "description": "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. `Idempotency-Key` is scoped to the calling client: same key + same body replays the first response (201, header `Idempotent-Replayed: true`) without starting another run; same key + different body: 409 `idempotency_conflict`. Keys are kept 24 h; a request that failed (422, 500) is not recorded, so retrying it with the same key tries again. 422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, `profile` with `driver`, a `driver` or `sandbox` that isn't available, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.",
+        "description": "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. `Idempotency-Key` is scoped to the calling client: same key + same body replays the first response (201, header `Idempotent-Replayed: true`) without starting another run; same key + different body: 409 `idempotency_conflict`. Keys are kept 24 h; a request that failed (422, 500) is not recorded, so retrying it with the same key tries again. 422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, `profile` with `driver`, a `driver` or `sandbox` that isn't available, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which. Capability runs.goal_branch: a run with a planner gets a goal branch, cut from `base` (the response's Run.goalBranch is null until the run registers; GET /v1/runs/{runId} then has it). A base that can't be determined, or a goal branch that can't be used, is 422 with `field` base or goalBranch and the daemon's sentence: show it next to that field.",
         "parameters": [
           {
             "name": "idempotency-key",
@@ -1743,7 +2055,25 @@
                   "targetBranch": {
                     "type": "string",
                     "pattern": "^(?!-)(?!.*\\.\\.)(?!.*\\/\\/)(?!.*[./]$)[A-Za-z0-9._/-]{1,200}$",
-                    "description": "Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target."
+                    "description": "Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target. With a goal branch (capability runs.goal_branch), the base: send `base` instead."
+                  },
+                  "base": {
+                    "type": "string",
+                    "pattern": "^(?!-)(?!.*\\.\\.)(?!.*\\/\\/)(?!.*[./]$)[A-Za-z0-9._/-]{1,200}$",
+                    "description": "Capability runs.goal_branch. The origin branch the run's goal branch is cut from and its pull request goes into (`capcomd run --base`), as the user picked it in the setup screen (GET /v1/projects/branches). Omitted: `targetBranch`, else the project's target, else the remote's default branch; when none of those is known, 422 with `field` base: ask the user. Never a guessed main"
+                  },
+                  "goalBranch": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^(?!-)(?!.*\\.\\.)(?!.*\\/\\/)(?!.*[./]$)[A-Za-z0-9._/-]{1,200}$",
+                        "description": "Branch name, e.g. capcomd/integration"
+                      },
+                      {
+                        "const": false
+                      }
+                    ],
+                    "description": "Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (capcomd/<goal-slug>, never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"
                   },
                   "driver": {
                     "enum": [
@@ -1806,6 +2136,29 @@
                       "description": "Agent-written text: render as plain text, never markdown, links or actions",
                       "x-untrusted": true
                     },
+                    "title": {
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "x-untrusted": true
+                    },
+                    "titleSource": {
+                      "description": "Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), agent (capability agents.title: its planner named the run, `capcomd title --run` in its VM; run.titled), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added",
+                      "enum": [
+                        "label",
+                        "agent",
+                        "merge",
+                        "goal",
+                        "task",
+                        null
+                      ],
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "repo": {
                       "description": "Repository the run works in (absolute path or remote URL)",
                       "type": [
@@ -1821,6 +2174,76 @@
                       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
                       "format": "date-time",
                       "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                    },
+                    "goalBranch": {
+                      "description": "Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "branch": {
+                          "type": "string",
+                          "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+                        },
+                        "base": {
+                          "type": "string",
+                          "description": "The branch it was cut from, which the pull request goes into (e.g. dev)"
+                        },
+                        "state": {
+                          "enum": [
+                            "working",
+                            "ready",
+                            "stopped",
+                            "pr_opened",
+                            "kept"
+                          ],
+                          "type": "string",
+                          "description": "working: the planner is at it (reviewed work lands as it goes); ready: the planner finished, the user decides (open a pull request or keep the branch); stopped: the planner failed or was cancelled (the branch keeps what landed; a pull request can still be opened); pr_opened: a pull request into the base is open (or was merged on GitHub); kept: the user kept the branch without one. Treat a state you don't know as working"
+                        },
+                        "readyAt": {
+                          "description": "When the planner finished (run.goal_completed); null before",
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time"
+                        },
+                        "pullRequest": {
+                          "description": "The pull request opened from it (run.pr_opened); null before",
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "properties": {
+                            "number": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991,
+                              "exclusiveMinimum": 0
+                            },
+                            "url": {
+                              "description": "Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "number",
+                            "url"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "branch",
+                        "base",
+                        "state",
+                        "readyAt",
+                        "pullRequest"
+                      ]
                     }
                   },
                   "required": [
@@ -1829,6 +2252,8 @@
                     "label",
                     "state",
                     "goal",
+                    "title",
+                    "titleSource",
                     "repo",
                     "createdAt"
                   ]
@@ -1927,6 +2352,29 @@
                       "description": "Agent-written text: render as plain text, never markdown, links or actions",
                       "x-untrusted": true
                     },
+                    "title": {
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "x-untrusted": true
+                    },
+                    "titleSource": {
+                      "description": "Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), agent (capability agents.title: its planner named the run, `capcomd title --run` in its VM; run.titled), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added",
+                      "enum": [
+                        "label",
+                        "agent",
+                        "merge",
+                        "goal",
+                        "task",
+                        null
+                      ],
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "repo": {
                       "description": "Repository the run works in (absolute path or remote URL)",
                       "type": [
@@ -1942,6 +2390,76 @@
                       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
                       "format": "date-time",
                       "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                    },
+                    "goalBranch": {
+                      "description": "Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "branch": {
+                          "type": "string",
+                          "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+                        },
+                        "base": {
+                          "type": "string",
+                          "description": "The branch it was cut from, which the pull request goes into (e.g. dev)"
+                        },
+                        "state": {
+                          "enum": [
+                            "working",
+                            "ready",
+                            "stopped",
+                            "pr_opened",
+                            "kept"
+                          ],
+                          "type": "string",
+                          "description": "working: the planner is at it (reviewed work lands as it goes); ready: the planner finished, the user decides (open a pull request or keep the branch); stopped: the planner failed or was cancelled (the branch keeps what landed; a pull request can still be opened); pr_opened: a pull request into the base is open (or was merged on GitHub); kept: the user kept the branch without one. Treat a state you don't know as working"
+                        },
+                        "readyAt": {
+                          "description": "When the planner finished (run.goal_completed); null before",
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time"
+                        },
+                        "pullRequest": {
+                          "description": "The pull request opened from it (run.pr_opened); null before",
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "properties": {
+                            "number": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991,
+                              "exclusiveMinimum": 0
+                            },
+                            "url": {
+                              "description": "Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "number",
+                            "url"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "branch",
+                        "base",
+                        "state",
+                        "readyAt",
+                        "pullRequest"
+                      ]
                     }
                   },
                   "required": [
@@ -1950,6 +2468,8 @@
                     "label",
                     "state",
                     "goal",
+                    "title",
+                    "titleSource",
                     "repo",
                     "createdAt"
                   ]
@@ -2278,7 +2798,7 @@
     "/v1/runs/{runId}/lifecycle": {
       "get": {
         "operationId": "runs.lifecycle",
-        "description": "Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.\nEach event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.\nActivity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).",
+        "description": "Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.\nEach event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.\nActivity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).",
         "parameters": [
           {
             "name": "runId",
@@ -2664,6 +3184,885 @@
                     "total",
                     "truncated",
                     "sources"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/goal": {
+      "get": {
+        "operationId": "runs.goal",
+        "description": "Capability runs.goal_branch. A goal-branch run's result, for the planner's column and the run's \"ready\" card: the goal branch against its base (commits, files, lines; fetched now), each child that landed (its task, branch, checks and review), each that didn't and why, the planner's summary, and whether a pull request can be opened (`openPullRequest`, with the reason when it can't). Works while the run is working too (what landed so far). Needs the `read` scope. Refetch on run.goal_completed, run.pr_opened, run.branch_kept and merge.succeeded. 404 `not_found` for an unknown run or a run without a goal branch (Run.goalBranch null).",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    },
+                    "base": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "working",
+                        "ready",
+                        "stopped",
+                        "pr_opened",
+                        "kept"
+                      ],
+                      "type": "string",
+                      "description": "working: the planner is at it (reviewed work lands as it goes); ready: the planner finished, the user decides (open a pull request or keep the branch); stopped: the planner failed or was cancelled (the branch keeps what landed; a pull request can still be opened); pr_opened: a pull request into the base is open (or was merged on GitHub); kept: the user kept the branch without one. Treat a state you don't know as working"
+                    },
+                    "goal": {
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "x-untrusted": true
+                    },
+                    "readyAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time",
+                      "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                    },
+                    "plannerId": {
+                      "description": "The planner agent (the run's root)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "summary": {
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "x-untrusted": true
+                    },
+                    "compare": {
+                      "type": "object",
+                      "properties": {
+                        "baseSha": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "headSha": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "ahead": {
+                          "description": "Commits on the goal branch that the base doesn't have",
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "behind": {
+                          "description": "Commits on the base since the goal branch was cut (the pull request may need them merged in)",
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "commits": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "sha": {
+                                "type": "string"
+                              },
+                              "subject": {
+                                "type": "string",
+                                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                                "x-untrusted": true
+                              },
+                              "at": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                                "format": "date-time",
+                                "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                              }
+                            },
+                            "required": [
+                              "sha",
+                              "subject",
+                              "at"
+                            ]
+                          },
+                          "description": "The goal branch's own commits, newest first, at most 50"
+                        },
+                        "commitsTotal": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                                "x-untrusted": true
+                              },
+                              "oldPath": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                                "x-untrusted": true
+                              },
+                              "status": {
+                                "enum": [
+                                  "added",
+                                  "modified",
+                                  "deleted",
+                                  "renamed",
+                                  "copied",
+                                  "typechange",
+                                  "unknown"
+                                ],
+                                "type": "string"
+                              },
+                              "added": {
+                                "description": "Lines added; null for a binary file",
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ],
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "removed": {
+                                "description": "Lines removed; null for a binary file",
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ],
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "oldPath",
+                              "status",
+                              "added",
+                              "removed"
+                            ]
+                          },
+                          "description": "The files the goal branch changes against where it left the base (`git diff --numstat`), the 200 with the most changed lines first"
+                        },
+                        "filesTotal": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "added": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "removed": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "error": {
+                          "description": "Why the branches couldn't be compared (daemon-written): the remote unreachable, a branch deleted; the rest of the answer still holds",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "baseSha",
+                        "headSha",
+                        "ahead",
+                        "behind",
+                        "commits",
+                        "commitsTotal",
+                        "files",
+                        "filesTotal",
+                        "added",
+                        "removed",
+                        "error"
+                      ],
+                      "description": "The goal branch against its base, fetched now"
+                    },
+                    "landed": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "agentId": {
+                            "type": "string"
+                          },
+                          "parent": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "profile": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "task": {
+                            "type": "string",
+                            "description": "The first line of its task (at most 200 characters)"
+                          },
+                          "title": {
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "x-untrusted": true
+                          },
+                          "continues": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "The agents whose work this one carries on (`spawn --continue`, e.g. after a merge conflict), nearest first. Their work landed, or didn't, with this one's, so they aren't listed on their own. Older daemons don't send it"
+                          },
+                          "branch": {
+                            "description": "The branch it pushed",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "mergeId": {
+                            "type": "string",
+                            "description": "mrg-… of the merge that landed it"
+                          },
+                          "sha": {
+                            "description": "The commit the merge made on the goal branch",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "verifyId": {
+                            "description": "vfy-… of the verification that gated it",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "mergedBy": {
+                            "description": "The agent that merged it (its parent: a lead or the planner); null for an operator's merge",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "checks": {
+                            "description": "The project's checks on it (merged with the goal branch); null when none were recorded",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "passed": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "passed"
+                            ]
+                          },
+                          "review": {
+                            "description": "The run's reviewer agent's verdict; null when the run has no reviewer",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "passed": {
+                                "type": "boolean"
+                              },
+                              "agentId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "reasons": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                                  "x-untrusted": true
+                                }
+                              }
+                            },
+                            "required": [
+                              "passed",
+                              "agentId",
+                              "reasons"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "agentId",
+                          "parent",
+                          "profile",
+                          "task",
+                          "branch",
+                          "mergeId",
+                          "sha",
+                          "verifyId",
+                          "mergedBy",
+                          "checks",
+                          "review"
+                        ]
+                      },
+                      "description": "Each child whose work was merged onto the goal branch, in the order the agents were spawned"
+                    },
+                    "notLanded": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "agentId": {
+                            "type": "string"
+                          },
+                          "parent": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "profile": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "task": {
+                            "type": "string",
+                            "description": "The first line of its task (at most 200 characters)"
+                          },
+                          "title": {
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "x-untrusted": true
+                          },
+                          "continues": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "The agents whose work this one carries on (`spawn --continue`, e.g. after a merge conflict), nearest first. Their work landed, or didn't, with this one's, so they aren't listed on their own. Older daemons don't send it"
+                          },
+                          "branch": {
+                            "description": "The branch it pushed",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "status": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "pending",
+                                  "running",
+                                  "paused",
+                                  "done",
+                                  "failed",
+                                  "cancelled",
+                                  "handed-off"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ],
+                            "description": "The agent's status"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "description": "Why it isn't on the goal branch: checks_failed, review_failed, merge_failed, denied, awaiting_approval, verifying, not_verified (done, never verified), not_merged (verified, never merged), failed, cancelled, still_working. Treat an unknown reason as not landed for a reason you don't know"
+                          },
+                          "detail": {
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "x-untrusted": true
+                          }
+                        },
+                        "required": [
+                          "agentId",
+                          "parent",
+                          "profile",
+                          "task",
+                          "branch",
+                          "status",
+                          "reason",
+                          "detail"
+                        ]
+                      },
+                      "description": "Each child with work that isn't on the goal branch, and why. Children with nothing of their own to land (reports, leads whose children landed) and children whose work another continued (listed under that one's `continues`) aren't listed"
+                    },
+                    "pullRequest": {
+                      "description": "The pull request opened from the goal branch, once there is one",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "number": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "exclusiveMinimum": 0
+                        },
+                        "url": {
+                          "description": "Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "number",
+                        "url"
+                      ]
+                    },
+                    "openPullRequest": {
+                      "type": "object",
+                      "properties": {
+                        "available": {
+                          "type": "boolean",
+                          "description": "POST …/pull-request would open (or return) one now"
+                        },
+                        "reason": {
+                          "description": "Why not, a sentence for the person (daemon-written, trusted) that says what to do: not on GitHub (the branch name is in it), no GitHub login (`gh auth login`), the planner still working, nothing landed yet; null when available",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "repo": {
+                          "description": "owner/name on GitHub; null when it isn't on GitHub",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "confirm": {
+                          "description": "State stopped (the planner failed or was cancelled before it finished): the question to ask the person before opening a pull request with what landed (daemon-written, trusted), e.g. \"The planner stopped before it finished (it failed): 2 of 3 tasks landed on capcomd/add-x. Open a pull request with what landed?\"; then POST …/pull-request with `{\"stopped\": true}`. null otherwise. Older daemons don't send it",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "available",
+                        "reason",
+                        "repo"
+                      ]
+                    },
+                    "decision": {
+                      "description": "What the user chose; null before",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "choice": {
+                          "enum": [
+                            "pull_request",
+                            "keep"
+                          ],
+                          "type": "string"
+                        },
+                        "by": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time",
+                          "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                        }
+                      },
+                      "required": [
+                        "choice",
+                        "by",
+                        "at"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "branch",
+                    "base",
+                    "state",
+                    "goal",
+                    "readyAt",
+                    "plannerId",
+                    "summary",
+                    "compare",
+                    "landed",
+                    "notLanded",
+                    "pullRequest",
+                    "openPullRequest",
+                    "decision"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/pull-request": {
+      "post": {
+        "operationId": "runs.pullRequest",
+        "description": "Capability runs.goal_branch. Open a GitHub pull request from the run's goal branch into its base (body optional: `{\"stopped\": true}`), with the user's own GitHub login on the daemon's machine (GITHUB_TOKEN, GH_TOKEN, else `gh auth token`). Title: the run's goal; description: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. capcomd never merges it. Idempotent: a pull request GitHub already has from the branch into the base (open or merged) is returned with `created: false`. Confirmed by run.pr_opened on the run stream (Run.goalBranch.state pr_opened). A run whose planner stopped before it finished (state stopped: it failed or was cancelled) is 409 `stopped` with the question to ask the person (\"The planner stopped before it finished (it failed): 2 of 3 tasks landed on <branch>. Open a pull request with what landed?\"); once they agree, send `{\"stopped\": true}`, and the description says near the top that the run stopped. 409 `conflict` (the message says why and what to do): the planner is still working, nothing landed on the goal branch, the repository isn't on GitHub or there is no GitHub login (GET …/goal `openPullRequest` says so first), or GitHub refused it. 404 for an unknown run or one without a goal branch. Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "stopped": {
+                    "type": "boolean",
+                    "description": "The person was asked about a stopped run (GET …/goal `openPullRequest.confirm`, or the 409 `stopped` message) and wants the pull request anyway. Ignored for a run that isn't stopped"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    },
+                    "base": {
+                      "type": "string"
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "description": "This call opened it; false: it was open (or merged) already and is returned as it is"
+                    },
+                    "pullRequest": {
+                      "type": "object",
+                      "properties": {
+                        "number": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "exclusiveMinimum": 0
+                        },
+                        "url": {
+                          "description": "Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "state": {
+                          "type": "string",
+                          "description": "open, closed or merged"
+                        }
+                      },
+                      "required": [
+                        "number",
+                        "url",
+                        "state"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "branch",
+                    "base",
+                    "created",
+                    "pullRequest"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/keep-branch": {
+      "post": {
+        "operationId": "runs.keepBranch",
+        "description": "Capability runs.goal_branch. Keep the goal branch without a pull request (no body): recorded so clients stop asking (Run.goalBranch.state kept; run.branch_kept on the run stream). Opening a pull request later is still allowed. 409 `conflict` while the planner works, or once a pull request was opened. Needs the steer scope. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    },
+                    "base": {
+                      "type": "string"
+                    },
+                    "kept": {
+                      "const": true
+                    },
+                    "changed": {
+                      "type": "boolean",
+                      "description": "This call recorded it (false: it was kept already)"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "branch",
+                    "base",
+                    "kept",
+                    "changed"
                   ]
                 }
               }
@@ -3314,6 +4713,15 @@
                           "null"
                         ]
                       },
+                      "createdAt": {
+                        "description": "When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it",
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
+                      },
                       "updatedAt": {
                         "type": [
                           "string",
@@ -3322,6 +4730,29 @@
                         "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
                         "format": "date-time",
                         "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                      },
+                      "title": {
+                        "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                        "x-untrusted": true,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "titleSource": {
+                        "enum": [
+                          "user",
+                          "self",
+                          "parent",
+                          "driver",
+                          "derived",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source"
                       }
                     },
                     "required": [
@@ -3971,6 +5402,280 @@
                     "action",
                     "changed",
                     "pending"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/agents/{agentId}/title": {
+      "put": {
+        "operationId": "agents.setTitle",
+        "description": "Capability agents.title. The user's title for the agent (`{\"title\": \"login redirect\"}`): what its tab, row and column header say. It sticks until the user clears it (DELETE): the agent's own renames (`capcomd title` in its VM), its parent's and the driving harness's are still recorded under it, and the latest of them shows once it is cleared. The user's renames aren't rate limited (an agent's and a parent's are: one per 30 s, 20 per agent). Works on an agent that has ended. Confirmed by agent.titled (by user) on the run's streams. 422 `invalid` (field title) for a title with no words, more than 4 words or more than 32 characters. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "The user's title for the agent: 1 to 4 words, at most 32 characters. Trimmed, whitespace collapsed, lowercased, control and format characters dropped; refused (422 `invalid`, field title) when that leaves no words, or more words or characters than that"
+                  }
+                },
+                "required": [
+                  "title"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "x-untrusted": true,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "titleSource": {
+                      "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source",
+                      "enum": [
+                        "user",
+                        "self",
+                        "parent",
+                        "driver",
+                        "derived",
+                        null
+                      ],
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "changed": {
+                      "type": "boolean",
+                      "description": "This call changed something (false: the same title again, or nothing to clear)"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "agentId",
+                    "title",
+                    "titleSource",
+                    "changed"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "agents.clearTitle",
+        "description": "Capability agents.title. Clear the user's title for the agent (no body): Agent.title goes back to the latest title the agent, its parent or the driving harness set, else the derived one. Confirmed by agent.titled (by cleared) on the run's streams; `changed: false` when there was none. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                      "x-untrusted": true,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "titleSource": {
+                      "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source",
+                      "enum": [
+                        "user",
+                        "self",
+                        "parent",
+                        "driver",
+                        "derived",
+                        null
+                      ],
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "changed": {
+                      "type": "boolean",
+                      "description": "This call changed something (false: the same title again, or nothing to clear)"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "agentId",
+                    "title",
+                    "titleSource",
+                    "changed"
                   ]
                 }
               }
@@ -7469,11 +9174,12 @@
               "already_decided",
               "idempotency_conflict",
               "conflict",
+              "stopped",
               "invalid",
               "internal",
               "unavailable"
             ],
-            "description": "conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"
+            "description": "stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"
           },
           "message": {
             "type": "string"
@@ -7642,6 +9348,123 @@
         "additionalProperties": {},
         "x-event-type": "run.ended"
       },
+      "RunGoalCompletedData": {
+        "type": "object",
+        "properties": {
+          "branch": {
+            "type": "string",
+            "description": "The run's goal branch"
+          },
+          "base": {
+            "type": "string",
+            "description": "The branch it was cut from, which a pull request goes into"
+          },
+          "plannerId": {
+            "type": "string",
+            "description": "The planner agent whose finish made the run ready"
+          },
+          "cause": {
+            "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch",
+          "base",
+          "plannerId"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.goal_completed"
+      },
+      "RunPrOpenedData": {
+        "type": "object",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "number": {
+            "type": "number",
+            "description": "The pull request's number on GitHub"
+          },
+          "url": {
+            "description": "Its page on GitHub",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "type": "string",
+            "description": "Who opened it: client:<id>, operator or driver"
+          },
+          "cause": {
+            "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch",
+          "base",
+          "number",
+          "url",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.pr_opened"
+      },
+      "RunBranchKeptData": {
+        "type": "object",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string",
+            "description": "Who chose to keep it: client:<id>, operator or driver"
+          },
+          "cause": {
+            "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch",
+          "base",
+          "by"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.branch_kept"
+      },
+      "RunTitledData": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text: render as plain text, never markdown, links or actions. The run's new title from its planner (`capcomd title --run`): Run.title with titleSource agent, unless the run has a label of its own. 1 to 4 lowercase words"
+          },
+          "setBy": {
+            "type": "string",
+            "description": "The agent that named the run (its planner)"
+          },
+          "cause": {
+            "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "setBy"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "run.titled"
+      },
       "AgentSpawnedData": {
         "type": "object",
         "properties": {
@@ -7788,6 +9611,22 @@
             "additionalProperties": {},
             "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
           },
+          "title": {
+            "description": "Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title: its title at spawn (Agent.title): its spawner's (`spawn --title`; agent.titled follows), else derived from the task. Absent when it has none, and from older daemons",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "titleSource": {
+            "type": "string",
+            "enum": [
+              "user",
+              "self",
+              "parent",
+              "driver",
+              "derived"
+            ],
+            "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source"
+          },
           "cause": {
             "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
             "type": "string"
@@ -7817,6 +9656,70 @@
         },
         "additionalProperties": {},
         "x-event-type": "agent.started"
+      },
+      "AgentTitledData": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "title": {
+            "description": "Agent-written text: render as plain text, never markdown, links or actions. 1 to 4 lowercase words, at most 32 characters, one line",
+            "x-untrusted": true,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "type": "string",
+            "enum": [
+              "self",
+              "parent",
+              "driver",
+              "user",
+              "cleared"
+            ],
+            "description": "Who set it (see Agent.titleSource), or cleared: the user cleared theirs (DELETE …/title)"
+          },
+          "setBy": {
+            "type": "string",
+            "description": "The agent that set it (by self or parent), driver, or user"
+          },
+          "shown": {
+            "type": "boolean",
+            "description": "This title is Agent.title now. false: a user title holds the tab (this one is kept and shows once the user clears theirs). A client sets Agent.title and titleSource from this event only when shown"
+          },
+          "titleSource": {
+            "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "user",
+              "self",
+              "parent",
+              "driver",
+              "derived",
+              null
+            ]
+          },
+          "cause": {
+            "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "title",
+          "by",
+          "setBy",
+          "shown",
+          "titleSource"
+        ],
+        "additionalProperties": {},
+        "x-event-type": "agent.titled"
       },
       "AgentDoneData": {
         "type": "object",
@@ -8531,6 +10434,10 @@
               "added",
               "removed"
             ]
+          },
+          "askedBy": {
+            "description": "The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge",
+            "type": "string"
           }
         },
         "required": [
@@ -8985,6 +10892,10 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "askedBy": {
+                "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
+                "type": "string"
               }
             },
             "additionalProperties": {},
@@ -9019,9 +10930,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           }
         },
         "required": [
@@ -9109,9 +11024,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           }
         },
         "required": [
@@ -9147,9 +11066,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           },
           "agentId": {
             "description": "Agent whose change moved the run, if any",
@@ -9197,9 +11120,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           },
           "agentId": {
             "description": "Agent whose change moved the run, if any",
@@ -9247,9 +11174,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           },
           "agentId": {
             "description": "Agent whose change moved the run, if any",
@@ -9297,9 +11228,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           },
           "agentId": {
             "description": "Agent whose change moved the run, if any",
@@ -9347,9 +11282,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           },
           "agentId": {
             "description": "Agent whose change moved the run, if any",
@@ -9397,9 +11336,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           },
           "agentId": {
             "description": "Agent whose change moved the run, if any",
@@ -9447,9 +11390,13 @@
               "approval_needed",
               "approved",
               "denied",
-              "deleted"
+              "deleted",
+              "planner_done",
+              "pull_request_opened",
+              "branch_kept",
+              "titled"
             ],
-            "description": "Why the state changed (trusted, machine-readable)"
+            "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
           },
           "agentId": {
             "description": "Agent whose change moved the run, if any",
@@ -9805,6 +11752,29 @@
                 "x-untrusted": true,
                 "description": "Agent-written text: render as plain text, never markdown, links or actions"
               },
+              "title": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "titleSource": {
+                "description": "Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), agent (capability agents.title: its planner named the run, `capcomd title --run` in its VM; run.titled), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "label",
+                  "agent",
+                  "merge",
+                  "goal",
+                  "task",
+                  null
+                ]
+              },
               "repo": {
                 "description": "Repository the run works in (absolute path or remote URL)",
                 "type": [
@@ -9820,6 +11790,75 @@
                 "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
                 "format": "date-time",
                 "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+              },
+              "goalBranch": {
+                "description": "Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "branch": {
+                    "type": "string",
+                    "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+                  },
+                  "base": {
+                    "type": "string",
+                    "description": "The branch it was cut from, which the pull request goes into (e.g. dev)"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "working",
+                      "ready",
+                      "stopped",
+                      "pr_opened",
+                      "kept"
+                    ],
+                    "description": "working: the planner is at it (reviewed work lands as it goes); ready: the planner finished, the user decides (open a pull request or keep the branch); stopped: the planner failed or was cancelled (the branch keeps what landed; a pull request can still be opened); pr_opened: a pull request into the base is open (or was merged on GitHub); kept: the user kept the branch without one. Treat a state you don't know as working"
+                  },
+                  "readyAt": {
+                    "description": "When the planner finished (run.goal_completed); null before",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "pullRequest": {
+                    "description": "The pull request opened from it (run.pr_opened); null before",
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "number": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "url": {
+                        "description": "Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "number",
+                      "url"
+                    ]
+                  }
+                },
+                "required": [
+                  "branch",
+                  "base",
+                  "state",
+                  "readyAt",
+                  "pullRequest"
+                ]
               }
             },
             "required": [
@@ -9828,6 +11867,8 @@
               "label",
               "state",
               "goal",
+              "title",
+              "titleSource",
               "repo",
               "createdAt"
             ]
@@ -10093,6 +12134,15 @@
                     "null"
                   ]
                 },
+                "createdAt": {
+                  "description": "When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time"
+                },
                 "updatedAt": {
                   "type": [
                     "string",
@@ -10101,6 +12151,29 @@
                   "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
                   "format": "date-time",
                   "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                },
+                "title": {
+                  "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                  "x-untrusted": true,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "titleSource": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "user",
+                    "self",
+                    "parent",
+                    "driver",
+                    "derived",
+                    null
+                  ],
+                  "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source"
                 }
               },
               "required": [
@@ -10273,6 +12346,10 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "askedBy": {
+                      "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
+                      "type": "string"
                     }
                   },
                   "additionalProperties": {},

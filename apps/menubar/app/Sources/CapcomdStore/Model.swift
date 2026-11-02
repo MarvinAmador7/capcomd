@@ -49,7 +49,10 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// Where it works: `Agent.workspace.label` (harness #46), shown verbatim as its folder chip. Older daemons: `repo` or
   /// `agent.repo` on agent.spawned when present.
   public var repo: String?
+  /// Spawn order among its siblings: the spawn time when known, else its place in the snapshot that listed it.
   public var spawnedAtMs: Int
+  /// When it was spawned, when the daemon says (snapshot `createdAt`, or agent.spawned): its column's elapsed clock.
+  public var createdAtMs: Int? = nil
   /// When its status last changed (snapshot `updatedAt`, or the event that changed it): a finished run's end.
   public var updatedAtMs: Int? = nil
   /// What it is doing now (`Agent.activity.text`, daemon-written, trusted): shown under a running agent's row.
@@ -75,6 +78,13 @@ public struct Agent: Sendable, Hashable, Identifiable {
   public var error: UntrustedText? = nil
   public var checks: CheckOutcome? = nil
   public var merge: MergeOutcome? = nil
+  /// Its short name (`Agent.title`, capability `agents.title`; agent-written, untrusted): the user's, else the latest
+  /// the agent, its parent or the driving harness set, else the daemon's from the task. Nil from older daemons.
+  public var title: UntrustedText? = nil
+  /// Where `title` comes from: user, self, parent, driver or derived (`Agent.titleSource`).
+  public var titleSource: String? = nil
+  /// The title as a tab or row shows it: one plain line, nil when there is none.
+  public var titleText: String? { AgentTitle.shown(title) }
   public var kind: ProfileKind { ProfileKind(profile: profile) }
   /// Profile names stay lowercase as the contract sends them ("lead"); nil → "agent".
   public var displayName: String {
@@ -176,6 +186,9 @@ public struct PendingApproval: Sendable, Hashable, Identifiable {
   public var diff: ApprovalDiff? = nil
   /// When it was asked (the approval.requested envelope, or snapshot `requestedAt`).
   public var requestedAtMs: Int? = nil
+  /// A merge's asker (`subject.askedBy`): the agent waiting on the decision, usually the parent of `agentId` (whose
+  /// work merges). Nil for an operator's merge and from older daemons.
+  public var askedBy: String? = nil
 
   public init(id: String, runId: String?, agentId: String?, kind: String, question: UntrustedText, branchLine: String?,
               target: String? = nil, diff: ApprovalDiff? = nil, requestedAtMs: Int? = nil) {
@@ -187,6 +200,7 @@ public struct PendingApproval: Sendable, Hashable, Identifiable {
     self.init(id: id, runId: runId, agentId: agentId, kind: kind, question: UntrustedText(question), branchLine: CapcomdStore.branchLine(kind: kind, subject: subject),
               target: kind == "merge" ? subject["target"]?.string.map { UntrustedText($0).plain } : nil,
               diff: kind == "merge" ? ApprovalDiff(subject: subject) : nil, requestedAtMs: requestedAtMs)
+    askedBy = kind == "merge" ? subject["askedBy"]?.string : nil
   }
 }
 
@@ -220,6 +234,12 @@ public struct Run: Sendable, Hashable, Identifiable {
   public var state: String
   public var startedAtMs: Int?
   public var lastEventMs: Int
+  /// Where the run's agents run (`run.created` / the snapshot's `sandbox`): "docker" (Local), "boxd" (Cloud), or a
+  /// place this app doesn't know. Nil from a daemon that doesn't say.
+  public var sandbox: String? = nil
+  /// The run's goal branch (`runs.goal_branch`): from the snapshot, then run.goal_completed / run.pr_opened /
+  /// run.branch_kept. Nil for a run without one. `goalBranch.awaitsDecision`: show Open PR / Keep the branch.
+  public var goalBranch: GoalBranchSummary? = nil
   public var agents: [String: Agent] = [:]
   public var steps: [Step] = []
   /// `run.*` lifecycle transitions applied to this run, in order (lifecycle feed).
@@ -229,7 +249,12 @@ public struct Run: Sendable, Hashable, Identifiable {
     if Self.terminalStates.contains(state) { return false }
     return state == "running" || agents.values.contains { $0.status == .running }
   }
-  public var title: String { goal?.firstLine ?? label ?? id }
+  /// The daemon's title (snapshot `Run.title`), when it sends one: see `titled` for the one shown.
+  public var daemonTitle: RunTitle? = nil
+  /// The name its planner gave the run (run.titled, capability `agents.title`; agent-written).
+  public var agentTitle: String? = nil
+  /// What the run is called wherever it's listed (`titled`), never its id.
+  public var title: String { titled?.text ?? RunTitle.untitled }
 
   /// Where a run stands for the panel: still doing something (it stays in the Active list), or how it ended.
   public enum Outcome: Sendable, Hashable { case active, done, failed, stopped }
@@ -266,12 +291,15 @@ public struct Run: Sendable, Hashable, Identifiable {
   }
   /// For ordering: the latest thing known about it.
   public var recencyMs: Int { max(lastEventMs, endedAtMs ?? 0, startedAtMs ?? 0) }
-  /// How it ended, in words, once it has: "Done in 4m", "Failed after 12m", "Stopped after 30s" (no time when the start
-  /// or end isn't known). Nil while active.
+  /// How it ended, in words, once it has: "Done in 4m", "Failed after 12m", "Stopped after 30s", and for work up for
+  /// merging that didn't land, "Merge denied after 4m" (or "Merge failed"), as its outcome mark says (no time when the
+  /// start or end isn't known). Nil while active.
   public var endedHead: String? {
     guard !isActive else { return nil }
     let took = startedAtMs.flatMap { s in endedAtMs.flatMap { e in e >= s ? shortDuration(ms: e - s) : nil } }
-    let verb: (String, String) = switch outcome { case .failed: ("Failed", "after"); case .stopped: ("Stopped", "after"); default: ("Done", "in") }
+    let merges = Set(agents.values.compactMap(\.merge?.state))
+    let unmerged = merges.contains("merged") ? nil : merges.contains("denied") ? "Merge denied" : merges.contains("failed") ? "Merge failed" : nil
+    let verb: (String, String) = switch outcome { case .failed: ("Failed", "after"); case .stopped: ("Stopped", "after"); default: unmerged.map { ($0, "after") } ?? ("Done", "in") }
     return took.map { "\(verb.0) \(verb.1) \($0)" } ?? verb.0
   }
 }
@@ -287,10 +315,11 @@ public func shortDuration(ms: Int) -> String {
 
 public struct Project: Sendable, Hashable, Identifiable {
   public var id: String
-  /// Title = goal of its most recent run (contract has no project goal; gap G1).
+  /// The goal of its most recent run that has one (contract has no project goal; gap G1).
   public var goal: UntrustedText?
   public var runs: [Run]
-  public var title: String { goal.map { $0.firstLine.trimmingCharacters(in: .whitespaces) } ?? runs.first?.title ?? id }
+  /// Its newest titled run's title (`Run.titled`): a short name for the work, not the whole goal.
+  public var title: String { runs.lazy.compactMap(\.titled).first?.text ?? RunTitle.untitled }
   public var isRunning: Bool { runs.contains(where: \.isRunning) }
   public var lastEventMs: Int { runs.map(\.lastEventMs).max() ?? 0 }
   public var recencyMs: Int { runs.map(\.recencyMs).max() ?? 0 }
@@ -324,7 +353,10 @@ public struct Project: Sendable, Hashable, Identifiable {
 public struct AgentNode: Sendable, Hashable, Identifiable {
   public var id: String
   public var name: String
-  /// Mono tertiary suffix when sibling profiles repeat: repo, else short task id, else last 4 of agentId.
+  /// Its title (`Agent.title`, plain), shown where the suffix was. Nil from older daemons.
+  public var title: String? = nil
+  /// Mono tertiary suffix: with titles, only when a sibling has the same title (last 4 of agentId); without (older
+  /// daemons), when sibling profiles repeat: repo, else short task id, else last 4 of agentId.
   public var suffix: String?
   public var kind: ProfileKind
   public var status: AgentStatus
@@ -348,10 +380,13 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
     if waiting { return .waiting }
     switch status { case .running: return .running; case .failed: return .failed; case .pending: return .queued; case .paused: return .paused; case .cancelled: return .stopped; default: return nil }
   }
+  /// How text names it ("lead · login redirect" asks; a notification): its profile and title, else the profile and
+  /// suffix as before ("worker d3ce").
+  public var label: String { AgentTitle.label(name: name, title: title, suffix: suffix) }
   /// VoiceOver label per SPEC §8.
   public var accessibilityLabel: String {
     let state = waiting ? "waiting for approval" : status.rawValue.replacingOccurrences(of: "-", with: " ")
-    return ([name + (suffix.map { " \($0)" } ?? ""), repo, state, "level \(depth + 1)"] as [String?]).compactMap { $0 }.joined(separator: ", ")
+    return ([label, repo, state, "level \(depth + 1)"] as [String?]).compactMap { $0 }.joined(separator: ", ")
   }
 }
 
@@ -433,6 +468,9 @@ public struct AttachmentRef: Sendable, Hashable {
 
 /// Something the user should hear about (macOS notification), raised only for live lifecycle events.
 public enum Notice: Sendable, Hashable {
-  case approvalRequested(approvalId: String, runId: String?, question: UntrustedText)
+  /// `asker`: how the agent waiting on it is named ("lead · login redirect"), when the store knows it.
+  case approvalRequested(approvalId: String, runId: String?, question: UntrustedText, asker: String? = nil)
   case runFinished(runId: String, type: String, title: String)
+  /// A goal branch run is ready, or stopped with work landed (GoalNotice): once per run.
+  case goalReady(GoalNotice)
 }

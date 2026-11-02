@@ -1,6 +1,7 @@
-# ADR-022: An agent's lifecycle as a Rivet workflow (spike, behind a flag)
+# ADR-022: An agent's lifecycle as a Rivet workflow
 
-**Status:** spike, off by default (`CAPCOMD_AGENT_WORKFLOW=1` turns it on, 2026-10-27). Builds on ADR-016 (primitives:
+**Status:** accepted, the default since 2026-10-28 (a spike behind `CAPCOMD_AGENT_WORKFLOW=1` from 2026-10-27).
+`CAPCOMD_AGENT_WORKFLOW=0` on the engine brings back the `agent-drive` processes for one release, then they go. Builds on ADR-016 (primitives:
 spawn, await, the driver), ADR-017 (in-VM capcomd, the spool pump), ADR-019 §1, §6 (liveness, usage-limit pauses) and
 docs/durability.md. Research: rivetkit 2.3.31 source (`rivetkit-typescript/packages/{rivetkit/src/workflow,workflow-engine}`).
 
@@ -21,12 +22,12 @@ went wrong was hand-rolled around them:
 Rivet workflows (`rivetkit/workflow`: durable `step`, `loop`, `sleep`, `sleepUntil`, retries with backoff), queues and
 actor events exist for exactly this, and were already in the pinned rivetkit.
 
-## Decision (spike)
+## Decision
 
-With `CAPCOMD_AGENT_WORKFLOW=1` (it must be set for the engine host and the CLI alike):
+By default (`CAPCOMD_AGENT_WORKFLOW` unset; `=0` on the engine host is the escape hatch):
 
 1. **The worker actor runs the agent's lifecycle as its workflow** (`src/actors/agent-workflow.ts`, the worker actor's
-   `run`, added only with the flag). One worker actor per agent epoch already exists (`[run, agent]`, `[run, agent,
+   `run`, added unless the engine host has `CAPCOMD_AGENT_WORKFLOW=0`). One worker actor per agent epoch already exists (`[run, agent]`, `[run, agent,
    eN]`), so one workflow drives one attempt-series of one agent:
 
    ```
@@ -61,7 +62,18 @@ With `CAPCOMD_AGENT_WORKFLOW=1` (it must be set for the engine host and the CLI 
 The driver code is shared, not copied: `driveOnce` was split into `preflightDrive`, `ensureWorker`, `runAttempt` and
 `settlePushed` (`ops.ts`), which both the driver process (flag off) and the workflow's steps call.
 
-### What moves to Rivet with the flag on
+6. **The driver's settings travel with the agent** (2026-10-28). A driver process read its settings from the CLI that
+   started it; the workflow runs in the engine host, whose env is another's. So `spawn` records the spawner's drive
+   settings on the agent (`agents_v2.drive_env`): how it runs (`CAPCOMD_SPAWN_EXEC`), scripted agents' scripts and
+   spool knobs (`CAPCOMD_SCRIPT_*`), the agents file its children's profiles resolve from (`CAPCOMD_AGENTS_FILE`, as
+   that shell resolved it, made absolute: a config path, the one state-ish value), the driver's timings and test
+   killpoints. It's an allowlist (`src/utils/env.ts`): never a secret (no `KEY`, `TOKEN`, `SECRET`, `PASSWORD`,
+   `CREDENTIAL` name segment) and no path to capcomd's own state. A spawn replayed by key keeps the settings it was
+   first recorded with. Each workflow step and the run it starts apply them over
+   the host's env through an `AsyncLocalStorage` (`withDriveEnv`), so `env()` reads them for that agent only, and what
+   the agent spawns from its VM inherits them. Recorded with the flag off too (harmless, and a mixed rollout works).
+
+### What moves to Rivet with the workflow
 
 | Today | With the flag |
 |---|---|
@@ -74,28 +86,118 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
 | await polling at 300 ms + kicks | `agentsChanged` events + 5 s fallback (kicks stay, they're cheap and idempotent) |
 | `wakeDue` alarm + `startDriver` process | `sleepUntil` in the paused epoch's workflow, then `start` for the next epoch (the alarm stays as a backstop) |
 
-## Results (2026-10-27)
+## Results (2026-10-27, 2026-10-28)
 
 - New scenarios (`tests/subagents/workflow.test.ts`, flag on, read only the scope's record until the end, so nothing
   kicks the workflow): a daemon SIGKILL mid-agent → the engine wakes the worker by itself, the workflow re-runs the
   attempt (the run left in the VM is stopped first: `start, stopped, start, finished`), the agent finishes, no
   `DRIVE_FAILED`, never an `agent-drive` process; a usage-limit pause with nobody awaiting → its workflow sleeps to the
   reset and the next epoch finishes.
-- Suites (2026-10-28, this Mac, other worktrees' tests running alongside): `test:fast` 653/653; `tests/agents` 58/58
-  flag off and on; `test:scenarios` 108/110 flag off and 107/110 flag on. The two failing both ways (agent-provider's
-  and observability's harness-stream reads) fail the same way on the commit before this spike today; the third with
-  the flag on is `run-planner` (below).
-- Chaos (`tests/chaos/fast.ts`, private ports and data): the named killpoints (legacy run path, no agents) 11/11 with
-  the flag off. The primitives cases 12/14 off (the two that read driver pid files from `.relay/` don't find them when
-  `CAPCOMD_HOME` is set) and 4/14 on: the harness gives `CAPCOMD_SPAWN_EXEC=fake` to its client only, so the engine,
-  which now runs the agent, runs a real one ("needs a repo"); `driver.kill` and the driver killpoints have no driver
-  process to kill. Making the chaos suite pass with the flag on is part of the criteria below.
+- First spike run (2026-10-28): flag on, run-planner and 10 of 14 chaos primitives failed, because the settings the
+  driver took from its CLI didn't reach the engine and the driver-kill cases had no driver; fixed by decision 6 and the
+  counterparts below.
+- After the gap fixes (2026-10-28, branch feat/agent-workflow-gaps, each run with a fresh `CAPCOMD_HOME`):
+
+  | | flag off | flag on |
+  |---|---|---|
+  | `test:fast` | 678/678 | 678/678 |
+  | `tests/agents` | 58/58 | 58/58 |
+  | `test:scenarios` | 110/110 | 110/110 |
+  | chaos:fast named killpoints (private ports) | 11/11 | 11/11 |
+  | chaos:fast primitives | 14/14 | 14/14 (every case killed) |
+  | `tests/chaos` killpoints, harness-fix, seed35, seed36 | 4, 1, 3, 2 pass | 4, 1, 3, 2 pass |
+  | `tests/chaos/classify.test.ts` | 5/5 | (no engine) |
+
+  `tests/chaos/subprocess.test.ts` (flag off, legacy run path, private ports, with a repo as chaos:fast runs it): the 11
+  named killpoints 11/11 plus its unit case, 50/50 seeds (63 min).
+- With the workflow as the default (2026-10-28, branch feat/agent-workflow-default, after its review; fresh
+  `CAPCOMD_HOME` per run, other agents' tests on the machine):
+
+  | | default (workflow) | `CAPCOMD_AGENT_WORKFLOW=0` |
+  |---|---|---|
+  | contract check, typecheck | green | green |
+  | `test:fast` | 679/679 | 679/679 |
+  | `tests/agents` | 58/58 | 58/58 |
+  | `test:scenarios` (with the upgrade drill, the mode test and the app-frames diff) | 115/115 | 115/115 |
+  | chaos:fast named killpoints / primitives | 11/11, 14/14 | 11/11, 14/14 |
+  | `tests/chaos` killpoints, harness-fix, seed35, seed36 | 4, 1, 3, 2 pass | 4, 1, 3, 2 pass |
+  | `tests/chaos/subprocess.test.ts` (11 named, 50 seeds) | 11/11, 50/50 | 11/11, 50/50 |
+  | Swift (menu bar app, client; their mock daemon) | 35, 9 tests pass | – |
+
+- The two harness-stream tests (agent-provider, observability "activity line") that failed in earlier runs failed only
+  with a long-lived scratch `CAPCOMD_HOME` (850 runs in `runs.jsonl`, 137 machine records): opening a run's stream took
+  over their 5 s read window. With a fresh home they pass both ways. Worth a look on its own (a stream's first frames
+  shouldn't depend on how many runs the home has seen).
+
+## Measurements (2026-10-28, `tests/chaos/measure-workflow.ts`)
+
+Fake agents on the in-memory sandbox, a slowed push standing in for a long run, one private engine on this Mac (other
+agents' tests running alongside). "Looks" are watch iterations (one `attempt-wait` + `poll` each). Engine data is
+the size of its RocksDB folder; host RSS is the engine host (`capcomd serve`, which runs every workflow); engine RSS
+is `rivet-engine`; the worker's history is its `_rivet_wf_kv` rows (worker action `getWorkflowStats`).
+
+| Case | Looks per agent | History per agent | Actor DB | Host RSS | Engine RSS | Engine data |
+|---|---|---|---|---|---|---|
+| (a) one agent, 240 s at a 50 ms watch (≈ 65 h of looks at the 60 s default) | 3899 | ≤ 210 rows, ≤ 17 KB, flat | 136 KB, flat | 166–204 MB, flat | 134 → 303 MB | 0.3 → 130 MB |
+| (b) 12 agents, 300 s, default 60 s watch | 5 | ≤ 59 rows, 4.4 KB | 120 KB | peak 148 MB | peak 157 MB | 5.5 MB |
+| (b) baseline: 12 agents, driver processes (flag off), 120–300 s | – | – | – | peak 137 MB, **+ 12 `agent-drive` processes, 664 MB** | peak 152–160 MB | 2.7–4.9 MB |
+| (b) 12 agents, 120 s, a 5 s watch (the earlier default) | ~24 | ≤ 146 rows | 128 KB | 144 MB | 173 MB | 10.3 MB |
+
+- **Bounded:** the workflow's own history (the drive loop prunes old iterations every 20 and keeps 20; rivetkit
+  default), the worker actor's database, and the host's memory. Twelve agents cost the engine host ~10 MB more than
+  one, where the driver path ran a ~55 MB process per agent.
+- **Grows with writes, not reclaimed while idle:** the engine's data folder (~33 KB per look: every history flush is
+  an actor SQLite commit the engine stores) and, while writing, `rivet-engine`'s memory (it fell back from 303 to 185
+  MB once idle). The driver path writes too (a lease renewal every 5 s). So the watch writes rarely: its default went
+  from LEASE/3 (5 s) to 60 s, which brings 12 agents to about the driver path's writes. The run sends `attempt`
+  when it ends, so only a run lost with its engine host waits for it: after a daemon restart the worker sleeps until
+  its watch's deadline (an alarm), then finds the run lost and runs it again, so recovery takes at most one watch
+  interval (the restart scenario asserts < 100 s with the default; it was 25 s). An `onWake` nudge was tried and
+  dropped: the engine doesn't wake a worker on restart before its alarm, so `onWake` ran no sooner than the deadline.
+  `CAPCOMD_AGENT_WORKFLOW_POLL_MS` overrides it. Compacting the engine's storage is Rivet's (residual).
+
+## Changing the workflow (the rule; since 2026-10-28)
+
+An agent can be in flight across a capcomd upgrade: its workflow replays the history it recorded under the old code,
+matched to the new code by entry name. The workflow carries two shape gates (`src/actors/agent-workflow.ts`):
+`ctx.getVersion("lifecycle-shape", N)` at the top, and `l.getVersion("drive-shape", M)` at the start of every
+drive-loop iteration. `getVersion` returns the version the instance (or that iteration) started with: 1 for one that
+had already run past the gate under code from before the gate existed, the latest for one that reaches it fresh; the
+answer is recorded, so a replay gets the same one.
+
+- **Any change to the names, kinds or order of workflow entries** (a step, sleep, queue wait, loop, try) bumps the
+  version of the scope it's in: `LIFECYCLE_SHAPE` for the top level, `DRIVE_SHAPE` for an iteration of the drive loop.
+  The gates sit right after `wait-start` and at the very start of each iteration, so neither `wait-start` nor the
+  gates themselves can ever change.
+- **Branch on the returned version**: the old entries stay in the old branch, so nothing has to be marked removed.
+  Code for older versions stays until no agent can still be on it (one release after the change; then remove it with
+  the next bump). New entries go in the new branch only.
+- **`ctx.removed(name, kind)`** is only for dropping an entry from a shared path without a branch, and it writes a
+  placeholder for every new instance (every iteration, inside the loop) forever: prefer a branch. A timed queue wait is
+  two entries (`name:count`, a message, and `name:deadline`, a sleep): both need it. A loop can't be removed.
+- **The drive loop's state (`Drive`) is history** the next iteration reads: after an upgrade, iteration k may replay
+  under version 1 and k+1 run version 2 on that state, so new state fields must be optional.
+- **Never** rename or reorder an entry in place, change a step's output shape that later code reads without a
+  version check, or nest a loop in a loop (or a try block).
+- **Changing what a step does inside** (its body, not its name or output) needs no bump: completed steps aren't re-run,
+  and an interrupted one runs again with the new body. It must stay idempotent.
+- Run `tests/subagents/workflow-upgrade.test.ts` for any change here.
+
+The drill (`workflow-upgrade.test.ts`, test-only `CAPCOMD_WORKFLOW_DRILL`): agent A is mid-run under shape 1 when the
+engine host dies; it comes back with shape 2 (a new top-level step, and in every drive-loop iteration a new step plus
+the watch's `attempt-wait`/`poll` entries renamed). With the gates, A replays its shape-1 history, never runs the new
+top-level step, finishes, and nothing diverges; agent B, started after the upgrade, runs shape 2. The control makes the
+same change without the gates (`=ungated`): A runs the shape-2 step it never started with (asserted), and when the
+restart caught it mid-iteration its workflow also diverged from its history (`HistoryDivergedError`, so it would
+never finish; seen in one of two runs, logged, not asserted). Both pass (2026-10-28). The drill exercises a recorded
+version 1 meeting version 2, the path every future change takes; the "no version recorded yet" path (agents in flight
+under the one-day pre-gate spike code) resolves to 1 by rivetkit's rule and isn't drilled.
 
 ## Failure modes
 
-- **Workflow replay and code changes.** History is matched by step names; changing the workflow's shape breaks
-  in-flight agents (`HistoryDivergedError`). Use `ctx.getVersion`/`ctx.removed` for changes once agents can be in
-  flight across an upgrade, or drain (no running agent) before upgrading.
+- **Workflow replay and code changes.** History is matched by entry names; changing the workflow's shape under an
+  in-flight agent breaks it (`HistoryDivergedError`), or makes it run steps of a shape it never started with. Every
+  change follows "Changing the workflow" below.
 - **Nested loops diverge on replay (rivetkit 2.3.31).** A loop inside another loop's iteration resumes at its saved
   iteration, and the outer iteration's check then finds the retained earlier inner iterations unvisited. Found by the
   first version of this spike; the workflow is one flat loop with a phase per iteration. Upstream report worth filing.
@@ -108,10 +210,10 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
   and runs again. The push lock keeps two pushes of one attempt from both landing.
 - **A step that keeps failing** (an engine that won't answer for minutes) ends in `give-up`: the agent fails with the
   step's error rather than staying "running"; a later `capcomd spawn --continue` picks its work up.
-- **Both paths during a mixed rollout**: a CLI without the flag starts a driver process; whichever claims the lease
+- **Mixed settings**: the engine's mode wins (see "Who decides"), so a CLI and an engine that disagree still use one
+  path. Should both run anyway (an old CLI that spawns a driver against a workflow engine), whichever claims the lease
   first drives the agent (the workflow's 6 h lease keeps a driver out once it has it; a driver's 15 s one keeps the
-  workflow's `prepare` out). A CLI with the flag against an engine without it falls back to a driver process. Set
-  the flag for the daemon and every client together.
+  workflow's `prepare` out).
 - **Events are best effort**: a missed `agentsChanged` (reconnect) costs at most the fallback poll.
 - **Observability**: the driver's `agent.run` span wraps the drive in its own process; the workflow writes one at the
   end instead (same ids and attributes, `agent.driver: workflow`, start = when it claimed the agent), so traces keep
@@ -120,22 +222,66 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
   detected per actor, not per process; `start` is sent before it's remembered; final prepare failures are recorded as
   DRIVE_FAILED like the driver's; the watch waits on the run's `attempt` message instead of a 1 s poll (an hour's agent
   writes ~720 loop entries instead of ~7200); the lease is claimed once, not renewed.
-- **Where driver-side settings are read.** The driver process read its environment from the CLI that started it; the
-  workflow reads the engine host's. Production settings live in config both read, but test knobs set only for one CLI
-  call (`CAPCOMD_SCRIPT_<PROFILE>` for a scripted agent) don't reach the engine: `run-planner.test.ts` fails with the
-  flag on for this reason (its planner script is passed to `capcomd run` only).
-- **Faster start shifts test timing.** `observability.test.ts` "activity line" expects to see the planner's "Waiting
-  for sub-agents" arrive as a live frame; with the flag on it is already in the stream's opening snapshot (the activity
-  is recorded as before), so the test's live-frame assertion fails.
+- **Where driver-side settings are read** (fixed, decision 6): they travel with the agent. Settings outside the
+  allowlist are the engine host's, as they always were for the worker's own actions (`CAPCOMD_REPO`, sandbox, keys).
+- **A host that dies inside a step** (found 2026-10-29: `chaos (primitives)` `vm.rpc.await.before:0` failed 3 of 5 CI
+  runs). The engine brings a crashed actor back only at its next alarm or on a call to it (rivet's crash policy:
+  sleep). The workflow arms an alarm only to wait (the watch, a backoff, `sleepUntil`); a running step has none, and
+  the 6 h lease keeps awaits from kicking it. A worker whose host died in `ensure-machine`, `start-agent`, `settle` and
+  the like slept until its machine's reap alarm, an hour later, with the agent "running" (in the chaos case: the
+  second child, started just as its parent's `capcomd await` killed the host). Every step but the watch's look now
+  keeps a no-op wake alarm 10 s ahead while it runs (`STEP_WAKE_MS`: the worker's own `armStepWake` action, at the
+  step's start and every 5 s), so after a restart the worker wakes by itself and runs the step again
+  (`tests/subagents/workflow.test.ts` "restart mid-step", killpoint `workflow.start_agent.mid`, and "restart inside a
+  long step", a provider that doesn't answer `ensure`). Cost: one schedule row per step, plus one per 5 s of a long
+  step (provisioning).
+- **One alarm per actor; the schedule overwrites the workflow's** (found 2026-10-30 by the live e2e with
+  `CAPCOMD_E2E_RESTART=1`, on the first version of the step wake). In rivetkit 2.3.31 the workflow sets the actor's
+  alarm directly for its waits, and every change to the actor's schedule (an event added, fired or cancelled) sets it to
+  the earliest scheduled event. The first step wake was left to fire 10 s after its step, during the watch: it replaced
+  the watch's alarm (60 s) with the machine's reap (1 h), so an engine killed after that left the workers asleep, worse
+  than without it. A step now cancels its wakes (`disarmStepWakes`) before it returns, before the workflow arms its
+  next wait ("restart mid-watch, after its steps' wakes have fired"). The same overwrite remains possible from the
+  worker's other scheduled actions during a wait (`reapIfExpired` re-arming for an agent that outlives its machine's
+  idle lifetime, `retryDrain`): a crash right after one of those wakes the worker at that event, not at the watch's
+  deadline. Worth an upstream report: the workflow driver could use the actor's run-wake deadline (`c.run.setWakeAt`),
+  which rivetkit-core appears to restore after a schedule alarm.
+- **Workflow-engine argument checks.** A queue wait's timeout must be an integer (a 4000 ms lease / 3 failed the whole
+  workflow with "Not an integer"); timeouts and `sleepUntil` targets are rounded.
 
-## Criteria to make it the default (S3, not now)
+### Chaos counterparts with the workflow
 
-1. The scenario suites, `tests/agents` and the chaos fast gate pass with the flag on, twice in a row, with no new flake:
-   the harnesses give the engine the driver-side knobs (`CAPCOMD_SPAWN_EXEC`, `CAPCOMD_SCRIPT_*`), or spawn records
-   them with the agent, and the driver-process killpoints get workflow equivalents (kill the engine mid-step).
-2. The live end-to-end (`scripts/mac-subagents-e2e.sh`, boxd + Claude + Codex) passes with the flag on; a daemon
-   restart mid-run of a real agent recovers.
-3. A workflow-shape change is shipped once with `getVersion` against in-flight agents (upgrade drill).
-4. `agent.run` spans and the menu bar's live views are unchanged with the flag on.
-5. Then: remove `agent-drive`, `driveAgent`/`engineOutage`, the process-side lease heartbeat and the scope's `wakeDue`
-   alarm path; keep `claimDriver` only as the workflow's liveness lease.
+The primitives chaos cases that killed a driver process have no driver to kill with the flag on; each kills the engine
+host instead, mid-step, and checks the same property (`tests/chaos/primitives.ts`):
+
+| Case | Flag off | Flag on |
+|---|---|---|
+| `driver.kill:0` | the scenario SIGKILLs the agent's driver mid-push; the takeover waits, the push runs once | killpoint `workflow.watch.running` kills the engine host while the slowed push is in flight; after the restart the lost run runs once more (2 push attempts), the push lands once, the agent finishes once |
+| `vm.rpc.spawn.before_reply:0`, `vm.rpc.await.before:0` | the parent's driver dies inside a VM's RPC | the same driver killpoint fires in the engine host, where the spool pump now runs: the engine dies, the scripted "VM" outlives it, the restarted workflow re-attaches and answers the RPC once (2 children, no duplicates) |
+
+### Who decides: the engine (since 2026-10-28)
+
+The engine host's setting decides how agents are driven: it's what its worker actors run. The engine host uses its own
+setting; anything else (a CLI, the MCP server) asks the engine (`scope.driveMode`, again after a minute, so a
+long-lived process follows an engine restarted with the other setting) and follows it: it starts an agent's workflow or spawns an
+`agent-drive` process as the engine does, waits with events or polling to match, and when its own
+`CAPCOMD_AGENT_WORKFLOW` says otherwise prints one line saying the engine's mode applies
+(`tests/subagents/workflow-mode.test.ts`, both directions). An engine too old to answer is treated as driver-path.
+
+## Criteria to make it the default (decided 2026-10-28)
+
+1. Met: the scenario suites, `tests/agents`, `test:fast` and the chaos fast gate (named killpoints and primitives) pass
+   with the workflow as without it (numbers under Results and in the default-on gates).
+2. Met in part: the live end-to-end on boxd passed with the workflow (planner + 2 Claude + 1 Codex workers + 3
+   reviewers, 3/3 verified, reviewed and merged, no VMs left; run-mvsnwrg9h4tc63). The hour-long and dozen-agent
+   measurements are under Measurements. Still to do live: the Docker (Local) goal and a daemon restart while a real
+   agent is mid-run.
+3. Met: the upgrade drill passes, and the version gates are in the workflow.
+4. Met: the menu bar's frames are the same both ways (`tests/scenarios/app-frames.test.ts`: frame types, their data
+   keys, each agent's status order and the snapshot frames' fields, on the lifecycle feed and the full stream; not
+   values). Covered there: spawn, start, done, failed with `drive.failed`, reaped, operator pause/resume, approvals,
+   verify/merge, steps, activity. Not there: the usage-limit pause (both ways in `tests/subagents/limits.test.ts`) and
+   thread items/checkpoints (the runner writes them, the same code both ways). `agent.run` spans:
+   `tests/cli/json.test.ts`, `tests/scenarios/contract.test.ts`.
+5. Next release: remove `agent-drive`, `driveAgent`/`engineOutage`, the process-side lease heartbeat and the
+   `CAPCOMD_AGENT_WORKFLOW=0` path; keep `claimDriver` as the workflow's liveness lease and `wakeDue` as the backstop.

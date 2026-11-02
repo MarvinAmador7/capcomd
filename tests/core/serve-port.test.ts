@@ -27,7 +27,7 @@ afterAll(() => { foreign6420?.close(); });
 function runServe(port: number, timeoutMs: number, sock = privateHarnessSocket(), env: Record<string, string> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "capcomd-serve-port-"));
   const pidFile = join(dataDir, "engine.pid");
-  const child = spawn(process.execPath, [CLI, "serve", "--port", String(port)], { cwd: REPO, env: { ...process.env, CAPCOMD_CHAOS_ENGINE_DATA: dataDir, CAPCOMD_ENGINE_PIDFILE: pidFile, CAPCOMD_HARNESS_SOCKET: sock, ...env }, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  const child = spawn(process.execPath, [CLI, "serve", "--port", String(port)], { cwd: REPO, env: { ...process.env, CAPCOMD_TEST_ENGINE_DATA: dataDir, CAPCOMD_ENGINE_PIDFILE: pidFile, CAPCOMD_HARNESS_SOCKET: sock, ...env }, stdio: ["ignore", "pipe", "pipe"], detached: true });
   let out = "";
   child.stdout!.on("data", (d) => (out += d)); child.stderr!.on("data", (d) => (out += d));
   const exited = new Promise<number | null>((r) => child.on("exit", (c) => r(c)));
@@ -51,7 +51,7 @@ function runServe(port: number, timeoutMs: number, sock = privateHarnessSocket()
 
 const probe = async (port: number, env: Record<string, string> = {}) => {
   const t0 = Date.now();
-  const r = Bun.spawn([process.execPath, `${REPO}/tests/chaos/ready-probe.ts`, String(port)], { cwd: REPO, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawn([process.execPath, `${REPO}/tests/helpers/ready-probe.ts`, String(port)], { cwd: REPO, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
   const [err, code] = await Promise.all([new Response(r.stderr).text(), r.exited]);
   return { code, ms: Date.now() - t0, err };
 };
@@ -184,6 +184,22 @@ test("serve exits nonzero when its port is busy, and says so", async () => {
     expect(code).toBe(1);
     expect(s.out()).toContain(`${port + 1}`);
     expect(s.out()).toContain("already in use");
+    expect(s.out()).toContain(`:${port + 1} is held by pid ${process.pid}`); // names who holds it
+  } finally { holder.close(); }
+}, 30_000);
+
+// rivet-services binds its own fixed port (RIVET_PORT, 8642 by default) whatever --port is: when it would run, serve
+// checks that port too, instead of starting an engine whose services then fail to bind.
+test("serve checks the rivet-services port when services run, and names its holder", async () => {
+  const port = await testPort();
+  const svcPort = port + 5;
+  const holder = await blackhole(svcPort);
+  try {
+    const s = runServe(port, 20_000, privateHarnessSocket(), { RIVET_RUN_SERVICES: "1", RIVET_PORT: String(svcPort) });
+    expect(await s.exited).toBe(1);
+    expect(s.out()).toContain(`${svcPort} already in use`);
+    expect(s.out()).toContain(`:${svcPort} is held by pid ${process.pid}`);
+    expect(s.out()).not.toContain("Starting Rivet engine");
   } finally { holder.close(); }
 }, 30_000);
 

@@ -5,7 +5,8 @@ import type {
   ExecResult,
   VmInfo,
 } from "./sandbox";
-import { chmodSync, mkdtempSync, writeFileSync } from "fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { SandboxAuthError, SandboxNotFoundError, SandboxTimeoutError, SandboxUnavailableError } from "./boxd-errors";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 
@@ -56,7 +57,16 @@ interface FakeVm {
   deleteAt?: number;
 }
 
+/**
+ * Test hook: the provider fails like a real one in an outage. Until `until` (ms epoch), every call (or only `ops`:
+ * ensure, waitReady, exec, upload, download, setEgress, destroy, list, extendTtl, probe) throws `error`: "timeout" (boxd's
+ * "Deadline exceeded", the default), "unavailable" (connection refused), "not_found" or "auth" (permanent).
+ */
+export interface FakeFault { until: number; error?: "timeout" | "unavailable" | "not_found" | "auth"; ops?: string[] }
+
 export interface FakeProviderOptions {
+  /** A JSON file holding a FakeFault, read at every call (engine-process tests: CAPCOMD_FAKE_OUTAGE_FILE). */
+  faultFile?: string;
   /**
    * Run exec/upload/download for real on this host (tests of the agent adapter with a fake
    * `claude` binary). Paths are host paths; env is the given env only (plus `inheritEnv`).
@@ -82,7 +92,28 @@ export class FakeProvider implements SandboxProvider {
   public secrets = new Map<string, { value: string; scope: string; domains: string[]; placeholder: string }>();
   /** Polls of snapshotGet before a snapshot reports ready (simulates boxd's async build). */
   public snapshotReadyAfter = 1;
+  /** Injected outage (tests); `faultFile` is read when this is null. */
+  public faults: FakeFault | null = null;
+  /** Calls that failed by injection, by method. */
+  public faulted: Record<string, number> = {};
   constructor(readonly opts: FakeProviderOptions = {}) {}
+
+  private fault(op: string, id?: VmId): void {
+    let f = this.faults;
+    if (!f && this.opts.faultFile) { try { f = JSON.parse(readFileSync(this.opts.faultFile, "utf8")); } catch { f = null; } }
+    if (!f || !(Date.now() < Number(f.until)) || (f.ops && !f.ops.includes(op))) return;
+    this.faulted[op] = (this.faulted[op] ?? 0) + 1;
+    const where = `machines.${op} failed${id ? ` (vm ${id})` : ""}`;
+    switch (f.error ?? "timeout") {
+      case "unavailable": throw new SandboxUnavailableError(`${where}: connect ECONNREFUSED 127.0.0.1:9443`, id);
+      case "not_found": throw new SandboxNotFoundError(`${where}: machine not found`, id);
+      case "auth": throw new SandboxAuthError(`${where}: BOXD_API_KEY was rejected by boxd (AuthenticationError: invalid or expired api key)`, id);
+      default: throw new SandboxTimeoutError(`${where}: Deadline exceeded after 60.000s,remote_addr=127.0.0.1:9443`, id);
+    }
+  }
+
+  /** Answers unless an injected outage covers "probe". */
+  async probe(id?: VmId): Promise<void> { this.fault("probe", id); }
 
   /** What a VM's own environment holds: vmEnv plus a bxds_ placeholder per bound secret (never the value). */
   machineEnv(): Record<string, string> {
@@ -134,6 +165,7 @@ export class FakeProvider implements SandboxProvider {
   specOf(id: VmId): VmSpec | undefined { return this.vms.get(id)?.spec; }
 
   async ensure(spec: VmSpec): Promise<{ id: VmId; created: boolean }> {
+    this.fault("ensure");
     if (this.opts.failEnsure === "auth") {
       const { mapBoxdError } = await import("./boxd-errors");
       class AuthenticationError extends Error {}
@@ -170,6 +202,7 @@ export class FakeProvider implements SandboxProvider {
   }
 
   async waitReady(id: VmId, timeoutMs: number): Promise<void> {
+    this.fault("waitReady", id);
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
 
@@ -191,6 +224,7 @@ export class FakeProvider implements SandboxProvider {
       cwd?: string;
     }
   ): Promise<ExecResult> {
+    this.fault("exec", id);
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
     if (vm.state !== "ready") throw new Error(`VM ${id} not ready`);
@@ -223,6 +257,7 @@ export class FakeProvider implements SandboxProvider {
   }
 
   async upload(id: VmId, path: string, data: Uint8Array): Promise<void> {
+    this.fault("upload", id);
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
     if (this.opts.hostExec) { await Bun.write(path, data); return; }
@@ -230,6 +265,7 @@ export class FakeProvider implements SandboxProvider {
   }
 
   async download(id: VmId, path: string): Promise<Uint8Array> {
+    this.fault("download", id);
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
     if (this.opts.hostExec) return new Uint8Array(await Bun.file(path).arrayBuffer());
@@ -239,6 +275,7 @@ export class FakeProvider implements SandboxProvider {
   }
 
   async setEgress(id: VmId, allow: string[]): Promise<void> {
+    this.fault("setEgress", id);
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
     this.egress.set(id, [...allow]);
@@ -280,18 +317,21 @@ export class FakeProvider implements SandboxProvider {
   }
 
   async extendTtl(id: VmId, seconds: number): Promise<void> {
+    this.fault("extendTtl", id);
     const vm = this.vms.get(id);
     if (!vm) throw new Error(`VM ${id} not found`);
     vm.deleteAt = this.clock + seconds * 1000;
   }
 
   async destroy(id: VmId): Promise<void> {
+    this.fault("destroy", id);
     const vm = this.vms.get(id);
     if (!vm) return;
     vm.state = "destroyed";
   }
 
   async list(prefix: string): Promise<VmInfo[]> {
+    this.fault("list");
     const result: VmInfo[] = [];
     for (const vm of this.vms.values()) {
       if (vm.name.startsWith(prefix) && vm.state !== "destroyed") {

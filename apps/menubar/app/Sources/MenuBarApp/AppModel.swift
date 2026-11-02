@@ -7,13 +7,6 @@ import CapcomdLive
 import CapcomdClient
 import CapcomdBot
 
-/// UserDefaults-backed prefs for the store's remembered UI choices.
-final class DefaultsPreferences: PreferenceStoring {
-  let d = UserDefaults.standard
-  func string(forKey k: String) -> String? { d.string(forKey: "capcomd.\(k)") }
-  func set(_ v: String?, forKey k: String) { d.set(v, forKey: "capcomd.\(k)") }
-}
-
 /// Observable mirror of CapcomdStore. The store stays platform-neutral; every store change bumps `revision`,
 /// and computed properties read it so SwiftUI tracks them.
 @Observable @MainActor
@@ -48,21 +41,15 @@ final class AppModel {
     s.onNotify = { [weak self] n in
       guard let self else { return }
       self.moment(n)
+      // A goal branch run that is ready already said so (its goal notice): no second banner for its completion.
+      if case .runFinished(let rid, "run.completed", _) = n, self.store.goalNoticed.contains(rid) { return }
       if self.store.prefs.allows(n) { Notifier.post(n, bot: self.notificationBot(n)) }   // Settings › General › Notifications
     }
   }
 
-  static var socketPath: String {
-    UserDefaults.standard.string(forKey: "capcomd.socketPath")
-      ?? (NSHomeDirectory() as NSString).appendingPathComponent(".capcomd/harness.sock")
-  }
+  static var socketPath: String { Connection.socketPath }
 
-  static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) {
-    let t = UnixSocketTransport(socketPath: socketPath, token: token)
-    return (CapcomdStore(subscriber: LiveSubscriber(transport: t), decider: LiveDecider(transport: t), detail: LiveDetail(transport: t),
-                         controls: LiveControls(transport: t), starter: LiveStarter(transport: t), messenger: LiveMessenger(transport: t),
-                         daemonInfo: LiveDaemonInfo(transport: t), thread: LiveThread(transport: t), prefs: DefaultsPreferences()), t)
-  }
+  static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) { Connection.makeStore(token: token) }
 
   // Identity moments: seen live only (never from a snapshot or a reopened panel), each once per run.
   @ObservationIgnored private var celebrations: [String: Date] = [:]
@@ -99,7 +86,7 @@ final class AppModel {
 
   /// The waiting agent's bot for an approval notification.
   func notificationBot(_ n: Notice) -> (traits: BotTraits, agentId: String)? {
-    guard case .approvalRequested(let aid, let runId, _) = n, let runId, let agentId = store.approvals[aid]?.agentId,
+    guard case .approvalRequested(let aid, let runId, _, _) = n, let runId, let agentId = store.approvals[aid]?.agentId,
           let t = bot(runId: runId, agentId: agentId) else { return nil }
     return (t, agentId)
   }
@@ -113,6 +100,11 @@ final class AppModel {
     let m = AppModel(makeStore(token: ""), tokenMissing: false)   // not started until the token is in
     m.tokenPending = true
     ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
+    // A click on a goal branch notice: the run's detail, with its Ready bar.
+    ApprovalNotifications.onOpenRun = { [weak m] rid in m?.open(run: rid); MenuBarPanel.open() }
+    #if DEBUG
+    DispatchQueue.main.async { MenuBarDebug.start(m) }   // CAPCOMD_MENUBAR_CONTROL (MenuBarDebug.swift)
+    #endif
     if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { m.tokenFromEnvironment = true; m.connect(token: env); return m }
     Task.detached(priority: .userInitiated) {
       let token = Keychain.token()
@@ -222,19 +214,56 @@ final class AppModel {
   func pickDriver(_ provider: String) { store.pickDriver(provider) }
 
   func startRun(_ goal: String) async -> Bool {
-    var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+    // The goal branch rows chose for this checkout: the base and the branch as shown (GoalBranchRows.swift).
+    var choice = store.newRunChoice(goalSetup: goalSetup)
     var state = await store.startRun(goal: goal, choice)
     if case .needsRepo = state, let folder = await ProjectFolderPicker.choose() {
       // A folder that isn't set up yet shows its next steps in the composer (the goal stays: Set Up and Start). A set-up
       // one takes the run, with the project's own drivers (the daemon's, without a project, may have had none to offer).
       guard await setup.pick(folder) else { return false }
-      choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+      choice = store.newRunChoice(goalSetup: nil)
       state = await store.startRun(goal: goal, choice)
     }
     if case .started = state { return true }
     return false
   }
   func clearStart() { store.clearStart() }
+
+  // Goal branches (capability runs.goal_branch): the composer's rows (GoalBranchRows.swift) and the ready card.
+  /// The base and goal branch for the next run, for the checkout it goes to.
+  var goalSetup = GoalBranchSetup()
+  /// The rows show for a project checkout on a daemon with goal branches; the default project and older daemons keep
+  /// today's composer.
+  var goalBranchesOffered: Bool { _ = revision; return store.goalBranchesOffered }
+  /// The field the last Start's refusal is about ("base", "goalBranch").
+  var startRefusedField: String? { _ = revision; return store.startRefusedField }
+  /// Asks the daemon about the rows' question and files its answer against it (an older question's answer is dropped).
+  func loadBranches(_ q: GoalBranchSetup.Query) async {
+    if let f = await store.loadProjectBranches(path: q.path, goal: q.goal, goalBranch: q.goalBranch, base: q.base) { goalSetup.receive(f, for: q) }
+  }
+  /// The run's goal card (nil without a goal branch).
+  func goalCard(_ runId: String) -> GoalCard? { _ = revision; return store.goalCard(runId: runId) }
+  /// The goal view behind the card, read once per run here (the store reads it again on the goal events).
+  @ObservationIgnored private var goalsAsked: Set<String> = []
+  func loadGoal(_ runId: String) {
+    guard goalsAsked.insert(runId).inserted else { return }
+    Task { await store.loadGoal(runId: runId) }
+  }
+  /// Open PR: a stopped run asks the daemon's question first; else it opens (the daemon may still ask).
+  func openPullRequest(_ card: GoalCard) {
+    switch card.openTap {
+    case .ask(let q): store.askToOpenStoppedPullRequest(runId: card.runId, question: q)
+    case .open: Task { _ = await store.openPullRequest(runId: card.runId) }
+    }
+  }
+  /// The person said yes to the stopped run's question.
+  func confirmPullRequest(_ runId: String) { Task { _ = await store.openPullRequest(runId: runId, stopped: true) } }
+  func cancelGoalAction(_ runId: String) { store.cancelGoalAction(runId: runId) }
+  func keepBranch(_ runId: String) { Task { _ = await store.keepBranch(runId: runId) } }
+  /// View diff: the compare on GitHub, else the run's Files tab.
+  func viewGoalDiff(_ card: GoalCard) {
+    if let u = card.diffURL { NSWorkspace.shared.open(u) } else { viewDiff(runId: card.runId) }
+  }
 
   // Bot avatars (brand direction B): one team per run, siblings kept distinct (botTeam). Agents join in spawn order, so
   // a newcomer never changes an earlier agent's bot. Recomputed only when the run's agents change.
@@ -278,6 +307,9 @@ final class AppModel {
   // Agent thread input (7c)
   func agentControlState(_ agentId: String) -> ControlState { _ = revision; return store.agentControlState[agentId] ?? .idle }
   func controlAgent(runId: String, agentId: String, _ action: RunControl) { Task { _ = await store.controlAgent(runId: runId, agentId: agentId, action) } }
+  /// Renaming an agent (agents.title): where the field starts, and what Return sends.
+  func titleEdit(runId: String, agentId: String) -> TitleEdit? { store.titleEdit(runId: runId, agentId: agentId) }
+  func rename(runId: String, agentId: String, _ outcome: TitleEdit.Outcome) { Task { _ = await store.rename(runId: runId, agentId: agentId, outcome) } }
   func pendingSteers(_ agentId: String) -> [PendingSteer] { _ = revision; return store.pendingSteers(agentId: agentId) }
   func steer(runId: String, agentId: String, body: String, skills: [String]) { Task { await store.steer(runId: runId, agentId: agentId, body: body, skills: skills) } }
   func retrySteer(runId: String, agentId: String, _ p: PendingSteer) { Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) } }
@@ -313,31 +345,6 @@ final class AppModel {
   func decide(_ id: String, _ d: ApprovalDecision) { Task { _ = await store.decide(id, d) } }
 }
 
-/// Daemon token in the login Keychain: generic password, service "capcomd", account NSUserName().
-enum Keychain {
-  static let service = "capcomd"
-  static func token() -> String? {
-    let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                            kSecAttrAccount as String: NSUserName(),
-                            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-    var out: CFTypeRef?
-    guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
-    return String(data: d, encoding: .utf8)
-  }
-  @discardableResult
-  static func save(_ token: String) -> Bool {
-    let key: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                              kSecAttrAccount as String: NSUserName()]
-    let data = Data(token.utf8)
-    let upd = SecItemUpdate(key as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-    if upd == errSecSuccess { return true }
-    guard upd == errSecItemNotFound else { return false }
-    var add = key; add[kSecValueData as String] = data
-    add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-    return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
-  }
-}
-
 /// Approval / run-finished notifications from the lifecycle feed. UNUserNotificationCenter needs a bundle, so a bare
 /// `swift run` binary (no bundle identifier) skips them instead of crashing.
 enum Notifier {
@@ -351,15 +358,28 @@ enum Notifier {
     let c = UNMutableNotificationContent()
     let id: String
     switch n {
-    case .approvalRequested(let aid, _, let q):
-      id = "approval-\(aid)"; c.title = "Approval needed"; c.body = q.plain   // plain text; notifications don't render markdown
+    case .approvalRequested(let aid, _, let q, let asker):
+      // "lead · login redirect asks": the agent as its tab names it (titles are plain text, like the question).
+      id = "approval-\(aid)"; c.title = asker.map { "\($0) asks" } ?? "Approval needed"; c.body = q.plain   // plain text; notifications don't render markdown
       c.categoryIdentifier = ApprovalNotifications.category; c.userInfo = ["approvalId": aid]
       if let bot, let a = ApprovalNotifications.botAttachment(bot.traits, id: bot.agentId) { c.attachments = [a] }
     case .runFinished(let rid, let type, let title):
       id = "run-\(rid)-\(type)"; c.title = title
       c.body = type == "run.completed" ? "Run completed" : type == "run.cancelled" ? "Run stopped" : "Run failed"
+    case .goalReady(let g):
+      // "Ready: capcomd/add-x → dev: 2 of 3 tasks landed"; a click opens the run.
+      id = "goal-\(g.runId)"; c.title = g.title; c.body = g.line; c.userInfo = ["runId": g.runId]
     }
     UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: c, trigger: nil))
   }
+}
+#endif
+
+#if canImport(SwiftUI) && os(macOS)
+/// The menu bar's thread views read the whole model (its `revision`): fine for one thread at a time in the panel.
+extension AppModel: ThreadHost {
+  func agentProvider(runId: String, agentId: String) -> Provider? { provider(runId: runId, agentId: agentId)?.provider }
+  func role(runId: String, agentId: String) -> String? { run(runId)?.agents[agentId]?.displayName }
+  func openAgent(runId: String, agentId: String) { path.append(.thread(runId: runId, agentId: agentId)) }
 }
 #endif

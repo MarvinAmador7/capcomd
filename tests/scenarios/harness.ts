@@ -5,7 +5,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { Engine } from "../chaos/engine";
+import { Engine } from "../helpers/test-engine";
 import { capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 
@@ -39,9 +39,11 @@ export interface World {
   repo: Awaited<ReturnType<typeof bareRepo>>;
 }
 
-export async function world(name: string, extraEnv: Record<string, string> = {}, opts: { engineOmit?: string[] } = {}): Promise<World> {
+export async function world(name: string, extraEnv: Record<string, string> = {}, opts: { engineOmit?: string[]; envFor?: (repo: Awaited<ReturnType<typeof bareRepo>>) => Promise<Record<string, string>> | Record<string, string> } = {}): Promise<World> {
   const repo = await bareRepo({ mode: "direct", extraEnv: { CAPCOMD_MERGE_TARGET: "trunk" } });
   await repo.seed.ok(["push", "-q", "origin", "main:trunk"]);
+  // Settings that need the repository first (a fake GitHub backed by it), for the engine and the CLI alike.
+  if (opts.envFor) extraEnv = { ...extraEnv, ...(await opts.envFor(repo)) };
   const dir = mkdtempSync(join(tmpdir(), `capcomd-scn-${name}-`));
   const agentsFile = join(dir, "agents.json");
   writeFileSync(agentsFile, JSON.stringify(PROFILES));

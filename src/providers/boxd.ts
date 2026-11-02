@@ -9,7 +9,9 @@ import {
   SandboxConfigError,
   SandboxHibernatedError,
   SandboxNotFoundError,
+  SandboxNotReadyError,
   SandboxTimeoutError,
+  isTransientSandboxError,
   mapBoxdError,
 } from "./boxd-errors";
 import { env } from "../utils/env";
@@ -265,8 +267,10 @@ export class BoxdProvider implements SandboxProvider {
     } catch (err) {
       const mapped = mapBoxdError(err, id, "waitUntilReady");
       if (mapped instanceof SandboxNotFoundError) throw mapped;
-      if (mapped instanceof SandboxTimeoutError || /ready/i.test((err as Error)?.message ?? "")) {
-        throw new SandboxTimeoutError(`VM ${id} not ready within ${timeoutMs}ms`, id, err);
+      // boxd not answering (a status poll's deadline, a dropped connection) is an outage: the caller may wait it out.
+      if (isTransientSandboxError(mapped) && typeof (err as { grpcCode?: unknown })?.grpcCode === "number") throw mapped;
+      if (mapped instanceof SandboxTimeoutError || /ready|running/i.test((err as Error)?.message ?? "")) {
+        throw new SandboxNotReadyError(`VM ${id} not ready within ${timeoutMs}ms`, id, err);
       }
       throw mapped;
     }
@@ -380,6 +384,12 @@ export class BoxdProvider implements SandboxProvider {
   async resume(id: VmId): Promise<void> {
     await this.client.machines.resume(id).catch((e) => { throw mapBoxdError(e, id, "resume"); });
     this.startKeepalive(id);
+  }
+
+  /** Does boxd answer? (resilient.ts asks after an exec failed transiently.) A machine that is gone is an answer too. */
+  async probe(id?: VmId): Promise<void> {
+    if (id) { await this.tryGet(id); return; }
+    await this.client.machines.list(this.org ? { org: this.org } : undefined).catch((e) => { throw mapBoxdError(e, undefined, "list"); });
   }
 
   async extendTtl(id: VmId, seconds: number): Promise<void> {

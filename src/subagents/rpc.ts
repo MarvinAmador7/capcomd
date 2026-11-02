@@ -3,7 +3,7 @@
 // prompt-injected agent can at most use what its own token already grants.
 //
 // Scopes: WRITE ops (spawn, cancel, send, verify, merge, handoff, grant) touch only the caller's own
-// subtree. READ ops (status, await, tree, inspect, logs, events) may also see the caller's
+// subtree; `title` names the caller itself or one of its own children (the planner: also the run). READ ops (status, await, tree, inspect, logs, events) may also see the caller's
 // parent's subtree (its siblings), so peers can coordinate and await-cycles can be detected.
 // Agent-authored text in responses (results, messages, logs) is fenced.
 import { redactShapes } from "../agents/redact";
@@ -106,7 +106,7 @@ function ids(args: Record<string, any>, key = "agents"): string[] {
 async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: string): Promise<unknown> {
   const run = c.run;
   // Writes are idempotent per request: the CLI retries a transient failure with the same id.
-  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant"].includes(op)) args = { ...args, key: `r:${reqId}` };
+  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant", "title"].includes(op)) args = { ...args, key: `r:${reqId}` };
   const s = client().scope.getOrCreate([run]);
   switch (op) {
     case "spawn": {
@@ -118,8 +118,9 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
         budget: args.budget !== undefined ? parseBudget(args.budget) : undefined, contract, grant: args.children, operator: false,
         overrides: args.set ? { set: args.set } : undefined, ...(args.check !== undefined ? { check: String(args.check) } : {}), ...(args.report === true || args.report === "true" ? { report: true } : {}),
         ...(typeof args.continue === "string" && args.continue ? { continueFrom: args.continue } : {}),
+        ...(args.title !== undefined ? { title: String(args.title) } : {}),
       });
-      return { agentId: a.agentId, status: a.status, depth: a.depth, budget: a.budget, limits: a.limits, created: a.created };
+      return { agentId: a.agentId, status: a.status, depth: a.depth, budget: a.budget, limits: a.limits, created: a.created, ...(a.title ? { title: a.title } : {}) };
     }
     case "status": {
       const targets = args.agents || args.agent ? ids(args) : [c.sub];
@@ -205,6 +206,19 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       return t === c.sub ? r : { ...r, lines: r.lines.map((l: any) => ({ ...l, line: fence(t, l.line).text })) };
     }
     case "heartbeat": { await s.heartbeat({ agentId: c.sub, note: args.note ? String(args.note) : undefined }); return { ok: true }; }
+    case "title": {
+      // Capability agents.title: name your own tab, one of your children's, or (the planner) the run. Rate limited.
+      const title = String(args.title ?? "");
+      const key = `${c.sub}:${args.key}`;
+      if (args.run === true || args.run === "true") {
+        const { me } = await readable(c);
+        if (me.parent || (me.contract as Record<string, unknown> | null)?.review) deny("only the run's planner names the run", "Name your own tab: capcomd title \"<2-4 words>\".");
+        return O.setRunTitle(run, title, { setBy: c.sub, key });
+      }
+      const t = args.agent ? String(args.agent) : c.sub;
+      if (t !== c.sub && (await O.getAgentOrThrow(run, t)).parent !== c.sub) deny(`${t} is not your child: you can name only yourself and the agents you spawned`);
+      return O.setAgentTitle(run, t, title, { by: t === c.sub ? "self" : "parent", setBy: c.sub, key });
+    }
     case "result": {
       const r = normalizeResult(args);
       await S.kvWrite(run, { k: `_result/${c.sub}`, value: r, writer: c.sub });
@@ -265,7 +279,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       await assertWritable(c, ref, true);
       if (!args.require) throw new RelayError("usage", "merge needs --require <vfyId>", "Verify the child first: capcomd verify --ref <agt>.");
       // A protected target parks the merge (awaiting_approval) for the operator; merge again with the same key to check.
-      return O.mergeRef({ runId: run, ref, require: String(args.require), operator: false, requestApproval: true, key: args.key ? `${c.sub}:${args.key}` : undefined });
+      return O.mergeRef({ runId: run, ref, require: String(args.require), operator: false, requestApproval: true, askedBy: c.sub, key: args.key ? `${c.sub}:${args.key}` : undefined });
     }
   }
   throw new RelayError("usage", `unknown op ${op}`, "See `capcomd help` inside the VM.");

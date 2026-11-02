@@ -19,11 +19,10 @@ import { startDriver } from "../primitives/drivers";
 import { agentWorkflowOn } from "../utils/agent-workflow-flag";
 
 /**
- * ADR-022: with the agent workflow, tell connected awaiters that agents changed (status, notice), so they look again
- * instead of polling. Nothing is sent with the flag off.
+ * ADR-022: tell connected awaiters that agents changed (status, notice), so they look again instead of polling. (With
+ * CAPCOMD_AGENT_WORKFLOW=0 nobody listens: awaits poll.)
  */
 function agentsChanged(c: any): void {
-  if (!agentWorkflowOn()) return;
   try { c.broadcast("agentsChanged", { at: Date.now() }); } catch { /* no connections: nothing to tell */ }
 }
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
@@ -31,6 +30,7 @@ import type { AgentSpec } from "../agents/profiles";
 import type { AttachedSkill } from "../agents/skills";
 import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
 import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
+import { applyTitle, normalizeTitle, renameRefusal, shownTitle, type TitleBy, type TitleState } from "../primitives/agent-title";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
@@ -133,6 +133,10 @@ function rowToAgent(r: any) {
     workspace: r.workspace ? (JSON.parse(r.workspace as string) as AgentWorkspace) : null,
     /** Who asked this running agent to pause (`requestPause`): its runner stops it, keeps its work and pauses it. */
     pauseRequested: (r.pause_requested as string | null) ?? null,
+    /** ADR-022: how it is driven (CAPCOMD_SPAWN_EXEC, CAPCOMD_SCRIPT_*, driver timings), as its spawner's env had it. */
+    driveEnv: r.drive_env ? (JSON.parse(r.drive_env as string) as Record<string, string>) : null,
+    /** Its title (capability agents.title): the user's, the latest agent-set one, the rename counts; null: nobody named it. */
+    titleState: r.title ? (JSON.parse(r.title as string) as TitleState) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -147,6 +151,28 @@ function opRow(r: any) {
 export type ScopeOp = ReturnType<typeof opRow>;
 /** How a run ended by itself (scope.endRun), not by its agents ending. */
 export type RunEnd = { state: "failed" | "cancelled"; reason: string | null; by: string | null; at: number };
+
+/** The run's goal branch (ops GOAL_KV, written by `run new --goal-branch`), read inside a transaction. */
+async function goalOf(tx: any): Promise<{ branch: string; base: string } | null> {
+  const r = await tx.execute("SELECT v, deleted FROM kv WHERE k = '_goal'");
+  if (!r.length || Number(r[0]!.deleted) === 1) return null;
+  const v = JSON.parse(r[0]!.v as string);
+  return typeof v?.branch === "string" && typeof v?.base === "string" ? { branch: v.branch, base: v.base } : null;
+}
+/** The goal's planner: a top-level agent that isn't a reviewer (a verify's reviewer is spawned at the top level). */
+const isPlanner = (a: ScopeAgent) => !a.parent && !(a.contract as Record<string, unknown> | null)?.review;
+/** What the user chose for a ready goal branch (scope_meta goal_decision): a pull request, or keeping the branch. */
+export type GoalDecision = { choice: "pull_request" | "keep"; by: string; at: number; pr?: { number: number; url: string | null } };
+/** The goal branch as getScope reports it: the branch, when its planner finished (`ready`), and the user's choice. */
+export type GoalState = { branch: string; base: string; ready: { at: number; plannerId: string } | null; decision: GoalDecision | null };
+
+/** The run's title as its planner set it (`capcomd title --run`, scope_meta run_title), with its rename counts. */
+export type RunAgentTitle = { title: string; setBy: string; at: number; count: number; last: Record<string, number> };
+
+/** agent.titled: what an agent's title change records (by "cleared": the user cleared theirs; `title` is then the one shown). */
+function titledEvent(agentId: string, title: string | null, by: TitleBy | "cleared", setBy: string, ch: { shown: boolean; titleSource: string | null }) {
+  return { agentId, title, by, setBy, shown: ch.shown, titleSource: ch.titleSource };
+}
 
 /** recordStep: an agent's step history (agent.step) keeps at most this many; later steps are dropped. */
 export const STEPS_MAX = 500;
@@ -283,6 +309,8 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "activity", "TEXT");
       await addColumn(database, "agents_v2", "workspace", "TEXT");
       await addColumn(database, "agents_v2", "pause_requested", "TEXT");
+      await addColumn(database, "agents_v2", "drive_env", "TEXT");
+      await addColumn(database, "agents_v2", "title", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -334,8 +362,14 @@ export const scopeActor = actor({
       }
       const unallocated = available(meta.budget, {}, all.filter((a) => !a.parent).map((a) => ({ ...a, tree: tree.get(a.agentId) })));
       const ended = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'ended'");
+      const g = await goalOf(c.db);
+      const meta2 = g ? await c.db.execute("SELECT k, v FROM scope_meta WHERE k IN ('goal_ready', 'goal_decision')") : [];
+      const pick = (k: string) => { const row = meta2.find((x: any) => x.k === k); return row ? JSON.parse(row.v as string) : null; };
+      const goalBranch: GoalState | null = g ? { ...g, ready: pick("goal_ready"), decision: pick("goal_decision") } : null;
+      const rt = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'run_title'");
+      const agentTitle = rt.length ? (({ title, setBy, at }: RunAgentTitle) => ({ title, setBy, at }))(JSON.parse(rt[0]!.v as string) as RunAgentTitle) : null;
       return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated,
-        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null };
+        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null, goalBranch, agentTitle };
     },
 
     /**
@@ -356,12 +390,108 @@ export const scopeActor = actor({
       return { changed: true, ended: (await read())! };
     },
 
+    /**
+     * The user's choice for the run's goal branch once its planner is done: a pull request into the base (opened by the
+     * caller; recorded here with its number), or keeping the branch. A pull request is recorded once (run.pr_opened);
+     * keeping it is recorded once (run.branch_kept), and refused after a pull request was opened.
+     */
+    async goalDecision(c, params: { choice: GoalDecision["choice"]; by: string; pr?: { number: number; url: string | null } }) {
+      let out: { changed: boolean; decision: GoalDecision | null } = { changed: false, decision: null };
+      await c.db.transaction(async (tx: RawAccess) => {
+        const g = await goalOf(tx);
+        if (!g) fail("not_found", "this run has no goal branch");
+        const prior = await tx.execute("SELECT v FROM scope_meta WHERE k = 'goal_decision'");
+        const had = prior.length ? (JSON.parse(prior[0]!.v as string) as GoalDecision) : null;
+        if (had?.choice === "pull_request") {
+          if (params.choice === "keep") fail("conflict", `a pull request (#${had.pr?.number}) is open from ${g!.branch}: there's nothing to keep`);
+          out = { changed: false, decision: had }; return;
+        }
+        if (had?.choice === params.choice) { out = { changed: false, decision: had }; return; }
+        if (params.choice === "pull_request" && !params.pr) fail("usage", "a pull request decision needs the pull request");
+        const d: GoalDecision = { choice: params.choice, by: params.by, at: Date.now(), ...(params.pr ? { pr: { number: params.pr.number, url: params.pr.url } } : {}) };
+        await tx.execute("INSERT INTO scope_meta (k, v) VALUES ('goal_decision', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(d));
+        if (d.choice === "pull_request") await addEvent(tx, "RUN_PR_OPENED", null, { branch: g!.branch, base: g!.base, number: d.pr!.number, url: d.pr!.url, by: d.by }, `goal-pr-${d.pr!.number}`);
+        else await addEvent(tx, "RUN_BRANCH_KEPT", null, { branch: g!.branch, base: g!.base, by: d.by }, "goal-kept");
+        out = { changed: true, decision: d };
+      }, { name: "scopeGoalDecision" });
+      return out;
+    },
+
+    /**
+     * Set an agent's title (capability agents.title), or clear the user's (title null, by "user"). The agent's own and
+     * its parent's renames are rate limited (RENAME_WINDOW_MS per setter, RENAMES_MAX per agent); a user title sticks:
+     * a later agent or parent title is recorded under it (shown: false) and shows once the user clears theirs. The same
+     * title from the same source again changes nothing. `key`: a retry with the same key answers as the first call did.
+     */
+    async setTitle(c, params: { agentId: string; title: string | null; by: TitleBy; setBy: string; key?: string }) {
+      let out: { agentId: string; changed: boolean; shown: boolean; title: string | null; titleSource: string | null } | null = null;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const r = await tx.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
+        if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
+        const a = rowToAgent(r[0]);
+        const task = redactShapes(a.task);
+        const idem = `title-${a.agentId}-${params.key ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`}`;
+        if (params.key && (await tx.execute("SELECT 1 FROM scope_events WHERE idem_key = ?", idem)).length) {
+          const s = shownTitle(a.titleState, task);
+          out = { agentId: a.agentId, changed: false, shown: params.title === null || s.title === params.title, ...s };
+          return;
+        }
+        let title: string | null = null;
+        if (params.title !== null) {
+          const n = normalizeTitle(params.title);
+          if (!n.ok) fail("usage", n.error);
+          title = (n as { title: string }).title;
+        } else if (params.by !== "user") fail("usage", "only the user clears a title");
+        const now = Date.now();
+        const ch = applyTitle(a.titleState, task, { title, by: params.by, setBy: params.setBy, now });
+        if (ch.changed && (params.by === "self" || params.by === "parent")) {
+          const no = renameRefusal(a.titleState, params.setBy, params.by === "self" ? "your tab" : a.agentId, now);
+          if (no) fail("rate_limited", no);
+        }
+        out = { agentId: a.agentId, changed: ch.changed, shown: ch.shown, title: ch.title, titleSource: ch.titleSource };
+        if (!ch.changed) return;
+        await tx.execute("UPDATE agents_v2 SET title = ? WHERE agent_id = ?", JSON.stringify(ch.next), a.agentId);
+        await addEvent(tx, "AGENT_TITLED", a.agentId, title === null ? titledEvent(a.agentId, ch.title, "cleared", params.setBy, ch) : titledEvent(a.agentId, title, params.by, params.setBy, ch), idem);
+      }, { name: "scopeSetTitle" });
+      return out!;
+    },
+
+    /**
+     * The run's title from its planner (`capcomd title --run`): Run.title with titleSource agent, below a label of the
+     * run's own. Rate limited like an agent's own renames. `key`: a retry with the same key answers as the first did.
+     */
+    async setRunTitle(c, params: { title: string; setBy: string; key?: string }) {
+      let out: { changed: boolean; title: string } | null = null;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const n = normalizeTitle(params.title);
+        if (!n.ok) fail("usage", n.error);
+        const title = (n as { title: string }).title;
+        const idem = `run-title-${params.key ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`}`;
+        const prev = await tx.execute("SELECT v FROM scope_meta WHERE k = 'run_title'");
+        const had = prev.length ? (JSON.parse(prev[0]!.v as string) as RunAgentTitle) : null;
+        if (params.key && (await tx.execute("SELECT 1 FROM scope_events WHERE idem_key = ?", idem)).length) { out = { changed: false, title: had?.title ?? title }; return; }
+        if (had?.title === title) { out = { changed: false, title }; return; }
+        const now = Date.now();
+        const no = renameRefusal(had, params.setBy, "the run", now);
+        if (no) fail("rate_limited", no);
+        const next: RunAgentTitle = { title, setBy: params.setBy, at: now, count: (had?.count ?? 0) + 1, last: { ...(had?.last ?? {}), [params.setBy]: now } };
+        await tx.execute("INSERT INTO scope_meta (k, v) VALUES ('run_title', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(next));
+        await addEvent(tx, "RUN_TITLED", params.setBy.startsWith("agt-") ? params.setBy : null, { title, setBy: params.setBy }, idem);
+        out = { changed: true, title };
+      }, { name: "scopeSetRunTitle" });
+      return out!;
+    },
+
     async spawn(
       c,
       params: {
         runId: string; agentId: string; key?: string; paramsHash: string; parent?: string | null;
         profile: string | null; ref: string | null; spec: Record<string, unknown> | null;
         task: string; contract?: Record<string, unknown> | null; budget?: Budget; operator?: boolean; grant?: Grant; review?: boolean;
+        /** ADR-022: the spawner's drive settings (not part of the params hash: a retry from another shell is the same spawn). */
+        driveEnv?: Record<string, string>;
+        /** Its title, from its spawner (`spawn --title`; already normalized). Not part of the params hash: a retry is the same spawn. */
+        title?: { title: string; by: "parent" | "driver"; setBy: string };
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -415,22 +545,30 @@ export const scopeActor = actor({
         try { if (repoKv.length) runRepo = envVar("REPO", JSON.parse(repoKv[0]!.v as string) ?? {}); } catch { /* unreadable: fall back */ }
         const workspace = workspaceOf(runRepo ?? envVar("REPO"));
         await tx.execute(
-          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace, drive_env)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?, ?)`,
           params.agentId, params.runId, params.parent ?? null, d.depth, params.profile, params.ref,
           params.spec ? JSON.stringify(params.spec) : null, JSON.stringify(d.limits), params.task,
           params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now,
-          workspace ? JSON.stringify(workspace) : null
+          workspace ? JSON.stringify(workspace) : null,
+          params.driveEnv && Object.keys(params.driveEnv).length ? JSON.stringify(params.driveEnv) : null
         );
         killpoint("scope.spawn.mid");
         // Same redaction path as message bodies: the row keeps the raw task for the worker; event + attachment are redacted.
         const taskInl = inlineOrAttach(redactShapes(params.task));
+        const redacted = taskInl.text ?? redactShapes(params.task);
+        // Its title: the spawner's (agent.titled follows agent.spawned), else derived from the task.
+        const titled = params.title ? applyTitle(null, redacted, { title: params.title.title, by: params.title.by, setBy: params.title.setBy, now, counted: false }) : null;
+        if (titled) await tx.execute("UPDATE agents_v2 SET title = ? WHERE agent_id = ?", JSON.stringify(titled.next), params.agentId);
+        const shown = titled ?? shownTitle(null, redacted);
         if (taskInl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", taskInl.attachment.id, taskInl.attachment.sha256, taskInl.attachment.bytes, taskInl.attachment.mediaType, taskInl.body, now);
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
           agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
           ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}), workspace,
+          ...(shown.title ? { title: shown.title, titleSource: shown.titleSource } : {}),
         }, `spawn-${params.agentId}`);
+        if (titled) await addEvent(tx, "AGENT_TITLED", params.agentId, titledEvent(params.agentId, titled.title, params.title!.by, params.title!.setBy, titled), `title-${params.agentId}-spawn`);
         out = await get(params.agentId);
         created = true;
       }, { name: "scopeSpawn" });
@@ -465,6 +603,17 @@ export const scopeActor = actor({
         await tx.execute("UPDATE agents_v2 SET status = ?, result = ?, spent = ?, notice = NULL, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
           params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? a.spent, budget: a.budget }, `finish-${params.agentId}`);
+        // A goal-branch run is ready when its planner finished its work and no other planner is still at it: the user
+        // then sees the goal branch against its base and opens a pull request (or keeps the branch). Once per run.
+        if (params.status === "done" && isPlanner(a)) {
+          const g = await goalOf(tx);
+          const others = g ? (await tx.execute("SELECT * FROM agents_v2 WHERE parent IS NULL AND agent_id != ? AND status IN ('pending','running','paused')", params.agentId)).map(rowToAgent).filter(isPlanner) : [];
+          if (g && !others.length) {
+            const at = Date.now();
+            await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('goal_ready', ?)", JSON.stringify({ at, plannerId: params.agentId }));
+            await addEvent(tx, "RUN_GOAL_COMPLETED", params.agentId, { branch: g.branch, base: g.base, plannerId: params.agentId }, "goal-ready");
+          }
+        }
         await tx.execute("DELETE FROM awaits WHERE waiter = ?", params.agentId);
         // The parent's thread gets a hand-back card: the child's summary, its artifacts as links and media.
         if (a.parent) await putItemTx(tx, a.parent, handoffOf(a.parent, params.agentId, params.status, params.result));
@@ -485,11 +634,13 @@ export const scopeActor = actor({
     },
 
     /** ADR-019 §2: the runner's stuck notice for a running agent (null: it no longer looks stuck). */
-    async notice(c, params: { agentId: string; notice: { kind: string; detail: string } | null }) {
+    /** `only` (with a null notice): clear only a notice of that kind (one raised by the same source). */
+    async notice(c, params: { agentId: string; notice: { kind: string; detail: string } | null; only?: string }) {
       const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
       const a = rowToAgent(r[0]);
       if (a.status !== "running" || (a.notice?.kind ?? null) === (params.notice?.kind ?? null)) return { changed: false };
+      if (!params.notice && params.only && a.notice?.kind !== params.only) return { changed: false };
       const n: AgentNotice | null = params.notice ? { kind: params.notice.kind, detail: params.notice.detail.slice(0, 300), at: Date.now() } : null;
       await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("UPDATE agents_v2 SET notice = ?, updated_at = ? WHERE agent_id = ?", n ? JSON.stringify(n) : null, Date.now(), params.agentId);
@@ -548,6 +699,9 @@ export const scopeActor = actor({
       if (paused.length) agentsChanged(c);
       return { paused, pausing, affected: order.map((a) => a.agentId) };
     },
+
+    /** ADR-022: how this engine drives agents (its host's CAPCOMD_AGENT_WORKFLOW): the CLI follows it. */
+    async driveMode(_c) { return { agentWorkflow: agentWorkflowOn() }; },
 
     /** A paused agent runs again as its next epoch (a new worker and VM, continuing on its branch). */
     async resume(c, params: { agentId: string; by?: string }) {
@@ -868,7 +1022,7 @@ export const scopeActor = actor({
         if (op.state !== "running") return;
         const data = params.diff ? { ...op.data, diff: params.diff } : op.data;
         await tx.execute("UPDATE ops SET state = 'awaiting_approval', data = ?, updated_at = ? WHERE op_id = ? AND state = 'running'", JSON.stringify(data), Date.now(), params.opId);
-        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason, ...(params.diff ? { diff: params.diff } : {}) }, `park-${params.opId}`);
+        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason, ...(params.diff ? { diff: params.diff } : {}), ...(op.data.askedBy ? { askedBy: op.data.askedBy } : {}) }, `park-${params.opId}`);
       }, { name: "scopeParkOp" });
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
     },

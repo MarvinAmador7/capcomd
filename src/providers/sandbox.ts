@@ -58,4 +58,7 @@ export interface SandboxProvider {
   list(prefix: string): Promise<VmInfo[]>;
   /** Move the VM's delete deadline to `seconds` from now (a lease the running work keeps renewing). */
   extendTtl?(id: VmId, seconds: number): Promise<void>;
+  /** Resolves when the provider answers (about `id`, if given; "not found" is an answer too); rejects when it doesn't.
+   *  Asked after an exec failed transiently, to tell an outage from a command that ran out of time. */
+  probe?(id?: VmId): Promise<void>;
 }

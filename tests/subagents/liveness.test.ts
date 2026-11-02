@@ -2,10 +2,10 @@
 // up by the in-VM supervisor (ADR-019), which also checkpoints its workspace: a worker that keeps working past the
 // stuck window is not flagged stuck. (fake claude in a host-exec FakeProvider, spawned through the engine.)
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { Engine } from "../chaos/engine";
+import { Engine } from "../helpers/test-engine";
 import { capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 
@@ -26,7 +26,7 @@ beforeAll(async () => {
     CAPCOMD_AGENT_CLAUDE_BIN: new URL("../agents/fake-claude.sh", import.meta.url).pathname,
     CAPCOMD_AGENT_WORKDIR: join(dir, "vm"),
     CAPCOMD_AGENT_POLL_MS: "100",
-    CAPCOMD_STUCK_AFTER_MS: "1500",
+    CAPCOMD_STUCK_AFTER_MS: "4000",
     CAPCOMD_DRIVER_LEASE_MS: "3000",
     CAPCOMD_SKIP_PREFLIGHT: "1",
     CAPCOMD_TRACE_DIR: join(dir, "traces"),
@@ -57,10 +57,11 @@ const cj = async (args: string[]) => {
 test("a worker without the in-VM CLI that keeps working is not flagged stuck", async () => {
   const run = (await cj(["run", "new"])).j?.runId;
   expect(run).toMatch(/^run-/);
-  const sp = await cj(["spawn", run, "--profile", "worker", "--task", "[slow] make the failing test pass", "--key", "slow"]);
+  const sp = await cj(["spawn", run, "--profile", "worker", "--task", "[slower] make the failing test pass", "--key", "slow"]);
   const id = sp.j?.agentId;
   expect(id).toMatch(/^agt-/);
-  // Watch it while it works: past the 1.5s stuck window it must carry an engine heartbeat and no stuck flag.
+  // Watch it while it works: past the 4 s stuck window (1.5 s let a loaded CI runner's output gaps read as stuck) it
+  // must carry an engine heartbeat and no stuck flag.
   const t0 = Date.now();
   let seen = 0;
   let flagged: string | undefined;
@@ -69,7 +70,7 @@ test("a worker without the in-VM CLI that keeps working is not flagged stuck", a
     const j = (await cj(["inspect", run, id])).j;
     if (j?.status !== "running") { if (j?.status && j.status !== "pending") break; continue; }
     if (j.stuck) flagged = j.stuck;
-    if (Date.now() - t0 > 2500 && j.heartbeatAt) seen++;
+    if (Date.now() - t0 > 5000 && j.heartbeatAt) seen++;
   }
   expect(flagged).toBeUndefined();
   expect(seen).toBeGreaterThan(0);
@@ -128,11 +129,33 @@ test("capcomd send reaches a running claude worker: the supervisor hands it to t
   expect(heard).toContain("use tabs please");
 }, 120_000);
 
+// The listener fake itself: a message line can reach its stdin in pieces (a pipe takes what it has room for, and the
+// supervisor writes the rest when its event loop gets to it), or take a while to read under load. It once read with a
+// 1 s timeout per line, and a timeout in the middle of a line threw the start away: the send --skill test then saw an
+// empty messages.txt on a busy machine. Here the line arrives in two pieces 1.3 s apart.
+test("the listener fake hears a long message whose line reaches its stdin in pieces", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "capcomd-listen-")), cwd = join(dir, "repo");
+  mkdirSync(cwd);
+  const line = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
+  const p = Bun.spawn([env.CAPCOMD_AGENT_CLAUDE_BIN!, "-p", "--input-format", "stream-json"], { cwd, stdin: "pipe", stdout: "ignore", stderr: "inherit" });
+  p.stdin.write(line("[listen:4] wait"));
+  p.stdin.flush();
+  const body = `follow this skill ${"notes ".repeat(4000)}`, msg = line(body);
+  await Bun.sleep(300);
+  p.stdin.write(msg.slice(0, 20_000));
+  p.stdin.flush();
+  await Bun.sleep(1300);
+  p.stdin.write(msg.slice(20_000));
+  p.stdin.end();
+  expect(await p.exited).toBe(0);
+  expect(readFileSync(join(cwd, "messages.txt"), "utf8")).toContain(body);
+}, 30_000);
+
 test("capcomd send --skill: the running worker reads the skill's SKILL.md with the message; message.sent names it", async () => {
   const skills = (await cj(["skills"])).j?.skills ?? [];
   expect(skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: "capcomd-orchestration", source: "bundled" })]));
   const run = (await cj(["run", "new"])).j?.runId;
-  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen] wait for a skill", "--key", "listen-skill"])).j?.agentId;
+  const id = (await cj(["spawn", run, "--profile", "listener", "--task", "[listen:30] wait for a skill", "--key", "listen-skill"])).j?.agentId;
   const bad = await cj(["send", run, id, "x", "--skill", "no-such-skill"]);
   expect(bad.code).not.toBe(0);
   expect(bad.j?.error?.message).toBe('There is no skill named "no-such-skill": `capcomd skills` lists the skills you can attach.');

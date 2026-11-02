@@ -5,14 +5,192 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.7.0 (2026-11-02)
+
+The desktop app (build it with `apps/menubar/scripts/build-app.sh --desktop`), goal branches (a run's reviewed work
+lands on a branch of its own, and you choose at the end whether to open one pull request), and agents that name their
+own tabs; also everything in 0.7.0-rc.1. **Breaking:** `capcomd run <goal>` now works on a goal branch
+(`--no-goal-branch` for the old behaviour). Checked with a live run on boxd before the release: a planner, two workers
+and a reviewer landed a goal on its branch from `dev` with no approvals, and the pull request into `dev` opened from it.
+
+- A goal branch's result lists each piece of work by its agent's title, in `capcomd goal`, the apps' ready card and the
+  pull request's description. Work an agent continued from another (say, to fix a merge conflict) is listed once,
+  under the agent that carried it on, instead of also showing the first try as "merge failed". API: each landed and
+  not-landed entry of `GET /v1/runs/{runId}/goal` carries `title` and `continues`.
+- Start a project from the desktop app: + (⇧⌘N) opens a new project column with the folder, the branch the work starts
+  from and the goal branch it lands on, the goal, Local or Cloud, the model and its effort, and Start. A folder that
+  isn't set up shows its setup steps in place. On Start the column becomes the planner's, and the crew's columns
+  appear as it spawns them.
+- The desktop app's project menu: click the open project's name for its goal, repos and place, then Message the
+  planner (⌘L), Changes, Pause or Resume (⌥⌘P), Stop (asks first), Fold into the title bar (⌘W; a finished project
+  offers Remove from the title bar, which lasts until it has news, also across relaunches) and Copy run ID. ⌘K opens a palette of these actions, the other projects, New
+  project, Follow and the open project's agents by title. ⌘W folds the open project instead of closing the window.
+- Agents name their own tabs. Each agent has a short title (1–4 lowercase words, e.g. "login redirect") that the
+  desktop app's crew tabs and column headers, the menu bar's rows, approvals and notifications show instead of id
+  fragments. Inside its VM an agent runs `capcomd title "<words>"`; a planner names its children with `spawn --title`
+  and the run with `capcomd title --run`. An agent nobody named shows the first words of its task. Naming a tab
+  doesn't show up in the agent's thread or activity, and an agent that can't spawn names itself with a small local
+  `capcomd` that makes no extra calls (capcomd reads the name from the agent's own commands).
+- Rename an agent yourself by double-clicking its tab or its column header in the desktop app, or with Rename… on
+  its row in the menu bar. Your name stays until you clear it (empty the field); the agent's own name shows again
+  after that. From your own harness, `capcomd title <runId> <agt> <words>` and the MCP tool `capcomd_title` name an
+  agent, and `capcomd_spawn` takes `title`.
+- The desktop app's column header reads "lead · login redirect · waiting on you" (no bot name), and a merge on the
+  menu bar's Active card reads "Merge work from <agent> into <target>?".
+- API (capability `agents.title`): agents carry `title` and `titleSource`; `PUT` and `DELETE
+  /v1/runs/{runId}/agents/{agentId}/title`; new events `agent.titled` and `run.titled`; `Run.titleSource` can be
+  `agent`.
+- The desktop app is called capcomd: in the menu bar, its About/Hide/Quit items and the Dock. `apps/menubar/scripts/build-app.sh
+  --desktop` packages it as `capcomd.app` (a regular Dock app). Its title bar shows each project by name only, without
+  the clock or status line under it.
+- A desktop app (`CapcomdDesktop`, a regular Dock app you can install without the menu bar one): the open project's
+  agents as full-height columns that stream their threads live, each with its own message box, and an agent's ask
+  docked at its column's foot (Approve ↩ / Deny; Return approves only the focused column's ask, Esc never denies).
+  Other projects fold into decks in the title bar (⌘1–9); ⌃1–9 and ⌃←/→ move between agents, and a sideways swipe
+  anywhere over the columns moves between them (scrolling up and down stays with the thread under the pointer). A
+  merge waits on the agent that asked for it (the lead or planner merging its child's work), so its Approve/Deny
+  docks on that agent's column. Follow (on by default,
+  ⇧⌘F) scrolls to an agent that asks or fails, and scrolling yourself turns it off. A steer you send settles into the
+  thread, and one that failed offers Retry or Discard. The window says when capcomd can't be reached (and reconnects
+  by itself), when nothing is running, and when your token was refused.
+- Fix: in the menu bar app, a long thread no longer opens on its oldest items and catches up over several seconds; it
+  shows once it has been read.
+- API: agents have `createdAt`, when they were spawned (null when unknown; older daemons omit it).
+- API: a merge approval's `subject.askedBy` names the agent that asked for the merge and waits on the decision
+  (`requestedBy.agentId` stays the agent whose work merges); absent for an operator's merge.
+- **Breaking:** `capcomd run <goal>` with a planner (and every run the apps start) now works on a goal branch of its
+  own, `capcomd/<goal-slug>`, cut from `--base` (default: the project's target, else the repository's default branch;
+  never a guessed `main`). Its agents' reviewed work lands there with no approval and no pull request per child, even
+  when the project merges by pull request. Pass `--no-goal-branch` to merge into the target as before.
+- When the planner is done, `capcomd goal <runId>` shows the goal branch against its base, what landed (with its
+  checks and review), what didn't and why, and the planner's summary. `capcomd pr open <runId>` opens one pull request
+  from it into the base with your `gh` login (capcomd never merges it); `capcomd goal keep <runId>` keeps the branch
+  without one. `capcomd run new --goal-branch G --base B` starts a scope on a goal branch; MCP `capcomd_run_new` takes
+  `goalBranch` and `base`, and the new MCP tools `capcomd_goal` and `capcomd_pr_open` do the same (your agent asks you
+  before opening a pull request).
+- API (capability `runs.goal_branch`): `POST /v1/runs` takes `base` and `goalBranch` (a bad one is a 422 naming the
+  `field`); runs carry `goalBranch` (its branch, base, state and pull request); `GET /v1/projects/branches` lists a
+  checkout's branches for a base menu with a suggested base and goal branch; `GET /v1/runs/{runId}/goal` is the
+  finished branch; `POST /v1/runs/{runId}/pull-request` and `/keep-branch` record the choice; new events
+  `run.goal_completed`, `run.pr_opened` and `run.branch_kept`.
+- As soon as you choose a project folder, the menu bar's composer shows the branch your run's work lands on and the
+  branch it starts from: the starting branch is preselected from the project, and when the project doesn't say you
+  pick it (never `main` by default). The branch name follows your goal as you type until you edit it, and a problem
+  with either name shows under its field.
+- When the planner is done, the desktop app docks a card on the planner's column with its summary, what landed and
+  what didn't, and View diff · Keep branch · Open PR; the menu bar shows "Ready: <branch>" with the same actions, and
+  older runs in its Recent list show a "Ready" or "Stopped" flag while their branch waits on you. Afterwards you see
+  the pull request's link, or "Kept on <branch>".
+- capcomd notifies you once when a goal-branch run is ready ("Ready: <branch> → <base>: 2 of 3 tasks landed") or
+  stopped with some work landed ("Stopped: …"); clicking it opens the run. It follows the same Settings switch as
+  finished-run notifications.
+- When the planner failed or was cancelled, opening a pull request with what landed asks you first: in the apps, in
+  `capcomd pr open` (y/N on a terminal, `--yes` otherwise) and for agents (`capcomd_pr_open` with `stopped: true`).
+  The pull request's description then says the run stopped. API: `POST /v1/runs/{runId}/pull-request` answers 409
+  `stopped` until the body is `{"stopped": true}`, and `GET /v1/runs/{runId}/goal` carries the question as
+  `openPullRequest.confirm`.
+- Fix: capcomd no longer guesses `main` as a project's target. `GET /v1/projects/inspect` sends `defaultBranch: null`
+  when the checkout doesn't say, `capcomd setup project` suggests origin's real default branch, and running it again
+  keeps the target you set instead of resetting it to `main`.
+
+- Desktop window bench for coding agents (`apps/menubar/app/DESKBENCH.md`): `swift run -c release CapcomdDeskBench`
+  hosts the desktop window on generated runs (1 to 64 agents, no daemon), drives it (open, project switch, reel steps,
+  jumps, swipes, thread bursts, typing, resize, Follow), measures frames, main-thread stretches and which views
+  re-rendered, judges the result against the SPEC §1 budgets, and compares builds within the machine's noise (`run`,
+  `suite`, `ab`, `compare`, `profile` under Instruments, `snapshot`, `explain`; `--json` everywhere, stable exit codes).
+- The desktop bench shows where a slow stretch went and what changed between builds: `run` samples the main thread's
+  stack inside long stretches and `explain` prints each one's top frames (`--sampler off` to disable; `selftest
+  sampler` checks it without a window); `diff A B` compares two time profiles as a call tree in ms per step. Results
+  record the exact build (commit, dirty flag) even for a copied binary. `ab`, `compare` and `run --baseline` decide on
+  main-thread CPU per step (`--objective instructions|frames|latency` to change it), with frame metrics as guards and
+  late frames measured as ms of lateness per second. `profile` records the whole scenario, marks its results as
+  profiled (never compared: exit 6), and warns that `.trace` files hold private data and must never be committed.
+  The desktop app's views now live in the `CapcomdDesk` library the app and the bench both link; the app is unchanged.
+- The desktop bench's `ab` is fair to both builds: it runs them in pairs with the order of each pair counterbalanced
+  (`--order random|abba`, `--seed N` to redraw it), waits for a quiet machine before every run (`--quiet-wait`,
+  `--quiet-busy`; it names any build running alongside), and decides on the per-pair differences. `explain` takes a
+  stretch's likely causes from its sampled stacks, and the first step no longer starts inside the setup's work.
+  `deskbench describe [--json]` lists the scenarios, objectives, guards, fixtures and runtime knobs; `--knob
+  name=value` sets a knob (`reel.slide=ca|clip`, `build.perFrame=1..8`), results record every knob's value, and
+  `ab <scenario> --a-knobs … --b-knobs …` compares two knob settings of one binary. A new `perfloop` tool
+  (`tools/perfloop`: `perfloop exp new|screen|full|promote`, `champion`, `store`) keeps a ledger of experiments against the best
+  build so far; `apps/menubar/app/PROGRAM.md` is the procedure an agent follows with it.
+- Correctness guards for the desktop bench and perfloop: `deskbench run … --guards built-within,snapshot-diff` checks
+  that the columns in view were built once the window is at rest and saves a snapshot; `deskbench snapdiff A.png
+  B.png` compares two. perfloop asks both builds for the best build's guards on every pair: a build that fails one
+  can't win, a snapshot unlike the best build's goes to the owner (`needsReview`), and the `burst`/`typing` isolation
+  checks run before every promotion. `perfloop guards --exp ID` re-runs them; only the owner may pass
+  `--guard-tolerance`.
+- Bench results say why views re-rendered: each step and long stretch has `causes` (which desktop-model properties
+  were set before its view bodies ran, and how many distinct columns or tabs re-ran), `explain` prints them under each
+  stretch, and `perfloop causes <result.json>` prints the whole table. `profile --template swiftui` summarises the
+  SwiftUI instrument's cause tables and says when the recording has none.
+- `perfloop sweep step --set agents=4..64/12` measures the desktop window across a grid of crew sizes, thread lengths,
+  knobs and scenario params and prints the cost curve with its fit ("ms/step grows 4.98 ms per agent (r² 0.84)");
+  `--dry-run` shows the grid and an estimate, and running the same command again resumes. Generated fixtures take
+  parameters (`crew@agents=32,items=200`). `deskbench fixture capture --from <socket> --run <id> --token-file <file>`
+  saves a run as an anonymised fixture outside the repo, and the bench runs on it with `--fixture file:<name>`.
+- `deskbench run swipe --gesture FILE` replays a recorded trackpad gesture into the desktop window's reel and reports
+  how closely the content followed your fingers (position error, stalls, jerk). Record one with `deskbench
+  record-gesture --name NAME` and list them with `perfloop gestures list`.
+- perfloop experiments can run on a machine nobody is using. `perfloop queue add ID` and `perfloop queue run --runner
+  local|ssh://user@host --until HH:MM` run queued screens and fulls. `local` waits until this Mac has been idle
+  (`--idle 120`) and redoes a rep you interrupt. `ssh://` copies the build to a spare Mac and opens the window in its
+  logged-in session, waiting while its screen is locked. Results record their runner and machine and are never
+  mixed; `perfloop runner check R` shows a runner's state.
+- Fix: deskbench's scene-hosted runs (the default) opened a second desktop window and measured both, so earlier
+  numbers were about twice one window's cost. Compare new results only with results recorded after this fix.
+- Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
+  or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
+  coming back, and whoever awaits it (you, or a parent agent's `capcomd await`) gets its result.
+
+## 0.7.0-rc.1 (2026-10-29)
+
+Release candidate: agents driven by a durable workflow inside the engine (no process per agent) that ride out a
+sandbox provider outage, Rivet 2.3.31 with the engine's data under capcomd's home, and in the menu bar app: bots, run
+titles, threads, Settings and the sandbox surface (place details, idle lifetime, Delete for machines left behind).
+
+- The menu bar's Recent list shows each run by its title instead of "Done", with how it ended as an icon by its time
+  (merged, done, merge denied, merge failed, failed, stopped; hover it, or ask VoiceOver, for the words). The title is
+  the run's label when you (or the agent that started it, through `capcomd_run_new`) gave it one, else the title of
+  the pull request its work merged as, else a short form of the goal ("Add a multiply(a, b) function to
+  src/math.ts"), and it changes to the pull request's title once that lands. The goal shows under the title only when
+  the title doesn't already say it; hover a cut title for all of it. Active cards and the run view use the same titles.
+  The harness API's runs carry it as `title` and `titleSource`.
+- Fix: a sandbox provider outage of up to 10 minutes (boxd's API not answering, Docker's daemon restarting) no longer
+  fails running agents. They wait for their machine and carry on: an agent working in its VM keeps working, and the
+  agent shows a "sandbox_outage" notice while it waits, cleared once the provider answers. Calls that are safe to
+  repeat (looking up or creating a machine, uploads, renewals, deletes) are tried again with backoff; a command is never
+  run twice. An outage longer than that fails the agent with `errorKind: "sandbox_unreachable"` and `retryable: true`
+  in its result ("the sandbox provider (boxd) didn't answer for 10 min …"), so you can run it again once the provider
+  is back. Set `CAPCOMD_SANDBOX_OUTAGE_MS` where `capcomd serve` runs to wait longer or shorter. Permanent errors (a
+  rejected key, a machine that doesn't exist, a quota) still fail at once.
+- Fix: an agent that fails no longer leaves its machine running until its idle lifetime runs out: it is deleted when
+  the agent fails. A delete the provider doesn't answer is tried again, with backoff, until the machine is gone.
+- Docker not answering ("Cannot connect to the Docker daemon") is now treated as an outage capcomd waits out, as
+  above, instead of failing the agent at once.
+- Fix: listing runs no longer creates empty runs in the engine. When your run list (`state/runs.jsonl`) names a run
+  this engine doesn't have, for example one a test engine on another port recorded, the menu bar, the harness API and
+  `capcomd_runs` show it as "unknown" with no agents. Before, every listing (twice a second while the menu bar is open)
+  quietly created an empty run in the engine for it. Reading such a run's agents, events, thread or approvals no
+  longer stalls for seconds either.
+- The live end-to-end scripts (`scripts/mac-subagents-e2e.sh`, `scripts/mac-agent-ops-e2e.sh`) keep their runs out of
+  your run list, so the menu bar no longer shows them. They write their own index in the run's work folder and still
+  use your logins, environments, boxd key and settings. To do the same, set `CAPCOMD_RUNS_INDEX` to a file of your own.
+- `capcomd serve` now opens the harness API only once its actors can answer, waiting at most 30 s. Before, the menu
+  bar's first requests after a restart could arrive before the actors were up and fail with warnings in the engine log.
 - Fix: a project's settings are looked for from the current folder up to your home folder and no further, even when
   `HOME` points somewhere else (a test or an agent's scratch home); capcomd's own `~/.capcomd/config.json` was read as
   a project's `.capcomd/config.json` then, so its sandbox and repository settings applied where they shouldn't.
-- Experimental, off by default: with `CAPCOMD_AGENT_WORKFLOW=1` set for both the engine (`capcomd serve`) and the CLI,
-  each agent is driven by a durable workflow inside the engine instead of a `capcomd agent-drive` process: it carries on
-  by itself after the engine restarts (no `await` needed to kick it), a usage-limit pause wakes at its reset from the
-  engine, and `capcomd await` waits for change events instead of polling. Without the variable nothing changes.
-  Design and limits: docs/adr-022-agent-lifecycle-workflow.md.
+- Agents are now driven by the engine itself: each agent runs as a durable workflow inside `capcomd serve` instead of a
+  separate `capcomd agent-drive` process per agent. An agent carries on by itself when the engine restarts (nothing has
+  to `await` it to get it going again), a usage-limit pause wakes at its reset from the engine, `capcomd await` waits
+  for change events instead of polling, and a dozen running agents no longer cost a dozen extra processes. The settings
+  that change how an agent runs (`CAPCOMD_SPAWN_EXEC`, scripted agents' `CAPCOMD_SCRIPT_*`, the agents file) are taken
+  from the shell that spawned it, as before. If something goes wrong, start the engine with
+  `CAPCOMD_AGENT_WORKFLOW=0` to get the old per-agent processes back (this escape hatch is kept for one release);
+  set it where `capcomd serve` (or the background service) runs: every command follows the engine's mode and says so
+  if its own setting differs. Design and limits: docs/adr-022-agent-lifecycle-workflow.md.
 - capcomd's engine data now lives in capcomd's own folder: `~/.capcomd/engine/<port>/db` (or `$CAPCOMD_HOME/engine/<port>/db`)
   for every port, the default 6420 included, instead of rivetkit's shared `~/.rivetkit`, which any other project
   using Rivet on your Mac also writes (a newer one could stamp the database so capcomd's engine refused to start).
@@ -320,6 +498,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fix: `capcomd serve` now stops the Durable Streams services process (port 8642) when it exits, including when its
   watchdog stops it. It used to keep running, hold the port so the next `capcomd serve` couldn't start its own, and
   attach itself to that daemon's engine.
+- `capcomd serve` names the process holding a port it needs ("capcomd serve: :6421 is held by pid 4242 (rivet-engine)"),
+  and on the default port it also checks the services port (8642, or `RIVET_PORT`) before starting, instead of
+  starting an engine whose services then can't bind.
+- `capcomd serve` stops the engine together with anything the engine started, including after the engine died. When
+  its watchdog gives up on the engine, it now waits for the engine to stop before exiting and lists the harness API
+  requests that were still waiting for an answer.
+- Menu bar app: after the daemon restarts, its feeds reconnect at random, growing intervals (up to 5 s) instead of all
+  at once.
 - Menu bar app: an ended run's view is titled by how it ended ("Done in 7s", "Stopped after 32s") instead of its
   last step.
 - Menu bar app: in a run's view, click an agent's row in Activity to read its thread; that's how you get back to

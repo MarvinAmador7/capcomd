@@ -108,7 +108,7 @@ describe("POST /v1/projects/git-init", () => {
 		const r = await w.init(d, { key: "init-key-0001" });
 		expect(r.status).toBe(200);
 		expect(ProjectInspect.parse(r.body)).toEqual(r.body);
-		expect(r.body).toMatchObject({ path: d, root: d, name: "my-app", repo: null, github: null, branches: [], defaultBranch: "main" });
+		expect(r.body).toMatchObject({ path: d, root: d, name: "my-app", repo: null, github: null, branches: [], defaultBranch: null });
 		expect(r.body.problems.map((p: any) => p.code)).toEqual(["no_origin"]);
 		expect(existsSync(join(d, ".git"))).toBe(true);
 		expect(sh(["git", "symbolic-ref", "--short", "HEAD"], d)).toBe("main");

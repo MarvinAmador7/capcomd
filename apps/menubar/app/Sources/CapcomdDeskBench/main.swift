@@ -1,0 +1,401 @@
+import AppKit
+import Foundation
+import CapcomdDesk
+import DeskBenchKit
+import PerfLoopProbe
+
+// CapcomdDeskBench: the desktop window's performance and debugging harness, for coding agents. `deskbench help`.
+// Stable subcommands, --json everywhere, documented schema (DeskBenchKit/Results.swift), exit codes in ExitCode.
+
+let help = """
+deskbench: performance and debugging harness for the capcomd desktop window (apps/menubar/app/DESKBENCH.md)
+
+  swift run -c release CapcomdDeskBench <command> [options]
+
+commands
+  list [scenarios|fixtures|budgets] [--json]     what can be run, and the SPEC §1 budget each scenario maps to
+  describe [--json]                               the perfloop.manifest/1: build, scenarios with objective and guards,
+                                                  fixtures, knobs, hosts (what a generic runner reads)
+  knobs [--json]                                  the runtime knobs this process would run with (PERFLOOP_KNOBS, --knob)
+  fixture <name> [--json]                         describe a fixture: projects, agents, items, asks (NAME@agents=24,items=100 varies
+                                                  a generated one; file:PATH is a captured one)
+  fixture capture --from SOCKET --run ID --out FILE [--token-file F] [--raw]
+                                                  read runs from a daemon as the app does, anonymised (text replaced by
+                                                  same-length generated text, ids hashed, URLs stripped, no attachment
+                                                  bytes): a deskbench.fixture/1 the bench runs on as --fixture file:FILE
+  run <scenario> [options]                        drive one scenario in-process on a fixture, judge it against its budget
+  suite [options]                                 every scenario in turn; one line each, exit non-zero if any fails
+  snapshot [--fixture F] [--out DIR] [--at N]     the window as PNG + a view/geometry dump (JSON), no scenario
+  profile <scenario> --template hitches|time|swiftui [--out DIR]
+                                                  run the scenario under xctrace and summarise the trace as JSON/text
+  trace <file.trace> [--process NAME] [--json]     summarise an existing trace (hitches, hangs, time profile) the same way
+  diff <a> <b> [--top N] [--per step|run] [--json] differential main-thread call tree of two time profiles (.trace or
+                                                  profile JSON), ms per step: what grew, what shrank (also `trace --diff a b`)
+  ab --a EXE --b EXE <scenario> [--reps N] [--objective O] [--order random|abba] [--seed N] [--pause-ms N]
+     [--quiet-wait S] [--quiet-busy PCT] [--sampler on]
+                                                  N pairs of runs of two builds of this bench, the first side of each pair
+                                                  counterbalanced (seeded, recorded), a pause and a quiet check before every
+                                                  run; a paired verdict: the per-pair differences beyond their band and
+                                                  Mann-Whitney p < 0.05 (exit 4 on a regression)
+  ab <scenario> --a-knobs K --b-knobs K [--a EXE]  the same, one binary (this one unless --a/--b) with two knob settings,
+                                                  K = name=value[,name=value] on top of --knob and PERFLOOP_KNOBS
+  compare <baseline.json> <candidate.json> [--objective O]
+                                                  regression check between two saved results of the same scenario
+  record-gesture [--name N] [--out FILE] [--count N] [--timeout S]
+                                                  the window on a fixture, recording your swipes on the reel (deltas,
+                                                  phases, times; nothing else) as perfloop.gesture/1 for run swipe --gesture
+  gestures [FILE…] [--write DIR] [--json]         the synthetic gestures swipe has built in, and whether each FILE replays
+  explain <result.json>                           a saved result as text: verdict, numbers, longest stretches, causes
+  selftest sampler [--json]                       check the main-thread sampler headless (no window): gate, attribution, cost
+  snapdiff A.png B.png [--diff-out D.png] [--guard-param k=v] [--json]
+                                                  the snapshot-diff guard, headless: A (the champion's snapshot after settle)
+                                                  against B, outside what moved by itself (A/B.later.png), per column
+                                                  (A/B.layout.json); exit 3 over tolerance (the owner reviews it)
+  help
+
+run options
+  --fixture NAME        solo | trio | crew17 (default) | crew17-long | swarm64 | crew; NAME@agents=N,items=M[,projects=P,
+                        asks=A,seed=S] varies one (what perfloop sweep sends); file:PATH runs on a captured fixture
+  --reps N              repetitions (default 3; medians are reported, one rep proves nothing)
+  --set key=value       a scenario parameter (see `list --json` → params)
+  --gesture FILE        swipe: the gesture to replay (perfloop.gesture/1, or synthetic:flick-forward | flick-back |
+                        drag-forward); repeat it for several, taken in turn (= --set gesture=A,B)
+  --knob name=value     a runtime knob (see `describe`), also `--set knob:name=value`; exported to the window as
+                        PERFLOOP_KNOBS. The result's `knobs` has the full vector, defaults included
+  --json                print the result JSON (otherwise the text explanation)
+  --out FILE            also write the result JSON here (a baseline for --baseline / compare)
+  --baseline FILE       compare against a saved result; exit 4 on a regression beyond the noise band
+  --artifacts DIR       write window PNG + view dump after every rep
+  --size WxH            window size (default 1440x900)
+  --no-activate         don't bring this process to the front (SwiftUI flushes late in the background; recorded in the result)
+  --quiet-check 0|1     measure the noise floor for 1 s before the scenario (default 1)
+  --host scene|window   scene (default): the window comes from a SwiftUI Window scene, as in the app; window: an NSWindow
+                        made by hand (the default for `open`, which needs a fresh window per rep)
+  --hold S              keep the window up S seconds after the run (to look at it)
+  --wait-for FILE       show the window, then wait until FILE exists before running (what `profile` uses to attach);
+                        FILE.done appears when the reps are done. The result is marked profiled
+  --objective O         what --baseline, ab and compare decide on: cpu (main-thread CPU ms per step; the default) |
+                        instructions (per step, the least noisy) | frames (late frame ms per second) | latency (the
+                        default for open, switch, follow). Frame metrics are guards: worse beyond their band also fails
+  --sampler on|off      sample the main thread's stacks inside long stretches (default on; worstStretches[].stacks;
+                        DESKBENCH_SAMPLER=off in the environment also turns it off, for `ab`'s children)
+  --sample-hz N         sampling rate while a stretch is open (default 1000)
+  --sample-gate-ms N    sample a stretch only once it has lasted N ms (default 4)
+  --guards LIST         correctness guards to judge after each rep (reps[].guards[]): built-within (the on-screen columns
+                        built, by N ms after settle), snapshot-diff (a PNG + layout after settle into --artifacts DIR, for
+                        snapdiff); also PERFLOOP_GUARDS, PERFLOOP_ARTIFACTS (what perfloop sets, from the champion's manifest)
+  --guard-param k=v     a guard parameter: built-within.ms (300), snapshot-diff.tolerance (0.005), … (PERFLOOP_GUARD_PARAMS)
+
+exit codes  0 pass · 1 usage · 2 harness error · 3 budget failed · 4 regression beyond noise · 5 untrusted (failed on a noisy machine: run again)
+            6 refused (a profiled result in a comparison)
+"""
+
+struct Args {
+  var positional: [String] = []
+  var flags: [String: [String]] = [:]
+  init(_ argv: [String]) {
+    var i = 0
+    while i < argv.count {
+      let a = argv[i]
+      if a.hasPrefix("--") {
+        let key = String(a.dropFirst(2))
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs", "from", "run", "token-file", "name", "guards", "guard-param", "diff-out", "gesture", "count", "timeout", "device", "write"] + SamplerConfig.flags
+        if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
+      } else { positional.append(a); i += 1 }
+    }
+  }
+  func has(_ k: String) -> Bool { flags[k] != nil }
+  func one(_ k: String) -> String? { flags[k]?.last }
+  func all(_ k: String) -> [String] { flags[k] ?? [] }
+}
+
+func out(_ s: String) { print(s); fflush(stdout) }
+func err(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
+
+func kv(_ xs: [String]) -> [String: String] {
+  var d: [String: String] = [:]
+  for x in xs { let p = x.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { d[p[0]] = p[1] } }
+  return d
+}
+
+@MainActor func main() async -> Int32 {
+  let argv = Array(CommandLine.arguments.dropFirst())
+  let args = Args(argv)
+  guard let cmd = args.positional.first else { out(help); return Int32(ExitCode.usage) }
+  let json = args.has("json")
+  var objective: Objective?
+  if let s = args.one("objective") {
+    guard let o = Objective(argument: s) else { err("deskbench: --objective must be one of \(Objective.allCases.map(\.rawValue).joined(separator: ", "))"); return Int32(ExitCode.usage) }
+    objective = o
+  }
+  SamplerConfig.current = SamplerConfig(args)
+  GuardPhase.config = GuardConfig(env: ProcessInfo.processInfo.environment, names: args.all("guards"), params: args.all("guard-param"), dir: args.one("artifacts"))
+  switch cmd {
+  case "help", "-h", "--help": out(help); return 0
+
+  case "list":
+    let what = args.positional.dropFirst().first ?? "all"
+    if json {
+      struct L: Codable { var tool: ToolInfo; var scenarios: [ScenarioSpec]; var fixtures: [FixtureSpec]; var suite: [String]; var exitCodes: [String: Int] }
+      out(JSONOut.encode(L(tool: Runner.tool(), scenarios: Scenarios.all, fixtures: Fixtures.all, suite: Scenarios.suite,
+                           exitCodes: ["ok": 0, "usage": 1, "harness": 2, "budget": 3, "regression": 4, "untrusted": 5, "refused": 6])))
+      return 0
+    }
+    out("deskbench \(Runner.build.line)")
+    if what == "all" || what == "scenarios" || what == "budgets" {
+      out("scenarios (→ SPEC §1 budget):")
+      for s in Scenarios.all {
+        out("  \(s.name.padding(toLength: 8, withPad: " ", startingAt: 0)) \(s.summary)")
+        out("           → \(s.budget)"); out("           rule: \(s.rule)")
+        if !s.params.isEmpty { out("           params: " + s.params.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")) }
+      }
+    }
+    if what == "all" || what == "fixtures" {
+      out("fixtures:")
+      for f in Fixtures.all { out("  \(f.name.padding(toLength: 12, withPad: " ", startingAt: 0)) \(f.openAgents) agents, \(f.projects) projects, \(f.itemsPerThread.lowerBound)–\(f.itemsPerThread.upperBound) items/thread, \(f.asks) ask(s): \(f.summary)") }
+    }
+    return 0
+
+  case "describe": return KnobArgs.describe(json: json)
+
+  case "knobs": return KnobArgs.show(json: json)
+
+  case "fixture":
+    if args.positional.dropFirst().first == "capture" { return await Capture.run(args) }
+    guard let name = args.positional.dropFirst().first, let w = Fixtures.make(name) else {
+      err("usage: deskbench fixture <name>  (see `list fixtures`)" + (args.positional.dropFirst().first.flatMap(Fixtures.problem).map { "\n" + $0 } ?? "")); return Int32(ExitCode.usage)
+    }
+    struct F: Codable { var spec: FixtureSpec; var runs: [String]; var openRun: String?; var agents: [String: [String]]; var asking: [String: [String]]; var items: [String: Int]; var events: Int; var attachments: Int; var kinds: [String: Int] }
+    var kinds: [String: Int] = [:]
+    for (_, items) in w.threads { for i in items { kinds[i.kind, default: 0] += 1 } }
+    let f = F(spec: w.spec, runs: w.runIds, openRun: w.openRunId, agents: w.agents, asking: w.asking, items: w.threads.mapValues(\.count), events: w.events.count, attachments: w.attachments.count, kinds: kinds)
+    if json { out(JSONOut.encode(f)) } else {
+      out("\(name): \(w.spec.summary)")
+      for r in w.runIds { out("  \(r)\(r == w.openRunId ? " (open)" : ""): \(w.agents[r]?.count ?? 0) agents, asks: \(w.asking[r] ?? [])") }
+      out("  items: \(w.threads.values.map(\.count).reduce(0, +)) across \(w.threads.count) threads; kinds: \(kinds.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))")
+      out("  events: \(w.events.count), attachments: \(w.attachments.count)")
+    }
+    return 0
+
+  case "run", "suite":
+    var o = Runner.Options(scenario: args.positional.dropFirst().first ?? "")
+    if let f = args.one("fixture") { o.fixture = f }
+    if let r = args.one("reps").flatMap(Int.init) { o.reps = r }
+    o.params = kv(args.all("set").filter { !KnobArgs.isKnob($0) })
+    if args.has("gesture") { o.params["gesture"] = args.all("gesture").joined(separator: ",") }
+    if let s = args.one("size") { let p = s.lowercased().split(separator: "x"); if p.count == 2, let w = Double(p[0]), let h = Double(p[1]) { o.width = w; o.height = h } }
+    o.activate = !args.has("no-activate")
+    o.quietCheck = args.one("quiet-check") != "0"
+    o.artifacts = args.one("artifacts").map { URL(fileURLWithPath: $0) }
+    o.baseline = args.one("baseline").map { URL(fileURLWithPath: $0) }
+    o.waitFor = args.one("wait-for").map { URL(fileURLWithPath: $0) }
+    o.holdSeconds = args.one("hold").flatMap(Double.init) ?? 0
+    o.variant = args.one("variant")
+    o.host = Harness.current != nil ? "scene" : "window"
+    o.profiled = args.has("profiled") || o.waitFor != nil
+    o.objective = objective
+    if cmd == "run" {
+      guard !o.scenario.isEmpty else { err("usage: deskbench run <scenario> [options]"); return Int32(ExitCode.usage) }
+      switch await Runner.run(o) {
+      case .failure(let e): err("deskbench: \(e)"); return Int32(e.code)
+      case .success(let r):
+        let text = JSONOut.encode(r)
+        if let p = args.one("out") { do { try text.write(toFile: p, atomically: true, encoding: .utf8) } catch { err("couldn't write \(p): \(error)") } }
+        out(json ? text : Explain.text(r))
+        return Int32(r.exitCode)
+      }
+    }
+    // suite
+    let outDir = args.one("out").map { URL(fileURLWithPath: $0) }
+    if let d = outDir { try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+    var worst = 0; var results: [BenchResult] = []
+    for name in Scenarios.suite {
+      var so = o; so.scenario = name
+      switch await Runner.run(so) {
+      case .failure(let e): err("\(name): \(e)"); worst = max(worst, e.code)
+      case .success(let r):
+        results.append(r); worst = max(worst, r.exitCode)
+        if let d = outDir { try? JSONOut.encode(r).write(to: d.appendingPathComponent("\(name).json"), atomically: true, encoding: .utf8) }
+        if !json {
+          let s = r.summary
+          var line = "\(r.verdict.uppercased().padding(toLength: 10, withPad: " ", startingAt: 0)) \(name.padding(toLength: 8, withPad: " ", startingAt: 0))"
+          line += "  " + Commands.medians(s)
+          if !r.budget.pass { line += "\n           " + r.budget.reasons.joined(separator: "\n           ") }
+          out(line)
+        }
+      }
+    }
+    if json { struct S: Codable { var schema = "deskbench.suite/1"; var results: [BenchResult]; var exitCode: Int }; out(JSONOut.encode(S(results: results, exitCode: worst))) }
+    else { out("suite: \(results.filter { $0.verdict == "pass" }.count)/\(results.count) passed; exit \(worst)") }
+    return Int32(worst)
+
+  case "snapshot":
+    let fixture = args.one("fixture") ?? "crew17"
+    guard let w = Fixtures.make(fixture) else { err("unknown fixture"); return Int32(ExitCode.usage) }
+    let dir = URL(fileURLWithPath: args.one("out") ?? "deskbench-snapshot")
+    let h = Harness.current ?? Harness(world: w)
+    var size = CGSize(width: 1440, height: 900)
+    if let s = args.one("size") { let p = s.lowercased().split(separator: "x"); if p.count == 2, let w = Double(p[0]), let hh = Double(p[1]) { size = CGSize(width: w, height: hh) } }
+    await h.sceneWindowReady()
+    h.showWindow(size: size, activate: !args.has("no-activate"))
+    _ = await h.nextCommit()
+    _ = await h.ensureActive(!args.has("no-activate"))
+    await h.sleep(ms: 600)
+    if let at = args.one("at"), let i = Int(at), h.model.columns.indices.contains(i) { h.model.scroll(to: h.model.columns[i], animated: false); _ = await h.nextCommit(); await h.sleep(ms: 150) }
+    let paths = h.snapshot(into: dir, name: "window")
+    if let hold = args.one("hold").flatMap(Double.init) { await h.sleep(ms: hold * 1000) }
+    if json { out(JSONOut.encode(h.dump())) } else {
+      let d = h.dump()
+      out("written: " + paths.joined(separator: ", "))
+      out("window \(d.window.map { "\($0.frame)" } ?? "?") active=\(d.window?.appActive ?? false) key=\(d.window?.keyWindow ?? false) occluded=\(d.window?.occluded ?? true)")
+      out("model: \(d.model.columns.count) columns, across \(d.model.across), position \(d.model.reelPosition ?? "-"), on screen \(d.model.onScreen), warm \(d.model.warm.count), asking \(d.model.asking)")
+      for s in d.scrollViews { out("scroll \(s.cls) frame \(s.frame) doc \(s.scroll!.documentSize) clip \(s.scroll!.clipBounds) insets \(s.scroll!.contentInsets) h=\(s.scroll!.horizontal) v=\(s.scroll!.vertical)") }
+    }
+    h.closeWindow()
+    return 0
+
+  case "profile":
+    guard let sc = args.positional.dropFirst().first else { err("usage: deskbench profile <scenario> --template hitches|time|swiftui [--out DIR]"); return Int32(ExitCode.usage) }
+    do {
+      let (r, code) = try Commands.profile(scenario: sc, fixture: args.one("fixture") ?? "crew17", template: args.one("template") ?? "hitches",
+                                           out: URL(fileURLWithPath: args.one("out") ?? "deskbench-profile"), reps: args.one("reps").flatMap(Int.init) ?? 2,
+                                           params: args.all("set"), seconds: args.one("seconds").flatMap(Double.init), activate: !args.has("no-activate"), host: args.one("host"))
+      out(json ? JSONOut.encode(r) : Commands.profileText(r))
+      return Int32(code)
+    } catch let e as CLIError { err("deskbench: \(e)"); return Int32(e.code) } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
+
+  case "diff":
+    return DiffCommand.run(Array(args.positional.dropFirst()), args: args)
+
+  case "trace":
+    if args.has("diff") { return DiffCommand.run(Array(args.positional.dropFirst()), args: args) }
+    guard let f = args.positional.dropFirst().first else { err("usage: deskbench trace <file.trace> [--process NAME]"); return Int32(ExitCode.usage) }
+    do {
+      let r = try Commands.summarise(trace: URL(fileURLWithPath: f), template: "existing", scenario: "-", process: args.one("process") ?? "Capcomd")
+      out(json ? JSONOut.encode(r) : Commands.profileText(r))
+      return 0
+    } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
+
+  case "ab":
+    // Two builds (--a, --b), or one binary with two knob settings (--a-knobs, --b-knobs; this binary unless --a or --b).
+    let byKnobs = args.has("a-knobs") || args.has("b-knobs")
+    let a = args.one("a") ?? (byKnobs ? args.one("b") ?? Commands.selfPath() : nil), b = args.one("b") ?? (byKnobs ? a : nil)
+    guard let a, let b, let sc = args.positional.dropFirst().first else {
+      err("usage: deskbench ab --a EXE --b EXE <scenario> [--fixture F] [--reps N]\n       deskbench ab <scenario> --a-knobs name=value --b-knobs name=value [--a EXE]"); return Int32(ExitCode.usage)
+    }
+    let ka = KnobArgs.side(args.one("a-knobs")), kb = KnobArgs.side(args.one("b-knobs"))
+    for (exe, k, side) in [(a, ka, "--a-knobs"), (b, kb, "--b-knobs")] where exe == Commands.selfPath() {
+      let p = Knobs.check(k)
+      if !p.isEmpty { err("deskbench: \(side): " + p.joined(separator: "; ")); return Int32(ExitCode.usage) }
+    }
+    if byKnobs && a == b && ka == kb { err("deskbench: --a-knobs and --b-knobs are the same setting: nothing to compare"); return Int32(ExitCode.usage) }
+    do {
+      var ao = Commands.ABOptions()
+      if let r = args.one("reps").flatMap(Int.init) { ao.reps = r }
+      if let x = args.one("order") { ao.order = x }
+      ao.seed = args.one("seed").flatMap(UInt64.init)
+      if let x = args.one("pause-ms").flatMap(Double.init) { ao.pauseMs = x }
+      if let x = args.one("quiet-wait").flatMap(Double.init) { ao.quietWaitS = x }
+      if let x = args.one("quiet-busy").flatMap(Double.init) { ao.quietBusyPct = x }
+      ao.sampler = args.one("sampler") == "on"
+      // Guards asked for on ab's command line reach its children the way perfloop's do: in the environment.
+      let gc = GuardPhase.config
+      let genv: [String: String] = gc.names.isEmpty ? [:] : [GuardConfig.namesVariable: gc.names.sorted().joined(separator: ","),
+        GuardConfig.paramsVariable: gc.params.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ","), GuardConfig.dirVariable: gc.dir?.path ?? ""].filter { !$0.value.isEmpty }
+      // Knobs reach the children in PERFLOOP_KNOBS, never as --set: a side's setting must not be overridden.
+      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", params: args.all("set").filter { !KnobArgs.isKnob($0) },
+                                      activate: !args.has("no-activate"), objective: objective, options: ao,
+                                      envA: genv.merging([Knobs.variable: Knobs.format(ka)]) { $1 }, envB: genv.merging([Knobs.variable: Knobs.format(kb)]) { $1 })
+      if let p = args.one("out") { try? JSONOut.encode(r).write(toFile: p, atomically: true, encoding: .utf8) }
+      out(json ? JSONOut.encode(r) : r.text)
+      return Int32(code)
+    } catch let e as CLIError { err("deskbench: \(e)"); return Int32(e.code) } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
+
+  case "compare":
+    let files = Array(args.positional.dropFirst())
+    guard files.count == 2 else { err("usage: deskbench compare <baseline.json> <candidate.json> [--objective cpu|instructions|frames|latency]"); return Int32(ExitCode.usage) }
+    do {
+      let a = try JSONOut.decode(BenchResult.self, from: Data(contentsOf: URL(fileURLWithPath: files[0])))
+      let b = try JSONOut.decode(BenchResult.self, from: Data(contentsOf: URL(fileURLWithPath: files[1])))
+      guard a.scenario == b.scenario, let spec = Scenarios.spec(a.scenario) else { err("the results are for different scenarios (\(a.scenario) vs \(b.scenario))"); return Int32(ExitCode.usage) }
+      if a.profiled == true || b.profiled == true {
+        err("deskbench: \(a.profiled == true ? files[0] : files[1]) was recorded under a profiler; profiled runs are never compared (the profiler's cost is in the numbers)")
+        return Int32(ExitCode.refused)
+      }
+      let cmp = Comparison(spec, objective: objective, baseline: a.reps, candidate: b.reps)
+      struct C: Codable {
+        var schema = "deskbench.compare/1"; var scenario: String; var baseline: String; var candidate: String; var comparison: [Regression]; var regression: Bool
+        var objective: String; var improvement: Bool; var guardsFailed: [String]; var notes: [String]; var buildA: BuildInfo?; var buildB: BuildInfo?
+      }
+      let c = C(scenario: a.scenario, baseline: files[0], candidate: files[1], comparison: cmp.rows, regression: cmp.regression, objective: cmp.objective,
+                improvement: cmp.improvement, guardsFailed: cmp.guardsFailed, notes: cmp.notes, buildA: a.tool.build, buildB: b.tool.build)
+      if json { out(JSONOut.encode(c)) } else {
+        out("compare \(a.scenario): \(files[0]) → \(files[1]), decided on \(cmp.objective)")
+        for (f, r) in [(files[0], a), (files[1], b)] { out("  \(f): \(r.tool.build?.line ?? r.tool.commit ?? "unknown build (no stamp)")") }
+        Commands.rows(cmp.rows).forEach(out)
+        for n in cmp.notes { out("  note: " + n) }
+        if !a.noise.quiet || !b.noise.quiet { out("  (one of the runs was on a noisy machine)") }
+      }
+      return Int32(c.regression ? ExitCode.regression : ExitCode.ok)
+    } catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
+
+  case "record-gesture": return await RecordGesture.run(args)
+  case "gestures": return GestureList.run(args)
+
+  case "snapdiff":
+    return SnapDiff.run(Array(args.positional.dropFirst()), params: args.all("guard-param"), diffOut: args.one("diff-out"), json: json)
+
+  case "selftest":
+    guard args.positional.dropFirst().first == "sampler" else { err("usage: deskbench selftest sampler [--json]"); return Int32(ExitCode.usage) }
+    return await SelfTest.sampler(json: json)
+
+  case "explain":
+    guard let f = args.positional.dropFirst().first else { err("usage: deskbench explain <result.json>"); return Int32(ExitCode.usage) }
+    do { out(Explain.text(try JSONOut.decode(BenchResult.self, from: Data(contentsOf: URL(fileURLWithPath: f))))); return 0 }
+    catch { err("deskbench: \(error)"); return Int32(ExitCode.harness) }
+
+  default:
+    err("deskbench: unknown command '\(cmd)'\n"); out(help); return Int32(ExitCode.usage)
+  }
+}
+
+// The window needs a running NSApplication; the command runs as a task on the main actor inside its run loop. Scenario
+// commands run as a SwiftUI app whose Window scene shows the fixture (the app's own window machinery) unless
+// `--host window` asks for a hand-made NSWindow; `open` always uses one (it needs a fresh window per rep).
+let startup = Args(Array(CommandLine.arguments.dropFirst()))
+KnobArgs.export(startup)   // before anything makes a knob
+// A knob setting this binary refuses runs nothing (it would measure the default under another name), and before any
+// window shows.
+if ["run", "suite", "snapshot", "profile", "ab"].contains(startup.positional.first ?? "") {
+  let p = DeskKnobs.problems
+  if !p.isEmpty { err("deskbench: " + p.joined(separator: "\ndeskbench: ")); exit(Int32(ExitCode.usage)) }
+}
+let sceneCommands = ["run", "suite", "snapshot", "record-gesture"]
+// `record-gesture --help` (and a refused --out) print and exit: no window for them.
+let helpOnly = startup.positional.first == "record-gesture" && (startup.has("help") || MainActor.assumeIsolated { if case .failure = RecordGesture.destination(startup) { true } else { false } })
+let wantsScene = sceneCommands.contains(startup.positional.first ?? "") && (startup.one("host") ?? "scene") == "scene" && !helpOnly
+  && !(startup.positional.first == "run" && startup.positional.dropFirst().first == "open")
+MainActor.assumeIsolated {
+  if wantsScene, let w = Fixtures.make(startup.one("fixture") ?? "crew17") {
+    let h = Harness(world: w); h.sceneHosted = true; Harness.current = h
+    if let s = startup.one("size") { let p = s.lowercased().split(separator: "x"); if p.count == 2, let w = Double(p[0]), let hh = Double(p[1]) { BenchScene.size = CGSize(width: w, height: hh) } }
+  }
+}
+Task { @MainActor in
+  let code = await main()
+  exit(code)
+}
+if MainActor.assumeIsolated({ Harness.current != nil }) {
+  BenchScene.main()
+} else if ["selftest", "describe", "knobs", "fixture", "snapdiff", "gestures"].contains(startup.positional.first ?? "") || helpOnly {
+  // Headless: the main run loop without NSApplication (no Dock icon, no window server connection).
+  CFRunLoopRun()
+} else {
+  let app = NSApplication.shared
+  // A regular app (Dock icon, can become active): SwiftUI flushes state changes promptly only in an active app. The
+  // commands that only spawn or read (ab, profile, compare, …) never show a window: they stay out of the way of the
+  // child that does, and never take activation from it.
+  let windowless = !["run", "suite", "snapshot", "record-gesture"].contains(startup.positional.first ?? "")
+  app.setActivationPolicy(CommandLine.arguments.contains("--no-activate") || windowless ? .accessory : .regular)
+  app.run()
+}

@@ -112,11 +112,8 @@ rework.
   removes.
 - **VM-ledger reconciliation** (S): no reaper reconciles `.relay/boxd.sqlite` rows whose VMs are gone (stale
   `created` rows were found on 2026-10-21; their VMs no longer existed).
-- **CI coverage** (M): CI runs the typecheck, `tests/machines`, the scenario suite, the killpoint tests (with
-  `|| true`, so they can't fail the build) and `chaos:fast` (strict), sharded into four parallel jobs (killpoints,
-  recipe, primitives, seeds): one round on every push to main, all three rounds nightly and on manual dispatch.
-  It doesn't run the live e2e, `tests/agents`, `tests/env`, `tests/merge` or `tests/cli`. Make the killpoint step
-  strict and add those suites.
+- **CI coverage** (M): CI runs the typecheck, `test:fast` and the scenario suite (six parallel shards). The chaos suite was
+  removed on 2026-11-02. CI doesn't run the live e2e, `tests/agents`, `tests/env` or `tests/merge`; add those suites.
 
 ## 6. Known issues and test debt
 

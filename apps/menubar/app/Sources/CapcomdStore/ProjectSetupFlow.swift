@@ -113,13 +113,14 @@ public struct SetupAnswers: Sendable, Hashable {
   public init(target: String, mode: String, agents: [String], budget: String = SetupAnswers.defaultBudget) {
     self.target = target; self.mode = mode; self.agents = agents; self.budget = budget
   }
-  /// What the folder suggests: its default branch, pull requests when they can be used, the logged-in agents it suggests.
+  /// What the folder suggests: its default branch (empty when nobody knows it: the person picks one; never a guessed
+  /// main), pull requests when they can be used, the logged-in agents it suggests.
   public init(_ i: ProjectInspection) {
     let loggedIn = Set(i.agents.filter(\.loggedIn).map(\.provider))
     let known = Set(i.agents.map(\.provider))
     // An agent the daemon didn't describe can't be judged: keep the suggestion.
     let agents = i.suggestedAgents.filter { loggedIn.contains($0) || !known.contains($0) }
-    self.init(target: i.values?.target ?? i.defaultBranch, mode: i.pullRequestsAvailable ? i.suggestedMode : "direct", agents: agents)
+    self.init(target: i.values?.target ?? i.defaultBranch ?? "", mode: i.pullRequestsAvailable ? i.suggestedMode : "direct", agents: agents)
   }
   /// The cap as sent: nil for none (empty), or the amount; `.invalid` when it isn't one.
   public enum Budget: Sendable, Hashable { case none, amount(Double), invalid }
@@ -387,7 +388,7 @@ public final class ProjectSetupFlow {
   /// The branches the target menu offers: the checkout's, with its default branch and the current pick.
   static func targets(_ i: ProjectInspection, current: String? = nil) -> [String] {
     var out: [String] = []
-    for b in [i.defaultBranch] + i.branches + [current].compactMap({ $0 }) where !b.isEmpty && !out.contains(b) { out.append(b) }
+    for b in [i.defaultBranch].compactMap({ $0 }) + i.branches + [current].compactMap({ $0 }) where !b.isEmpty && !out.contains(b) { out.append(b) }
     return out
   }
 

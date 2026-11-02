@@ -1,4 +1,4 @@
-import { isBoxdAuthError } from "../providers/boxd-errors";
+import { isBoxdAuthError, isSandboxUnreachable, isTransientSandboxError } from "../providers/boxd-errors";
 import { redactShapes } from "../agents/redact";
 import { resolveEnvSnapshot } from "../env/resolve";
 // ADR-016 step 1: run new / spawn / await / wait-any / cancel, on top of the existing worker
@@ -6,10 +6,11 @@ import { resolveEnvSnapshot } from "../env/resolve";
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
-import { client, assertEngine, cancelRun } from "../core/relay";
+import { dirname, join, resolve } from "path";
+import { tmpdir } from "os";
+import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
+import { agentsFilePath, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
@@ -18,22 +19,25 @@ import type { ScopeAgent } from "../actors/scope";
 import type { AttachedSkill } from "../agents/skills";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
-import { env } from "../utils/env";
+import { captureDriveEnv, env } from "../utils/env";
 import { parseVerdict, reviewBrief } from "./review";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
 import { startDriver } from "./drivers";
-import { agentWorkflowOn } from "../utils/agent-workflow-flag";
+import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
+import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
 export { startDriver };
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
 const workerOf = (runId: string, agentId: string, epoch = 1) => client().worker.getOrCreate(epoch > 1 ? [runId, agentId, `e${epoch}`] : [runId, agentId]);
 
-const LEASE_MS = Number(env("DRIVER_LEASE_MS") ?? 15_000);
-const POLL_MS = Number(env("AWAIT_POLL_MS") ?? 300);
+// Read when used, not at load: with the agent workflow (ADR-022) an engine host drives agents spawned with different
+// settings (withDriveEnv), and a driver process reads the same values either way.
+const leaseMs = () => Number(env("DRIVER_LEASE_MS") ?? 15_000);
+const pollMs = () => Number(env("AWAIT_POLL_MS") ?? 300);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Map an actor UserError (code) onto the CLI's error envelope. */
@@ -55,7 +59,38 @@ export function asRelay(e: unknown): never {
   if (code === "budget" || code === "parent_terminal") throw new RelayError("conflict", msg, "Request a smaller --budget or free budget by cancelling agents.");
   if (code === "grant") throw new RelayError("conflict", msg, "Grant less, give the parent more first (or raise the run's budget: capcomd grant <runId> --budget …), or free budget by cancelling agents.");
   if (code === "finished") throw new RelayError("conflict", msg, "A finished agent can't be given more: spawn one that continues from its branch (result.branch).");
+  if (code === "rate_limited") throw new RelayError("conflict", msg, "Keep the title you have; rename only when the focus really changes.", { code: "rate_limited" });
+  if (code === "usage") throw new RelayError("usage", msg, /title/.test(msg) ? TITLE_HINT : "Check the command's arguments.");
   throw e;
+}
+
+/** How a title is written (capability agents.title). */
+export const TITLE_HINT = 'A title is 1 to 4 lowercase words naming what the agent works on, at most 32 characters, e.g. "login redirect".';
+
+/**
+ * Name an agent (capability agents.title): `by` self or parent from a VM (rate limited), driver from the host (CLI,
+ * MCP), user from the apps (PUT …/title; null clears it). `shown: false`: the user's title holds the tab, and this
+ * one shows once they clear theirs.
+ */
+export async function setAgentTitle(runId: string, agentId: string, title: string | null, o: { by: TitleBy; setBy: string; key?: string }) {
+  await assertEngine();
+  if (title !== null) {
+    const n = normalizeTitle(title);
+    if (!n.ok) throw new RelayError("usage", n.error, TITLE_HINT);
+    title = n.title;
+  }
+  await getAgentOrThrow(runId, agentId);
+  const r = await client().scope.getOrCreate([runId]).setTitle({ agentId, title, by: o.by, setBy: o.setBy, ...(o.key ? { key: o.key } : {}) }).catch(asRelay);
+  return { runId, ...r, ...(r.shown ? {} : { note: "The user renamed this agent: their title stays on its tab until they clear it; yours is kept and shows then." }) };
+}
+
+/** The run's title from its planner (`capcomd title --run`): Run.title (titleSource agent) unless the run has a label of its own. */
+export async function setRunTitle(runId: string, title: string, o: { setBy: string; key?: string }) {
+  await assertEngine();
+  const n = normalizeTitle(title);
+  if (!n.ok) throw new RelayError("usage", n.error, TITLE_HINT);
+  const r = await client().scope.getOrCreate([runId]).setRunTitle({ title: n.title, setBy: o.setBy, ...(o.key ? { key: o.key } : {}) }).catch(asRelay);
+  return { runId, ...r };
 }
 
 /** Operator-named checks (`run new --checks-set name=CMD`) live here; VMs can read `_` keys, never write them. */
@@ -66,6 +101,9 @@ export const REVIEWER_KV = "_reviewer";
 export const TARGET_KV = "_target";
 /** Where the run's spans are written (CAPCOMD_TRACE_DIR when the run was created), for readers in other shells. */
 export const TRACE_KV = "_trace";
+/** The run's goal branch (`run new --goal-branch G --base B`): {branch, base}. Its target is that branch, and reviewed
+ *  work lands on it by a direct push with no approval, whatever the repo's merge mode (src/primitives/goal.ts). */
+export const GOAL_KV = "_goal";
 
 /** The run's recorded trace directory, if any. */
 export async function runTraceDir(runId: string): Promise<string | undefined> {
@@ -81,6 +119,14 @@ export async function runTarget(runId: string): Promise<string | undefined> {
   return typeof v?.branch === "string" ? v.branch : undefined;
 }
 
+/** The run's goal branch and base, when it has one. */
+export async function runGoal(runId: string): Promise<{ branch: string; base: string } | undefined> {
+  const v: any = (await client().scope.getOrCreate([runId]).kvGet({ k: GOAL_KV }).catch(() => null))?.value;
+  return typeof v?.branch === "string" && typeof v?.base === "string" ? { branch: v.branch, base: v.base } : undefined;
+}
+/** A merge or verify into the run's goal branch: pushed directly (no PR per child), never parked for approval. */
+const onGoal = (goal: { branch: string } | undefined, target: string) => !!goal && goal.branch === target;
+
 const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,200}(?<![./])$/;
 /** Create `branch` on the remote from `from` if it doesn't exist yet (a per-run staging branch). */
 async function ensureBranch(runId: string, branch: string, from: string): Promise<{ created: boolean }> {
@@ -95,6 +141,14 @@ async function ensureBranch(runId: string, branch: string, from: string): Promis
   const push = await git.run(["push", "--porcelain", "origin", `${base}:refs/heads/${branch}`]);
   if (push.code !== 0 && !(await git.ok(["ls-remote", "--heads", "origin", branch]).catch(() => ""))) throw new RelayError("conflict", `could not create ${branch}: ${(push.stdout + push.stderr).trim().slice(-300)}`, "Check push access to the repository.");
   return { created: true };
+}
+/** The remote (CAPCOMD_REPO) has `branch` (false without a repository: the push that creates it reports that). */
+async function remoteHasBranch(branch: string): Promise<boolean> {
+  const cfg = (await import("../merge/config")).loadMergeConfig();
+  if (!cfg) return false;
+  const { Git } = await import("../merge/git");
+  const r = await new Git(process.cwd()).run(["ls-remote", "--heads", cfg.remote, `refs/heads/${branch}`], { timeoutMs: 20_000 });
+  return r.code === 0 && r.stdout.trim().length > 0;
 }
 const CHECK_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -125,7 +179,10 @@ export async function namedCheck(runId: string, name: string): Promise<string> {
 
 export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string;
   /** The run's own sandbox (`capcomd run --sandbox`): its agents and checks run there, not on the daemon's CAPCOMD_SANDBOX. */
-  sandbox?: string }
+  sandbox?: string;
+  /** The run's goal branch (`--goal-branch G --base B`): cut from `base`, the run's target; reviewed work lands on it
+   *  directly and the user opens a pull request from it into `base` when the planner is done. Needs `base`. */
+  goalBranch?: string; base?: string }
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
   const runId = o.runId ?? stableId("run", "run", o.key);
@@ -133,8 +190,23 @@ export async function runNew(o: RunNewOpts) {
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
   if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
-  if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from main.");
-  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}) });
+  if (o.goalBranch !== undefined || o.base !== undefined) {
+    // A goal branch is the run's target, cut from its base: never "main" by default, never protected, never the base.
+    if (o.goalBranch === undefined || o.base === undefined) throw new RelayError("usage", "--goal-branch and --base go together", "Pass both: --goal-branch capcomd/<topic> --base <the branch it starts from>.", { code: o.base === undefined ? "base" : "goalBranch" });
+    if (o.target !== undefined && o.target !== o.goalBranch) throw new RelayError("usage", "--target and --goal-branch name different branches", "A goal branch is the run's target: pass only --goal-branch.");
+    const G = await import("../merge/goal");
+    const bp = G.baseProblem(o.base);
+    if (bp) throw new RelayError("usage", `--base: ${bp}`, "Name the branch the goal branch starts from.", { code: "base" });
+    const gp = G.goalBranchProblem(o.goalBranch, { base: o.base, env: await (await import("../merge/run-config")).runEnv(undefined) });
+    if (gp) throw new RelayError("usage", `--goal-branch: ${gp}`, "Pick another goal branch name.", { code: "goalBranch" });
+    // A new run's goal branch is a new branch: another run's (or anyone's) work must not end up in this run's pull request.
+    const prior = await runGoal(runId);
+    if (prior && (prior.branch !== o.goalBranch || prior.base !== o.base)) throw new RelayError("conflict", `run ${runId} already has goal branch ${prior.branch} (from ${prior.base})`, "Start a new run for another goal branch.", { code: "goalBranch" });
+    if (!prior && (await remoteHasBranch(o.goalBranch))) throw new RelayError("conflict", `goal branch ${o.goalBranch} already exists on the remote`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+    o = { ...o, target: o.goalBranch, targetFrom: o.base };
+  }
+  if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from <base>.");
+  const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}), ...(o.base ? { base: o.base } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, ...(o.goal ? { goal: o.goal } : {}), paramsHash: ph }).catch(asRelay);
   // The run carries its repository settings, so the engine (e.g. a background service) needn't have them.
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
@@ -162,19 +234,24 @@ export async function runNew(o: RunNewOpts) {
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
   if (o.target) {
     if (o.targetFrom) await ensureBranch(runId, o.target, o.targetFrom);
+    // The goal first: a merge that reads the target and finds no goal would go the repo's way (a PR, an approval).
+    if (o.goalBranch) await (await import("./state")).kvWrite(runId, { k: GOAL_KV, value: { branch: o.goalBranch, base: o.base }, writer: "operator" });
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
   if (res.created) await (await import("./state")).kvWrite(runId, { k: TRACE_KV, value: { dir: (await import("../utils/tracing-simple")).traceDir() }, writer: "operator" }).catch(() => {});
   if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now() });
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
-  return { runId, created: res.created, budget: res.budget };
+  return { runId, created: res.created, budget: res.budget, ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
 }
 
-/** Runs this machine created, newest last (one JSON line each), so a later session can find them: `capcomd_runs`. */
-export const runsIndexPath = () => join(stateDir(), "runs.jsonl");
+/**
+ * Runs this machine created, newest last (one JSON line each), so a later session can find them: `capcomd_runs`, and the
+ * daemon's run list. CAPCOMD_RUNS_INDEX names another file (the live e2e scripts keep their runs out of the user's list).
+ */
+export const runsIndexPath = () => env("RUNS_INDEX") || join(stateDir(), "runs.jsonl");
 function recordRun(r: { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }) {
-  try { mkdirSync(stateDir(), { recursive: true }); appendFileSync(runsIndexPath(), JSON.stringify(r) + "\n"); } catch { /* an index, not state */ }
+  try { const p = runsIndexPath(); mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, JSON.stringify(r) + "\n"); } catch { /* an index, not state */ }
 }
 export function recentRuns(limit = 20): Array<{ runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }> {
   if (!existsSync(runsIndexPath())) return [];
@@ -196,6 +273,8 @@ export interface SpawnOpts {
   grant?: Grant;
   /** Start from this finished agent's work (contract.from): its branch, else its last checkpoint. */
   continueFrom?: string;
+  /** Its title (capability agents.title), from its parent (`spawn --title` in a VM) or the driver (host CLI, MCP). */
+  title?: string;
 }
 /**
  * What spawning `ref` (a profile, or an encoded ref with overrides) checks before anything is recorded: the profile
@@ -220,6 +299,13 @@ export function spawnChecks(ref: string | null, source: Record<string, string | 
 
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
+  // A title that would be refused refuses the spawn, before anything is recorded.
+  let title: string | undefined;
+  if (o.title !== undefined) {
+    const n = normalizeTitle(o.title);
+    if (!n.ok) throw new RelayError("usage", `--title: ${n.error}`, TITLE_HINT);
+    title = n.title;
+  }
   if (o.report) o = { ...o, contract: { ...(o.contract ?? {}), report: true } };
   if (o.contract?.from !== undefined) throw new RelayError("usage", "contract.from is set by --continue", "Continue an agent's work with --continue <agentId>.");
   if (o.continueFrom) o = { ...o, contract: { ...(o.contract ?? {}), from: await continuation(o.runId, o.continueFrom, o.parent) } };
@@ -251,6 +337,10 @@ export async function spawnAgent(o: SpawnOpts) {
     profile: resolved.name, ref: ref ?? resolved.name, spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
+    // ADR-022: how this shell (or the parent's driver) drives agents travels with the agent, for the engine to use.
+    // The agents file the driver would have resolved its children's profiles from (this shell's, or the project's).
+    driveEnv: { ...captureDriveEnv(), CAPCOMD_AGENTS_FILE: resolve(agentsFilePath()) },
+    ...(title ? { title: { title, ...(o.parent && !o.operator ? { by: "parent" as const, setBy: o.parent } : { by: "driver" as const, setBy: "driver" }) } } : {}),
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
@@ -295,7 +385,7 @@ export function envSnapshotProblem(provider: unknown, source: Record<string, str
 
 export function view(a: ScopeAgent) {
   return {
-    agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status,
+    agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status, ...shownTitle(a.titleState, redactShapes(a.task)),
     budget: a.budget, spent: a.spent, task: a.task, key: a.key, limits: a.limits, result: a.result,
     ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...noticeView(a),
     ...(a.status === "paused" && a.pausedUntil ? { pausedUntil: new Date(a.pausedUntil).toISOString() } : {}), ...(a.epoch > 1 ? { epoch: a.epoch } : {}),
@@ -314,7 +404,7 @@ async function wakeIfDue(runId: string, a: ScopeAgent): Promise<boolean> {
   if (a.status !== "paused" || !a.pausedUntil || a.pausedUntil > Date.now()) return false;
   // ADR-022: its own workflow wakes it at the reset; a look past the reset only wakes that workflow (in case the
   // engine hasn't yet), it doesn't resume the agent itself.
-  if (agentWorkflowOn()) { await startDriver(runId, a.agentId); return false; }
+  if (await engineDrivesAgents(runId)) { await startDriver(runId, a.agentId); return false; }
   const r = await client().scope.getOrCreate([runId]).resume({ agentId: a.agentId, by: "reset" });
   if (r.changed) await startDriver(runId, a.agentId);
   return r.changed;
@@ -327,7 +417,7 @@ export async function peekAgents(runId: string, ids: string[]) {
   for (const id of ids) {
     const a = await getAgentOrThrow(runId, id);
     if (a.status === "paused") { if (await wakeIfDue(runId, a)) kickedAt.set(id, Date.now()); out.push(a); continue; }
-    if (!TERMINAL_AGENT.has(a.status) && (!a.driver || a.driverUntil < Date.now()) && (kickedAt.get(id) ?? 0) < Date.now() - LEASE_MS) { await startDriver(runId, id); kickedAt.set(id, Date.now()); }
+    if (!TERMINAL_AGENT.has(a.status) && (!a.driver || a.driverUntil < Date.now()) && (kickedAt.get(id) ?? 0) < Date.now() - leaseMs()) { await startDriver(runId, id); kickedAt.set(id, Date.now()); }
     out.push(a);
   }
   return out;
@@ -415,6 +505,18 @@ export async function grantBudget(runId: string, o: { agentId?: string; add: Bud
   return { runId, ...r };
 }
 
+/**
+ * Attempts that failed only because the sandbox provider didn't answer (an outage) are run again without counting, at
+ * most this many times per drive: each one's machine calls wait for the provider (up to CAPCOMD_SANDBOX_OUTAGE_MS) and
+ * fail with sandbox_unreachable (final) when it stays down, so this only bounds a provider that keeps flapping.
+ */
+export const MAX_OUTAGE_RETRIES = 10;
+
+/** What a failed agent's result says about an outage that ended it (the error kind, and that running it again may work). */
+export function outageResult(e: unknown): Record<string, unknown> {
+  return isSandboxUnreachable(e) ? { errorKind: "sandbox_unreachable", retryable: true } : {};
+}
+
 /** The engine an attempt ran against: unset until its claim answered; null from an engine that doesn't say. */
 type EngineSeen = { instance?: string | null };
 
@@ -432,7 +534,7 @@ async function engineOutage(s: any, agentId: string, driver: string, seen: Engin
       // Bounded: a call to an engine that is still starting can hang.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const c: any = await Promise.race([
-        s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }),
+        s.claimDriver({ agentId, driver, ttlMs: leaseMs() }),
         new Promise((_, no) => { timer = setTimeout(() => no(new Error("engine probe timed out")), 15_000); }),
       ]).finally(() => clearTimeout(timer));
       const now = c?.instance ?? null;
@@ -471,7 +573,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
     // How long one outage is waited out, and how many attempts it may cost without counting (a daemon that keeps
     // dying under the same attempt is a fault after all).
     const outageMs = Number(env("DRIVE_OUTAGE_MS") ?? 5 * 60_000);
-    let restarts = 0;
+    let restarts = 0, outages = 0, tries = 0;
     const seen: EngineSeen = {};
     for (let attempt = 1; attempt <= 3; attempt++) {
       delete seen.instance;
@@ -485,17 +587,26 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
         if (outage === "restarted" && ++restarts <= 20) { console.error(`[drive] the engine went away under attempt ${attempt}; running it again`); attempt--; continue; }
         // Every failed attempt is visible (DRIVE_FAILED, redacted) and counted across driver processes;
         // N identical failures in a row fail the agent instead of looping.
-        const df = await s.driveFailed({ agentId, kind, message: String((e as Error)?.message ?? e), attempt, driver }).catch(() => null);
+        const df = await s.driveFailed({ agentId, kind, message: String((e as Error)?.message ?? e), attempt: ++tries, driver }).catch(() => null);
+        // The sandbox provider didn't answer (an outage): not the agent failing. Run the attempt again without counting
+        // it; its machine calls wait for the provider (and fail with sandbox_unreachable, final, when it stays down).
+        if (!isSandboxUnreachable(e) && isTransientSandboxError(e) && ++outages <= MAX_OUTAGE_RETRIES) {
+          console.error(`[drive] the sandbox provider didn't answer under attempt ${attempt}; running it again`);
+          attempt--; await sleep(2000 * Math.min(outages, 5)); continue;
+        }
         if (df && df.consecutive >= maxSame) break;
         // A rejected credential never heals by retrying; a scripted agent's exit code is its answer.
         // A limit (timeout, turns, budget) is a decision, not a fault: running the same task again hits it again.
         // So does a configuration problem (an unknown or invalid profile, no credentials): its message says what to fix.
-        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config") break;
+        // And a provider that didn't answer for the whole outage window: the agent waited that long already.
+        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || isSandboxUnreachable(e)) break;
         await sleep(2000 * attempt);
       }
     }
     const res = await resultOf(runId, agentId);
-    const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}) } });
+    const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
+    // A failed agent's machine goes too (its worker retries a destroy the provider didn't answer).
+    await workerOf(runId, agentId, fin.agent.epoch).drainWorker({ workerId: agentId }).catch(() => {});
     stampSpent(span, fin.agent);
     return fin.agent;
   }, { spanId: agentSpanId(runId, agentId), parentSpanId: me?.parent ? agentSpanId(runId, me.parent) : rootSpanIdForRun(runId) });
@@ -654,13 +765,13 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
 
 async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`, seen: EngineSeen = {}): Promise<ScopeAgent> {
   const s = client().scope.getOrCreate([runId]);
-  const claim = await s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(asRelay);
+  const claim = await s.claimDriver({ agentId, driver, ttlMs: leaseMs() }).catch(asRelay);
   seen.instance = (claim as { instance?: string }).instance ?? null;
   if (!claim.ok) return claim.agent;
   const a = claim.agent;
   const paused = await preflightDrive(runId, agentId, s, a);
   if (paused) return paused;
-  const hb = setInterval(() => { s.claimDriver({ agentId, driver, ttlMs: LEASE_MS }).catch(() => {}); }, Math.max(500, LEASE_MS / 3));
+  const hb = setInterval(() => { s.claimDriver({ agentId, driver, ttlMs: leaseMs() }).catch(() => {}); }, Math.max(500, leaseMs() / 3));
   const w = workerOf(runId, agentId, a.epoch);
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   try {
@@ -676,7 +787,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   }
 }
 
-// ── ADR-022 (CAPCOMD_AGENT_WORKFLOW=1): the same steps, called from the worker actor's workflow ──────────────────────
+// ── ADR-022 (the default; not with CAPCOMD_AGENT_WORKFLOW=0): the same steps, called from the worker actor's workflow ──
 
 /** Claim the agent for the workflow and make the driver's checks. "end": nothing to do (finished, paused, cancelled,
  *  or driven by a live driver); "paused": paused before it ran (its usage reset, or 0). */
@@ -712,12 +823,15 @@ export async function settleEnded(runId: string, agentId: string, epoch: number)
 
 /** Record one failed attempt (DRIVE_FAILED) and say whether to try again: the driver's rules (3 attempts, N identical
  *  failures in a row, never for a final kind). */
-export async function recordDriveFailure(runId: string, agentId: string, driver: string, attempt: number, err: { kind: string; message: string; final: boolean } | null, maxAttempts: number): Promise<{ retry: boolean }> {
+export async function recordDriveFailure(runId: string, agentId: string, driver: string, attempt: number, err: { kind: string; message: string; final: boolean; transient?: boolean } | null, maxAttempts: number, o: { outages?: number } = {}): Promise<{ retry: boolean; outage?: boolean }> {
   if (!err) return { retry: false };
   const s = client().scope.getOrCreate([runId]);
   const df = await s.driveFailed({ agentId, kind: err.kind, message: err.message, attempt, driver }).catch(() => null);
+  // The sandbox provider's outage: run it again without counting (MAX_OUTAGE_RETRIES bounds a provider that flaps).
+  const outages = o.outages ?? 0;
+  if (err.transient && !err.final && outages < MAX_OUTAGE_RETRIES) return { retry: true, outage: true };
   const maxSame = Number(env("DRIVE_MAX_FAILURES") ?? 3);
-  return { retry: !err.final && attempt < maxAttempts && !(df && df.consecutive >= maxSame) };
+  return { retry: !err.final && attempt - outages < maxAttempts && !(df && df.consecutive >= maxSame) };
 }
 
 /**
@@ -742,12 +856,15 @@ export async function recordAgentRunSpan(runId: string, agentId: string, started
 }
 
 /** The agent failed for good: its result says why (a cancel meanwhile wins: its VM is released). */
-export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number }): Promise<ScopeAgent> {
+export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string }): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
   if (a.status === "cancelled") return settleEnded(runId, agentId, epoch);
-  if (TERMINAL_AGENT.has(a.status)) return a;
+  // Its machine goes once it has failed (here too when an earlier settle recorded the failure but stopped before this).
+  const drain = () => workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  if (TERMINAL_AGENT.has(a.status)) { if (a.status === "failed") await drain(); return a; }
   const res = await resultOf(runId, agentId);
-  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}) } });
+  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });
+  await drain();
   return fin.agent;
 }
 
@@ -762,11 +879,15 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
   const wk: any = await w.getWorker({ workerId: agentId });
   const vmId = wk?.context?.vmId;
   if (!vmId) return null;
-  const { provider } = await (await import("../dependencies")).providerForRun(runId);
-  const { orchestrationSkill } = await import("../subagents/skill");
+  const { provider, sandbox } = await (await import("../dependencies")).providerForRun(runId);
+  const { orchestrationSkill, VM_RPC_DIR } = await import("../subagents/skill");
   const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
-  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true }), kind };
-  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn) };
+  const goal = await runGoal(runId).catch(() => undefined);
+  // The test sandbox that runs "VMs" on this host shares one /tmp: each agent's spool gets its own folder there.
+  const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
+  const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
+  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true, goal: goal ?? null, root: !a.parent }), kind, rpcDir };
+  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
 }
 
 export async function getAgentOrThrow(runId: string, agentId: string): Promise<ScopeAgent> {
@@ -787,9 +908,9 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
   const done = new Map<string, ScopeAgent>();
   const latest = new Map<string, ScopeAgent>();
   const noticeAt = new Map<string, number>();
-  // ADR-022: with the agent workflow, wait for the scope's "agents changed" event instead of polling every POLL_MS
+  // ADR-022: with the agent workflow, wait for the scope's "agents changed" event instead of polling every pollMs()
   // (a slow poll stays as the fallback: an event missed while reconnecting, a kick that's due).
-  const feed = agentWorkflowOn() ? changeFeed(runId) : null;
+  const feed = (await engineDrivesAgents(runId)) ? changeFeed(runId) : null;
   try {
   for (let poll = 0; ; poll++) {
     const noticed: ScopeAgent[] = [];
@@ -801,7 +922,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       // A paused agent wakes at its reset time; until then nothing drives it.
       if (a.status === "paused") { if (await wakeIfDue(runId, a)) kicked.set(id, Date.now()); continue; }
       const stale = !a.driver || a.driverUntil < Date.now();
-      if (stale && (kicked.get(id) ?? 0) < Date.now() - LEASE_MS) { await startDriver(runId, id); kicked.set(id, Date.now()); }
+      if (stale && (kicked.get(id) ?? 0) < Date.now() - leaseMs()) { await startDriver(runId, id); kicked.set(id, Date.now()); }
       const at = a.notice?.at ?? 0;
       if (opts.notices && poll > 0 && at && at !== noticeAt.get(id)) noticed.push(a);
       noticeAt.set(id, at);
@@ -810,12 +931,12 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     if (done.size === ids.length) return { agents: ids.map((i) => view(done.get(i)!)) };
     if (noticed.length) return { notices: noticed.map((a) => ({ agentId: a.agentId, ...a.notice! })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)) };
     if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })) };
-    if (feed) await feed.wait(Math.min(EVENT_FALLBACK_MS, Math.max(0, deadline - Date.now()) + 1)); else await sleep(POLL_MS);
+    if (feed) await feed.wait(Math.min(eventFallbackMs(), Math.max(0, deadline - Date.now()) + 1)); else await sleep(pollMs());
   }
   } finally { feed?.close(); }
 }
 
-const EVENT_FALLBACK_MS = Number(env("AWAIT_FALLBACK_MS") ?? 5000);
+const eventFallbackMs = () => Number(env("AWAIT_FALLBACK_MS") ?? 5000);
 
 /**
  * The scope's `agentsChanged` events (ADR-022) as a wait: resolves at the next event, or after `ms`. An event that
@@ -1085,7 +1206,9 @@ async function verifyOnce(o: VerifyOpts) {
   const c = client();
   const s = c.scope.getOrCreate([o.runId]);
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(o.runId);
+  // No repository (cfg null) is a dry run: "main" only labels it, nothing is merged anywhere.
   const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
+  const direct = onGoal(await runGoal(o.runId), target);
   const { branch, agentId, label, pinnedCheck } = await resolveRef(o.runId, o.ref);
   if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
   // A child pinned to a check at spawn is verified with it unless the caller names another.
@@ -1099,7 +1222,7 @@ async function verifyOnce(o: VerifyOpts) {
   const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   const res: any = await c.verifier.getOrCreate([o.runId, vfyId]).verify({
-    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(checks ? { testCommand: checks } : {}),
+    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(checks ? { testCommand: checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   // Already on the target (merged earlier): nothing new to check or review, so it passes as already merged.
@@ -1127,6 +1250,8 @@ export interface MergeOpts {
   runId: string; ref: string; require?: string; target?: string; operator?: boolean; key?: string;
   /** In-VM merges: a protected target parks the merge for `capcomd approve <runId> <mrgId>` instead of refusing. */
   requestApproval?: boolean;
+  /** The agent that asked for the merge (in-VM merges): it waits on the decision, so the approval shows on its column. */
+  askedBy?: string;
 }
 
 /** Land a ref. Requires a passing vfy for that exact commit and target, unless --operator. */
@@ -1138,7 +1263,9 @@ export async function mergeRef(o: MergeOpts) {
   const RC = await import("../merge/run-config");
   const runEnv = await RC.runEnv(o.runId);
   const cfg = (await import("../merge/config")).loadMergeConfig(runEnv);
+  // No repository (cfg null) is a dry run: "main" only labels it, nothing is merged anywhere.
   const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
+  const goal = onGoal(await runGoal(o.runId), target);
   const { branch, agentId } = await resolveRef(o.runId, o.ref);
   let expectSha: string | undefined;
   if (!o.require && !o.operator) throw new RelayError("usage", "merge needs --require <vfyId> (a passing `capcomd verify` of this ref)", "Run `capcomd verify <runId> --ref <ref>` first, or pass --operator to merge unverified.");
@@ -1150,11 +1277,14 @@ export async function mergeRef(o: MergeOpts) {
     expectSha = (v.result?.commit as string | null) ?? undefined;
   }
   // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
-  const needsApproval = !!cfg && isProtectedBranch(target, runEnv) && !o.operator;
+  // The run's goal branch takes reviewed work with no human step: the person decides once, on the pull request into the
+  // base, when the planner is done (it can't be a protected branch: `run new` refuses that).
+  const needsApproval = !!cfg && !goal && isProtectedBranch(target, runEnv) && !o.operator;
   if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
   const mrgId = stableId("mrg", `${o.runId}\0${o.ref}\0${target}`, o.key);
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
-  const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data }).catch(asRelay);
+  // Who asked is not a parameter of the merge: a retry by another caller is the same merge.
+  const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data: o.askedBy ? { ...data, askedBy: o.askedBy } : data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   if (needsApproval) {
     // The person deciding sees what lands: the files the verified commit changes (best effort, never blocks the park).
@@ -1178,8 +1308,9 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   // Re-run the checks that verification passed with (the target may have moved), not the repo default.
   const v = d.require ? await s.getOp({ opId: d.require }) : null;
   const checks = typeof v?.data.checks === "string" && v.data.checks ? (v.data.checks as string) : undefined;
+  const direct = onGoal(await runGoal(runId), d.target);
   const res: any = await c.verifier.getOrCreate([runId, op.id]).verify({
-    verifierId: op.id, taskId: label, branch: d.branch, runId, target: d.target, testOnly: false, ...(d.expectSha ? { expectSha: d.expectSha } : {}), ...(checks ? { testCommand: checks } : {}),
+    verifierId: op.id, taskId: label, branch: d.branch, runId, target: d.target, testOnly: false, ...(d.expectSha ? { expectSha: d.expectSha } : {}), ...(checks ? { testCommand: checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const merged = out.status === "merged";
@@ -1224,7 +1355,8 @@ export async function decideMerge(runId: string, mrgId: string, o: { approve: bo
 
 /** Merges parked for approval in a run, oldest first. */
 export async function pendingMerges(runId: string) {
-  const ops = (await client().scope.getOrCreate([runId]).listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])) as import("../actors/scope").ScopeOp[];
+  // A read: a run without a scope on this engine has none pending (never create its scope to ask).
+  const ops = (await existingActor("scope", [runId]).then((s) => s?.listOps({ state: "awaiting_approval", kind: "merge" }) ?? []).catch(() => [])) as import("../actors/scope").ScopeOp[];
   return ops.map((op) => ({ taskId: op.id, kind: "merge" as const, targetBranch: (op.data.target as string) ?? null, since: new Date(op.updatedAt).toISOString(), ref: op.data.ref as string }));
 }
 

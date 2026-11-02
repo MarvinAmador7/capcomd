@@ -13,7 +13,7 @@ const dir = mkdtempSync(join(tmpdir(), "harness-rf-"));
 const cpath = join(dir, "clients.json");
 const tok = addClient("ive", ["read", "approve"], cpath).token;
 const apr = { approvalId: "apr-1", kind: "merge" as const, status: "pending" as const, question: "merge?", requestedBy: { agentId: "a1", runId: "run-1" }, subject: { target: "main" }, expiresAt: null };
-const run = (id: string, createdAt: string) => ({ id, projectId: null, label: id, state: "running", goal: null, repo: "/r", createdAt });
+const run = (id: string, createdAt: string) => ({ id, projectId: null, label: id, state: "running", goal: null, title: null, titleSource: null, repo: "/r", createdAt });
 
 function slowSource() {
 	const src = memorySource({ runs: [run("run-1", "2026-10-25T07:00:00.000Z")], approvals: { "run-1": [apr] } });

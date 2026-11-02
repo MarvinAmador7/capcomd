@@ -64,7 +64,7 @@ describe("lifecycle_events", () => {
 	});
 
 	test("decision 9 names: every lifecycle type is a published dotted past-tense type", () => {
-		for (const t of LIFECYCLE_TYPES) { expect(t in EventData).toBe(true); expect(t).toMatch(/^[a-z]+\.[a-z_]+$/); expect(t.split(".").at(-1)!).toMatch(/(ed|done)$/); }
+		for (const t of LIFECYCLE_TYPES) { expect(t in EventData).toBe(true); expect(t).toMatch(/^[a-z]+\.[a-z_]+$/); expect(t.split(".").at(-1)!).toMatch(/(ed|done|kept)$/); }
 	});
 
 	test("run.failed when the last live agent ends and one failed; run.cancelled when all were cancelled", () => {
