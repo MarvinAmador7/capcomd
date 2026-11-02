@@ -112,7 +112,11 @@ esac
 case "$prompt" in *"[listen]"*|*"[listen:"*)
   n=$(printf '%s' "$prompt" | sed -n 's/.*\[listen:\([0-9]*\)\].*/\1/p')
   for i in $(seq 1 "${n:-8}"); do
-    if [ "$stream" = 1 ] && IFS= read -r -t 1 line; then
+    # Wait up to 1 s for a message's first byte, then read the rest of its line without a timeout: a timeout in the
+    # middle of a line throws away what it read, and a long line can arrive in pieces (or just take a while to read).
+    if [ "$stream" = 1 ] && IFS= read -r -t 1 -n 1 c; then
+      [ -z "$c" ] && continue
+      IFS= read -r line; line="$c$line"
       printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
       emit '{"type":"assistant","message":{"content":[{"type":"text","text":"heard a message"}]}}'
     else [ "$stream" = 1 ] || sleep 1; emit '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'; fi
