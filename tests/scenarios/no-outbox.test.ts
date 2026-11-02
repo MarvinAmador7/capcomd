@@ -7,7 +7,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { Engine } from "../chaos/engine";
+import { Engine } from "../helpers/test-engine";
 import { testPort } from "../helpers/engine";
 
 let engine: Engine;

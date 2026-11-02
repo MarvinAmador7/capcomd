@@ -497,7 +497,7 @@ export const workerActor = actor({
     // ADR-022: the step wake (agent-workflow.ts STEP_WAKE_MS), untraced.
     ...(WORKFLOW ? stepWakeActions : {}),
     ...traceActions("worker", {
-    /** Push lock rows (attempts, adopted, state) for audits and the takeover chaos case. */
+    /** Push lock rows (attempts, adopted, state) for audits and tests of a takeover. */
     async getPushes(c, _p: Record<string, never>) {
       await c.db.execute(PUSH_LOCKS_SQL);
       return (await c.db.execute("SELECT * FROM push_locks ORDER BY idem_key")).map((r: any) => ({

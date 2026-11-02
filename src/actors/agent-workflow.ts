@@ -174,7 +174,7 @@ async function startAttempt(c: any, p: StartAgent, n: number): Promise<"started"
   const key: string[] = c.key;
   const cl = c.client();
   const live = `${c.actorId}:${n}`;
-  killpoint("workflow.start_agent.mid"); // chaos/tests: the engine host dies inside a step (no wait, so no alarm of its own)
+  killpoint("workflow.start_agent.mid"); // tests: the engine host dies inside a step (no wait, so no alarm of its own)
   await db.execute(ATTEMPTS_SQL);
   const row: any = (await db.execute("SELECT state FROM agent_attempts WHERE attempt = ?", n))[0];
   if (row && row.state !== "running") return "settled";
@@ -230,7 +230,7 @@ async function poll(c: any, p: StartAgent, n: number): Promise<Poll> {
   if (!row) return { state: "lost" };
   if (row.state === "running") {
     if (!liveRuns.has(`${c.actorId}:${n}`)) return { state: "lost" };
-    // Chaos: the engine host dies mid-step, with the agent's run in flight and its push lock held (mid-push).
+    // Tests (CAPCOMD_KILLPOINT): the engine host dies mid-step, with the agent's run in flight and its push lock held (mid-push).
     if (process.env.CAPCOMD_KILLPOINT && (await c.db.execute("SELECT 1 FROM push_locks WHERE state = 'running' AND until > ?", Date.now()).catch(() => [])).length) killpoint("workflow.watch.running");
     return { state: "running" };
   }

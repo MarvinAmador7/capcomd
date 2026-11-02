@@ -107,7 +107,7 @@ trap cleanup EXIT
 engine_dead() { ! kill -0 "$ENGINE_PID" 2>/dev/null; }
 engine_why() { grep -iE 'error|in use|refusing|exiting' "$WORK/engine.log" | tail -1 | cut -c1-200; }
 # Wait for readiness, but bail as soon as the engine process dies (e.g. a port bind failure).
-bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" &
+bun tests/helpers/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" &
 PROBE_PID=$!
 while kill -0 "$PROBE_PID" 2>/dev/null; do
   if engine_dead; then kill "$PROBE_PID" 2>/dev/null; die "engine exited during startup: $(engine_why) (see $WORK/engine.log)"; fi

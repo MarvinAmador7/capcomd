@@ -8,8 +8,8 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { spawn, spawnSync } from "child_process";
 import { testPort } from "../../tests/helpers/engine";
-import { Engine, engineEnv } from "../../tests/chaos/engine";
-import { seedRepo } from "../../tests/chaos/survive";
+import { Engine, engineEnv } from "../../tests/helpers/test-engine";
+import { seedRepo } from "../../tests/helpers/seed-repo";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 const PORT = process.env.EVAL_PORT ? Number(process.env.EVAL_PORT) : await testPort();
