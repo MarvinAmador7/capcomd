@@ -1,5 +1,6 @@
 // lifecycle_events (decided Oct 25, 2026; docs/harness-architecture.md §13): the feed of ONLY run and agent state changes
-// plus approval requested/decided. Tool calls and messages stay in step and thread events.
+// plus approval requested/decided, and agent and run titles (agent.titled, run.titled). Tool calls and messages stay in
+// step and thread events.
 // Persistence: a deterministic projection of the run's durable scope_events log (written in the same transaction as each
 // state change), so every lifecycle event has a stable `seq` (the source event's seq) and survives daemon restarts. Run-level
 // states are folded from the agent states in seq order: run.started on the first agent start, run.paused when every live agent
@@ -14,15 +15,15 @@ import { UntrustedText } from "./legacy-events";
 export const LifecycleCause = z.enum([
 	"created", "spawned", "started", "resumed", "paused", "usage_limit", "finished", "error", "cancelled", "parent_ended",
 	"all_agents_done", "agent_failed", "all_agents_cancelled", "all_agents_paused", "approval_needed", "approved", "denied", "deleted",
-	"planner_done", "pull_request_opened", "branch_kept",
+	"planner_done", "pull_request_opened", "branch_kept", "titled",
 ]).describe("Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know");
 export type LifecycleCause = z.infer<typeof LifecycleCause>;
 
 /** Every lifecycle type. Agent and approval names reuse the existing harness.v1 names (decision 9). */
 export const LIFECYCLE_TYPES = [
 	"run.created", "run.started", "run.paused", "run.resumed", "run.completed", "run.failed", "run.cancelled", "run.deleted",
-	"run.goal_completed", "run.pr_opened", "run.branch_kept",
-	"agent.spawned", "agent.started", "agent.paused", "agent.resumed", "agent.done", "agent.failed", "agent.cancelled", "agent.reaped",
+	"run.goal_completed", "run.pr_opened", "run.branch_kept", "run.titled",
+	"agent.spawned", "agent.titled", "agent.started", "agent.paused", "agent.resumed", "agent.done", "agent.failed", "agent.cancelled", "agent.reaped",
 	"approval.requested", "approval.decided",
 ] as const;
 export type LifecycleType = (typeof LIFECYCLE_TYPES)[number];
@@ -40,7 +41,10 @@ const AGENT_CAUSE: Record<string, LifecycleCause> = {
 	AGENT_FAILED: "error", AGENT_CANCELLED: "cancelled", AGENT_REAPED: "parent_ended",
 };
 const GOAL_CAUSE: Record<string, LifecycleCause> = { RUN_GOAL_COMPLETED: "planner_done", RUN_PR_OPENED: "pull_request_opened", RUN_BRANCH_KEPT: "branch_kept" };
-const GOAL_TYPES = new Set(["run.goal_completed", "run.pr_opened", "run.branch_kept"]);
+// Titles (capability agents.title): what a tab or a project is called is part of how a client shows the run's state.
+const TITLE_CAUSE: Record<string, LifecycleCause> = { AGENT_TITLED: "titled", RUN_TITLED: "titled" };
+/** run.* lifecycle events that don't move the run's own state. */
+const GOAL_TYPES = new Set(["run.goal_completed", "run.pr_opened", "run.branch_kept", "run.titled"]);
 const TERMINAL = new Set(["AGENT_DONE", "AGENT_FAILED", "AGENT_CANCELLED", "AGENT_REAPED"]);
 
 const RUN_TEXT: Record<string, string> = {
@@ -86,6 +90,7 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 		// The goal branch (capability runs.goal_branch): ready when the planner finished, then the user's choice. Its own
 		// events, passed through with a cause; they don't move the run's state above (its agents do).
 		if (t in GOAL_CAUSE) { out.push(toEnvelope(runId, { ...e, data: { ...e.data, cause: GOAL_CAUSE[t]! } }, next(k), projectId)); continue; }
+		if (t in TITLE_CAUSE) { out.push(toEnvelope(runId, { ...e, data: { ...e.data, cause: TITLE_CAUSE[t]! } }, next(k), projectId)); continue; }
 		if (t === "MERGE_AWAITING_APPROVAL") {
 			const d = e.data as any, text = mergeApprovalText(d);
 			const env = toEnvelope(runId, { ...e, type: "approval.requested", data: {

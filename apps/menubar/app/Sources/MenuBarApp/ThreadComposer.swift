@@ -42,7 +42,7 @@ struct ThreadComposer: View {
     if first == "/", canAttachSkills { return .skill(String(t.dropFirst()).lowercased()) }
     return nil
   }
-  private func handle(_ n: AgentNode) -> String { "@" + n.name + (n.suffix.map { "-\($0)" } ?? "") }
+  private func handle(_ n: AgentNode) -> String { AgentTitle.handle(n) }
   private var mentionRows: [AgentNode] {
     guard case .mention(let q) = trigger else { return [] }
     return Array(model.descendants(runId: runId, of: agentId).filter { n in
@@ -294,7 +294,8 @@ struct ThreadComposer: View {
   }
 }
 
-/// `.mi`: the bot · its name · role and suffix · status, highlighted blue. The inserted handle stays role-based.
+/// `.mi`: the bot · its name · role, title and suffix · status, highlighted blue. The inserted handle stays role-based
+/// (with its title: `@worker-login-redirect`).
 struct MentionRow: View {
   let node: AgentNode
   let on: Bool
@@ -304,6 +305,7 @@ struct MentionRow: View {
       BotAvatar(traits: bot, size: .xs)
       Text(verbatim: bot?.name ?? node.name).font(Theme.Thread.mentionFont).foregroundStyle(on ? Color.white : Theme.Thread.mentionText)
       if bot != nil { Text(verbatim: node.name).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
+      if let t = node.title { Text(verbatim: t).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText).lineLimit(1) }
       if let s = node.suffix { Text(verbatim: s).font(Theme.Thread.mentionSuffix).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionSuffixText) }
       Spacer(minLength: 0)
       Text(status).font(Theme.Thread.mentionStatus).foregroundStyle(on ? Theme.Thread.onHighlightSecondary : Theme.Thread.mentionStatusText)

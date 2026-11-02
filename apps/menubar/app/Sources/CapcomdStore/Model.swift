@@ -78,6 +78,13 @@ public struct Agent: Sendable, Hashable, Identifiable {
   public var error: UntrustedText? = nil
   public var checks: CheckOutcome? = nil
   public var merge: MergeOutcome? = nil
+  /// Its short name (`Agent.title`, capability `agents.title`; agent-written, untrusted): the user's, else the latest
+  /// the agent, its parent or the driving harness set, else the daemon's from the task. Nil from older daemons.
+  public var title: UntrustedText? = nil
+  /// Where `title` comes from: user, self, parent, driver or derived (`Agent.titleSource`).
+  public var titleSource: String? = nil
+  /// The title as a tab or row shows it: one plain line, nil when there is none.
+  public var titleText: String? { AgentTitle.shown(title) }
   public var kind: ProfileKind { ProfileKind(profile: profile) }
   /// Profile names stay lowercase as the contract sends them ("lead"); nil → "agent".
   public var displayName: String {
@@ -244,6 +251,8 @@ public struct Run: Sendable, Hashable, Identifiable {
   }
   /// The daemon's title (snapshot `Run.title`), when it sends one: see `titled` for the one shown.
   public var daemonTitle: RunTitle? = nil
+  /// The name its planner gave the run (run.titled, capability `agents.title`; agent-written).
+  public var agentTitle: String? = nil
   /// What the run is called wherever it's listed (`titled`), never its id.
   public var title: String { titled?.text ?? RunTitle.untitled }
 
@@ -344,7 +353,10 @@ public struct Project: Sendable, Hashable, Identifiable {
 public struct AgentNode: Sendable, Hashable, Identifiable {
   public var id: String
   public var name: String
-  /// Mono tertiary suffix when sibling profiles repeat: repo, else short task id, else last 4 of agentId.
+  /// Its title (`Agent.title`, plain), shown where the suffix was. Nil from older daemons.
+  public var title: String? = nil
+  /// Mono tertiary suffix: with titles, only when a sibling has the same title (last 4 of agentId); without (older
+  /// daemons), when sibling profiles repeat: repo, else short task id, else last 4 of agentId.
   public var suffix: String?
   public var kind: ProfileKind
   public var status: AgentStatus
@@ -368,10 +380,13 @@ public struct AgentNode: Sendable, Hashable, Identifiable {
     if waiting { return .waiting }
     switch status { case .running: return .running; case .failed: return .failed; case .pending: return .queued; case .paused: return .paused; case .cancelled: return .stopped; default: return nil }
   }
+  /// How text names it ("lead · login redirect" asks; a notification): its profile and title, else the profile and
+  /// suffix as before ("worker d3ce").
+  public var label: String { AgentTitle.label(name: name, title: title, suffix: suffix) }
   /// VoiceOver label per SPEC §8.
   public var accessibilityLabel: String {
     let state = waiting ? "waiting for approval" : status.rawValue.replacingOccurrences(of: "-", with: " ")
-    return ([name + (suffix.map { " \($0)" } ?? ""), repo, state, "level \(depth + 1)"] as [String?]).compactMap { $0 }.joined(separator: ", ")
+    return ([label, repo, state, "level \(depth + 1)"] as [String?]).compactMap { $0 }.joined(separator: ", ")
   }
 }
 
@@ -453,7 +468,8 @@ public struct AttachmentRef: Sendable, Hashable {
 
 /// Something the user should hear about (macOS notification), raised only for live lifecycle events.
 public enum Notice: Sendable, Hashable {
-  case approvalRequested(approvalId: String, runId: String?, question: UntrustedText)
+  /// `asker`: how the agent waiting on it is named ("lead · login redirect"), when the store knows it.
+  case approvalRequested(approvalId: String, runId: String?, question: UntrustedText, asker: String? = nil)
   case runFinished(runId: String, type: String, title: String)
   /// A goal branch run is ready, or stopped with work landed (GoalNotice): once per run.
   case goalReady(GoalNotice)

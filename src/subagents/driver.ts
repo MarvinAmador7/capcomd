@@ -1,5 +1,6 @@
 // ADR-017 driver glue: give an agent its in-VM capcomd (token + spool pump) for as long as it runs.
-//  - Real agents (allowSpawn only): VmSpool over boxd exec; the runner installs the CLI + skill.
+//  - Real agents (allowSpawn only): VmSpool over boxd exec; the runner installs the CLI + skill. (Agents that may not
+//    spawn name their tab with a local shim the daemon reads from their tool calls: no RPC, see runner.ts.)
 //  - Scripted fake agents (CAPCOMD_SPAWN_EXEC=script, tests/scenarios): the contract's `script` runs
 //    on this host with a scrubbed env (no host secrets, no engine endpoint) and the same CLI on a
 //    LocalSpool, so scenarios exercise exactly the in-VM code path minus boxd.
@@ -58,11 +59,11 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   };
 }
 
-/** Real agent VM: pump while `work` runs (the worker actor's pushBranch). */
-export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: SandboxProvider, vmId: VmId, jsonl: string | undefined, work: () => Promise<T>): Promise<T> {
+/** Real agent VM: pump while `work` runs (the worker actor's pushBranch). `rpcDir`: its spool in the VM. */
+export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: SandboxProvider, vmId: VmId, jsonl: string | undefined, work: () => Promise<T>, rpcDir = VM_RPC_DIR): Promise<T> {
   // The pump has its own backoff and never ends the agent: it uses the provider as is (rawProvider), so a call during an
   // outage fails and is tried again next tick instead of holding up the pump (and its stop) for the outage window.
-  const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, VM_RPC_DIR, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000));
+  const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, rpcDir, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000));
   try { return await work(); } finally { await p.stop(); }
 }
 

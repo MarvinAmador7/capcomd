@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
-import { VM_CLI_SOURCE } from "../utils/assets";
+import { TITLE_SHIM_SOURCE, VM_CLI_SOURCE } from "../utils/assets";
+import { namingSkill } from "../subagents/skill";
 import { redactShapes } from "../agents/redact";
 import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
@@ -236,8 +237,8 @@ export type PushBranchParams = {
   goal?: string;
   /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
   fakePath?: string; fakeContent?: string;
-  /** ADR-017: install in-VM capcomd + skill (agents allowed to spawn). */
-  subagents?: { skill: string; kind?: string };
+  /** ADR-017: install in-VM capcomd + skill (agents allowed to spawn). `rpcDir`: where its spool is in the VM. */
+  subagents?: { skill: string; kind?: string; rpcDir?: string };
   conflictFiles?: string[];
   /** Agent profile name for this task. */
   agent?: string;
@@ -399,7 +400,16 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       // Agents that may spawn already have their raw stream tailed into the log by the spool pump (driver.ts).
       ...(scope && !params.subagents ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
       ...(items ? { onItems: items } : {}),
-      ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: "/tmp/capcomd-rpc" } } : {}),
+      ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: params.subagents.rpcDir ?? "/tmp/capcomd-rpc" } } : {}),
+      // agents.title: an agent that may not spawn names its tab with a local shim; its `capcomd title …` calls, read
+      // from its tool calls, are its own renames (rate limited like any; a refusal goes to its log).
+      ...(scope && !params.subagents ? {
+        naming: { shimSource: TITLE_SHIM_SOURCE, skill: namingSkill({ mcp: false }) },
+        onTitle: (t: { title: string; callId: string }) => {
+          scope.setTitle({ agentId: workerId, title: t.title, by: "self", setBy: workerId, key: `call:${t.callId}` })
+            .catch((e: Error) => scope.appendLog({ agentId: workerId, stream: "agent", lines: [`[capcomd] title not recorded: ${String(e?.message ?? e).slice(0, 300)}`] }).catch(() => {}));
+        },
+      } : {}),
       isCancelled: async () => {
         const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
         if (run?.state === "cancelled") { cancelSeen = true; return true; }

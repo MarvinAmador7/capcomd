@@ -9,8 +9,9 @@ export const TITLE_MAX = 50;
 const TITLE_MIN = 12, WEAK_MIN = 24;
 
 /** Where the title came from, best first: the run's label (set by whoever started it, a person or a driving agent),
- *  the merged work's commit and pull request subject, the run's goal, its first agent's task. */
-export const TITLE_SOURCES = ["label", "merge", "goal", "task"] as const;
+ *  the name its planner gave it (`capcomd title --run`), the merged work's commit and pull request subject, the run's
+ *  goal, its first agent's task. */
+export const TITLE_SOURCES = ["label", "agent", "merge", "goal", "task"] as const;
 export type TitleSource = (typeof TITLE_SOURCES)[number];
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -91,13 +92,16 @@ export interface TitleAgent { parent: string | null; task: string | null | undef
 
 /**
  * The run's title and where it came from (see TITLE_SOURCES). A label that only repeats the goal (`capcomd run <goal>`
- * labels the run with it) isn't a name of its own. The merged work names the run only when exactly one agent's work
- * merged: with several, any one of them names only part of it. `agents` in spawn order.
+ * labels the run with it) isn't a name of its own; the name the planner gave the run (`agentTitle`) comes next. The
+ * merged work names the run only when exactly one agent's work merged: with several, any one of them names only part
+ * of it. `agents` in spawn order.
  */
-export function runTitle(r: { label: string | null; goal: string | null; agents?: TitleAgent[] }): { title: string | null; titleSource: TitleSource | null } {
+export function runTitle(r: { label: string | null; goal: string | null; agentTitle?: string | null; agents?: TitleAgent[] }): { title: string | null; titleSource: TitleSource | null } {
 	const goal = shortTitle(r.goal);
 	const label = shortTitle(r.label);
 	if (label && label !== goal) return { title: label, titleSource: "label" };
+	const named = shortTitle(r.agentTitle);
+	if (named) return { title: named, titleSource: "agent" };
 	const merged = (r.agents ?? []).filter((a) => (a.result as { merge?: { state?: unknown } } | null | undefined)?.merge?.state === "merged");
 	const subject = merged.length === 1 ? shortTitle(merged[0]!.task) : null;
 	if (subject) return { title: subject, titleSource: "merge" };

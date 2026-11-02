@@ -7,6 +7,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
+import { tmpdir } from "os";
 import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { agentsFilePath, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
@@ -27,6 +28,7 @@ import { startDriver } from "./drivers";
 import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
+import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
 export { startDriver };
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
@@ -57,7 +59,38 @@ export function asRelay(e: unknown): never {
   if (code === "budget" || code === "parent_terminal") throw new RelayError("conflict", msg, "Request a smaller --budget or free budget by cancelling agents.");
   if (code === "grant") throw new RelayError("conflict", msg, "Grant less, give the parent more first (or raise the run's budget: capcomd grant <runId> --budget …), or free budget by cancelling agents.");
   if (code === "finished") throw new RelayError("conflict", msg, "A finished agent can't be given more: spawn one that continues from its branch (result.branch).");
+  if (code === "rate_limited") throw new RelayError("conflict", msg, "Keep the title you have; rename only when the focus really changes.", { code: "rate_limited" });
+  if (code === "usage") throw new RelayError("usage", msg, /title/.test(msg) ? TITLE_HINT : "Check the command's arguments.");
   throw e;
+}
+
+/** How a title is written (capability agents.title). */
+export const TITLE_HINT = 'A title is 1 to 4 lowercase words naming what the agent works on, at most 32 characters, e.g. "login redirect".';
+
+/**
+ * Name an agent (capability agents.title): `by` self or parent from a VM (rate limited), driver from the host (CLI,
+ * MCP), user from the apps (PUT …/title; null clears it). `shown: false`: the user's title holds the tab, and this
+ * one shows once they clear theirs.
+ */
+export async function setAgentTitle(runId: string, agentId: string, title: string | null, o: { by: TitleBy; setBy: string; key?: string }) {
+  await assertEngine();
+  if (title !== null) {
+    const n = normalizeTitle(title);
+    if (!n.ok) throw new RelayError("usage", n.error, TITLE_HINT);
+    title = n.title;
+  }
+  await getAgentOrThrow(runId, agentId);
+  const r = await client().scope.getOrCreate([runId]).setTitle({ agentId, title, by: o.by, setBy: o.setBy, ...(o.key ? { key: o.key } : {}) }).catch(asRelay);
+  return { runId, ...r, ...(r.shown ? {} : { note: "The user renamed this agent: their title stays on its tab until they clear it; yours is kept and shows then." }) };
+}
+
+/** The run's title from its planner (`capcomd title --run`): Run.title (titleSource agent) unless the run has a label of its own. */
+export async function setRunTitle(runId: string, title: string, o: { setBy: string; key?: string }) {
+  await assertEngine();
+  const n = normalizeTitle(title);
+  if (!n.ok) throw new RelayError("usage", n.error, TITLE_HINT);
+  const r = await client().scope.getOrCreate([runId]).setRunTitle({ title: n.title, setBy: o.setBy, ...(o.key ? { key: o.key } : {}) }).catch(asRelay);
+  return { runId, ...r };
 }
 
 /** Operator-named checks (`run new --checks-set name=CMD`) live here; VMs can read `_` keys, never write them. */
@@ -240,6 +273,8 @@ export interface SpawnOpts {
   grant?: Grant;
   /** Start from this finished agent's work (contract.from): its branch, else its last checkpoint. */
   continueFrom?: string;
+  /** Its title (capability agents.title), from its parent (`spawn --title` in a VM) or the driver (host CLI, MCP). */
+  title?: string;
 }
 /**
  * What spawning `ref` (a profile, or an encoded ref with overrides) checks before anything is recorded: the profile
@@ -264,6 +299,13 @@ export function spawnChecks(ref: string | null, source: Record<string, string | 
 
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
+  // A title that would be refused refuses the spawn, before anything is recorded.
+  let title: string | undefined;
+  if (o.title !== undefined) {
+    const n = normalizeTitle(o.title);
+    if (!n.ok) throw new RelayError("usage", `--title: ${n.error}`, TITLE_HINT);
+    title = n.title;
+  }
   if (o.report) o = { ...o, contract: { ...(o.contract ?? {}), report: true } };
   if (o.contract?.from !== undefined) throw new RelayError("usage", "contract.from is set by --continue", "Continue an agent's work with --continue <agentId>.");
   if (o.continueFrom) o = { ...o, contract: { ...(o.contract ?? {}), from: await continuation(o.runId, o.continueFrom, o.parent) } };
@@ -298,6 +340,7 @@ export async function spawnAgent(o: SpawnOpts) {
     // ADR-022: how this shell (or the parent's driver) drives agents travels with the agent, for the engine to use.
     // The agents file the driver would have resolved its children's profiles from (this shell's, or the project's).
     driveEnv: { ...captureDriveEnv(), CAPCOMD_AGENTS_FILE: resolve(agentsFilePath()) },
+    ...(title ? { title: { title, ...(o.parent && !o.operator ? { by: "parent" as const, setBy: o.parent } : { by: "driver" as const, setBy: "driver" }) } } : {}),
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
@@ -342,7 +385,7 @@ export function envSnapshotProblem(provider: unknown, source: Record<string, str
 
 export function view(a: ScopeAgent) {
   return {
-    agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status,
+    agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status, ...shownTitle(a.titleState, redactShapes(a.task)),
     budget: a.budget, spent: a.spent, task: a.task, key: a.key, limits: a.limits, result: a.result,
     ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...noticeView(a),
     ...(a.status === "paused" && a.pausedUntil ? { pausedUntil: new Date(a.pausedUntil).toISOString() } : {}), ...(a.epoch > 1 ? { epoch: a.epoch } : {}),
@@ -836,12 +879,15 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
   const wk: any = await w.getWorker({ workerId: agentId });
   const vmId = wk?.context?.vmId;
   if (!vmId) return null;
-  const { provider } = await (await import("../dependencies")).providerForRun(runId);
-  const { orchestrationSkill } = await import("../subagents/skill");
+  const { provider, sandbox } = await (await import("../dependencies")).providerForRun(runId);
+  const { orchestrationSkill, VM_RPC_DIR } = await import("../subagents/skill");
   const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
   const goal = await runGoal(runId).catch(() => undefined);
-  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true, goal: goal ?? null, root: !a.parent }), kind };
-  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn) };
+  // The test sandbox that runs "VMs" on this host shares one /tmp: each agent's spool gets its own folder there.
+  const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
+  const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
+  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true, goal: goal ?? null, root: !a.parent }), kind, rpcDir };
+  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
 }
 
 export async function getAgentOrThrow(runId: string, agentId: string): Promise<ScopeAgent> {

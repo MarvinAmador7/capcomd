@@ -212,6 +212,35 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `run.titled`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text, never markdown, links or actions. The run's new title from its planner (`capcomd title --run`): Run.title with titleSource agent, unless the run has a label of its own. 1 to 4 lowercase words"
+    },
+    "setBy": {
+      "type": "string",
+      "description": "The agent that named the run (its planner)"
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "setBy"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `agent.spawned`
 
 ```json
@@ -362,6 +391,22 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "additionalProperties": {},
       "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
     },
+    "title": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title: its title at spawn (Agent.title): its spawner's (`spawn --title`; agent.titled follows), else derived from the task. Absent when it has none, and from older daemons",
+      "type": "string",
+      "x-untrusted": true
+    },
+    "titleSource": {
+      "type": "string",
+      "enum": [
+        "user",
+        "self",
+        "parent",
+        "driver",
+        "derived"
+      ],
+      "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source"
+    },
     "cause": {
       "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
       "type": "string"
@@ -394,6 +439,75 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "type": "string"
     }
   },
+  "additionalProperties": {}
+}
+```
+
+## `agent.titled`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "agentId": {
+      "type": "string"
+    },
+    "title": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions. 1 to 4 lowercase words, at most 32 characters, one line",
+      "x-untrusted": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "by": {
+      "type": "string",
+      "enum": [
+        "self",
+        "parent",
+        "driver",
+        "user",
+        "cleared"
+      ],
+      "description": "Who set it (see Agent.titleSource), or cleared: the user cleared theirs (DELETE …/title)"
+    },
+    "setBy": {
+      "type": "string",
+      "description": "The agent that set it (by self or parent), driver, or user"
+    },
+    "shown": {
+      "type": "boolean",
+      "description": "This title is Agent.title now. false: a user title holds the tab (this one is kept and shows once the user clears theirs). A client sets Agent.title and titleSource from this event only when shown"
+    },
+    "titleSource": {
+      "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "user",
+        "self",
+        "parent",
+        "driver",
+        "derived",
+        null
+      ]
+    },
+    "cause": {
+      "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "agentId",
+    "title",
+    "by",
+    "setBy",
+    "shown",
+    "titleSource"
+  ],
   "additionalProperties": {}
 }
 ```
@@ -1803,7 +1917,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -1906,7 +2021,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -1952,7 +2068,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2010,7 +2127,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2068,7 +2186,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2126,7 +2245,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2184,7 +2304,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2242,7 +2363,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2300,7 +2422,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "deleted",
         "planner_done",
         "pull_request_opened",
-        "branch_kept"
+        "branch_kept",
+        "titled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2635,7 +2758,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 
 # Lifecycle feed
 
-Lifecycle feed: only run and agent state changes (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, agent.spawned, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
+Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
 Activity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).
 
@@ -2731,13 +2854,14 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "x-untrusted": true
         },
         "titleSource": {
-          "description": "Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added",
+          "description": "Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), agent (capability agents.title: its planner named the run, `capcomd title --run` in its VM; run.titled), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added",
           "type": [
             "string",
             "null"
           ],
           "enum": [
             "label",
+            "agent",
             "merge",
             "goal",
             "task",
@@ -3153,6 +3277,29 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                 "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
               }
             ]
+          },
+          "title": {
+            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+            "x-untrusted": true,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "titleSource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "user",
+              "self",
+              "parent",
+              "driver",
+              "derived",
+              null
+            ],
+            "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source"
           }
         },
         "required": [

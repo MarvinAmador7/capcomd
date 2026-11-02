@@ -31,7 +31,7 @@ hides the agent tree (24 pt rows; approvals stay in the card body, not under the
   keys.ts". A progressive activity line ("Editing keys.ts") reads after "is"; any other follows a colon
   ("planner: Read 4 files"). Nobody running: "<agent> is paused", "<agent> is queued", "Starting".
 - Names are the tree's: the profile, plus the sibling suffix (folder, short task id or last 4 of the id).
-- A merge's question is worded by the app from structured fields: "Merge <asker>'s work into <target>?". Other
+- A merge's question is worded by the app from structured fields: "Merge work from <asker> into <target>?" (the asker as text names it: "worker · login redirect"). Other
   kinds show the approval's own question (agent-written: plain text).
 - Who waits: the asker's live ancestors, then agents still queued outside its subtree. "planner", "planner and
   reviewer", "planner, lead and 2 others"; "waits" for one, "wait" for more.
@@ -97,7 +97,7 @@ The panel window still snaps to the new height (SPEC §7); the card's content an
 - The card takes focus on a click or with Tab. While it asks and has focus, Return approves; Esc never denies.
   Approve, Deny, View diff, Hide, Open thread, Resume now and the chevron are buttons in the key-view loop.
 - The card is one container: its label says the goal, how long it has run, and the state ("Approval needed:
-  Merge worker's work into main?. planner and reviewer wait on it. 2 files, 24 lines added, 0 removed"). Approve,
+  Merge work from worker into main?. planner and reviewer wait on it. 2 files, 24 lines added, 0 removed"). Approve,
   Deny and View diff are also actions on the card itself. Heads and the elapsed clock are hidden (the label says
   them in words).
 

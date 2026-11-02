@@ -6,6 +6,9 @@ import { join } from "path";
 import supervisor from "../agents/supervisor.mjs" with { type: "text" };
 // @ts-ignore: likewise
 import vmCli from "../subagents/vm-cli.mjs" with { type: "text" };
+// The naming shim is title-rules.mjs, which the daemon also imports as code: the bundler can't give one file both ways,
+// so its text comes from a generated copy (scripts/gen-title-shim.ts).
+import { TITLE_SHIM } from "../primitives/title-shim.gen";
 // @ts-ignore: a file import (Bun) gives its path; TypeScript has no type for a .sh module
 import engineWrapper from "../engine/engine-wrapper.sh" with { type: "file" };
 // @ts-ignore: a text import (Bun) of a Markdown file gives its contents
@@ -19,6 +22,8 @@ import { VERSION } from "./self";
 export const SUPERVISOR_SOURCE: string = supervisor;
 /** The in-VM `capcomd` (ADR-017), uploaded into the VMs of agents that may spawn. */
 export const VM_CLI_SOURCE: string = vmCli;
+/** The `capcomd` of agents that may not spawn: it only names their tab (capability agents.title), with the daemon's rules. */
+export const TITLE_SHIM_SOURCE: string = TITLE_SHIM;
 /** The orchestration skill, installed for Claude Code when there's no plugin host. */
 export const ORCHESTRATION_SKILL: string = orchestrationSkill;
 /** The setup skill, installed for Hermes (Claude Code and Codex get it with the plugin). */

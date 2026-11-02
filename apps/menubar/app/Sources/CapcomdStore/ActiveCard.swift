@@ -20,7 +20,7 @@ public struct ActiveCard: Sendable, Hashable {
   public struct Ask: Sendable, Hashable {
     public var approval: PendingApproval
     public var asker: Member?
-    /// Client-worded from structured fields for a merge ("Merge worker's work into main?"), else the approval's own
+    /// Client-worded from structured fields for a merge ("Merge work from worker · login redirect into main?"), else the approval's own
     /// question (untrusted: shown as plain text).
     public var question: String
     /// Agents that can't go on until this is decided: the asker's live ancestors and the agents still queued.
@@ -109,7 +109,7 @@ extension CapcomdStore {
     var body = ActiveCard.Body.working, reason: String?
     if let (_, a) = asks {
       let asker = a.agentId.flatMap { run.agents[$0] != nil ? member($0) : nil }
-      let question = a.kind == "merge" && asker != nil && a.target != nil ? "Merge \(asker!.name)'s work into \(a.target!)?" : a.question.plain
+      let question = a.kind == "merge" && asker != nil && a.target != nil ? "Merge work from \(asker!.name) into \(a.target!)?" : a.question.plain
       body = .ask(ActiveCard.Ask(approval: a, asker: asker, question: question, waiters: waiters(run, asker: a.agentId).map(member)))
       reason = "ask:\(a.id)"
     } else if let (_, ag) = failed {
@@ -197,7 +197,7 @@ extension CapcomdStore {
   /// Each agent's name as its tree row shows it: the profile, plus the suffix siblings of one profile get.
   func memberNames(_ runId: String) -> [String: String] {
     var out: [String: String] = [:]
-    func walk(_ ns: [AgentNode]) { for n in ns { out[n.id] = n.name + (n.suffix.map { " \($0)" } ?? ""); walk(n.children) } }
+    func walk(_ ns: [AgentNode]) { for n in ns { out[n.id] = n.label; walk(n.children) } }
     walk(agentTree(runId: runId))
     return out
   }

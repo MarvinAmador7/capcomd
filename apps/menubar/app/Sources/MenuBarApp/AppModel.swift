@@ -86,7 +86,7 @@ final class AppModel {
 
   /// The waiting agent's bot for an approval notification.
   func notificationBot(_ n: Notice) -> (traits: BotTraits, agentId: String)? {
-    guard case .approvalRequested(let aid, let runId, _) = n, let runId, let agentId = store.approvals[aid]?.agentId,
+    guard case .approvalRequested(let aid, let runId, _, _) = n, let runId, let agentId = store.approvals[aid]?.agentId,
           let t = bot(runId: runId, agentId: agentId) else { return nil }
     return (t, agentId)
   }
@@ -308,6 +308,9 @@ final class AppModel {
   // Agent thread input (7c)
   func agentControlState(_ agentId: String) -> ControlState { _ = revision; return store.agentControlState[agentId] ?? .idle }
   func controlAgent(runId: String, agentId: String, _ action: RunControl) { Task { _ = await store.controlAgent(runId: runId, agentId: agentId, action) } }
+  /// Renaming an agent (agents.title): where the field starts, and what Return sends.
+  func titleEdit(runId: String, agentId: String) -> TitleEdit? { store.titleEdit(runId: runId, agentId: agentId) }
+  func rename(runId: String, agentId: String, _ outcome: TitleEdit.Outcome) { Task { _ = await store.rename(runId: runId, agentId: agentId, outcome) } }
   func pendingSteers(_ agentId: String) -> [PendingSteer] { _ = revision; return store.pendingSteers(agentId: agentId) }
   func steer(runId: String, agentId: String, body: String, skills: [String]) { Task { await store.steer(runId: runId, agentId: agentId, body: body, skills: skills) } }
   func retrySteer(runId: String, agentId: String, _ p: PendingSteer) { Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) } }
@@ -356,8 +359,9 @@ enum Notifier {
     let c = UNMutableNotificationContent()
     let id: String
     switch n {
-    case .approvalRequested(let aid, _, let q):
-      id = "approval-\(aid)"; c.title = "Approval needed"; c.body = q.plain   // plain text; notifications don't render markdown
+    case .approvalRequested(let aid, _, let q, let asker):
+      // "lead · login redirect asks": the agent as its tab names it (titles are plain text, like the question).
+      id = "approval-\(aid)"; c.title = asker.map { "\($0) asks" } ?? "Approval needed"; c.body = q.plain   // plain text; notifications don't render markdown
       c.categoryIdentifier = ApprovalNotifications.category; c.userInfo = ["approvalId": aid]
       if let bot, let a = ApprovalNotifications.botAttachment(bot.traits, id: bot.agentId) { c.attachments = [a] }
     case .runFinished(let rid, let type, let title):
