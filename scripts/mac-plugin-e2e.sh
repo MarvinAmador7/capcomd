@@ -72,7 +72,7 @@ CAPCOMD_ENGINE_DATA="$WORK/engine" CAPCOMD_HARNESS_SOCKET="$WORK/harness.sock" b
 ENGINE_PID=$!
 cleanup() { pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
-bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
+bun tests/helpers/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
 
 # The plugin's launcher runs the installed `capcomd`: here, this checkout.
 BIN="$WORK/bin"; mkdir -p "$BIN"; ln -s "$ROOT_DIR/src/cli/index.ts" "$BIN/capcomd"

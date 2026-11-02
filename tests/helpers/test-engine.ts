@@ -4,23 +4,23 @@ import { createRequire } from "module";
 import { join, resolve } from "path";
 import { tmpdir, userInfo } from "os";
 import { openSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "fs";
-import { privateHarnessSocket } from "../helpers/harness-socket";
+import { privateHarnessSocket } from "./harness-socket";
 
 /**
  * Every engine (and every port a helper kills listeners on) must be private: an explicit port outside the default
  * engine's block (6420, +1, +10: a developer's daemon; the cleanup kills whatever listens there), and an explicit data
- * dir in a temp area (the OS temp dir, /tmp, or CAPCOMD_CHAOS_DATA_ROOT): never the user's real ~/.capcomd or
+ * dir in a temp area (the OS temp dir, /tmp, or CAPCOMD_TEST_DATA_ROOT): never the user's real ~/.capcomd or
  * ~/.rivetkit, their home, the checkout or `/` (helpers delete it).
  */
-export function assertPrivatePort(port: number | undefined, what = "a chaos/test helper"): number {
+export function assertPrivatePort(port: number | undefined, what = "a test helper"): number {
   if (port === undefined || !Number.isInteger(port)) throw new Error(`${what} needs an explicit private port (refusing the default :6420)`);
   if (port >= 6410 && port <= 6430) throw new Error(`${what}: port ${port} is in the default engine's block (6420, +1, +10); use a private port (tests/helpers/engine.ts testPort())`);
   return port;
 }
-export function assertPrivateDir(dir: string | undefined, what = "a chaos/test helper"): string {
+export function assertPrivateDir(dir: string | undefined, what = "a test helper"): string {
   if (!dir) throw new Error(`${what} needs an explicit data dir (refusing the default, the user's real engine data)`);
   const d = realOrResolved(dir);
-  const raw = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders", envVar("CHAOS_DATA_ROOT")].filter(Boolean) as string[];
+  const raw = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders", envVar("TEST_DATA_ROOT")].filter(Boolean) as string[];
   const roots = [...new Set([...raw.map((r) => resolve(r)), ...raw.map(realOrResolved)])];
   if (!roots.some((r) => d !== r && d.startsWith(`${r}/`))) throw new Error(`${what}: refusing data dir ${d}: it must be inside a temp dir (${roots.join(", ")})`);
   const home = userInfo().homedir;
@@ -28,7 +28,7 @@ export function assertPrivateDir(dir: string | undefined, what = "a chaos/test h
   return dir;
 }
 const realOrResolved = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
-export function assertPrivate(o: { port?: number; dataDir?: string }, what = "a chaos/test engine"): { port: number; dataDir: string } {
+export function assertPrivate(o: { port?: number; dataDir?: string }, what = "a test engine"): { port: number; dataDir: string } {
   return { port: assertPrivatePort(o.port, what), dataDir: assertPrivateDir(o.dataDir, what) };
 }
 
@@ -179,7 +179,7 @@ export function repoEnv(opts: EngineOpts): NodeJS.ProcessEnv {
     CAPCOMD_REPO: `${opts.dataDir}/git/origin.git`,
     CAPCOMD_WORKDIR: `${opts.dataDir}/git/work`,
     CAPCOMD_MERGE_MODE: "direct",
-    CAPCOMD_MERGE_STRATEGY: process.env.CAPCOMD_CHAOS_MERGE_STRATEGY ?? "squash",
+    CAPCOMD_MERGE_STRATEGY: process.env.CAPCOMD_TEST_MERGE_STRATEGY ?? "squash",
     CAPCOMD_MERGE_TARGET: "trunk",
     CAPCOMD_TEST_COMMAND: 'test -f "tasks/$CAPCOMD_TASK_ID.md"',
   };
@@ -199,9 +199,9 @@ export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
   Object.assign(env, repoEnv(opts));
   if (opts.env) Object.assign(env, opts.env);
   if (opts.dataDir) {
-    env.RIVET_ENGINE_BINARY = `${ROOT}/tests/chaos/engine-wrapper.sh`;
-    env.CAPCOMD_CHAOS_REAL_ENGINE = REAL_ENGINE;
-    env.CAPCOMD_CHAOS_ENGINE_DATA = opts.dataDir;
+    env.RIVET_ENGINE_BINARY = `${ROOT}/src/engine/engine-wrapper.sh`;
+    env.CAPCOMD_TEST_REAL_ENGINE = REAL_ENGINE;
+    env.CAPCOMD_TEST_ENGINE_DATA = opts.dataDir;
     // The wrapper records the engine pid here; stop() trusts it where /proc/<pid>/environ is unreadable.
     env.CAPCOMD_ENGINE_PIDFILE = join(opts.dataDir, "engine.pid");
   }
@@ -223,7 +223,7 @@ export class Engine {
     this.opts = opts;
     this.port = assertPrivate(opts, `engine ${label}`).port;
     this.harnessSocket = opts.env?.CAPCOMD_HARNESS_SOCKET ?? privateHarnessSocket();
-    this.logPath = `/tmp/relay-chaos-${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180)}.log`;
+    this.logPath = `/tmp/relay-test-${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180)}.log`;
   }
 
   /** Every port this engine instance owns (guard, api-peer, metrics). */
@@ -299,7 +299,7 @@ export class Engine {
 
   /**
    * A freshly restarted engine occasionally never registers its runner
-   * (`actor_ready_timeout` for 45s+, seen in chaos seed 8). That's a readiness
+   * (`actor_ready_timeout` for 45s+, seen in a crash drill). That's a readiness
    * problem, not data loss, so cold-restart the engine on the same data dir
    * (no wipe) up to twice before giving up. Each retry is logged.
    */
@@ -368,14 +368,14 @@ export class Engine {
         await sleep(100);
       }
     }
-    if (envVar("CHAOS_TS")) console.log(`    [ts] http-up`, Date.now());
+    if (envVar("TEST_TS")) console.log(`    [ts] http-up`, Date.now());
     if (!httpUp) {
       throw new Error(`engine http not ready\n${tailFile(this.logPath)}`);
     }
 
     const probe = spawn(
       process.execPath,
-      ["tests/chaos/ready-probe.ts", String(this.port)],
+      ["tests/helpers/ready-probe.ts", String(this.port)],
       { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] }
     );
     const outcome = await new Promise<{ code: number; output: string }>((resolve) => {
@@ -394,7 +394,7 @@ export class Engine {
         resolve({ code: code ?? 1, output });
       });
     });
-    if (envVar("CHAOS_TS")) console.log(`    [ts] probe-done`, Date.now(), outcome.output.replace(/\s+/g, " ").slice(-200));
+    if (envVar("TEST_TS")) console.log(`    [ts] probe-done`, Date.now(), outcome.output.replace(/\s+/g, " ").slice(-200));
     if (outcome.code === 0 && outcome.output.includes("ready")) return;
     const detail = outcome.output.replace(/\s+/g, " ").slice(-300);
     throw new Error(`engine not ready: ${detail}`);
@@ -455,7 +455,7 @@ export function runClient(runId: string, opts: EngineOpts = {}): Promise<{ code:
     // SIGKILL would hit only the wrapper, leaving bun.exe holding the pipes ('close' never fires).
     const child = spawn(
       process.execPath,
-      ["src/cli/index.ts", "run", `--${opts.runPath ?? "legacy"}`, "--run-id", runId, "ChaosGoal"],
+      ["src/cli/index.ts", "run", `--${opts.runPath ?? "legacy"}`, "--run-id", runId, "TestGoal"],
       {
         cwd: ROOT,
         env,
@@ -466,7 +466,7 @@ export function runClient(runId: string, opts: EngineOpts = {}): Promise<{ code:
     let output = "";
     const t0 = Date.now();
     child.stdout?.on("data", (chunk) => {
-      if (envVar("CHAOS_TS")) output += `[+${Date.now() - t0}ms] `;
+      if (envVar("TEST_TS")) output += `[+${Date.now() - t0}ms] `;
       output += chunk.toString();
     });
     child.stderr?.on("data", (chunk) => {

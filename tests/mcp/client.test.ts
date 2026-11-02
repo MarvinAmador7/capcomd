@@ -7,7 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { Engine } from "../chaos/engine";
+import { Engine } from "../helpers/test-engine";
 import { CLI, capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 import { primitivesAgentsFile } from "../primitives/helpers";

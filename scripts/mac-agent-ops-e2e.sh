@@ -62,7 +62,7 @@ CAPCOMD_ENGINE_DATA="$WORK/engine" CAPCOMD_HARNESS_SOCKET="$WORK/harness.sock" $
 ENGINE_PID=$!
 cleanup() { pkill -P "$ENGINE_PID" 2>/dev/null || true; kill "$ENGINE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
-bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
+bun tests/helpers/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
 
 RUN=$($C run new --label "agent ops e2e $TS" --json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).runId)')
 id() { bun -e 'console.log(JSON.parse(await Bun.stdin.text()).agentId)'; }

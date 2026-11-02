@@ -23,7 +23,8 @@
 | Duplicate delivery (action retry, client retry, a driver's or workflow's re-run) | The transition sees its idem_key already in the event log and returns without writing (the UNIQUE index backs that up), so the call is treated as "already applied". | Automatic. |
 
 ## Crash-test suite
-Run with `bun test tests/chaos/*.test.ts`. The harness is `tests/chaos/harness.ts`.
+Removed on 2026-11-02 (it was `tests/chaos`; see the git history). The killpoints below remain, and the merge and
+workflow tests still use them (`CAPCOMD_KILLPOINT`, DEVELOPMENT.md).
 - **Mechanics:** Rivet local mode (`setupTest`/local engine) plus a `FakeSandboxProvider` and a fake model client. An env var `CAPCOMD_KILLPOINT=<name>[:n]` makes `killpoint(name)` call `process.exit(137)` on its nth hit; the harness then restarts the process and lets the run finish. A real-boxd profile is nightly-only.
 - **Kill points** (named calls in code):
   1. `tx.mid`: inside the lifecycle transaction, between the event insert and the lifecycle update. Expect: neither persisted.

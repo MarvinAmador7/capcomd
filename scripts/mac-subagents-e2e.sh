@@ -86,7 +86,7 @@ echo "== 2. engine on :$PORT"
 start_engine() {
   CAPCOMD_ENGINE_DATA="$WORK/engine" CAPCOMD_HARNESS_SOCKET="$WORK/harness.sock" bun src/cli/index.ts serve --port "$PORT" >> "$WORK/engine.log" 2>&1 &
   ENGINE_PID=$!
-  bun tests/chaos/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
+  bun tests/helpers/ready-probe.ts "$PORT" >/dev/null 2>"$WORK/ready.err" || die "engine not ready: $(tail -1 "$WORK/ready.err")"
   kill -0 "$ENGINE_PID" 2>/dev/null || die "engine exited: $(tail -3 "$WORK/engine.log")"
 }
 # Every process under serve (its engine host, rivet-engine, …), deepest first.

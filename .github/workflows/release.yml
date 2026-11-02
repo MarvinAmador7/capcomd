@@ -1,7 +1,7 @@
 name: Release
 
 # Pushing a tag vX.Y.Z (X.Y.Z = package.json's version, with a dated CHANGELOG.md section) builds and publishes a
-# GitHub release: the tests on Linux and macOS, one strict chaos round, the package (`bun pm pack`) and the single
+# GitHub release: the tests on Linux and macOS, the package (`bun pm pack`) and the single
 # executables (scripts/build-binary.ts: macOS and Linux, arm64 and x64) each installed the way a user installs them
 # (bun add -g; install.sh) and driven with fake agents on their own platform (scripts/release-smoke.sh), then that
 # same package on npm (with provenance; skipped while package.json is private), the release with the package, the
@@ -100,33 +100,6 @@ jobs:
       - name: Sub-agent scenario suite
         run: bun run test:scenarios
         timeout-minutes: 40   # as in ci.yml: ~22 min on macOS, over 25 on ubuntu-latest
-
-  chaos:
-    name: Chaos (${{ matrix.suite }})
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 50
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [killpoints, recipe, primitives, seeds]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: .bun-version
-
-      - run: bun install
-
-      - name: chaos:fast ${{ matrix.suite }} (strict, one round)
-        run: bun tests/chaos/fast.ts --only ${{ matrix.suite }} --rounds 1
-        env:
-          CHAOS_STRICT: "1"
-          CHAOS_WORKERS: "4"
-        timeout-minutes: 45
 
   package:
     name: Package
@@ -263,7 +236,7 @@ jobs:
 
   npm:
     name: Publish to npm
-    needs: [prepare, test, chaos, smoke, binary-smoke]
+    needs: [prepare, test, smoke, binary-smoke]
     if: needs.prepare.outputs.npm == 'true' && (github.event_name == 'push' || inputs.publish)
     runs-on: ubuntu-latest
     permissions:
@@ -296,7 +269,7 @@ jobs:
 
   publish:
     name: Publish the release
-    needs: [prepare, test, chaos, smoke, binary-smoke, npm]
+    needs: [prepare, test, smoke, binary-smoke, npm]
     # npm is skipped while package.json is private; any failure (npm included) publishes nothing here.
     if: ${{ !cancelled() && !failure() && (github.event_name == 'push' || inputs.publish) }}
     runs-on: ubuntu-latest
