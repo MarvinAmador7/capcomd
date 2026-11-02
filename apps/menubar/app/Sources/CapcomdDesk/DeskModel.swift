@@ -33,7 +33,13 @@ package final class AgentSlice {
   /// The run's goal branch, on the planner's (root) column only: its name in the header while it works, then the ready
   /// card docked at the column's foot (GoalCard).
   package private(set) var goal: GoalCard? { didSet { Mutations.record("AgentSlice.goal", id: id) } }
+  /// Where it is being renamed (a double-click on its tab or its column header), nil while it isn't.
+  package private(set) var renaming: RenamePlace? { didSet { Mutations.record("AgentSlice.renaming", id: id) } }
+  /// Why its last rename didn't go through (the old title is back); nil once a later one does.
+  package private(set) var renameFailure: String? { didSet { Mutations.record("AgentSlice.renameFailure", id: id) } }
   init(_ h: ColumnHeader) { id = h.agentId; header = h }
+  func set(renaming r: RenamePlace?) { if renaming != r { renaming = r } }
+  func set(renameFailure f: String?) { if renameFailure != f { renameFailure = f } }
   func set(goal g: GoalCard?) { if goal != g { goal = g } }
   func set(warm w: Bool) { if warm != w { warm = w } }
   func set(onScreen o: Bool) { if onScreen != o { onScreen = o } }
@@ -84,6 +90,8 @@ package final class DeskModel {
   package private(set) var reelPosition: String? { didSet { Mutations.record("DeskModel.reelPosition") } }
   /// A scroll the reel carries out (a tab click, Follow, the keyboard, a project switch); `serial` makes a repeat count.
   package private(set) var reelRequest: ReelRequest? { didSet { Mutations.record("DeskModel.reelRequest") } }
+  /// The agent whose rename field is open (one at a time): while it is, Return belongs to the field, never to a decision.
+  package private(set) var renamingAgent: String? { didSet { Mutations.record("DeskModel.renamingAgent") } }
   package var focusedAgent: String? { didSet { Mutations.record("DeskModel.focusedAgent"); if focusedAgent != oldValue { syncFlags() } } }
   /// Follow: an ask or a failure in the open project scrolls the reel to its column (SPEC §3).
   package var follow = true { didSet { Mutations.record("DeskModel.follow") } }
@@ -294,6 +302,8 @@ package final class DeskModel {
   }
 
   package func agent(_ id: String) -> AgentSlice? { agents[id] }
+  /// Every column's slice (renaming closes the others).
+  var agentSlices: [String: AgentSlice] { agents }
   /// The column's thread slice if its column made one (DeskDebug), without making it.
   package func peekThread(_ id: String) -> ThreadSlice? { threads[id] }
 
@@ -396,6 +406,44 @@ package final class DeskModel {
   package func discardSteer(agentId: String, id: String) { store.discardSteer(agentId: agentId, id: id) }
 
   package func decide(_ approvalId: String, _ d: ApprovalDecision) { Task { _ = await store.decide(approvalId, d) } }
+}
+
+/// Where an agent is renamed inline: its crew tab, or its column header.
+package enum RenamePlace: Equatable, Sendable { case tab, header }
+
+extension DeskModel {
+  // MARK: renaming (capability agents.title)
+
+  /// A double-click on a tab or a column header: that field opens (and any other closes).
+  package func beginRename(_ agentId: String, at place: RenamePlace) {
+    for (id, a) in agentSlices where id != agentId { a.set(renaming: nil) }
+    agent(agentId)?.set(renaming: place)
+    renamingAgent = agentId
+  }
+  /// Esc, or a click elsewhere: the field closes, nothing is sent.
+  package func endRename(_ agentId: String) {
+    agent(agentId)?.set(renaming: nil)
+    if renamingAgent == agentId { renamingAgent = nil }
+  }
+  /// What the field starts from: the title shown, and whether it is the person's own.
+  package func titleEdit(_ agentId: String) -> TitleEdit? {
+    guard let runId = openRunId else { return nil }
+    return store.titleEdit(runId: runId, agentId: agentId)
+  }
+  /// Return: a name the daemon would refuse keeps the field open (false); anything else closes it, and the store sends
+  /// the rename (the tab shows the new title at once; a failure puts the old one back and says why).
+  @discardableResult
+  package func commitRename(_ agentId: String, _ edit: TitleEdit) -> Bool {
+    let outcome = edit.commit
+    if case .invalid = outcome { return false }
+    endRename(agentId)
+    guard let runId = openRunId else { return true }
+    Task { [weak self] in
+      let r = await self?.store.rename(runId: runId, agentId: agentId, outcome)
+      if case .failed(let why)? = r { self?.agent(agentId)?.set(renameFailure: why) } else { self?.agent(agentId)?.set(renameFailure: nil) }
+    }
+    return true
+  }
 }
 
 package struct ReelRequest: Equatable {

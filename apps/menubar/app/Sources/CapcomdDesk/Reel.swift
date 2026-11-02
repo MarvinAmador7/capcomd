@@ -846,15 +846,26 @@ struct Column: View {
   }
 }
 
-/// The column's header: bot, profile, its id suffix, bot name, state, place, and the system-drawn clock.
+/// The column's header: bot, profile, its title (a double-click renames it; capability agents.title), its id suffix
+/// (only when a sibling shares the title, or from an older daemon), bot name, state, place, and the system-drawn clock.
 struct ColumnHead: View {
+  @Environment(DeskModel.self) private var model
   let slice: AgentSlice
   var body: some View {
     DeskProbe.body("ColumnHead", id: slice.id)
     let h = slice.header
     return HStack(spacing: 8) {
       ProvidedBot(traits: slice.bot, size: .xs, cell: 1.5, provider: h.provider)
-      Text(verbatim: h.name).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text)
+      Text(verbatim: h.name).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).fixedSize()
+      if slice.renaming == .header {
+        InlineTitleField(agentId: slice.id, font: Theme.Desk.label, width: Theme.Desk.headerField)
+      } else if let t = h.title {
+        Text(verbatim: t).font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary).lineLimit(1).truncationMode(.tail)
+          .frame(maxWidth: Theme.Desk.headerTitleMax, alignment: .leading).fixedSize(horizontal: true, vertical: false)
+          .contentShape(Rectangle())
+          .onTapGesture(count: 2) { model.beginRename(slice.id, at: .header) }
+          .help(slice.renameFailure.map { "Couldn't rename it: \($0)" } ?? "Double-click to rename")
+      }
       if let s = h.suffix { Text(verbatim: s).font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary) }
       if let n = slice.bot?.name { Text(verbatim: n).font(Theme.Desk.label).foregroundStyle(Theme.Desk.tertiary) }
       Text(verbatim: "· " + Self.state(h, asks: slice.approval != nil)).font(Theme.Desk.meta)
@@ -1000,7 +1011,8 @@ struct SlotDraft: ViewModifier {
 
 /// The decision an agent waits on, docked at its column's foot: the question, then View diff · Deny · Approve ↩.
 /// Return approves only while its column has focus (SPEC §4): with asks in several columns, or focus elsewhere, a
-/// Return must not approve one you aren't looking at. Esc is never bound.
+/// Return must not approve one you aren't looking at, nor while a rename field is open (its Return saves the name). Esc is
+/// never bound.
 struct DecisionBar: View {
   @Environment(DeskModel.self) private var model
   let approval: PendingApproval
@@ -1020,7 +1032,7 @@ struct DecisionBar: View {
           HStack(spacing: 6) { Text("Approve"); Text("↩").font(.system(size: 10.5, weight: .semibold)).padding(.horizontal, 4).background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.12))) }
         }
         .buttonStyle(DeskButton(kind: .primary))
-        .keyboardShortcut(focused ? .defaultAction : nil)
+        .keyboardShortcut(focused && model.renamingAgent == nil ? .defaultAction : nil)
       }
       .disabled(busy).opacity(busy ? 0.5 : 1)
     }

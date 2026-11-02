@@ -124,7 +124,9 @@ struct PlaceIcon: View {
   }
 }
 
-/// One agent's tab: its head and short name; amber when it asks, dim while queued. A click scrolls the reel to it.
+/// One agent's tab: its head and its title (capability agents.title; an older daemon's: the suffix, else the profile);
+/// amber when it asks, dim while queued. A click scrolls the reel to it; a double-click renames it in place. A long
+/// title ends with "…" at a fixed width, so the strip doesn't move as titles change.
 struct CrewTab: View {
   @Environment(DeskModel.self) private var model
   let agentId: String
@@ -135,7 +137,12 @@ struct CrewTab: View {
       Button { model.scroll(to: agentId) } label: {
         HStack(spacing: 5) {
           BotAvatar(traits: a.bot, size: .xs, cell: 1.5)
-          Text(verbatim: h.suffix ?? h.name).font(Theme.Desk.label)
+          if a.renaming == .tab {
+            InlineTitleField(agentId: agentId, font: Theme.Desk.label, width: Theme.Desk.tabTitleMax)
+          } else {
+            Text(verbatim: h.tabLabel).font(Theme.Desk.label).lineLimit(1).truncationMode(.tail)
+              .frame(maxWidth: Theme.Desk.tabTitleMax, alignment: .leading).fixedSize(horizontal: true, vertical: false)
+          }
           if asks { Text("asks").font(Theme.Desk.label).foregroundStyle(Theme.amber) }
         }
         .foregroundStyle(asks || a.onScreen ? Theme.Desk.text : Theme.Desk.secondary)
@@ -147,7 +154,10 @@ struct CrewTab: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(PressableStyle())
-      .accessibilityLabel([h.name, h.suffix, asks ? "asks" : nil].compactMap { $0 }.joined(separator: " "))
+      .simultaneousGesture(TapGesture(count: 2).onEnded { model.beginRename(agentId, at: .tab) })
+      .help(a.renameFailure.map { "Couldn't rename it: \($0)" } ?? h.label)
+      .accessibilityLabel([h.label, asks ? "asks" : nil].compactMap { $0 }.joined(separator: " "))
+      .accessibilityAction(named: "Rename") { model.beginRename(agentId, at: .tab) }
     }
   }
 }

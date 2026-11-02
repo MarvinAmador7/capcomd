@@ -48,6 +48,11 @@ package enum Theme {
     package static let suffixFont = Font.system(size: 10.5, design: .monospaced)
     package static let suffixText = Theme.label(dark: 0.32, light: 0.55)
     package static let suffixLeading: CGFloat = 6
+    /// Its title (capability agents.title), where the suffix was: plain words, a step quieter than the name.
+    package static let titleFont = Font.system(size: 12)
+    package static let titleText = Theme.label(dark: 0.5, light: 0.7)
+    package static let titleLeading: CGFloat = 6
+    package static let titleField: CGFloat = 170
     package static let chipFont = Font.system(size: 11)
     package static let chipIcon = Font.system(size: 9)
     package static let chipText = Theme.label(dark: 0.5, light: 0.7)

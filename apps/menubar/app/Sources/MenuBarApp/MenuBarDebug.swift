@@ -6,7 +6,7 @@ import CapcomdStore
 /// Development only: with CAPCOMD_MENUBAR_CONTROL=<dir>, the panel is also hosted in a borderless window far off screen
 /// (it never shows, takes no focus and needs no click), driven by the lines of <dir>/cmd each half second (then deleted):
 /// `goal <text>` (the composer's goal), `branch <name>` / `base <name>` (its goal branch row), `start` (Return in the
-/// composer), `card <runId> open|confirm|cancel|keep` (its Ready bar's buttons), `run <runId>` (its drill-down), `back`, `snap <name>` (the panel into
+/// composer), `card <runId> open|confirm|cancel|keep` (its Ready bar's buttons), `run <runId>` (its drill-down), `back`, `tree <N>` (the Nth card's tree, as its chevron shows it), `snap <name>` (the panel into
 /// <dir>/<name>.png). <dir>/state.txt says what the panel shows. For checks against the mock (client/mock).
 @MainActor enum MenuBarDebug {
   static let goal = Notification.Name("capcomd.debug.goal"), start = Notification.Name("capcomd.debug.start")
@@ -43,6 +43,7 @@ import CapcomdStore
           switch a[1] { case "open": model.openPullRequest(c); case "confirm": model.confirmPullRequest(a[0]); case "cancel": model.cancelGoalAction(a[0]); case "keep": model.keepBranch(a[0]); default: break }
         case "run": if w.count > 1 { model.open(run: w[1]) }
         case "back": model.back()
+        case "tree": if let n = w.dropFirst().first.flatMap(Int.init), model.projects.indices.contains(n - 1) { model.treeShown.insert(model.projects[n - 1].id) }   // its card's chevron
         case "snap": if w.count > 1 { snap(dir.appendingPathComponent("\(w[1]).png")) }
         default: break
         }
