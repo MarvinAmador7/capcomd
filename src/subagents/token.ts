@@ -68,14 +68,7 @@ export function verifyToken(token: string, key = signingKey(), now = Date.now())
   return { ok: true, claims };
 }
 
-/** A real agent that may not spawn gets the in-VM CLI only to name its tab (capability agents.title). */
-export const NAMING_OPS: Op[] = ["title", "heartbeat"];
-
-/**
- * Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator); a scripted
- * agent's coordination ops otherwise; a real agent that may not spawn (`naming`) only names itself.
- */
-export function opsFor(limits: { allowSpawn: boolean }, o: { naming?: boolean } = {}): Op[] {
-  if (limits.allowSpawn) return [...ALL_OPS];
-  return o.naming ? [...NAMING_OPS] : ["status", "heartbeat", "kv", "task", "inbox", "send", "result", "title"];
+/** Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator). */
+export function opsFor(limits: { allowSpawn: boolean }): Op[] {
+  return limits.allowSpawn ? [...ALL_OPS] : ["status", "heartbeat", "kv", "task", "inbox", "send", "result", "title"];
 }

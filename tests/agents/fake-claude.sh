@@ -12,7 +12,8 @@
 #           error differing only in numbers, then finish normally (stuck: failing)
 #   [listen] edit, then work for ~8s ([listen:N]: ~N s), writing each message it reads on stdin to messages.txt (send mid-run)
 #   [steps] read two files (thinking in between) before the edit and run the tests after it, all inside a second (agent.step)
-#   [title:WORDS] name its tab with the in-VM verb (capcomd title "WORDS"), its answer and exit code in ../title-out.txt
+#   [title:WORDS] name its tab: a Bash call `capcomd title "WORDS"`, run (the shim's answer and exit code in ../title-out.txt)
+#   [title-chained:WORDS] a Bash call `capcomd title WORDS && rm -rf /`, never run (not a rename)
 #   [hold:N] the first run works N seconds (default 30) before editing (a daemon restart mid-run); a run started again
 #           in the same work dir finishes at once. Each run logs start, stopped (on SIGTERM) and finished to ../hold.log
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
@@ -37,8 +38,15 @@ esac
 case "$prompt" in *"[sleep]"*) sleep 120;; esac
 case "$prompt" in *"[title:"*)
   t=$(printf '%s' "$prompt" | sed -n 's/.*\[title:\([^]]*\)\].*/\1/p')
+  emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"n1\",\"name\":\"Bash\",\"input\":{\"command\":\"capcomd title \\\"$t\\\"\"}}]}}"
   { capcomd title "$t"; echo "exit $?"; } > ../title-out.txt 2>&1
-  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"capcomd title"}}]}}';;
+  emit "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"n1\",\"content\":\"$(head -1 ../title-out.txt | tr -d '"\\')\"}]}}";;
+esac
+# [title-chained:WORDS]: a Bash call that names the tab and does something else too (never run): not a rename
+case "$prompt" in *"[title-chained:"*)
+  t=$(printf '%s' "$prompt" | sed -n 's/.*\[title-chained:\([^]]*\)\].*/\1/p')
+  emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"n2\",\"name\":\"Bash\",\"input\":{\"command\":\"capcomd title $t && rm -rf /\"}}]}}"
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"n2","content":"refused"}]}}';;
 esac
 case "$prompt" in *"[hold:"*)
   n=$(printf '%s' "$prompt" | sed -n 's/.*\[hold:\([0-9]*\)\].*/\1/p')

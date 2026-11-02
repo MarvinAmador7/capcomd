@@ -707,7 +707,7 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
     await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
     return { kind: "ended" };
   }
-  const vmRpc = exec ? await vmRpcFor(runId, a, w, agentId) : null;
+  const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
   const review = reviewOf(a);
   const report = (a.contract as any)?.report === true;
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
@@ -874,24 +874,19 @@ function fakeFileParams(f: { path?: string; content?: string }) {
   return f.path ? { fakePath: f.path, fakeContent: f.content ?? "" } : {};
 }
 
-/**
- * Real agent: token + pump on its VM; the runner installs CLI, MCP and skill. One allowed to spawn gets the
- * orchestration skill and every op; any other only names its tab (capability agents.title).
- */
+/** Real agent allowed to spawn: token + pump on its VM; the runner installs CLI, MCP and skill. */
 async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
   const wk: any = await w.getWorker({ workerId: agentId });
   const vmId = wk?.context?.vmId;
   if (!vmId) return null;
   const { provider, sandbox } = await (await import("../dependencies")).providerForRun(runId);
-  const { namingSkill, orchestrationSkill, VM_RPC_DIR } = await import("../subagents/skill");
+  const { orchestrationSkill, VM_RPC_DIR } = await import("../subagents/skill");
   const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
-  const orchestrator = a.limits.allowSpawn;
-  const goal = orchestrator ? await runGoal(runId).catch(() => undefined) : undefined;
+  const goal = await runGoal(runId).catch(() => undefined);
   // The test sandbox that runs "VMs" on this host shares one /tmp: each agent's spool gets its own folder there.
   const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
   const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
-  const skill = orchestrator ? orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true, goal: goal ?? null, root: !a.parent }) : namingSkill({ mcp: true });
-  const params = { skill, kind, orchestrator, rpcDir };
+  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true, goal: goal ?? null, root: !a.parent }), kind, rpcDir };
   return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
 }
 

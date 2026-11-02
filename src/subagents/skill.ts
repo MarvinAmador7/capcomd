@@ -1,6 +1,6 @@
 // ADR-017: the orchestration skill appended to the system prompt of agents whose effective
 // limits allow spawning. Agents without children.allowSpawn get only the naming lines (capability agents.title) and a
-// CLI and MCP server that can do just that.
+// local `capcomd` that can do just that (src/primitives/title-rules.mjs).
 import type { Limits, Budget } from "../primitives/policy";
 
 export const VM_RPC_DIR = "/tmp/capcomd-rpc";
@@ -8,7 +8,7 @@ export const VM_RPC_DIR = "/tmp/capcomd-rpc";
 /** Every agent names its tab, Rex-style: injected into every real agent's instructions, so it stays short. */
 export function namingSkill(o: { mcp: boolean; planner?: boolean }): string {
   return `# Name your tab (capcomd)
-Once you understand your task, run \`capcomd title "<2-4 lowercase words>"\`${o.mcp ? " (or the capcomd_title tool)" : ""} naming what you're working on
+Once you understand your task, run \`capcomd title "<2-4 lowercase words>"\`${o.mcp ? " (or the capcomd_title tool)" : " as a command of its own"} naming what you're working on
 (e.g. "login redirect"). Rename only when your focus really changes.${o.planner === undefined ? "" : `
 Give each child a title when you spawn it (\`--title "…"\`)${o.planner ? `, and name the run once you've planned it
 (\`capcomd title --run "<2-4 words>"\`)` : ""}.`}`;

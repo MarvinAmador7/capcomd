@@ -218,20 +218,6 @@ export const TOOLS = [
   ["result", "Declare your structured result before you exit: summary, artifacts, data.", S({ summary: str, artifacts: { type: "array", items: S({ name: str, ref: str }) }, data: {} }, ["summary"])],
 ].map(([name, description, inputSchema]) => ({ name: `capcomd_${name}`, description, inputSchema }));
 
-/** The ops this agent's token carries (its claims are readable, only the orchestrator can sign them); null: unknown. */
-function tokenOps() {
-  try {
-    const body = readFileSync(TOKEN_FILE, "utf8").trim().split(".")[1];
-    const ops = JSON.parse(Buffer.from(body, "base64url").toString("utf8")).ops;
-    return Array.isArray(ops) ? ops : null;
-  } catch { return null; }
-}
-/** The MCP tools an agent can call: the ops its token carries (an agent that may only name itself sees capcomd_title). */
-export function toolsFor(ops) {
-  if (!ops) return TOOLS;
-  return TOOLS.filter((t) => ops.includes(t.name.replace(/^capcomd_/, "").replace("wait_any", "wait-any")));
-}
-
 async function mcp() {
   let buf = "";
   const send = (m) => process.stdout.write(JSON.stringify(m) + "\n");
@@ -245,7 +231,7 @@ async function mcp() {
       let m; try { m = JSON.parse(line); } catch { continue; }
       if (m.id === undefined) continue; // notification
       if (m.method === "initialize") send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params?.protocolVersion ?? "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "capcomd", version: "1" } } });
-      else if (m.method === "tools/list") send({ jsonrpc: "2.0", id: m.id, result: { tools: toolsFor(tokenOps()) } });
+      else if (m.method === "tools/list") send({ jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } });
       else if (m.method === "tools/call") {
         const name = String(m.params?.name ?? "").replace(/^capcomd_/, "").replace("wait_any", "wait-any");
         const args = m.params?.arguments ?? {};
