@@ -55,3 +55,54 @@ illustrations, not captures, and they show the menu bar app as it is on `main` (
 - Footage: none recorded. The rebuilt panels are the product imagery.
 - The name: the site doesn't explain what CAPCOM means.
 - Bot names: not used. Agents are named by role, plus a short suffix in the panels, as in the app's tree.
+
+## The desktop page (/desktop/)
+
+capcomd Desktop is in development (branch feat/desktop-shell, not on main yet), so the page says so in the hero and
+in the close, and its action is "Watch on GitHub".
+
+| Section | Claims | Source |
+|---|---|---|
+| Hero, the reel | a native Mac app written entirely in Swift, no web view, no Electron; agents as full-height columns in tree order; crew tabs with a bracket on the columns on screen; an ask docks at its column's foot (View diff · Deny · Approve ↩) | apps/menubar/design/desktop/SPEC.md §2; Reel.png |
+| Native, all the way down | 0 web views, 100% Swift (81 Swift files, no other sources in the app); SwiftUI columns shared with the menu bar app; the reel an `NSScrollView` (`SnapScrollView`) with one `NSHostingView` per column; slides as one additive Core Animation animation; system fonts (`Font.system`); the Go menu (`CommandMenu("Go")`) with ⌘1–9, ⌃1–9, ⌃←/→; one SSE stream per run over the CapcomdClient Unix socket; macOS 14 or later | apps/menubar/app on feat/desktop-shell: Package.swift, Sources/CapcomdDesk/Reel.swift, DeskWindow.swift, Sources/CapcomdUI/Theme.swift, Sources/CapcomdLive/Live.swift; the perf log for the slide |
+| One voice to the crew | Follow moves only for an ask or a failure; 17 agents | SPEC.md §1, §3 |
+| One column per agent | header (bot, profile, name, state, place, elapsed), thread, own message box; Return approves while an ask has focus, Esc never denies | SPEC.md §2, §4 |
+| Start with a sentence | A plum stage like the hero's. The goal line is the composer at display size, typed straight onto the plum, with Start and three example goals. The board is one window: Lumen sleeps in the new column and smiles once you type; the crew's columns wait as outlines. On Start, Lumen reads the repo, writes a three-step plan (one per example goal, a generic one otherwise), spawns lead, worker and critic, and the lead hands task 1 to the worker. The plans, file count and names are sample content | SPEC.md §2; ReelNew.png |
+| Other projects wait in the title bar | decks of crew heads with one status line; an asking deck gets an amber ring and is never in the overflow; a deck fans out in place; swarm subtrees fold into stacks and asks step out; the strip | SPEC.md §2; ReelStack, ReelTabs, ReelSwarm boards |
+| Every move has a key | every shortcut listed | SPEC.md §4 and the project menu in §2 |
+| Fast is the feature | the order "performance, speed, design"; 100 ms first frame, 50 ms switch, 120 Hz with 17 agents (8.3 ms a frame), one stream per run. These are budgets, not measurements | SPEC.md §0, §1 |
+| Measured, not promised | the main-thread strips (9 s of `step` on crew17, 1 ms samples; `lib/perf-reel.json`); 257 → 52 hitches, 10.1 → 3.6 s main-thread CPU, frame p95 68 → 12.6 ms, project switch 544 → 170 ms; the four kept fixes and three dropped hypotheses; 170 ms against the 50 ms switch budget | "Benching the Reel", the perf log of 30 Oct 2026 (now the page /desktop/perf/): its xctrace exports and DeskBench A/B runs, 3a6b5b7 → 9bcd41a |
+| The window today | a capture of the real window | `CapcomdDeskBench snapshot --fixture crew17 --at 0` on feat/desktop-shell 9bcd41a (generated data) |
+
+Pictures:
+
+- `public/desktop/real-window.jpg`, `real-tb.jpg`, `real-ask.jpg`: the real window, drawn by DeskBench from the
+  `crew17` fixture and cropped. Its text is generated, and some of it repeats. Retake them when the app has a demo
+  run.
+- `public/desktop/mcc-apollo7.jpg` (S68-49301) and `mcc-apollo14.jpg` (S71-17610): NASA Johnson Space Center, public
+  domain. `mcc-consoles.jpg`: "Apollo Mission Control Consoles" by Mike Renlund, CC BY 2.0. All three come from
+  Wikimedia Commons and are credited in the footer.
+- The bots are the engine's own. Their seeds (`dk-*`) were picked so the names match the boards (Lumen, Nugget,
+  Tinker, Volt, Mica, Loop, Radar).
+
+Samples to confirm: the matchkey run, its agents' text, times and counts (taken from Reel.png); "Fix proration" and
+"addriva" as other projects; "Opus 5.5" in the composer; `my-app` / `main` on the new project's chips.
+
+## The perf log (/desktop/perf/)
+
+"Benching the Reel", the log an agent wrote on 30 Oct 2026 while it tuned the reel, rebuilt as a page of the site. Its
+words, numbers and terminal excerpts are `lib/perf.ts`, taken from the log as written (help text trimmed to fit, ✓
+marks dropped). Its data was extracted from the log's own embedded data, not re-measured:
+
+- `lib/perf-reel.json`: the main-thread strips of `step` and `switch`, before and after (run-length coded, 9 s each).
+- `lib/perf-log.json`: the compositor's hitches, the burst lengths and the A/B medians and ranges. Drawn at build time.
+- `public/desktop/perf-trees.json` (520 KB, about 54 KB gzipped): the Time Profiler call trees of four recordings,
+  fetched by the flame graphs when they mount.
+- `public/desktop/bench-at0.jpg`, `bench-at5.jpg`, `bench-at10.jpg`: `CapcomdDeskBench snapshot --fixture crew17
+  --at 0|5|10`, taken 31 Oct 2026 from the release build on feat/desktop-shell (generated data).
+
+The page names the machine (MacBook Pro, MacBookPro18,3, macOS 27.0.1) and the build hashes, as the log did. Retake
+it when the switch work lands: the "Still slow" section says the next targets.
+
+Decision for the owner: the "One voice to the crew" section says what CAPCOM means. Until now the site deliberately
+didn't (see "Open decisions" above).
