@@ -1,10 +1,10 @@
 name: menubar
 on:
   pull_request:
-    paths: ["apps/menubar/**", "openapi/**", ".github/workflows/menubar.yml"]
+    paths: ["apps/menubar/**", "tools/perfloop/**", "openapi/**", ".github/workflows/menubar.yml"]
   push:
     branches: [main]
-    paths: ["apps/menubar/**", "openapi/**"]
+    paths: ["apps/menubar/**", "tools/perfloop/**", "openapi/**"]
 jobs:
   macos:
     runs-on: macos-15

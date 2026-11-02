@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Menu bar to window</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.sb{--text:#F2F2F7;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--amber:#FFB020;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.cap{font-size:13px;line-height:1.5;color:var(--sec);max-width:400px}
+.cap b{color:var(--text);font-weight:600}
+.pc{border-radius:11px;background:rgba(255,255,255,.06);padding:12px}
+.h{width:16px;height:16px;border-radius:4px;background:rgba(255,255,255,.1);display:inline-flex;align-items:center;justify-content:center}
+.h img{width:12px;height:12px;image-rendering:pixelated}
+td,th{padding:9px 12px 9px 0;text-align:left;vertical-align:top;border-top:.5px solid rgba(255,255,255,.08);font-size:12.5px}
+th{font-weight:500;color:var(--ter);font-size:12px;border-top:0}
+</style>
+</helmet>
+<div class="sb" style="width:1440px;height:900px;box-sizing:border-box;padding:56px 64px;background:#0e0e10;display:flex;flex-direction:column;gap:40px">
+  <div style="display:grid;grid-template-columns:400px 1fr 560px;gap:48px;align-items:end;height:440px">
+
+    <!-- 1 panel -->
+    <figure style="margin:0;display:flex;flex-direction:column;gap:16px">
+      <div style="width:380px;border-radius:16px;background:#1c1d21;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14);padding:10px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px">
+        <div style="height:34px;border-radius:9px;background:rgba(255,255,255,.07);display:flex;align-items:center;padding:0 12px;color:var(--ter);font-size:12.5px">Start a project…</div>
+        <div style="font-size:11px;font-weight:600;color:var(--ter);padding:4px 6px 0">Active</div>
+        <div class="pc" style="box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)">
+          <div style="display:flex;font-size:12px;color:var(--sec)"><span style="flex:1">Migrate matchkey to v3.2</span><span class="mono" style="font-size:11px;color:var(--ter)">18:40</span></div>
+          <div style="font-weight:600;font-size:14px;margin-top:6px">Merge worker 4423's work into main?</div>
+        </div>
+        <div class="pc">
+          <div style="font-weight:600;font-size:13px">Fix proration rounding in billing</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:var(--sec)"><span class="h"><img src="bots/pr-planner-0-xs.svg" alt=""></span><span style="color:var(--text)">planner</span> is splitting the work</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:8px 6px 2px;font-size:12.5px;border-top:.5px solid rgba(255,255,255,.08)"><span style="background:rgba(255,255,255,.1);border-radius:5px;padding:2px 6px;margin-left:-6px">Open capcomd</span><span style="color:var(--ter)">⌘↩</span></div>
+      </div>
+      <figcaption class="cap"><b>Open capcomd</b> from the panel's footer, or press ⌘↩ on a focused card. The window opens on that project.</figcaption>
+    </figure>
+
+    <!-- 2 in between -->
+    <figure style="margin:0;display:flex;flex-direction:column;gap:16px;align-self:stretch;justify-content:flex-end">
+      <div style="position:relative;height:340px" aria-hidden="true">
+        <div style="position:absolute;left:0;bottom:0;width:150px;height:180px;border-radius:14px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)"></div>
+        <div style="position:absolute;left:0;bottom:0;width:240px;height:250px;border-radius:14px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)"></div>
+        <div style="position:absolute;left:0;bottom:0;width:330px;height:318px;border-radius:14px;background:#17171a;box-shadow:inset 0 0 0 1px rgba(255,255,255,.3)">
+          <div style="position:absolute;left:96px;top:30px;right:16px;height:84px;border-radius:11px;box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)"></div>
+          <div style="position:absolute;left:12px;top:30px;width:70px;height:12px;border-radius:4px;background:rgba(255,255,255,.08)"></div>
+          <div style="position:absolute;left:12px;top:50px;width:70px;height:12px;border-radius:4px;background:rgba(255,255,255,.05)"></div>
+        </div>
+        <svg width="80" height="20" viewBox="0 0 80 20" style="position:absolute;left:250px;top:8px"><path d="M2 18L74 3M74 3l-9-1M74 3l-4 8" stroke="#8E8E96" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>
+      </div>
+      <figcaption class="cap"><b>The panel grows into the window.</b> One shape scales from the menu bar icon to the window frame in 300 ms, curve (0.32, 0.72, 0, 1). The asking card stays where your eye is and becomes the decision in the loop. ⌘↩ opens with no animation.</figcaption>
+    </figure>
+
+    <!-- 3 window -->
+    <figure style="margin:0;display:flex;flex-direction:column;gap:16px">
+      <div style="width:560px;height:350px;border-radius:12px;background:#141416;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14);display:grid;grid-template-columns:110px 1fr 140px;overflow:hidden">
+        <div style="background:#1b1b1e;padding:12px 8px;display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;gap:4px;margin-bottom:10px"><span style="width:7px;height:7px;border-radius:4px;background:#FF5F57"></span><span style="width:7px;height:7px;border-radius:4px;background:#FEBC2E"></span><span style="width:7px;height:7px;border-radius:4px;background:#28C840"></span></div>
+          <div style="height:22px;border-radius:5px;background:rgba(255,255,255,.08);font-size:10px;display:flex;align-items:center;padding:0 6px;white-space:nowrap;overflow:hidden">Migrate matchkey</div>
+          <div style="height:22px;font-size:10px;display:flex;align-items:center;padding:0 6px;color:var(--sec);white-space:nowrap;overflow:hidden">Fix proration</div>
+        </div>
+        <div style="padding:14px 12px;display:flex;flex-direction:column;gap:8px;border-left:.5px solid rgba(255,255,255,.08);border-right:.5px solid rgba(255,255,255,.08)">
+          <div style="align-self:flex-end;width:60%;height:26px;border-radius:8px;background:rgba(255,255,255,.08)"></div>
+          <div style="width:85%;height:8px;border-radius:3px;background:rgba(255,255,255,.1)"></div>
+          <div style="width:70%;height:8px;border-radius:3px;background:rgba(255,255,255,.1)"></div>
+          <div style="height:44px;border-radius:7px;background:#1f1f22"></div>
+          <div style="border-radius:7px;background:#221f1a;box-shadow:inset 0 0 0 1px rgba(255,176,32,.6);padding:8px;font-size:10.5px;font-weight:600">Merge worker 4423's work into main?</div>
+          <div style="flex:1"></div>
+          <div style="height:26px;border-radius:8px;background:rgba(255,255,255,.07)"></div>
+        </div>
+        <div style="padding:14px 10px;display:flex;flex-direction:column;gap:7px">
+          <div style="font-size:10px;font-weight:600">Crew</div>
+          <div style="display:flex;gap:5px;align-items:center;font-size:9.5px"><img src="bots/mk-planner-0-xs.svg" alt="" style="width:11px;height:11px">planner</div>
+          <div style="display:flex;gap:5px;align-items:center;font-size:9.5px;padding-left:8px"><img src="bots/mk-lead-1-xs.svg" alt="" style="width:11px;height:11px">lead</div>
+          <div style="display:flex;gap:5px;align-items:center;font-size:9.5px;padding-left:16px"><img src="bots/mk-worker-2-xs.svg" alt="" style="width:11px;height:11px">worker</div>
+          <div style="display:flex;gap:5px;align-items:center;font-size:9.5px;padding-left:16px;color:var(--amber)"><img src="bots/mk-worker-3-xs.svg" alt="" style="width:11px;height:11px">worker</div>
+          <div style="display:flex;gap:5px;align-items:center;font-size:9.5px;padding-left:16px;color:var(--ter)"><img src="bots/mk-worker-4-xs.svg" alt="" style="width:11px;height:11px">worker</div>
+          <div style="display:flex;gap:5px;align-items:center;font-size:9.5px;padding-left:8px;color:var(--ter)"><img src="bots/mk-critic-5-xs.svg" alt="" style="width:11px;height:11px">critic</div>
+        </div>
+      </div>
+      <figcaption class="cap"><b>Same state, two clients.</b> Both read the daemon, so a decision made in one shows in the other at once. Closing the window leaves the menu bar as it was.</figcaption>
+    </figure>
+  </div>
+
+  <table style="border-collapse:collapse;width:100%;max-width:1312px">
+    <thead><tr><th style="width:260px">What moves</th><th style="width:420px">How</th><th>With Reduce Motion</th></tr></thead>
+    <tbody>
+      <tr><td>Panel → window (pointer)</td><td>scale and clip one shape, 300 ms (0.32, 0.72, 0, 1)</td><td style="color:var(--sec)">150 ms crossfade</td></tr>
+      <tr><td>Panel → window (⌘↩), ⌘K, block focus</td><td>none: keyboard actions never animate</td><td style="color:var(--sec)">none</td></tr>
+      <tr><td>A decision arrives in the loop</td><td>height spring 0.35 s, no bounce; content 180 ms ease-out with 2 px blur → 0</td><td style="color:var(--sec)">150 ms fade</td></tr>
+      <tr><td>Split a crew member beside the loop</td><td>the row lifts on drag; the block opens from the row's position, spring 0.3 s</td><td style="color:var(--sec)">opens in place</td></tr>
+      <tr><td>Bots</td><td>no loops; a blink on hover and the visor glow on running agents, as approved for the menu bar</td><td style="color:var(--sec)">static</td></tr>
+    </tbody>
+  </table>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

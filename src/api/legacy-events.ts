@@ -58,7 +58,7 @@ const kv = { k: S, version: N, writer: S.optional() };
 
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
 export const SCOPE_EVENT_TYPES = [
-	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED",
+	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED", "RUN_GOAL_COMPLETED", "RUN_PR_OPENED", "RUN_BRANCH_KEPT",
 	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED", "AGENT_STEP",
 	"AGENT_PAUSED", "AGENT_RESUMED", "AGENT_GRANTED", "AGENT_ADOPTED", "AGENT_REAPED", "AGENT_CANCELLED",
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
@@ -76,6 +76,9 @@ export const LegacyEventShapes = {
 	"run.created": { budget: U, label: nS, goal: nT.optional(), ...cause },
 	"run.granted": budget,
 	"run.ended": { state: z.enum(["failed", "cancelled"]).describe("How the run itself ended, when its agents didn't end it: failed (it couldn't start its first agent) or cancelled (stopped before any agent of it had run, or with none left to stop)"), reason: nT.describe("Why: the error that stopped it, or the cancel's reason"), by: nS.describe("Who ended it: operator, client:<id>, or null for capcomd itself"), ...cause },
+	"run.goal_completed": { branch: S.describe("The run's goal branch"), base: S.describe("The branch it was cut from, which a pull request goes into"), plannerId: S.describe("The planner agent whose finish made the run ready"), ...cause },
+	"run.pr_opened": { branch: S, base: S, number: N.describe("The pull request's number on GitHub"), url: nS.describe("Its page on GitHub"), by: S.describe("Who opened it: client:<id>, operator or driver"), ...cause },
+	"run.branch_kept": { branch: S, base: S, by: S.describe("Who chose to keep it: client:<id>, operator or driver"), ...cause },
 	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(), ...cause },
 	"agent.started": { ...cause },
 	"agent.done": { ...finish, ...cause },
@@ -105,7 +108,7 @@ export const LegacyEventShapes = {
 	"merge.started": { id: S },
 	"merge.succeeded": { id: S },
 	"merge.failed": { id: S },
-	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read") },
+	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read"), askedBy: S.optional().describe("The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge") },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
 	"task.added": { taskId: S, title: T, after: z.array(S).optional() },

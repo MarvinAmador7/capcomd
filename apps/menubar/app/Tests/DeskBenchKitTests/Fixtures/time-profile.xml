@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!-- Hand-made, not recorded: the shape of `xctrace export --xpath '…/table[@schema="time-profile"]'`. The schema comes
+     in a node of its own, the rows in two more; ids are global, so refs cross nodes; a <sentinel/> is an empty cell. -->
+<trace-query-result>
+<node xpath='//trace-toc[1]/run[1]/data[1]/table[14]'><schema name="time-profile"><col><mnemonic>time</mnemonic><name>Sample Time</name></col><col><mnemonic>thread</mnemonic><name>Thread</name></col><col><mnemonic>process</mnemonic><name>Process</name></col><col><mnemonic>thread-state</mnemonic><name>State</name></col><col><mnemonic>weight</mnemonic><name>Weight</name></col><col><mnemonic>stack</mnemonic><name>Backtrace</name></col></schema></node>
+<node xpath='//trace-toc[1]/run[1]/data[1]/table[15]'>
+<row><sample-time id="1" fmt="00:00.100">100000000</sample-time><thread id="2" fmt="Main Thread 0x1 (Bench, pid: 7)"><tid id="3">1</tid><process id="4" fmt="Bench (7)"><pid id="5">7</pid></process></thread><process ref="4"/><thread-state id="6" fmt="Running">Running</thread-state><weight id="7" fmt="1.00 ms">1000000</weight><tagged-backtrace id="8"><frame id="9" name="-[NSScrollAnimationHelper(Private) _advance:]" addr="0x10"><binary id="10" name="AppKit"/></frame><frame id="11" name="-[NSApplication(NSEventRouting) sendEvent:]" addr="0x11"><binary ref="10"/></frame><frame id="12" name="ReelView.slide(to:animated:)" addr="0x12"><binary id="13" name="Bench"/></frame><frame id="14" name="main" addr="0x13"><binary ref="13"/></frame></tagged-backtrace></row>
+<row><sample-time id="15" fmt="00:00.101">101000000</sample-time><thread ref="2"/><process ref="4"/><sentinel/><weight ref="7"/><tagged-backtrace ref="8"/></row>
+</node>
+<node xpath='//trace-toc[1]/run[1]/data[1]/table[16]'>
+<row><sample-time id="16" fmt="00:00.200">200000000</sample-time><thread ref="2"/><process ref="4"/><thread-state ref="6"/><weight ref="7"/><tagged-backtrace id="17"><frame id="18" name="std::__1::pair&lt;Key, Value (unsigned short)&gt; Map&lt;Key&gt;::getOrInsert&lt;Key&gt;(Key const&amp;)" addr="0x20"><binary id="19" name="libswiftCore.dylib"/></frame><frame id="20" name="(anonymous namespace)::Engine::solve(int)" addr="0x21"><binary ref="19"/></frame><frame id="21" name="LayoutEngineBox.sizeThatFits(_:)" addr="0x22"><binary id="22" name="SwiftUICore"/></frame><frame ref="12"/><frame ref="14"/></tagged-backtrace></row>
+<row><sample-time id="23" fmt="00:00.201">201000000</sample-time><thread ref="2"/><process ref="4"/><thread-state ref="6"/><weight ref="7"/><tagged-backtrace id="24"><frame ref="21"/><frame ref="12"/><frame ref="14"/></tagged-backtrace></row>
+<row><sample-time id="25" fmt="00:00.300">300000000</sample-time><thread ref="2"/><process ref="4"/><sentinel/><weight ref="7"/><tagged-backtrace id="26"><frame id="27" name="objc_msgSend" addr="0x30"><binary id="28" name="libobjc.A.dylib"/></frame><frame ref="14"/></tagged-backtrace></row>
+<row><sample-time id="29" fmt="00:00.150">150000000</sample-time><thread id="30" fmt="worker 0x2 (Bench, pid: 7)"><tid id="31">2</tid><process ref="4"/></thread><process ref="4"/><thread-state ref="6"/><weight ref="7"/><tagged-backtrace ref="24"/></row>
+</node>
+</trace-query-result>

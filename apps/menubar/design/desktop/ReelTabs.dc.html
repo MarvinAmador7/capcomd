@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Reel: title bar states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.sb{--text:#F2F2F7;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--amber:#FFB020;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.bar{height:60px;border-radius:12px;background:#0e0e10;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);display:flex;align-items:center;gap:8px;padding:0 12px 0 16px}
+.lights{display:flex;gap:8px;padding-right:10px}
+.lights span{width:12px;height:12px;border-radius:6px;background:#3a3a3e}
+.grp{display:flex;align-items:center;gap:4px;height:44px;padding:0 4px 0 12px;border-radius:13px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12)}
+.tp{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px 0 4px;border-radius:9px;color:var(--sec);font-size:12.5px;white-space:nowrap}
+.tp img{width:22px;height:22px;image-rendering:pixelated}
+.deck{position:relative;display:inline-flex;align-items:center;gap:9px;height:40px;padding:0 12px 0 8px;border-radius:12px;background:rgba(255,255,255,.05);color:var(--sec);font-size:12.5px;white-space:nowrap}
+.dk{display:inline-flex;align-items:center}
+.dk span{width:24px;height:24px;border-radius:7px;background:#26262a;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.dk span+span{margin-left:-15px}
+.dk img{width:18px;height:18px;image-rendering:pixelated}
+.nm{display:flex;flex-direction:column;line-height:1.2}
+.nm b{font-weight:400;color:var(--text)}
+.nm i{font-style:normal;font-size:10.5px;color:var(--ter)}
+.cap{font-size:13px;line-height:1.5;color:var(--sec);max-width:1100px}
+.cap b{color:var(--text);font-weight:600}
+.row{display:flex;flex-direction:column;gap:12px}
+.ring{width:12px;height:12px}
+.env{flex:0 0 auto;color:#C7C7CE}
+.deck .env{order:0}.deck .nm{order:1}.deck .dk{order:2}
+</style>
+</helmet>
+<div class="sb" style="width:1440px;height:900px;box-sizing:border-box;padding:48px 64px;background:#0b0b0c;display:flex;flex-direction:column;gap:30px">
+
+  <!-- 1: matchkey open -->
+  <div class="row">
+    <div class="bar">
+      <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="grp">
+        <svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Cloud"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="nm" style="padding:0 10px 0 4px"><b style="font-weight:600;font-size:12.5px">Migrate matchkey</b><i>Cloud ·<span class="mono">18:40</span></i></span>
+        <span class="tp"><img src="bots/mk-planner-0-small.svg" alt="">planner</span>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-lead-1-small.svg" alt="">lead</span>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-worker-2-small.svg" alt="">d3ce</span>
+        <span class="tp" style="color:var(--text);background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55)"><img src="bots/mk-worker-3-small.svg" alt="">4423<span style="color:var(--amber)">asks</span></span>
+        <span class="tp" style="opacity:.6"><img src="bots/mk-worker-4-small.svg" alt="">9b1f</span>
+        <span class="tp" style="opacity:.6"><img src="bots/mk-critic-5-small.svg" alt="">critic</span>
+      </div>
+      <span class="deck"><span class="dk"><span><img src="bots/pr-planner-0-xs.svg" alt=""></span><span><img src="bots/pr-worker-1-xs.svg" alt=""></span><span><img src="bots/pr-critic-2-xs.svg" alt=""></span></span><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="nm"><b>Fix proration</b><i>Local ·<span class="mono">2:05</span></i></span></span>
+      <span class="deck"><span class="dk"><span><img src="bots/pr-critic-2-xs.svg" alt=""></span></span><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="nm"><b>Nightly bumps</b><i>Local ·MacMini</i></span></span>
+    </div>
+    <div class="cap"><b>One project open.</b> Its stack is fanned out into crew tabs inside one group; the bracket is the part of the reel on screen. Every other project is a deck that reads left to right: where it runs (Local or Cloud) and its name, then its crew's heads stacked together.</div>
+  </div>
+
+  <!-- 2: after clicking Fix proration -->
+  <div class="row">
+    <div class="bar">
+      <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+      <span class="deck" style="box-shadow:inset 0 0 0 1px rgba(255,176,32,.6);color:var(--text)">
+        <span class="dk"><span><img src="bots/mk-planner-0-xs.svg" alt=""></span><span><img src="bots/mk-lead-1-xs.svg" alt=""></span><span style="box-shadow:0 0 0 1.5px #0e0e10,0 0 0 2.5px #FFB020"><img src="bots/mk-worker-3-xs.svg" alt=""></span></span>
+        <svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Cloud"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="nm"><b>Migrate matchkey</b><i style="color:var(--amber)">4423 asks</i></span>
+      </span>
+      <div class="grp">
+        <svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="nm" style="padding:0 10px 0 4px"><b style="font-weight:600;font-size:12.5px">Fix proration rounding</b><i>Local ·<span class="mono">2:05</span></i></span>
+        <span class="tp" style="color:var(--text);background:rgba(255,255,255,.08)"><img src="bots/pr-planner-0-small.svg" alt="">planner</span>
+        <span class="tp" style="color:var(--text);background:rgba(255,255,255,.08)"><img src="bots/pr-worker-1-small.svg" alt="">worker relay</span>
+        <span class="tp" style="opacity:.6;background:rgba(255,255,255,.08)"><img src="bots/pr-critic-2-small.svg" alt="">reviewer</span>
+      </div>
+      <span class="deck"><span class="dk"><span><img src="bots/pr-critic-2-xs.svg" alt=""></span></span><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="nm"><b>Nightly bumps</b><i>Local ·MacMini</i></span></span>
+    </div>
+    <div class="cap"><b>Click a deck and it fans out where it sits.</b> The heads slide apart into named tabs (spring 0.3 s, no bounce; names fade in over the last 120 ms) while the open group folds back into its deck. Projects keep their order, so nothing jumps. A folded project that asks keeps its amber ring and says who asks. ⌘1–9 switch with no animation.</div>
+  </div>
+
+  <!-- 3: peek a deck without opening it -->
+  <div class="row" style="position:relative">
+    <div class="bar">
+      <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="grp">
+        <svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Cloud"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="nm" style="padding:0 10px 0 4px"><b style="font-weight:600;font-size:12.5px">Migrate matchkey</b><i>Cloud ·<span class="mono">18:40</span></i></span>
+        <span class="tp"><img src="bots/mk-planner-0-small.svg" alt="">planner</span>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-lead-1-small.svg" alt="">lead</span>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-worker-2-small.svg" alt="">d3ce</span>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-worker-3-small.svg" alt="">4423</span>
+        <span class="tp" style="opacity:.6">+2</span>
+      </div>
+      <span class="deck" style="background:rgba(255,255,255,.09);color:var(--text)"><span class="dk"><span><img src="bots/pr-planner-0-xs.svg" alt=""></span><span><img src="bots/pr-worker-1-xs.svg" alt=""></span><span><img src="bots/pr-critic-2-xs.svg" alt=""></span></span><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="nm"><b>Fix proration</b><i>Local ·<span class="mono">2:05</span></i></span></span>
+      <span style="flex:1"></span>
+      <div style="width:420px"></div>
+    </div>
+    <div role="tooltip" style="position:absolute;left:720px;top:64px;width:330px;background:#232326;border-radius:12px;padding:10px 12px;box-sizing:border-box;box-shadow:0 0 0 .5px rgba(255,255,255,.14),0 14px 32px rgba(0,0,0,.45);display:flex;flex-direction:column;gap:6px;z-index:2">
+      <div style="font-size:12px;font-weight:600">Fix proration rounding in billing</div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px"><img src="bots/pr-planner-0-xs.svg" alt="" style="width:16px;height:16px;image-rendering:pixelated"><span style="font-weight:500">planner</span><span style="color:var(--sec)">splitting the work across relay</span></div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px"><img src="bots/pr-worker-1-xs.svg" alt="" style="width:16px;height:16px;image-rendering:pixelated"><span style="font-weight:500">worker relay</span><span style="color:var(--sec)">editing prorate.ts</span></div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ter)"><img src="bots/pr-critic-2-xs.svg" alt="" style="width:16px;height:16px;image-rendering:pixelated;opacity:.6"><span>reviewer</span><span>queued</span></div>
+    </div>
+    <div class="cap" style="max-width:600px"><b>Hover a deck to peek.</b> After a short delay a card lists its crew with one live line each; moving to the next deck shows its card at once. The open group gives up width first: the tabs outside the bracket fold into "+2".</div>
+  </div>
+
+  <!-- 4: many projects -->
+  <div class="row" style="margin-top:56px">
+    <div class="bar">
+      <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="grp">
+        <svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Cloud"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="nm" style="padding:0 10px 0 4px"><b style="font-weight:600;font-size:12.5px">Migrate matchkey</b><i>Cloud ·<span class="mono">18:40</span></i></span>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-lead-1-small.svg" alt="">lead</span>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-worker-2-small.svg" alt="">d3ce</span>
+        <span class="tp" style="color:var(--text);background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55)"><img src="bots/mk-worker-3-small.svg" alt="">4423</span>
+        <span class="tp" style="opacity:.6">+3</span>
+      </div>
+      <span class="deck" style="padding:0 8px" aria-label="Fix proration"><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="dk"><span><img src="bots/pr-planner-0-xs.svg" alt=""></span><span><img src="bots/pr-worker-1-xs.svg" alt=""></span></span></span>
+      <span class="deck" style="padding:0 8px" aria-label="Nightly bumps"><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="dk"><span><img src="bots/pr-critic-2-xs.svg" alt=""></span></span></span>
+      <span class="deck" style="padding:0 8px;box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)" aria-label="Rotate staging keys, asks"><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Cloud"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="dk"><span><img src="bots/pr-planner-0-small.svg" alt=""></span><span style="box-shadow:0 0 0 1.5px #0e0e10,0 0 0 2.5px #FFB020"><img src="bots/pr-worker-1-small.svg" alt=""></span></span></span>
+      <span class="deck" style="padding:0 8px" aria-label="Docs link check"><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="dk"><span><img src="bots/pr-critic-2-small.svg" alt=""></span></span></span>
+      <span class="deck" style="padding:0 8px" aria-label="Upgrade Bun"><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Cloud"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="dk"><span><img src="bots/mk-critic-5-small.svg" alt=""></span><span><img src="bots/mk-worker-4-xs.svg" alt=""></span></span></span>
+      <span class="deck" style="padding:0 10px;font-size:12px">+2</span>
+    </div>
+    <div class="cap"><b>Many projects.</b> When names no longer fit, decks drop their names and keep their heads; the name is in the peek. Past what fits, a "+2" deck lists the rest, the projects button's menu from Shell 1. Decks that ask never hide in the overflow.</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

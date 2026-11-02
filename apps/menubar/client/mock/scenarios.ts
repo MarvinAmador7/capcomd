@@ -9,6 +9,10 @@
 //   SETTINGS=mixed SANDBOXES=readonly|envlocked|noconfigure|conflict|owners …   changing settings, capcomd's own machines
 //   SETTINGS=mixed SANDBOXES=changed|unavailable|noactions …          deleting machines (409, 503, a phase 2 daemon)
 //   PROJECTS=ready|configured|notgit|noorigin|nogh-publish|secrets|taken|notgithub|nogh|apikey|refuse|old …   setting a folder up as a project, starting its repository and publishing it (projects.ts)
+//   SCENARIO=goal [GOAL_READY_AFTER=ms GOAL_BASE=dev|none GOAL_SOURCE=github|git GOAL_GITHUB=yes|no|nologin]   goal branches (goal.ts):
+//     run-gb01 working → ready with landed and not-landed work, run-gl01 stopped (its planner failed); the setup's branches
+//     route, POST /v1/runs base/goalBranch refusals, Open PR and Keep branch. Start the app with -capcomd.startRepo /src/app
+//     for the composer's goal branch row.
 //
 // Scenes: card-running | card-ask | card-stopped | card-finished | card-long | cards (the Active card, design/active-card),
 // panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
@@ -22,6 +26,7 @@ import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
 import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
 import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
 import { runTitle } from "../../../../src/api/run-title";
+import { clampGoal, goalCaps, goalCreateRefusal, goalRoute, goalSummary, ledgerGoal, type GoalSpec } from "./goal";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
 const TOKEN = process.env.TOKEN ?? "test-token";
@@ -42,7 +47,9 @@ type ApprovalSpec = { id: string; agentId: string; question: string; ref: string
 type SpanSpec = { id: string; parent?: string; name: string; from: number; took: number; error?: boolean; attrs?: Record<string, unknown> };   // from/took: seconds after the run started
 type FileSpec = { path: string; status: string; added: number | null; removed: number | null; agentId: string };
 type RunSpec = { id: string; projectId: string; goal: string; state: string; startedAgo: number; lastAgo: number; agents: AgentSpec[]; approvals?: ApprovalSpec[];
-  spans?: SpanSpec[]; transcript?: Record<string, string[]>; files?: FileSpec[] };
+  spans?: SpanSpec[]; transcript?: Record<string, string[]>; files?: FileSpec[];
+  /** Run.goalBranch and GET …/goal (goal.ts). */
+  goalSpec?: GoalSpec };
 
 const scenes: Record<string, RunSpec[]> = {
   // tree-card-v3.png: approval-tinted card with a nested tree, a quiet running card, one finished project.
@@ -173,6 +180,27 @@ scenes["cards"] = [{ ...clamp("ask") }, proration("failed"), { ...matchkey() }, 
   { ...clamp("done"), id: "run-cl03", projectId: "prj-e2e3", goal: "Ship the clamp helper",
     agents: clamp("done").agents.map((a) => ({ ...a, id: a.id.replace("cl-", "cl3-"), parent: a.parent?.replace("cl-", "cl3-") })),
     files: clampFiles.map((f) => ({ ...f, agentId: "agt-cl3-wk" })) }];
+// Goal branches (goal.ts): one run working toward its ready card, one whose planner failed after landing some work.
+scenes["goal"] = (() => {
+  const g = clampGoal(), working = g.state === "working";
+  return [
+    { id: "run-gb01", projectId: "prj-clamp", goal: "Add a clamp helper and its tests", state: working ? "running" : "completed", startedAgo: 6 * min, lastAgo: working ? 0.05 * min : 0.2 * min,
+      agents: [
+        { id: "agt-gb-pl", profile: "planner", provider: "claude", status: working ? "running" : "done", repo: "app", activity: working ? "Reviewing 3 workers" : "Wrote the summary", kind: "spawn", ago: 6 * min,
+          result: working ? undefined : { summary: g.summary } },
+        { id: "agt-gb-w1", parent: "agt-gb-pl", profile: "worker", provider: "claude", status: "done", repo: "app", key: "task-clamp", activity: "Edited src/math.ts", kind: "edit", ago: 4 * min },
+        { id: "agt-gb-w2", parent: "agt-gb-pl", profile: "worker", provider: "codex", status: "done", repo: "app", key: "task-tests", activity: "Ran bun test", kind: "test", ago: 3.5 * min },
+        { id: "agt-gb-w3", parent: "agt-gb-pl", profile: "worker", provider: "codex", status: "done", repo: "app", key: "task-docs", activity: "Ran markdownlint", kind: "test", ago: 3 * min },
+      ], goalSpec: g },
+    { id: "run-gl01", projectId: "prj-ledger", goal: "Migrate the ledger to v2", state: "failed", startedAgo: 40 * min, lastAgo: 12 * min,
+      agents: [
+        { id: "agt-gl-pl", profile: "planner", provider: "claude", status: "failed", repo: "ledger", ago: 40 * min, result: { error: "usage limit reached" } },
+        { id: "agt-gl-w1", parent: "agt-gl-pl", profile: "worker", provider: "codex", status: "done", repo: "ledger", key: "task-schema", ago: 38 * min },
+        { id: "agt-gl-w2", parent: "agt-gl-pl", profile: "worker", provider: "claude", status: "failed", repo: "ledger", key: "task-backfill", ago: 30 * min, result: { error: "usage limit reached (resets 18:40)" } },
+        { id: "agt-gl-w3", parent: "agt-gl-pl", profile: "worker", provider: "codex", status: "cancelled", repo: "ledger", key: "task-readers", ago: 20 * min },
+      ], goalSpec: ledgerGoal() },
+  ] as RunSpec[];
+})();
 const runs = scenes[SCENARIO];
 if (!runs) { console.error(`unknown SCENARIO ${SCENARIO}; one of ${Object.keys(scenes).join(", ")}`); process.exit(2); }
 
@@ -213,7 +241,8 @@ function subjectOf(p: ApprovalSpec) {
 function depthOf(r: RunSpec, a: AgentSpec): number { let d = 0, p = a.parent; while (p) { d++; p = r.agents.find(x => x.id === p)?.parent; } return d; }
 const HEAD = seq;
 
-const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, ...runTitle({ label: null, goal: r.goal }), repo: null, createdAt: iso(NOW - r.startedAgo) });
+const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null, state: r.state, goal: r.goal, ...runTitle({ label: null, goal: r.goal }), repo: null, createdAt: iso(NOW - r.startedAgo),
+  ...(r.goalSpec ? { goalBranch: goalSummary(r.goalSpec) } : {}) });
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
   text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
   task: a.task ?? null, taskAttachment: null, result: a.result ?? null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago),
@@ -255,6 +284,28 @@ const threadWrite = (run: RunSpec, agentId: string, d: any) => {
     durability: "ephemeral", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId, data: { agentId, item } };
   for (const c of liveThread.get(run.id) ?? []) { try { c.enqueue(new TextEncoder().encode(sse(null, e.type, e))); } catch { /* closed */ } }
 };
+// Goal branches: the runs that have one, and their events on the daemon and run streams (seqs past everything else).
+const goals = new Map(runs.filter((r) => r.goalSpec).map((r) => [r.id, { goal: r.goal, spec: r.goalSpec! }]));
+let goalSeq = HEAD + 30_000;
+const emitGoal = (runId: string, type: string, data: Record<string, unknown>, agentId: string | null = null) => {
+  const r = runs.find((x) => x.id === runId)!, ms = Date.now();
+  const e = { v: 1, id: `evt_goal_${++goalSeq}`, scope: runId, seq: goalSeq, entity: agentId ?? runId, entitySeq: 1, type, typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms,
+    projectId: r.projectId, runId, agentId, data };
+  broadcast("daemon", e); broadcast(runId, e);
+};
+for (const r of runs) {
+  const g = r.goalSpec;
+  if (!g || g.readyAfter === null) continue;
+  setTimeout(() => {   // the planner finishes: the run is ready, and completes
+    const planner = r.agents.find((a) => a.id === g.plannerId)!;
+    planner.status = "done"; planner.activity = "Wrote the summary"; planner.result = { summary: g.summary };
+    g.state = "ready"; g.readyAt = Date.now(); r.state = "completed";
+    emitGoal(r.id, "agent.done", { result: { summary: g.summary } }, planner.id);
+    emitGoal(r.id, "run.goal_completed", { branch: g.branch, base: g.base, plannerId: planner.id }, planner.id);
+    emitGoal(r.id, "run.completed", { cause: "completed" });
+    console.log(`goal: ${r.id} is ready on ${g.branch}`);
+  }, g.readyAfter);
+}
 if (existsSync(sock)) unlinkSync(sock);
 Bun.serve({
   unix: sock,
@@ -262,12 +313,17 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url), p = url.pathname;
     // CAPS=steer.skills,agent.pause advertises features the thread input checks for.
-    const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : []), ...(PROJECTS ? projectsCaps(PROJECTS) : [])])];
+    const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : []), ...(PROJECTS ? projectsCaps(PROJECTS) : []),
+      ...(goals.size ? goalCaps : [])])];
     if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: SETTINGS ? "0.6.0" : `mock-ui-${SCENARIO}`,
       ...(caps.length ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
     if (PROJECTS) {
       const r = projectsRoute(url, PROJECTS, req) ?? projectsRunOptionsRefusal(url, PROJECTS);
+      if (r) return r;
+    }
+    if (goals.size) {
+      const r = await goalRoute(url, req, goals, (runId, type, data) => emitGoal(runId, type, data));
       if (r) return r;
     }
     if (p === "/v1/skills") return Response.json([
@@ -328,6 +384,11 @@ Bun.serve({
       if (body.effort !== undefined && !levels[body.driver ?? "claude"].includes(body.effort)) return err(422, "invalid", `effort must be one of ${levels[body.driver ?? "claude"].join(", ")}`);
       console.log(`runs.create goal=${JSON.stringify(body.goal)} driver=${body.driver ?? "(default)"} sandbox=${body.sandbox ?? "(default)"} effort=${body.effort ?? "(default)"}`);
       if (process.env.NO_REPO && !body.repo) return err(422, "invalid", "repo is required: this daemon has no default repository (CAPCOMD_REPO).");
+      if (goals.size) {
+        console.log(`  base=${body.base ?? "(default)"} goalBranch=${JSON.stringify(body.goalBranch ?? "(suggested)")}`);
+        const no = goalCreateRefusal(body);
+        if (no) return no;
+      }
       return Response.json({ id: `run-new${Date.now() % 100000}`, projectId: "prj-new", label: body.goal, state: "starting", goal: body.goal, ...runTitle({ label: body.goal, goal: body.goal }), repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
     }
     if (p === "/v1/runs") return Response.json(runs.map(runBody));

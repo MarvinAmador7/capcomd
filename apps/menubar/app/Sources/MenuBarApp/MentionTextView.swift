@@ -62,36 +62,6 @@ import CapcomdStore
   }
 }
 
-/// A mention pill: a capsule with the bot (14 pt, pixel-exact) and the bot's name. The composer and your sent bubbles
-/// draw the same one.
-@MainActor enum MentionPill {
-  static func image(label: String, bot: BotTraits?) -> NSImage {
-    let font = NSFont.systemFont(ofSize: Theme.Thread.pillFontSize, weight: .medium)
-    let text = NSAttributedString(string: label, attributes: [.font: font, .foregroundColor: NSColor(Theme.Thread.pillText)])
-    let botImage = bot.flatMap { BotImages.image($0, size: .xs) }
-    let h = Theme.Thread.pillHeight, side = CGFloat(BotAvatar.cells(.xs))
-    let lead = botImage == nil ? Theme.Thread.pillTrailing : Theme.Thread.pillLeading + side + Theme.Thread.pillGap
-    let w = (lead + text.size().width + Theme.Thread.pillTrailing).rounded(.up)
-    let fill = NSColor(Theme.Thread.pillFill), stroke = NSColor(Theme.Thread.pillStroke)
-    let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { r in
-      let shape = NSBezierPath(roundedRect: r.insetBy(dx: 0.25, dy: 0.25), xRadius: h / 2, yRadius: h / 2)
-      fill.setFill(); shape.fill()
-      stroke.setStroke(); shape.lineWidth = 0.5; shape.stroke()
-      if let botImage {
-        NSGraphicsContext.current?.imageInterpolation = .none
-        botImage.draw(in: NSRect(x: Theme.Thread.pillLeading, y: ((h - side) / 2).rounded(), width: side, height: side))
-      }
-      let ts = text.size()
-      text.draw(at: NSPoint(x: lead, y: ((h - ts.height) / 2).rounded()))
-      return true
-    }
-    img.accessibilityDescription = label
-    return img
-  }
-
-  /// How far below the baseline the pill starts, centring it on the cap height of text at `size`.
-  static func baseline(textSize size: CGFloat) -> CGFloat { ((NSFont.systemFont(ofSize: size).capHeight - Theme.Thread.pillHeight) / 2).rounded() }
-}
 
 /// One mention in the composer's text: the pill as a single character, carrying who it points at.
 final class MentionAttachment: NSTextAttachment {

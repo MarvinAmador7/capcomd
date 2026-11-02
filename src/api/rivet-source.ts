@@ -11,7 +11,9 @@ import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
 import { agentActivity, describeEvent } from "./describe";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
-import { approvalIdFor, mergeApprovalText, parseApprovalId, projectIdOf, type HarnessSource, type PendingApproval } from "./source";
+import { approvalIdFor, mergeApprovalText, parseApprovalId, projectIdOf, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
+import { goalSummary } from "../primitives/goal";
+import { RelayError } from "../core/errors";
 import { startDetachedRun } from "./create-run";
 import { runTitle, type TitleAgent } from "./run-title";
 import { workspaceOf } from "./workspace";
@@ -184,12 +186,13 @@ export function rivetSource(): HarnessSource {
 	const runsIndex = () => recentRuns(500);
 	const runs = async () => Promise.all(runsIndex().map(async (r) => {
 		const s = await existingScope(r.runId).catch(() => null);
-		const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null } | null;
+		const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null } | null;
 		const agents = s && meta ? await s.listAgents({}).catch(() => []) : [];
 		const live = (agents as Array<{ status: string }>).some((a) => a.status === "running" || a.status === "pending" || a.status === "paused");
 		// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
 		const goal = meta?.goal ?? null;
-		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt) };
+		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt),
+			goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended) };
 	}));
 	const surface = sandboxSurface({
 		// The user config (~/.capcomd/config.json `sandboxes`); off with CAPCOMD_NO_CONFIG.
@@ -244,7 +247,7 @@ export function rivetSource(): HarnessSource {
 					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile), status: a.status,
 					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: agentActivity(a.activity, a.status),
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
-					...agentRuntime(a.spec), updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
+					...agentRuntime(a.spec), createdAt: a.createdAt ? isoTs(a.createdAt) : null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
 				};
 			});
 		},
@@ -364,7 +367,26 @@ export function rivetSource(): HarnessSource {
 		initGit: async (path) => { const G = await import("./project-git"); return G.initGit(path, await projectDeps()); },
 		publishOptions: async (path) => { const G = await import("./project-git"); return G.publishOptions(path, await projectDeps()); },
 		publishProject: async (input) => { const G = await import("./project-git"); return G.publishProject(input, await projectDeps()); },
+		projectBranches: async (q) => { const P = await import("./projects"); return P.projectBranches(q, await projectDeps()); },
+		goal: async (runId) => {
+			try { return await (await import("../primitives/goal")).goalView(runId); }
+			catch (e) { if (e instanceof RelayError && e.code === "not_found") return null; throw e; }
+		},
+		openPullRequest: (runId, by, o) => goalAction(async () => (await import("../primitives/goal")).openGoalPullRequest(runId, { by, stopped: o?.stopped === true })),
+		keepBranch: (runId, by) => goalAction(async () => (await import("../primitives/goal")).keepGoalBranch(runId, { by }) as Promise<{ runId: string; branch: string; base: string; kept: true; changed: boolean }>),
 	};
+}
+
+/** A goal-branch action's RelayError as the API's refusal: not_found 404, conflict 409, usage 422; anything else throws (500). */
+async function goalAction<T>(f: () => Promise<T>): Promise<GoalOutcome<T>> {
+	try { return { ok: true, body: await f() }; }
+	catch (e) {
+		if (!(e instanceof RelayError)) throw e;
+		if (e.code === "not_found") return { ok: false, status: 404, code: "not_found", message: e.message };
+		if (e.code === "conflict") return { ok: false, status: 409, code: e.reason === "stopped" ? "stopped" : "conflict", message: e.message };
+		if (e.code === "usage" || e.code === "config") return { ok: false, status: 422, code: "invalid", message: e.message };
+		throw e;
+	}
 }
 
 /** Project setup runs in the daemon's own environment, with its logins and its `gh`. */

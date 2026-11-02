@@ -79,7 +79,8 @@ export async function startDetachedRun(input: CreateRunInput & { runId: string }
 	}
 	const [cmd, ...args] = selfArgv("run", "--detach", "--json", "--run-id", input.runId,
 		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []),
-		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []), "--", input.goal);
+		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []),
+		...(input.base !== undefined ? [`--base=${input.base}`] : []), ...(input.goalBranch === false ? ["--no-goal-branch"] : input.goalBranch !== undefined ? [`--goal-branch=${input.goalBranch}`] : []), "--", input.goal);
 	const child = (o.spawn ?? spawn)(cmd!, args, { cwd: ctx.cwd, env: ctx.env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"] });
 	let stdout = "", stderr = "";
 	child.stdout!.on("data", (b) => { stdout += b; });
@@ -93,7 +94,9 @@ export async function startDetachedRun(input: CreateRunInput & { runId: string }
 	let j: any = null;
 	try { j = JSON.parse(stdout.trim().split("\n").pop() ?? ""); } catch { /* not JSON: reported below */ }
 	if (code === 0 && j?.ok && j.runId === input.runId) return { repo: ctx.repo, log: typeof j.log === "string" ? j.log : null };
-	const e = j?.error as { code?: string; message?: string; hint?: string } | undefined;
-	if (e?.code && REFUSALS.has(e.code)) throw new CreateRunError(`${e.message ?? "capcomd run refused the run"}${e.hint && !e.hint.includes("--help") ? ` ${e.hint}` : ""}`);
+	const e = j?.error as { code?: string; message?: string; hint?: string; reason?: string } | undefined;
+	// A refusal about the base or the goal branch names the body field it's about (the setup screen shows it there).
+	const field = e?.reason === "base" || e?.reason === "goalBranch" ? e.reason : undefined;
+	if (e?.code && REFUSALS.has(e.code)) throw new CreateRunError(`${e.message ?? "capcomd run refused the run"}${e.hint && !e.hint.includes("--help") ? ` ${e.hint}` : ""}`, field);
 	throw new Error(`capcomd run failed to start the run (exit ${code}): ${(e?.message ?? (stderr.trim() || stdout.trim())).slice(-500)}`);
 }

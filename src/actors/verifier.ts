@@ -34,6 +34,8 @@ export const verifierActor = actor({
         testOnly?: boolean;
         testCommand?: string;
         expectSha?: string;
+        /** "direct": a run's goal branch (reviewed work is pushed to it, never a PR per child), whatever the repo's mode. */
+        mode?: "direct";
       }
     ) {
       const { verifierId, taskId, branch, runId } = params;
@@ -53,7 +55,7 @@ export const verifierActor = actor({
       const outcome = await withSpan(
         params.testOnly ? "git.verify" : "git.merge",
         { "relay.run_id": runId, "git.operation": params.testOnly ? "verify" : "merge", "git.ref": branch, "git.target": params.target ?? "" },
-        async () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}) },
+        async () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}), ...(params.mode ? { mode: params.mode } : {}) },
           await (await import("../merge/run-config")).mergeConfigFor(runId)) // the run's repository, not the engine's env
       );
 

@@ -25,11 +25,20 @@ public final class CapcomdStore {
   var threadCursor: [String: Int] = [:]
   public internal(set) var threadUnavailable: [String: DetailUnavailable] = [:]
   public internal(set) var media: [MediaKey: Fetched<Data>] = [:]
-  /// The run whose lifecycle feed carries `thread=1` (the open thread's run), and the agent shown.
-  public internal(set) var threadStreamRun: String?
+  /// Who follows which run's live thread items: the panel's open thread ("panel") and the desktop reel ("reel") each
+  /// hold at most one run. Those runs' lifecycle feeds carry `thread=1`; it covers every agent of the run.
+  var threadHolders: [String: String] = [:]
+  public var threadStreamRuns: Set<String> { Set(threadHolders.values) }
+  /// The panel's open thread: its run, and the agent shown.
+  public var threadStreamRun: String? { threadHolders[Self.panelHolder] }
   public internal(set) var openThreadAgent: String?
   public let prefs: UIPreferences
+  /// Something changed (the menu bar's whole-model refresh).
   public var onChange: (@MainActor () -> Void)?
+  /// The same moment, saying what changed, so a view showing one agent re-renders only for that agent. `.all` when
+  /// a change isn't narrowed (most durable events); live frames (activity, thread items) are always narrowed.
+  public var onChanges: (@MainActor (Set<ChangeKey>) -> Void)?
+  var pendingChanges: Set<ChangeKey> = []
 
   // Run detail (drill-down): fetched over REST while a run is open; see StoreDetail.swift.
   public internal(set) var traces: [String: Fetched<[TraceSpan]>] = [:]
@@ -42,6 +51,9 @@ public final class CapcomdStore {
   /// Pause / resume of one agent (and its subtree), keyed by agent id; settles on agent.paused / agent.resumed.
   public internal(set) var agentControlState: [String: ControlState] = [:]
   public internal(set) var startState: StartState = .idle
+  /// With `startState` `.failed`: the field the daemon's refusal is about (`runs.goal_branch`: "base" or "goalBranch"),
+  /// so the setup screen shows the sentence under that field. Nil otherwise.
+  public internal(set) var startRefusedField: String?
   /// Steers typed in a thread, per agent, until confirmed (StoreThread.swift).
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
   public internal(set) var capabilities: Set<String> = []
@@ -92,6 +104,16 @@ public final class CapcomdStore {
   let daemonInfo: DaemonInfoFetching?
   let threadSource: ThreadFetching?
   let projectSetter: ProjectSettingUp?
+  /// Goal branches (`runs.goal_branch`; GoalBranch.swift): the run's goal view per run, Open PR / Keep the branch per
+  /// run, and the setup screen's branches.
+  let goalActor: GoalBranchActing?
+  public internal(set) var goalViews: [String: Fetched<GoalView>] = [:]
+  public internal(set) var goalActions: [String: GoalActionState] = [:]
+  public internal(set) var projectBranches: Fetched<ProjectBranches>?
+  var pendingGoalKeys: [String: String] = [:]
+  /// Runs whose goal notice was raised (or is on its way): once per run, whatever the feed sends again.
+  public internal(set) var goalNoticed: Set<String> = []
+  var branchesAsked: String?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -115,12 +137,13 @@ public final class CapcomdStore {
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
               starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil, thread: ThreadFetching? = nil,
-              projects: ProjectSettingUp? = nil,
+              projects: ProjectSettingUp? = nil, goals: GoalBranchActing? = nil,
               prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
     self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter
     self.messenger = messenger; self.daemonInfo = daemonInfo; self.threadSource = thread; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
     // The live daemon adapter sets projects up too; tests may pass a port of their own.
     self.projectSetter = projects ?? (daemonInfo as? ProjectSettingUp)
+    self.goalActor = goals ?? (daemonInfo as? GoalBranchActing)
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 
@@ -243,13 +266,15 @@ public final class CapcomdStore {
     for id in want { subscribe(Self.lifecycleKey(id), scope: id, feed: "lifecycle") }   // live activity rides along (Live adds ?activity=1)
   }
   public var activeScopes: [String] { subs.keys.sorted() }
+  /// The daemon feed has answered (an empty project list is then really empty, not unread).
+  public internal(set) var daemonLoaded = false
 
   func subscribe(_ scope: String) { subscribe(scope, scope: scope, feed: nil) }
   func subscribe(_ key: String, scope: String, feed: String?) {
     guard subs[key] == nil, let subscriber else { return }
     let after = cursor[key] ?? 0
     let onFrame: @Sendable (StreamFrame) async -> Void = { [weak self] f in await self?.receive(f, scope: key) }
-    let thread = feed != nil && Self.lifecycleRun(key) == threadStreamRun   // the open thread's run: live thread items too
+    let thread = feed != nil && Self.lifecycleRun(key).map(threadStreamRuns.contains) == true   // followed runs: live thread items too
     subs[key] = feed == nil ? subscriber.subscribe(scope: scope, after: after, onFrame: onFrame)
                             : subscriber.subscribe(scope: scope, feed: feed, thread: thread, after: after, onFrame: onFrame)
   }
@@ -275,7 +300,14 @@ public final class CapcomdStore {
     case .unauthorized:
       unauthorized = true
     case .link(let up):
-      guard scope == "daemon", daemonUnreachable == up else { return }   // the panel follows the daemon feed only
+      guard scope == "daemon" else { return }   // the panel follows the daemon feed only
+      if up, !daemonLoaded {
+        // The daemon answered. Its run list follows on the same connection (the daemon scope has no snapshot to end);
+        // say so a moment later, so an empty list isn't shown before the runs that were on their way.
+        daemonLoaded = true
+        Task { [weak self] in try? await Task.sleep(for: .milliseconds(300)); self?.changed() }
+      }
+      guard daemonUnreachable == up else { return }
       daemonUnreachable = !up
       // Back: what the daemon can do and offers may have changed (a restart, an upgrade), and a first read made while it
       // was down got nothing, which hid the composer's Local/VM and driver row until the app was restarted.
@@ -310,7 +342,8 @@ public final class CapcomdStore {
       var run = runs[r.id] ?? Run(id: r.id, projectId: r.projectId, label: r.label, goal: nil, state: r.state, startedAtMs: nil, lastEventMs: 0)
       run.projectId = r.projectId; run.label = r.label; run.state = r.state; run.goal = r.goal.map(UntrustedText.init)
       run.daemonTitle = Self.daemonTitle(r)
-      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt)
+      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
+      run.goalBranch = r.goalBranch ?? run.goalBranch
       runs[r.id] = run
     }
     let agentRuns = Set(b.agents.map(\.runId)).union(b.steps.compactMap { $0.runId ?? ($0.scope.hasPrefix("run-") ? $0.scope : nil) })
@@ -325,9 +358,10 @@ public final class CapcomdStore {
     for (rid, st) in state { runs[rid]?.state = st }          // the snapshot's state wins over replayed transitions
     // Agents: the snapshot is authoritative for status/text/task; replay supplies key/repo/spawn order.
     for (i, a) in b.agents.enumerated() {
-      let old = runs[a.runId]?.agents[a.id]
+      let old = runs[a.runId]?.agents[a.id], created = epochMs(iso: a.createdAt) ?? old?.createdAtMs
       var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                     task: a.task.map(UntrustedText.init), key: old?.key, repo: a.workspace?.label ?? old?.repo, spawnedAtMs: old?.spawnedAtMs ?? i, activity: a.activity?.text)
+                     task: a.task.map(UntrustedText.init), key: old?.key, repo: a.workspace?.label ?? old?.repo, spawnedAtMs: old?.spawnedAtMs ?? created ?? i, activity: a.activity?.text)
+      ag.createdAtMs = created
       ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
       ag.activityKind = a.activity?.kind
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
@@ -349,6 +383,12 @@ public final class CapcomdStore {
     lastSeq[scope] = snapshotSeq
   }
 
+  /// Changes one run's goal branch (GoalBranch.swift): `runs` is set here only.
+  func updateGoalBranch(_ runId: String, _ f: (inout GoalBranchSummary?) -> Void) {
+    guard runs[runId] != nil else { return }
+    f(&runs[runId]!.goalBranch)
+  }
+
   // MARK: reducer
   func apply(_ e: Envelope) {
     let d = e.data
@@ -365,6 +405,7 @@ public final class CapcomdStore {
       guard let runId else { return }
       runs[runId]?.goal = d["goal"]?.string.map(UntrustedText.init); runs[runId]?.startedAtMs = e.epochMs
       if let l = d["label"]?.string { runs[runId]?.label = l }
+      if let sb = d["sandbox"]?.string { runs[runId]?.sandbox = sb }
     case "run.started", "run.paused", "run.resumed", "run.completed", "run.failed", "run.cancelled", "run.deleted":
       guard let runId else { return }
       let t = RunTransition(type: e.type, cause: d["cause"]?.string, agentId: d["agentId"]?.string ?? e.agentId, seq: e.seq, epochMs: e.epochMs)
@@ -376,6 +417,9 @@ public final class CapcomdStore {
         for (id, a) in approvals where a.runId == runId { approvals.removeValue(forKey: id) }
         subs.removeValue(forKey: Self.lifecycleKey(runId))?.cancel()
       }
+    case "run.goal_completed", "run.pr_opened", "run.branch_kept":
+      guard let runId else { return }
+      applyGoalEvent(e, runId: runId)
     case "run.new":
       guard let runId else { return }
       runs[runId]?.label = d["label"]?.string
@@ -390,6 +434,7 @@ public final class CapcomdStore {
       a.taskAttachment = AttachmentRef(d["taskAttachment"])
       a.provider = Provider(wire: d["agent"]?["provider"]?.string ?? d["agent"]?["kind"]?.string)
       a.model = d["agent"]?["model"]?.string
+      a.createdAtMs = e.epochMs
       runs[runId]?.agents[id] = a
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
                                     phase: Self.phase(a.kind), text: a.displayName, detail: a.task, status: .queued))
@@ -409,7 +454,10 @@ public final class CapcomdStore {
     case "agent.resumed", "agent.started":
       setStatus(runId, agentId, .running, e)
       if let runId, let agentId { runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil }
-    case "agent.thread_item_changed": applyThreadFrame(runId: runId, agentId: agentId, d)
+    case "agent.thread_item_changed":
+      applyThreadFrame(runId: runId, agentId: agentId, d)
+      // Up to four frames a second per item: narrowed, so only that agent's thread (and its run's last-event time) re-render.
+      if let runId, let agentId { mark(.run(runId), .agent(agentId), .thread(agentId)) }
     case "agent.step":
       // One finished step of an agent (capability agent.steps): "Read 4 files", then "Edited a file", in order. Keyed
       // like the daemon dedupes it (agent, kind, start), so a replay or a re-driven agent doesn't add a row twice.
@@ -425,6 +473,7 @@ public final class CapcomdStore {
       runs[runId]?.agents[agentId]?.activityKind = d["activity"]?["kind"]?.string
       runs[runId]?.agents[agentId]?.activityAtMs = epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs
       if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
+      mark(.run(runId), .agent(agentId), .thread(agentId))   // live, once a second per agent: narrowed
     case "verify.started", "verify.passed", "verify.failed":
       guard let runId else { return }
       let st: StepStatus = e.type == "verify.started" ? .running : e.type == "verify.passed" ? .done : .failed
@@ -479,9 +528,21 @@ public final class CapcomdStore {
     case "approval.requested":
       guard let id = e.data["approvalId"]?.string, let a = approvals[id] else { return }
       onNotify(.approvalRequested(approvalId: id, runId: a.runId, question: a.question))
+    case "run.goal_completed":
+      // Ready: the notice says how much landed, so it waits for the goal view.
+      guard let rid = e.runId ?? e.data["runId"]?.string, goalNoticed.insert(rid).inserted else { return }
+      Task { await self.raiseGoalNotice(rid, stopped: false, otherwise: nil) }
     case "run.completed", "run.failed", "run.cancelled":
       guard let rid = e.runId ?? e.data["runId"]?.string else { return }
-      onNotify(.runFinished(runId: rid, type: e.type, title: runs[rid]?.title ?? rid))
+      let finished = Notice.runFinished(runId: rid, type: e.type, title: runs[rid]?.title ?? rid)
+      // A goal branch run that stopped (failed or cancelled before the planner was done): with work landed, the goal
+      // notice says so instead; without, it is a run that failed or was stopped, as before.
+      if e.type != "run.completed", goalBranchSupported, let g = runs[rid]?.goalBranch, g.state != GoalBranchSummary.prOpened,
+         g.state != GoalBranchSummary.kept, goalNoticed.insert(rid).inserted {
+        Task { await self.raiseGoalNotice(rid, stopped: true, otherwise: finished) }
+        return
+      }
+      onNotify(finished)
     default: return
     }
   }
@@ -500,7 +561,8 @@ public final class CapcomdStore {
       run.projectId = r.projectId ?? run.projectId; run.label = r.label ?? run.label; run.state = r.state
       if let g = r.goal { run.goal = UntrustedText(g) }
       run.daemonTitle = Self.daemonTitle(r)
-      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt)
+      run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
+      run.goalBranch = r.goalBranch ?? run.goalBranch
       runs[r.id] = run
     }
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {
@@ -510,11 +572,13 @@ public final class CapcomdStore {
         old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs; old.repo = a.workspace?.label ?? old.repo
         old.provider = Provider(wire: a.provider) ?? old.provider; old.model = a.model ?? old.model
         old.activityAtMs = epochMs(iso: a.activity?.at) ?? old.activityAtMs
+        old.createdAtMs = epochMs(iso: a.createdAt) ?? old.createdAtMs
         old.read(result: a.result)
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
-                       task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: i, activity: a.activity?.text)
+                       task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: epochMs(iso: a.createdAt) ?? i, activity: a.activity?.text)
+        ag.createdAtMs = epochMs(iso: a.createdAt)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
         ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
         ag.provider = Provider(wire: a.provider); ag.model = a.model
@@ -590,5 +654,23 @@ public final class CapcomdStore {
     return result
   }
 
-  func changed() { onChange?() }
+  /// Narrows the next `changed()` to these keys. Only for a change known to touch nothing else.
+  func mark(_ keys: ChangeKey...) { pendingChanges.formUnion(keys) }
+  func changed() {
+    let keys: Set<ChangeKey> = pendingChanges.isEmpty ? [.all] : pendingChanges
+    pendingChanges = []
+    onChange?(); onChanges?(keys)
+  }
+}
+
+/// What a change touched (`CapcomdStore.onChanges`).
+public enum ChangeKey: Hashable, Sendable {
+  /// Anything may have changed.
+  case all
+  /// A run's own fields (state, last event, its agents' statuses or activity lines).
+  case run(String)
+  /// One agent's fields (status, activity line).
+  case agent(String)
+  /// One agent's thread (its items).
+  case thread(String)
 }

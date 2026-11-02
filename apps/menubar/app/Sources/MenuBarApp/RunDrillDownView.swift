@@ -27,6 +27,8 @@ struct RunDrillDownView: View {
       }
       .transition(.opacity)
       ForEach(model.approvals(runId)) { ApprovalCard(approval: $0) }
+      // The goal branch: where work lands while the planner works, then Ready with its actions.
+      GoalReadyBar(runId: runId, docked: false, quiet: true).padding(.vertical, Theme.Goal.barGap)
       DetailPane(runId: runId)
     }
     .padding([.top, .horizontal], Theme.Drill.padding)

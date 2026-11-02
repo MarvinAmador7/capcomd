@@ -57,7 +57,7 @@ final class FakeProjectDaemon: DaemonInfoFetching, ProjectSettingUp, @unchecked 
   func publishProject(path: String, owner: String, name: String, visibility: String) async throws -> ProjectInspection {
     publishes.append([path, owner, name, visibility])
     if !publishAnswers.isEmpty, let e = publishAnswers.removeFirst() { throw e }
-    let i = ProjectInspection(path: path, root: path, name: "my-app", repo: "https://github.com/\(owner)/\(name).git", github: "\(owner)/\(name)", ghReady: true, branches: ["main"], suggestedMode: "pr")
+    let i = ProjectInspection(path: path, root: path, name: "my-app", repo: "https://github.com/\(owner)/\(name).git", github: "\(owner)/\(name)", ghReady: true, defaultBranch: "main", branches: ["main"], suggestedMode: "pr")
     inspections[path] = i
     return i
   }
@@ -68,7 +68,7 @@ final class FakeProjectDaemon: DaemonInfoFetching, ProjectSettingUp, @unchecked 
 @MainActor
 final class ProjectSetupTests: XCTestCase {
   let ready = ProjectInspection(path: "/Users/me/src/app/src", root: "/Users/me/src/app", name: "app", repo: "https://github.com/acme/app.git", github: "acme/app",
-                                ghReady: true, branches: ["capcomd/staging", "main"], suggestedCheck: "bun run test", suggestedMode: "pr",
+                                ghReady: true, defaultBranch: "main", branches: ["capcomd/staging", "main"], suggestedCheck: "bun run test", suggestedMode: "pr",
                                 agents: [ProjectAgent(provider: "claude", label: "Claude Code", loggedIn: true), ProjectAgent(provider: "codex", label: "Codex", auth: "apikey")])
 
   func daemon() -> FakeProjectDaemon { let d = FakeProjectDaemon(); d.inspections[ready.path] = ready; return d }

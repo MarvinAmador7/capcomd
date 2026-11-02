@@ -28,7 +28,7 @@ capcomd - agent orchestration CLI
 
 Usage:
   capcomd serve [--harness-socket PATH]  Start the Rivet engine (port 6420) and the harness.v1 API socket
-  capcomd run <goal> [--run-id ID] [--target-branch B] [--detach]
+  capcomd run <goal> [--run-id ID] [--base B] [--goal-branch G | --no-goal-branch] [--detach]
              [--profile NAME] [--set key=value]... [--overrides JSON] [--operator]
                                        Pick an agent profile; overrides only narrow it
                                        (e.g. --set children.maxDepth=1 --set maxTurns=10)
@@ -48,6 +48,14 @@ Usage:
   capcomd agents list|show|add|set|rm|schema|validate
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
+                                           onto the run's goal branch: --goal-branch G (default: capcomd/<goal-slug>), cut
+                                           from --base B (default: the project's target, else origin's default branch);
+                                           reviewed work lands on it with no approval. --no-goal-branch: merge into the
+                                           target (--target-branch) as before
+  capcomd goal <runId> [--json]            the goal branch against its base: what landed, what didn't, the planner's summary
+  capcomd pr open <runId> [--yes]          open a pull request from the goal branch into its base (your gh login; idempotent;
+                                           capcomd never merges it; a run whose planner stopped asks first, --yes without a
+                                           terminal)  ·  capcomd goal keep <runId>: keep the branch, no PR
                                            (default on boxd: the profile named "planner", which capcomd setup writes)
              [--planner-provider claude|codex]  run the planner on that provider (its model and login: the project's
                                            profile on it, else the provider's defaults)
@@ -55,7 +63,7 @@ Usage:
              [--sandbox docker|boxd]       where this run's agents and checks run (default: CAPCOMD_SANDBOX)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
   capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages; configure: change settings, set up projects)
-  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE]]  → runId (a scope; plans nothing)
+  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE] | --goal-branch G --base B]  → runId (a scope; plans nothing)
   capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
@@ -212,6 +220,9 @@ async function main(argv: string[]): Promise<number> {
         relogin: { type: "boolean" },
         deny: { type: "boolean" },
         "target-from": { type: "string" },
+        base: { type: "string" },
+        "goal-branch": { type: "string" },
+        "no-goal-branch": { type: "boolean" },
         ref: { type: "string" },
         checks: { type: "string" },
         check: { type: "string" },
@@ -338,7 +349,11 @@ async function main(argv: string[]): Promise<number> {
           const checks = values["checks-set"] ? P.parseCheckSet(values["checks-set"] as string[]) : (d.checks ?? {});
           const reviewer = (values.reviewer as string | undefined) ?? d.reviewer;
           const target = (values.target as string | undefined) ?? d.target;
-          const r = await P.runNew({ budget, label: values.label as string | undefined, ...(values.goal ? { goal: values.goal as string } : {}), key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}), ...(target ? { target } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) });
+          // --goal-branch G --base B: the run's target is G, cut from B (no default base: the operator names both).
+          const goalBranch = values["goal-branch"] as string | undefined, base = values.base as string | undefined;
+          if ((goalBranch !== undefined || base !== undefined) && (values.target !== undefined || values["target-from"] !== undefined)) usage("--goal-branch/--base replace --target/--target-from: pass one pair");
+          const r = await P.runNew({ budget, label: values.label as string | undefined, ...(values.goal ? { goal: values.goal as string } : {}), key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}),
+            ...(goalBranch !== undefined || base !== undefined ? { ...(goalBranch !== undefined ? { goalBranch } : {}), ...(base !== undefined ? { base } : {}) } : { ...(target ? { target } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) }) });
           if (json) out(r); else console.log(r.runId);
           return EXIT.ok;
         }
@@ -414,18 +429,48 @@ async function main(argv: string[]): Promise<number> {
           if (!/^\s*\[agent:/i.test(rawGoal)) goal = `[agent:${ref}] ${rawGoal}`;
         }
         const runId = (values["run-id"] as string | undefined) ?? generateRunId();
-        const targetBranch = values["target-branch"] as string | undefined;
+        let targetBranch = values["target-branch"] as string | undefined;
         await assertEngine();
+        // A planner run gets a goal branch (unless --no-goal-branch): cut from the base the user picked (--base; with a goal
+        // branch, --target-branch names the base too), else the project's target, else origin's default branch. Decided
+        // here, before the run detaches, so a base nobody can determine is refused now (never a made-up "main").
+        let goalBranch: { branch: string; base: string } | null = null;
+        if (values["no-goal-branch"] && (values["goal-branch"] !== undefined || values.base !== undefined)) usage("--no-goal-branch can't be combined with --goal-branch or --base");
+        if (values["goal-branch"] !== undefined && !planner) usage("--goal-branch needs a planner run (the built-in recipe merges into its target)");
+        // The built-in recipe has no goal branch: its work merges into the base it was given.
+        if (!planner && values.base !== undefined) {
+          if (targetBranch !== undefined && targetBranch !== values.base) usage("--base and --target-branch name different branches");
+          targetBranch = values.base as string;
+        }
+        if (planner && !values["no-goal-branch"]) {
+          if (values.base !== undefined && targetBranch !== undefined && values.base !== targetBranch) usage("--base and --target-branch name different branches: with a goal branch, pass only --base");
+          const G = await import("../merge/goal");
+          const { env: envVar } = await import("../utils/env");
+          const cfg = (await import("../merge/config")).loadMergeConfig();
+          const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
+          // A run resumed with its id keeps the goal branch it has (read without creating the run's scope).
+          const { GOAL_KV } = await import("../primitives/ops");
+          const pv: any = (await (await import("../core/relay")).existingActor("scope", [runId]).then((x) => x?.kvGet({ k: GOAL_KV }) ?? null).catch(() => null))?.value;
+          const prior = typeof pv?.branch === "string" && typeof pv?.base === "string" ? { branch: pv.branch as string, base: pv.base as string } : undefined;
+          // The remote itself (git ls-remote) says which branches exist; the GitHub API is for the setup screen's menu.
+          const r = await G.resolveGoalBranch({
+            goal: rawGoal, base: (values.base as string | undefined) ?? targetBranch ?? prior?.base ?? null, goalBranch: (values["goal-branch"] as string | undefined) ?? prior?.branch ?? null,
+            projectTarget: d.target ?? envVar("MERGE_TARGET") ?? null, remote: cfg?.remote ?? null, cwd: process.cwd(), reuse: prior?.branch ?? null,
+          });
+          goalBranch = { branch: r.goalBranch, base: r.base };
+          targetBranch = undefined;
+        }
 
         if (values.detach) {
           const dir = join((await import("../utils/home")).stateDir(), "runs");
           mkdirSync(dir, { recursive: true });
           const log = join(dir, `${runId}.ndjson`);
           const fd = openSync(log, "a");
-          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), ...(driver ? ["--planner-provider", driver] : []), ...(effort ? ["--planner-effort", effort] : []), ...(runSandbox ? ["--sandbox", runSandbox] : []), "--", goal);
+          const goalArgs = goalBranch ? ["--goal-branch", goalBranch.branch, "--base", goalBranch.base] : values["no-goal-branch"] ? ["--no-goal-branch"] : [];
+          const [cmd, ...args] = (await import("../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...goalArgs, ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), ...(driver ? ["--planner-provider", driver] : []), ...(effort ? ["--planner-effort", effort] : []), ...(runSandbox ? ["--sandbox", runSandbox] : []), "--", goal);
           const child = spawn(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
           child.unref();
-          if (json) out({ runId, detached: true, log, pid: child.pid });
+          if (json) out({ runId, detached: true, log, pid: child.pid, ...(goalBranch ? { goalBranch: goalBranch.branch, base: goalBranch.base } : {}) });
           else console.log(`Started run ${runId} in the background (log: ${log})`);
           return EXIT.ok;
         }
@@ -443,12 +488,52 @@ async function main(argv: string[]): Promise<number> {
           else console.log(human);
         };
         const result = planner
-          ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: plannerRef!, ...(driver ? { driver } : {}), ...(runSandbox ? { sandbox: runSandbox } : {}) })
+          ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: plannerRef!, ...(driver ? { driver } : {}), ...(runSandbox ? { sandbox: runSandbox } : {}), ...(goalBranch ? { goalBranch } : {}) })
           : runPath === "recipe"
           ? await (await import("../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit, ...(runSandbox ? { sandbox: runSandbox } : {}) })
           : await executeRun({ goal, runId, targetBranch, emit });
         if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
         return result.ok ? EXIT.ok : EXIT.run_failed;
+      }
+
+      case "goal": {
+        // capcomd goal <runId> | capcomd goal keep <runId>
+        const G = await import("../primitives/goal");
+        if (positionals[1] === "keep") {
+          const runId = positionals[2] ?? usage("runId required: capcomd goal keep <runId>");
+          const r = await G.keepGoalBranch(runId, { by: (values.by as string | undefined) ?? "operator" });
+          if (json) out(r); else console.log(`Kept ${r.branch} (no pull request).`);
+          return EXIT.ok;
+        }
+        const runId = positionals[1] ?? usage("runId required: capcomd goal <runId>");
+        const v = await G.goalView(runId);
+        if (json) { out({ goal: v }); return EXIT.ok; }
+        const c = v.compare;
+        console.log(`Goal branch: ${v.branch} (from ${v.base})  ${v.state}`);
+        console.log(c.error ? `Compare: ${c.error}` : `${c.ahead} commit(s) ahead of ${v.base}, ${c.filesTotal} file(s), +${c.added} -${c.removed}`);
+        if (v.landed.length) { console.log("\nLanded:"); for (const l of v.landed) console.log(`  ${l.agentId} ${l.task}  (${l.review ? (l.review.passed ? "reviewed" : "review failed") : "no reviewer"})`); }
+        if (v.notLanded.length) { console.log("\nNot landed:"); for (const n of v.notLanded) console.log(`  ${n.agentId} ${n.task}: ${n.reason}${n.detail ? ` (${n.detail.split("\n")[0]})` : ""}`); }
+        if (v.summary) console.log(`\nPlanner's summary:\n${v.summary}`);
+        console.log(v.pullRequest ? `\nPull request: #${v.pullRequest.number}${v.pullRequest.url ? ` ${v.pullRequest.url}` : ""}`
+          : v.openPullRequest.available ? `\n${v.openPullRequest.confirm ? `${v.openPullRequest.confirm}\n` : ""}Open a pull request: capcomd pr open ${runId}` : `\n${v.openPullRequest.reason}`);
+        return EXIT.ok;
+      }
+
+      case "pr": {
+        if (positionals[1] !== "open") usage("usage: capcomd pr open <runId>");
+        const runId = positionals[2] ?? usage("runId required: capcomd pr open <runId>");
+        const G = await import("../primitives/goal");
+        const by = (values.by as string | undefined) ?? "operator";
+        // A run whose planner stopped before it finished: ask first on a terminal; --yes otherwise.
+        const r = await G.openGoalPullRequest(runId, { by, stopped: values.yes === true }).catch(async (e) => {
+          if (!(e instanceof RelayError) || e.reason !== "stopped" || json) throw e;
+          const p = (await import("./prompt")).prompter();
+          if (!p.interactive || !(await p.confirm(e.message, false))) throw e;
+          return G.openGoalPullRequest(runId, { by, stopped: true });
+        });
+        if (json) out(r);
+        else console.log(`${r.created ? "Opened" : "Already open:"} pull request #${r.pullRequest.number} from ${r.branch} into ${r.base}${r.pullRequest.url ? `: ${r.pullRequest.url}` : ""}`);
+        return EXIT.ok;
       }
 
       case "status": {

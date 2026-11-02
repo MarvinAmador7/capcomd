@@ -1,0 +1,6 @@
+# compiled probe binaries
+sampler/sampler
+rusage/rusage
+symbolicate/symbolicate
+symbolicate/scan
+*.dSYM

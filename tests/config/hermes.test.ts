@@ -368,7 +368,7 @@ describe("capcomd setup agent / setup check with Hermes", () => {
       // The allowlist is exactly the write tools that aren't destructive: Hermes asks before the destructive ones.
       const writes = tools.filter((t) => !t.annotations?.readOnlyHint && !t.annotations?.destructiveHint).map((t) => t.name).sort();
       expect(writes).toEqual([...HERMES_ALLOWED_TOOLS].sort());
-      expect(tools.filter((t) => t.annotations?.destructiveHint).map((t) => t.name).sort()).toEqual(["capcomd_approve", "capcomd_cancel", "capcomd_merge"]);
+      expect(tools.filter((t) => t.annotations?.destructiveHint).map((t) => t.name).sort()).toEqual(["capcomd_approve", "capcomd_cancel", "capcomd_merge", "capcomd_pr_open"]);
       // capcomd_setup, from Hermes's capcomd: the default project's gates (answered from its checkout) and Hermes
       // reported as set up.
       const res: any = await client.callTool({ name: "capcomd_setup", arguments: {} });

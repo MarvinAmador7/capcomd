@@ -71,3 +71,9 @@ Rejected/superseded variants are intentionally not committed — don't reintrodu
 
 `brand/` holds the bot-avatar proposal (generated pixel bots per agent, identity moments, a new menu bar mark). It is
 **not approved**: build nothing from it until it is. See `brand/README.md`; `tools/renderbrand.sh` regenerates it.
+
+## Desktop window (Reel)
+
+The approved boards for the full-size window are in `desktop/` (`*.dc.html` from the design canvas, rendered `*.png`,
+`canvas.json`, the bots they use in `desktop/bots/`). `desktop/SPEC.md` is the written spec, with the performance
+budgets every desktop PR has to meet.

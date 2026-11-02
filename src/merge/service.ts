@@ -10,8 +10,11 @@ import type { MergeOutcome, MergeRequest } from "./types";
 let githubOverride: GitHubApi | null = null;
 /** Tests inject a fake GitHub adapter. */
 export function setGitHubApi(api: GitHubApi | null) { githubOverride = api; }
+/** A test injected a GitHub adapter (so no login is needed). */
+export const hasGitHubOverride = () => githubOverride !== null;
 
-async function github(cfg: MergeConfig): Promise<GitHubApi> {
+/** The GitHub API for `cfg`'s repository: the injected fake, else REST with the user's token (GITHUB_TOKEN, GH_TOKEN, `gh auth token`). */
+export async function github(cfg: MergeConfig): Promise<GitHubApi> {
   return githubOverride ?? new HttpGitHub(cfg.github.api, await githubToken());
 }
 
@@ -31,6 +34,6 @@ export async function mergeTask(req: MergeRequest, cfg: MergeConfig | null = loa
   const clone = `${req.runId}-merge`;
   return withTargetLock(join(cfg.workdir, "locks"), cfg.remote, req.target, async () => {
     killpoint("merge.lock.acquired");
-    return cfg.mode === "direct" ? directMerge(cfg, req, clone) : prMerge(cfg, req, await github(cfg), clone);
+    return (req.mode ?? cfg.mode) === "direct" ? directMerge(cfg, req, clone) : prMerge(cfg, req, await github(cfg), clone);
   });
 }
