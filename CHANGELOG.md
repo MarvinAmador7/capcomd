@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.7.0 (2026-11-02)
+
+The desktop app (build it with `apps/menubar/scripts/build-app.sh --desktop`), goal branches (a run's reviewed work
+lands on a branch of its own, and you choose at the end whether to open one pull request), and agents that name their
+own tabs; also everything in 0.7.0-rc.1. **Breaking:** `capcomd run <goal>` now works on a goal branch
+(`--no-goal-branch` for the old behaviour). Checked with a live run on boxd before the release: a planner, two workers
+and a reviewer landed a goal on its branch from `dev` with no approvals, and the pull request into `dev` opened from it.
+
 - A goal branch's result lists each piece of work by its agent's title, in `capcomd goal`, the apps' ready card and the
   pull request's description. Work an agent continued from another (say, to fix a merge conflict) is listed once,
   under the agent that carried it on, instead of also showing the first try as "merge failed". API: each landed and
