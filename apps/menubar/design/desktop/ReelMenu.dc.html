@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Reel: the open project's menu</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.sb{--text:#F2F2F7;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--amber:#FFB020;--red:#FF6961;--green:#30D158;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.bar{height:60px;border-radius:12px 12px 0 0;background:#0e0e10;display:flex;align-items:center;gap:8px;padding:0 12px 0 16px}
+.lights{display:flex;gap:8px;padding-right:10px}
+.lights span{width:12px;height:12px;border-radius:6px;background:#3a3a3e}
+.grp{display:flex;align-items:center;gap:4px;height:44px;padding:0 4px 0 12px;border-radius:13px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12)}
+.tp{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px 0 4px;border-radius:9px;color:var(--sec);font-size:12.5px;white-space:nowrap}
+.tp img{width:22px;height:22px;image-rendering:pixelated}
+.deck{display:inline-flex;align-items:center;gap:9px;height:40px;padding:0 12px 0 10px;border-radius:12px;background:rgba(255,255,255,.05);color:var(--sec);font-size:12.5px;white-space:nowrap}
+.dk{display:inline-flex;align-items:center}
+.dk span{width:24px;height:24px;border-radius:7px;background:#26262a;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.dk span+span{margin-left:-15px}
+.dk img{width:18px;height:18px;image-rendering:pixelated}
+.nm{display:flex;flex-direction:column;line-height:1.2}
+.nm b{font-weight:400;color:var(--text)}
+.nm i{font-style:normal;font-size:10.5px;color:var(--ter)}
+.env{flex:0 0 auto;color:#C7C7CE}
+.mi{display:flex;align-items:center;gap:10px;height:30px;padding:0 10px;border-radius:7px;font-size:13px;color:var(--text);text-decoration:none}
+.mi svg{flex:0 0 auto;color:var(--sec)}
+.mi .k{margin-left:auto;font-size:12px;color:var(--ter)}
+.sep{height:.5px;background:rgba(255,255,255,.1);margin:5px 6px}
+.chip{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:5px;background:rgba(255,255,255,.07);color:var(--sec);font-size:11.5px}
+.cap{font-size:13px;line-height:1.55;color:var(--sec)}
+.cap b{color:var(--text);font-weight:600}
+</style>
+</helmet>
+<div class="sb" style="width:1440px;height:900px;box-sizing:border-box;padding:48px 64px;background:#0b0b0c;display:grid;grid-template-columns:860px 1fr;gap:56px;align-items:start">
+
+  <div style="position:relative;height:804px;border-radius:12px;background:#0e0e10;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);overflow:hidden">
+    <div class="bar">
+      <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="grp">
+        <button aria-haspopup="menu" aria-expanded="true" style="all:unset;display:flex;align-items:center;gap:6px;height:36px;padding:0 8px 0 0;border-radius:9px;cursor:pointer">
+          <svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Cloud"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg>
+          <span class="nm" style="padding-left:4px"><b style="font-weight:600;font-size:12.5px">Migrate matchkey</b><i>Cloud · <span class="mono">18:40</span></i></span>
+          <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true" style="margin-left:2px"><path d="M2 3.5l3 3 3-3" stroke="#A9A9B1" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>
+        </button>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-lead-1-small.svg" alt="">lead</span>
+        <span class="tp" style="color:var(--text)"><img src="bots/mk-worker-2-small.svg" alt="">d3ce</span>
+        <span class="tp" style="color:var(--text);background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55)"><img src="bots/mk-worker-3-small.svg" alt="">4423</span>
+        <span class="tp" style="opacity:.6">+3</span>
+      </div>
+      <span class="deck"><svg class="env" width="16" height="12" viewBox="0 0 16 12" role="img" aria-label="Local"><rect x="2.6" y="1.6" width="10.8" height="7.2" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M.9 10.6h14.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="nm"><b>Fix proration</b><i>Local · <span class="mono">2:05</span></i></span><span class="dk"><span><img src="bots/pr-planner-0-xs.svg" alt=""></span><span><img src="bots/pr-worker-1-xs.svg" alt=""></span></span></span>
+    </div>
+
+    <!-- the reel underneath, dimmed -->
+    <div style="display:flex;gap:10px;padding:0 0 10px;height:724px;opacity:.35" aria-hidden="true">
+      <div style="flex:0 0 30px;border-radius:0 11px 11px 0;background:#151518"></div>
+      <div style="flex:1;border-radius:11px;background:#151518"></div>
+      <div style="flex:1;border-radius:11px;background:#151518"></div>
+      <div style="flex:1;border-radius:11px;background:#151518;box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)"></div>
+    </div>
+
+    <!-- The menu -->
+    <div role="menu" aria-label="Migrate matchkey to v3.2" style="position:absolute;left:84px;top:58px;width:360px;background:#232326;border-radius:13px;padding:6px;box-sizing:border-box;box-shadow:0 0 0 .5px rgba(255,255,255,.14),0 18px 40px rgba(0,0,0,.5);display:flex;flex-direction:column">
+      <div style="padding:8px 10px 10px;display:flex;flex-direction:column;gap:8px">
+        <div style="font-weight:600;font-size:13.5px;line-height:1.35">Migrate matchkey to v3.2 across ids/v1 and addriva</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap"><span class="chip">matchkey</span><span class="chip">ids/v1</span><span class="chip">addriva</span></div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--sec)">
+          <svg width="14" height="11" viewBox="0 0 16 12" aria-hidden="true"><path d="M4.6 10.6h7.1a2.8 2.8 0 00.5-5.6 4 4 0 00-7.7-.8A3.2 3.2 0 004.6 10.6z" stroke="currentColor" fill="none" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          Cloud · boxd eu-1 · 6 agents · started 21:30
+        </div>
+      </div>
+      <div class="sep"></div>
+      <a href="#" role="menuitem" class="mi"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg>Message the planner…<span class="k">⌘L</span></a>
+      <a href="#" role="menuitem" class="mi"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5.5L12 5v8.5H4z" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M6.5 8h3M8 6.5v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Changes<span style="font-size:12px" class="mono"><span style="color:var(--green)">+73</span> <span style="color:var(--red)">−5</span></span><span class="k">3 files</span></a>
+      <a href="#" role="menuitem" class="mi"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h4M2.5 8h7M2.5 12h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12" cy="4" r="1.3" fill="currentColor"/><circle cx="12.5" cy="12" r="1.3" fill="currentColor"/></svg>Trace<span class="k">⌘T</span></a>
+      <a href="#" role="menuitem" class="mi"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4.5l1.5 1.5H14v6.5H2z" stroke="currentColor" fill="none" stroke-width="1.2" stroke-linejoin="round"/></svg>Browse the workspace…</a>
+      <div class="sep"></div>
+      <a href="#" role="menuitem" class="mi"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>Pause project<span class="k">⌥⌘P</span></a>
+      <a href="#" role="menuitem" class="mi" style="color:var(--red)"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" style="color:var(--red)"><rect x="4" y="4" width="8" height="8" rx="1.5" stroke="currentColor" fill="none" stroke-width="1.3"/></svg>Stop project…</a>
+      <div class="sep"></div>
+      <a href="#" role="menuitem" class="mi"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6.5l5 4 5-4" stroke="currentColor" fill="none" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>Fold into the title bar<span class="k">⌘W</span></a>
+      <a href="#" role="menuitem" class="mi"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M3 10.5V4a1 1 0 011-1h6.5" stroke="currentColor" fill="none" stroke-width="1.2"/></svg>Copy run ID<span class="k mono" style="font-size:11px">run_7f3a2c</span></a>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:22px;padding-top:20px">
+    <div class="cap"><b>The name opens the project's menu.</b> Switching projects is the decks' job, so this menu only holds what you can do to the open project, and only actions the daemon has today.</div>
+    <div class="cap"><b>The top tells you what the project is.</b> The whole goal as you wrote it, the repos it touches, and where it runs: Local or Cloud with the provider, the number of agents, and when it started.</div>
+    <div class="cap"><b>Work with it.</b> Message the planner (the run's messages route), Changes with the files and their counts (the run's files), Trace, and Browse the workspace.</div>
+    <div class="cap"><b>Control it.</b> Pause becomes Resume while paused. Stop asks first, because it cancels every agent; it is the one red item.</div>
+    <div class="cap"><b>Fold, don't close.</b> ⌘W folds the project back into its deck and it keeps running; that's the only kind of close a running project gets. A finished project offers Remove from the title bar instead.</div>
+    <div class="cap" style="color:var(--ter)">Left out on purpose: rename, duplicate, archive and export. Nothing in capcomd does them, and the goal is the name.</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

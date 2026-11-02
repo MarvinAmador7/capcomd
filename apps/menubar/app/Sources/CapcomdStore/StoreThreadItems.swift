@@ -27,21 +27,27 @@ extension CapcomdStore {
   /// of an id wins, so an item that arrives both ways is shown once.
   public func openThread(runId: String, agentId: String) {
     openThreadAgent = agentId
-    if threadStreamRun != runId {
-      let old = threadStreamRun
-      threadStreamRun = runId
-      if let old { resubscribeLifecycle(old) }
-      resubscribeLifecycle(runId)
-    }
+    followThreads(runId: runId, holder: Self.panelHolder)
     changed()
   }
 
-  /// The thread view closed: the run's lifecycle feed goes back to lifecycle frames only. Items already read stay.
+  /// The thread view closed: the run's lifecycle feed goes back to lifecycle frames only (unless the reel still
+  /// follows it). Items already read stay.
   public func closeThread() {
     openThreadAgent = nil
-    guard let run = threadStreamRun else { return }
-    threadStreamRun = nil
-    resubscribeLifecycle(run)
+    followThreads(runId: nil, holder: Self.panelHolder)
+  }
+
+  public static let panelHolder = "panel"
+  public static let reelHolder = "reel"
+
+  /// `holder` (the panel's thread view, the desktop reel) now follows `runId`'s live thread items for all its agents,
+  /// or nothing. A run's feed is reopened only when whether anyone follows it changes.
+  public func followThreads(runId: String?, holder: String) {
+    let before = threadStreamRuns
+    if let runId { threadHolders[holder] = runId } else { threadHolders.removeValue(forKey: holder) }
+    let after = threadStreamRuns
+    for run in before.symmetricDifference(after) { resubscribeLifecycle(run) }
   }
 
   func resubscribeLifecycle(_ runId: String) {
@@ -64,14 +70,15 @@ extension CapcomdStore {
         guard page.next != nil, !page.items.isEmpty else { break }
       }
       threadUnavailable[agentId] = nil
+      mark(.thread(agentId))
     } catch is Unauthorized { unauthorized = true }
-    catch { threadUnavailable[agentId] = error as? DetailUnavailable ?? .failed("Couldn't reach capcomd") }
+    catch { threadUnavailable[agentId] = error as? DetailUnavailable ?? .failed("Couldn't reach capcomd"); mark(.thread(agentId)) }
     changed()
   }
 
   /// `agent.thread_item_changed` (ephemeral, `?thread=1`): a full item, latest rev wins.
   func applyThreadFrame(runId: String?, agentId: String?, _ d: [String: JSONValue]) {
-    guard let runId, runId == threadStreamRun, let agentId, case .object(let o)? = d["item"],
+    guard let runId, threadStreamRuns.contains(runId), let agentId, case .object(let o)? = d["item"],
           let item = try? JSONDecoder().decode(CapcomdThread.Item.self, from: StreamFrame.reencode(o)) else { return }
     books[agentId, default: Book()].apply(item)
   }

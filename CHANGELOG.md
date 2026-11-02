@@ -5,6 +5,53 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Desktop window bench for coding agents (`apps/menubar/app/DESKBENCH.md`): `swift run -c release CapcomdDeskBench`
+  hosts the desktop window on generated runs (1 to 64 agents, no daemon), drives it (open, project switch, reel steps,
+  jumps, swipes, thread bursts, typing, resize, Follow), measures frames, main-thread stretches and which views
+  re-rendered, judges the result against the SPEC §1 budgets, and compares builds within the machine's noise (`run`,
+  `suite`, `ab`, `compare`, `profile` under Instruments, `snapshot`, `explain`; `--json` everywhere, stable exit codes).
+- The desktop bench shows where a slow stretch went and what changed between builds: `run` samples the main thread's
+  stack inside long stretches and `explain` prints each one's top frames (`--sampler off` to disable; `selftest
+  sampler` checks it without a window); `diff A B` compares two time profiles as a call tree in ms per step. Results
+  record the exact build (commit, dirty flag) even for a copied binary. `ab`, `compare` and `run --baseline` decide on
+  main-thread CPU per step (`--objective instructions|frames|latency` to change it), with frame metrics as guards and
+  late frames measured as ms of lateness per second. `profile` records the whole scenario, marks its results as
+  profiled (never compared: exit 6), and warns that `.trace` files hold private data and must never be committed.
+  The desktop app's views now live in the `CapcomdDesk` library the app and the bench both link; the app is unchanged.
+- The desktop bench's `ab` is fair to both builds: it runs them in pairs with the order of each pair counterbalanced
+  (`--order random|abba`, `--seed N` to redraw it), waits for a quiet machine before every run (`--quiet-wait`,
+  `--quiet-busy`; it names any build running alongside), and decides on the per-pair differences. `explain` takes a
+  stretch's likely causes from its sampled stacks, and the first step no longer starts inside the setup's work.
+  `deskbench describe [--json]` lists the scenarios, objectives, guards, fixtures and runtime knobs; `--knob
+  name=value` sets a knob (`reel.slide=ca|clip`, `build.perFrame=1..8`), results record every knob's value, and
+  `ab <scenario> --a-knobs … --b-knobs …` compares two knob settings of one binary. A new `perfloop` tool
+  (`tools/perfloop`: `perfloop exp new|screen|full|promote`, `champion`, `store`) keeps a ledger of experiments against the best
+  build so far; `apps/menubar/app/PROGRAM.md` is the procedure an agent follows with it.
+- Correctness guards for the desktop bench and perfloop: `deskbench run … --guards built-within,snapshot-diff` checks
+  that the columns in view were built once the window is at rest and saves a snapshot; `deskbench snapdiff A.png
+  B.png` compares two. perfloop asks both builds for the best build's guards on every pair: a build that fails one
+  can't win, a snapshot unlike the best build's goes to the owner (`needsReview`), and the `burst`/`typing` isolation
+  checks run before every promotion. `perfloop guards --exp ID` re-runs them; only the owner may pass
+  `--guard-tolerance`.
+- Bench results say why views re-rendered: each step and long stretch has `causes` (which desktop-model properties
+  were set before its view bodies ran, and how many distinct columns or tabs re-ran), `explain` prints them under each
+  stretch, and `perfloop causes <result.json>` prints the whole table. `profile --template swiftui` summarises the
+  SwiftUI instrument's cause tables and says when the recording has none.
+- `perfloop sweep step --set agents=4..64/12` measures the desktop window across a grid of crew sizes, thread lengths,
+  knobs and scenario params and prints the cost curve with its fit ("ms/step grows 4.98 ms per agent (r² 0.84)");
+  `--dry-run` shows the grid and an estimate, and running the same command again resumes. Generated fixtures take
+  parameters (`crew@agents=32,items=200`). `deskbench fixture capture --from <socket> --run <id> --token-file <file>`
+  saves a run as an anonymised fixture outside the repo, and the bench runs on it with `--fixture file:<name>`.
+- `deskbench run swipe --gesture FILE` replays a recorded trackpad gesture into the desktop window's reel and reports
+  how closely the content followed your fingers (position error, stalls, jerk). Record one with `deskbench
+  record-gesture --name NAME` and list them with `perfloop gestures list`.
+- perfloop experiments can run on a machine nobody is using. `perfloop queue add ID` and `perfloop queue run --runner
+  local|ssh://user@host --until HH:MM` run queued screens and fulls. `local` waits until this Mac has been idle
+  (`--idle 120`) and redoes a rep you interrupt. `ssh://` copies the build to a spare Mac and opens the window in its
+  logged-in session, waiting while its screen is locked. Results record their runner and machine and are never
+  mixed; `perfloop runner check R` shows a runner's state.
+- Fix: deskbench's scene-hosted runs (the default) opened a second desktop window and measured both, so earlier
+  numbers were about twice one window's cost. Compare new results only with results recorded after this fix.
 - Fix: an agent whose engine restarted (a crash, a killed `capcomd serve`) while the engine was starting, provisioning
   or wrapping it up no longer stays "running" for up to an hour: it resumes by itself within seconds of the engine
   coming back, and whoever awaits it (you, or a parent agent's `capcomd await`) gets its result.

@@ -220,6 +220,9 @@ public struct Run: Sendable, Hashable, Identifiable {
   public var state: String
   public var startedAtMs: Int?
   public var lastEventMs: Int
+  /// Where the run's agents run (`run.created` / the snapshot's `sandbox`): "docker" (Local), "boxd" (Cloud), or a
+  /// place this app doesn't know. Nil from a daemon that doesn't say.
+  public var sandbox: String? = nil
   public var agents: [String: Agent] = [:]
   public var steps: [Step] = []
   /// `run.*` lifecycle transitions applied to this run, in order (lifecycle feed).
