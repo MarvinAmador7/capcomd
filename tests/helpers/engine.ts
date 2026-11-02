@@ -1,4 +1,4 @@
-import { Engine } from "../chaos/engine";
+import { Engine } from "./test-engine";
 
 export const REPO = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 export const CLI = `${REPO}/src/cli/index.ts`;

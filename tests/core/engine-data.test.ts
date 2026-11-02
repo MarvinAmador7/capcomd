@@ -36,7 +36,7 @@ describe("paths", () => {
     expect(engineDataDir(7000, {})).toBe(join(homedir(), ".capcomd", "engine", "7000"));
     expect(engineDataDir(6420, { CAPCOMD_HOME: "/c" })).toBe("/c/engine/6420");
     expect(engineDataDir(6420, { CAPCOMD_HOME: "/c", CAPCOMD_ENGINE_DATA: "/x" })).toBe("/x");
-    expect(engineDataDir(6420, { CAPCOMD_CHAOS_ENGINE_DATA: "/y" })).toBe("/y");
+    expect(engineDataDir(6420, { CAPCOMD_TEST_ENGINE_DATA: "/y" })).toBe("/y");
     expect(isDefaultDataDir({})).toBe(true);
     expect(isDefaultDataDir({ CAPCOMD_ENGINE_DATA: "/x" })).toBe(false);
     expect(dbDir("/c/engine/6420")).toBe("/c/engine/6420/db");

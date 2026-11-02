@@ -59,8 +59,8 @@ capcomd treats each of these as a hard rule rather than a hope.
 
 **Durable runs.** A run is a set of durable actors (built on [Rivet](https://rivet.dev)) whose state survives
 crashes and restarts. Every step is an idempotent, recorded transition, so a crashed orchestrator, engine or agent
-driver resumes where it stopped, a retried call never acts twice, and a merge happens exactly once. A chaos suite
-kills the process at named points, and at random, to prove it.
+driver resumes where it stopped, a retried call never acts twice, and a merge happens exactly once. Tests kill the
+process at named points to check it.
 
 **Isolation.** Every agent runs in a fresh VM with its own clone and branch; VM snapshots are scrubbed of secrets.
 Agents can't touch each other's work or your machine, and never hold push credentials. Inside its VM an agent is
@@ -258,7 +258,7 @@ agent profiles.
 - [STATUS.md](STATUS.md): what works today, and how it's verified.
 - [ROADMAP.md](ROADMAP.md): what's next, known limits and their approaches.
 - [CHANGELOG.md](CHANGELOG.md): what's in each release.
-- [DEVELOPMENT.md](DEVELOPMENT.md): architecture, tests, chaos suite, cutting a release.
+- [DEVELOPMENT.md](DEVELOPMENT.md): architecture, tests, cutting a release.
 - [docs/](docs/): design decisions (ADRs), and the operator's orchestration skill in [skills/](skills/).
 
 ## Contributing

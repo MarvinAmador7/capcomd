@@ -6,7 +6,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { spawn } from "child_process";
-import { Engine } from "../chaos/engine";
+import { Engine } from "../helpers/test-engine";
 import { capcomd, testPort } from "../helpers/engine";
 import { primitivesAgentsFile } from "./helpers";
 import { stableId } from "../../src/primitives/policy";
