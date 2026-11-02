@@ -258,7 +258,7 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
   // Re-running setup keeps the project's target. Unknown: none is written, and each run asks for its base.
   const had = projectValues(dir)?.target ?? "";
   const remoteHead = had || head || (originUrl(dir) ? (() => {
-    const r = spawnSync("git", ["ls-remote", "--symref", "origin", "HEAD"], { cwd: dir, encoding: "utf8", timeout: 15_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5" } });
+    const r = spawnSync("git", ["ls-remote", "--symref", "origin", "HEAD"], { cwd: dir, encoding: "utf8", timeout: 15_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes -o ConnectTimeout=5" } });
     return /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(r.stdout ?? "")?.[1] ?? "";
   })() : "");
   const target = String(v.target ?? await p.ask("Target branch: where runs start from and where their pull requests go (e.g. main, dev or develop; empty: each run asks)", remoteHead)).trim() || null;

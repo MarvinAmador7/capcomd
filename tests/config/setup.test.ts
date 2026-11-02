@@ -5,6 +5,10 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { githubRepoOf, httpsRemote, projectStep, suggestCheck } from "../../src/cli/commands/setup";
 
+// The test projects' remotes are made-up GitHub ones: setup asks them for their default branch (`git ls-remote`), which
+// must fail at once here rather than try a real SSH connection (seconds on a machine with an SSH key).
+process.env.GIT_SSH_COMMAND = "false";
+
 const CLI = new URL("../../src/cli/index.ts", import.meta.url).pathname;
 const run = (args: string[], o: { cwd: string; env: Record<string, string> }) => {
   const p = Bun.spawnSync([process.execPath, CLI, ...args], { cwd: o.cwd, env: { ...process.env, ...o.env }, stdout: "pipe", stderr: "pipe" });
