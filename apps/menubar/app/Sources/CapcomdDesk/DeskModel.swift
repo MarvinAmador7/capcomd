@@ -112,6 +112,7 @@ package final class DeskModel {
   /// The app's model: connected to the daemon's socket with the Keychain token (or `CAPCOMD_TOKEN`).
   package init() {
     (store, transport) = Connection.makeStore(token: "")
+    DeskNotifications.start(self)
     if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { connect(env); return }
     Task.detached(priority: .userInitiated) {
       let token = Keychain.token()
@@ -136,6 +137,7 @@ package final class DeskModel {
     (store, transport) = Connection.makeStore(token: token)
     if let old { Task { try? await old.shutdown() } }
     store.onChanges = { [weak self] keys in self?.apply(keys) }
+    store.onNotify = { [weak self] n in if let self { DeskNotifications.post(n, prefs: self.store.prefs) } }
     store.start()
     tokenRejected = false
     link = .ready
@@ -282,6 +284,13 @@ package final class DeskModel {
       if let run { self.store.openRun(run) } else { self.store.closeRun() }
     }
     return true
+  }
+
+  /// A notification's run: its project, at its planner's column (where a goal card docks).
+  package func openRun(_ runId: String) {
+    guard let deck = decks.first(where: { $0.runId == runId }) else { return }
+    open(project: deck.id)
+    if let planner = columns.first { scroll(to: planner, animated: false) }
   }
 
   package func agent(_ id: String) -> AgentSlice? { agents[id] }

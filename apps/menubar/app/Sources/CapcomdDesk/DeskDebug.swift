@@ -67,7 +67,7 @@ import AppKit
   /// CAPCOMD_DESK_CONTROL=<dir>: drives the window without touching the screen, for checks against a live daemon. Each
   /// half second it runs the lines of <dir>/cmd (then deletes it) and writes the model's state to <dir>/state.txt.
   /// Lines: `project N`, `agent N`, `focus ±1`, `scroll <agentId>`, `follow on|off`, `steer <agentId> <text>`,
-  /// `decide <approvalId> approve|deny`, `goal open|confirm|cancel|keep` (the goal card's buttons), `swipe <dx>` (a two-finger swipe of dx points handed to the reel's scroll
+  /// `decide <approvalId> approve|deny`, `goal open|confirm|cancel|keep` (the goal card's buttons), `openrun <runId>` (a click on its notification), `swipe <dx>` (a two-finger swipe of dx points handed to the reel's scroll
   /// view, as deskbench's swipes are; negative scrolls toward later columns), `snap <name>` (the window, now, into <dir>/<name>.png), `key <char|return|escape|left|right> [cmd] [ctrl] [shift]` (a key event handed to
   /// this app's own window and menu, never posted to the system).
   static func control(_ model: DeskModel, _ dir: URL) {
@@ -88,6 +88,7 @@ import AppKit
         case "snap": if w.count > 1 { snapshot(into: dir, name: w[1]) }
         case "swipe": if let dx = w.dropFirst().first.flatMap(Double.init) { swipe(dx) }
         case "goal": goal(model, w.dropFirst().first ?? "")
+        case "openrun": if w.count > 1 { model.openRun(w[1]) }   // as a click on its notification
         default: break
         }
       }
