@@ -1,5 +1,6 @@
 #if canImport(SwiftUI) && os(macOS) && (DEBUG || DESK_PROBE)
 import AppKit
+import CapcomdStore
 
 /// Development only: with CAPCOMD_DESK_SNAPSHOT=<dir>, the window draws itself into <dir>/window.png and lists its
 /// scroll views' geometry in <dir>/scrolls.txt every 2 s. Its own window needs no screen-recording permission.
@@ -72,6 +73,13 @@ import AppKit
   /// this app's own window and menu, never posted to the system), `rename <N|agentId> tab|header` (a double-click on
   /// that agent's tab or header: its rename field opens), `type <text>` (the text typed into the focused field, as key
   /// events handed to this window; select it all first with `key a cmd`).
+  /// The new project column (ReelNew): `new` (as + or ⇧⌘N), `new close`, `draft <text>` (the goal field's text),
+  /// `folder <path>|default` (a folder picked, as Choose Project Folder… would, or Use the Default Project),
+  /// `base <branch>`, `branch <name>` (the goal branch field), `setup <setUp|setUpAndStart|initializeGit|publish|
+  /// tryAgain|cancel>` (a button of the folder's setup), `escape` (Esc in the goal field), `start` (Return). The project
+  /// menu (ReelMenu): `menu` (a click on the name), `menu <message|changes|pause|resume|stop|fold|remove|copy>` (that
+  /// item), `menu confirm|cancel` (the Stop question). The palette: `palette [query]` (⌘K, with that query typed),
+  /// `palette up|down|run|close`. `menus` writes the main menu's items and their shortcuts to <dir>/menus.txt.
   static func control(_ model: DeskModel, _ dir: URL) {
     let cmd = dir.appendingPathComponent("cmd")
     if let text = try? String(contentsOf: cmd, encoding: .utf8) {
@@ -96,11 +104,61 @@ import AppKit
           let id = Int(w[1]).flatMap { n in model.columns.indices.contains(n - 1) ? model.columns[n - 1] : nil } ?? w[1]
           model.beginRename(id, at: w.dropFirst(2).first == "header" ? .header : .tab)
         case "type": type(String(line.dropFirst(5)))
+        case "new": if w.dropFirst().first == "close" { model.closeNewProject() } else { model.openNewProject() }
+        case "draft": model.typeGoal(String(line.dropFirst(6)))
+        case "folder":
+          let path = String(line.dropFirst(7))
+          if path == "default" { model.useDefaultProject() } else if !path.isEmpty { Task { await model.pickFolder(path) } }
+        case "base": if w.count > 1 { model.pickBase(w[1]) }
+        case "branch": model.typeBranch(String(line.dropFirst(7)))
+        case "setup":
+          if w.dropFirst().first == "cancel" { model.cancelSetup() } else if let a = setupAction(w.dropFirst().first ?? "") { model.setupAction(a) }
+        case "escape": model.newProjectEscape()   // Esc in the goal field
+        case "start": Task { await model.startNewProject() }
+        case "menu":
+          switch w.dropFirst().first {
+          case nil: model.toggleMenu()
+          case "confirm"?: model.confirmStop()
+          case "cancel"?: model.cancelStop()
+          case let name?: if let i = model.menuItem(name) { model.perform(i) }
+          }
+        case "palette":
+          switch w.dropFirst().first {
+          case "up"?: model.movePaletteSelection(-1)
+          case "down"?: model.movePaletteSelection(1)
+          case "run"?: model.runPaletteSelection()
+          case "close"?: model.closePalette()
+          default: model.togglePalette(query: String(line.dropFirst(8)))
+          }
+        case "menus": menus(into: dir)
         default: break
         }
       }
     }
     try? state(model).write(to: dir.appendingPathComponent("state.txt"), atomically: true, encoding: .utf8)
+  }
+
+  static func setupAction(_ name: String) -> SetupAction? {
+    switch name {
+    case "setUp": .setUp; case "setUpAndStart": .setUpAndStart; case "initializeGit": .initializeGit; case "publish": .publish
+    case "tryAgain": .tryAgain; default: nil
+    }
+  }
+
+  /// The main menu's items with their key equivalents, one per line: to check the shortcuts don't collide.
+  static func menus(into dir: URL) {
+    var out: [String] = []
+    func walk(_ m: NSMenu, _ path: String) {
+      for i in m.items where !i.isSeparatorItem {
+        let mods = i.keyEquivalentModifierMask
+        let key = i.keyEquivalent.isEmpty ? "" : (mods.contains(.control) ? "⌃" : "") + (mods.contains(.option) ? "⌥" : "")
+          + (mods.contains(.shift) ? "⇧" : "") + (mods.contains(.command) ? "⌘" : "") + i.keyEquivalent.uppercased()
+        out.append("\(path)\(i.title)\t\(key)\(i.isEnabled ? "" : "\t(disabled)")")
+        if let sub = i.submenu { walk(sub, "\(path)\(i.title) › ") }
+      }
+    }
+    if let m = NSApp.mainMenu { walk(m, "") }
+    try? (out.joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("menus.txt"), atomically: true, encoding: .utf8)
   }
 
   /// `goal open|confirm|cancel|keep`: the open run's goal card buttons, as a click on them would.
@@ -180,6 +238,19 @@ import AppKit
         + "pending \(t.map { $0.pending.map { "\($0.state)" }.joined(separator: ",") } ?? "-")")
     }
     for a in s.pendingApprovals { out.append("approval \(a.id) run \(a.runId ?? "-") agent \(a.agentId ?? "-") \(a.decision)") }
+    out.append("folded \(model.folded) hidden \(model.hidden.keys.sorted().joined(separator: ",")) returnApproves \(model.returnApproves) typing \(model.typingIn ?? "-") stopAsked \(model.stopAsked)")
+    if let np = model.newProject {
+      let f = np.form, g = f.goalSetup
+      out.append("new \(f.phase) bot \(np.name) smiling \(f.smiling) goal \"\(f.goal)\" canStart \(model.newProjectCanStart) escCloses \(f.escCloses) refusal \(f.refusal ?? "-") field \(f.refusedField ?? "-")")
+      out.append("new repo \(s.prefs.startRepo ?? "-") branches \(model.newProjectBranches) base \(g.base ?? "-") goalBranch \(g.goalBranch.isEmpty ? "-" : g.goalBranch) baseLine \(f.baseLine?.text ?? "-") branchLine \(f.branchLine?.text ?? "-")")
+      out.append("new place \(s.startSandbox?.name ?? "-") driver \(s.startDriver?.provider ?? "-") effort \(s.startEffort ?? "-") setup \(model.newProjectSetup().map { "\($0.phase) \($0.header)" } ?? (model.setupFlow.isOpen ? "loading" : "-"))")
+    }
+    if model.menuOpen || model.openRunId != nil, let m = model.projectMenu {
+      out.append("menu open \(model.menuOpen) items \(m.items.map(\.name).joined(separator: ",")) control \(m.control)")
+    }
+    if model.paletteOpen {
+      out.append("palette \"\(model.paletteQuery)\" selection \(model.paletteSelection): " + model.paletteShown.map(\.title).joined(separator: " | "))
+    }
     if let run = model.openRunId, let g = s.goalCard(runId: run) {
       out.append("goal \(g.title) \(g.phase) stopped \(g.stopped) docks \(g.docks) loading \(g.loading) openPR \(g.openPR) confirm \(g.confirm ?? "-") outcome \(g.outcome.map { "\($0)" } ?? "-")")
     }

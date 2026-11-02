@@ -97,3 +97,18 @@ extension CapcomdStore {
                  activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
   }
 }
+
+extension CapcomdStore {
+  /// The composer's goal branch row shows: a daemon with goal branches and a project checkout to start in (the default
+  /// project and older daemons keep the composer as it was).
+  public var goalBranchesOffered: Bool { capabilities.contains(Capability.runsGoalBranch) && prefs.startRepo != nil }
+
+  /// What Start sends beside the goal: the remembered project, driver, place and effort, and, with goal branches, the
+  /// base and branch `goalSetup` chose for that checkout. The menu bar's composer and the desktop's new project column
+  /// both start runs this way.
+  public func newRunChoice(goalSetup: GoalBranchSetup?) -> RunChoice {
+    var c = RunChoice(repo: prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+    if goalBranchesOffered, let g = goalSetup, g.path == c.repo { (c.base, c.goalBranch) = g.choice }
+    return c
+  }
+}

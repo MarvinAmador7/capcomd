@@ -51,6 +51,35 @@ extension Theme {
     static let question = Font.system(size: 15, weight: .semibold)
     static let goalTitle = Font.system(size: 13, weight: .semibold, design: .monospaced)
 
+    // The new project column (ReelNew): the planner-to-be, the composer card, the dashed space for the crew.
+    static let crewDash = Color.white.opacity(0.12)
+    enum NewProject {
+      static let botCell: CGFloat = 3.5                  // the full bot (32 cells) at 112 pt
+      static let greetingGap: CGFloat = 12, greetingBottom: CGFloat = 36, shadowLift: CGFloat = 14
+      static let dither = Color(red: 0x2C / 255, green: 0x2C / 255, blue: 0x31 / 255)
+      static let cardMargin: CGFloat = 10, cardRadius: CGFloat = 14, cardGap: CGFloat = 6
+      static let cardPadding = EdgeInsets(top: 10, leading: 10, bottom: 8, trailing: 10)
+      static let cardFill = Color(red: 0x1D / 255, green: 0x1D / 255, blue: 0x21 / 255), cardStroke = Color.white.opacity(0.14)
+      static let goalFont = Font.system(size: 14)
+      static let chipFont = Font.system(size: 11.5)
+      static let segmentOn = Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3F / 255)
+    }
+
+    // The project menu (ReelMenu) and the ⌘K palette: one surface.
+    enum Surface {
+      static let width: CGFloat = 360, paletteWidth: CGFloat = 480
+      static let fill = Color(red: 0x23 / 255, green: 0x23 / 255, blue: 0x26 / 255), stroke = Color.white.opacity(0.14)
+      static let radius: CGFloat = 13, padding: CGFloat = 6
+      static let rowHeight: CGFloat = 30, rowRadius: CGFloat = 7, rowPadding: CGFloat = 10, rowGap: CGFloat = 10
+      static let rowFont = Font.system(size: 13), keyFont = Font.system(size: 12), icon: CGFloat = 15
+      static let hover = Color.white.opacity(0.08), selected = Theme.accent.opacity(0.28)
+      static let divider = Color.white.opacity(0.10)
+      static let goalFont = Font.system(size: 13.5, weight: .semibold)
+      static let chipFont = Font.system(size: 11.5), chipFill = Color.white.opacity(0.07)
+      static let placeFont = Font.system(size: 11.5)
+      static let scrim = Color.black.opacity(0.4)
+    }
+
     /// Columns across: three at 1440 pt, two at 1100, one under 760 (SPEC §2).
     static func columnsAcross(_ width: CGFloat) -> Int { width >= 1280 ? 3 : width >= 900 ? 2 : 1 }
   }

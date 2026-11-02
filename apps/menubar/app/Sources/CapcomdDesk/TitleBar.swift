@@ -5,7 +5,8 @@ import CapcomdBot
 import CapcomdUI
 
 /// The title bar (ReelStack, ReelTabs): the open project as one group with its crew tabs, every other project folded
-/// into a deck, and Follow on the right. Each piece reads only its own slice.
+/// into a deck, and on the right Follow, Actions (⌘K) and + (a new project). While the new project column is open
+/// every project is a deck and the + stays held down. Each piece reads only its own slice.
 struct TitleBar: View {
   @Environment(DeskModel.self) private var model
   var body: some View {
@@ -14,7 +15,7 @@ struct TitleBar: View {
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 8) {
           ForEach(model.decks) { deck in
-            if deck.id == model.openProjectId { OpenGroup(deck: deck) } else { FoldedDeck(deck: deck) }
+            if deck.id == model.openProjectId && model.newProject == nil { OpenGroup(deck: deck) } else { FoldedDeck(deck: deck) }
           }
         }
         .padding(.vertical, 6)
@@ -23,6 +24,8 @@ struct TitleBar: View {
       Spacer(minLength: 0)
       OfflineBadge()
       FollowButton()
+      ActionsButton()
+      NewProjectButton()
     }
     .padding(.leading, Theme.Desk.titleLeading).padding(.trailing, 10)
     .frame(height: Theme.Desk.titleBar)
@@ -72,10 +75,21 @@ struct OpenGroup: View {
     let cols = model.columns, seen = model.onScreen
     let first = cols.firstIndex(where: seen.contains) ?? -1, last = cols.lastIndex(where: seen.contains) ?? -1
     return HStack(spacing: 2) {
-      PlaceIcon(sandbox: deck.sandbox).padding(.trailing, 6)
-      Text(verbatim: deck.title).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).lineLimit(1)
-        .frame(maxWidth: 200, alignment: .leading)
-      .padding(.trailing, 8)
+      // The name opens the project's menu (ReelMenu).
+      Button { model.toggleMenu() } label: {
+        HStack(spacing: 0) {
+          PlaceIcon(sandbox: deck.sandbox).padding(.trailing, 6)
+          Text(verbatim: deck.title).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).lineLimit(1)
+            .frame(maxWidth: 200, alignment: .leading).fixedSize()
+          Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Desk.secondary)
+            .padding(.leading, 6)
+        }
+        .padding(.trailing, 8).frame(height: Theme.Desk.groupHeight - 4)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(PressableStyle())
+      .help("Project menu")
+      .accessibilityLabel("\(deck.title), project menu")
       // One row of tabs whose identity never changes as the reel scrolls; the bracket is drawn behind the on-screen
       // ones from their bounds, so moving it re-lays out one shape instead of rebuilding tabs.
       HStack(spacing: 2) {
@@ -101,6 +115,7 @@ struct OpenGroup: View {
     .frame(height: Theme.Desk.groupHeight)
     .background(RoundedRectangle(cornerRadius: Theme.Desk.groupRadius, style: .continuous).fill(Theme.Desk.groupFill))
     .overlay(RoundedRectangle(cornerRadius: Theme.Desk.groupRadius, style: .continuous).strokeBorder(Theme.Desk.groupStroke, lineWidth: 0.5))
+    .anchorPreference(key: ProjectGroupBounds.self, value: .bounds) { $0 }
   }
 }
 
@@ -222,6 +237,41 @@ struct FollowButton: View {
     .foregroundStyle(model.follow ? Color(red: 0x6C / 255, green: 0xB4 / 255, blue: 1) : Theme.Desk.tertiary)
     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(model.follow ? Theme.accent.opacity(0.16) : .clear))
     .help("Follow: an ask or a failure scrolls the reel to it (⇧⌘F)")
+  }
+}
+
+/// Actions (⌘K): the palette.
+struct ActionsButton: View {
+  @Environment(DeskModel.self) private var model
+  var body: some View {
+    Button { model.togglePalette() } label: {
+      Image(systemName: "command").font(.system(size: 13, weight: .regular))
+        .foregroundStyle(model.paletteOpen ? Theme.Desk.text : Theme.Desk.tertiary)
+        .frame(width: Theme.Desk.iconButton, height: Theme.Desk.iconButton)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(model.paletteOpen ? Color.white.opacity(0.10) : .clear))
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(PressableStyle())
+    .help("Actions (⌘K)")
+    .accessibilityLabel("Actions")
+  }
+}
+
+/// + (⇧⌘N): the new project column. Held down while it's open; a second click closes it (its draft stays).
+struct NewProjectButton: View {
+  @Environment(DeskModel.self) private var model
+  var body: some View {
+    let held = model.newProject != nil
+    Button { model.toggleNewProject() } label: {
+      Image(systemName: "plus").font(.system(size: 13, weight: .regular))
+        .foregroundStyle(held ? Theme.Desk.text : Theme.Desk.tertiary)
+        .frame(width: Theme.Desk.iconButton, height: Theme.Desk.iconButton)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(held ? Color.white.opacity(0.10) : .clear))
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(PressableStyle())
+    .help("New project (⇧⌘N)")
+    .accessibilityLabel("New project").accessibilityAddTraits(held ? .isSelected : [])
   }
 }
 #endif
