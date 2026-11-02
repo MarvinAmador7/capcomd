@@ -198,6 +198,7 @@ export function buildServer(): McpServer {
     inputSchema: {
       runId: run,
       task: z.string().min(1).describe("What the agent should do, with acceptance criteria"),
+      title: z.string().optional().describe("Its tab's name: 1-4 lowercase words for what it works on, at most 32 characters (e.g. \"login redirect\"); default: the agent names itself, else capcomd takes the task's first words"),
       profile: z.string().optional().describe("Agent profile (capcomd_profiles); default: the default profile"),
       budget: z.string().optional().describe(`This agent's share, e.g. "usd=1,turns=40,wallSeconds=900". A unit you leave out reserves the profile's own cap (maxTurns, timeoutMs, maxBudgetUsd) if it sets one, else nothing: the agent's spend is metered as it works and counts against your budget and the run's, and it is stopped when one runs out. Name a unit to give a child its own cap. Omit it in a run without a budget: the agent works until done`),
       check: z.string().optional().describe("One of the run's check names (capcomd_setup gates.checks)"),
@@ -221,6 +222,12 @@ export function buildServer(): McpServer {
     description: "Send a message to a running agent (for example a failed check's output to fix). A Claude agent reads it within seconds, at its next step; a Codex agent can't read messages while it runs.",
     inputSchema: { runId: run, to: z.string().min(1), body: z.string().min(1), key, project }, annotations: WRITE,
   }, routed("capcomd_send", (a) => D.send(a)));
+
+  server.registerTool("capcomd_title", {
+    title: "Name an agent",
+    description: "Name an agent's tab (what the desktop and menu bar apps call it): 1-4 lowercase words for what it works on, at most 32 characters, e.g. \"login redirect\". Agents name themselves once they understand their task, so you rarely need this. The agent's own later renames replace yours; a title the user gave in the apps stays until they clear it (the call then says shown: false).",
+    inputSchema: { runId: run, agentId: z.string().min(1), title: z.string().min(1), key, project }, annotations: WRITE,
+  }, routed("capcomd_title", (a) => D.title(a)));
 
   server.registerTool("capcomd_cancel", {
     title: "Cancel",

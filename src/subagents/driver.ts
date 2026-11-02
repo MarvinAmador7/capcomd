@@ -1,5 +1,6 @@
 // ADR-017 driver glue: give an agent its in-VM capcomd (token + spool pump) for as long as it runs.
-//  - Real agents (allowSpawn only): VmSpool over boxd exec; the runner installs the CLI + skill.
+//  - Real agents: VmSpool over boxd exec; the runner installs the CLI + skill. One that may not spawn only names its
+//    tab with it (capability agents.title): its token carries just that, and its pump polls less often.
 //  - Scripted fake agents (CAPCOMD_SPAWN_EXEC=script, tests/scenarios): the contract's `script` runs
 //    on this host with a scrubbed env (no host secrets, no engine endpoint) and the same CLI on a
 //    LocalSpool, so scenarios exercise exactly the in-VM code path minus boxd.
@@ -27,7 +28,7 @@ const NODE_BIN = Bun.which("node") ?? "node";
  * `steps`: also record its step history (agent.step) from these ops. Only for scripted agents, whose ops are all the
  * daemon sees of them; a real agent's steps come from its own events (worker.ts), which include its capcomd calls.
  */
-function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number, o: { steps?: boolean } = {}) {
+function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number, o: { steps?: boolean; naming?: boolean } = {}) {
   const s = client().scope.getOrCreate([runId]);
   const ttlMs = Number(env("TOKEN_TTL_MS") ?? 30 * 60_000);
   let jti: string | null = null;
@@ -36,7 +37,7 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
     o.steps ? { onStep: (st) => s.recordStep({ agentId: a.agentId, ...st }) } : {});
   const pump = startPump({
     spool, intervalMs, refreshMs: Math.max(1000, ttlMs / 2),
-    mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits), ttlMs }); jti = t.claims.jti; return t.token; },
+    mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits, { naming: o.naming }), ttlMs }); jti = t.claims.jti; return t.token; },
     handle: async (req) => {
       driverKillpoint(`rpc.${req.op}.before`);
       const r = await handleRpc(req, { runId, agentId: a.agentId });
@@ -58,11 +59,14 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   };
 }
 
-/** Real agent VM: pump while `work` runs (the worker actor's pushBranch). */
-export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: SandboxProvider, vmId: VmId, jsonl: string | undefined, work: () => Promise<T>): Promise<T> {
+/** Real agent VM: pump while `work` runs (the worker actor's pushBranch). `rpcDir`: its spool in the VM. */
+export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: SandboxProvider, vmId: VmId, jsonl: string | undefined, work: () => Promise<T>, rpcDir = VM_RPC_DIR): Promise<T> {
   // The pump has its own backoff and never ends the agent: it uses the provider as is (rawProvider), so a call during an
   // outage fails and is tried again next tick instead of holding up the pump (and its stop) for the outage window.
-  const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, VM_RPC_DIR, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000));
+  // An agent that only names its tab calls capcomd once or twice: its spool is looked at less often.
+  const naming = !a.limits.allowSpawn;
+  const poll = naming ? Number(env("VM_RPC_LEAF_POLL_MS") ?? 2000) : Number(env("VM_RPC_POLL_MS") ?? 1000);
+  const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, rpcDir, jsonl), poll, { naming });
   try { return await work(); } finally { await p.stop(); }
 }
 

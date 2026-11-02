@@ -236,8 +236,8 @@ export type PushBranchParams = {
   goal?: string;
   /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
   fakePath?: string; fakeContent?: string;
-  /** ADR-017: install in-VM capcomd + skill (agents allowed to spawn). */
-  subagents?: { skill: string; kind?: string };
+  /** ADR-017: install in-VM capcomd + skill (every real agent; `orchestrator`: it may spawn). `rpcDir`: where its spool is in the VM. */
+  subagents?: { skill: string; kind?: string; orchestrator?: boolean; rpcDir?: string };
   conflictFiles?: string[];
   /** Agent profile name for this task. */
   agent?: string;
@@ -397,9 +397,9 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       ...(activity ? { onEvent: activity.event } : {}),
       ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
       // Agents that may spawn already have their raw stream tailed into the log by the spool pump (driver.ts).
-      ...(scope && !params.subagents ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
+      ...(scope && !(params.subagents && params.subagents.orchestrator !== false) ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
       ...(items ? { onItems: items } : {}),
-      ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: "/tmp/capcomd-rpc" } } : {}),
+      ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: params.subagents.rpcDir ?? "/tmp/capcomd-rpc", orchestrator: params.subagents.orchestrator !== false } } : {}),
       isCancelled: async () => {
         const run = await (c as any).client().run.getOrCreate([runId]).getRun({ runId });
         if (run?.state === "cancelled") { cancelSeen = true; return true; }

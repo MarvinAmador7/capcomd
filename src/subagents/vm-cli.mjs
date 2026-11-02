@@ -107,7 +107,8 @@ const arr = (v) => (v === undefined ? [] : [].concat(v));
 function usage(msg) { const e = new Error(msg); e.usage = true; throw e; }
 
 export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is JSON.
-  spawn --task T [--profile P] [--key K] [--budget usd=1,turns=20,wallSeconds=600] [--check NAME] [--report] [--continue agt]
+  title "<2-4 lowercase words>"   name your tab (what you're working on); title <agt> "…" names a child; title --run "…" (the planner) names the run
+  spawn --task T [--title "…"] [--profile P] [--key K] [--budget usd=1,turns=20,wallSeconds=600] [--check NAME] [--report] [--continue agt]
         (--report: read-only; the child's final message is its result, nothing is pushed)
         (--continue: start from a finished child's work, its branch or last checkpoint, e.g. one stopped at a limit)
         [--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N
@@ -137,7 +138,7 @@ export function toCall(argv) {
       for (const [k, v] of Object.entries(fl)) if (k.startsWith("children.")) children[k.slice(9)] = v;
       const set = {};
       for (const s of arr(fl.set)) { const [k, v] = String(s).split(/=(.*)/s); set[k] = isNaN(Number(v)) ? v : Number(v); }
-      return { op: "spawn", args: { task: fl.task, profile: fl.profile, key, budget: fl.budget, check: fl.check, ...(fl.report !== undefined ? { report: true } : {}), ...(fl.continue ? { continue: fl.continue } : {}), contract: json(fl.contract, "--contract"), ...(Object.keys(children).length ? { children } : {}), ...(Object.keys(set).length ? { set } : {}) } };
+      return { op: "spawn", args: { task: fl.task, ...(fl.title !== undefined ? { title: String(fl.title) } : {}), profile: fl.profile, key, budget: fl.budget, check: fl.check, ...(fl.report !== undefined ? { report: true } : {}), ...(fl.continue ? { continue: fl.continue } : {}), contract: json(fl.contract, "--contract"), ...(Object.keys(children).length ? { children } : {}), ...(Object.keys(set).length ? { set } : {}) } };
     }
     case "await": case "wait-any": if (!pos.length) usage(`${cmd} needs agent ids`); return { op: cmd, args: { agents: pos, timeoutMs }, loop: true };
     case "status": return { op: "status", args: pos.length ? { agents: pos } : {} };
@@ -151,6 +152,13 @@ export function toCall(argv) {
     case "budget": return { op: "budget", args: {} };
     case "grant": if (!pos[0] || !fl.budget) usage("grant <agt> --budget usd=…,turns=…,wallSeconds=…"); return { op: "grant", args: { agent: pos[0], budget: fl.budget, key } };
     case "heartbeat": return { op: "heartbeat", args: { note: pos.join(" ") || undefined } };
+    case "title": {
+      // title "login redirect" (yourself) | title <agt> "…" (a child) | title --run "…" (the planner names the run)
+      const agent = /^agt-/.test(pos[0] ?? "") ? pos.shift() : undefined;
+      const words = pos.join(" ").trim() || (typeof fl.run === "string" && fl.run !== "true" ? fl.run : "");
+      if (!words) usage('title "<2-4 lowercase words>": name what you\'re working on, e.g. capcomd title "login redirect"');
+      return { op: "title", args: { title: words, ...(agent ? { agent } : {}), ...(fl.run !== undefined ? { run: true } : {}), key } };
+    }
     case "result": return { op: "result", args: { summary: fl.summary ?? pos.join(" "), artifacts: arr(fl.artifact).map((a) => { const [name, ref] = String(a).split(/=(.*)/s); return { name, ref: ref ?? name }; }), data: json(fl.data, "--data") } };
     case "task": {
       const action = pos.shift();
@@ -187,7 +195,8 @@ function exitFor(r) { return r.ok ? 0 : r.error?.retryable ? 75 : r.error?.code 
 const S = (props, req = []) => ({ type: "object", properties: props, required: req });
 const str = { type: "string" }, num = { type: "number" }, ids = { type: "array", items: { type: "string" } };
 export const TOOLS = [
-  ["spawn", "Spawn a child agent under you. Set its fan-out with `children` (narrow-only, ≤ your own limits).", S({ task: str, profile: str, key: str, budget: str, check: str, report: { type: "boolean" }, continue: str, contract: { type: "object" }, children: S({ maxChildren: num, maxDepth: num, maxTotalDescendants: num, allowedChildProfiles: ids, budgetShare: num }) }, ["task"])],
+  ["title", "Name your tab: 2-4 lowercase words for what you're working on (e.g. \"login redirect\"). Rename only when your focus really changes. `agent`: one of your children instead; `run: true` (the planner): the run.", S({ title: str, agent: str, run: { type: "boolean" }, key: str }, ["title"])],
+  ["spawn", "Spawn a child agent under you. Set its fan-out with `children` (narrow-only, ≤ your own limits). `title`: its tab's name (2-4 lowercase words).", S({ task: str, title: str, profile: str, key: str, budget: str, check: str, report: { type: "boolean" }, continue: str, contract: { type: "object" }, children: S({ maxChildren: num, maxDepth: num, maxTotalDescendants: num, allowedChildProfiles: ids, budgetShare: num }) }, ["task"])],
   ["await", "Block until all given children finish; returns their structured results (fenced).", S({ agents: ids, timeoutMs: num }, ["agents"])],
   ["wait_any", "Block until any given child finishes.", S({ agents: ids, timeoutMs: num }, ["agents"])],
   ["status", "Status of agents (default: you).", S({ agents: ids })],
@@ -209,6 +218,20 @@ export const TOOLS = [
   ["result", "Declare your structured result before you exit: summary, artifacts, data.", S({ summary: str, artifacts: { type: "array", items: S({ name: str, ref: str }) }, data: {} }, ["summary"])],
 ].map(([name, description, inputSchema]) => ({ name: `capcomd_${name}`, description, inputSchema }));
 
+/** The ops this agent's token carries (its claims are readable, only the orchestrator can sign them); null: unknown. */
+function tokenOps() {
+  try {
+    const body = readFileSync(TOKEN_FILE, "utf8").trim().split(".")[1];
+    const ops = JSON.parse(Buffer.from(body, "base64url").toString("utf8")).ops;
+    return Array.isArray(ops) ? ops : null;
+  } catch { return null; }
+}
+/** The MCP tools an agent can call: the ops its token carries (an agent that may only name itself sees capcomd_title). */
+export function toolsFor(ops) {
+  if (!ops) return TOOLS;
+  return TOOLS.filter((t) => ops.includes(t.name.replace(/^capcomd_/, "").replace("wait_any", "wait-any")));
+}
+
 async function mcp() {
   let buf = "";
   const send = (m) => process.stdout.write(JSON.stringify(m) + "\n");
@@ -222,7 +245,7 @@ async function mcp() {
       let m; try { m = JSON.parse(line); } catch { continue; }
       if (m.id === undefined) continue; // notification
       if (m.method === "initialize") send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params?.protocolVersion ?? "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "capcomd", version: "1" } } });
-      else if (m.method === "tools/list") send({ jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } });
+      else if (m.method === "tools/list") send({ jsonrpc: "2.0", id: m.id, result: { tools: toolsFor(tokenOps()) } });
       else if (m.method === "tools/call") {
         const name = String(m.params?.name ?? "").replace(/^capcomd_/, "").replace("wait_any", "wait-any");
         const args = m.params?.arguments ?? {};

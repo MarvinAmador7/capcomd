@@ -64,7 +64,7 @@ Usage:
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
   capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages; configure: change settings, set up projects)
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE] | --goal-branch G --base B]  → runId (a scope; plans nothing)
-  capcomd spawn <runId> --task T [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
+  capcomd spawn <runId> --task T [--title "2-4 words"] [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
   capcomd pause <runId> [agt]                   pause agents (and their descendants): each stops with its work kept on its branch
@@ -80,6 +80,8 @@ Usage:
   capcomd tui [runId] [--view live|waterfall|timeline|rollups|events]   the terminal debugger (no runId: the latest run)
   capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N] [--follow]  ·  capcomd budget show <runId> [agt]
   capcomd send <runId> <agt> <text> [--from agt] [--skill NAME]…  ·  capcomd token revoke <runId> <jti> [--reason R]
+  capcomd title <runId> <agt> <2-4 words>   name an agent's tab (as the driving harness: the agent's own later renames
+                                       replace it; a title the user gave in the apps stays until they clear it)
   capcomd skills                         skills send --skill attaches (bundled and ~/.claude/skills): the agent reads each with the message
   capcomd task add <runId> --title T [--data JSON] [--after tsk,…] [--key K]  ·  task list <runId> [--status open|claimed|done]  ·  task show <runId> <tsk>
   capcomd task claim <runId> [tsk] --holder H [--lease-ms N] [--key K]   → {taskId, epoch, leaseUntil}; no id = next free (expired leases are taken over)
@@ -577,6 +579,7 @@ async function main(argv: string[]): Promise<number> {
           parent: values.parent as string | undefined, key: values.key as string | undefined, contract, budget,
           operator: !!values.operator, start: !values["no-start"], ...(values.check !== undefined ? { check: values.check as string } : {}), ...(values.report ? { report: true } : {}),
           ...(values.continue ? { continueFrom: values.continue as string } : {}),
+          ...(values.title !== undefined ? { title: values.title as string } : {}),
           grant: Object.fromEntries(Object.entries(values).filter(([k, v]) => k.startsWith("children.") && v !== undefined).map(([k, v]) => [k.slice(9), v])),
         });
         if (json) out(r); else console.log(r.agentId);
@@ -740,6 +743,16 @@ async function main(argv: string[]): Promise<number> {
         if ("error" in sk) usage(sk.error);
         const { note, ...r } = await (await import("../primitives/ops")).sendToAgent(runId, { to, from: (values.from as string | undefined) ?? "operator", body, ...(values.key ? { key: String(values.key) } : {}), ...(sk.skills.length ? { skills: sk.skills } : {}) });
         if (json) out({ runId, to, ...r, ...(note ? { note } : {}) }); else console.log(`sent #${r.seq} to ${to}${note ? ` (${note})` : ""}`);
+        return EXIT.ok;
+      }
+
+      case "title": {
+        // capcomd title <runId> <agt> <words…>: the driver names an agent (capability agents.title).
+        const runId = positionals[1] ?? usage('capcomd title <runId> <agt> "<2-4 words>"');
+        const agentId = positionals[2] ?? usage('capcomd title <runId> <agt> "<2-4 words>"');
+        const words = positionals.slice(3).join(" ") || (values.title as string | undefined) || usage('title required: capcomd title <runId> <agt> "login redirect"');
+        const r = await (await import("../primitives/ops")).setAgentTitle(runId, agentId, words, { by: "driver", setBy: "driver", ...(values.key ? { key: `driver:${values.key}` } : {}) });
+        if (json) out(r); else console.log(r.shown ? `${agentId}: ${r.title}` : `${agentId}: kept "${words}"; the tab still says "${r.title}" (${r.note})`);
         return EXIT.ok;
       }
 

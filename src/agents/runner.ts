@@ -105,8 +105,11 @@ export interface AgentRunOptions {
   onNotice?: (n: { kind: Stuck["kind"]; detail: string } | null) => void;
   secrets?: string[];
   now?: () => number;
-  /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
-  subagents?: { skill: string; cliSource: string; rpcDir: string };
+  /**
+   * ADR-017: install in-VM capcomd (CLI + MCP + skill). Every real agent gets it to name its tab (capability
+   * agents.title); `orchestrator` (default true): it may spawn, so finishing without edits of its own is fine.
+   */
+  subagents?: { skill: string; cliSource: string; rpcDir: string; orchestrator?: boolean };
   /**
    * ADR-021 §2: the run's idle machine lifetime (seconds; default AGENT_VM_TTL_SECONDS). The VM's delete deadline is
    * renewed to this from now every 10 minutes while the agent runs.
@@ -398,7 +401,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     } else {
       promptText = [cfg.systemPrompt, promptText, cfg.appendSystemPrompt].filter(Boolean).join("\n\n");
     }
-    // ADR-017: agents allowed to spawn get capcomd (CLI on PATH + MCP server) and the skill.
+    // ADR-017: agents get capcomd (CLI on PATH + MCP server) and the skill: the orchestration one when they may spawn,
+    // else the few lines about naming their tab.
     let capcomdCtx: { cli: string; mcpConfig: string } | undefined;
     let capcomdPrelude = "";
     if (opts.subagents) {
@@ -683,7 +687,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
     if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) {
       // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine. A paused agent
       // (quota, or the operator's pause) has nothing to keep yet either: it starts over when it resumes.
-      if (opts.subagents || limit === "quota" || limit === "paused") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt }; }
+      if ((opts.subagents && opts.subagents.orchestrator !== false) || limit === "quota" || limit === "paused") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt }; }
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before changing anything`);
       throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
     }

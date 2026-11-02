@@ -12,6 +12,7 @@
 #           error differing only in numbers, then finish normally (stuck: failing)
 #   [listen] edit, then work for ~8s ([listen:N]: ~N s), writing each message it reads on stdin to messages.txt (send mid-run)
 #   [steps] read two files (thinking in between) before the edit and run the tests after it, all inside a second (agent.step)
+#   [title:WORDS] name its tab with the in-VM verb (capcomd title "WORDS"), its answer and exit code in ../title-out.txt
 #   [hold:N] the first run works N seconds (default 30) before editing (a daemon restart mid-run); a run started again
 #           in the same work dir finishes at once. Each run logs start, stopped (on SIGTERM) and finished to ../hold.log
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
@@ -34,6 +35,11 @@ case "$prompt" in *"[leak]"*)
   echo "stderr leak $ANTHROPIC_API_KEY" >&2;;
 esac
 case "$prompt" in *"[sleep]"*) sleep 120;; esac
+case "$prompt" in *"[title:"*)
+  t=$(printf '%s' "$prompt" | sed -n 's/.*\[title:\([^]]*\)\].*/\1/p')
+  { capcomd title "$t"; echo "exit $?"; } > ../title-out.txt 2>&1
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"capcomd title"}}]}}';;
+esac
 case "$prompt" in *"[hold:"*)
   n=$(printf '%s' "$prompt" | sed -n 's/.*\[hold:\([0-9]*\)\].*/\1/p')
   again=0; [ -f ../hold.log ] && again=1

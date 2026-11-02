@@ -124,11 +124,11 @@ export async function inspect(a: { runId: string; agent: string; tail?: number }
 
 // ── agents ────────────────────────────────────────────────────────────────────────────────────────
 
-export async function spawn(a: { runId: string; task: string; profile?: string; key?: string; budget?: string; check?: string; report?: boolean; continue?: string; children?: Record<string, unknown> }) {
+export async function spawn(a: { runId: string; task: string; title?: string; profile?: string; key?: string; budget?: string; check?: string; report?: boolean; continue?: string; children?: Record<string, unknown> }) {
   let budget: Budget | undefined;
   try { budget = a.budget ? parseBudget(a.budget) : undefined; } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Units: usd, turns, wallSeconds, e.g. \"usd=1,turns=40\"."); }
   // No `operator`: a driver's spawn may only narrow the profile, like any parent.
-  const r = await O.spawnAgent({ runId: a.runId, task: a.task, profile: a.profile, key: a.key, ...(budget ? { budget } : {}), ...(a.check ? { check: a.check } : {}), ...(a.report ? { report: true } : {}), ...(a.continue ? { continueFrom: a.continue } : {}), ...(a.children ? { grant: a.children as any } : {}) });
+  const r = await O.spawnAgent({ runId: a.runId, task: a.task, ...(a.title !== undefined ? { title: a.title } : {}), profile: a.profile, key: a.key, ...(budget ? { budget } : {}), ...(a.check ? { check: a.check } : {}), ...(a.report ? { report: true } : {}), ...(a.continue ? { continueFrom: a.continue } : {}), ...(a.children ? { grant: a.children as any } : {}) });
   return { ...agentView(r), next: `Wait with capcomd_await {runId: "${a.runId}", agents: ["${r.agentId}"]}.` };
 }
 
@@ -155,6 +155,11 @@ export async function send(a: { runId: string; to: string; body: string; key?: s
   const r = await client().scope.getOrCreate([a.runId]).sendMessage({ to: a.to, from: DRIVER, body: a.body, ...(a.key ? { key: `${DRIVER}:${a.key}` } : {}) });
   const note = await O.messageNote(a.runId, a.to);
   return { runId: a.runId, to: a.to, ...r, ...(note ? { note } : {}) };
+}
+
+/** Name an agent's tab (capability agents.title) as the driver: the agent's own later renames replace it; the user's title stays. */
+export async function title(a: { runId: string; agentId: string; title: string; key?: string }) {
+  return O.setAgentTitle(a.runId, a.agentId, a.title, { by: "driver", setBy: DRIVER, ...(a.key ? { key: `${DRIVER}:${a.key}` } : {}) });
 }
 
 export async function cancel(a: { runId: string; agent?: string; reason?: string }) {

@@ -11,7 +11,7 @@ import { env } from "../utils/env";
 
 export const ALL_OPS = [
   "spawn", "await", "wait-any", "status", "tree", "cancel", "send", "inbox", "handoff", "events",
-  "budget", "task", "kv", "verify", "merge", "inspect", "logs", "heartbeat", "result", "grant",
+  "budget", "task", "kv", "verify", "merge", "inspect", "logs", "heartbeat", "result", "grant", "title",
 ] as const;
 export type Op = (typeof ALL_OPS)[number];
 
@@ -68,7 +68,14 @@ export function verifyToken(token: string, key = signingKey(), now = Date.now())
   return { ok: true, claims };
 }
 
-/** Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator). */
-export function opsFor(limits: { allowSpawn: boolean }): Op[] {
-  return limits.allowSpawn ? [...ALL_OPS] : ["status", "heartbeat", "kv", "task", "inbox", "send", "result"];
+/** A real agent that may not spawn gets the in-VM CLI only to name its tab (capability agents.title). */
+export const NAMING_OPS: Op[] = ["title", "heartbeat"];
+
+/**
+ * Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator); a scripted
+ * agent's coordination ops otherwise; a real agent that may not spawn (`naming`) only names itself.
+ */
+export function opsFor(limits: { allowSpawn: boolean }, o: { naming?: boolean } = {}): Op[] {
+  if (limits.allowSpawn) return [...ALL_OPS];
+  return o.naming ? [...NAMING_OPS] : ["status", "heartbeat", "kv", "task", "inbox", "send", "result", "title"];
 }
