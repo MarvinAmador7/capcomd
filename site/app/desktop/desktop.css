@@ -316,7 +316,7 @@ img { display: block; max-width: 100%; height: auto; }
 .dk-band__t b { display: block; font-weight: 500; font-size: 18px; }
 .dk-band__t small { display: block; margin-top: 2px; font-size: var(--text-small); color: var(--color-muted); }
 
-/* ---------- Native, all the way down: the app as a cross-section, what you see on top, the socket at the bottom ---------- */
+/* ---------- Built for the Mac: the app as a cross-section, what you see on top, the socket at the bottom ---------- */
 .dk-native { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; padding: var(--dk-gap) var(--spacing-gutter) 0; }
 .dk-native__head { grid-column: 1 / span 5; align-self: start; position: sticky; top: 40px; }
 .dk-native__head .dk-lead { margin-top: 28px; max-width: 22ch; }

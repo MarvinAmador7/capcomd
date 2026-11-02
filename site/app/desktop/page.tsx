@@ -13,7 +13,7 @@ import { Reveals } from "@/components/Reveals";
 import { FIXES, READOUTS } from "@/lib/perf";
 import { SITE } from "@/lib/site";
 
-const title = "capcomd Desktop · every agent, one native window";
+const title = "capcomd Desktop · every agent, one window, your call";
 const description = "capcomd Desktop is a native Mac app, written entirely in Swift, that shows each coding agent in a run as its own column and calls on you only when one of them needs a decision. In development.";
 
 export const metadata: Metadata = {
@@ -57,8 +57,8 @@ export default function DesktopPage() {
       <header className="dk-hero">
         <Nav home={false} current="desktop" />
         <div className="dk-hero__words">
-          <h1 className="dk-h1" data-load style={delay(60)}>Every agent. One native window.</h1>
-          <p className="dk-hero__lead" data-load style={delay(160)}>A Mac app written entirely in Swift. No web view, no Electron. Each coding agent in your run gets its own column, and you hear from them only when one needs a decision.</p>
+          <h1 className="dk-h1" data-load style={delay(60)}><span className="whitespace-nowrap">Every agent.</span> <span className="whitespace-nowrap">One window.</span> <span className="whitespace-nowrap">Your call.</span></h1>
+          <p className="dk-hero__lead" data-load style={delay(160)}>A native Mac app that gives every coding agent in your run its own live column. They work side by side; you step in only when one needs a decision.</p>
           <p className="dk-hero__act" data-load style={delay(240)}>
             <a className="button" href={SITE.repo}>Watch on GitHub</a>
             <span>In development for macOS. The CLI works today: <a href="/#install">install it</a>.</span>
@@ -72,7 +72,7 @@ export default function DesktopPage() {
       <main id="main" tabIndex={-1}>
         <section className="dk-native" id="native" aria-labelledby="native-h">
           <div className="dk-native__head">
-            <h2 id="native-h" className="dk-h2" data-reveal>Native, all the way down.</h2>
+            <h2 id="native-h" className="dk-h2" data-reveal>Built for the Mac.</h2>
             <p className="dk-lead" data-reveal style={delay(80)}>No web view, no bundled browser, no JavaScript in the window. capcomd Desktop is Swift from the first pixel to the socket, built on the frameworks macOS itself is drawn with.</p>
             <dl className="dk-native__facts">
               {NATIVE_FACTS.map(([n, what], k) => <div key={what} data-reveal style={delay(140 + 60 * k)}><dt>{n}</dt><dd>{what}</dd></div>)}
