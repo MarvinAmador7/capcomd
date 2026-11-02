@@ -5,12 +5,10 @@
 // stores the state (agents_v2.title, scope_meta run_title) and checks renames with these, the API and clients show
 // `shownTitle`.
 
-/** A title is 1 to TITLE_WORDS_MAX plain lowercase words, at most TITLE_MAX_CHARS characters, one line. */
-export const TITLE_WORDS_MAX = 4;
-export const TITLE_MAX_CHARS = 32;
-/** Agent and parent renames: at most one per setter per agent every RENAME_WINDOW_MS, RENAMES_MAX per agent (or run). */
-export const RENAME_WINDOW_MS = 30_000;
-export const RENAMES_MAX = 20;
+// How a title is cleaned and refused, and the rate limit, live in title-rules.mjs: the same file is the shim an agent
+// that may not spawn names its tab with, so it says what the daemon will.
+import { cleanTitle, INVISIBLE, normalizeTitle, RENAME_WINDOW_MS, RENAMES_MAX, renameRefusal, TITLE_MAX_CHARS, TITLE_WORDS_MAX, titleLength } from "./title-rules.mjs";
+export { cleanTitle, normalizeTitle, RENAME_WINDOW_MS, RENAMES_MAX, renameRefusal, TITLE_MAX_CHARS, TITLE_WORDS_MAX };
 
 /** Who set a title: the agent itself, its parent, the user's driving harness (MCP, CLI), the user in the apps. */
 export type TitleBy = "self" | "parent" | "driver" | "user";
@@ -30,31 +28,8 @@ export interface TitleState {
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const len = (s: string) => { let n = 0; for (const _ of graphemes.segment(s)) n++; return n; };
+const len = titleLength;
 const take = (s: string, n: number) => { let out = ""; let i = 0; for (const g of graphemes.segment(s)) { if (i++ >= n) break; out += g.segment; } return out; };
-// Control and format characters (bidi overrides, zero-width spaces, BOMs): a title is one plain line. A zero-width
-// joiner stays only inside an emoji sequence (👩‍💻), where it is part of one character.
-const INVISIBLE = /(?!\u200D)[\p{Cc}\p{Cf}\u2028\u2029]|(?<!\p{Extended_Pictographic}\uFE0F?)\u200D|\u200D(?!\p{Extended_Pictographic})/gu;
-
-/** Trimmed, one line, whitespace collapsed, lowercase, without control or format characters. */
-export function cleanTitle(raw: string): string {
-  return raw.replace(/[\r\n\t\v\f\u0085\u2028\u2029]+/g, " ").replace(INVISIBLE, "").replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-/**
- * A title as given (by an agent, a parent, a driver or the user): cleaned, then refused when it has no words, more
- * than TITLE_WORDS_MAX or more than TITLE_MAX_CHARS characters. Never cut: the agent should pick shorter words.
- */
-export function normalizeTitle(raw: unknown): { ok: true; title: string } | { ok: false; error: string } {
-  if (typeof raw !== "string") return { ok: false, error: "a title is text: 1 to 4 lowercase words, e.g. \"login redirect\"" };
-  const t = cleanTitle(raw);
-  if (!t) return { ok: false, error: "a title needs at least one word: name what you're working on in 1 to 4 lowercase words, e.g. \"login redirect\"" };
-  const words = t.split(" ").length;
-  if (words > TITLE_WORDS_MAX) return { ok: false, error: `a title is 1 to ${TITLE_WORDS_MAX} words, not ${words}: say what you're working on in fewer words, e.g. "login redirect"` };
-  const n = len(t);
-  if (n > TITLE_MAX_CHARS) return { ok: false, error: `a title is at most ${TITLE_MAX_CHARS} characters, not ${n}: pick shorter words` };
-  return { ok: true, title: t };
-}
 
 // The derived title: the task's first meaningful words. Markers ([listen], [agent:…], headings, list bullets) and
 // filler go; a short "Goal:" or "Task:" label before the text goes; the text stops at its first clause boundary.
@@ -103,22 +78,6 @@ export function shownTitle(s: TitleState | null | undefined, task: string | null
   if (s?.agent) return { title: s.agent.title, titleSource: s.agent.by };
   const d = derivedTitle(task);
   return d ? { title: d, titleSource: "derived" } : { title: null, titleSource: null };
-}
-
-const ago = (ms: number) => `${Math.max(1, Math.round(ms / 1000))} s`;
-
-/**
- * Whether `setBy` may rename now (agent and parent renames; the user's and the driver's aren't limited): null, or the
- * refusal as one sentence. `what` names what is renamed as the caller sees it ("your tab", "agt-x", "the run"). A
- * title given at spawn isn't checked.
- */
-export function renameRefusal(s: Pick<TitleState, "count" | "last"> | null | undefined, setBy: string, what: string, now: number): string | null {
-  if ((s?.count ?? 0) >= RENAMES_MAX) return `${what} has been renamed ${RENAMES_MAX} times, the most capcomd allows: keep the title it has`;
-  const last = s?.last?.[setBy];
-  if (last !== undefined && now - last < RENAME_WINDOW_MS) {
-    return `you renamed ${what} ${ago(now - last)} ago: rename at most once every ${RENAME_WINDOW_MS / 1000} s (try again in ${ago(RENAME_WINDOW_MS - (now - last))}), and only when your focus really changes`;
-  }
-  return null;
 }
 
 /** What setting or clearing a title does to the state, and what the call answers. */

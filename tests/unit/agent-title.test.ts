@@ -2,6 +2,9 @@
 // daemon derives from a task when nobody named the agent, which title shows (the user's sticks; then the latest of
 // self, parent and driver; then the derived one), and the rate limit on an agent's and a parent's renames.
 import { describe, expect, test } from "bun:test";
+import { copyFileSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { applyTitle, cleanTitle, derivedTitle, normalizeTitle, RENAME_WINDOW_MS, RENAMES_MAX, renameRefusal, shownTitle, TITLE_MAX_CHARS, type TitleState } from "../../src/primitives/agent-title";
 
 describe("normalizeTitle", () => {
@@ -119,5 +122,36 @@ describe("renameRefusal", () => {
 	test("at most 20 renames per agent (or run)", () => {
 		expect(renameRefusal({ count: RENAMES_MAX, last: {} }, "agt-c", "your tab", t0)).toBe("your tab has been renamed 20 times, the most capcomd allows: keep the title it has");
 		expect(renameRefusal({ count: RENAMES_MAX - 1, last: {} }, "agt-c", "the run", t0)).toBeNull();
+	});
+});
+
+// The `capcomd` of an agent that may not spawn (src/primitives/title-rules.mjs, the daemon's own rules): it only names
+// the tab, says the daemon's refusals itself, keeps its own rename times, and talks to nobody.
+describe("the naming shim", () => {
+	const shim = new URL("../../src/primitives/title-rules.mjs", import.meta.url).pathname;
+	test("ok, a refusal, the rate limit, and usage for anything else", async () => {
+		const { shimMain, SHIM_USAGE } = await import("../../src/primitives/title-rules.mjs");
+		const t0 = 1_792_900_000_000;
+		const ok = shimMain(["title", "Login", "Redirect"], null, t0);
+		expect(ok).toEqual({ code: 0, out: "ok: login redirect", state: { title: "login redirect", count: 1, last: { self: t0 } } });
+		expect(shimMain(["title", "login redirect"], ok.state, t0 + 1)).toMatchObject({ code: 0, out: "ok: login redirect" });   // the same again
+		expect(shimMain(["title", "redirect loop"], ok.state, t0 + 12_000)).toMatchObject({ code: 1, out: expect.stringContaining("you renamed your tab 12 s ago") });
+		expect(shimMain(["title", "redirect loop"], ok.state, t0 + 30_000)).toMatchObject({ code: 0, out: "ok: redirect loop" });
+		expect(shimMain(["title", "one", "two", "three", "four", "five"], null, t0)).toMatchObject({ code: 1, out: 'a title is 1 to 4 words, not 5: say what you\'re working on in fewer words, e.g. "login redirect"' });
+		expect(shimMain(["spawn", "--task", "x"], null, t0)).toMatchObject({ code: 2, out: SHIM_USAGE });
+		expect(shimMain(["title"], null, t0)).toMatchObject({ code: 2 });
+		expect(shimMain(["title", "agt-123", "child"], null, t0).code).toBe(2);
+		expect(shimMain(["title", "--run", "x"], null, t0).code).toBe(2);
+	});
+	test("run as a command: prints and exits, its record next to it", () => {
+		const dir = mkdtempSync(join(tmpdir(), "title-shim-"));
+		const file = join(dir, "capcomd-title.mjs");
+		copyFileSync(shim, file);
+		const run = (...a: string[]) => { const r = Bun.spawnSync(["node", file, ...a]); return [r.exitCode, r.stdout.toString().trim()]; };
+		expect(run("title", "login redirect")).toEqual([0, "ok: login redirect"]);
+		expect(JSON.parse(readFileSync(join(dir, "title-state.json"), "utf8"))).toMatchObject({ title: "login redirect", count: 1 });
+		expect(run("title", "redirect loop")[0]).toBe(1);
+		expect(run("title", "a b c d e")).toEqual([1, 'a title is 1 to 4 words, not 5: say what you\'re working on in fewer words, e.g. "login redirect"']);
+		expect(run("status")[0]).toBe(2);
 	});
 });
