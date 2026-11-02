@@ -13,6 +13,10 @@
 //     run-gb01 working → ready with landed and not-landed work, run-gl01 stopped (its planner failed); the setup's branches
 //     route, POST /v1/runs base/goalBranch refusals, Open PR and Keep branch. Start the app with -capcomd.startRepo /src/app
 //     for the composer's goal branch row.
+//   TITLES=1 …   agent titles (capability agents.title): every agent has one (the scenes' own, else derived from its task or
+//     its key, as the daemon does), agent.spawned carries it, PUT/DELETE …/agents/{agentId}/title rename it (agent.titled on
+//     the run streams a moment later; the person's sticks), and the planner of the first run renames a worker every
+//     TITLE_EVERY_MS (default 20000) while it runs, under the person's title once they set one.
 //
 // Scenes: card-running | card-ask | card-stopped | card-finished | card-long | cards (the Active card, design/active-card),
 // panel (tree-card-v3.png), finished (no active work: done/failed/stopped rows), run (view-activity/view-trace/drill-a2-*:
@@ -26,6 +30,7 @@ import { ThreadStore, goldenThread, leadThread, withDiff } from "./threads";
 import { settingsCaps, settingsRoute, settingsRunOptions, settingsScene } from "./settings";
 import { projectsCaps, projectsRoute, projectsRunOptionsRefusal, projectsScene } from "./projects";
 import { runTitle } from "../../../../src/api/run-title";
+import { applyTitle, derivedTitle, normalizeTitle, shownTitle, type TitleState } from "../../../../src/primitives/agent-title";
 import { clampGoal, goalCaps, goalCreateRefusal, goalRoute, goalSummary, ledgerGoal, type GoalSpec } from "./goal";
 
 const sock = process.argv[2] ?? process.env.SOCK ?? "/tmp/capcomd-ui.sock";
@@ -204,6 +209,30 @@ scenes["goal"] = (() => {
 const runs = scenes[SCENARIO];
 if (!runs) { console.error(`unknown SCENARIO ${SCENARIO}; one of ${Object.keys(scenes).join(", ")}`); process.exit(2); }
 
+// TITLES=1: what each agent would have named its tab (agents.title). The scenes' agents by id; any other is derived from
+// its task, else its key ("task-clamp" → "clamp").
+const TITLES = process.env.TITLES === "1";
+const SCENE_TITLES: Record<string, [string, "self" | "parent" | "derived"]> = {
+  "agt-pl01": ["plan matchkey v3.2", "self"], "agt-wk01": ["matchkey keys", "self"], "agt-ld01": ["ids backfill", "self"],
+  "agt-wk02": ["parquet shards to r2", "self"], "agt-wk04": ["shard retries", "parent"], "agt-wk03": ["ids v1 readers", "self"],
+  "agt-cr01": ["row count checks", "parent"], "agt-cr02": ["matchkey commit", "parent"],
+  "agt-m-pl": ["plan matchkey v3.2", "self"], "agt-m-w1": ["matchkey keys", "self"], "agt-m-l1": ["ids backfill", "self"],
+  "agt-m-w2": ["keys refactor", "self"], "agt-m-w3": ["key normalizer", "self"], "agt-m-w4": ["shard retries", "parent"],
+  "agt-m-l2": ["addriva api", "self"], "agt-m-w5": ["schema readers", "self"], "agt-m-w6": ["api docs", "parent"], "agt-m-cr": ["row count checks", "parent"],
+  "agt-gb-pl": ["plan clamp helper", "self"], "agt-gb-w1": ["clamp helper", "self"], "agt-gb-w2": ["clamp tests", "self"], "agt-gb-w3": ["clamp docs", "parent"],
+  "agt-pl02": ["proration rounding", "self"], "agt-pr-pl": ["proration plan", "self"], "agt-pr-w1": ["proration rounding", "self"], "agt-pr-w2": ["ledger totals", "parent"],
+};
+/** Each agent's title state, as the daemon keeps it (TITLES=1). */
+const titleStates = new Map<string, TitleState>();
+/** What its title is derived from: its task, else its key. */
+const taskText = (a: AgentSpec) => a.task ?? a.key?.replace(/^task-/, "").replace(/-/g, " ") ?? null;
+const titleOf = (a: AgentSpec): { title: string | null; titleSource: string | null } =>
+  TITLES ? shownTitle(titleStates.get(a.id), taskText(a)) : { title: null, titleSource: null };
+for (const r of runs) for (const a of r.agents) {
+  const s = SCENE_TITLES[a.id];
+  if (TITLES && s && s[1] !== "derived") titleStates.set(a.id, { agent: { title: s[0], by: s[1], setBy: s[1] === "self" ? a.id : a.parent ?? "driver", at: NOW - a.ago } });
+}
+
 // Envelopes in seq order across all runs (run.created, agent.spawned, approval.requested).
 /** Which AI an agent runs on (Agent.provider / agent.spawned agent.provider): workers on Codex, the rest on Claude, a mixed team. */
 const providerOf = (a: { profile: string; provider?: string }) => a.provider ?? (a.profile === "worker" ? "codex" : "claude");
@@ -219,7 +248,8 @@ const env = (r: RunSpec, type: string, entity: string, agentId: string | null, m
 for (const r of runs) {
   env(r, "run.created", r.id, null, NOW - r.startedAgo, { runId: r.id, budget: {}, label: null, goal: r.goal });
   for (const a of r.agents) env(r, "agent.spawned", a.id, a.id, NOW - a.ago, { parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile,
-    budget: {}, limits: {}, agent: specOf(a), task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a) });
+    budget: {}, limits: {}, agent: specOf(a), task: a.task ?? null, key: a.key ?? null, operator: false, workspace: workspaceOf(a),
+    ...(TITLES && titleOf(a).title ? titleOf(a) : {}) });
   for (const p of r.approvals ?? []) env(r, "approval.requested", p.id, p.agentId, NOW - (p.askedAgo ?? r.lastAgo), { approvalId: p.id, kind: "merge", question: p.question,
     requestedBy: { agentId: p.agentId, runId: r.id }, subject: subjectOf(p), expiresAt: null });
   env(r, "run.started", r.id, null, NOW - r.lastAgo, { cause: "started" });   // bumps lastEventMs to the run's recency
@@ -246,7 +276,7 @@ const runBody = (r: RunSpec) => ({ id: r.id, projectId: r.projectId, label: null
 const agentBody = (r: RunSpec, a: AgentSpec) => ({ id: a.id, runId: r.id, parent: a.parent ?? null, depth: depthOf(r, a), profile: a.profile, status: a.status,
   text: `Agent ${a.id} is now ${a.status}.`, activity: a.activity ? { text: a.activity, kind: a.kind ?? "read", at: iso(NOW - a.ago) } : null,
   task: a.task ?? null, taskAttachment: null, result: a.result ?? null, workspace: workspaceOf(a), updatedAt: iso(NOW - a.ago),
-  provider: providerOf(a), model: specOf(a).model });
+  provider: providerOf(a), model: specOf(a).model, ...(TITLES ? titleOf(a) : {}) });
 const approvalBody = (r: RunSpec, p: ApprovalSpec) => ({ approvalId: p.id, kind: "merge", status: decided.has(p.id) ? decided.get(p.id).status : "pending",
   question: p.question, requestedBy: { agentId: p.agentId, runId: r.id }, subject: subjectOf(p), expiresAt: null, requestedAt: iso(NOW - (p.askedAgo ?? r.lastAgo)) });
 const decided = new Map<string, any>();
@@ -306,6 +336,23 @@ for (const r of runs) {
     console.log(`goal: ${r.id} is ready on ${g.branch}`);
   }, g.readyAfter);
 }
+// TITLES=1: the first run's planner renames its first running worker now and then (agent.titled by parent), under the
+// person's title once they gave it one (shown: false), so a rename in the app can be seen to stick.
+if (TITLES) {
+  const r = runs[0], names = ["redirect loop", "login redirect"];
+  let turn = 0;
+  setInterval(() => {
+    const a = r.agents.find((x) => x.parent && x.status === "running");
+    if (!a) return;
+    const title = names[turn++ % names.length]!, ms = Date.now();
+    const ch = applyTitle(titleStates.get(a.id), taskText(a), { title, by: "parent", setBy: a.parent!, now: ms });
+    titleStates.set(a.id, ch.next);
+    broadcast(r.id, { v: 1, id: `evt_title_${ms}`, scope: r.id, seq: HEAD + 500 + (++msgSeq), entity: a.id, entitySeq: 1, type: "agent.titled", typeVersion: 1,
+      durability: "durable", ts: iso(ms), epochMs: ms, projectId: r.projectId, runId: r.id, agentId: a.id,
+      data: { agentId: a.id, title, by: "parent", setBy: a.parent, shown: ch.shown, titleSource: ch.titleSource } });
+  }, Number(process.env.TITLE_EVERY_MS ?? 20_000));
+}
+
 if (existsSync(sock)) unlinkSync(sock);
 Bun.serve({
   unix: sock,
@@ -314,7 +361,7 @@ Bun.serve({
     const url = new URL(req.url), p = url.pathname;
     // CAPS=steer.skills,agent.pause advertises features the thread input checks for.
     const caps = [...new Set([...(process.env.CAPS?.split(",") ?? []), ...(SETTINGS ? settingsCaps(SETTINGS) : []), ...(PROJECTS ? projectsCaps(PROJECTS) : []),
-      ...(goals.size ? goalCaps : [])])];
+      ...(goals.size ? goalCaps : []), ...(TITLES ? ["agents.title"] : [])])];
     if (p === "/v1/health") return Response.json({ ok: true, api: "harness.v1", version: SETTINGS ? "0.6.0" : `mock-ui-${SCENARIO}`,
       ...(caps.length ? { capabilities: caps } : {}) });
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return err(401, "unauthorized", "missing or invalid bearer token");
@@ -405,6 +452,29 @@ Bun.serve({
     if (th) return Response.json(threads.page(th[2], Number(url.searchParams.get("after") ?? 0), Math.min(500, Number(url.searchParams.get("limit") ?? 100))));
     if (/^\/v1\/runs\/[^/]+\/attachments\/[^/]+\/content$/.test(p)) return new Response(PNG, { headers: { "content-type": "image/png", "x-content-type-options": "nosniff" } });
     if (/^\/v1\/runs\/[^/]+\/agents\/[^/]+\/workspace$/.test(p)) return err(404, "not_found", "not in the agent's latest work");
+    const ttl = TITLES ? p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/title$/) : null;
+    if (ttl && (req.method === "PUT" || req.method === "DELETE")) {   // agents.title: the person's name; agent.titled confirms it a moment later
+      if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
+      const run = runs.find(r => r.id === ttl[1]), agent = run?.agents.find(a => a.id === ttl[2]);
+      if (!run) return err(404, "not_found", `run ${ttl[1]} not found`);
+      if (!agent) return err(404, "not_found", `agent ${ttl[2]} not found`);
+      let title: string | null = null;
+      if (req.method === "PUT") {
+        const n = normalizeTitle(((await req.json().catch(() => null)) as any)?.title);
+        if (!n.ok) return Response.json({ code: "invalid", message: n.error, field: "title" }, { status: 422 });
+        title = n.title;
+      }
+      const ch = applyTitle(titleStates.get(agent.id), taskText(agent), { title, by: "user", setBy: "user", now: Date.now() });
+      if (ch.changed) {
+        titleStates.set(agent.id, ch.next);
+        const shown = titleOf(agent), ms = Date.now() + 300;
+        setTimeout(() => broadcast(run.id, { v: 1, id: `evt_title_${ms}`, scope: run.id, seq: HEAD + 500 + (++msgSeq), entity: agent.id, entitySeq: 1, type: "agent.titled", typeVersion: 1,
+          durability: "durable", ts: iso(ms), epochMs: ms, projectId: run.projectId, runId: run.id, agentId: agent.id,
+          data: { agentId: agent.id, title: title ?? shown.title, by: title === null ? "cleared" : "user", setBy: "user", shown: true, titleSource: shown.titleSource } }), 300);
+      }
+      const shown = titleOf(agent);
+      return Response.json({ runId: run.id, agentId: agent.id, ...shown, changed: ch.changed });
+    }
     const actl = p.match(/^\/v1\/runs\/([^/]+)\/agents\/([^/]+)\/(pause|resume)$/);
     if (actl && req.method === "POST") {   // harness #68: one agent and its subtree; the lifecycle confirms it a moment later
       if (!req.headers.get("idempotency-key")) return err(422, "invalid", "Idempotency-Key header (8-200 chars) is required");
