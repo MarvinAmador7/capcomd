@@ -517,7 +517,7 @@ export const SandboxDescriptor = z.object({
 	listed: z.boolean().describe("Always true here (unlisted test providers are never served)"),
 	caps: SandboxCaps.describe("What it can do. Ignore caps you don't know"),
 	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime). Ignore ids you don't know"),
-	info: z.array(z.string()).describe("Info row ids its details show (logins, checkpoints). Ignore ids you don't know"),
+	info: z.array(z.string()).describe("Info row ids its details show (logins, checkpoints; agentSlots on a place with a memory cap, today docker). Ignore ids you don't know"),
 	resourceKinds: z.array(z.string()).describe("Kinds of resource it lists (machine)"),
 	actions: z.array(z.string()).describe("Resource actions this daemon serves for it, from a closed list: open_terminal, delete (capability sandboxes.actions; more come with later capabilities). Ignore actions you don't know"),
 });
@@ -529,11 +529,11 @@ export const SandboxSummary = SandboxDescriptor.extend({
 export const Sandboxes = z.object({ sandboxes: z.array(SandboxSummary).describe("Every listed place, in order: today docker, then boxd") });
 export const FieldChoice = z.object({ value: z.string(), label: z.string().describe("Daemon-written, e.g. \"1 hour\"") });
 export const SandboxField = z.object({
-	id: z.string().describe("Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"),
+	id: z.string().describe("Stable id: idleLifetime (settings); logins, checkpoints, agentSlots (info). More may be added"),
 	type: z.string().describe("choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"),
 	label: z.string().describe("Row title (daemon-written)"),
 	help: z.string().nullable().describe("A footnote under the row (daemon-written, trusted); null when none"),
-	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)"),
+	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)"),
 	display: z.string().describe("The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"),
 	default: z.string().nullable().describe("A setting's default value; null for info rows"),
 	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
@@ -546,7 +546,7 @@ export const SandboxField = z.object({
 export const SandboxDetail = z.object({
 	descriptor: SandboxDescriptor,
 	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900)"),
-	info: z.array(SandboxField).describe("Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work)"),
+	info: z.array(SandboxField).describe("Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work), agentSlots (how many agents run at once here: Docker's memory over a per-agent budget, CAPCOMD_DOCKER_AGENT_MEMORY_MB, 1 GB by default; more wait as pending and start as others finish)"),
 	rev: z.string().describe("Changes whenever a setting's value, source or editability does; PATCH …/settings sends it back (a stale one is 409 conflict)"),
 });
 export const SettingsBody = z.object({
