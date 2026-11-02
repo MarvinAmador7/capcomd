@@ -857,19 +857,23 @@ struct ColumnHead: View {
     let h = slice.header
     return HStack(spacing: 8) {
       ProvidedBot(traits: slice.bot, size: .xs, cell: 1.5, provider: h.provider)
-      Text(verbatim: h.name).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).fixedSize()
-      if slice.renaming == .header {
-        InlineTitleField(agentId: slice.id, font: Theme.Desk.label, width: Theme.Desk.headerField)
-      } else if let t = h.title {
-        Text(verbatim: "· " + t).font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary).lineLimit(1).truncationMode(.tail)
-          .frame(maxWidth: Theme.Desk.headerTitleMax, alignment: .leading).fixedSize(horizontal: true, vertical: false)
-          .contentShape(Rectangle())
-          .onTapGesture(count: 2) { model.beginRename(slice.id, at: .header) }
-          .help(slice.renameFailure.map { "Couldn't rename it: \($0)" } ?? "Double-click to rename")
+      // The text runs together, so each "·" has one space on either side.
+      HStack(spacing: 0) {
+        Text(verbatim: h.name).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).fixedSize()
+        if slice.renaming == .header {
+          Text(verbatim: " · ").font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary)
+          InlineTitleField(agentId: slice.id, font: Theme.Desk.label, width: Theme.Desk.headerField)
+        } else if let t = h.title {
+          Text(verbatim: " · " + t).font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary).lineLimit(1).truncationMode(.tail)
+            .frame(maxWidth: Theme.Desk.headerTitleMax, alignment: .leading).fixedSize(horizontal: true, vertical: false)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) { model.beginRename(slice.id, at: .header) }
+            .help(slice.renameFailure.map { "Couldn't rename it: \($0)" } ?? "Double-click to rename")
+        }
+        if let s = h.suffix { Text(verbatim: " " + s).font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary) }
+        Text(verbatim: " · " + Self.state(h, asks: slice.approval != nil)).font(Theme.Desk.meta)
+          .foregroundStyle(slice.approval != nil ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.secondary)
       }
-      if let s = h.suffix { Text(verbatim: s).font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary) }
-      Text(verbatim: "· " + Self.state(h, asks: slice.approval != nil)).font(Theme.Desk.meta)
-        .foregroundStyle(slice.approval != nil ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.secondary)
       Spacer(minLength: 0)
       // The planner's column names the goal branch, quietly, so it's plain where the work lands.
       if let g = slice.goal {

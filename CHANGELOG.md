@@ -5,6 +5,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Agents name their own tabs. Each agent has a short title (1–4 lowercase words, e.g. "login redirect") that the
+  desktop app's crew tabs and column headers, the menu bar's rows, approvals and notifications show instead of id
+  fragments. Inside its VM an agent runs `capcomd title "<words>"`; a planner names its children with `spawn --title`
+  and the run with `capcomd title --run`. An agent nobody named shows the first words of its task. Naming a tab
+  doesn't show up in the agent's thread or activity, and an agent that can't spawn names itself with a small local
+  `capcomd` that makes no extra calls (capcomd reads the name from the agent's own commands).
+- Rename an agent yourself by double-clicking its tab or its column header in the desktop app, or with Rename… on
+  its row in the menu bar. Your name stays until you clear it (empty the field); the agent's own name shows again
+  after that. From your own harness, `capcomd title <runId> <agt> <words>` and the MCP tool `capcomd_title` name an
+  agent, and `capcomd_spawn` takes `title`.
+- The desktop app's column header reads "lead · login redirect · waiting on you" (no bot name), and a merge on the
+  menu bar's Active card reads "Merge work from <agent> into <target>?".
+- API (capability `agents.title`): agents carry `title` and `titleSource`; `PUT` and `DELETE
+  /v1/runs/{runId}/agents/{agentId}/title`; new events `agent.titled` and `run.titled`; `Run.titleSource` can be
+  `agent`.
 - The desktop app is called capcomd: in the menu bar, its About/Hide/Quit items and the Dock. `apps/menubar/scripts/build-app.sh
   --desktop` packages it as `capcomd.app` (a regular Dock app). Its title bar shows each project by name only, without
   the clock or status line under it.
