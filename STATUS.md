@@ -15,9 +15,9 @@ capcomd plugin (MCP tools and skills; verified live from Claude Code), the skill
 
 | Area | State | Verified by |
 |---|---|---|
-| Lifecycle actors and state machines (run, task, lease, worker) | Built | `tests/machines`, chaos killpoints |
-| Crash safety: idempotency keys, epochs, exactly-once merge | Built | `tests/chaos` (named killpoints and seeded runs), `chaos:fast` |
-| Primitives (ADR-016): `run new`, `spawn`, `await`, `wait-any`, `cancel`, `tree`, task board with fenced leases, versioned kv, `events --follow` | Built | `tests/primitives`, chaos `board.*` / `kv.*` killpoints |
+| Lifecycle actors and state machines (run, task, lease, worker) | Built | `tests/machines` |
+| Crash safety: idempotency keys, epochs, exactly-once merge | Built | `tests/merge`, `tests/subagents/workflow.test.ts` (named killpoints) |
+| Primitives (ADR-016): `run new`, `spawn`, `await`, `wait-any`, `cancel`, `tree`, task board with fenced leases, versioned kv, `events --follow` | Built | `tests/primitives` |
 | `verify` (checks on the ref merged with the latest target) and `merge --require` (only the verified commit lands; merge re-runs the same checks) | Built | `tests/primitives/verify-merge.test.ts` |
 | Operator-named checks: `run new --checks-set name='cmd'`, pinned per child with `spawn --check NAME` | Built | `tests/scenarios/named-checks.test.ts` |
 | Reviewer: `run new --reviewer P` (operator-set); after the checks pass, verify spawns a reviewer agent on the commit (read-only, never pushes); both must pass, no verdict = fail | Built, verified live | `tests/scenarios/review.test.ts`, `tests/agents/claude-code.test.ts` |
@@ -27,7 +27,7 @@ capcomd plugin (MCP tools and skills; verified live from Claude Code), the skill
 | Per-run staging target: `run new --target T [--target-from BASE]`; children branch from it, verify and merge default to it | Built | `tests/scenarios/approvals.test.ts` |
 | Guided setup (`capcomd setup`, `setup check`): local demo, boxd key in the OS keychain, snapshot, logins, project config and profiles, Claude Code skill, engine service | Built (accounts step verified live, non-interactive) | `tests/config/` |
 | Engine as a service (`capcomd service install`): launchd (macOS), systemd user unit (Linux) | Built (launchd verified live) | `tests/config/service.test.ts` |
-| Releases from CI: a `vX.Y.Z` tag runs the tests (Linux, macOS), a chaos round, an install of the packed package with a fresh `HOME` (fake agents), then publishes the GitHub release | Built (v0.3.0 released this way) | `.github/workflows/release.yml`, `scripts/release-smoke.sh` |
+| Releases from CI: a `vX.Y.Z` tag runs the tests (Linux, macOS), an install of the packed package with a fresh `HOME` (fake agents), then publishes the GitHub release | Built (v0.3.0 released this way) | `.github/workflows/release.yml`, `scripts/release-smoke.sh` |
 | Runs carry their repository settings: an engine without repo env (a service) works; one engine serves several repos | Built | `tests/scenarios/run-repo.test.ts` |
 | Dependent work, interface first: a contract child lands, then provider and consumers run in parallel and land in dependency order (planner guidance, pattern 7) | Built | `tests/scenarios/interface-first.test.ts` |
 | Sub-agents in VMs (ADR-017): capability tokens, narrow-only fan-out, in-VM `capcomd` CLI and MCP tools, fencing of agent text | Built | `bun run test:scenarios` |
@@ -80,7 +80,6 @@ bun run test:fast              # unit, CLI, setup/config, state machines, tracin
 bun run test:scenarios         # CI's regression suite, about 3.5 min on macOS, 6.5 min on Linux
 bun test tests/agents tests/primitives tests/merge
 (cd apps/tui && bun test)
-bun run test:chaos             # long: the killpoint and seed suites
 scripts/mac-subagents-e2e.sh   # live: needs BOXD_API_KEY, gh, and working claude + codex logins
 scripts/mac-agent-ops-e2e.sh   # live: notices, send to a running agent, spawn --continue (claude login)
 ```
@@ -89,4 +88,4 @@ The engine-backed tests run on macOS and Linux; Linux uses `/proc` and macOS use
 run long suites under `caffeinate -i`: if the machine sleeps mid-run, tests time out and can leave an
 orphaned `rivet-engine` behind.
 
-Other reports: `docs/evidence/` (chaos logs).
+Other reports: `docs/evidence/` (including logs from the crash-test suite removed on 2026-11-02).

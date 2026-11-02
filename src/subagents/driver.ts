@@ -68,7 +68,7 @@ export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: Sandb
 
 export class ScriptFailed extends Error { constructor(msg: string, readonly exitCode: number) { super(msg); } }
 
-/** Chaos: kill this driver once at `name` (marker file), simulating a host crash mid-RPC. */
+/** Tests: kill this driver once at `name` (marker file), simulating a host crash mid-RPC. */
 export function driverKillpoint(name: string) {
   const want = env("DRIVER_KILLPOINT");
   if (!want || want !== name) return;

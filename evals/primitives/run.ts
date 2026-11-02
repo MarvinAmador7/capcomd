@@ -4,7 +4,7 @@
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { Engine } from "../../tests/chaos/engine";
+import { Engine } from "../../tests/helpers/test-engine";
 
 const PORT = Number(process.env.EVAL_PORT ?? 7681);
 const agents = join(mkdtempSync(join(tmpdir(), "capcomd-eval-")), "agents.json");

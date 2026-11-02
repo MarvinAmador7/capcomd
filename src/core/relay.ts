@@ -135,7 +135,7 @@ export interface RunResult {
 
 /**
  * Drive a run to a terminal state. Every step is idempotent, so calling this
- * again with the same runId resumes a crashed run (the chaos suite relies on it).
+ * again with the same runId resumes a crashed run.
  */
 export async function executeRun(opts: RunOptions): Promise<RunResult> {
   const runId = opts.runId ?? generateRunId();

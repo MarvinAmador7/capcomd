@@ -350,5 +350,5 @@ A task parks in `awaiting_approval` after verification passes when its target br
 `main,master,release/*`). The engine process reads that variable. The task stays there until
 `capcomd approve` or `capcomd_approve` moves it to `merged` (event `APPROVED`, recorded with
 `approvedBy`). Cancelling the run cancels tasks that are parked. Without `--target-branch`, tasks
-merge their own `task/<id>/e<epoch>` branches, which are unprotected, so the default path and the
-chaos suite never wait for approval.
+merge their own `task/<id>/e<epoch>` branches, which are unprotected, so the default path never
+waits for approval.

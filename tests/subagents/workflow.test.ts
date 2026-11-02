@@ -9,7 +9,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { Engine } from "../chaos/engine";
+import { Engine } from "../helpers/test-engine";
 import { capcomd, sleep, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
 

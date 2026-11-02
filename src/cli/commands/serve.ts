@@ -128,7 +128,7 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // Once per start (not again in the engine host below): the one-time copy from ~/.rivetkit, then the version guard.
   // The engine's version is recorded only once it answers (below), so the record never names an engine that didn't open it.
   if (process.env.CAPCOMD_SERVE_EXEC !== "1") {
-    const real = process.env.CAPCOMD_REAL_ENGINE ?? process.env.CAPCOMD_CHAOS_REAL_ENGINE ?? process.env.RIVET_ENGINE_BINARY!;
+    const real = process.env.CAPCOMD_REAL_ENGINE ?? process.env.CAPCOMD_TEST_REAL_ENGINE ?? process.env.RIVET_ENGINE_BINARY!;
     const engineVersion = data.engineVersionOf(real);
     if (engineVersion) process.env.CAPCOMD_ENGINE_VERSION = engineVersion;
     const { VERSION } = await import("../../utils/self");

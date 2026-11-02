@@ -8,7 +8,7 @@
 | env | effect |
 |---|---|
 | `CAPCOMD_SANDBOX=boxd` | `providerFromEnv()` in `src/dependencies.ts` returns `BoxdProvider` |
-| unset / `fake` | `FakeProvider` (the default, and what every test and chaos run uses) |
+| unset / `fake` | `FakeProvider` (the default, and what every test uses) |
 | `BOXD_API_KEY` | read by the provider. It is never logged, printed or stored |
 | `BOXD_ORG` | optional org to create machines in |
 | `CAPCOMD_BOXD_DB` | ledger path (default `.relay/boxd.sqlite`, gitignored) |
