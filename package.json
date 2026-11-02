@@ -50,7 +50,8 @@
     "chaos:fast": "bun tests/chaos/fast.ts",
     "chaos:slow": "bun test tests/chaos/subprocess.test.ts",
     "test:fast": "bun test packages/agent-thread packages/bot-avatar tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers",
-    "test:scenarios": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts"
+    "test:scenarios": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts",
+    "test:scenarios:timings": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts --timings=tests/scenario-timings.json --update-timings"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -106,7 +106,8 @@ docs/           - design documents and ADRs
 ```bash
 bun run typecheck
 bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP (~1 min)
-bun run test:scenarios         # sub-agent scenarios, primitives policy (the CI regression suite)
+bun run test:scenarios         # sub-agent scenarios, primitives policy (the CI regression suite, six shards in CI)
+bun run test:scenarios:timings # the same, then refresh tests/scenario-timings.json (per-file times that balance the shards)
 bun test tests/agents tests/primitives tests/merge
 (cd apps/tui && bun test)
 ```
@@ -143,6 +144,9 @@ bun run chaos:fast             # parallel workers; strict when CI=true
 # Run with a specific killpoint
 CAPCOMD_KILLPOINT=tx.mid:1 bun test tests/chaos/killpoints.test.ts
 ```
+
+CI runs them only on demand (Actions → CI → Run workflow: three strict rounds per suite), not on pushes or nightly; the
+release workflow still runs one strict round.
 
 Named killpoints:
 
