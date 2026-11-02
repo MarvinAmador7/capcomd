@@ -12,6 +12,7 @@ import { claudeInputDiff, claudeResultDiff } from "./diff";
 import { checkImage, type StoredImage } from "./images";
 import { capBytes, oneLine, sanitize, tailBytes } from "./sanitize";
 import { claudeSummary, codexSummary } from "./summary";
+import { isClaudeNamingCall, isCodexNamingCall } from "./naming";
 import { THREAD_FORMAT, type BlockNode, type ItemDraft, type LinkNode, type ToolDiffT, type ToolInfoT } from "./schema";
 
 const EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
@@ -57,7 +58,7 @@ export function threadBuilder(o: ThreadOptions) {
 	const items = new Map<string, ItemDraft>();
 	const tools = new Map<string, string>(); // CLI call id → item id
 	const plans = new Map<string, string>(); // codex todo_list item id → item id
-	const ignoredCalls = new Set<string>(); // calls shown as something else (TodoWrite → plan)
+	const ignoredCalls = new Set<string>(); // calls shown as something else (TodoWrite → plan), or not at all (naming the tab)
 	const seenBlocks = new Set<string>();
 	const editPaths = new Map<string, unknown>(); // claude file-editing call id → its input's path
 	let n = 0, lastText: string | null = null;
@@ -161,6 +162,8 @@ export function threadBuilder(o: ThreadOptions) {
 				else if (bt === "tool_use") {
 					const name = str(c.name), input = c.input && typeof c.input === "object" ? c.input : {};
 					const callId = str(c.id) || `anon-${n + 1}`;
+					// Naming its tab (`capcomd title …`, capcomd_title) is bookkeeping, not a step: left out with its result.
+					if (isClaudeNamingCall(name, input)) { ignoredCalls.add(callId); continue; }
 					if (name === "TodoWrite" && Array.isArray(input.todos)) {
 						ignoredCalls.add(callId);
 						out.push(planItem(input.todos.map((t: any) => ({ text: str(t?.content) || str(t?.activeForm), done: t?.status === "completed" })), "done"));
@@ -214,6 +217,8 @@ export function threadBuilder(o: ThreadOptions) {
 			const done = type === "item.completed";
 			switch (item.type) {
 				case "command_execution": case "file_change": case "mcp_tool_call": case "web_search": {
+					// Naming its tab is bookkeeping, not a step: not shown (the raw events keep it).
+					if (isCodexNamingCall(item)) break;
 					const fresh = !tools.has(id);
 					if (fresh) {
 						const name = item.type === "mcp_tool_call" ? `${str(item.server)}.${str(item.tool)}` : str(item.type);

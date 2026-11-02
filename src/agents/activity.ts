@@ -6,6 +6,7 @@
 // Each finished streak is also a step of the agent's history (harness.v1 `agent.step`), reported at once, unthrottled.
 import type { AgentEvent } from "./types";
 import { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind } from "../../packages/agent-thread/src/kinds";
+import { isClaudeNamingCall, isCodexNamingCall } from "../../packages/agent-thread/src/naming";
 
 // The vocabulary and the command/op classifiers live in packages/agent-thread (the thread's tool items use them too).
 export { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind };
@@ -49,13 +50,17 @@ export function activityOf(ev: AgentEvent): ActivityStep[] {
 	const content = raw?.message?.content;
 	if (ev.type === "assistant" && Array.isArray(content)) {
 		const uses = content.filter((c: any) => c?.type === "tool_use");
-		if (uses.length) return uses.map((u: any) => claudeTool(String(u.name ?? ""), u.input && typeof u.input === "object" ? u.input : {}));
+		// Naming its tab (capcomd title) is no step of its work: not in its activity or its step history.
+		const input = (u: any) => (u.input && typeof u.input === "object" ? u.input : {});
+		const work = uses.filter((u: any) => !isClaudeNamingCall(String(u.name ?? ""), input(u)));
+		if (uses.length) return work.map((u: any) => claudeTool(String(u.name ?? ""), input(u)));
 		if (content.some((c: any) => c?.type === "text" || c?.type === "thinking")) return [step("think")];
 		return [];
 	}
 	const item = raw?.item;
 	if ((ev.type === "item_started" || ev.type === "item_completed" || ev.type === "item_updated") && item && typeof item === "object") {
 		const id = String(item.id ?? "");
+		if (isCodexNamingCall(item)) return [];
 		switch (item.type) {
 			case "command_execution": return [step(commandKind(String(item.command ?? "")), id || item.command)];
 			case "file_change": {
