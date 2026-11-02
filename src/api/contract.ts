@@ -738,6 +738,8 @@ const GoalWork = z.object({
 	parent: z.string().nullable(),
 	profile: z.string().nullable(),
 	task: UntrustedText.describe("The first line of its task (at most 200 characters)"),
+	title: UntrustedText.nullable().optional().describe("Its title (capability agents.title: 1–4 lowercase words, the agent's, its parent's or the user's, else derived from its task): what to show first, with `task` as the detail. Older daemons don't send it"),
+	continues: z.array(z.string()).optional().describe("The agents whose work this one carries on (`spawn --continue`, e.g. after a merge conflict), nearest first. Their work landed, or didn't, with this one's, so they aren't listed on their own. Older daemons don't send it"),
 	branch: z.string().nullable().describe("The branch it pushed"),
 });
 export const GoalLanded = GoalWork.extend({
@@ -774,7 +776,7 @@ export const GoalView = z.object({
 		error: z.string().nullable().describe("Why the branches couldn't be compared (daemon-written): the remote unreachable, a branch deleted; the rest of the answer still holds"),
 	}).describe("The goal branch against its base, fetched now"),
 	landed: z.array(GoalLanded).describe("Each child whose work was merged onto the goal branch, in the order the agents were spawned"),
-	notLanded: z.array(GoalNotLanded).describe("Each child with work that isn't on the goal branch, and why. Children with nothing of their own to land (reports, leads whose children landed) aren't listed"),
+	notLanded: z.array(GoalNotLanded).describe("Each child with work that isn't on the goal branch, and why. Children with nothing of their own to land (reports, leads whose children landed) and children whose work another continued (listed under that one's `continues`) aren't listed"),
 	pullRequest: GoalPullRequest.nullable().describe("The pull request opened from the goal branch, once there is one"),
 	openPullRequest: z.object({
 		available: z.boolean().describe("POST …/pull-request would open (or return) one now"),

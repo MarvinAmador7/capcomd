@@ -3508,6 +3508,21 @@
                             "type": "string",
                             "description": "The first line of its task (at most 200 characters)"
                           },
+                          "title": {
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "x-untrusted": true
+                          },
+                          "continues": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "The agents whose work this one carries on (`spawn --continue`, e.g. after a merge conflict), nearest first. Their work landed, or didn't, with this one's, so they aren't listed on their own. Older daemons don't send it"
+                          },
                           "branch": {
                             "description": "The branch it pushed",
                             "type": [
@@ -3627,6 +3642,21 @@
                             "type": "string",
                             "description": "The first line of its task (at most 200 characters)"
                           },
+                          "title": {
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "x-untrusted": true
+                          },
+                          "continues": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "The agents whose work this one carries on (`spawn --continue`, e.g. after a merge conflict), nearest first. Their work landed, or didn't, with this one's, so they aren't listed on their own. Older daemons don't send it"
+                          },
                           "branch": {
                             "description": "The branch it pushed",
                             "type": [
@@ -3678,7 +3708,7 @@
                           "detail"
                         ]
                       },
-                      "description": "Each child with work that isn't on the goal branch, and why. Children with nothing of their own to land (reports, leads whose children landed) aren't listed"
+                      "description": "Each child with work that isn't on the goal branch, and why. Children with nothing of their own to land (reports, leads whose children landed) and children whose work another continued (listed under that one's `continues`) aren't listed"
                     },
                     "pullRequest": {
                       "description": "The pull request opened from the goal branch, once there is one",

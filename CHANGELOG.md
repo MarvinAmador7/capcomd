@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- A goal branch's result lists each piece of work by its agent's title, in `capcomd goal`, the apps' ready card and the
+  pull request's description. Work an agent continued from another (say, to fix a merge conflict) is listed once,
+  under the agent that carried it on, instead of also showing the first try as "merge failed". API: each landed and
+  not-landed entry of `GET /v1/runs/{runId}/goal` carries `title` and `continues`.
 - Start a project from the desktop app: + (⇧⌘N) opens a new project column with the folder, the branch the work starts
   from and the goal branch it lands on, the goal, Local or Cloud, the model and its effort, and Start. A folder that
   isn't set up shows its setup steps in place. On Start the column becomes the planner's, and the crew's columns

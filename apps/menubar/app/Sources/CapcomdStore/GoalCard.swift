@@ -98,9 +98,9 @@ public struct GoalCard: Sendable, Hashable {
       card.landed = v.landed.map { l in
         let checks = l.checksPassed.map { $0 ? "checks passed" : "checks failed" } ?? "no checks"
         let review = l.review.map { $0.passed ? "reviewed" : "review didn't pass" }
-        return Row(id: l.id, task: l.task, status: [checks, review].compactMap { $0 }.joined(separator: " · "), detail: nil, landed: true)
+        return Row(id: l.id, task: l.title ?? l.task, status: [checks, review].compactMap { $0 }.joined(separator: " · "), detail: nil, landed: true)
       }
-      card.notLanded = v.notLanded.map { Row(id: $0.id, task: $0.task, status: $0.reasonText, detail: $0.detail, landed: false) }
+      card.notLanded = v.notLanded.map { Row(id: $0.id, task: $0.title ?? $0.task, status: $0.reasonText, detail: $0.detail, landed: false) }
       card.files = Array(c.files.prefix(filesShown))
       card.filesMore = max(0, (c.filesTotal ?? c.files.count) - card.files.count)
       card.diffURL = compareURL(repo: v.openPullRequest.repo, base: g.base, branch: g.branch, pullRequestURL: g.pullRequest?.url ?? v.pullRequest?.url)
