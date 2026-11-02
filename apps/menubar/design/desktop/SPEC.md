@@ -54,8 +54,8 @@ One window, two parts.
     GitHub, with the goal view's counts; hidden for a run without a goal branch on GitHub, since the desktop has no
     diff view yet); Pause project / Resume project (⌥⌘P) and Stop project… (red; asks first, it cancels every agent),
     both with `run.controls` on a run that hasn't ended; Fold into the title bar (⌘W: back into its deck, it keeps
-    running, and no project is open until one is picked), or for a finished project Remove from the title bar (hidden
-    until it has news: a new run, an ask, work again); Copy run ID (shows the short id, copies the whole). Only actions
+    running, and no project is open until one is picked), or for a finished project Remove from the title bar (hidden,
+    also after a relaunch, until it has news: a new run, an ask, work again); Copy run ID (shows the short id, copies the whole). Only actions
     the daemon and the app have: Trace and Browse the workspace are hidden until the desktop has views for them, and
     rename, duplicate, archive and export are out on purpose.
   - **Actions ⌘K** (the ⌘ button): a small palette over the window, the menu's surface: type to filter (every word
@@ -76,10 +76,10 @@ One window, two parts.
     change, no loop), and on Start moves into the column's header.
   - The composer card at its foot (#1D1D21, 14 pt corners, 1 pt stroke, the blue ring while focused): the folder chip
     (the remembered project checkout, × back to the default project; Default project chooses a folder), then with
-    `runs.goal_branch` and a project folder the goal branch row beside it: the base menu (the repository's branches,
+    `runs.goal_branch` and a project folder the base menu beside it (the repository's branches,
     the daemon's `suggestedBase` preselected; never a guessed main: with no suggestion nothing is picked, Start waits
-    and "Pick the branch this work starts from" shows) and the goal branch's name (the daemon's suggestion for the goal
-    until edited), with the daemon's sentences under them. Older daemons: no branch row. Then the goal (14 pt), then
+    and "Pick the branch this work starts from" shows), and on a line of its own under them the goal branch's name (the
+    daemon's suggestion for the goal until edited), with the daemon's sentences under it. Older daemons: no branch row. Then the goal (14 pt), then
     one tool row: + (Choose Project Folder…, Use the Default Project), Local / Cloud, the model with its effort bars
     (the run options the menu bar's composer uses), Start. No mic until voice input (phase 3). Return starts.
   - A folder that isn't set up swaps the tool row for the menu bar's inline setup (the same views, on

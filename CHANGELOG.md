@@ -11,7 +11,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   appear as it spawns them.
 - The desktop app's project menu: click the open project's name for its goal, repos and place, then Message the
   planner (⌘L), Changes, Pause or Resume (⌥⌘P), Stop (asks first), Fold into the title bar (⌘W; a finished project
-  offers Remove from the title bar) and Copy run ID. ⌘K opens a palette of these actions, the other projects, New
+  offers Remove from the title bar, which lasts until it has news, also across relaunches) and Copy run ID. ⌘K opens a palette of these actions, the other projects, New
   project, Follow and the open project's agents by title. ⌘W folds the open project instead of closing the window.
 - Agents name their own tabs. Each agent has a short title (1–4 lowercase words, e.g. "login redirect") that the
   desktop app's crew tabs and column headers, the menu bar's rows, approvals and notifications show instead of id

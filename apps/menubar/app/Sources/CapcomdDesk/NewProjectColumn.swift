@@ -160,13 +160,15 @@ struct NewProjectComposer: View {
     .onChange(of: form.goal) { _, g in if g != goal { goal = g } }   // the debug control file types into the model
   }
 
-  /// The folder chip and, with goal branches, the base it starts from and the branch the work lands on.
+  /// The folder chip and, with goal branches, the base it starts from; the branch the work lands on gets a line of its
+  /// own under them, so a long name isn't cut at narrow widths.
   @ViewBuilder private func contextRow(branches: Bool) -> some View {
     HStack(spacing: 4) {
       FolderChip(revision: np.revision)
-      if branches { BaseChip(form: np.form); GoalBranchName(form: np.form) }
+      if branches { BaseChip(form: np.form) }
       Spacer(minLength: 0)
     }
+    if branches { GoalBranchName(form: np.form) }
   }
 
   private func toolRow(starting: Bool) -> some View {
@@ -277,7 +279,7 @@ struct GoalBranchName: View {
       Image(systemName: "arrow.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.Desk.tertiary).accessibilityHidden(true)
       GoalBranchField(text: Binding(get: { s.goalBranch }, set: { model.typeBranch($0) }), placeholder: s.placeholder,
                       error: form.branchLine?.warn == true)
-        .frame(minWidth: 90, maxWidth: 220)
+        .frame(minWidth: 90, maxWidth: .infinity)
     }
   }
 }

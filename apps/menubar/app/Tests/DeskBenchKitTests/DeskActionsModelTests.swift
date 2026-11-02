@@ -157,6 +157,26 @@ final class DeskActionsModelTests: XCTestCase {
     XCTAssertEqual(m.decks.map(\.runId), ["run-a", "run-b"])   // it asks: it's back
   }
 
+  /// Removed stays removed across launches: the next model on the same defaults hides it until it has news.
+  @MainActor func testRemoveLastsAcrossLaunches() throws {
+    let suite = "desk-tests-\(UUID().uuidString)"
+    let d = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer { d.removePersistentDomain(forName: suite) }
+    let s = CapcomdStore()
+    project(s, "run-a", goal: "Migrate matchkey", at: 1_000)
+    project(s, "run-b", goal: "Fix proration", at: 2_000)
+    ev(s, "run-a", "agent.done", "run-a-pl"); ev(s, "run-a", "run.completed", nil)
+    let first = DeskModel(store: s, defaults: d)
+    first.open(project: first.decks.first { $0.runId == "run-a" }?.id)
+    first.perform(try XCTUnwrap(first.menuItem("remove")))
+    XCTAssertEqual(first.decks.map(\.runId), ["run-b"])
+    let relaunched = DeskModel(store: s, defaults: d)
+    XCTAssertEqual(relaunched.decks.map(\.runId), ["run-b"])
+    project(s, "run-a2", goal: "Migrate matchkey again", at: 9_000)  // another project's news doesn't bring it back
+    relaunched.apply([.all])
+    XCTAssertFalse(relaunched.decks.map(\.runId).contains("run-a"))
+  }
+
   /// Message the planner: its column comes on screen and its box takes the focus once.
   @MainActor func testMessageThePlannerFocusesItsBox() {
     let (m, _) = model()
