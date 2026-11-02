@@ -21,7 +21,7 @@ import { getDependencies, providerForRun, providerNamed } from "../dependencies"
 import { runIdleLifetime, withSandbox } from "../providers/run-sandbox";
 import { reportMachineDeleted } from "../providers/machine-audit";
 import { forgetMachine, machineNameFor, recordAgentMachine } from "../providers/machines";
-import { sandboxName } from "../providers/registry";
+import { sandboxCaps, sandboxName } from "../providers/registry";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { runAgent, stoppedAt } from "../agents/runner";
 import { activityReporter } from "../agents/activity";
@@ -384,6 +384,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
     }, setup.config!, {
       apiKey,
+      // A container per agent (Docker): the env image's warm template can be its workspace, used in place.
+      warmTemplate: sandboxCaps(runSource).isolation === "container",
       heartbeatMs: beatEvery,
       vmTtlSeconds: lifeSeconds,
       onRenew: (secs) => { renewWorkerLease(c.db, workerId, Date.now() + secs * 1000).catch(() => {}); },
