@@ -2,7 +2,7 @@
 // up by the in-VM supervisor (ADR-019), which also checkpoints its workspace: a worker that keeps working past the
 // stuck window is not flagged stuck. (fake claude in a host-exec FakeProvider, spawned through the engine.)
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../helpers/test-engine";
@@ -128,6 +128,28 @@ test("capcomd send reaches a running claude worker: the supervisor hands it to t
   expect(heard).toContain("Message from the operator");
   expect(heard).toContain("use tabs please");
 }, 120_000);
+
+// The listener fake itself: a message line can reach its stdin in pieces (a pipe takes what it has room for, and the
+// supervisor writes the rest when its event loop gets to it), or take a while to read under load. It once read with a
+// 1 s timeout per line, and a timeout in the middle of a line threw the start away: the send --skill test then saw an
+// empty messages.txt on a busy machine. Here the line arrives in two pieces 1.3 s apart.
+test("the listener fake hears a long message whose line reaches its stdin in pieces", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "capcomd-listen-")), cwd = join(dir, "repo");
+  mkdirSync(cwd);
+  const line = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
+  const p = Bun.spawn([env.CAPCOMD_AGENT_CLAUDE_BIN!, "-p", "--input-format", "stream-json"], { cwd, stdin: "pipe", stdout: "ignore", stderr: "inherit" });
+  p.stdin.write(line("[listen:4] wait"));
+  p.stdin.flush();
+  const body = `follow this skill ${"notes ".repeat(4000)}`, msg = line(body);
+  await Bun.sleep(300);
+  p.stdin.write(msg.slice(0, 20_000));
+  p.stdin.flush();
+  await Bun.sleep(1300);
+  p.stdin.write(msg.slice(20_000));
+  p.stdin.end();
+  expect(await p.exited).toBe(0);
+  expect(readFileSync(join(cwd, "messages.txt"), "utf8")).toContain(body);
+}, 30_000);
 
 test("capcomd send --skill: the running worker reads the skill's SKILL.md with the message; message.sent names it", async () => {
   const skills = (await cj(["skills"])).j?.skills ?? [];
