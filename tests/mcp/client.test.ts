@@ -81,12 +81,12 @@ describe("capcomd mcp: the driver's tools", () => {
   test("lists the primitives, with read-only and destructive annotations", async () => {
     const { tools } = await mcp.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      "capcomd_approve", "capcomd_await", "capcomd_budget", "capcomd_cancel", "capcomd_events", "capcomd_grant", "capcomd_inspect", "capcomd_kv",
-      "capcomd_merge", "capcomd_profiles", "capcomd_projects", "capcomd_resume", "capcomd_run_new", "capcomd_runs", "capcomd_send", "capcomd_setup", "capcomd_spawn",
+      "capcomd_approve", "capcomd_await", "capcomd_budget", "capcomd_cancel", "capcomd_events", "capcomd_goal", "capcomd_grant", "capcomd_inspect", "capcomd_kv",
+      "capcomd_merge", "capcomd_pr_open", "capcomd_profiles", "capcomd_projects", "capcomd_resume", "capcomd_run_new", "capcomd_runs", "capcomd_send", "capcomd_setup", "capcomd_spawn",
       "capcomd_task", "capcomd_trace", "capcomd_tree", "capcomd_verify",
     ]);
     const by = Object.fromEntries(tools.map((t) => [t.name, t.annotations ?? {}]));
-    for (const n of ["capcomd_merge", "capcomd_cancel", "capcomd_approve"]) expect(by[n]!.destructiveHint).toBe(true);
+    for (const n of ["capcomd_merge", "capcomd_cancel", "capcomd_approve", "capcomd_pr_open"]) expect(by[n]!.destructiveHint).toBe(true);
     for (const n of ["capcomd_tree", "capcomd_await", "capcomd_setup", "capcomd_events"]) expect(by[n]!.readOnlyHint).toBe(true);
   });
 

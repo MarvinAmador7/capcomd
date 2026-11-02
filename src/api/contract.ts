@@ -48,6 +48,20 @@ export const Run = z.object({
 	titleSource: z.enum(TITLE_SOURCES).nullable().describe("Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added"),
 	repo: z.string().nullable().describe("Repository the run works in (absolute path or remote URL)"),
 	createdAt: Timestamp.nullable(),
+	goalBranch: z.lazy(() => GoalBranchSummary).nullable().optional().describe("Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it"),
+});
+/** Where a run's goal branch stands (Run.goalBranch.state, GET /v1/runs/{runId}/goal `state`). */
+export const GoalBranchState = z.enum(["working", "ready", "stopped", "pr_opened", "kept"]).describe("working: the planner is at it (reviewed work lands as it goes); ready: the planner finished, the user decides (open a pull request or keep the branch); stopped: the planner failed or was cancelled (the branch keeps what landed; a pull request can still be opened); pr_opened: a pull request into the base is open (or was merged on GitHub); kept: the user kept the branch without one. Treat a state you don't know as working");
+export const GoalPullRequest = z.object({
+	number: z.number().int().positive(),
+	url: z.string().nullable().describe("Its page on GitHub; null when the daemon can't tell (a GitHub Enterprise API without html_url)"),
+});
+export const GoalBranchSummary = z.object({
+	branch: z.string().describe("The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"),
+	base: z.string().describe("The branch it was cut from, which the pull request goes into (e.g. dev)"),
+	state: GoalBranchState,
+	readyAt: Timestamp.nullable().describe("When the planner finished (run.goal_completed); null before"),
+	pullRequest: GoalPullRequest.nullable().describe("The pull request opened from it (run.pr_opened); null before"),
 });
 /** A project groups runs on one repo toward one goal; a project holds any number of runs. */
 export const Project = z.object({
@@ -371,6 +385,7 @@ export const CAPABILITIES = {
 	"sandboxes.actions": "POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream",
 	"projects.setup": "GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream",
 	"projects.git": "POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`",
+	"runs.goal_branch": "Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -393,7 +408,9 @@ export const CreateRunBody = z.object({
 	repo: z.string().refine((p) => p.startsWith("/"), "repo must be an absolute path").optional()
 		.describe("Absolute path of a project checkout on the daemon's machine, one `capcomd setup project` ran in: its .capcomd/config.json gives the run's repository, merge mode, target, checks and agent profiles. Omitted: the daemon's own repository settings (CAPCOMD_REPO); 422 when it has none."),
 	profile: ProfileName.max(63).optional().describe("Agent profile, as `capcomd run --profile`: the worker of the built-in recipe. Refused (422) when the run uses a planner agent, which picks its own workers."),
-	targetBranch: BranchName.optional().describe("Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target."),
+	targetBranch: BranchName.optional().describe("Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target. With a goal branch (capability runs.goal_branch), the base: send `base` instead."),
+	base: BranchName.optional().describe("Capability runs.goal_branch. The origin branch the run's goal branch is cut from and its pull request goes into (`capcomd run --base`), as the user picked it in the setup screen (GET /v1/projects/branches). Omitted: `targetBranch`, else the project's target, else the remote's default branch; when none of those is known, 422 with `field` base: ask the user. Never a guessed main"),
+	goalBranch: z.union([BranchName, z.literal(false)]).optional().describe("Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (capcomd/<goal-slug>, never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"),
 	driver: AgentProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
 	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
 	sandbox: SandboxName.optional().describe("Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): a listed place's name (GET /v1/run-options `sandboxes`), today docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't one, or isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox."),
@@ -402,7 +419,8 @@ export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd 
 	"the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. " +
 	"`Idempotency-Key` is scoped to the calling client: same key + same body replays the first response (201, header `Idempotent-Replayed: true`) without starting another run; " +
 	"same key + different body: 409 `idempotency_conflict`. Keys are kept 24 h; a request that failed (422, 500) is not recorded, so retrying it with the same key tries again. " +
-	"422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, `profile` with `driver`, a `driver` or `sandbox` that isn't available, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which.";
+	"422 `invalid` for a bad body, a `repo` that isn't a project checkout, no repository at all, `profile` with `driver`, a `driver` or `sandbox` that isn't available, or a run `capcomd run` itself refuses (unknown profile, no planner profile); `message` says which. " +
+	"Capability runs.goal_branch: a run with a planner gets a goal branch, cut from `base` (the response's Run.goalBranch is null until the run registers; GET /v1/runs/{runId} then has it). A base that can't be determined, or a goal branch that can't be used, is 422 with `field` base or goalBranch and the daemon's sentence: show it next to that field.";
 
 /** GET /v1/run-options: the choices POST /v1/runs takes for `driver` and `sandbox`, and whether each can be used now. */
 export const DriverFit = z.object({
@@ -616,7 +634,7 @@ export const ProjectInspect = z.object({
 	repo: z.string().nullable().describe("origin as an https URL (the repository setup uses; never one the client sends); null without origin"),
 	github: z.string().nullable().describe("owner/name when origin is on GitHub; else null"),
 	ghReady: z.boolean().describe("`gh auth status` succeeds on the daemon's machine: pull requests (mode pr) can be opened and merged. false when it fails or origin isn't on GitHub"),
-	defaultBranch: z.string().describe("origin's default branch as the local refs know it (origin/HEAD), else main: the target to suggest"),
+	defaultBranch: z.string().nullable().describe("origin's default branch as the local refs know it (origin/HEAD): the target to suggest. null when the local refs don't say (never a guessed main): ask, or read GET /v1/projects/branches (capability runs.goal_branch), which asks the remote"),
 	branches: z.array(z.string()).describe("origin's branches from the local refs (no fetch), the default one included"),
 	suggestedCheck: z.string().describe("The check `capcomd setup project` would suggest (package.json's test script: `bun run test`, `npm test`); \"\" for none"),
 	suggestedMode: z.enum(["pr", "direct"]).describe("pr when ghReady, else direct (as the wizard suggests)"),
@@ -685,6 +703,95 @@ export const PROJECTS_PUBLISH_DOC = "Capability projects.git. Publish a checkout
 	"Refusals carry the daemon's sentence and `field`: 422 `invalid` for a folder that isn't a checkout without origin (path, with `problem`), the GitHub CLI not logged in (gh), an owner that isn't in `accounts` or a name GitHub doesn't take (owner, name); without commits: likely secrets among the files (files; the sentence names them and says to add them to .gitignore), more than 2000 files (files: add a .gitignore), no files, or no git user.name/email (identity). 409 `conflict` with `field` name when the repository already exists on GitHub, and without a field when the checkout already has an origin or is being published. 503 `unavailable` when the GitHub CLI fails otherwise (its first line in the sentence). " +
 	"A first commit that was made stays when the GitHub step fails: publishing again pushes it. Audited: a durable project.published event on the `daemon` stream (owner, name, visibility and a file count, never file names or contents). `Idempotency-Key` (8-200 chars, required) as for POST /v1/projects.";
 
+/** GET /v1/projects/branches (capability runs.goal_branch): the setup screen's base menu and goal branch field. */
+export const ProjectBranches = z.object({
+	path: z.string().describe("The path as given"),
+	root: z.string().nullable().describe("The checkout it is in; null when it isn't one (then everything else is empty)"),
+	github: z.string().nullable().describe("owner/name when origin is on GitHub"),
+	source: z.enum(["github", "git", "local"]).describe("Where the branches were read: github (the GitHub API with the user's own gh login), git (`git ls-remote origin`), local (the checkout's own refs: the remote couldn't be asked; see note)"),
+	note: z.string().nullable().describe("Why a better source wasn't used (daemon-written, trusted), e.g. \"GitHub: no login (GITHUB_TOKEN, GH_TOKEN or `gh auth login`)\"; null when it was"),
+	defaultBranch: z.string().nullable().describe("The repository's default branch as the remote reports it; null when it doesn't (never a guessed main)"),
+	branches: z.array(z.string()).describe("The repository's branches, sorted (at most 500): the base menu"),
+	projectTarget: z.string().nullable().describe("The project's configured target branch (`capcomd setup project`), when it has one"),
+	suggestedBase: z.string().nullable().describe("What to preselect: `base` when given, else the project's target, else defaultBranch; null when none is known: the user must pick one (never a guessed main)"),
+	suggestedGoalBranch: z.string().nullable().describe("With `goal`: capcomd/<goal-slug> (lowercase, hyphens, at most 40 characters of slug), with -2, -3… when the repository has that branch already; null without `goal`"),
+	goalBranchProblem: z.string().nullable().describe("With `goalBranch`: why it can't be used (daemon-written, trusted: not a branch name, the base itself, protected, or already on the remote), shown under the field; null when it can"),
+	baseProblem: z.string().nullable().describe("With `base`: why it can't be used (not a branch name, or not one of `branches` when they were read from the remote); null when it can"),
+});
+export const PROJECT_BRANCHES_DOC = "Capability runs.goal_branch. What the run setup screen needs for a project checkout: the repository's branches and default branch for the base menu (GitHub first, with the user's own GitHub login on the daemon's machine; else `git ls-remote origin`; else the checkout's local refs), the base to preselect (the project's target, else the default branch), and, with `goal`, the suggested goal branch; with `goalBranch` and `base`, whether that name can be used. " +
+	"Needs the `read` scope. Writes nothing; asks the remote (the GitHub API or git, at most 15 s each), so call it when the screen opens and when the goal or a name changes (debounced), not in a loop. 422 `invalid` for a relative path. A folder that isn't a checkout is 200 with `root` null.";
+export const ProjectBranchesQuery = z.object({
+	path: AbsolutePath.describe("Absolute path of the project checkout (or a folder inside it), as POST /v1/runs `repo`"),
+	goal: z.string().max(16 * 1024).optional().describe("The goal as typed: suggestedGoalBranch is made from its first line"),
+	goalBranch: z.string().max(256).optional().describe("A goal branch name the user typed: goalBranchProblem says whether it can be used"),
+	base: z.string().max(256).optional().describe("The base the user picked (checked; preselected)"),
+});
+
+/** GET /v1/runs/{runId}/goal (capability runs.goal_branch). */
+export const GOAL_FILES_MAX = 200;
+const GoalWork = z.object({
+	agentId: z.string(),
+	parent: z.string().nullable(),
+	profile: z.string().nullable(),
+	task: UntrustedText.describe("The first line of its task (at most 200 characters)"),
+	branch: z.string().nullable().describe("The branch it pushed"),
+});
+export const GoalLanded = GoalWork.extend({
+	mergeId: z.string().describe("mrg-… of the merge that landed it"),
+	sha: z.string().nullable().describe("The commit the merge made on the goal branch"),
+	verifyId: z.string().nullable().describe("vfy-… of the verification that gated it"),
+	mergedBy: z.string().nullable().describe("The agent that merged it (its parent: a lead or the planner); null for an operator's merge"),
+	checks: z.object({ passed: z.boolean() }).nullable().describe("The project's checks on it (merged with the goal branch); null when none were recorded"),
+	review: z.object({ passed: z.boolean(), agentId: z.string().nullable(), reasons: z.array(UntrustedText) }).nullable().describe("The run's reviewer agent's verdict; null when the run has no reviewer"),
+});
+export const GoalNotLanded = GoalWork.extend({
+	status: AgentStatus.or(z.string()).describe("The agent's status"),
+	reason: z.string().describe("Why it isn't on the goal branch: checks_failed, review_failed, merge_failed, denied, awaiting_approval, verifying, not_verified (done, never verified), not_merged (verified, never merged), failed, cancelled, still_working. Treat an unknown reason as not landed for a reason you don't know"),
+	detail: UntrustedText.nullable().describe("More, when there is any: the failing check's reason, the reviewer's reasons, the agent's error (at most 1000 characters)"),
+});
+export const GoalView = z.object({
+	runId: z.string(),
+	branch: z.string(),
+	base: z.string(),
+	state: GoalBranchState,
+	goal: UntrustedText.nullable().describe("The run's goal, as the user wrote it"),
+	readyAt: Timestamp.nullable(),
+	plannerId: z.string().nullable().describe("The planner agent (the run's root)"),
+	summary: UntrustedText.nullable().describe("The planner's own summary (`capcomd result --summary`): what it shows first; null while it works or when it wrote none"),
+	compare: z.object({
+		baseSha: z.string().nullable(), headSha: z.string().nullable(),
+		ahead: z.number().int().nonnegative().nullable().describe("Commits on the goal branch that the base doesn't have"),
+		behind: z.number().int().nonnegative().nullable().describe("Commits on the base since the goal branch was cut (the pull request may need them merged in)"),
+		commits: z.array(z.object({ sha: z.string(), subject: UntrustedText, at: Timestamp.nullable() })).describe("The goal branch's own commits, newest first, at most 50"),
+		commitsTotal: z.number().int().nonnegative().nullable(),
+		files: z.array(FileChange.omit({ agentId: true })).describe(`The files the goal branch changes against where it left the base (\`git diff --numstat\`), the ${GOAL_FILES_MAX} with the most changed lines first`),
+		filesTotal: z.number().int().nonnegative().nullable(),
+		added: z.number().int().nonnegative().nullable(), removed: z.number().int().nonnegative().nullable(),
+		error: z.string().nullable().describe("Why the branches couldn't be compared (daemon-written): the remote unreachable, a branch deleted; the rest of the answer still holds"),
+	}).describe("The goal branch against its base, fetched now"),
+	landed: z.array(GoalLanded).describe("Each child whose work was merged onto the goal branch, in the order the agents were spawned"),
+	notLanded: z.array(GoalNotLanded).describe("Each child with work that isn't on the goal branch, and why. Children with nothing of their own to land (reports, leads whose children landed) aren't listed"),
+	pullRequest: GoalPullRequest.nullable().describe("The pull request opened from the goal branch, once there is one"),
+	openPullRequest: z.object({
+		available: z.boolean().describe("POST …/pull-request would open (or return) one now"),
+		reason: z.string().nullable().describe("Why not, a sentence for the person (daemon-written, trusted) that says what to do: not on GitHub (the branch name is in it), no GitHub login (`gh auth login`), the planner still working, nothing landed yet; null when available"),
+		repo: z.string().nullable().describe("owner/name on GitHub; null when it isn't on GitHub"),
+	}),
+	decision: z.object({ choice: z.enum(["pull_request", "keep"]), by: z.string(), at: Timestamp }).nullable().describe("What the user chose; null before"),
+});
+export const GOAL_DOC = "Capability runs.goal_branch. A goal-branch run's result, for the planner's column and the run's \"ready\" card: the goal branch against its base (commits, files, lines; fetched now), each child that landed (its task, branch, checks and review), each that didn't and why, the planner's summary, and whether a pull request can be opened (`openPullRequest`, with the reason when it can't). " +
+	"Works while the run is working too (what landed so far). Needs the `read` scope. Refetch on run.goal_completed, run.pr_opened, run.branch_kept and merge.succeeded. 404 `not_found` for an unknown run or a run without a goal branch (Run.goalBranch null).";
+export const GoalPullRequestResult = z.object({
+	runId: z.string(), branch: z.string(), base: z.string(),
+	created: z.boolean().describe("This call opened it; false: it was open (or merged) already and is returned as it is"),
+	pullRequest: GoalPullRequest.extend({ state: z.string().describe("open, closed or merged") }),
+});
+export const PULL_REQUEST_DOC = "Capability runs.goal_branch. Open a GitHub pull request from the run's goal branch into its base (no body), with the user's own GitHub login on the daemon's machine (GITHUB_TOKEN, GH_TOKEN, else `gh auth token`). Title: the run's goal; description: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. capcomd never merges it. " +
+	"Idempotent: a pull request GitHub already has from the branch into the base (open or merged) is returned with `created: false`. Confirmed by run.pr_opened on the run stream (Run.goalBranch.state pr_opened). " +
+	"409 `conflict` (the message says why and what to do): the planner is still working, nothing landed on the goal branch, the repository isn't on GitHub or there is no GitHub login (GET …/goal `openPullRequest` says so first), or GitHub refused it. 404 for an unknown run or one without a goal branch. " +
+	"Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. " + WRITE_DOC;
+export const KEEP_BRANCH_DOC = "Capability runs.goal_branch. Keep the goal branch without a pull request (no body): recorded so clients stop asking (Run.goalBranch.state kept; run.branch_kept on the run stream). Opening a pull request later is still allowed. 409 `conflict` while the planner works, or once a pull request was opened. Needs the steer scope. " + WRITE_DOC;
+
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
 		.output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string(), capabilities: z.array(z.string()).optional().describe(`Features this daemon has: ${CAPABILITIES_DOC} This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty`) })),
@@ -700,6 +807,7 @@ export const contract = {
 			.input(z.object({ path: AbsolutePath.describe("Absolute path of the checkout (or a folder inside it)") })).output(ProjectPublishOptions),
 		publish: oc.route({ method: "POST", path: "/v1/projects/publish", inputStructure: "detailed", description: PROJECTS_PUBLISH_DOC })
 			.input(z.object({ headers: IdempotencyHeaders, body: ProjectPublishBody })).output(ProjectInspect),
+		branches: oc.route({ method: "GET", path: "/v1/projects/branches", description: PROJECT_BRANCHES_DOC }).input(ProjectBranchesQuery).output(ProjectBranches),
 	},
 	runs: {
 		list: oc.route({ method: "GET", path: "/v1/runs" }).output(z.array(Run)),
@@ -714,6 +822,11 @@ export const contract = {
 			.input(z.object({ runId: z.string(), after: z.coerce.number().int().nonnegative().optional() })).output(z.array(HarnessEvent)),
 		files: oc.route({ method: "GET", path: "/v1/runs/{runId}/files", description: FILES_DOC })
 			.input(z.object({ runId: z.string(), agentId: z.string().optional(), limit: z.coerce.number().int().positive().max(FILES_MAX).optional() })).output(RunFiles),
+		goal: oc.route({ method: "GET", path: "/v1/runs/{runId}/goal", description: GOAL_DOC }).input(z.object({ runId: z.string() })).output(GoalView),
+		pullRequest: oc.route({ method: "POST", path: "/v1/runs/{runId}/pull-request", inputStructure: "detailed", description: PULL_REQUEST_DOC })
+			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(GoalPullRequestResult),
+		keepBranch: oc.route({ method: "POST", path: "/v1/runs/{runId}/keep-branch", inputStructure: "detailed", description: KEEP_BRANCH_DOC })
+			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(z.object({ runId: z.string(), branch: z.string(), base: z.string(), kept: z.literal(true), changed: z.boolean().describe("This call recorded it (false: it was kept already)") })),
 		pause: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/pause", inputStructure: "detailed",
 			description: `Pause every pending or running agent of the run (no body). An agent that hasn't started is paused now (\`changed\`); a running one is asked to stop (\`pending\`): ` +

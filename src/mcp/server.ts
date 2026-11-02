@@ -140,11 +140,26 @@ export function buildServer(): McpServer {
       budget: z.string().optional().describe('Budget, e.g. "usd=5,turns=200,wallSeconds=3600"; omit for none'),
       label: z.string().optional().describe("What the run is for, as a short title the way you'd title a pull request (\"Add multiply to src/math.ts\"): the capcomd app names the run by it"),
       target: z.string().optional().describe("A staging branch to land on instead of the project's target (not a protected branch)"),
-      targetFrom: z.string().optional().describe("Create target from this branch, e.g. main"),
+      targetFrom: z.string().optional().describe("Create target from this branch"),
+      goalBranch: z.string().optional().describe("The run's goal branch, e.g. capcomd/add-multiply: created from base; verified, reviewed merges land on it with no approval, and the user opens a pull request from it at the end (capcomd_pr_open). Omit it with base set to get a suggested name"),
+      base: z.string().optional().describe("The branch the goal branch starts from and the pull request goes into (ask the user; default: the project's target, else the repository's default branch)"),
       key, project,
     },
     annotations: WRITE,
   }, routed("capcomd_run_new", (a) => D.runNew(a)));
+
+  server.registerTool("capcomd_goal", {
+    title: "Goal branch",
+    description: "A goal-branch run's result: the goal branch against its base (commits, files, lines), what each agent landed and how it was reviewed, what didn't land and why, the planner's summary, and whether a pull request can be opened. Show it to the user before capcomd_pr_open.",
+    inputSchema: { runId: run, project }, annotations: READ,
+  }, routed("capcomd_goal", (a) => D.goal(a)));
+
+  server.registerTool("capcomd_pr_open", {
+    title: "Open a pull request",
+    description: "Open a GitHub pull request from the run's goal branch into its base, with the user's own GitHub login (gh). Only once the run is ready, and only when the user asked for it. Idempotent: a second call returns the same pull request. capcomd never merges it.",
+    // Destructive in the MCP sense: it publishes on GitHub, so clients (Claude Code, Hermes) ask the person first.
+    inputSchema: { runId: run, project }, annotations: DESTRUCTIVE,
+  }, routed("capcomd_pr_open", (a) => D.prOpen(a)));
 
   server.registerTool("capcomd_runs", {
     title: "Recent runs",

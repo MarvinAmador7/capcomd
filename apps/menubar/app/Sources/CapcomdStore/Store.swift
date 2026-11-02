@@ -51,6 +51,9 @@ public final class CapcomdStore {
   /// Pause / resume of one agent (and its subtree), keyed by agent id; settles on agent.paused / agent.resumed.
   public internal(set) var agentControlState: [String: ControlState] = [:]
   public internal(set) var startState: StartState = .idle
+  /// With `startState` `.failed`: the field the daemon's refusal is about (`runs.goal_branch`: "base" or "goalBranch"),
+  /// so the setup screen shows the sentence under that field. Nil otherwise.
+  public internal(set) var startRefusedField: String?
   /// Steers typed in a thread, per agent, until confirmed (StoreThread.swift).
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
   public internal(set) var capabilities: Set<String> = []
@@ -101,6 +104,14 @@ public final class CapcomdStore {
   let daemonInfo: DaemonInfoFetching?
   let threadSource: ThreadFetching?
   let projectSetter: ProjectSettingUp?
+  /// Goal branches (`runs.goal_branch`; GoalBranch.swift): the run's goal view per run, Open PR / Keep the branch per
+  /// run, and the setup screen's branches.
+  let goalActor: GoalBranchActing?
+  public internal(set) var goalViews: [String: Fetched<GoalView>] = [:]
+  public internal(set) var goalActions: [String: GoalActionState] = [:]
+  public internal(set) var projectBranches: Fetched<ProjectBranches>?
+  var pendingGoalKeys: [String: String] = [:]
+  var branchesAsked: String?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -124,12 +135,13 @@ public final class CapcomdStore {
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
               starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil, thread: ThreadFetching? = nil,
-              projects: ProjectSettingUp? = nil,
+              projects: ProjectSettingUp? = nil, goals: GoalBranchActing? = nil,
               prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
     self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter
     self.messenger = messenger; self.daemonInfo = daemonInfo; self.threadSource = thread; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
     // The live daemon adapter sets projects up too; tests may pass a port of their own.
     self.projectSetter = projects ?? (daemonInfo as? ProjectSettingUp)
+    self.goalActor = goals ?? (daemonInfo as? GoalBranchActing)
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 
@@ -329,6 +341,7 @@ public final class CapcomdStore {
       run.projectId = r.projectId; run.label = r.label; run.state = r.state; run.goal = r.goal.map(UntrustedText.init)
       run.daemonTitle = Self.daemonTitle(r)
       run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
+      run.goalBranch = r.goalBranch ?? run.goalBranch
       runs[r.id] = run
     }
     let agentRuns = Set(b.agents.map(\.runId)).union(b.steps.compactMap { $0.runId ?? ($0.scope.hasPrefix("run-") ? $0.scope : nil) })
@@ -368,6 +381,12 @@ public final class CapcomdStore {
     lastSeq[scope] = snapshotSeq
   }
 
+  /// Changes one run's goal branch (GoalBranch.swift): `runs` is set here only.
+  func updateGoalBranch(_ runId: String, _ f: (inout GoalBranchSummary?) -> Void) {
+    guard runs[runId] != nil else { return }
+    f(&runs[runId]!.goalBranch)
+  }
+
   // MARK: reducer
   func apply(_ e: Envelope) {
     let d = e.data
@@ -396,6 +415,9 @@ public final class CapcomdStore {
         for (id, a) in approvals where a.runId == runId { approvals.removeValue(forKey: id) }
         subs.removeValue(forKey: Self.lifecycleKey(runId))?.cancel()
       }
+    case "run.goal_completed", "run.pr_opened", "run.branch_kept":
+      guard let runId else { return }
+      applyGoalEvent(e, runId: runId)
     case "run.new":
       guard let runId else { return }
       runs[runId]?.label = d["label"]?.string
@@ -526,6 +548,7 @@ public final class CapcomdStore {
       if let g = r.goal { run.goal = UntrustedText(g) }
       run.daemonTitle = Self.daemonTitle(r)
       run.startedAtMs = run.startedAtMs ?? epochMs(iso: r.createdAt); run.sandbox = r.sandbox ?? run.sandbox
+      run.goalBranch = r.goalBranch ?? run.goalBranch
       runs[r.id] = run
     }
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {

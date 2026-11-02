@@ -40,7 +40,7 @@ async function policy() {
 
 // ── runs ──────────────────────────────────────────────────────────────────────────────────────────
 
-export async function runNew(a: { budget?: string; label?: string; key?: string; target?: string; targetFrom?: string }) {
+export async function runNew(a: { budget?: string; label?: string; key?: string; target?: string; targetFrom?: string; goalBranch?: string; base?: string }) {
   let budget: Budget;
   try { budget = parseBudget(a.budget ?? ""); } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Pass units, e.g. budget: \"usd=5,turns=200,wallSeconds=3600\"."); }
   const p = await policy();
@@ -55,9 +55,43 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
     const { isProtectedBranch } = await import("../utils/protected");
     if (isProtectedBranch(a.target) && a.target !== d.target) deny(`target ${a.target} is a protected branch`, "Leave target unset (the project's target applies), or name a staging branch, e.g. capcomd/<topic>, with targetFrom: \"main\".");
   }
-  const target = a.target ?? d.target;
-  const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) });
-  return { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null }, next: "Spawn agents with capcomd_spawn; give each a check name from gates.checks." };
+  // A goal branch (goalBranch and/or base): reviewed work lands on it with no approval; the user opens a pull request
+  // from it into the base at the end (capcomd_pr_open). Base: the one given, else the project's target, else origin's
+  // default branch; none of those is an error, never "main".
+  if ((a.goalBranch !== undefined || a.base !== undefined) && (a.target !== undefined || a.targetFrom !== undefined)) deny("goalBranch/base replace target/targetFrom", "Pass goalBranch (and base), or target (and targetFrom), not both.");
+  let goal: { branch: string; base: string } | null = null;
+  if (a.goalBranch !== undefined || a.base !== undefined) {
+    const cfg = (await import("../merge/config")).loadMergeConfig();
+    const { env: envVar } = await import("../utils/env");
+    const r = await (await import("../merge/goal")).resolveGoalBranch({ goal: a.label ?? "goal", base: a.base ?? null, goalBranch: a.goalBranch ?? null, projectTarget: d.target ?? envVar("MERGE_TARGET") ?? null,
+      remote: cfg?.remote ?? null, cwd: process.cwd() });
+    goal = { branch: r.goalBranch, base: r.base };
+  }
+  const target = goal ? goal.branch : a.target ?? d.target;
+  const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(goal ? { goalBranch: goal.branch, base: goal.base } : { ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) }) });
+  return { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
+    next: goal ? `Spawn agents with capcomd_spawn; verified merges land on ${goal.branch} with no approval. When the work is done, show the user capcomd_goal and ask before capcomd_pr_open.` : "Spawn agents with capcomd_spawn; give each a check name from gates.checks." };
+}
+
+/** The goal branch against its base: what landed, what didn't, the planner's summary, and whether a PR can be opened. */
+export async function goal(a: { runId: string }) {
+  const v = await (await import("../primitives/goal")).goalView(a.runId);
+  const f = (id: string, t: string | null) => (t == null ? t : fence(id, t).text);
+  return {
+    ...v, summary: v.plannerId ? f(v.plannerId, v.summary) : v.summary,
+    landed: v.landed.map((l) => ({ ...l, task: f(l.agentId, l.task), review: l.review ? { ...l.review, reasons: l.review.reasons.map((r) => fence(l.review!.agentId ?? l.agentId, r).text) } : null })),
+    notLanded: v.notLanded.map((n) => ({ ...n, task: f(n.agentId, n.task), detail: f(n.agentId, n.detail) })),
+    compare: { ...v.compare, commits: v.compare.commits.map((c) => ({ ...c, subject: fence("commit", c.subject).text })) },
+    next: v.pullRequest ? `The pull request is #${v.pullRequest.number}${v.pullRequest.url ? ` (${v.pullRequest.url})` : ""}: the user reviews and merges it on GitHub.`
+      : v.openPullRequest.available ? `Show the user what landed and the summary, and ask whether to open a pull request into ${v.base} (capcomd_pr_open) or keep the branch.`
+      : `${v.openPullRequest.reason}`,
+  };
+}
+
+/** Open a pull request from the run's goal branch into its base (idempotent; capcomd never merges it). */
+export async function prOpen(a: { runId: string }) {
+  const r = await (await import("../primitives/goal")).openGoalPullRequest(a.runId, { by: DRIVER });
+  return { ...r, next: `Tell the user: pull request #${r.pullRequest.number}${r.pullRequest.url ? ` (${r.pullRequest.url})` : ""} from ${r.branch} into ${r.base}. They review and merge it on GitHub.` };
 }
 
 export async function runs(a: { limit?: number; project?: { name: string; path: string } | null }) {

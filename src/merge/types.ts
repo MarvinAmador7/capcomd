@@ -12,6 +12,8 @@ export interface MergeRequest {
   testCommand?: string;
   /** Merge only if the task branch tip is still this commit (the one `capcomd verify` passed). */
   expectSha?: string;
+  /** Land it this way whatever the repo's merge mode: a run's goal branch takes reviewed work by a direct push (no PR). */
+  mode?: "direct";
 }
 
 export type MergeOutcome =

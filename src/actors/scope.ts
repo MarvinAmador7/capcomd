@@ -149,6 +149,20 @@ export type ScopeOp = ReturnType<typeof opRow>;
 /** How a run ended by itself (scope.endRun), not by its agents ending. */
 export type RunEnd = { state: "failed" | "cancelled"; reason: string | null; by: string | null; at: number };
 
+/** The run's goal branch (ops GOAL_KV, written by `run new --goal-branch`), read inside a transaction. */
+async function goalOf(tx: any): Promise<{ branch: string; base: string } | null> {
+  const r = await tx.execute("SELECT v, deleted FROM kv WHERE k = '_goal'");
+  if (!r.length || Number(r[0]!.deleted) === 1) return null;
+  const v = JSON.parse(r[0]!.v as string);
+  return typeof v?.branch === "string" && typeof v?.base === "string" ? { branch: v.branch, base: v.base } : null;
+}
+/** The goal's planner: a top-level agent that isn't a reviewer (a verify's reviewer is spawned at the top level). */
+const isPlanner = (a: ScopeAgent) => !a.parent && !(a.contract as Record<string, unknown> | null)?.review;
+/** What the user chose for a ready goal branch (scope_meta goal_decision): a pull request, or keeping the branch. */
+export type GoalDecision = { choice: "pull_request" | "keep"; by: string; at: number; pr?: { number: number; url: string | null } };
+/** The goal branch as getScope reports it: the branch, when its planner finished (`ready`), and the user's choice. */
+export type GoalState = { branch: string; base: string; ready: { at: number; plannerId: string } | null; decision: GoalDecision | null };
+
 /** recordStep: an agent's step history (agent.step) keeps at most this many; later steps are dropped. */
 export const STEPS_MAX = 500;
 
@@ -336,8 +350,12 @@ export const scopeActor = actor({
       }
       const unallocated = available(meta.budget, {}, all.filter((a) => !a.parent).map((a) => ({ ...a, tree: tree.get(a.agentId) })));
       const ended = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'ended'");
+      const g = await goalOf(c.db);
+      const meta2 = g ? await c.db.execute("SELECT k, v FROM scope_meta WHERE k IN ('goal_ready', 'goal_decision')") : [];
+      const pick = (k: string) => { const row = meta2.find((x: any) => x.k === k); return row ? JSON.parse(row.v as string) : null; };
+      const goalBranch: GoalState | null = g ? { ...g, ready: pick("goal_ready"), decision: pick("goal_decision") } : null;
       return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated,
-        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null };
+        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null, goalBranch };
     },
 
     /**
@@ -356,6 +374,33 @@ export const scopeActor = actor({
         await addEvent(tx, "RUN_ENDED", null, { state: end.state, reason: end.reason, by: end.by }, "run-ended");
       }, { name: "scopeEndRun" });
       return { changed: true, ended: (await read())! };
+    },
+
+    /**
+     * The user's choice for the run's goal branch once its planner is done: a pull request into the base (opened by the
+     * caller; recorded here with its number), or keeping the branch. A pull request is recorded once (run.pr_opened);
+     * keeping it is recorded once (run.branch_kept), and refused after a pull request was opened.
+     */
+    async goalDecision(c, params: { choice: GoalDecision["choice"]; by: string; pr?: { number: number; url: string | null } }) {
+      let out: { changed: boolean; decision: GoalDecision | null } = { changed: false, decision: null };
+      await c.db.transaction(async (tx: RawAccess) => {
+        const g = await goalOf(tx);
+        if (!g) fail("not_found", "this run has no goal branch");
+        const prior = await tx.execute("SELECT v FROM scope_meta WHERE k = 'goal_decision'");
+        const had = prior.length ? (JSON.parse(prior[0]!.v as string) as GoalDecision) : null;
+        if (had?.choice === "pull_request") {
+          if (params.choice === "keep") fail("conflict", `a pull request (#${had.pr?.number}) is open from ${g!.branch}: there's nothing to keep`);
+          out = { changed: false, decision: had }; return;
+        }
+        if (had?.choice === params.choice) { out = { changed: false, decision: had }; return; }
+        if (params.choice === "pull_request" && !params.pr) fail("usage", "a pull request decision needs the pull request");
+        const d: GoalDecision = { choice: params.choice, by: params.by, at: Date.now(), ...(params.pr ? { pr: { number: params.pr.number, url: params.pr.url } } : {}) };
+        await tx.execute("INSERT INTO scope_meta (k, v) VALUES ('goal_decision', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(d));
+        if (d.choice === "pull_request") await addEvent(tx, "RUN_PR_OPENED", null, { branch: g!.branch, base: g!.base, number: d.pr!.number, url: d.pr!.url, by: d.by }, `goal-pr-${d.pr!.number}`);
+        else await addEvent(tx, "RUN_BRANCH_KEPT", null, { branch: g!.branch, base: g!.base, by: d.by }, "goal-kept");
+        out = { changed: true, decision: d };
+      }, { name: "scopeGoalDecision" });
+      return out;
     },
 
     async spawn(
@@ -470,6 +515,17 @@ export const scopeActor = actor({
         await tx.execute("UPDATE agents_v2 SET status = ?, result = ?, spent = ?, notice = NULL, driver = NULL, driver_until = 0, updated_at = ? WHERE agent_id = ?",
           params.status, JSON.stringify(params.result), JSON.stringify(params.spent ?? a.spent), Date.now(), params.agentId);
         await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? a.spent, budget: a.budget }, `finish-${params.agentId}`);
+        // A goal-branch run is ready when its planner finished its work and no other planner is still at it: the user
+        // then sees the goal branch against its base and opens a pull request (or keeps the branch). Once per run.
+        if (params.status === "done" && isPlanner(a)) {
+          const g = await goalOf(tx);
+          const others = g ? (await tx.execute("SELECT * FROM agents_v2 WHERE parent IS NULL AND agent_id != ? AND status IN ('pending','running','paused')", params.agentId)).map(rowToAgent).filter(isPlanner) : [];
+          if (g && !others.length) {
+            const at = Date.now();
+            await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('goal_ready', ?)", JSON.stringify({ at, plannerId: params.agentId }));
+            await addEvent(tx, "RUN_GOAL_COMPLETED", params.agentId, { branch: g.branch, base: g.base, plannerId: params.agentId }, "goal-ready");
+          }
+        }
         await tx.execute("DELETE FROM awaits WHERE waiter = ?", params.agentId);
         // The parent's thread gets a hand-back card: the child's summary, its artifacts as links and media.
         if (a.parent) await putItemTx(tx, a.parent, handoffOf(a.parent, params.agentId, params.status, params.result));
