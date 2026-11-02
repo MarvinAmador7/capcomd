@@ -3,6 +3,7 @@
 #
 #   apps/menubar/scripts/build-app.sh            release build
 #   apps/menubar/scripts/build-app.sh --debug    debug build
+#   apps/menubar/scripts/build-app.sh --desktop  the desktop app instead: apps/menubar/build/desktop/capcomd.app
 #
 # CAPCOMD_SIGN_IDENTITY picks the code-signing identity (a name or part of one, as `codesign --sign` takes it).
 # Without it the app is signed ad hoc, which macOS treats as a new app on every build: the Keychain asks again for
@@ -12,10 +13,12 @@ set -eu
 
 usage() { sed -n '2,10s/^# \{0,1\}//p' "$0"; }
 config=release
+desktop=
 for arg in "$@"; do
   case $arg in
     --debug) config=debug ;;
     --release) config=release ;;
+    --desktop) desktop=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "build-app.sh: unknown option $arg" >&2; usage >&2; exit 2 ;;
   esac
@@ -29,6 +32,15 @@ out="$menubar/build"
 app="$out/capcomd.app"
 bundle_id=dev.capcomd.menubar
 product=CapcomdMenuBar
+ui_element="<true/>"
+# Both apps are "capcomd"; the desktop one is a regular Dock app with its own bundle id.
+if [ -n "$desktop" ]; then
+  out="$menubar/build/desktop"
+  app="$out/capcomd.app"
+  bundle_id=dev.capcomd.desktop
+  product=CapcomdDesktop
+  ui_element="<false/>"
+fi
 
 bun=${BUN_BIN:-$(command -v bun || true)}
 [ -n "$bun" ] || bun="$HOME/.bun/bin/bun"
@@ -112,7 +124,7 @@ cat > "$stage/Contents/Info.plist" <<PLIST
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
-	<true/>
+	$ui_element
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

@@ -63,7 +63,7 @@ struct BracketBounds: PreferenceKey {
   static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) { value += nextValue() }
 }
 
-/// The open project: its name and clock, then its crew in tree order, with the on-screen columns bracketed.
+/// The open project: its name, then its crew in tree order, with the on-screen columns bracketed.
 struct OpenGroup: View {
   @Environment(DeskModel.self) private var model
   let deck: DeckInfo
@@ -73,11 +73,8 @@ struct OpenGroup: View {
     let first = cols.firstIndex(where: seen.contains) ?? -1, last = cols.lastIndex(where: seen.contains) ?? -1
     return HStack(spacing: 2) {
       PlaceIcon(sandbox: deck.sandbox).padding(.trailing, 6)
-      VStack(alignment: .leading, spacing: 1) {
-        Text(verbatim: deck.title).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).lineLimit(1)
-        DeckClock(deck: deck)
-      }
-      .frame(maxWidth: 200, alignment: .leading)
+      Text(verbatim: deck.title).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).lineLimit(1)
+        .frame(maxWidth: 200, alignment: .leading)
       .padding(.trailing, 8)
       // One row of tabs whose identity never changes as the reel scrolls; the bracket is drawn behind the on-screen
       // ones from their bounds, so moving it re-lays out one shape instead of rebuilding tabs.
@@ -104,22 +101,6 @@ struct OpenGroup: View {
     .frame(height: Theme.Desk.groupHeight)
     .background(RoundedRectangle(cornerRadius: Theme.Desk.groupRadius, style: .continuous).fill(Theme.Desk.groupFill))
     .overlay(RoundedRectangle(cornerRadius: Theme.Desk.groupRadius, style: .continuous).strokeBorder(Theme.Desk.groupStroke, lineWidth: 0.5))
-  }
-}
-
-/// The run's clock: elapsed while it runs (drawn by the system each second, no re-render), its duration once ended.
-struct DeckClock: View {
-  let deck: DeckInfo
-  var body: some View {
-    HStack(spacing: 0) {
-      if let p = Place(sandbox: deck.sandbox) { Text(verbatim: p.word + " · ") }
-      if let ended = deck.endedHead {
-        Text(verbatim: ended)
-      } else if let start = deck.startedAtMs {
-        Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
-      }
-    }
-    .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()
   }
 }
 
@@ -171,7 +152,7 @@ struct CrewTab: View {
   }
 }
 
-/// A folded project: its name and one status line, then its crew's heads stacked. Amber when an agent in it asks.
+/// A folded project: its name, then its crew's heads stacked. Amber, and who asks under the name, when an agent in it asks.
 struct FoldedDeck: View {
   @Environment(DeskModel.self) private var model
   let deck: DeckInfo
@@ -184,7 +165,6 @@ struct FoldedDeck: View {
         VStack(alignment: .leading, spacing: 1) {
           Text(verbatim: deck.title).font(Theme.Desk.label).foregroundStyle(Theme.Desk.text).lineLimit(1)
           if asks, let who = deck.askingName { Text(verbatim: "\(who) asks").font(Theme.Desk.meta).foregroundStyle(Theme.amber) }
-          else { DeckClock(deck: deck) }
         }
         .frame(maxWidth: 150, alignment: .leading)
         HStack(spacing: -Theme.Desk.deckHeadOverlap) {

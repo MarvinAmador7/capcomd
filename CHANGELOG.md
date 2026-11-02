@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- The desktop app is called capcomd: in the menu bar, its About/Hide/Quit items and the Dock. `apps/menubar/scripts/build-app.sh
+  --desktop` packages it as `capcomd.app` (a regular Dock app). Its title bar shows each project by name only, without
+  the clock or status line under it.
 - A desktop app (`CapcomdDesktop`, a regular Dock app you can install without the menu bar one): the open project's
   agents as full-height columns that stream their threads live, each with its own message box, and an agent's ask
   docked at its column's foot (Approve ↩ / Deny; Return approves only the focused column's ask, Esc never denies).

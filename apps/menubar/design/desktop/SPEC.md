@@ -36,9 +36,9 @@ One window, two parts.
 
 - **Title bar** (52 pt: the unified toolbar's height, so the traffic lights centre on it; full-size content): traffic lights, then the **projects**, then on the
   right **Follow**, **Actions ⌘K**, **+**. Boards: `ReelStack`, `ReelTabs`.
-  - The **open project** is one group: Local/Cloud glyph (`laptopcomputer` / `cloud`), name with "Cloud · 18:40",
-    then its crew tabs in tree order, with a bracket around the tabs whose columns are on screen.
-  - Every **other project** is a deck: glyph, name + one status line, then its crew's heads stacked (overlap 15 pt).
+  - The **open project** is one group: Local/Cloud glyph (`laptopcomputer` / `cloud`), name (no clock or
+    status line), then its crew tabs in tree order, with a bracket around the tabs whose columns are on screen.
+  - Every **other project** is a deck: glyph, name (no clock or status line), then its crew's heads stacked (overlap 15 pt).
     A folded project that asks has an amber ring and says who asks.
   - Too many to fit: decks drop their names, then the rest go into a "+n" deck (its menu lists them). An asking
     project is never in the overflow.
