@@ -61,7 +61,7 @@ final class ActiveCardTests: XCTestCase {
     let c = card(s)
     guard case .ask(let ask) = c.body else { return XCTFail("\(c.body)") }
     XCTAssertEqual(c.reason, "ask:apr-1")
-    XCTAssertEqual(ask.question, "Merge worker's work into main?")   // worded by the client from kind, asker and target
+    XCTAssertEqual(ask.question, "Merge work from worker into main?")   // worded by the client from kind, asker and target
     XCTAssertEqual(ask.asker?.agentId, "wk")
     XCTAssertEqual(ask.waiters.map(\.name), ["planner", "critic"])   // its live parent, and the agent still queued
     XCTAssertEqual(ask.approval.requestedAtMs, 1_082_000)

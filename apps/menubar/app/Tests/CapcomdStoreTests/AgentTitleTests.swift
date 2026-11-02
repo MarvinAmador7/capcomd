@@ -93,8 +93,11 @@ final class AgentTitleTests: XCTestCase {
     s.onNotify = { notices.append($0) }
     s.receive(.event(Envelope(id: "lc1", scope: "lifecycle:run-a", seq: 99, entity: "w1", type: "approval.requested", epochMs: 5_000, projectId: "prj-a", runId: "run-a", agentId: "w1",
                               data: ["approvalId": .string("apr-1"), "kind": .string("merge"), "question": .string("Merge this agent's work into main?"),
-                                     "requestedBy": .object(["agentId": .string("w1"), "runId": .string("run-a")]), "subject": .object(["askedBy": .string("ld")])])), scope: CapcomdStore.lifecycleKey("run-a"))
+                                     "requestedBy": .object(["agentId": .string("w1"), "runId": .string("run-a")]), "subject": .object(["askedBy": .string("ld"), "target": .string("main")])])), scope: CapcomdStore.lifecycleKey("run-a"))
     XCTAssertEqual(s.decks()[0].askingName, "lead · fix login redirect")
+    // The Active card words the merge with the agent's title, no possessive.
+    guard case .ask(let ask) = s.activeCard(s.projects[0], nowMs: 6_000).body else { return XCTFail("no ask") }
+    XCTAssertEqual(ask.question, "Merge work from worker · login redirect into main?")
     guard case .approvalRequested(_, _, _, let asker)? = notices.first else { return XCTFail("no notice") }
     XCTAssertEqual(asker, "lead · fix login redirect")
   }

@@ -846,8 +846,9 @@ struct Column: View {
   }
 }
 
-/// The column's header: bot, profile, its title (a double-click renames it; capability agents.title), its id suffix
-/// (only when a sibling shares the title, or from an older daemon), bot name, state, place, and the system-drawn clock.
+/// The column's header: bot, profile · title (a double-click renames it; capability agents.title), its id suffix (only
+/// when a sibling shares the title, or from an older daemon) · state, place, and the system-drawn clock. The bot itself
+/// says which agent it is: its name isn't repeated here ("lead · login redirect · waiting on you").
 struct ColumnHead: View {
   @Environment(DeskModel.self) private var model
   let slice: AgentSlice
@@ -860,14 +861,13 @@ struct ColumnHead: View {
       if slice.renaming == .header {
         InlineTitleField(agentId: slice.id, font: Theme.Desk.label, width: Theme.Desk.headerField)
       } else if let t = h.title {
-        Text(verbatim: t).font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary).lineLimit(1).truncationMode(.tail)
+        Text(verbatim: "· " + t).font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary).lineLimit(1).truncationMode(.tail)
           .frame(maxWidth: Theme.Desk.headerTitleMax, alignment: .leading).fixedSize(horizontal: true, vertical: false)
           .contentShape(Rectangle())
           .onTapGesture(count: 2) { model.beginRename(slice.id, at: .header) }
           .help(slice.renameFailure.map { "Couldn't rename it: \($0)" } ?? "Double-click to rename")
       }
       if let s = h.suffix { Text(verbatim: s).font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary) }
-      if let n = slice.bot?.name { Text(verbatim: n).font(Theme.Desk.label).foregroundStyle(Theme.Desk.tertiary) }
       Text(verbatim: "· " + Self.state(h, asks: slice.approval != nil)).font(Theme.Desk.meta)
         .foregroundStyle(slice.approval != nil ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.secondary)
       Spacer(minLength: 0)

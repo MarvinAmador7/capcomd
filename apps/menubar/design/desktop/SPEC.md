@@ -51,8 +51,8 @@ One window, two parts.
     Trace (⌘T), Browse the workspace, Pause/Resume (⌥⌘P), Stop… (asks first), Fold into the title bar, Copy run ID.
     Only actions the daemon has.
 - **Reel**: the open project's agents as full-height columns in tree order (`Reel`). Three columns at 1440 pt, two at
-  1100, one under 760; the neighbours peek 44 pt at both edges. A column is header (bot, profile, title (double-click
-  renames it, as the tab does), bot name, state, place, elapsed) · thread (the menu bar's thread renderer) · its own message box. An agent that asks docks the
+  1100, one under 760; the neighbours peek 44 pt at both edges. A column is header (bot, then "profile · title · state"
+  (a double-click on the title renames it, as the tab does; the bot's name isn't repeated), place, elapsed) · thread (the menu bar's thread renderer) · its own message box. An agent that asks docks the
   decision at its column's foot (View diff · Deny · Approve ↩) instead of the box.
 - **Swarms** (`ReelSwarm`): leads' subtrees fold into stacks in the title bar; only the subtree on screen is fanned
   out. An asking agent always steps out of its stack. A strip at the foot shows one cell per agent, grouped by lead.
