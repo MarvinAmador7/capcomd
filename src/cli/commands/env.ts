@@ -65,7 +65,10 @@ export async function envCommand(command: string, pos: string[], values: Record<
   const sub = pos[1];
   if (sub === "build") {
     const repo = loadMergeConfig();
-    const res = await envBuild(platform(), { repoUrl: repo?.remote, cfg: toolCfg(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[] });
+    // A sandbox per container (Docker) keeps a warm template agents use in place; a VM's snapshot stays shallow.
+    const { sandboxCaps } = await import("../../providers/registry");
+    const warm = sandboxCaps().isolation === "container";
+    const res = await envBuild(platform(), { repoUrl: repo?.remote, cfg: toolCfg(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[], ...(warm ? { warm, target: repo?.target } : {}) });
     const v = Object.entries(res.record.versions).map(([k, x]) => `${k}=${x.version}(${x.source})`).join(" ");
     emit(json, { name: res.name, cached: res.cached, record: res.record }, `${res.cached ? "up to date" : "built"}: ${res.name}  ${v}${res.record.buildMs ? `  ${res.record.buildMs}ms` : ""}`);
     return 0;
