@@ -246,6 +246,39 @@
 			},
 			"title": null,
 			"titleSource": null
+		},
+		{
+			"name": "the planner named the run",
+			"run": {
+				"label": "Fix the flaky login test",
+				"goal": "Fix the flaky login test",
+				"agentTitle": "login flake",
+				"agents": [
+					{
+						"parent": "agt-p",
+						"task": "Retry the login request",
+						"result": {
+							"merge": {
+								"state": "merged",
+								"target": "main"
+							}
+						}
+					}
+				]
+			},
+			"title": "login flake",
+			"titleSource": "agent"
+		},
+		{
+			"name": "a label of its own beats the planner's name",
+			"run": {
+				"label": "Auth refactor",
+				"goal": "Fix the flaky login test",
+				"agentTitle": "login flake",
+				"agents": []
+			},
+			"title": "Auth refactor",
+			"titleSource": "label"
 		}
 	]
 }

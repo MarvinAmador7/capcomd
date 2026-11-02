@@ -3,7 +3,8 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { AgentProvider, AgentResult, LegacyEventData, UntrustedText } from "./legacy-events";
+import { AgentProvider, AgentResult, AgentTitleSource, LegacyEventData, UntrustedText } from "./legacy-events";
+import { RENAME_WINDOW_MS, RENAMES_MAX, TITLE_MAX_CHARS, TITLE_WORDS_MAX } from "../primitives/agent-title";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
 import { ACTIVITY_KINDS } from "../agents/activity";
@@ -45,7 +46,7 @@ export const Run = z.object({
 	state: z.string().describe("new, idle, running or unknown; failed or cancelled when the run ended without its agents ending it (a failed start, Stop on a run with no agent running: `run.ended`); starting in the runs.create response, before the run's process has registered it"),
 	goal: UntrustedText.nullable(),
 	title: UntrustedText.nullable().describe(`A short name for the work, to show where a run is listed (a list row, a notification): one line, about ${TITLE_MAX} characters at most (longer text is cut where a clause ends, else at a word with "…"). Changes while the run goes on when a better one arrives (see titleSource); null when the run has no label, goal or task yet. Older daemons don't send it: use the goal's first line`),
-	titleSource: z.enum(TITLE_SOURCES).nullable().describe("Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added"),
+	titleSource: z.enum(TITLE_SOURCES).nullable().describe("Where the title comes from, best first: label (the run's own label, from `capcomd run new --label` or the agent that started it, when it isn't just the goal), agent (capability agents.title: its planner named the run, `capcomd title --run` in its VM; run.titled), merge (the subject capcomd gave the merged work's commit and pull request, when exactly one agent's work merged), goal (the run's goal), task (its first agent's task, for a run with no goal). More may be added"),
 	repo: z.string().nullable().describe("Repository the run works in (absolute path or remote URL)"),
 	createdAt: Timestamp.nullable(),
 	goalBranch: z.lazy(() => GoalBranchSummary).nullable().optional().describe("Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it"),
@@ -96,6 +97,8 @@ export const Agent = z.object({
 	effort: z.string().nullable().describe("The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent"),
 	createdAt: Timestamp.nullable().optional().describe("When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it"),
 	updatedAt: Timestamp.nullable(),
+	title: UntrustedText.nullable().optional().describe(`Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title. Its short name, for its tab, row or column header ("login redirect"): 1 to ${TITLE_WORDS_MAX} lowercase words, at most ${TITLE_MAX_CHARS} characters, one line. The user's (PUT …/title), else the latest the agent, its parent or the user's driving harness set, else the daemon's from the task's first words (titleSource derived); null only for an agent with no task text. Live: agent.titled. Older daemons don't send it: name the agent by its profile`),
+	titleSource: AgentTitleSource.nullable().optional(),
 });
 /** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */
 export const Message = z.object({
@@ -230,7 +233,7 @@ export const StreamFrames = {
 	"snapshot.end": z.looseObject({ snapshotSeq: z.number().int().nonnegative() }),
 } as const;
 
-export const LIFECYCLE_DOC = `Lifecycle feed: only run and agent state changes (${LIFECYCLE_TYPES.join(", ")}). Tool calls and messages are not here; they stay in step and thread events.
+export const LIFECYCLE_DOC = `Lifecycle feed: only run and agent state changes, and what the run and its agents are called (${LIFECYCLE_TYPES.join(", ")}). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted \`data.cause\` code and the envelope's trusted \`text\`; \`seq\` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
 Activity is not a state change, so it is not in this feed by default: a stream client opts in with \`?activity=1\` (Agent activity, below).`;
 
@@ -386,6 +389,7 @@ export const CAPABILITIES = {
 	"projects.setup": "GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream",
 	"projects.git": "POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`",
 	"runs.goal_branch": "Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events",
+	"agents.title": "Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -797,6 +801,24 @@ export const PULL_REQUEST_DOC = "Capability runs.goal_branch. Open a GitHub pull
 	"Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. " + WRITE_DOC;
 export const KEEP_BRANCH_DOC = "Capability runs.goal_branch. Keep the goal branch without a pull request (no body): recorded so clients stop asking (Run.goalBranch.state kept; run.branch_kept on the run stream). Opening a pull request later is still allowed. 409 `conflict` while the planner works, or once a pull request was opened. Needs the steer scope. " + WRITE_DOC;
 
+/** PUT /v1/runs/{runId}/agents/{agentId}/title (capability agents.title). */
+export const AgentTitleBody = z.object({
+	title: z.string().max(200).describe(`The user's title for the agent: 1 to ${TITLE_WORDS_MAX} words, at most ${TITLE_MAX_CHARS} characters. Trimmed, whitespace collapsed, lowercased, control and format characters dropped; refused (422 \`invalid\`, field title) when that leaves no words, or more words or characters than that`),
+});
+/** Result of PUT and DELETE …/title. The change itself arrives as agent.titled on the run's streams. */
+export const AgentTitleResult = z.object({
+	runId: z.string(),
+	agentId: z.string(),
+	title: UntrustedText.nullable().describe("Agent-written text: render as plain text, never markdown, links or actions. Agent.title after the call"),
+	titleSource: AgentTitleSource.nullable().describe("Agent.titleSource after the call"),
+	changed: z.boolean().describe("This call changed something (false: the same title again, or nothing to clear)"),
+});
+export const AGENT_TITLE_DOC = "Capability agents.title. The user's title for the agent (`{\"title\": \"login redirect\"}`): what its tab, row and column header say. " +
+	"It sticks until the user clears it (DELETE): the agent's own renames (`capcomd title` in its VM), its parent's and the driving harness's are still recorded under it, and the latest of them shows once it is cleared. " +
+	`The user's renames aren't rate limited (an agent's and a parent's are: one per ${RENAME_WINDOW_MS / 1000} s, ${RENAMES_MAX} per agent). Works on an agent that has ended. Confirmed by agent.titled (by user) on the run's streams. ` +
+	"422 `invalid` (field title) for a title with no words, more than 4 words or more than 32 characters. " + WRITE_DOC;
+export const AGENT_TITLE_CLEAR_DOC = "Capability agents.title. Clear the user's title for the agent (no body): Agent.title goes back to the latest title the agent, its parent or the driving harness set, else the derived one. Confirmed by agent.titled (by cleared) on the run's streams; `changed: false` when there was none. " + WRITE_DOC;
+
 export const contract = {
 	health: oc.route({ method: "GET", path: "/v1/health", description: "Liveness; no token needed. `capabilities` is how a client feature-detects (Capabilities in docs/harness-contract.md)." })
 		.output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string(), capabilities: z.array(z.string()).optional().describe(`Features this daemon has: ${CAPABILITIES_DOC} This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty`) })),
@@ -876,6 +898,10 @@ export const contract = {
 				"Confirmed by agent.paused per agent (data.result.limit \"paused\", data.result.by client:<id>). The run's own state follows its agents: run.paused when this leaves every live agent of the run paused, else the run stays running. " +
 				`409 \`conflict\` when neither the agent nor any descendant is pending or running. ${WRITE_DOC}`,
 		}).input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders })).output(AgentControl),
+		setTitle: oc.route({ method: "PUT", path: "/v1/runs/{runId}/agents/{agentId}/title", inputStructure: "detailed", description: AGENT_TITLE_DOC })
+			.input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders, body: AgentTitleBody })).output(AgentTitleResult),
+		clearTitle: oc.route({ method: "DELETE", path: "/v1/runs/{runId}/agents/{agentId}/title", inputStructure: "detailed", description: AGENT_TITLE_CLEAR_DOC })
+			.input(z.object({ params: z.object({ runId: z.string(), agentId: z.string() }), headers: IdempotencyHeaders })).output(AgentTitleResult),
 		resume: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/agents/{agentId}/resume", inputStructure: "detailed",
 			description: "Capability agent.pause. Run the agent and its paused descendants again now (no body), as `capcomd resume <runId> <agt>`: paused here, by a run pause, or by a provider usage limit (that login's recorded limit is cleared). " +

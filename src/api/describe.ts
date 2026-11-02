@@ -20,8 +20,12 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "run.goal_completed": return `The work is ready on ${d.branch ?? "the goal branch"}: open a pull request into ${d.base ?? "the base"}, or keep the branch.`;
 		case "run.pr_opened": return `Pull request #${Number(d.number) || "?"} opened from ${d.branch ?? "the goal branch"} into ${d.base ?? "the base"}.`;
 		case "run.branch_kept": return `Kept ${d.branch ?? "the goal branch"} without a pull request.`;
+		// Titles are agent-written: the text says who renamed what, never the title itself (it stays in data).
+		case "run.titled": return d.setBy ? `Agent ${d.setBy} named the run.` : "The run was named.";
 		case "agent.spawned": return `${a} was started${d.parent ? ` by ${d.parent}` : ""}${d.profile ? ` as ${String(d.profile).toLowerCase()}` : ""}.`;
 		case "agent.started": return `${a} began working.`;
+		case "agent.titled": return d.by === "cleared" ? `Your name for ${agentId ?? "the agent"} was cleared.` : d.by === "self" ? `${a} named its tab.`
+			: d.by === "parent" ? `${a} was named by ${d.setBy ?? "its parent"}.` : d.by === "user" ? `You renamed ${agentId ?? "the agent"}.` : `${a} was named by the driver.`;
 		case "agent.done": return `${a} finished.`;
 		case "agent.failed": return `${a} failed.`;
 		case "agent.checkpointed": return `${a} saved a checkpoint (${Number(d.files) || 0} files).`;
