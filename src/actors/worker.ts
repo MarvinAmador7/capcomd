@@ -22,6 +22,7 @@ import { runIdleLifetime, withSandbox } from "../providers/run-sandbox";
 import { reportMachineDeleted } from "../providers/machine-audit";
 import { forgetMachine, machineNameFor, recordAgentMachine } from "../providers/machines";
 import { sandboxCaps, sandboxName } from "../providers/registry";
+import { slotsFor } from "../providers/capacity";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { runAgent, stoppedAt } from "../agents/runner";
 import { activityReporter } from "../agents/activity";
@@ -33,7 +34,7 @@ import { resolveEnvSnapshot } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord } from "../agents/profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
-import { agentWorkflowOn, agentWorkflowParts, queueStart, stepWakeActions, workflowStats, type StartAgent } from "./agent-workflow";
+import { admitStart, agentVmIdemKey, agentWorkflowOn, agentWorkflowParts, queueStart, stepWakeActions, workflowStats, type StartAgent } from "./agent-workflow";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
 
@@ -203,6 +204,8 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
         if (!place) try { place = sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX */ }
         if (typeof idemKey === "string" && idemKey) {
           reportMachineDeleted(place, machineNameFor(idemKey), cause);
+          // Its memory slot (a place with a cap) is free for the next waiting agent.
+          slotsFor(place)?.release(machineNameFor(idemKey));
           // Destroyed (or already gone: destroy tolerates that): no longer a machine of capcomd's.
           forgetMachine(machineNameFor(idemKey));
         }
@@ -496,8 +499,9 @@ export const workerActor = actor({
   }),
 
   actions: {
-    // ADR-022: the step wake (agent-workflow.ts STEP_WAKE_MS), untraced.
-    ...(WORKFLOW ? stepWakeActions : {}),
+    // ADR-022: the step wake (agent-workflow.ts STEP_WAKE_MS), and a waiting agent's ask for a slot on a place with a
+    // memory cap (src/providers/capacity.ts), every few seconds: untraced.
+    ...(WORKFLOW ? { ...stepWakeActions, async admitStart(c: any, params: StartAgent) { return admitStart(c, params); } } : {}),
     ...traceActions("worker", {
     /** Push lock rows (attempts, adopted, state) for audits and tests of a takeover. */
     async getPushes(c, _p: Record<string, never>) {
@@ -537,7 +541,7 @@ export const workerActor = actor({
       const idemKey =
         existing && JSON.parse(existing.context as string).idemKey
           ? (JSON.parse(existing.context as string).idemKey as string)
-          : `relay-${runId.substring(0, 8)}-${workerId}-e${epoch}`;
+          : agentVmIdemKey(runId, workerId, epoch);
 
       if (!existing) {
         const [snapshot] = initialTransition(workerMachine, {

@@ -23,6 +23,7 @@ import { descriptorOf, isListedProvider, LISTED_PROVIDERS, POSTED_ACTIONS, PROVI
 import { SandboxNotFoundError } from "../providers/boxd-errors";
 import { beginMachineAction } from "../providers/machine-audit";
 import { MACHINE_PREFIX, type VmInfo } from "../providers/sandbox";
+import { agentMemory, agentSlots, AGENT_MEMORY_ENV, gb, type AgentMemory } from "../providers/capacity";
 import { ConfigFileError, currentIdleLifetime, IDLE_LIFETIME_DEFAULT, IDLE_LIFETIME_PRESETS, IDLE_LIFETIME_ENV, IDLE_LIFETIME_MIN, type IdleLifetime, type SettingsStore } from "../providers/settings";
 /** What the Logins row reads of GET /v1/logins. */
 export type LoginLike = { provider: "claude" | "codex"; sandbox: string; loggedIn: boolean; hostBound: boolean };
@@ -130,12 +131,31 @@ export function checkpointsField(source: Env = process.env): Field {
 	};
 }
 
+/** What the Agents at once row reads: Docker's memory (null while unknown) and the per-agent budget. */
+export type SlotsLike = { memTotal: number | null; memory: AgentMemory };
+/**
+ * The Agents at once row (src/providers/capacity.ts): agents here share Docker's memory, so at most its memory over the
+ * per-agent budget run at once; more wait as pending and start as others finish.
+ */
+export function agentSlotsField(s: SlotsLike): Field {
+	const budget = s.memory.mb % 1024 === 0 ? `${s.memory.mb / 1024} GB` : `${s.memory.mb} MB`;
+	const n = s.memTotal ? agentSlots(s.memTotal, s.memory.mb) : null;
+	const env = s.memory.source === "env";
+	return {
+		id: "agentSlots", type: "info", label: "Agents at once",
+		help: `Agents here share Docker's memory, ${budget} each. More wait (pending) and start as others finish. ${env ? `Set by ${AGENT_MEMORY_ENV} in capcomd's environment.` : `Change it with ${AGENT_MEMORY_ENV} in capcomd's environment.`}`,
+		value: n !== null ? String(n) : null,
+		display: n !== null ? `${n} (${gb(s.memTotal!)} ÷ ${budget} per agent)` : `${budget} per agent (Docker's memory isn't known yet)`,
+		default: null, choices: [], source: env ? "env" : "daemon", editable: false, appliesTo: null, needsRestart: false, state: null,
+	};
+}
+
 /** GET /v1/sandboxes/{name}: null for a provider clients don't see. */
-export function sandboxDetail(name: string, o: { env?: Env; logins: LoginLike[]; idleLifetime: IdleLifetime; writable?: boolean }): SandboxDetail | null {
+export function sandboxDetail(name: string, o: { env?: Env; logins: LoginLike[]; idleLifetime: IdleLifetime; writable?: boolean; slots?: SlotsLike | null }): SandboxDetail | null {
 	if (!isListedProvider(name)) return null;
 	const d: ProviderDescriptor = PROVIDERS[name];
 	const settings = d.settings.map((id) => (id === "idleLifetime" && d.caps.idleLifetime !== "none" ? idleLifetimeField(d, o.idleLifetime, o.writable ?? true) : null)).filter((f): f is Field => !!f);
-	const info = d.info.map((id) => (id === "logins" ? loginsField(name, o.logins) : checkpointsField(o.env))).filter((f): f is Field => !!f);
+	const info = d.info.map((id) => (id === "logins" ? loginsField(name, o.logins) : id === "agentSlots" ? agentSlotsField(o.slots ?? { memTotal: null, memory: agentMemory(o.env) }) : checkpointsField(o.env))).filter((f): f is Field => !!f);
 	// rev: changes whenever a setting's value, source or editability does (PATCH …/settings checks it).
 	const rev = createHash("sha256").update(JSON.stringify([d.descriptorVersion, settings.map((f) => [f.id, f.value, f.source, f.editable])])).digest("hex").slice(0, 16);
 	return { descriptor: servedDescriptor(d), settings, info, rev };
@@ -588,11 +608,14 @@ export interface SurfaceDeps extends ResourceDeps {
 	availability(name: ListedProvider): Promise<{ available: boolean; reason: string | null; default: boolean }>;
 	/** Where provider settings are kept (the user config). */
 	settings: SettingsStore;
+	/** The Agents at once row's facts for a place with a memory cap (Docker's memory, cached); null without a cap. */
+	agentSlots?(name: ListedProvider): Promise<SlotsLike | null>;
 }
 export function sandboxSurface(deps: SurfaceDeps) {
 	const catalog = resourceCatalog(deps);
 	const env = () => deps.env ?? process.env;
-	const detail = async (name: ListedProvider) => sandboxDetail(name, { env: env(), logins: await deps.logins(), idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable() })!;
+	const slots = async (name: ListedProvider) => (deps.agentSlots ? await deps.agentSlots(name).catch(() => null) : null);
+	const detail = async (name: ListedProvider) => sandboxDetail(name, { env: env(), logins: await deps.logins(), idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable(), slots: await slots(name) })!;
 	return {
 		sandboxes: async (): Promise<SandboxSummary[]> => Promise.all(LISTED_PROVIDERS.map(async (n) => ({ ...servedDescriptor(PROVIDERS[n]), ...(await deps.availability(n)) }))),
 		sandbox: async (name: string): Promise<SandboxDetail | null> => (isListedProvider(name) ? detail(name) : null),
@@ -604,7 +627,8 @@ export function sandboxSurface(deps: SurfaceDeps) {
 		updateSandboxSettings: async (name: string, patch: SettingsPatch): Promise<SettingsOutcome> => {
 			if (!isListedProvider(name)) return { ok: false, status: 404, code: "not_found", message: `sandbox ${name.slice(0, 64)} not found` };
 			const logins = await deps.logins();
-			const build = () => sandboxDetail(name, { env: env(), logins, idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable() })!;
+			const placeSlots = await slots(name);
+			const build = () => sandboxDetail(name, { env: env(), logins, idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable(), slots: placeSlots })!;
 			const before = build();
 			const checked = checkSettingsPatch(before, patch);
 			if (!checked.ok) return checked;

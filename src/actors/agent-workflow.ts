@@ -74,17 +74,73 @@ export function agentWorkflowParts() {
   };
 }
 
+/** The idempotency key of an agent's machine for an epoch (its worker's VM): the container or VM is named after it. */
+export const agentVmIdemKey = (runId: string, workerId: string, epoch: number) => `relay-${runId.substring(0, 8)}-${workerId}-e${epoch}`;
+
+/** When this worker's agent first asked for a slot (a place with a memory cap), and whether it said it waits. */
+export const ADMISSION_SQL = "CREATE TABLE IF NOT EXISTS agent_admission (id INTEGER PRIMARY KEY CHECK (id = 1), since INTEGER NOT NULL, logged INTEGER NOT NULL DEFAULT 0)";
+/** How often a waiting agent asks again for a slot. */
+const ADMIT_RETRY_MS = () => Math.max(200, Number(env("ADMIT_RETRY_MS") ?? 3000));
+
 /**
  * The worker action `startAgent`: queue the one `start` its workflow waits for. Idempotent (the first call queues it,
  * later ones only wake the actor, which resumes its workflow if a restart left it asleep).
+ *
+ * On a place with a memory cap (Docker: src/providers/capacity.ts) the start waits for a slot first: the agent stays
+ * `pending` (nothing claims it), and the worker asks again every few seconds (`admitStart`, a durable alarm), oldest
+ * request first, until one is free. A waiting agent that is paused or ended meanwhile stops asking.
  */
-export async function queueStart(c: any, p: StartAgent): Promise<{ queued: boolean }> {
+export async function queueStart(c: any, p: StartAgent): Promise<{ queued: boolean; waiting?: boolean }> {
   await c.db.execute(STARTS_SQL);
   if ((await c.db.execute("SELECT 1 FROM agent_workflow_start WHERE id = 1")).length) return { queued: false };
+  if (!(await admitted(c, p))) return { queued: false, waiting: true };
   // Send, then remember: a crash in between costs a second `start` (consumed by nobody), never a lost one.
   await c.queue.send("start", p);
   await c.db.execute("INSERT OR IGNORE INTO agent_workflow_start (id, run_id, agent_id, epoch, at) VALUES (1, ?, ?, ?, ?)", p.runId, p.agentId, p.epoch, Date.now());
   return { queued: true };
+}
+
+/** May this agent start now (a slot is free, or its place has no cap)? When not, its next ask is scheduled. */
+async function admitted(c: any, p: StartAgent): Promise<boolean> {
+  const { slotsFor, gb } = await import("../providers/capacity");
+  let place: string | null = null;
+  try { place = (await (await import("../providers/run-sandbox")).runSandbox(p.runId)) ?? (await import("../providers/registry")).sandboxName(); } catch { return true; }
+  const slots = slotsFor(place);
+  if (!slots) return true;
+  await c.db.execute(ADMISSION_SQL);
+  const row: any = (await c.db.execute("SELECT since, logged FROM agent_admission WHERE id = 1"))[0];
+  const since = row ? Number(row.since) : Date.now();
+  if (!row) await c.db.execute("INSERT OR IGNORE INTO agent_admission (id, since) VALUES (1, ?)", since);
+  const { machineNameFor } = await import("../providers/machines");
+  const r = await slots.request(machineNameFor(agentVmIdemKey(p.runId, p.agentId, p.epoch)), since);
+  const log = (line: string) => scopeOf(p.runId).then((s) => s.appendLog({ agentId: p.agentId, stream: "workflow", lines: [line] })).catch(() => {});
+  if (r.admitted) {
+    // No ask left pending: a scheduled event that fires later resets the actor's alarm under the workflow (STEP_WAKE_MS).
+    for (const e of (await c.schedule.list()) as Array<{ id: string; action: string }>) if (e.action === "admitStart") await c.schedule.cancel(e.id).catch(() => {});
+    if (row && Number(row.logged)) await log(`[capcomd] a local agent slot is free: starting (waited ${Math.round((Date.now() - since) / 1000)} s)`);
+    return true;
+  }
+  if (!row || !Number(row.logged)) {
+    await c.db.execute("UPDATE agent_admission SET logged = 1 WHERE id = 1");
+    await log(`[capcomd] waiting for a local agent slot: ${r.used} of ${r.slots} in use${r.ahead ? `, ${r.ahead} waiting before it` : ""} (${r.memTotal ? gb(r.memTotal) : "?"} for Docker ÷ ${r.perAgentMb} MB per agent)`);
+  }
+  const pending = ((await c.schedule.list()) as Array<{ action: string }>).some((e) => e.action === "admitStart");
+  if (!pending) await c.schedule.after(ADMIT_RETRY_MS(), "admitStart", p);
+  return false;
+}
+
+/** The worker action behind a waiting agent's alarm: ask for a slot again, unless the agent no longer waits to start. */
+export async function admitStart(c: any, p: StartAgent): Promise<{ queued: boolean; waiting?: boolean }> {
+  const a = await (await scopeOf(p.runId)).getAgent({ agentId: p.agentId }).catch(() => null);
+  if (a && (TERMINAL_AGENT.has(a.status) || a.status === "paused" || a.epoch !== p.epoch)) {
+    const { slotsFor } = await import("../providers/capacity");
+    const { machineNameFor } = await import("../providers/machines");
+    let place: string | null = null;
+    try { place = (await (await import("../providers/run-sandbox")).runSandbox(p.runId)) ?? (await import("../providers/registry")).sandboxName(); } catch { /* unknown: nothing to release */ }
+    slotsFor(place)?.release(machineNameFor(agentVmIdemKey(p.runId, p.agentId, p.epoch)));
+    return { queued: false };
+  }
+  return queueStart(c, p);
 }
 
 /** The worker actions behind the step wake (STEP_WAKE_MS); untraced: bookkeeping, not work. */

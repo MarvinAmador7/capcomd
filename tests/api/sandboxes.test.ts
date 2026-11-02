@@ -75,7 +75,7 @@ describe("GET /v1/sandboxes (capability sandboxes)", () => {
 		expect(r.body).toEqual({ sandboxes: [
 			{ name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
 				caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
-				settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "Docker isn't running", default: false },
+				settings: ["idleLifetime"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "Docker isn't running", default: false },
 			{ name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
 				caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
 				settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"], available: false, reason: "No boxd API key (run capcomd setup)", default: false },
@@ -117,7 +117,9 @@ describe("GET /v1/sandboxes/{name}", () => {
 		const r = await get("/v1/sandboxes/docker");
 		expect(r.body.settings[0]).toMatchObject({ id: "idleLifetime", value: "3600", display: "1 hour", editable: true });
 		expect(r.body.settings[0].help).toContain("up to 5 minutes over");
-		expect(r.body.info.map((f: any) => f.id)).toEqual(["logins", "checkpoints"]);
+		expect(r.body.info.map((f: any) => f.id)).toEqual(["logins", "checkpoints", "agentSlots"]);
+		// Without Docker's memory (the in-memory source has none) the row still says the budget.
+		expect(r.body.info[2]).toMatchObject({ id: "agentSlots", type: "info", label: "Agents at once", value: null, display: "1 GB per agent (Docker's memory isn't known yet)", editable: false, source: "daemon" });
 	});
 	test("a place clients don't see, or none at all: 404 not_found", async () => {
 		const { get } = setup();
