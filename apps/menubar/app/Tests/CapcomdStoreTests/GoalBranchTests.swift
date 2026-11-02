@@ -55,6 +55,14 @@ final class GoalBranchTests: XCTestCase {
     XCTAssertEqual(v.openPullRequest, .init(available: true, reason: nil, repo: "acme/app"))
   }
 
+  /// Newer daemons send each piece of work's title and the work it carries on; older ones send neither.
+  func testWorkDecodesItsTitleAndWhatItCarriesOn() throws {
+    let json = goalJSON.replacingOccurrences(of: #""task":"write x","#, with: #""task":"write x","title":"x helper","continues":["agt-old"],"#)
+    let v = try GoalWire.view(Data(json.utf8))
+    XCTAssertEqual(v.landed.first?.title?.plain, "x helper"); XCTAssertEqual(v.landed.first?.continues, ["agt-old"])
+    XCTAssertNil(v.notLanded.first?.title); XCTAssertEqual(v.notLanded.first?.continues, [])
+  }
+
   func testRunGoalBranchFollowsTheSnapshotAndTheEvents() throws {
     let s = store(FakeGoals())
     let run = try JSONDecoder().decode(SnapshotRun.self, from: Data("""

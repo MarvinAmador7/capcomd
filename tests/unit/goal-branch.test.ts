@@ -169,3 +169,45 @@ describe("a stopped goal: ask before a pull request", () => {
 		expect(pullRequestBody({ runId: "run-g", branch: "capcomd/add-x", summary: "Added x.", landed: [l], notLanded: [] }).startsWith("Added x.")).toBe(true);
 	});
 });
+
+describe("what landed: continued work and titles", () => {
+	const goal = { branch: "capcomd/add-helpers" };
+	const agent = (id: string, o: Record<string, unknown> = {}) => ({ agentId: id, parent: "agt-p", profile: "worker", status: "done", task: `task of ${id}`,
+		contract: null, result: { branch: `b-${id}`, commit: "c0ffee" }, titleState: null, ...o }) as any;
+	const planner = agent("agt-p", { parent: null, profile: "planner" });
+	let t = 0;
+	const op = (kind: "verify" | "merge", agentId: string, state: string, result: Record<string, unknown> = {}) =>
+		({ id: `${kind}-${agentId}-${++t}`, kind, state, updatedAt: t, data: { agentId, target: goal.branch, branch: `b-${agentId}` }, result }) as any;
+
+	test("a child whose merge conflicted and was continued isn't listed: its continuation is, and says so", async () => {
+		const { landedOf } = await import("../../src/primitives/goal");
+		const agents = [planner, agent("agt-clamp"), agent("agt-sign"), agent("agt-fix", { contract: { from: { agentId: "agt-sign", ref: "refs/heads/b-agt-sign" } } })];
+		const ops = [op("verify", "agt-clamp", "passed"), op("merge", "agt-clamp", "merged"), op("verify", "agt-sign", "passed"),
+			op("merge", "agt-sign", "failed", { status: "conflict" }), op("verify", "agt-fix", "passed"), op("merge", "agt-fix", "merged")];
+		const { landed, notLanded } = landedOf(goal, agents, ops);
+		expect(landed.map((l) => [l.agentId, l.continues])).toEqual([["agt-clamp", []], ["agt-fix", ["agt-sign"]]]);
+		expect(notLanded).toEqual([]);
+	});
+
+	test("a continuation that didn't land either is listed once, with the chain it carries", async () => {
+		const { landedOf } = await import("../../src/primitives/goal");
+		const agents = [planner, agent("agt-a"), agent("agt-b", { contract: { from: { agentId: "agt-a" } } }),
+			agent("agt-c", { status: "failed", result: { error: "usage limit" }, contract: { from: { agentId: "agt-b" } } })];
+		const { landed, notLanded } = landedOf(goal, agents, [op("merge", "agt-a", "failed", { status: "conflict" })]);
+		expect(landed).toEqual([]);
+		expect(notLanded.map((n) => [n.agentId, n.reason, n.continues])).toEqual([["agt-c", "failed", ["agt-b", "agt-a"]]]);
+	});
+
+	test("work is labelled by its title in the pull request, with the task as the fallback", async () => {
+		const { landedOf, pullRequestBody } = await import("../../src/primitives/goal");
+		const agents = [planner, agent("agt-clamp", { titleState: { agent: { title: "clamp helper", by: "self", setBy: "agt-clamp", at: 1 } } }),
+			agent("agt-sign", { task: "" }), agent("agt-fix", { contract: { from: { agentId: "agt-sign" } }, task: "Merge the goal branch into the sign work" })];
+		const ops = [op("merge", "agt-clamp", "merged"), op("merge", "agt-fix", "merged")];
+		const { landed, notLanded } = landedOf(goal, agents, ops);
+		expect(landed.map((l) => l.title)).toEqual(["clamp helper", "merge goal branch"]);
+		const body = pullRequestBody({ runId: "run-g", branch: goal.branch, summary: null, landed, notLanded });
+		expect(body).toContain("- clamp helper (agt-clamp, worker): no checks recorded, no reviewer");
+		expect(body).toContain("(agt-fix, worker, carries on agt-sign's work)");
+		expect(body).not.toContain("Not landed");
+	});
+});

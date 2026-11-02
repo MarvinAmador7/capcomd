@@ -114,6 +114,13 @@ final class GoalCardTests: XCTestCase {
     XCTAssertEqual(c.openPR, .hidden); XCTAssertFalse(c.keepShown); XCTAssertNil(c.outcome)
   }
 
+  /// A row reads the work's title when the daemon sends one, its task otherwise.
+  func testRowsLeadWithTheTitle() throws {
+    let c = GoalCard.make(runId: "run-g", summary: summary, view: .loaded(try view { $0.landed[0].title = UntrustedText("x helper") }), action: nil)
+    XCTAssertEqual(c.landed.map(\.task.plain), ["x helper"])
+    XCTAssertEqual(c.notLanded.map(\.task.plain), ["write y", "write z"])
+  }
+
   func testReadyWithItsView() throws {
     let c = GoalCard.make(runId: "run-g", summary: summary, view: .loaded(try view()), action: nil)
     XCTAssertTrue(c.docks); XCTAssertFalse(c.loading)

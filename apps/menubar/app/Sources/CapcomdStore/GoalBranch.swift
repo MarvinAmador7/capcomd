@@ -49,6 +49,10 @@ public struct GoalLanded: Decodable, Sendable, Hashable, Identifiable {
   public var agentId: String; public var parent: String?; public var profile: String?
   /// The first line of its task (agent- or user-written).
   public var task: UntrustedText
+  /// Its title (capability agents.title), what a row shows first; nil from older daemons.
+  public var title: UntrustedText?
+  /// The agents whose work this one carries on (`spawn --continue`); they aren't listed on their own.
+  public var continues: [String] = []
   public var branch: String?; public var mergeId: String; public var sha: String?; public var verifyId: String?
   /// The agent that merged it (its lead or the planner).
   public var mergedBy: String?
@@ -57,7 +61,7 @@ public struct GoalLanded: Decodable, Sendable, Hashable, Identifiable {
   /// The run's reviewer's verdict; nil when the run has no reviewer.
   public var review: Review?
   public var id: String { agentId }
-  enum CodingKeys: String, CodingKey { case agentId, parent, profile, task, branch, mergeId, sha, verifyId, mergedBy, checks, review }
+  enum CodingKeys: String, CodingKey { case agentId, parent, profile, task, title, continues, branch, mergeId, sha, verifyId, mergedBy, checks, review }
   struct Checks: Decodable { var passed: Bool }
   public init(agentId: String, task: String, mergeId: String, branch: String? = nil, profile: String? = nil, checksPassed: Bool? = nil, review: Review? = nil) {
     self.agentId = agentId; self.task = UntrustedText(task); self.mergeId = mergeId; self.branch = branch; self.profile = profile; self.checksPassed = checksPassed; self.review = review
@@ -66,6 +70,7 @@ public struct GoalLanded: Decodable, Sendable, Hashable, Identifiable {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     agentId = try c.decode(String.self, forKey: .agentId); parent = try c.decodeIfPresent(String.self, forKey: .parent)
     profile = try c.decodeIfPresent(String.self, forKey: .profile); task = UntrustedText(try c.decodeIfPresent(String.self, forKey: .task) ?? "")
+    title = try c.decodeIfPresent(String.self, forKey: .title).map(UntrustedText.init); continues = try c.decodeIfPresent([String].self, forKey: .continues) ?? []
     branch = try c.decodeIfPresent(String.self, forKey: .branch); mergeId = try c.decodeIfPresent(String.self, forKey: .mergeId) ?? ""
     sha = try c.decodeIfPresent(String.self, forKey: .sha); verifyId = try c.decodeIfPresent(String.self, forKey: .verifyId)
     mergedBy = try c.decodeIfPresent(String.self, forKey: .mergedBy)
@@ -77,6 +82,8 @@ public struct GoalLanded: Decodable, Sendable, Hashable, Identifiable {
 public struct GoalNotLanded: Decodable, Sendable, Hashable, Identifiable {
   public var agentId: String; public var parent: String?; public var profile: String?
   public var task: UntrustedText
+  public var title: UntrustedText?
+  public var continues: [String] = []
   public var branch: String?; public var status: String
   /// checks_failed, review_failed, merge_failed, denied, awaiting_approval, verifying, not_verified, not_merged, failed,
   /// cancelled, still_working; an unknown one is "not landed" for a reason the app doesn't know (`reasonText`).
@@ -84,7 +91,7 @@ public struct GoalNotLanded: Decodable, Sendable, Hashable, Identifiable {
   /// The failing check's reason, the reviewer's reasons, the agent's error (agent-written).
   public var detail: UntrustedText?
   public var id: String { agentId }
-  enum CodingKeys: String, CodingKey { case agentId, parent, profile, task, branch, status, reason, detail }
+  enum CodingKeys: String, CodingKey { case agentId, parent, profile, task, title, continues, branch, status, reason, detail }
   public init(agentId: String, task: String, reason: String, status: String = "done", detail: String? = nil) {
     self.agentId = agentId; self.task = UntrustedText(task); self.reason = reason; self.status = status; self.detail = detail.map(UntrustedText.init)
   }
@@ -92,6 +99,7 @@ public struct GoalNotLanded: Decodable, Sendable, Hashable, Identifiable {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     agentId = try c.decode(String.self, forKey: .agentId); parent = try c.decodeIfPresent(String.self, forKey: .parent)
     profile = try c.decodeIfPresent(String.self, forKey: .profile); task = UntrustedText(try c.decodeIfPresent(String.self, forKey: .task) ?? "")
+    title = try c.decodeIfPresent(String.self, forKey: .title).map(UntrustedText.init); continues = try c.decodeIfPresent([String].self, forKey: .continues) ?? []
     branch = try c.decodeIfPresent(String.self, forKey: .branch); status = try c.decodeIfPresent(String.self, forKey: .status) ?? "done"
     reason = try c.decodeIfPresent(String.self, forKey: .reason) ?? "unknown"; detail = try c.decodeIfPresent(String.self, forKey: .detail).map(UntrustedText.init)
   }

@@ -5,6 +5,7 @@
 import { assertEngine, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { TERMINAL_AGENT } from "./policy";
+import { shownTitle } from "./agent-title";
 import type { GoalDecision, GoalState, ScopeAgent, ScopeOp } from "../actors/scope";
 
 /** Where a goal branch stands. working: the planner is at it; ready: it finished, the user decides; stopped: it failed
@@ -46,12 +47,18 @@ const str = (v: unknown) => (typeof v === "string" && v ? v : null);
 
 export interface LandedWork {
   agentId: string; parent: string | null; profile: string | null; task: string; branch: string | null;
+  /** Its title (capability agents.title), what a person reads first; null when it has neither a title nor a task. */
+  title?: string | null;
+  /** The agents whose work this one carries on (`spawn --continue`, oldest last): their work landed, or didn't, here. */
+  continues?: string[];
   mergeId: string; sha: string | null; verifyId: string | null; mergedBy: string | null;
   checks: { passed: boolean } | null;
   review: { passed: boolean; agentId: string | null; reasons: string[] } | null;
 }
 export interface NotLandedWork {
   agentId: string; parent: string | null; profile: string | null; task: string; branch: string | null; status: string;
+  title?: string | null;
+  continues?: string[];
   reason: NotLandedReason; detail: string | null;
 }
 
@@ -60,12 +67,22 @@ export function landedOf(goal: { branch: string }, agents: ScopeAgent[], ops: Sc
   const landed: LandedWork[] = [], notLanded: NotLandedWork[] = [];
   const byAgent = (kind: string, id: string) => ops.filter((o) => o.kind === kind && o.data.agentId === id).sort((a, b) => a.updatedAt - b.updatedAt);
   const hasKids = new Set(agents.map((a) => a.parent).filter(Boolean) as string[]);
+  // A child continued by another (`spawn --continue`, e.g. after a merge conflict) isn't listed on its own: its work
+  // went on in the agent that continued it, which is listed (landed or not) and says whose work it carries on.
+  const fromOf = (a: ScopeAgent): string | null => { const f = (a.contract as any)?.from?.agentId; return typeof f === "string" && f ? f : null; };
+  const continued = new Set(agents.map(fromOf).filter(Boolean) as string[]);
+  const chainOf = (a: ScopeAgent): string[] => {
+    const out: string[] = [];
+    for (let f = fromOf(a); f && !out.includes(f); ) { out.push(f); const p = agents.find((x) => x.agentId === f); f = p ? fromOf(p) : null; }
+    return out;
+  };
   for (const a of agents) {
-    if (isPlanner(a) || isReview(a)) continue;
+    if (isPlanner(a) || isReview(a) || continued.has(a.agentId)) continue;
     const merges = byAgent("merge", a.agentId).filter((m) => m.data.target === goal.branch);
     const verifies = byAgent("verify", a.agentId);
     const r = (a.result ?? {}) as Record<string, any>;
-    const base = { agentId: a.agentId, parent: a.parent, profile: a.profile ? a.profile.toLowerCase() : null, task: firstLine(a.task), branch: str(r.branch) };
+    const base = { agentId: a.agentId, parent: a.parent, profile: a.profile ? a.profile.toLowerCase() : null, task: firstLine(a.task), branch: str(r.branch),
+      title: shownTitle(a.titleState, a.task).title, continues: chainOf(a) };
     const merged = merges.find((m) => m.state === "merged");
     if (merged) {
       const v = merged.data.require ? ops.find((o) => o.id === merged.data.require) : verifies.filter((x) => x.state === "passed").at(-1);
@@ -180,6 +197,11 @@ async function compareOf(cfg: import("../merge/config").MergeConfig | null, g: {
   return mirrorFor({ remote: cfg.remote, target: g.base, workdir: cfg.workdir }).compare(g.base, g.branch).catch((e) => ({ error: String((e as Error)?.message ?? e).slice(0, 200) }));
 }
 
+/** What a person reads for a child's work: its title, else the first line of its task. */
+const workLabel = (w: { title?: string | null; task: string }) => w.title || w.task || "(no task)";
+/** ", carries on agt-…'s work" for an agent that continued others' work (`spawn --continue`). */
+const carriesOn = (w: { continues?: string[] }) => w.continues?.length ? `, carries on ${w.continues.join(", ")}'s work` : "";
+
 /** The pull request's body: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. */
 export function pullRequestBody(o: { runId: string; branch: string; summary: string | null; landed: LandedWork[]; notLanded: NotLandedWork[]; stopped?: string | null }): string {
   const lines: string[] = [];
@@ -192,12 +214,12 @@ export function pullRequestBody(o: { runId: string; branch: string; summary: str
   for (const l of o.landed) {
     const review = l.review ? (l.review.passed ? `reviewed and approved${l.review.agentId ? ` by ${l.review.agentId}` : ""}` : "review did not pass") : "no reviewer";
     const checks = l.checks ? (l.checks.passed ? "checks passed" : "checks failed") : "no checks recorded";
-    lines.push(`- ${l.task || "(no task)"} (${l.agentId}${l.profile ? `, ${l.profile}` : ""}): ${checks}, ${review}${l.sha ? `; ${l.sha.slice(0, 12)}` : ""}`);
+    lines.push(`- ${workLabel(l)} (${l.agentId}${l.profile ? `, ${l.profile}` : ""}${carriesOn(l)}): ${checks}, ${review}${l.sha ? `; ${l.sha.slice(0, 12)}` : ""}`);
     for (const r of l.review?.reasons.slice(0, 5) ?? []) lines.push(`  - ${firstLine(r, 300)}`);
   }
   if (o.notLanded.length) {
     lines.push("", "## Not landed", "");
-    for (const n of o.notLanded) lines.push(`- ${n.task || "(no task)"} (${n.agentId}): ${n.reason.replace(/_/g, " ")}${n.detail ? `: ${firstLine(n.detail, 300)}` : ""}`);
+    for (const n of o.notLanded) lines.push(`- ${workLabel(n)} (${n.agentId}${carriesOn(n)}): ${n.reason.replace(/_/g, " ")}${n.detail ? `: ${firstLine(n.detail, 300)}` : ""}`);
   }
   lines.push("", "---", `Opened by capcomd from run ${o.runId}. capcomd never merges this pull request: review and merge it on GitHub.`);
   // GitHub caps a body at 65536 characters.

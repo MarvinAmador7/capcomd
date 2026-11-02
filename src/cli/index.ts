@@ -513,8 +513,10 @@ async function main(argv: string[]): Promise<number> {
         const c = v.compare;
         console.log(`Goal branch: ${v.branch} (from ${v.base})  ${v.state}`);
         console.log(c.error ? `Compare: ${c.error}` : `${c.ahead} commit(s) ahead of ${v.base}, ${c.filesTotal} file(s), +${c.added} -${c.removed}`);
-        if (v.landed.length) { console.log("\nLanded:"); for (const l of v.landed) console.log(`  ${l.agentId} ${l.task}  (${l.review ? (l.review.passed ? "reviewed" : "review failed") : "no reviewer"})`); }
-        if (v.notLanded.length) { console.log("\nNot landed:"); for (const n of v.notLanded) console.log(`  ${n.agentId} ${n.task}: ${n.reason}${n.detail ? ` (${n.detail.split("\n")[0]})` : ""}`); }
+        const label = (w: { title?: string | null; task: string; continues?: string[] }) =>
+          `${w.title || w.task}${w.continues?.length ? ` (carries on ${w.continues.join(", ")})` : ""}`;
+        if (v.landed.length) { console.log("\nLanded:"); for (const l of v.landed) console.log(`  ${l.agentId} ${label(l)}  (${l.review ? (l.review.passed ? "reviewed" : "review failed") : "no reviewer"})`); }
+        if (v.notLanded.length) { console.log("\nNot landed:"); for (const n of v.notLanded) console.log(`  ${n.agentId} ${label(n)}: ${n.reason}${n.detail ? ` (${n.detail.split("\n")[0]})` : ""}`); }
         if (v.summary) console.log(`\nPlanner's summary:\n${v.summary}`);
         console.log(v.pullRequest ? `\nPull request: #${v.pullRequest.number}${v.pullRequest.url ? ` ${v.pullRequest.url}` : ""}`
           : v.openPullRequest.available ? `\n${v.openPullRequest.confirm ? `${v.openPullRequest.confirm}\n` : ""}Open a pull request: capcomd pr open ${runId}` : `\n${v.openPullRequest.reason}`);
