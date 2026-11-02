@@ -11,7 +11,7 @@ jobs:
     # One macOS runner serves every PR: a hung test must fail, not hold it for hours.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: echo "BUN_BIN=$(which bun)" >> "$GITHUB_ENV"
       - name: Client tests
