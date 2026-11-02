@@ -26,6 +26,34 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
 - **A sandbox is a container** named after the agent's idempotency key, with capcomd's labels; it lives until the
   agent ends (or its delete-after time passes, if the engine went away). `docker ps --filter
   label=dev.capcomd.sandbox=1` lists them.
+- **A warm workspace.** `capcomd env build` keeps a warm checkout of the project in the env image (the template, at
+  `/var/tmp/capcomd/template`): the whole history of the target branch (`CAPCOMD_MERGE_TARGET`, else the default
+  branch), its dependencies installed for Linux (with the package manager the lockfile needs when the base image has
+  none: bun at the version the project pins in `packageManager` or `.bun-version`, else `CAPCOMD_BUN_VERSION` or
+  1.4.3), and its record (commit, lockfile hash) in the template's `.git` and in the env manifest. The same secret scan
+  runs before the image is committed; no credential is baked in (git gets its token per command, as before). Every
+  container is its own copy-on-write copy of the image, so an agent works in the template in place: `git fetch`, then
+  `git checkout -B <branch>`, edit, commit. Its branch, tree and commit are the same as from a fresh clone, and a new
+  agent's workspace is ready in about a second instead of a clone plus a copy of `node_modules`.
+- **When it clones instead.** The runner uses the template only when its commit is in the target's history, the
+  lockfile of the tree the agent starts from is the one its dependencies were installed for, it is of the run's
+  repository, and no earlier run in that container used it (a retry); otherwise it clones and copies the template's
+  `node_modules` when the lockfile matches, as before (src/agents/workspace.ts `chooseWorkspace`). The agent's log
+  says which (`[capcomd] workspace: …`), and so does its span (`agent.workspace`, `agent.workspace_ms`). boxd VMs
+  always clone; their snapshot keeps a shallow template for `node_modules` only.
+- **Drift.** Images change only on `capcomd env build`, never by themselves. `capcomd env status` and `capcomd env
+  doctor` say how far the template is behind the target (agents fetch the difference), when the lockfile changed
+  (agents then clone and install their own dependencies) and when the target was rewritten, and suggest `capcomd env
+  build --sandbox docker`. A plan login is an image made from the env image of its day, so agents with it get that
+  image's template: they say so too, and `capcomd auth login … --sandbox docker` moves it to the current one.
+- **Agents at once.** Agents' containers share Docker's memory (Docker Desktop's or OrbStack's VM), and memory runs out
+  before disk does (one agent CLI is 0.3-0.6 GB). So at most `docker info` MemTotal ÷ a per-agent budget run at once:
+  1 GB by default, `CAPCOMD_DOCKER_AGENT_MEMORY_MB` in capcomd's environment (at least 256), or
+  `sandboxes.docker.agentMemoryMb` in the user config. Above the cap a new agent stays `pending` (its log says it waits
+  for a slot) and starts, oldest first, when another agent's container is removed. Running capcomd agent containers
+  count, so agents from before a daemon restart do too. The place's details show it as the Agents at once row
+  (`agentSlots`). It applies to agents the engine's workflow drives (the default; not with `CAPCOMD_AGENT_WORKFLOW=0`)
+  and not to boxd.
 - **Differences from boxd:**
   - Isolation is a container, not a VM: the agent can't see your files, but a kernel exploit would reach the host.
   - No host-bound secrets: an API key (auth `apikey`) reaches the agent in its environment, where it can read it.
@@ -76,6 +104,10 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
      or the provider's own CLI, like `docker exec -it`);
    - `settings`, `info`, `actions`: the rows and resource actions its details screen offers, from the closed lists in
      the registry (`SETTING_IDS`, `INFO_IDS`, `RESOURCE_ACTIONS`). The daemon serves only the actions it implements.
+     `agentSlots` (Agents at once) is for a local place whose agents share one machine's memory: give it a memory probe
+     in `src/providers/capacity.ts` (`PLACES`), and the engine caps its agents the same way as Docker's.
+   - A sandbox that is each agent's own copy of its image (`isolation: "container"`) gets the warm workspace: `env
+     build` keeps a warm template in its snapshot and the runner may use it in place (`warmTemplate`).
 
    **Settings** (`PATCH /v1/sandboxes/{name}/settings`, the `configure` scope; `src/providers/settings.ts`). Today one,
    `idleLifetime`: how long a machine left behind lives, in seconds. It is a lease: `ensure` gets it as `ttlSeconds`,
