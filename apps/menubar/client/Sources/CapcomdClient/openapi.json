@@ -3386,6 +3386,15 @@
                           "null"
                         ]
                       },
+                      "createdAt": {
+                        "description": "When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it",
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
+                      },
                       "updatedAt": {
                         "type": [
                           "string",
@@ -8603,6 +8612,10 @@
               "added",
               "removed"
             ]
+          },
+          "askedBy": {
+            "description": "The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge",
+            "type": "string"
           }
         },
         "required": [
@@ -9057,6 +9070,10 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "askedBy": {
+                "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
+                "type": "string"
               }
             },
             "additionalProperties": {},
@@ -10189,6 +10206,15 @@
                     "null"
                   ]
                 },
+                "createdAt": {
+                  "description": "When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time"
+                },
                 "updatedAt": {
                   "type": [
                     "string",
@@ -10369,6 +10395,10 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "askedBy": {
+                      "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
+                      "type": "string"
                     }
                   },
                   "additionalProperties": {},

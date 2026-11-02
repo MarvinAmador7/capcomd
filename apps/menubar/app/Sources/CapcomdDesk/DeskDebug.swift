@@ -54,19 +54,109 @@ import AppKit
         }
       }
     }
+    if let dir = ProcessInfo.processInfo.environment["CAPCOMD_DESK_CONTROL"], !dir.isEmpty {
+      let d = URL(fileURLWithPath: dir)
+      Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in MainActor.assumeIsolated { control(model, d) } }
+    }
     guard let dir = ProcessInfo.processInfo.environment["CAPCOMD_DESK_SNAPSHOT"], !dir.isEmpty else { return }
     Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
       MainActor.assumeIsolated { snapshot(into: URL(fileURLWithPath: dir)) }
     }
   }
 
-  static func snapshot(into dir: URL) {
+  /// CAPCOMD_DESK_CONTROL=<dir>: drives the window without touching the screen, for checks against a live daemon. Each
+  /// half second it runs the lines of <dir>/cmd (then deletes it) and writes the model's state to <dir>/state.txt.
+  /// Lines: `project N`, `agent N`, `focus ±1`, `scroll <agentId>`, `follow on|off`, `steer <agentId> <text>`,
+  /// `decide <approvalId> approve|deny`, `swipe <dx>` (a two-finger swipe of dx points handed to the reel's scroll
+  /// view, as deskbench's swipes are; negative scrolls toward later columns), `snap <name>` (the window, now, into <dir>/<name>.png), `key <char|return|escape|left|right> [cmd] [ctrl] [shift]` (a key event handed to
+  /// this app's own window and menu, never posted to the system).
+  static func control(_ model: DeskModel, _ dir: URL) {
+    let cmd = dir.appendingPathComponent("cmd")
+    if let text = try? String(contentsOf: cmd, encoding: .utf8) {
+      try? FileManager.default.removeItem(at: cmd)
+      for line in text.split(separator: "\n") {
+        let w = line.split(separator: " ", maxSplits: 2).map(String.init)
+        switch w.first {
+        case "project": if let n = w.dropFirst().first.flatMap(Int.init) { model.goToProject(n - 1) }
+        case "agent": if let n = w.dropFirst().first.flatMap(Int.init) { model.goToAgent(n - 1) }
+        case "focus": if let n = w.dropFirst().first.flatMap(Int.init) { model.moveFocus(n) }
+        case "scroll": if w.count > 1 { model.scroll(to: w[1]) }
+        case "follow": model.follow = w.dropFirst().first == "on"
+        case "steer": if w.count > 2 { model.steer(agentId: w[1], body: w[2]) }
+        case "decide": if w.count > 2 { model.decide(w[1], w[2] == "deny" ? .deny : .approve) }
+        case "key": key(w.dropFirst().joined(separator: " "))
+        case "snap": if w.count > 1 { snapshot(into: dir, name: w[1]) }
+        case "swipe": if let dx = w.dropFirst().first.flatMap(Double.init) { swipe(dx) }
+        default: break
+        }
+      }
+    }
+    try? state(model).write(to: dir.appendingPathComponent("state.txt"), atomically: true, encoding: .utf8)
+  }
+
+  static func swipe(_ dx: Double) {
+    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    func find(_ v: NSView) -> SnapScrollView? { (v as? SnapScrollView) ?? v.subviews.lazy.compactMap(find).first }
+    guard let root = win.contentView?.superview ?? win.contentView, let sv = find(root) else { return }
+    let steps = 12, t0 = ProcessInfo.processInfo.systemUptime
+    for n in 0...(steps + 1) {
+      let phase: Int64 = n == 0 ? 1 : n <= steps ? 2 : 4   // CGScrollPhase: began, changed, ended
+      let d = n == 0 || n > steps ? 0 : Int32(dx / Double(steps))
+      guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: d, wheel3: 0) else { return }
+      cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+      cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: Double(d))
+      cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: Double(d))
+      cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+      cg.timestamp = CGEventTimestamp((t0 + Double(n) * 0.012) * 1e9)
+      if let e = NSEvent(cgEvent: cg) { sv.scrollWheel(with: e) }
+    }
+  }
+
+  static func key(_ spec: String) {
+    let w = spec.split(separator: " ").map(String.init)
+    guard let k = w.first, let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    var flags: NSEvent.ModifierFlags = []
+    if w.contains("cmd") { flags.insert(.command) }; if w.contains("ctrl") { flags.insert(.control) }; if w.contains("shift") { flags.insert(.shift) }
+    let (chars, code): (String, UInt16) = switch k {
+    case "return": ("\r", 36); case "escape": ("\u{1b}", 53)
+    case "left": (String(UnicodeScalar(NSLeftArrowFunctionKey)!), 123); case "right": (String(UnicodeScalar(NSRightArrowFunctionKey)!), 124)
+    default: (k, [ "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25 ][k] ?? 0)
+    }
+    if k == "left" || k == "right" { flags.insert([.function, .numericPad]) }
+    guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                   windowNumber: win.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: chars,
+                                   isARepeat: false, keyCode: code) else { return }
+    // As AppKit routes a key: the window's key equivalents (SwiftUI's shortcuts), then the main menu, then the responder chain.
+    if win.performKeyEquivalent(with: e) { return }
+    if NSApp.mainMenu?.performKeyEquivalent(with: e) == true { return }
+    win.firstResponder?.keyDown(with: e)
+  }
+
+  static func state(_ model: DeskModel) -> String {
+    let s = model.store
+    var out = ["link \(model.link) unreachable \(s.daemonUnreachable) unauthorized \(s.unauthorized) follow \(model.follow) across \(model.across)",
+               "open \(model.openProjectId ?? "-") run \(model.openRunId ?? "-") position \(model.reelPosition ?? "-") focused \(model.focusedAgent ?? "-")"]
+    for (n, d) in model.decks.enumerated() {
+      out.append("deck \(n + 1) \(d.id == model.openProjectId ? "*" : " ") \(d.title) run \(d.runId) running \(d.isRunning) asking \(d.askingName ?? "-") agents \(d.agentIds.count)")
+    }
+    for id in model.columns {
+      guard let a = model.agent(id) else { out.append("col \(id) (no slice)"); continue }
+      let h = a.header, t = model.peekThread(id)
+      out.append("col \(id) \(h.name) \(h.suffix ?? "") \(h.status) warm \(a.warm) seen \(a.onScreen) focus \(a.focused) ask \(a.approval?.id ?? "-") "
+        + "spawned \(h.spawnedAtMs) store \(s.threadEntries(agentId: id).count) shown \(t.map { "\($0.entries.count)" } ?? "-") "
+        + "pending \(t.map { $0.pending.map { "\($0.state)" }.joined(separator: ",") } ?? "-")")
+    }
+    for a in s.pendingApprovals { out.append("approval \(a.id) run \(a.runId ?? "-") agent \(a.agentId ?? "-") \(a.decision)") }
+    return out.joined(separator: "\n") + "\n"
+  }
+
+  static func snapshot(into dir: URL, name: String = "window") {
     guard let w = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
           let frame = w.contentView?.superview ?? w.contentView,
           let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
     frame.layoutSubtreeIfNeeded()   // an occluded window gets no display passes: catch up before drawing it
     frame.cacheDisplay(in: frame.bounds, to: rep)
-    try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("window.png"))
+    try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(name).png"))
     var lines = ["window \(w.frame.size) contentLayoutRect \(w.contentLayoutRect) visible \(w.occlusionState.contains(.visible)) key \(w.isKeyWindow)"]
     func walk(_ v: NSView) {
       if let s = v as? NSScrollView {

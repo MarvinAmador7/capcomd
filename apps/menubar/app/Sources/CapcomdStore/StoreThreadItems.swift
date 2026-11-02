@@ -59,20 +59,31 @@ extension CapcomdStore {
 
   /// Reads the agent's thread from the route's cursor to the end, a page at a time. The cursor is the highest seq the
   /// route returned, never one from a live frame: a frame can run ahead of items the route hasn't returned yet.
+  ///
+  /// The pages go into the book together, once the read ends. Applied page by page, any change in between (a live
+  /// frame, an activity line) showed the thread as far as it had been read: the oldest items, oldest first, so a long
+  /// thread opened on its first hundred items and reached its newest seconds later.
   public func refreshThread(runId: String, agentId: String) async {
     guard let threadSource else { return }
+    var read: [CapcomdThread.Item] = [], cursor = threadCursor[agentId] ?? 0
+    var failure: Error?
     do {
       for _ in 0..<50 {   // bounded: a long thread catches up over a few refreshes
-        let after = threadCursor[agentId] ?? 0
-        let page = try await threadSource.thread(runId: runId, agentId: agentId, after: after, limit: Self.threadPage)
-        books[agentId, default: Book()].apply(page.items)   // into the live book: frames applied meanwhile stay
-        threadCursor[agentId] = max(after, page.items.map(\.seq).max() ?? after, page.next ?? after)
+        let page = try await threadSource.thread(runId: runId, agentId: agentId, after: cursor, limit: Self.threadPage)
+        read += page.items
+        cursor = max(cursor, page.items.map(\.seq).max() ?? cursor, page.next ?? cursor)
         guard page.next != nil, !page.items.isEmpty else { break }
       }
-      threadUnavailable[agentId] = nil
-      mark(.thread(agentId))
-    } catch is Unauthorized { unauthorized = true }
-    catch { threadUnavailable[agentId] = error as? DetailUnavailable ?? .failed("Couldn't reach capcomd"); mark(.thread(agentId)) }
+    } catch { failure = error }
+    if !read.isEmpty || failure == nil {
+      books[agentId, default: Book()].apply(read)   // into the live book: frames applied meanwhile stay (highest rev wins)
+      threadCursor[agentId] = max(threadCursor[agentId] ?? 0, cursor)
+    }
+    switch failure {
+    case nil: threadUnavailable[agentId] = nil; mark(.thread(agentId))
+    case is Unauthorized?: unauthorized = true
+    case let e?: threadUnavailable[agentId] = e as? DetailUnavailable ?? .failed("Couldn't reach capcomd"); mark(.thread(agentId))
+    }
     changed()
   }
 

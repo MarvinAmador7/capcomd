@@ -63,6 +63,12 @@ package final class DeskModel {
   @ObservationIgnored package private(set) var store: CapcomdStore
   @ObservationIgnored private var transport: UnixSocketTransport?
   package private(set) var link: Link = .connecting { didSet { Mutations.record("DeskModel.link") } }
+  /// The daemon refused the token it was given (rather than there being none).
+  package private(set) var tokenRejected = false { didSet { Mutations.record("DeskModel.tokenRejected") } }
+  /// The daemon's feed is down (it keeps retrying): the window says so instead of showing stale state as live.
+  package private(set) var unreachable = false { didSet { Mutations.record("DeskModel.unreachable") } }
+  /// The daemon has answered: until then an empty title bar means "not read yet", not "nothing running".
+  package private(set) var loaded = false { didSet { Mutations.record("DeskModel.loaded") } }
   /// Every project with something to show, oldest first (never reordered by activity).
   package private(set) var decks: [DeckInfo] = [] { didSet { Mutations.record("DeskModel.decks") } }
   /// The project the reel shows, and its run.
@@ -96,6 +102,8 @@ package final class DeskModel {
   @ObservationIgnored let mediaSlice = MediaSlice()
   @ObservationIgnored private var teams: [String: (sig: String, bots: [String: BotTraits])] = [:]
   @ObservationIgnored private var knownAsks: Set<String> = []
+  /// The open run's failed agents, once its columns were first read (nil: not yet).
+  @ObservationIgnored private var knownFailures: Set<String>?
 
   /// The app's model: connected to the daemon's socket with the Keychain token (or `CAPCOMD_TOKEN`).
   package init() {
@@ -125,6 +133,7 @@ package final class DeskModel {
     if let old { Task { try? await old.shutdown() } }
     store.onChanges = { [weak self] keys in self?.apply(keys) }
     store.start()
+    tokenRejected = false
     link = .ready
     apply([.all])
   }
@@ -140,9 +149,11 @@ package final class DeskModel {
 
   /// The store changed: refresh only what the keys name. `.all` refreshes everything, comparing before assigning.
   package func apply(_ keys: Set<ChangeKey>) {
-    if store.unauthorized { link = .needsToken; return }
+    if store.unauthorized { tokenRejected = true; link = .needsToken; return }
     let all = keys.contains(.all)
     if all {
+      if unreachable != store.daemonUnreachable { unreachable = store.daemonUnreachable }
+      if !loaded, store.daemonLoaded { loaded = true }
       let d = store.decks()
       if decks != d { decks = d }
       if openProjectId == nil || !d.contains(where: { $0.id == openProjectId }) { select(d.first(where: { $0.askingAgentId != nil })?.id ?? d.first?.id) }
@@ -155,7 +166,7 @@ package final class DeskModel {
       let ids = cols.map(\.agentId)
       defer { syncFlags() }
       let bots = all ? team(runId) : nil
-      let asks = all ? Dictionary(store.approvals(forRun: runId).compactMap { a in a.agentId.map { ($0, a) } }, uniquingKeysWith: { a, _ in a }) : nil
+      let asks = all ? Dictionary(store.approvals(forRun: runId).compactMap { a in store.waitingAgent(a).map { ($0, a) } }, uniquingKeysWith: { a, _ in a }) : nil
       // Slices first, added in one assignment, then the columns: a column or tab that read `agents` mid-way would
       // render empty first and then once per agent added.
       var added: [String: AgentSlice] = [:]
@@ -174,6 +185,7 @@ package final class DeskModel {
         startWarming()
       }
       if let asks { followAsks(Set(asks.keys)) }
+      followFailures(Set(cols.filter { $0.status == .failed }.map(\.agentId)))
     }
     for (id, t) in threads where all || keys.contains(.thread(id)) {
       t.set(entries: store.threadEntries(agentId: id), pending: store.pendingSteers(agentId: id), unavailable: store.threadUnavailable[id])
@@ -185,6 +197,17 @@ package final class DeskModel {
   private func followAsks(_ asking: Set<String>) {
     let new = asking.subtracting(knownAsks)
     knownAsks = asking
+    guard follow, let first = columns.first(where: new.contains) else { return }
+    scroll(to: first)
+  }
+
+  /// An agent of the open project that fails scrolls the reel to it while Follow is on (SPEC §3). Agents that had
+  /// already failed when the project opened don't: the first look at a project only learns them.
+  private func followFailures(_ failed: Set<String>) {
+    // Learned from the first read that has the run's agents (the feed may answer with the run before its agents).
+    guard let known = knownFailures else { if !columns.isEmpty { knownFailures = failed }; return }
+    let new = failed.subtracting(known)
+    knownFailures = failed
     guard follow, let first = columns.first(where: new.contains) else { return }
     scroll(to: first)
   }
@@ -219,13 +242,23 @@ package final class DeskModel {
     openRunId = run
     agents = [:]; threads = [:]; columns = []; warmOrder = []
     knownAsks = Set(deck?.askingAgentId.map { [$0] } ?? [])
+    knownFailures = nil
     reelPosition = deck?.askingAgentId; focusedAgent = deck?.askingAgentId; syncFlags()
     reelRequest = ReelRequest(agentId: deck?.askingAgentId, animated: false, serial: (reelRequest?.serial ?? 0) + 1)
     store.followThreads(runId: run, holder: CapcomdStore.reelHolder)
+    // The run's own stream carries its messages (your steers, agents' messages to each other), which the lifecycle
+    // feed doesn't: without it a sent steer never settles into the thread. Opened after this change is applied, since
+    // opening reports a change itself.
+    Task { @MainActor [weak self] in
+      guard let self, self.openRunId == run else { return }
+      if let run { self.store.openRun(run) } else { self.store.closeRun() }
+    }
     return true
   }
 
   package func agent(_ id: String) -> AgentSlice? { agents[id] }
+  /// The column's thread slice if its column made one (DeskDebug), without making it.
+  package func peekThread(_ id: String) -> ThreadSlice? { threads[id] }
 
   /// A folded deck's heads: its run's bots, cached per run until its agents change.
   package func heads(_ deck: DeckInfo) -> [BotTraits] { let t = team(deck.runId); return deck.agentIds.compactMap { t[$0] } }
@@ -318,6 +351,12 @@ package final class DeskModel {
     guard let runId = openRunId else { return }
     Task { await store.steer(runId: runId, agentId: agentId, body: body) }
   }
+
+  package func retrySteer(agentId: String, _ p: PendingSteer) {
+    guard let runId = openRunId else { return }
+    Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) }
+  }
+  package func discardSteer(agentId: String, id: String) { store.discardSteer(agentId: agentId, id: id) }
 
   package func decide(_ approvalId: String, _ d: ApprovalDecision) { Task { _ = await store.decide(approvalId, d) } }
 }

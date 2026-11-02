@@ -49,7 +49,10 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// Where it works: `Agent.workspace.label` (harness #46), shown verbatim as its folder chip. Older daemons: `repo` or
   /// `agent.repo` on agent.spawned when present.
   public var repo: String?
+  /// Spawn order among its siblings: the spawn time when known, else its place in the snapshot that listed it.
   public var spawnedAtMs: Int
+  /// When it was spawned, when the daemon says (snapshot `createdAt`, or agent.spawned): its column's elapsed clock.
+  public var createdAtMs: Int? = nil
   /// When its status last changed (snapshot `updatedAt`, or the event that changed it): a finished run's end.
   public var updatedAtMs: Int? = nil
   /// What it is doing now (`Agent.activity.text`, daemon-written, trusted): shown under a running agent's row.
@@ -176,6 +179,9 @@ public struct PendingApproval: Sendable, Hashable, Identifiable {
   public var diff: ApprovalDiff? = nil
   /// When it was asked (the approval.requested envelope, or snapshot `requestedAt`).
   public var requestedAtMs: Int? = nil
+  /// A merge's asker (`subject.askedBy`): the agent waiting on the decision, usually the parent of `agentId` (whose
+  /// work merges). Nil for an operator's merge and from older daemons.
+  public var askedBy: String? = nil
 
   public init(id: String, runId: String?, agentId: String?, kind: String, question: UntrustedText, branchLine: String?,
               target: String? = nil, diff: ApprovalDiff? = nil, requestedAtMs: Int? = nil) {
@@ -187,6 +193,7 @@ public struct PendingApproval: Sendable, Hashable, Identifiable {
     self.init(id: id, runId: runId, agentId: agentId, kind: kind, question: UntrustedText(question), branchLine: CapcomdStore.branchLine(kind: kind, subject: subject),
               target: kind == "merge" ? subject["target"]?.string.map { UntrustedText($0).plain } : nil,
               diff: kind == "merge" ? ApprovalDiff(subject: subject) : nil, requestedAtMs: requestedAtMs)
+    askedBy = kind == "merge" ? subject["askedBy"]?.string : nil
   }
 }
 

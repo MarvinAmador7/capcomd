@@ -51,6 +51,10 @@ final class ReelView: NSView, ReelColumnViews {
   private var served = -1
   private var pending: ReelRequest?
   private var gestures = 0, slides = 0
+  /// The leading column when the current swipe (or mouse wheel turn) began.
+  private var gestureStart = 0
+  private var wheelStart: Int?
+  fileprivate func wheelTurned() { if wheelStart == nil { wheelStart = at } }
   /// Runtime knobs (DeskKnobs), read once: how a slide moves the reel, and how many far columns each frame builds.
   private let clipSlide = DeskKnobs.reelSlide.value == .clip
   private let perFrame = DeskKnobs.buildPerFrame.value
@@ -101,8 +105,78 @@ final class ReelView: NSView, ReelColumnViews {
     if parkColumns { parking.isHidden = true; addSubview(parking, positioned: .below, relativeTo: scroll) }
     if bitmapCache { startBitmapCache() }
     NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    swipeMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+      nonisolated(unsafe) let event = e   // local monitors run on the main thread
+      return MainActor.assumeIsolated { self?.took(event) ?? false } ? nil : e
+    }
   }
   required init?(coder: NSCoder) { fatalError() }
+
+  // MARK: sideways gestures over a column
+
+  /// A column's thread scrolls vertically only, but its scroll view takes the whole gesture under the pointer, so a
+  /// sideways swipe over a column never reached the reel. Each gesture is routed once, on its first movement: mostly
+  /// sideways goes to the reel (unless it starts over something that scrolls sideways itself, a wide code block),
+  /// anything else stays with the view under the pointer. Its momentum follows the same way.
+  private var swipeMonitor: Any?
+  private enum Route { case none, waiting(NSEvent), reel, through }
+  private var gestureRoute: Route = .none
+
+  /// Whether the reel took the event (the view under the pointer then never sees it).
+  private func took(_ e: NSEvent) -> Bool {
+    guard let window, e.window === window else { return false }
+    let dx = abs(e.scrollingDeltaX), dy = abs(e.scrollingDeltaY)
+    if e.phase.isEmpty && e.momentumPhase.isEmpty {   // a mouse wheel (Shift turns it sideways): no gesture to follow
+      guard dx > dy, over(e), !overSidewaysScroller(e) else { return false }
+      scroll.scrollWheel(with: e); return true
+    }
+    if !e.momentumPhase.isEmpty {
+      guard case .reel = gestureRoute else { return false }
+      scroll.scrollWheel(with: e)
+      if e.momentumPhase.contains(.ended) || e.momentumPhase.contains(.cancelled) { gestureRoute = .none }
+      return true
+    }
+    if e.phase.contains(.mayBegin) { return false }
+    if e.phase.contains(.began) {
+      guard over(e) else { gestureRoute = .through; return false }
+      gestureRoute = .waiting(e)
+      if dx == 0 && dy == 0 { return true }   // decided on the first movement
+    }
+    switch gestureRoute {
+    case .waiting(let began):
+      let done = e.phase.contains(.ended) || e.phase.contains(.cancelled)
+      if dx == 0 && dy == 0 && !done { return true }
+      if dx > dy && !overSidewaysScroller(began) {
+        gestureRoute = .reel
+        if began !== e { scroll.scrollWheel(with: began) }
+        scroll.scrollWheel(with: e); return true
+      }
+      gestureRoute = .through
+      if began !== e { view(under: began)?.scrollWheel(with: began) }
+      return false
+    case .reel:
+      scroll.scrollWheel(with: e); return true
+    case .none, .through:
+      return false
+    }
+  }
+
+  private func over(_ e: NSEvent) -> Bool { bounds.contains(convert(e.locationInWindow, from: nil)) }
+
+  private func view(under e: NSEvent) -> NSView? {
+    guard let cv = window?.contentView else { return nil }
+    return cv.hitTest(cv.superview?.convert(e.locationInWindow, from: nil) ?? e.locationInWindow)
+  }
+
+  /// Whether the event starts over a scroll view, other than the reel's, with room to scroll sideways.
+  private func overSidewaysScroller(_ e: NSEvent) -> Bool {
+    var v = view(under: e)
+    while let s = v, s !== scroll {
+      if let sv = s as? NSScrollView, let d = sv.documentView, d.frame.width > sv.contentView.bounds.width + 1 { return true }
+      v = s.superview
+    }
+    return false
+  }
   override var isFlipped: Bool { true }
   override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
 
@@ -219,12 +293,25 @@ final class ReelView: NSView, ReelColumnViews {
     guard bounds.width > 0, pitch > 0 else { pending = r; return }
     served = r.serial
     let i = r.agentId.flatMap { order.firstIndex(of: $0) } ?? 0
+    defer { reportLanding() }
     guard r.animated else { jump(to: i); return }
     // A long jump would slide every column it passes past the screen. Cut to one column short, then slide the last.
     if abs(i - at) > across { slide(to: i, from: x(i < at ? i + 1 : i - 1)) } else { slide(to: i) }
   }
 
   private func x(_ i: Int) -> CGFloat { min(max(0, CGFloat(i) * pitch), max(0, doc.frame.width - bounds.width)) }
+
+  /// The reel can't put every column first: near the end (or with fewer columns than fit) it stops at the last
+  /// screen. The model asked for one leading column and the reel shows another; tell it which, or the title bar's
+  /// bracket and the on-screen flags describe a scroll that didn't happen (opening a project at its ask, the
+  /// last of two columns, bracketed only the asker while both showed). Deferred: this runs inside a view update.
+  private func reportLanding() {
+    let landed = at
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.order.indices.contains(landed), self.at == landed, self.model.reelPosition != self.order[landed] else { return }
+      self.model.reelScrolled(toIndex: landed)
+    }
+  }
 
   private func jump(to i: Int) {
     stopSlide()
@@ -398,6 +485,7 @@ final class ReelView: NSView, ReelColumnViews {
   /// A swipe began: it takes over from a slide in flight.
   fileprivate func gestureBegan() {
     gestures = 1
+    gestureStart = at
     if layoutMode == .framesHide, !order.isEmpty { reveal(0...(order.count - 1)) }   // the fingers may go anywhere
     // (park: the columns come out of parking as the leading column changes, `scrolled` → `buildAround`)
     stopSlide()
@@ -413,14 +501,21 @@ final class ReelView: NSView, ReelColumnViews {
     let start = Int((now / pitch).rounded())
     var i = Int((projected / pitch).rounded())
     i = min(max(i, start - across, 0), min(start + across, order.count - 1))
+    if i != gestureStart { scrolledByHand() }
     slide(to: i)
   }
 
   /// A mouse wheel (no gesture phases): settle on the nearest column once the wheel stops.
   fileprivate func wheelStopped() {
     guard pitch > 0 else { return }
-    slide(to: Int((scroll.contentView.bounds.origin.x / pitch).rounded()))
+    let i = Int((scroll.contentView.bounds.origin.x / pitch).rounded())
+    if i != (wheelStart ?? i) { scrolledByHand() }
+    wheelStart = nil
+    slide(to: i)
   }
+
+  /// Scrolling yourself to another column turns Follow off (SPEC §3); a swipe that lands back where it began doesn't.
+  private func scrolledByHand() { if model.follow { model.follow = false } }
 
   private func moving() {
     let m = gestures + slides > 0
@@ -698,6 +793,7 @@ final class SnapScrollView: NSScrollView {
       return super.scrollWheel(with: e)
     }
     if e.phase.isEmpty {
+      reel.wheelTurned()
       super.scrollWheel(with: e)
       wheelTimer?.invalidate()
       wheelTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak reel] _ in MainActor.assumeIsolated { reel?.wheelStopped() } }
@@ -735,7 +831,7 @@ struct Column: View {
         } else {
           Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        if let ap = a.approval { DecisionBar(approval: ap) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
+        if let ap = a.approval { DecisionBar(approval: ap, focused: focused) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }
       .background(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous).fill(Theme.Desk.column))
       .overlay(RoundedRectangle(cornerRadius: Theme.Desk.columnRadius, style: .continuous)
@@ -763,8 +859,8 @@ struct ColumnHead: View {
         .foregroundStyle(slice.approval != nil ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.secondary)
       Spacer(minLength: 0)
       if let r = h.repo { Text(verbatim: r).font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary).lineLimit(1) }
-      if h.status == .running {
-        Text(Date(timeIntervalSince1970: Double(h.spawnedAtMs) / 1000), style: .timer)
+      if h.status == .running, let start = h.startedAtMs {
+        Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
           .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()
       }
     }
@@ -800,7 +896,7 @@ struct ColumnThread: View {
         if case .failed(let why)? = thread.unavailable {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
         }
-        ForEach(thread.pending) { p in SteerBubble(runId: runId, text: p.body, state: p.state) }
+        ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
       }
       .padding(Theme.Desk.bodyPadding)
     }
@@ -809,6 +905,18 @@ struct ColumnThread: View {
   }
   static func bottomMargin(_ e: ThreadEntry) -> CGFloat {
     switch e { case .item(let i, _): ThreadItemRow.bottomMargin(i); case .event: Theme.Content.proseBottom }
+  }
+}
+
+/// A steer on its way: Retry and Discard when it didn't go through.
+struct ColumnSteer: View {
+  @Environment(DeskModel.self) private var model
+  let runId: String
+  let agentId: String
+  let steer: PendingSteer
+  var body: some View {
+    SteerBubble(runId: runId, text: steer.body, state: steer.state,
+                onRetry: { model.retrySteer(agentId: agentId, steer) }, onDiscard: { model.discardSteer(agentId: agentId, id: steer.id) })
   }
 }
 
@@ -880,9 +988,12 @@ struct SlotDraft: ViewModifier {
 }
 
 /// The decision an agent waits on, docked at its column's foot: the question, then View diff · Deny · Approve ↩.
+/// Return approves only while its column has focus (SPEC §4): with asks in several columns, or focus elsewhere, a
+/// Return must not approve one you aren't looking at. Esc is never bound.
 struct DecisionBar: View {
   @Environment(DeskModel.self) private var model
   let approval: PendingApproval
+  let focused: Bool
   var body: some View {
     DeskProbe.body("DecisionBar")
     let busy = approval.decision != .idle
@@ -898,7 +1009,7 @@ struct DecisionBar: View {
           HStack(spacing: 6) { Text("Approve"); Text("↩").font(.system(size: 10.5, weight: .semibold)).padding(.horizontal, 4).background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.12))) }
         }
         .buttonStyle(DeskButton(kind: .primary))
-        .keyboardShortcut(.defaultAction)
+        .keyboardShortcut(focused ? .defaultAction : nil)
       }
       .disabled(busy).opacity(busy ? 0.5 : 1)
     }

@@ -177,7 +177,7 @@ struct ColumnBody: View {
         } else {
           Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        if let ap = a.approval { DecisionBar(approval: ap) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
+        if let ap = a.approval { DecisionBar(approval: ap, focused: a.focused) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }
       .contentShape(Rectangle())
       .onTapGesture { if model.focusedAgent != agentId { model.focusedAgent = agentId } }

@@ -35,6 +35,8 @@ public struct ColumnHeader: Sendable, Hashable, Identifiable {
   public var activity: String?
   public var repo: String?
   public var spawnedAtMs: Int
+  /// When it was spawned, when known: the header's elapsed clock (none when the daemon didn't say).
+  public var startedAtMs: Int?
   public var provider: Provider?
   public var depth: Int
 }
@@ -48,12 +50,22 @@ extension CapcomdStore {
     return ps.sorted { (firstStart($0), $0.id) < (firstStart($1), $1.id) }.compactMap { p in
       guard let run = p.activeRuns.max(by: { ($0.recencyMs, $0.id) < ($1.recencyMs, $1.id) }) ?? p.latestRun else { return nil }
       let ids = agentTree(runId: run.id).flatMap(\.subtreeIds)
-      let asking = approvals(forRun: run.id).compactMap(\.agentId).first { run.agents[$0] != nil }
+      let asking = approvals(forRun: run.id).compactMap { waitingAgent($0) }.first
       return DeckInfo(id: p.id, runId: run.id, title: p.title, startedAtMs: run.startedAtMs,
                       endedHead: run.endedHead, isRunning: run.isRunning, sandbox: run.sandbox,
                       askingAgentId: asking, askingName: asking.flatMap { columnHeader(runId: run.id, agentId: $0) }.map { h in [h.name, h.suffix].compactMap { $0 }.joined(separator: " ") },
                       agentIds: ids)
     }
+  }
+
+  /// The agent an approval waits on, whose column shows it: a merge's asker (the lead or planner merging its child's
+  /// work), else the parent of the agent whose work merges (older daemons), else that agent.
+  public func waitingAgent(_ a: PendingApproval) -> String? {
+    guard let runId = a.runId ?? a.agentId.flatMap({ id in runs.values.first { $0.agents[id] != nil }?.id }),
+          let run = runs[runId], let id = a.agentId else { return a.askedBy }
+    if let asker = a.askedBy, run.agents[asker] != nil { return asker }
+    if a.kind == "merge", let p = run.agents[id]?.parent, run.agents[p] != nil { return p }
+    return run.agents[id] != nil ? id : nil
   }
 
   /// The reel's columns for a run, in tree order (a parent before its children, siblings by spawn time).
@@ -69,6 +81,6 @@ extension CapcomdStore {
 
   func header(_ n: AgentNode, _ a: Agent, _ runId: String) -> ColumnHeader {
     ColumnHeader(agentId: a.id, runId: runId, name: n.name, suffix: n.suffix, kind: n.kind, status: n.status, waiting: n.waiting,
-                 activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, provider: a.provider, depth: n.depth)
+                 activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
   }
 }

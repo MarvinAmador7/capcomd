@@ -76,6 +76,8 @@ test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: cla
     expect(Agent.safeParse(a).success).toBe(true);
     expect({ k, provider: a.provider, model: a.model }).toEqual({ k, ...want[k as keyof typeof ids] });
     expect({ k, effort: a.effort }).toEqual({ k, effort: k === "codex" ? "high" : null });
+    // When it was spawned: a client's elapsed clock for the agent (a snapshot carries no agent.spawned to read it from).
+    expect(Date.parse(a.createdAt)).toBeGreaterThan(Date.now() - 120_000);
   }
 
   // The lifecycle feed's snapshot.agents frame carries the same fields.
@@ -96,5 +98,6 @@ test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: cla
   for (const [k, id] of Object.entries(ids)) {
     const a = agents.find((x) => x.id === id);
     expect({ k, provider: a.provider, model: a.model }).toEqual({ k, ...want[k as keyof typeof ids] });
+    expect(a.createdAt).toBe(listed.find((x) => x.id === id).createdAt);
   }
 }, 120_000);

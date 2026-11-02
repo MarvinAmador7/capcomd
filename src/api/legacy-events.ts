@@ -105,7 +105,7 @@ export const LegacyEventShapes = {
 	"merge.started": { id: S },
 	"merge.succeeded": { id: S },
 	"merge.failed": { id: S },
-	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read") },
+	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read"), askedBy: S.optional().describe("The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge") },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
 	"task.added": { taskId: S, title: T, after: z.array(S).optional() },

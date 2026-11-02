@@ -1117,6 +1117,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "added",
         "removed"
       ]
+    },
+    "askedBy": {
+      "description": "The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge",
+      "type": "string"
     }
   },
   "required": [
@@ -1645,6 +1649,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
+        },
+        "askedBy": {
+          "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
+          "type": "string"
         }
       },
       "additionalProperties": {},
@@ -2907,6 +2915,21 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "null"
             ]
           },
+          "createdAt": {
+            "description": "When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it",
+            "type": [
+              "string",
+              "null"
+            ],
+            "allOf": [
+              {
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            ]
+          },
           "updatedAt": {
             "type": [
               "string",
@@ -3097,6 +3120,10 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "askedBy": {
+                "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
+                "type": "string"
               }
             },
             "additionalProperties": {},

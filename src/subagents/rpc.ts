@@ -265,7 +265,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       await assertWritable(c, ref, true);
       if (!args.require) throw new RelayError("usage", "merge needs --require <vfyId>", "Verify the child first: capcomd verify --ref <agt>.");
       // A protected target parks the merge (awaiting_approval) for the operator; merge again with the same key to check.
-      return O.mergeRef({ runId: run, ref, require: String(args.require), operator: false, requestApproval: true, key: args.key ? `${c.sub}:${args.key}` : undefined });
+      return O.mergeRef({ runId: run, ref, require: String(args.require), operator: false, requestApproval: true, askedBy: c.sub, key: args.key ? `${c.sub}:${args.key}` : undefined });
     }
   }
   throw new RelayError("usage", `unknown op ${op}`, "See `capcomd help` inside the VM.");

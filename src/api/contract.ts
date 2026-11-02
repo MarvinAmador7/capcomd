@@ -80,6 +80,7 @@ export const Agent = z.object({
 	provider: AgentProvider.nullable().describe("The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent"),
 	model: z.string().nullable().describe("The model the agent runs with, when the daemon knows it (the profile's model or CAPCOMD_AGENT_MODEL); null: the provider CLI's default, or a fake agent"),
 	effort: z.string().nullable().describe("The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent"),
+	createdAt: Timestamp.nullable().optional().describe("When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it"),
 	updatedAt: Timestamp.nullable(),
 });
 /** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */
@@ -200,6 +201,7 @@ const ApprovalSubject = z.looseObject({
 	filesTotal: z.number().int().nonnegative().optional().describe("merge: how many files the branch changes (files lists at most the first ones)"),
 	added: z.number().int().nonnegative().optional().describe("merge: lines added across all its files (binary files not counted)"),
 	removed: z.number().int().nonnegative().optional().describe("merge: lines removed across all its files (binary files not counted)"),
+	askedBy: z.string().optional().describe("merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons"),
 }).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
 
 /** Frames on GET /v1/streams/{scope}/events besides ordinary events (SSE `event:` names). */

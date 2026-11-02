@@ -37,10 +37,25 @@ final class DeskTests: XCTestCase {
     let d = store().decks()
     XCTAssertEqual(d.map(\.title), ["Migrate matchkey to v3.2", "Fix proration rounding in billing"])
     XCTAssertEqual(d[0].runId, "run-a")
-    XCTAssertEqual(d[0].askingAgentId, "w2")
-    XCTAssertEqual(d[0].askingName, "worker 4423")
+    // w2's work waits to merge, but its lead is the one waiting (an older daemon's approval: no subject.askedBy).
+    XCTAssertEqual(d[0].askingAgentId, "ld")
+    XCTAssertEqual(d[0].askingName, "lead")
     XCTAssertNil(d[1].askingAgentId)
     XCTAssertEqual(d[0].agentIds, ["pl", "ld", "w1", "w2", "cr"])
+  }
+
+  func testAMergeWaitsOnTheAgentThatAskedForIt() {
+    let s = store()
+    // The planner merges its grandchild's work: subject.askedBy names it, over the merged agent's parent.
+    ev(s, "run-a", "approval.requested", "w1", ["approvalId": .string("apr-2"), "kind": .string("merge"), "question": .string("Merge?"),
+                                                "requestedBy": .object(["agentId": .string("w1"), "runId": .string("run-a")]),
+                                                "subject": .object(["target": .string("main"), "askedBy": .string("pl")])], at: 1_009)
+    let a = s.approvals(forRun: "run-a").first { $0.id == "apr-2" }!
+    XCTAssertEqual(a.askedBy, "pl")
+    XCTAssertEqual(s.waitingAgent(a), "pl")
+    // An asker that isn't in the run falls back to the merged agent's parent.
+    var stray = a; stray.askedBy = "agt-elsewhere"
+    XCTAssertEqual(s.waitingAgent(stray), "ld")
   }
 
   func testReelColumnsFollowTheTree() {
@@ -81,5 +96,48 @@ final class DeskTests: XCTestCase {
     ev(s, "run-c", "run.created", nil, ["goal": .string("Cloud one"), "sandbox": .string("boxd")], at: 1)
     ev(s, "run-d", "run.created", nil, ["goal": .string("Older daemon")], at: 2)
     XCTAssertEqual(s.decks().map(\.sandbox), ["boxd", nil])
+  }
+
+  /// A column's clock starts when its agent was spawned. A lifecycle snapshot lists agents without their agent.spawned
+  /// events, so their order fell back to the snapshot's index (0, 1, 2…) and the clock read 498196 hours. The daemon's
+  /// `createdAt` is the clock now; a daemon that doesn't send it shows no clock rather than a wrong one.
+  func testAColumnClockStartsWhenTheAgentWasSpawned() throws {
+    func agents(_ json: String) throws -> [SnapshotAgent] { try JSONDecoder().decode([SnapshotAgent].self, from: Data(json.utf8)) }
+    let s = CapcomdStore()
+    let key = CapcomdStore.lifecycleKey("run-s")
+    s.receive(.reset(snapshotSeq: 5, reason: "compacted"), scope: "daemon")
+    s.receive(.snapshotRun(SnapshotRun(id: "run-s", projectId: "p", label: nil, state: "running", goal: "g", createdAt: nil)), scope: "daemon")
+    s.receive(.snapshotEnd(snapshotSeq: 5), scope: "daemon")
+    s.receive(.reset(snapshotSeq: 9, reason: "compacted"), scope: key)
+    s.receive(.snapshotRun(SnapshotRun(id: "run-s", projectId: "p", label: nil, state: "running", goal: "g", createdAt: nil)), scope: key)
+    s.receive(.snapshotAgents(try agents("""
+      [{"id":"a","runId":"run-s","parent":null,"depth":0,"profile":"lead","status":"running","createdAt":"2026-11-01T04:16:48.115Z"},
+       {"id":"b","runId":"run-s","parent":"a","depth":1,"profile":"worker","status":"running"}]
+      """)), scope: key)
+    s.receive(.snapshotEnd(snapshotSeq: 9), scope: key)
+    let cols = s.reelColumns(runId: "run-s")
+    XCTAssertEqual(cols.map(\.agentId), ["a", "b"])
+    XCTAssertEqual(cols[0].startedAtMs, epochMs(iso: "2026-11-01T04:16:48.115Z"))
+    XCTAssertNil(cols[1].startedAtMs)   // an older daemon: no clock
+    // A live spawn starts the clock at its event.
+    ev(s, "run-s", "agent.spawned", "c", ["profile": .string("worker"), "parent": .string("a")], at: 1_793_506_700_000)
+    XCTAssertEqual(s.columnHeader(runId: "run-s", agentId: "c")?.startedAtMs, 1_793_506_700_000)
+  }
+
+  /// The daemon scope sends no snapshot (an empty daemon sends nothing but `: connected`): the first answer on its feed
+  /// is what says an empty project list is really empty. A run's feed answering says nothing about the daemon's list.
+  func testTheDaemonIsLoadedOnceItsFeedAnswers() async throws {
+    let s = CapcomdStore()
+    var changes = 0
+    s.onChange = { changes += 1 }
+    s.receive(.link(up: true), scope: CapcomdStore.lifecycleKey("run-x"))
+    XCTAssertFalse(s.daemonLoaded)
+    s.receive(.link(up: true), scope: "daemon")
+    XCTAssertTrue(s.daemonLoaded)
+    XCTAssertTrue(s.decks().isEmpty)   // loaded and empty: nothing running
+    XCTAssertEqual(changes, 0)         // reported a moment later, after the run list on its way
+    for _ in 0..<100 where changes == 0 { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(changes, 1)
+    XCTAssertFalse(s.daemonUnreachable)
   }
 }
