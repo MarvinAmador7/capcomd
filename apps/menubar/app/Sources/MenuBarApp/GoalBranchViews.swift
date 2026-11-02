@@ -56,29 +56,6 @@ struct GoalBranchRows: View {
   }
 }
 
-/// The goal branch's name: mono on the setup's dark well, the daemon's suggestion as its placeholder, orange when the
-/// daemon said it can't be used.
-struct GoalBranchField: View {
-  @Binding var text: String
-  let placeholder: String
-  var error = false
-  var body: some View {
-    let shape = RoundedRectangle(cornerRadius: Theme.Setup.controlRadius, style: .continuous)
-    TextField("", text: $text).textFieldStyle(.plain)
-      .font(Theme.Setup.fieldFont).foregroundStyle(Theme.Setup.valueText)
-      .background(alignment: .leading) {
-        if text.isEmpty { Text(verbatim: placeholder).font(Theme.Setup.fieldFont).foregroundStyle(Theme.Setup.noteText).lineLimit(1).allowsHitTesting(false) }
-      }
-      .padding(.horizontal, Theme.Setup.fieldPadding).frame(maxWidth: .infinity).frame(height: Theme.Setup.controlHeight)
-      .background(shape.fill(Theme.Setup.fieldFill))
-      .overlay(shape.strokeBorder(error ? Theme.Setup.orange : Theme.Setup.fieldStroke, lineWidth: 0.5))
-      .background(shape.stroke(Theme.Setup.orange.opacity(Theme.Setup.errorRingOpacity), lineWidth: Theme.Setup.errorRing)
-        .padding(-Theme.Setup.errorRing / 2).opacity(error ? 1 : 0))
-      .accessibilityLabel("Goal branch").accessibilityValue(text.isEmpty ? placeholder : text)
-      .help("Reviewed work lands on this branch; when the planner is done you choose whether to open a pull request from it")
-  }
-}
-
 /// The run's goal branch on the menu bar. Ready (or stopped): "Ready: <branch>" with View diff · Keep branch · Open PR
 /// (or why Open PR can't be offered), and the stopped run's question with Cancel · Open PR. Once chosen: the pull
 /// request's link or "Kept on <branch>". While the planner works only `quiet` places (the drill-down) name the branch.

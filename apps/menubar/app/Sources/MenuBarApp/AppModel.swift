@@ -214,15 +214,14 @@ final class AppModel {
   func pickDriver(_ provider: String) { store.pickDriver(provider) }
 
   func startRun(_ goal: String) async -> Bool {
-    var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
     // The goal branch rows chose for this checkout: the base and the branch as shown (GoalBranchRows.swift).
-    if goalBranchesOffered, goalSetup.path == choice.repo { (choice.base, choice.goalBranch) = goalSetup.choice }
+    var choice = store.newRunChoice(goalSetup: goalSetup)
     var state = await store.startRun(goal: goal, choice)
     if case .needsRepo = state, let folder = await ProjectFolderPicker.choose() {
       // A folder that isn't set up yet shows its next steps in the composer (the goal stays: Set Up and Start). A set-up
       // one takes the run, with the project's own drivers (the daemon's, without a project, may have had none to offer).
       guard await setup.pick(folder) else { return false }
-      choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+      choice = store.newRunChoice(goalSetup: nil)
       state = await store.startRun(goal: goal, choice)
     }
     if case .started = state { return true }
@@ -235,7 +234,7 @@ final class AppModel {
   var goalSetup = GoalBranchSetup()
   /// The rows show for a project checkout on a daemon with goal branches; the default project and older daemons keep
   /// today's composer.
-  var goalBranchesOffered: Bool { _ = revision; return store.capabilities.contains(Capability.runsGoalBranch) && store.prefs.startRepo != nil }
+  var goalBranchesOffered: Bool { _ = revision; return store.goalBranchesOffered }
   /// The field the last Start's refusal is about ("base", "goalBranch").
   var startRefusedField: String? { _ = revision; return store.startRefusedField }
   /// Asks the daemon about the rows' question and files its answer against it (an older question's answer is dropped).
