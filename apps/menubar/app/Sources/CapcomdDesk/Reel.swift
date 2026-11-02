@@ -969,12 +969,18 @@ struct ColumnComposer: View {
   let agentId: String
   let name: String
   @State private var draft = ""
+  @FocusState private var focused: Bool
   var body: some View {
     DeskProbe.body("ColumnComposer", id: agentId)
     return HStack(spacing: 8) {
       TextField("Tell \(name)…", text: $draft, axis: .vertical)
         .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)
+        .focused($focused)
         .onSubmit(send)
+        // Typing here focuses this column, and no decision takes this field's Return.
+        .onChange(of: focused) { _, f in model.typing(in: agentId, f) }
+        // Message the planner… (⌘L).
+        .task(id: model.agent(agentId)?.boxFocus ?? 0) { if model.takeBoxFocus(agentId) { focused = true } }
       if !draft.isEmpty {
         Button(action: send) {
           Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold)).foregroundStyle(Color(white: 0.11))
@@ -1015,8 +1021,8 @@ struct SlotDraft: ViewModifier {
 
 /// The decision an agent waits on, docked at its column's foot: the question, then View diff · Deny · Approve ↩.
 /// Return approves only while its column has focus (SPEC §4): with asks in several columns, or focus elsewhere, a
-/// Return must not approve one you aren't looking at, nor while a rename field is open (its Return saves the name). Esc is
-/// never bound.
+/// Return must not approve one you aren't looking at, nor while a text field takes Return (a rename field, a column's
+/// message box, the new project column, the menu or the palette: `DeskModel.returnApproves`). Esc is never bound.
 struct DecisionBar: View {
   @Environment(DeskModel.self) private var model
   let approval: PendingApproval
@@ -1036,7 +1042,7 @@ struct DecisionBar: View {
           HStack(spacing: 6) { Text("Approve"); Text("↩").font(.system(size: 10.5, weight: .semibold)).padding(.horizontal, 4).background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.12))) }
         }
         .buttonStyle(DeskButton(kind: .primary))
-        .keyboardShortcut(focused && model.renamingAgent == nil ? .defaultAction : nil)
+        .keyboardShortcut(focused && model.returnApproves ? .defaultAction : nil)
       }
       .disabled(busy).opacity(busy ? 0.5 : 1)
     }

@@ -13,6 +13,9 @@
 //     run-gb01 working → ready with landed and not-landed work, run-gl01 stopped (its planner failed); the setup's branches
 //     route, POST /v1/runs base/goalBranch refusals, Open PR and Keep branch. Start the app with -capcomd.startRepo /src/app
 //     for the composer's goal branch row.
+//   LIVE_STARTS=1 …   a run started with POST /v1/runs comes alive (the desktop's new project column): run.created, its
+//     planner spawned and started with the goal as its first message, a reply on its thread, then a lead and two workers
+//     a few seconds apart (LIVE_SPAWN_MS, default 2500).
 //   TITLES=1 …   agent titles (capability agents.title): every agent has one (the scenes' own, else derived from its task or
 //     its key, as the daemon does), agent.spawned carries it, PUT/DELETE …/agents/{agentId}/title rename it (agent.titled on
 //     the run streams a moment later; the person's sticks), and the planner of the first run renames a worker every
@@ -284,7 +287,7 @@ const decided = new Map<string, any>();
 // Agent threads: the lead's, plus the steer that opens it (snapshot.threads).
 const threads = new ThreadStore(), leadRun = runs.find(r => r.agents.some(a => a.id === "agt-ld01")), T0 = NOW - 5 * min;
 if (leadRun) for (const d of process.env.THREAD === "golden" ? goldenThread() : withDiff(leadThread(T0))) threads.write("agt-ld01", d);
-const steers = leadRun ? [{ seq: 1, from: "operator", to: "agt-ld01", at: iso(T0), text: "Skip shards above 200 and keep it on the staging bucket.", attachment: null }] : [];
+const steers: Array<{ seq: number; from: string; to: string; at: string; text: string; attachment: null }> = leadRun ? [{ seq: 1, from: "operator", to: "agt-ld01", at: iso(T0), text: "Skip shards above 200 and keep it on the staging bucket.", attachment: null }] : [];
 // A 1×1 png for attachment media.
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 
@@ -351,6 +354,45 @@ if (TITLES) {
       durability: "durable", ts: iso(ms), epochMs: ms, projectId: r.projectId, runId: r.id, agentId: a.id,
       data: { agentId: a.id, title, by: "parent", setBy: a.parent, shown: ch.shown, titleSource: ch.titleSource } });
   }, Number(process.env.TITLE_EVERY_MS ?? 20_000));
+}
+
+// LIVE_STARTS=1: a run started from the app comes alive, on the daemon and run streams (seqs past everything else).
+let liveSeq = HEAD + 20_000;
+function liveStart(rid: string, goal: string, sandbox: string) {
+  const pid = `prj-${rid}`, r: RunSpec = { id: rid, projectId: pid, goal, state: "running", startedAgo: 0, lastAgo: 0, agents: [] };
+  const ev = (type: string, entity: string, agentId: string | null, data: any) => {
+    const ms = Date.now();
+    const e = { v: 1, id: `evt_live_${++liveSeq}`, scope: rid, seq: liveSeq, entity, entitySeq: 1, type, typeVersion: 1, durability: "durable", ts: iso(ms), epochMs: ms,
+      projectId: pid, runId: rid, agentId, data };
+    broadcast("daemon", e); broadcast(rid, e);
+  };
+  const spawn = (id: string, parent: string | null, profile: string, task: string) => {
+    const a: AgentSpec = { id, parent: parent ?? undefined, profile, status: "running", ago: 0, task, repo: "matchkey" };
+    r.agents.push(a);
+    ev("agent.spawned", id, id, { parent, depth: parent ? 1 : 0, profile, budget: {}, limits: {}, agent: specOf(a), task, key: null, operator: false,
+      workspace: workspaceOf(a), ...(TITLES ? titleOf(a) : {}) });
+    ev("agent.started", id, id, {});
+  };
+  const spawnMs = Number(process.env.LIVE_SPAWN_MS ?? 2500);
+  setTimeout(() => {
+    runs.push(r);
+    ev("run.created", rid, null, { runId: rid, budget: {}, label: null, goal, sandbox });
+    ev("run.started", rid, null, { cause: "started" });
+  }, 300);
+  const planner = `agt-${rid}-pl`;
+  setTimeout(() => {
+    spawn(planner, null, "planner", goal);
+    // The goal is the planner's first message, then it answers on its thread.
+    const mseq = ++msgSeq, ms = Date.now();
+    steers.push({ seq: mseq, from: "operator", to: planner, at: iso(ms), text: goal, attachment: null });
+    broadcast(rid, { v: 1, id: `evt_msg_${mseq}`, scope: rid, seq: HEAD + mseq, entity: `msg-${mseq}`, entitySeq: 1, type: "message.sent", typeVersion: 1,
+      durability: "durable", ts: iso(ms), epochMs: ms, projectId: pid, runId: rid, agentId: "operator", data: { from: "operator", to: planner, seq: mseq, text: goal, bytes: goal.length } });
+  }, 900);
+  setTimeout(() => threadWrite(r, planner, { id: `itm-${rid}-1`, rev: 1, kind: "say", status: "done", at: iso(Date.now()), durationMs: null, format: "blocks/1", redacted: false,
+    tool: null, error: null, truncated: null, child: null, text: "Reading the repository to plan the work.",
+    blocks: [{ t: "paragraph", children: [{ t: "text", text: "Reading the repository to plan the work." }] }] }), 1800);
+  [["lead", "Split the backfill by shard"], ["worker", "Backfill shards 1–128"], ["worker", "Backfill shards 129–256"]].forEach(([profile, task], i) =>
+    setTimeout(() => spawn(`agt-${rid}-${i + 1}`, i === 0 ? planner : `agt-${rid}-1`, profile!, task!), 900 + spawnMs * (i + 1)));
 }
 
 if (existsSync(sock)) unlinkSync(sock);
@@ -436,7 +478,9 @@ Bun.serve({
         const no = goalCreateRefusal(body);
         if (no) return no;
       }
-      return Response.json({ id: `run-new${Date.now() % 100000}`, projectId: "prj-new", label: body.goal, state: "starting", goal: body.goal, ...runTitle({ label: body.goal, goal: body.goal }), repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
+      const newId = `run-new${Date.now() % 100000}`;
+      if (process.env.LIVE_STARTS) liveStart(newId, body.goal, body.sandbox ?? "boxd");
+      return Response.json({ id: newId, projectId: process.env.LIVE_STARTS ? `prj-${newId}` : "prj-new", label: body.goal, state: "starting", goal: body.goal, ...runTitle({ label: body.goal, goal: body.goal }), repo: body.repo ?? "/src/matchkey", createdAt: iso(Date.now()) }, { status: 201 });
     }
     if (p === "/v1/runs") return Response.json(runs.map(runBody));
     const r1 = p.match(/^\/v1\/runs\/([^/]+)\/(trace|files)$/), run1 = r1 && runs.find(r => r.id === r1[1]);

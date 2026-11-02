@@ -1,5 +1,6 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
+import AppKit
 import Observation
 import CapcomdStore
 import CapcomdLive
@@ -20,6 +21,9 @@ import PerfLoopProbe
 @Observable @MainActor
 package final class AgentSlice {
   package let id: String
+  /// Bumped by Message the planner… (⌘L): its message box takes the focus.
+  package private(set) var boxFocus = 0 { didSet { Mutations.record("AgentSlice.boxFocus", id: id) } }
+  func focusBox() { boxFocus += 1 }
   package private(set) var header: ColumnHeader { didSet { Mutations.record("AgentSlice.header", id: id) } }
   package private(set) var bot: BotTraits? { didSet { Mutations.record("AgentSlice.bot", id: id) } }
   /// The approval this agent waits on, if any.
@@ -90,13 +94,53 @@ package final class DeskModel {
   package private(set) var reelPosition: String? { didSet { Mutations.record("DeskModel.reelPosition") } }
   /// A scroll the reel carries out (a tab click, Follow, the keyboard, a project switch); `serial` makes a repeat count.
   package private(set) var reelRequest: ReelRequest? { didSet { Mutations.record("DeskModel.reelRequest") } }
-  /// The agent whose rename field is open (one at a time): while it is, Return belongs to the field, never to a decision.
+  /// The agent whose rename field is open (one at a time): while it is, Return belongs to the field, never to a decision
+  /// (`returnApproves`).
   package private(set) var renamingAgent: String? { didSet { Mutations.record("DeskModel.renamingAgent") } }
   package var focusedAgent: String? { didSet { Mutations.record("DeskModel.focusedAgent"); if focusedAgent != oldValue { syncFlags() } } }
   /// Follow: an ask or a failure in the open project scrolls the reel to its column (SPEC §3).
   package var follow = true { didSet { Mutations.record("DeskModel.follow") } }
   /// Columns across the window (3, 2 or 1), set by the reel when its width crosses a step.
   package var across = 3 { didSet { Mutations.record("DeskModel.across"); if across != oldValue { syncFlags() } } }
+  /// The new project column (ReelNew) while it's open; nil: closed. A draft that didn't start is kept for the next open.
+  package internal(set) var newProject: NewProjectModel? { didSet { Mutations.record("DeskModel.newProject") } }
+  @ObservationIgnored var newProjectDraft: NewProjectModel?
+  /// The open project's menu (ReelMenu) and the ⌘K palette are open; Stop project… is asking first.
+  package internal(set) var menuOpen = false { didSet { Mutations.record("DeskModel.menuOpen") } }
+  package internal(set) var paletteOpen = false { didSet { Mutations.record("DeskModel.paletteOpen") } }
+  package internal(set) var stopAsked = false { didSet { Mutations.record("DeskModel.stopAsked") } }
+  /// The palette's query and the entry Return runs (an index into what the query shows).
+  package var paletteQuery = "" { didSet { Mutations.record("DeskModel.paletteQuery"); if paletteQuery != oldValue { paletteSelection = 0 } } }
+  package internal(set) var paletteSelection = 0 { didSet { Mutations.record("DeskModel.paletteSelection") } }
+  /// Bumped on every unnarrowed store change, for the views that show the store's general state (the menu, the palette,
+  /// the new project column) while they are open. Nothing else reads it.
+  package internal(set) var actionsRevision = 0 { didSet { Mutations.record("DeskModel.actionsRevision") } }
+  /// The person put every project away (⌘W, Remove from the title bar): the window doesn't open one by itself until
+  /// they pick one.
+  @ObservationIgnored var folded = false
+  /// Finished projects removed from the title bar, by project id, with the run they showed: back once they have news (a
+  /// new run, an ask).
+  @ObservationIgnored var hidden: [String: String] = [:]
+  /// Message the planner…: the agent whose message box takes the focus when its column next shows (ColumnComposer).
+  @ObservationIgnored var boxFocusPending: String?
+  /// The folder setup the new project column shows (ProjectSetupFlow, as the menu bar's composer has), on `store`.
+  @ObservationIgnored package internal(set) var setupFlow: ProjectSetupFlow
+  @ObservationIgnored var branchTask: Task<Void, Never>?
+  @ObservationIgnored var branchesAsked: GoalBranchSetup.Query?
+  /// What the app does outside the window, replaceable in tests: open a link, copy text, ask for a project folder.
+  @ObservationIgnored package var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
+  @ObservationIgnored package var copyText: (String) -> Void = { t in NSPasteboard.general.clearContents(); NSPasteboard.general.setString(t, forType: .string) }
+  @ObservationIgnored package var chooseFolder: () async -> String? = { await DeskFolderPicker.choose() }
+  /// Return approves the focused column's ask only while nothing else takes Return: a rename field, the new project
+  /// column's composer, the menu, the palette or the Stop question (SPEC §4).
+  package var returnApproves: Bool { renamingAgent == nil && typingIn == nil && newProject == nil && !menuOpen && !paletteOpen && !stopAsked }
+  /// The column whose message box has the keyboard (nil: none).
+  package private(set) var typingIn: String? { didSet { Mutations.record("DeskModel.typingIn") } }
+  /// A message box took or gave up the keyboard: its column is the focused one while it has it.
+  package func typing(in agentId: String, _ on: Bool) {
+    if on { typingIn = agentId; if focusedAgent != agentId { focusedAgent = agentId } }
+    else if typingIn == agentId { typingIn = nil }
+  }
   /// The column ids on screen, for the title bar's bracket: derived from the scroll position, never tracked per frame.
   package var onScreen: Set<String> {
     let start = reelPosition.flatMap { columns.firstIndex(of: $0) } ?? 0
@@ -120,6 +164,7 @@ package final class DeskModel {
   /// The app's model: connected to the daemon's socket with the Keychain token (or `CAPCOMD_TOKEN`).
   package init() {
     (store, transport) = Connection.makeStore(token: "")
+    setupFlow = ProjectSetupFlow(store: store)
     DeskNotifications.start(self)
     if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { connect(env); return }
     Task.detached(priority: .userInitiated) {
@@ -132,6 +177,8 @@ package final class DeskModel {
   /// once, following the store's keyed changes exactly as the connected model does.
   package init(store s: CapcomdStore) {
     store = s; transport = nil
+    setupFlow = ProjectSetupFlow(store: s)
+    setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     s.onChanges = { [weak self] keys in self?.apply(keys) }
     link = .ready
     apply([.all])
@@ -144,6 +191,8 @@ package final class DeskModel {
     let old = transport
     (store, transport) = Connection.makeStore(token: token)
     if let old { Task { try? await old.shutdown() } }
+    setupFlow = ProjectSetupFlow(store: store)
+    setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     store.onChanges = { [weak self] keys in self?.apply(keys) }
     store.onNotify = { [weak self] n in if let self { DeskNotifications.post(n, prefs: self.store.prefs) } }
     store.start()
@@ -168,9 +217,12 @@ package final class DeskModel {
     if all {
       if unreachable != store.daemonUnreachable { unreachable = store.daemonUnreachable }
       if !loaded, store.daemonLoaded { loaded = true }
-      let d = store.decks()
+      actionsRevision &+= 1
+      let d = shown(store.decks())
       if decks != d { decks = d }
-      if openProjectId == nil || !d.contains(where: { $0.id == openProjectId }) { select(d.first(where: { $0.askingAgentId != nil })?.id ?? d.first?.id) }
+      if openProjectId == nil ? !folded : !d.contains(where: { $0.id == openProjectId }) {
+        select(d.first(where: { $0.askingAgentId != nil })?.id ?? d.first?.id)
+      }
       else if let deck = d.first(where: { $0.id == openProjectId }), deck.runId != openRunId { select(deck.id) }
     }
     guard let runId = openRunId else { return }
@@ -206,6 +258,7 @@ package final class DeskModel {
       t.set(entries: store.threadEntries(agentId: id), pending: store.pendingSteers(agentId: id), unavailable: store.threadUnavailable[id])
     }
     if all { for (k, v) in store.media where mediaSlice.items[k] != v { mediaSlice.items[k] = v } }
+    if all { newProjectChanged() }
   }
 
   /// The goal card goes on the planner's column (the root, first in tree order); its view is read once a decision is up
@@ -267,6 +320,9 @@ package final class DeskModel {
 
   /// Show a project (a deck click, ⌘1–9). Keyboard switches don't animate; the reel starts at its ask, if any.
   package func open(project id: String?) {
+    menuOpen = false; stopAsked = false
+    if newProject != nil { closeNewProject() }
+    if id != nil { folded = false }
     guard select(id) else { return }
     apply([.all])
   }
@@ -278,7 +334,7 @@ package final class DeskModel {
     let run = deck?.runId
     guard run != openRunId else { return false }
     openRunId = run
-    agents = [:]; threads = [:]; columns = []; warmOrder = []
+    agents = [:]; threads = [:]; columns = []; warmOrder = []; typingIn = nil
     knownAsks = Set(deck?.askingAgentId.map { [$0] } ?? [])
     knownFailures = nil
     reelPosition = deck?.askingAgentId; focusedAgent = deck?.askingAgentId; syncFlags()
