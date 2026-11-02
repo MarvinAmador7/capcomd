@@ -15,7 +15,8 @@ public struct DeckInfo: Sendable, Hashable, Identifiable {
   public var isRunning: Bool
   /// Where it runs: "docker" (Local), "boxd" (Cloud), another place, or nil when the daemon doesn't say.
   public var sandbox: String?
-  /// The agent whose approval waits (the first, by request order), and its tree name with suffix ("worker 4423").
+  /// The agent whose approval waits (the first, by request order), and how it is named ("lead · login redirect", or
+  /// with an older daemon its tree name with suffix, "worker 4423").
   public var askingAgentId: String?
   public var askingName: String?
   /// Every agent, in tree order (the folded deck stacks these heads).
@@ -28,7 +29,12 @@ public struct ColumnHeader: Sendable, Hashable, Identifiable {
   public var agentId: String
   public var runId: String
   public var name: String
+  /// Its title (`Agent.title`): the crew tab's label, and the header's after the profile. Nil from older daemons.
+  public var title: String? = nil
+  /// With a title, only when a sibling shares it; else the old tie-breaker (see `CapcomdStore.disambiguate`).
   public var suffix: String?
+  /// The person named it (titleSource user): an emptied rename field clears their name.
+  public var userTitled: Bool = false
   public var kind: ProfileKind
   public var status: AgentStatus
   public var waiting: Bool
@@ -39,6 +45,13 @@ public struct ColumnHeader: Sendable, Hashable, Identifiable {
   public var startedAtMs: Int?
   public var provider: Provider?
   public var depth: Int
+}
+
+extension ColumnHeader {
+  /// The crew tab's label: its title, else (older daemons) the suffix that tells siblings apart, else the profile.
+  public var tabLabel: String { title.map { t in suffix.map { "\(t) \($0)" } ?? t } ?? suffix ?? name }
+  /// How text names the agent ("lead · login redirect").
+  public var label: String { AgentTitle.label(name: name, title: title, suffix: suffix) }
 }
 
 extension CapcomdStore {
@@ -53,7 +66,7 @@ extension CapcomdStore {
       let asking = approvals(forRun: run.id).compactMap { waitingAgent($0) }.first
       return DeckInfo(id: p.id, runId: run.id, title: p.title, startedAtMs: run.startedAtMs,
                       endedHead: run.endedHead, isRunning: run.isRunning, sandbox: run.sandbox,
-                      askingAgentId: asking, askingName: asking.flatMap { columnHeader(runId: run.id, agentId: $0) }.map { h in [h.name, h.suffix].compactMap { $0 }.joined(separator: " ") },
+                      askingAgentId: asking, askingName: asking.flatMap { columnHeader(runId: run.id, agentId: $0) }.map(\.label),
                       agentIds: ids)
     }
   }
@@ -80,7 +93,7 @@ extension CapcomdStore {
   }
 
   func header(_ n: AgentNode, _ a: Agent, _ runId: String) -> ColumnHeader {
-    ColumnHeader(agentId: a.id, runId: runId, name: n.name, suffix: n.suffix, kind: n.kind, status: n.status, waiting: n.waiting,
+    ColumnHeader(agentId: a.id, runId: runId, name: n.name, title: n.title, suffix: n.suffix, userTitled: a.titleSource == "user", kind: n.kind, status: n.status, waiting: n.waiting,
                  activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
   }
 }

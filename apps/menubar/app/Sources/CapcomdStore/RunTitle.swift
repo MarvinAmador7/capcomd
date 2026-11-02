@@ -5,15 +5,15 @@ import Foundation
 /// (tests/api/run-titles.json): the app titles runs the same way when the daemon is older, and before a newer title
 /// reaches it (a merge lands on the live feed before the run is read again).
 public struct RunTitle: Sendable, Hashable {
-  /// Where the title came from, best first: the run's label (when it isn't just its goal), the merged work's commit
-  /// and pull request subject, the goal, the first agent's task. A source this app doesn't know ranks first: the
-  /// daemon only adds better ones.
+  /// Where the title came from, best first: the run's label (when it isn't just its goal), the name its planner gave
+  /// it (`capcomd title --run`, run.titled), the merged work's commit and pull request subject, the goal, the first
+  /// agent's task. A source this app doesn't know ranks first: the daemon only adds better ones.
   public enum Source: Sendable, Hashable {
-    case label, merge, goal, task, other(String)
+    case label, agent, merge, goal, task, other(String)
     public init(wire: String) {
-      switch wire { case "label": self = .label; case "merge": self = .merge; case "goal": self = .goal; case "task": self = .task; default: self = .other(wire) }
+      switch wire { case "label": self = .label; case "agent": self = .agent; case "merge": self = .merge; case "goal": self = .goal; case "task": self = .task; default: self = .other(wire) }
     }
-    public var rank: Int { switch self { case .other: 5; case .label: 4; case .merge: 3; case .goal: 2; case .task: 1 } }
+    public var rank: Int { switch self { case .other: 6; case .label: 5; case .agent: 4; case .merge: 3; case .goal: 2; case .task: 1 } }
   }
   public var text: String
   public var source: Source
@@ -103,10 +103,11 @@ public struct RunTitle: Sendable, Hashable {
 
   /// The run's title from what the app knows of it (the daemon's rules: see `Source`). The merged work names the run
   /// only when exactly one agent's work merged. `agents` in spawn order.
-  public static func of(label: String?, goal: String?, agents: [Agent]) -> RunTitle? {
+  public static func of(label: String?, goal: String?, agentTitle: String? = nil, agents: [Agent]) -> RunTitle? {
     func titled(_ text: String?, _ source: Source) -> RunTitle? { short(text).map { RunTitle(text: $0, source: source, full: firstLine(text)) } }
     let g = titled(goal, .goal)
     if let l = titled(label, .label), l.text != g?.text { return l }
+    if let n = titled(agentTitle, .agent) { return n }
     let merged = agents.filter { $0.merge?.state == "merged" }
     if merged.count == 1, let t = titled(merged[0].task?.plain, .merge) { return t }
     return g ?? titled(agents.first { $0.parent == nil }?.task?.plain, .task)
@@ -117,7 +118,7 @@ extension Run {
   /// The title to show: the app's own (it follows the live feed) or the daemon's (`Run.title`), whichever comes from
   /// the better source; the daemon's on a tie. Nil when the run has no label, goal or task yet.
   public var titled: RunTitle? {
-    let local = RunTitle.of(label: label, goal: goal?.plain, agents: agents.values.sorted { ($0.spawnedAtMs, $0.id) < ($1.spawnedAtMs, $1.id) })
+    let local = RunTitle.of(label: label, goal: goal?.plain, agentTitle: agentTitle, agents: agents.values.sorted { ($0.spawnedAtMs, $0.id) < ($1.spawnedAtMs, $1.id) })
     guard let daemon = daemonTitle else { return local }
     guard let local else { return daemon }
     return local.source.rank > daemon.source.rank ? local : daemon

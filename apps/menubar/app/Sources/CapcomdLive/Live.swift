@@ -215,6 +215,29 @@ public struct LiveMessenger: AgentMessaging {
   }
 }
 
+/// `PUT` / `DELETE /v1/runs/{runId}/agents/{agentId}/title` (capability `agents.title`, steer scope): the person's name
+/// for an agent. The messenger's transport carries it (both are the steer scope's per-agent writes).
+extension LiveMessenger: AgentTitling {
+  public func setTitle(runId: String, agentId: String, title: String?, idempotencyKey: String) async throws -> (title: String?, titleSource: String?) {
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/title"
+    let headers = [("Idempotency-Key", idempotencyKey)]
+    let (status, data): (Int, Data)
+    if let title { (status, data) = try await transport.put(path, headers: headers, json: try JSONSerialization.data(withJSONObject: ["title": title])) }
+    else { (status, data) = try await transport.delete(path, headers: headers) }
+    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let message = obj?["message"] as? String ?? "capcomd refused"
+    switch status {
+    case 200: return (obj?["title"] as? String, obj?["titleSource"] as? String)
+    case 401: throw Unauthorized()
+    case 403: throw AgentTitle.Refused("This app's capcomd token can't rename agents (needs the steer scope)")
+    case 404 where (obj?["code"] as? String) == "not_found" && (message.hasPrefix("run ") || message.hasPrefix("agent ")): throw AgentTitle.Refused(message)
+    case 404, 405: throw DetailUnavailable.unsupported
+    case 409, 422: throw AgentTitle.Refused(message)
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
+
 /// `GET /v1/health` (`capabilities`, absent on older daemons) and `GET /v1/skills`.
 public struct LiveDaemonInfo: DaemonInfoFetching {
   let transport: UnixSocketTransport

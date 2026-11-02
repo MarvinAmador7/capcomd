@@ -197,7 +197,7 @@ extension CapcomdStore {
   /// Each agent's name as its tree row shows it: the profile, plus the suffix siblings of one profile get.
   func memberNames(_ runId: String) -> [String: String] {
     var out: [String: String] = [:]
-    func walk(_ ns: [AgentNode]) { for n in ns { out[n.id] = n.name + (n.suffix.map { " \($0)" } ?? ""); walk(n.children) } }
+    func walk(_ ns: [AgentNode]) { for n in ns { out[n.id] = n.label; walk(n.children) } }
     walk(agentTree(runId: runId))
     return out
   }
