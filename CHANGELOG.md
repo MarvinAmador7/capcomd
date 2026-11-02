@@ -35,6 +35,22 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   checkout's branches for a base menu with a suggested base and goal branch; `GET /v1/runs/{runId}/goal` is the
   finished branch; `POST /v1/runs/{runId}/pull-request` and `/keep-branch` record the choice; new events
   `run.goal_completed`, `run.pr_opened` and `run.branch_kept`.
+- As soon as you choose a project folder, the menu bar's composer shows the branch your run's work lands on and the
+  branch it starts from: the starting branch is preselected from the project, and when the project doesn't say you
+  pick it (never `main` by default). The branch name follows your goal as you type until you edit it, and a problem
+  with either name shows under its field.
+- When the planner is done, the desktop app docks a card on the planner's column with its summary, what landed and
+  what didn't, and View diff · Keep branch · Open PR; the menu bar shows "Ready: <branch>" with the same actions, and
+  older runs in its Recent list show a "Ready" or "Stopped" flag while their branch waits on you. Afterwards you see
+  the pull request's link, or "Kept on <branch>".
+- capcomd notifies you once when a goal-branch run is ready ("Ready: <branch> → <base>: 2 of 3 tasks landed") or
+  stopped with some work landed ("Stopped: …"); clicking it opens the run. It follows the same Settings switch as
+  finished-run notifications.
+- When the planner failed or was cancelled, opening a pull request with what landed asks you first: in the apps, in
+  `capcomd pr open` (y/N on a terminal, `--yes` otherwise) and for agents (`capcomd_pr_open` with `stopped: true`).
+  The pull request's description then says the run stopped. API: `POST /v1/runs/{runId}/pull-request` answers 409
+  `stopped` until the body is `{"stopped": true}`, and `GET /v1/runs/{runId}/goal` carries the question as
+  `openPullRequest.confirm`.
 - Fix: capcomd no longer guesses `main` as a project's target. `GET /v1/projects/inspect` sends `defaultBranch: null`
   when the checkout doesn't say, `capcomd setup project` suggests origin's real default branch, and running it again
   keeps the target you set instead of resetting it to `main`.

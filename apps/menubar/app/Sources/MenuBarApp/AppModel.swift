@@ -41,6 +41,8 @@ final class AppModel {
     s.onNotify = { [weak self] n in
       guard let self else { return }
       self.moment(n)
+      // A goal branch run that is ready already said so (its goal notice): no second banner for its completion.
+      if case .runFinished(let rid, "run.completed", _) = n, self.store.goalNoticed.contains(rid) { return }
       if self.store.prefs.allows(n) { Notifier.post(n, bot: self.notificationBot(n)) }   // Settings › General › Notifications
     }
   }
@@ -98,6 +100,11 @@ final class AppModel {
     let m = AppModel(makeStore(token: ""), tokenMissing: false)   // not started until the token is in
     m.tokenPending = true
     ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
+    // A click on a goal branch notice: the run's detail, with its Ready bar.
+    ApprovalNotifications.onOpenRun = { [weak m] rid in m?.open(run: rid); MenuBarPanel.open() }
+    #if DEBUG
+    DispatchQueue.main.async { MenuBarDebug.start(m) }   // CAPCOMD_MENUBAR_CONTROL (MenuBarDebug.swift)
+    #endif
     if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { m.tokenFromEnvironment = true; m.connect(token: env); return m }
     Task.detached(priority: .userInitiated) {
       let token = Keychain.token()
@@ -208,6 +215,8 @@ final class AppModel {
 
   func startRun(_ goal: String) async -> Bool {
     var choice = RunChoice(repo: store.prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+    // The goal branch rows chose for this checkout: the base and the branch as shown (GoalBranchRows.swift).
+    if goalBranchesOffered, goalSetup.path == choice.repo { (choice.base, choice.goalBranch) = goalSetup.choice }
     var state = await store.startRun(goal: goal, choice)
     if case .needsRepo = state, let folder = await ProjectFolderPicker.choose() {
       // A folder that isn't set up yet shows its next steps in the composer (the goal stays: Set Up and Start). A set-up
@@ -220,6 +229,42 @@ final class AppModel {
     return false
   }
   func clearStart() { store.clearStart() }
+
+  // Goal branches (capability runs.goal_branch): the composer's rows (GoalBranchRows.swift) and the ready card.
+  /// The base and goal branch for the next run, for the checkout it goes to.
+  var goalSetup = GoalBranchSetup()
+  /// The rows show for a project checkout on a daemon with goal branches; the default project and older daemons keep
+  /// today's composer.
+  var goalBranchesOffered: Bool { _ = revision; return store.capabilities.contains(Capability.runsGoalBranch) && store.prefs.startRepo != nil }
+  /// The field the last Start's refusal is about ("base", "goalBranch").
+  var startRefusedField: String? { _ = revision; return store.startRefusedField }
+  /// Asks the daemon about the rows' question and files its answer against it (an older question's answer is dropped).
+  func loadBranches(_ q: GoalBranchSetup.Query) async {
+    if let f = await store.loadProjectBranches(path: q.path, goal: q.goal, goalBranch: q.goalBranch, base: q.base) { goalSetup.receive(f, for: q) }
+  }
+  /// The run's goal card (nil without a goal branch).
+  func goalCard(_ runId: String) -> GoalCard? { _ = revision; return store.goalCard(runId: runId) }
+  /// The goal view behind the card, read once per run here (the store reads it again on the goal events).
+  @ObservationIgnored private var goalsAsked: Set<String> = []
+  func loadGoal(_ runId: String) {
+    guard goalsAsked.insert(runId).inserted else { return }
+    Task { await store.loadGoal(runId: runId) }
+  }
+  /// Open PR: a stopped run asks the daemon's question first; else it opens (the daemon may still ask).
+  func openPullRequest(_ card: GoalCard) {
+    switch card.openTap {
+    case .ask(let q): store.askToOpenStoppedPullRequest(runId: card.runId, question: q)
+    case .open: Task { _ = await store.openPullRequest(runId: card.runId) }
+    }
+  }
+  /// The person said yes to the stopped run's question.
+  func confirmPullRequest(_ runId: String) { Task { _ = await store.openPullRequest(runId: runId, stopped: true) } }
+  func cancelGoalAction(_ runId: String) { store.cancelGoalAction(runId: runId) }
+  func keepBranch(_ runId: String) { Task { _ = await store.keepBranch(runId: runId) } }
+  /// View diff: the compare on GitHub, else the run's Files tab.
+  func viewGoalDiff(_ card: GoalCard) {
+    if let u = card.diffURL { NSWorkspace.shared.open(u) } else { viewDiff(runId: card.runId) }
+  }
 
   // Bot avatars (brand direction B): one team per run, siblings kept distinct (botTeam). Agents join in spawn order, so
   // a newcomer never changes an earlier agent's bot. Recomputed only when the run's agents change.
@@ -318,6 +363,9 @@ enum Notifier {
     case .runFinished(let rid, let type, let title):
       id = "run-\(rid)-\(type)"; c.title = title
       c.body = type == "run.completed" ? "Run completed" : type == "run.cancelled" ? "Run stopped" : "Run failed"
+    case .goalReady(let g):
+      // "Ready: capcomd/add-x → dev: 2 of 3 tasks landed"; a click opens the run.
+      id = "goal-\(g.runId)"; c.title = g.title; c.body = g.line; c.userInfo = ["runId": g.runId]
     }
     UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: c, trigger: nil))
   }

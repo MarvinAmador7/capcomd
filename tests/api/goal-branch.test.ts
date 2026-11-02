@@ -105,6 +105,21 @@ describe("capability runs.goal_branch", () => {
 		expect((await setup().post("/v1/runs/run-plain/pull-request")).status).toBe(404);
 	});
 
+	test("POST …/pull-request on a stopped run: 409 stopped with the question until the body says the person agreed", async () => {
+		const ask = "The planner stopped before it finished (it failed): 1 of 2 tasks landed on capcomd/add-x. Open a pull request with what landed?";
+		const { post, get } = setup(view({ state: "stopped", openPullRequest: { available: true, reason: null, repo: "acme/app", confirm: ask } }));
+		expect((await get("/v1/runs/run-g/goal")).body.openPullRequest.confirm).toBe(ask);
+		expect(await post("/v1/runs/run-g/pull-request")).toMatchObject({ status: 409, body: { code: "stopped", message: ask } });
+		expect(await post("/v1/runs/run-g/pull-request", steer, "pr-stop-0001", { stopped: false })).toMatchObject({ status: 409, body: { code: "stopped" } });
+		expect(await post("/v1/runs/run-g/pull-request", steer, "pr-stop-0002", { stopped: "yes" })).toMatchObject({ status: 422, body: { code: "invalid" } });
+		// A refusal isn't kept: the same key with the agreement opens it; that key with another body is another request.
+		const a = await post("/v1/runs/run-g/pull-request", steer, "pr-stop-0001", { stopped: true });
+		expect(a).toMatchObject({ status: 200, body: { created: true, pullRequest: { number: 1 } } });
+		expect((await post("/v1/runs/run-g/pull-request", steer, "pr-stop-0001")).body.code).toBe("idempotency_conflict");
+		// A ready run ignores the flag.
+		expect(await setup().post("/v1/runs/run-g/pull-request", steer, "pr-stop-0003", { stopped: true })).toMatchObject({ status: 200, body: { created: true } });
+	});
+
 	test("POST …/keep-branch: recorded once (run.branch_kept); a pull request can still be opened after", async () => {
 		const { post, get } = setup();
 		expect(await post("/v1/runs/run-g/keep-branch")).toMatchObject({ status: 200, body: { kept: true, changed: true, branch: "capcomd/add-x" } });

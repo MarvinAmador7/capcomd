@@ -156,9 +156,14 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_pr_open", {
     title: "Open a pull request",
-    description: "Open a GitHub pull request from the run's goal branch into its base, with the user's own GitHub login (gh). Only once the run is ready, and only when the user asked for it. Idempotent: a second call returns the same pull request. capcomd never merges it.",
+    description: "Open a GitHub pull request from the run's goal branch into its base, with the user's own GitHub login (gh). Only once the run is ready, and only when the user asked for it. Idempotent: a second call returns the same pull request. capcomd never merges it. " +
+      "When the planner stopped before it finished (capcomd_goal state stopped), it is refused with reason `stopped` and a question: ask the person that question first, and call again with stopped: true only if they say yes.",
     // Destructive in the MCP sense: it publishes on GitHub, so clients (Claude Code, Hermes) ask the person first.
-    inputSchema: { runId: run, project }, annotations: DESTRUCTIVE,
+    inputSchema: {
+      runId: run,
+      stopped: z.boolean().optional().describe("The person was asked about a stopped run (the planner failed or was cancelled) and wants the pull request with what landed. Never set it without asking them"),
+      project,
+    }, annotations: DESTRUCTIVE,
   }, routed("capcomd_pr_open", (a) => D.prOpen(a)));
 
   server.registerTool("capcomd_runs", {

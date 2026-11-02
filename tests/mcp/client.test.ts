@@ -88,6 +88,10 @@ describe("capcomd mcp: the driver's tools", () => {
     const by = Object.fromEntries(tools.map((t) => [t.name, t.annotations ?? {}]));
     for (const n of ["capcomd_merge", "capcomd_cancel", "capcomd_approve", "capcomd_pr_open"]) expect(by[n]!.destructiveHint).toBe(true);
     for (const n of ["capcomd_tree", "capcomd_await", "capcomd_setup", "capcomd_events"]) expect(by[n]!.readOnlyHint).toBe(true);
+    // A stopped run's pull request needs the person's yes, passed as `stopped`; the description says to ask first.
+    const pr = tools.find((t) => t.name === "capcomd_pr_open")!;
+    expect((pr.inputSchema.properties as Record<string, any>).stopped).toMatchObject({ type: "boolean" });
+    expect(pr.description).toContain("ask the person that question first");
   });
 
   test("setup reports the project's gates", async () => {

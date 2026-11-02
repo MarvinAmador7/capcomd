@@ -30,7 +30,11 @@ package final class AgentSlice {
   /// the columns and tabs whose state changed, not every one that read the model's position.
   package private(set) var onScreen = false { didSet { Mutations.record("AgentSlice.onScreen", id: id) } }
   package private(set) var focused = false { didSet { Mutations.record("AgentSlice.focused", id: id) } }
+  /// The run's goal branch, on the planner's (root) column only: its name in the header while it works, then the ready
+  /// card docked at the column's foot (GoalCard).
+  package private(set) var goal: GoalCard? { didSet { Mutations.record("AgentSlice.goal", id: id) } }
   init(_ h: ColumnHeader) { id = h.agentId; header = h }
+  func set(goal g: GoalCard?) { if goal != g { goal = g } }
   func set(warm w: Bool) { if warm != w { warm = w } }
   func set(onScreen o: Bool) { if onScreen != o { onScreen = o } }
   func set(focused f: Bool) { if focused != f { focused = f } }
@@ -108,6 +112,7 @@ package final class DeskModel {
   /// The app's model: connected to the daemon's socket with the Keychain token (or `CAPCOMD_TOKEN`).
   package init() {
     (store, transport) = Connection.makeStore(token: "")
+    DeskNotifications.start(self)
     if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { connect(env); return }
     Task.detached(priority: .userInitiated) {
       let token = Keychain.token()
@@ -132,6 +137,7 @@ package final class DeskModel {
     (store, transport) = Connection.makeStore(token: token)
     if let old { Task { try? await old.shutdown() } }
     store.onChanges = { [weak self] keys in self?.apply(keys) }
+    store.onNotify = { [weak self] n in if let self { DeskNotifications.post(n, prefs: self.store.prefs) } }
     store.start()
     tokenRejected = false
     link = .ready
@@ -177,6 +183,7 @@ package final class DeskModel {
         if let asks { s.set(approval: asks[h.agentId]) }
       }
       if !added.isEmpty { agents.merge(added) { a, _ in a } }
+      syncGoal(runId, root: ids.first)
       if columns != ids {
         // A project just opened shows its columns' heads first; their threads warm after, nearest first.
         let opened = columns.isEmpty
@@ -192,6 +199,29 @@ package final class DeskModel {
     }
     if all { for (k, v) in store.media where mediaSlice.items[k] != v { mediaSlice.items[k] = v } }
   }
+
+  /// The goal card goes on the planner's column (the root, first in tree order); its view is read once a decision is up
+  /// or made (the store reads it again on the goal events).
+  @ObservationIgnored private var goalsAsked: Set<String> = []
+  private func syncGoal(_ runId: String, root: String?) {
+    let card = store.goalCard(runId: runId)
+    for (id, a) in agents { a.set(goal: id == root ? card : nil) }
+    if let card, card.docks || card.outcome != nil, store.goalViews[runId] == nil, goalsAsked.insert(runId).inserted {
+      Task { await store.loadGoal(runId: runId) }
+    }
+  }
+
+  // Goal card actions (the planner's column).
+  /// Open PR: a stopped run asks the daemon's question first; else it opens (the daemon may still ask).
+  package func openPullRequest(_ card: GoalCard) {
+    switch card.openTap {
+    case .ask(let q): store.askToOpenStoppedPullRequest(runId: card.runId, question: q)
+    case .open: Task { _ = await store.openPullRequest(runId: card.runId) }
+    }
+  }
+  package func confirmPullRequest(_ runId: String) { Task { _ = await store.openPullRequest(runId: runId, stopped: true) } }
+  package func cancelGoalAction(_ runId: String) { store.cancelGoalAction(runId: runId) }
+  package func keepBranch(_ runId: String) { Task { _ = await store.keepBranch(runId: runId) } }
 
   /// A new ask in the open project scrolls the reel to it while Follow is on; an answered ask never moves it.
   private func followAsks(_ asking: Set<String>) {
@@ -254,6 +284,13 @@ package final class DeskModel {
       if let run { self.store.openRun(run) } else { self.store.closeRun() }
     }
     return true
+  }
+
+  /// A notification's run: its project, at its planner's column (where a goal card docks).
+  package func openRun(_ runId: String) {
+    guard let deck = decks.first(where: { $0.runId == runId }) else { return }
+    open(project: deck.id)
+    if let planner = columns.first { scroll(to: planner, animated: false) }
   }
 
   package func agent(_ id: String) -> AgentSlice? { agents[id] }

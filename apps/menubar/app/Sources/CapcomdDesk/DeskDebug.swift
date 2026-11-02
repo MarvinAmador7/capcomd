@@ -67,7 +67,7 @@ import AppKit
   /// CAPCOMD_DESK_CONTROL=<dir>: drives the window without touching the screen, for checks against a live daemon. Each
   /// half second it runs the lines of <dir>/cmd (then deletes it) and writes the model's state to <dir>/state.txt.
   /// Lines: `project N`, `agent N`, `focus ±1`, `scroll <agentId>`, `follow on|off`, `steer <agentId> <text>`,
-  /// `decide <approvalId> approve|deny`, `swipe <dx>` (a two-finger swipe of dx points handed to the reel's scroll
+  /// `decide <approvalId> approve|deny`, `goal open|confirm|cancel|keep` (the goal card's buttons), `openrun <runId>` (a click on its notification), `swipe <dx>` (a two-finger swipe of dx points handed to the reel's scroll
   /// view, as deskbench's swipes are; negative scrolls toward later columns), `snap <name>` (the window, now, into <dir>/<name>.png), `key <char|return|escape|left|right> [cmd] [ctrl] [shift]` (a key event handed to
   /// this app's own window and menu, never posted to the system).
   static func control(_ model: DeskModel, _ dir: URL) {
@@ -87,11 +87,25 @@ import AppKit
         case "key": key(w.dropFirst().joined(separator: " "))
         case "snap": if w.count > 1 { snapshot(into: dir, name: w[1]) }
         case "swipe": if let dx = w.dropFirst().first.flatMap(Double.init) { swipe(dx) }
+        case "goal": goal(model, w.dropFirst().first ?? "")
+        case "openrun": if w.count > 1 { model.openRun(w[1]) }   // as a click on its notification
         default: break
         }
       }
     }
     try? state(model).write(to: dir.appendingPathComponent("state.txt"), atomically: true, encoding: .utf8)
+  }
+
+  /// `goal open|confirm|cancel|keep`: the open run's goal card buttons, as a click on them would.
+  static func goal(_ model: DeskModel, _ what: String) {
+    guard let run = model.openRunId, let card = model.store.goalCard(runId: run) else { return }
+    switch what {
+    case "open": model.openPullRequest(card)
+    case "confirm": model.confirmPullRequest(run)
+    case "cancel": model.cancelGoalAction(run)
+    case "keep": model.keepBranch(run)
+    default: break
+    }
   }
 
   static func swipe(_ dx: Double) {
@@ -147,6 +161,9 @@ import AppKit
         + "pending \(t.map { $0.pending.map { "\($0.state)" }.joined(separator: ",") } ?? "-")")
     }
     for a in s.pendingApprovals { out.append("approval \(a.id) run \(a.runId ?? "-") agent \(a.agentId ?? "-") \(a.decision)") }
+    if let run = model.openRunId, let g = s.goalCard(runId: run) {
+      out.append("goal \(g.title) \(g.phase) stopped \(g.stopped) docks \(g.docks) loading \(g.loading) openPR \(g.openPR) confirm \(g.confirm ?? "-") outcome \(g.outcome.map { "\($0)" } ?? "-")")
+    }
     return out.joined(separator: "\n") + "\n"
   }
 

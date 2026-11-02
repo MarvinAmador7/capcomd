@@ -148,3 +148,24 @@ async function repoWith(branches: string[], head: string): Promise<string> {
 	git(["symbolic-ref", "HEAD", `refs/heads/${head}`], bare);
 	return bare;
 }
+
+describe("a stopped goal: ask before a pull request", () => {
+	const planner = (status: string) => ({ parent: null, contract: null, status }) as any;
+	const work = { landed: [{}], notLanded: [{}, {}] };
+	test("the question says how the planner stopped and how much landed; none for any other state", async () => {
+		const { stoppedQuestion } = await import("../../src/primitives/goal");
+		expect(stoppedQuestion("stopped", "capcomd/add-x", [planner("failed")], work))
+			.toBe("The planner stopped before it finished (it failed): 1 of 3 tasks landed on capcomd/add-x. Open a pull request with what landed?");
+		expect(stoppedQuestion("stopped", "capcomd/add-x", [planner("cancelled")], { landed: [{}], notLanded: [] })).toContain("(it was cancelled): 1 of 1 task landed");
+		for (const s of ["working", "ready", "pr_opened", "kept"] as const) expect(stoppedQuestion(s, "capcomd/add-x", [planner("done")], work)).toBeNull();
+	});
+	test("the pull request's description says so first", async () => {
+		const { pullRequestBody } = await import("../../src/primitives/goal");
+		const l = { agentId: "agt-w", parent: "agt-p", profile: "worker", task: "write x", branch: null, mergeId: "mrg-1", sha: null, verifyId: null, mergedBy: null, checks: null, review: null };
+		const n = { agentId: "agt-v", parent: "agt-p", profile: "worker", task: "write y", branch: null, status: "failed", reason: "failed" as const, detail: null };
+		const body = pullRequestBody({ runId: "run-g", branch: "capcomd/add-x", summary: "Added x.", landed: [l], notLanded: [n], stopped: "the planner failed" });
+		expect(body.split("\n")[0]).toBe("> **The run stopped before the planner finished:** the planner failed. 1 of 2 tasks landed; what didn't is listed below.");
+		expect(body.indexOf("Added x.")).toBeGreaterThan(0);
+		expect(pullRequestBody({ runId: "run-g", branch: "capcomd/add-x", summary: "Added x.", landed: [l], notLanded: [] }).startsWith("Added x.")).toBe(true);
+	});
+});

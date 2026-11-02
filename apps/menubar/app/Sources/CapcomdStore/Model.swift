@@ -455,4 +455,6 @@ public struct AttachmentRef: Sendable, Hashable {
 public enum Notice: Sendable, Hashable {
   case approvalRequested(approvalId: String, runId: String?, question: UntrustedText)
   case runFinished(runId: String, type: String, title: String)
+  /// A goal branch run is ready, or stopped with work landed (GoalNotice): once per run.
+  case goalReady(GoalNotice)
 }

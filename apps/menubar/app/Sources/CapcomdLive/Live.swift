@@ -329,10 +329,12 @@ extension LiveDaemonInfo: GoalBranchActing {
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }
-  /// 200 the pull request (`created` false when it was open already); 409 `conflict` and 404 for a run without a goal
-  /// branch carry the daemon's sentence.
-  public func openPullRequest(runId: String, idempotencyKey: String) async throws -> GoalPullRequestResult {
-    let (status, data) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/pull-request", headers: [("Idempotency-Key", idempotencyKey)])
+  /// 200 the pull request (`created` false when it was open already); 409 `conflict` (or `stopped`: the question to ask
+  /// about a run whose planner stopped) and 404 for a run without a goal branch carry the daemon's sentence. `stopped`
+  /// sends `{"stopped": true}`: the person agreed.
+  public func openPullRequest(runId: String, stopped: Bool, idempotencyKey: String) async throws -> GoalPullRequestResult {
+    let (status, data) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/pull-request", headers: [("Idempotency-Key", idempotencyKey)],
+                                                  json: stopped ? Data(#"{"stopped":true}"#.utf8) : nil)
     if status == 200 { do { return try GoalWire.pullRequest(data) } catch { throw DetailUnavailable.failed("unexpected response") } }
     try Self.refusal(status, data, scope: "open pull requests")
   }
@@ -359,7 +361,7 @@ extension LiveDaemonInfo: GoalBranchActing {
     case 403: throw GoalActionRefused("This app's capcomd token can't \(scope) (needs the steer scope)")
     case 404 where code(data) == "not_found" && message(data).contains("run"): throw GoalActionRefused(message(data))
     case 404: throw DetailUnavailable.unsupported
-    case 409, 422: throw GoalActionRefused(message(data))
+    case 409, 422: throw GoalActionRefused(message(data), code: code(data))
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }

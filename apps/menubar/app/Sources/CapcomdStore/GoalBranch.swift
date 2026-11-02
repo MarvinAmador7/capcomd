@@ -178,7 +178,10 @@ public struct GoalView: Decodable, Sendable, Hashable {
     public var reason: String?
     /// "owner/name" on GitHub.
     public var repo: String?
-    public init(available: Bool, reason: String? = nil, repo: String? = nil) { self.available = available; self.reason = reason; self.repo = repo }
+    /// A stopped run (the planner failed or was cancelled): the daemon's question to ask before opening one with what
+    /// landed; then `openPullRequest(runId:stopped: true)`. Nil otherwise (and from older daemons).
+    public var confirm: String?
+    public init(available: Bool, reason: String? = nil, repo: String? = nil, confirm: String? = nil) { self.available = available; self.reason = reason; self.repo = repo; self.confirm = confirm }
   }
   public struct Decision: Decodable, Sendable, Hashable { public var choice: String; public var by: String; public var at: String? }
   public var runId: String; public var branch: String; public var base: String
@@ -264,14 +267,20 @@ public struct GoalPullRequestResult: Decodable, Sendable, Hashable {
 }
 
 /// The daemon said no to Open PR or Keep the branch (409 `conflict`, 404 for a run without a goal branch): its sentence.
-public struct GoalActionRefused: Error, Sendable, Hashable { public var message: String; public init(_ m: String) { message = m } }
+/// `code` "stopped": the planner stopped before it finished, and the sentence is the question to ask the person.
+public struct GoalActionRefused: Error, Sendable, Hashable {
+  public var message: String; public var code: String?
+  public init(_ m: String, code: String? = nil) { message = m; self.code = code }
+  public static let stopped = "stopped"
+}
 
 /// Goal branch reads and actions (capability `runs.goal_branch`). Reads need `read`; the two actions need `steer` and an
 /// Idempotency-Key. Throws `GoalActionRefused`, `Unauthorized`, or `DetailUnavailable` (`.unsupported` on daemons
 /// without the routes).
 public protocol GoalBranchActing: Sendable {
   func goal(runId: String) async throws -> GoalView
-  func openPullRequest(runId: String, idempotencyKey: String) async throws -> GoalPullRequestResult
+  /// `stopped`: the person agreed to open one for a run whose planner stopped (`{"stopped": true}`).
+  func openPullRequest(runId: String, stopped: Bool, idempotencyKey: String) async throws -> GoalPullRequestResult
   func keepBranch(runId: String, idempotencyKey: String) async throws
   /// `GET /v1/projects/branches`: nil fields aren't sent.
   func projectBranches(path: String, goal: String?, goalBranch: String?, base: String?) async throws -> ProjectBranches
@@ -291,8 +300,10 @@ public enum GoalWire {
 }
 
 /// Open PR or Keep the branch for one run: on its way, done, or refused / failed with the sentence to show.
+/// `confirmStopped`: the planner stopped before it finished; ask the person the daemon's question before opening one.
 public enum GoalActionState: Sendable, Hashable {
   case idle, openingPullRequest, keeping
+  case confirmStopped(String)
   case opened(GoalPullRequestResult)
   case kept
   case refused(String)
@@ -320,28 +331,38 @@ extension CapcomdStore {
 
   /// Opens the pull request from the run's goal branch into its base (one Idempotency-Key per tap, reused on a retry
   /// after a transport failure). `goalActions[runId]` is `.opened` with it (also when it was open already), `.refused`
-  /// with the daemon's sentence, or `.failed`. The run's `goalBranch` follows from run.pr_opened.
+  /// with the daemon's sentence, or `.failed`. The run's `goalBranch` follows from run.pr_opened. A run whose planner
+  /// stopped is `.confirmStopped` with the daemon's question until it's asked again with `stopped` (the person said yes).
   @discardableResult
-  public func openPullRequest(runId: String) async -> GoalActionState {
+  public func openPullRequest(runId: String, stopped: Bool = false) async -> GoalActionState {
     await ensureCapabilities()
     guard let goalActor, goalBranchSupported else { goalActions[runId] = .failed(Self.goalBranchNeedsUpdate); changed(); return goalActions[runId]! }
     if goalActions[runId] == .openingPullRequest { return .openingPullRequest }
-    let key = pendingGoalKeys["pr:\(runId)"] ?? makeKey()
-    pendingGoalKeys["pr:\(runId)"] = key
+    // Its own key with the person's yes: that's another request to the daemon.
+    let slot = "pr:\(runId)" + (stopped ? ":stopped" : "")
+    let key = pendingGoalKeys[slot] ?? makeKey()
+    pendingGoalKeys[slot] = key
     goalActions[runId] = .openingPullRequest; changed()
     let next: GoalActionState
     do {
-      let r = try await goalActor.openPullRequest(runId: runId, idempotencyKey: key)
-      pendingGoalKeys["pr:\(runId)"] = nil; next = .opened(r)
+      let r = try await goalActor.openPullRequest(runId: runId, stopped: stopped, idempotencyKey: key)
+      pendingGoalKeys[slot] = nil; next = .opened(r)
       updateGoalBranch(runId) { $0?.state = GoalBranchSummary.prOpened; $0?.pullRequest = r.pullRequest }
-    } catch let e as GoalActionRefused { pendingGoalKeys["pr:\(runId)"] = nil; next = .refused(e.message) }
+    } catch let e as GoalActionRefused {
+      pendingGoalKeys[slot] = nil; next = e.code == GoalActionRefused.stopped && !stopped ? .confirmStopped(e.message) : .refused(e.message)
+    }
     catch is Unauthorized { unauthorized = true; next = .failed(Self.tokenRejected) }
-    catch DetailUnavailable.unsupported { pendingGoalKeys["pr:\(runId)"] = nil; next = .failed(Self.goalBranchNeedsUpdate) }
+    catch DetailUnavailable.unsupported { pendingGoalKeys[slot] = nil; next = .failed(Self.goalBranchNeedsUpdate) }
     catch { next = .failed("Couldn't reach capcomd") }   // key kept: a retry replays instead of asking twice
     goalActions[runId] = next; changed()
     if case .opened = next, goalViews[runId] != nil { await loadGoal(runId: runId) }
     return next
   }
+
+  /// Asks the person the daemon's question about a stopped run (from the goal view, before any call), or puts it away
+  /// (Cancel): the card shows it until they answer.
+  public func askToOpenStoppedPullRequest(runId: String, question: String) { goalActions[runId] = .confirmStopped(question); changed() }
+  public func cancelGoalAction(runId: String) { if goalActions[runId] != .openingPullRequest && goalActions[runId] != .keeping { goalActions[runId] = .idle; changed() } }
 
   /// Keeps the goal branch without a pull request, so the app stops asking.
   @discardableResult
@@ -366,10 +387,12 @@ extension CapcomdStore {
 
   /// Reads the setup screen's branches for a project checkout (`GET /v1/projects/branches`) into `projectBranches`:
   /// the base menu, what to preselect, the suggested goal branch for `goal`, and the daemon's checks of a typed
-  /// `goalBranch` / `base`. An answer for another path than the latest asked is dropped.
-  public func loadProjectBranches(path: String, goal: String? = nil, goalBranch: String? = nil, base: String? = nil) async {
+  /// `goalBranch` / `base`. An answer to an older question than the latest asked is dropped (and nil returned); else it is
+  /// returned too, for the setup screen to file against what it asked.
+  @discardableResult
+  public func loadProjectBranches(path: String, goal: String? = nil, goalBranch: String? = nil, base: String? = nil) async -> Fetched<ProjectBranches>? {
     await ensureCapabilities()
-    guard let goalActor, goalBranchSupported else { projectBranches = .unavailable(.unsupported); changed(); return }
+    guard let goalActor, goalBranchSupported else { projectBranches = .unavailable(.unsupported); changed(); return projectBranches }
     let ask = [path, goal ?? "", goalBranch ?? "", base ?? ""].joined(separator: "\u{0}")
     branchesAsked = ask
     if projectBranches?.value?.path != path { projectBranches = .loading; changed() }
@@ -378,8 +401,9 @@ extension CapcomdStore {
     catch is Unauthorized { unauthorized = true; next = .unavailable(.failed(Self.tokenRejected)) }
     catch let e as DetailUnavailable { next = .unavailable(e) }
     catch { next = .unavailable(.failed("Couldn't read the repository's branches just now")) }
-    guard branchesAsked == ask else { return }
+    guard branchesAsked == ask else { return nil }
     projectBranches = next; changed()
+    return next
   }
 
   /// run.goal_completed / run.pr_opened / run.branch_kept: the run's goal branch moves on, and an open goal view is read again.

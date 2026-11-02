@@ -3723,6 +3723,13 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "confirm": {
+                          "description": "State stopped (the planner failed or was cancelled before it finished): the question to ask the person before opening a pull request with what landed (daemon-written, trusted), e.g. \"The planner stopped before it finished (it failed): 2 of 3 tasks landed on capcomd/add-x. Open a pull request with what landed?\"; then POST …/pull-request with `{\"stopped\": true}`. null otherwise. Older daemons don't send it",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         }
                       },
                       "required": [
@@ -3828,7 +3835,7 @@
     "/v1/runs/{runId}/pull-request": {
       "post": {
         "operationId": "runs.pullRequest",
-        "description": "Capability runs.goal_branch. Open a GitHub pull request from the run's goal branch into its base (no body), with the user's own GitHub login on the daemon's machine (GITHUB_TOKEN, GH_TOKEN, else `gh auth token`). Title: the run's goal; description: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. capcomd never merges it. Idempotent: a pull request GitHub already has from the branch into the base (open or merged) is returned with `created: false`. Confirmed by run.pr_opened on the run stream (Run.goalBranch.state pr_opened). 409 `conflict` (the message says why and what to do): the planner is still working, nothing landed on the goal branch, the repository isn't on GitHub or there is no GitHub login (GET …/goal `openPullRequest` says so first), or GitHub refused it. 404 for an unknown run or one without a goal branch. Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
+        "description": "Capability runs.goal_branch. Open a GitHub pull request from the run's goal branch into its base (body optional: `{\"stopped\": true}`), with the user's own GitHub login on the daemon's machine (GITHUB_TOKEN, GH_TOKEN, else `gh auth token`). Title: the run's goal; description: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. capcomd never merges it. Idempotent: a pull request GitHub already has from the branch into the base (open or merged) is returned with `created: false`. Confirmed by run.pr_opened on the run stream (Run.goalBranch.state pr_opened). A run whose planner stopped before it finished (state stopped: it failed or was cancelled) is 409 `stopped` with the question to ask the person (\"The planner stopped before it finished (it failed): 2 of 3 tasks landed on <branch>. Open a pull request with what landed?\"); once they agree, send `{\"stopped\": true}`, and the description says near the top that the run stopped. 409 `conflict` (the message says why and what to do): the planner is still working, nothing landed on the goal branch, the repository isn't on GitHub or there is no GitHub login (GET …/goal `openPullRequest` says so first), or GitHub refused it. 404 for an unknown run or one without a goal branch. Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. Needs the steer scope. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: same key + same request: 200 with the first result (replay); same key on a different request (another route, run, agent or body): 409 `idempotency_conflict`. Errors: 404 `not_found` (unknown run or agent), 409 `conflict` (state), 422 `invalid`.",
         "parameters": [
           {
             "name": "runId",
@@ -3849,6 +3856,22 @@
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "stopped": {
+                    "type": "boolean",
+                    "description": "The person was asked about a stopped run (GET …/goal `openPullRequest.confirm`, or the 409 `stopped` message) and wants the pull request anyway. Ignored for a run that isn't stopped"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -8821,11 +8844,12 @@
               "already_decided",
               "idempotency_conflict",
               "conflict",
+              "stopped",
               "invalid",
               "internal",
               "unavailable"
             ],
-            "description": "conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"
+            "description": "stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"
           },
           "message": {
             "type": "string"

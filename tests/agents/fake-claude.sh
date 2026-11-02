@@ -10,7 +10,7 @@
 #   [spin] or [spin:N] edit, then make the same Read call N times (default 30, 0.15s apart), then finish normally (stuck: spinning)
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
 #           error differing only in numbers, then finish normally (stuck: failing)
-#   [listen] edit, then work for ~8s, writing each message it reads on stdin to messages.txt (send mid-run)
+#   [listen] edit, then work for ~8s ([listen:N]: ~N s), writing each message it reads on stdin to messages.txt (send mid-run)
 #   [steps] read two files (thinking in between) before the edit and run the tests after it, all inside a second (agent.step)
 #   [hold:N] the first run works N seconds (default 30) before editing (a daemon restart mid-run); a run started again
 #           in the same work dir finishes at once. Each run logs start, stopped (on SIGTERM) and finished to ../hold.log
@@ -95,8 +95,9 @@ esac
 case "$prompt" in *"[steady]"*)
   for i in $(seq 1 12); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
 esac
-case "$prompt" in *"[listen]"*)
-  for i in $(seq 1 8); do
+case "$prompt" in *"[listen]"*|*"[listen:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[listen:\([0-9]*\)\].*/\1/p')
+  for i in $(seq 1 "${n:-8}"); do
     if [ "$stream" = 1 ] && IFS= read -r -t 1 line; then
       printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
       emit '{"type":"assistant","message":{"content":[{"type":"text","text":"heard a message"}]}}'

@@ -122,6 +122,16 @@ async function pullRequestFit(runId: string, branch: string): Promise<PullReques
   return { available: true, reason: null, repo, cfg };
 }
 
+/** A stopped goal (the planner failed or was cancelled before it finished): the question to put to the person before a
+ *  pull request is opened with what landed. null for any other state. */
+export function stoppedQuestion(state: GoalBranchState, branch: string, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status">>, w: { landed: unknown[]; notLanded: unknown[] }): string | null {
+  if (state !== "stopped") return null;
+  const planner = agents.filter(isPlanner).at(-1);
+  const how = planner?.status === "failed" ? " (it failed)" : planner?.status === "cancelled" ? " (it was cancelled)" : "";
+  const total = w.landed.length + w.notLanded.length;
+  return `The planner stopped before it finished${how}: ${w.landed.length} of ${total} ${total === 1 ? "task" : "tasks"} landed on ${branch}. Open a pull request with what landed?`;
+}
+
 async function scopeOf(runId: string) {
   const s = await existingActor("scope", [runId]);
   const meta = s ? ((await s.getScope({}).catch(() => null)) as Record<string, any> | null) : null;
@@ -157,7 +167,8 @@ export async function goalView(runId: string) {
       : { baseSha: compare.baseSha, headSha: compare.headSha, ahead: compare.ahead, behind: compare.behind, commits: compare.commits, commitsTotal: compare.ahead,
         ...((d) => ({ files: compare.files.slice(0, GOAL_FILES_MAX).map((f) => ({ path: f.path, oldPath: f.oldPath, status: f.status, added: f.added, removed: f.removed })), filesTotal: d.filesTotal, added: d.added, removed: d.removed }))(pres(compare.files)),
         error: null },
-    landed, notLanded, pullRequest: pr, openPullRequest: { available: open.available, reason: open.reason, repo: open.repo }, decision,
+    landed, notLanded, pullRequest: pr,
+    openPullRequest: { available: open.available, reason: open.reason, repo: open.repo, confirm: open.available ? stoppedQuestion(state, g.branch, agents, { landed, notLanded }) : null }, decision,
   };
 }
 export const GOAL_FILES_MAX = 200;
@@ -170,8 +181,11 @@ async function compareOf(cfg: import("../merge/config").MergeConfig | null, g: {
 }
 
 /** The pull request's body: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. */
-export function pullRequestBody(o: { runId: string; branch: string; summary: string | null; landed: LandedWork[]; notLanded: NotLandedWork[] }): string {
+export function pullRequestBody(o: { runId: string; branch: string; summary: string | null; landed: LandedWork[]; notLanded: NotLandedWork[]; stopped?: string | null }): string {
   const lines: string[] = [];
+  // A stopped run says so first: the person opened it knowing the planner didn't finish.
+  const total = o.landed.length + o.notLanded.length;
+  if (o.stopped) lines.push(`> **The run stopped before the planner finished:** ${o.stopped}. ${o.landed.length} of ${total} ${total === 1 ? "task" : "tasks"} landed${o.notLanded.length ? "; what didn't is listed below" : ""}.`, "");
   if (o.summary?.trim()) lines.push(o.summary.trim().slice(0, 20_000), "");
   lines.push(`## What landed on \`${o.branch}\``, "");
   if (!o.landed.length) lines.push("Nothing was merged by the run's agents.");
@@ -199,8 +213,10 @@ function assertDecidable(agents: ScopeAgent[], g: GoalState) {
 /**
  * Open a pull request from the run's goal branch into its base, with the user's own GitHub login. Idempotent: a pull
  * request GitHub already has for the branch (open or merged) is returned, not opened again. capcomd never merges it.
+ * A stopped goal (the planner failed or was cancelled) is refused (`conflict`, reason `stopped`, the question to ask)
+ * unless `stopped` says the person was asked and said yes.
  */
-export async function openGoalPullRequest(runId: string, o: { by: string }) {
+export async function openGoalPullRequest(runId: string, o: { by: string; stopped?: boolean }) {
   await assertEngine();
   const { s, meta, g } = await scopeOf(runId);
   const [agents, ops] = await Promise.all([s.listAgents({}) as Promise<ScopeAgent[]>, s.listOps({}) as Promise<ScopeOp[]>]);
@@ -220,10 +236,14 @@ export async function openGoalPullRequest(runId: string, o: { by: string }) {
   const compare = await compareOf(fit.cfg, g);
   if (!("error" in compare) && compare.ahead === 0) throw new RelayError("conflict", `nothing landed on ${g.branch}: it has no commits that ${g.base} doesn't`, "There is nothing to open a pull request for.", { code: "empty" });
   const { landed, notLanded } = landedOf(g, agents, ops);
+  const state = goalStateOf(g, agents, !!meta.ended);
+  const ask = stoppedQuestion(state, g.branch, agents, { landed, notLanded });
+  if (ask && !o.stopped) throw new RelayError("conflict", ask, "Ask the person first; if they want it, open it with `capcomd pr open <runId> --yes` (POST …/pull-request {\"stopped\": true}).", { code: "stopped" });
   const planner = agents.find((a) => a.agentId === g.ready?.plannerId) ?? agents.filter(isPlanner).at(-1);
   const goal = (meta.goal as string | null) ?? (meta.label as string | null) ?? g.branch;
   const title = firstLine(goal, 120) || g.branch;
-  const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : null, landed, notLanded });
+  const stopped = !ask ? null : planner?.status === "failed" ? "the planner failed" : planner?.status === "cancelled" ? "the planner was cancelled" : "the run ended first";
+  const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : null, landed, notLanded, stopped });
   const pr = await gh.createPull(fit.repo, { head: g.branch, base: g.base, title, body }).catch((e) => { throw new RelayError("conflict", `GitHub refused the pull request: ${(e as Error).message}`, "Check the branch on GitHub and your access to the repository.", { code: "github" }); });
   return record(view(pr, true));
 }

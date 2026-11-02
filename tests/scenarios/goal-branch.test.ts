@@ -86,7 +86,7 @@ test("the planner's finish makes the run ready: the goal branch against dev, wha
   expect(why).toEqual({ "write src/c.txt": "failed", "write src/d.txt": "checks_failed" });
   expect(v.compare).toMatchObject({ ahead: 2, behind: 0, error: null, filesTotal: 2 });
   expect(v.compare.files.map((f) => f.path).sort()).toEqual(["src/a.txt", "src/b.txt"]);
-  expect(v.openPullRequest).toEqual({ available: true, reason: null, repo: "acme/widgets" });
+  expect(v.openPullRequest).toEqual({ available: true, reason: null, repo: "acme/widgets", confirm: null });
   // The run list carries it, and the lifecycle feed has the ready event.
   const listed = (await rivetSource().runs()).find((r) => r.id === run)!;
   expect(listed.goalBranch).toMatchObject({ branch: GOAL, base: "dev", state: "ready", pullRequest: null });
@@ -119,7 +119,7 @@ test("open PR: one pull request from the goal branch into dev, titled with the g
   expect(keep.j.error).toMatchObject({ code: "conflict" });
 }, 60_000);
 
-const goalRun = async (env: Record<string, string>, key: string) => {
+const goalRun = async (env: Record<string, string>, key: string, o: { end?: string; status?: string } = {}) => {
   const x = await capcomd(["run", "new", "--budget", "usd=5,turns=100,wallSeconds=600", "--key", key, "--goal", "Add e", "--goal-branch", `capcomd/scn-${key}`, "--base", "dev", "--json"], { ...w.env, ...env, PWD: w.dir });
   const j = JSON.parse(x.stdout.trim().split("\n").pop()!);
   expect(j.ok).toBe(true);
@@ -127,8 +127,8 @@ const goalRun = async (env: Record<string, string>, key: string) => {
   const root = await spawnRoot(w, id, "planner", w.script(`p-${key}`, `W=${JSON.stringify(worker)}
 id=$(capcomd spawn --profile worker --task "write src/e.txt" --key e --budget turns=10 --children.maxChildren=0 --contract "${job("e")}" | $S/jget agentId)
 capcomd await $id >/dev/null; v=$(capcomd verify --ref $id --key v); capcomd merge --ref $id --require "$(echo "$v" | $S/jget id)" --key m >/dev/null
-capcomd result --summary "Added e." >/dev/null`));
-  expect((await waitAll(w, id, [root])).agents[0].status).toBe("done");
+${o.end ?? 'capcomd result --summary "Added e." >/dev/null'}`));
+  expect((await waitAll(w, id, [root])).agents[0].status).toBe(o.status ?? "done");
   return id;
 };
 const prOpen = async (id: string, env: Record<string, string>) => {
@@ -156,6 +156,23 @@ test("open PR is refused clearly for a repository that isn't on GitHub, and with
   expect(c.j).toMatchObject({ created: true, base: "dev" });
   expect(gh.pulls.at(-1)!.base.ref).toBe("dev");
 }, 240_000);
+
+test("a planner that failed after landing work: the person is asked first; with their yes the PR says the run stopped", async () => {
+  const before = gh.pulls.length;
+  const id = await goalRun({}, `stop-${Date.now()}`, { end: "exit 3", status: "failed" });
+  const v = await goalView(id);
+  expect(v.state).toBe("stopped");
+  expect(v.openPullRequest).toMatchObject({ available: true, confirm: expect.stringMatching(/^The planner stopped before it finished \(it failed\): 1 of 1 task landed on capcomd\/scn-stop-.*\. Open a pull request with what landed\?$/) });
+  // Without a terminal and without --yes: refused with that question, nothing opened.
+  const a = await prOpen(id, {});
+  expect(a.code).not.toBe(0);
+  expect(a.j.error).toMatchObject({ code: "conflict", reason: "stopped", message: v.openPullRequest.confirm });
+  expect(gh.pulls.length).toBe(before);
+  // --yes: opened, and its description says first that the run stopped.
+  const x = await capcomd(["pr", "open", id, "--yes", "--json"], { ...w.env, PWD: w.dir });
+  expect(JSON.parse(x.stdout.trim().split("\n").pop()!)).toMatchObject({ created: true, base: "dev" });
+  expect(gh.pulls.at(-1)!.body.split("\n")[0]).toBe("> **The run stopped before the planner finished:** the planner failed. 1 of 1 task landed.");
+}, 120_000);
 
 test("no base given, no project target, no default branch on the remote: refused, never main", async () => {
   // The remote's HEAD points nowhere, so it reports no default branch.

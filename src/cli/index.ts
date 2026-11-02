@@ -53,8 +53,9 @@ Usage:
                                            reviewed work lands on it with no approval. --no-goal-branch: merge into the
                                            target (--target-branch) as before
   capcomd goal <runId> [--json]            the goal branch against its base: what landed, what didn't, the planner's summary
-  capcomd pr open <runId>                  open a pull request from the goal branch into its base (your gh login; idempotent;
-                                           capcomd never merges it)  ·  capcomd goal keep <runId>: keep the branch, no PR
+  capcomd pr open <runId> [--yes]          open a pull request from the goal branch into its base (your gh login; idempotent;
+                                           capcomd never merges it; a run whose planner stopped asks first, --yes without a
+                                           terminal)  ·  capcomd goal keep <runId>: keep the branch, no PR
                                            (default on boxd: the profile named "planner", which capcomd setup writes)
              [--planner-provider claude|codex]  run the planner on that provider (its model and login: the project's
                                            profile on it, else the provider's defaults)
@@ -513,14 +514,23 @@ async function main(argv: string[]): Promise<number> {
         if (v.landed.length) { console.log("\nLanded:"); for (const l of v.landed) console.log(`  ${l.agentId} ${l.task}  (${l.review ? (l.review.passed ? "reviewed" : "review failed") : "no reviewer"})`); }
         if (v.notLanded.length) { console.log("\nNot landed:"); for (const n of v.notLanded) console.log(`  ${n.agentId} ${n.task}: ${n.reason}${n.detail ? ` (${n.detail.split("\n")[0]})` : ""}`); }
         if (v.summary) console.log(`\nPlanner's summary:\n${v.summary}`);
-        console.log(v.pullRequest ? `\nPull request: #${v.pullRequest.number}${v.pullRequest.url ? ` ${v.pullRequest.url}` : ""}` : v.openPullRequest.available ? `\nOpen a pull request: capcomd pr open ${runId}` : `\n${v.openPullRequest.reason}`);
+        console.log(v.pullRequest ? `\nPull request: #${v.pullRequest.number}${v.pullRequest.url ? ` ${v.pullRequest.url}` : ""}`
+          : v.openPullRequest.available ? `\n${v.openPullRequest.confirm ? `${v.openPullRequest.confirm}\n` : ""}Open a pull request: capcomd pr open ${runId}` : `\n${v.openPullRequest.reason}`);
         return EXIT.ok;
       }
 
       case "pr": {
         if (positionals[1] !== "open") usage("usage: capcomd pr open <runId>");
         const runId = positionals[2] ?? usage("runId required: capcomd pr open <runId>");
-        const r = await (await import("../primitives/goal")).openGoalPullRequest(runId, { by: (values.by as string | undefined) ?? "operator" });
+        const G = await import("../primitives/goal");
+        const by = (values.by as string | undefined) ?? "operator";
+        // A run whose planner stopped before it finished: ask first on a terminal; --yes otherwise.
+        const r = await G.openGoalPullRequest(runId, { by, stopped: values.yes === true }).catch(async (e) => {
+          if (!(e instanceof RelayError) || e.reason !== "stopped" || json) throw e;
+          const p = (await import("./prompt")).prompter();
+          if (!p.interactive || !(await p.confirm(e.message, false))) throw e;
+          return G.openGoalPullRequest(runId, { by, stopped: true });
+        });
         if (json) out(r);
         else console.log(`${r.created ? "Opened" : "Already open:"} pull request #${r.pullRequest.number} from ${r.branch} into ${r.base}${r.pullRequest.url ? `: ${r.pullRequest.url}` : ""}`);
         return EXIT.ok;

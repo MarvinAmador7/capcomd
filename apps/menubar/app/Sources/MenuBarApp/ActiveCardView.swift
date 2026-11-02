@@ -38,6 +38,10 @@ struct ActiveCardView: View {
         .transition(.opacity)
       }
       if open { bar(card).transition(.opacity) }
+      else if model.goalCard(card.runId).map({ $0.docks || $0.outcome != nil }) == true {
+        GoalReadyBar(runId: card.runId)
+          .padding(.horizontal, -Theme.Ask.padding).padding(.bottom, -Theme.Ask.padding).padding(.top, Theme.Ask.barTop)   // docked to the card's foot
+      }
     }
     .padding(Theme.Ask.padding)
     .background { shape.fill(Theme.Ask.fill) }
@@ -571,14 +575,17 @@ struct OutcomeRow: View {
         }
         .padding(Theme.Ask.padding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.Ask.fill))
-        .contentShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .contentShape(Rectangle())
       }
       .buttonStyle(PressableStyle())
       .keyboardShortcut("1", modifiers: .command)
       .onAppear { model.loadOutcomeFiles(o.runId) }
       .accessibilityLabel(spoken(o))
       .accessibilityHint("Opens the run (Command-1)")
+      // A goal branch's Ready bar (or its pull request, or "Kept on"), docked to the row's foot.
+      .safeAreaInset(edge: .bottom, spacing: 0) { GoalReadyBar(runId: o.runId) }
+      .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.Ask.fill))
+      .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
     }
   }
 
