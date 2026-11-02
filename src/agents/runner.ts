@@ -387,22 +387,26 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
     }
     if (startFrom) must(await git(["fetch", "origin", task.from!.ref], repo), "git fetch (continue)");
     if (!task.review) must(await git(["checkout", "-B", task.branch, startRef(task, branchExists)], repo), "git checkout");
-    // In place, the local branches are what a fresh clone has: the target at its tip, and the task branch.
-    if (inPlace) must(await sh(`cd ${sq(repo)} && git branch -f --track ${sq(task.target)} ${sq(`origin/${task.target}`)} >/dev/null && git for-each-ref --format='%(refname:short)' refs/heads/ | while read -r b; do [ "$b" = ${sq(task.target)} ] || [ "$b" = ${sq(task.branch)} ] || git branch -D -q "$b"; done`), "git branch (target)");
+    // In place, the local branches are what a fresh clone has: the target at its tip, and the task branch. Its
+    // dependencies are already there (env build installed them for this lockfile).
+    const local = inPlace ? must(await sh(`cd ${sq(repo)} && git branch -f --track ${sq(task.target)} ${sq(`origin/${task.target}`)} >/dev/null && git for-each-ref --format='%(refname:short)' refs/heads/ | while read -r b; do [ "$b" = ${sq(task.target)} ] || [ "$b" = ${sq(task.branch)} ] || git branch -D -q "$b"; done; [ -d node_modules ] && echo reused; true`), "git branch (target)") : null;
 
-    // Reuse dependencies baked into the env snapshot when the lockfile matches (capcomd env build): in place they are
-    // already there; a clone copies them, unless an earlier run in this sandbox used (and changed) the template.
-    const deps = inPlace ? { stdout: "" } : await sh(`L=; for f in ${LOCKFILES.join(" ")}; do [ -f ${sq(repo)}/$f ] && { L=$(sha256sum ${sq(repo)}/$f | cut -c1-64); break; }; done
+    // Reuse dependencies baked into the env snapshot when the lockfile matches (capcomd env build): a clone copies them,
+    // unless an earlier run in this sandbox used (and changed) the template.
+    const deps = local ?? await sh(`L=; for f in ${LOCKFILES.join(" ")}; do [ -f ${sq(repo)}/$f ] && { L=$(sha256sum ${sq(repo)}/$f | cut -c1-64); break; }; done
 H=$(cat ${sq(T)}/.capcomd-lockhash 2>/dev/null || cat ${sq(`${T}/${TEMPLATE_LOCKHASH}`)} 2>/dev/null)
 if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq(repo)}/node_modules ] && [ ! -e ${sq(`${T}/${TEMPLATE_CLAIM}`)} ]; then
   cp -a ${sq(T)}/node_modules ${sq(repo)}/node_modules && echo node_modules >> ${sq(repo)}/.git/info/exclude && echo reused; fi; true`);
-    const depsReused = inPlace ? (await sh(`[ -d ${sq(repo)}/node_modules ] && echo yes; true`)).stdout.includes("yes") : deps.stdout.includes("reused");
+    const depsReused = deps.stdout.includes("reused");
     if (depsReused) addSpanEvent(span, "agent.deps_reused", {});
+    // How long the workspace took (clone or in place, deps included), and with a warm template which path was taken and
+    // why: the agent's log and its span, not the user's output.
+    const wsMs = now() - wsStarted;
+    setSpanAttributes(span, { "agent.workspace_ms": wsMs });
     if (workspace) {
-      // Which path was taken, and how long the workspace took: the agent's log and its span, not the user's output.
-      const ms = now() - wsStarted;
+      const ms = wsMs;
       addSpanEvent(span, "agent.workspace", { "agent.workspace": workspace.path, ...(workspace.path === "clone" ? { "agent.workspace_reason": workspace.reason } : {}), "agent.workspace_ms": ms });
-      setSpanAttributes(span, { "agent.workspace": workspace.path, "agent.workspace_ms": ms });
+      setSpanAttributes(span, { "agent.workspace": workspace.path });
       opts.onLog?.([workspace.path === "in_place" ? `[capcomd] workspace: the env image's warm checkout, in place (${ms} ms)` : `[capcomd] workspace: a fresh clone, ${workspace.reason} (${ms} ms)`]);
     }
 
