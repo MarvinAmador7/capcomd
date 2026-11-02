@@ -119,8 +119,10 @@ package final class DeskModel {
   /// they pick one.
   @ObservationIgnored var folded = false
   /// Finished projects removed from the title bar, by project id, with the run they showed: back once they have news (a
-  /// new run, an ask).
-  @ObservationIgnored var hidden: [String: String] = [:]
+  /// new run, an ask). Kept across launches in `defaults` (the app's: UserDefaults.standard; none for the bench).
+  @ObservationIgnored var hidden: [String: String] = [:] { didSet { defaults?.set(hidden, forKey: Self.hiddenKey) } }
+  @ObservationIgnored private var defaults: UserDefaults?
+  static let hiddenKey = "desk.hiddenProjects"
   /// Message the planner…: the agent whose message box takes the focus when its column next shows (ColumnComposer).
   @ObservationIgnored var boxFocusPending: String?
   /// The folder setup the new project column shows (ProjectSetupFlow, as the menu bar's composer has), on `store`.
@@ -165,6 +167,7 @@ package final class DeskModel {
   package init() {
     (store, transport) = Connection.makeStore(token: "")
     setupFlow = ProjectSetupFlow(store: store)
+    restoreHidden(from: .standard)
     DeskNotifications.start(self)
     if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { connect(env); return }
     Task.detached(priority: .userInitiated) {
@@ -175,13 +178,19 @@ package final class DeskModel {
 
   /// A model on a store that is already filled and needs no socket (the bench's fixtures, previews, tests): ready at
   /// once, following the store's keyed changes exactly as the connected model does.
-  package init(store s: CapcomdStore) {
+  package init(store s: CapcomdStore, defaults d: UserDefaults? = nil) {
     store = s; transport = nil
     setupFlow = ProjectSetupFlow(store: s)
+    if let d { restoreHidden(from: d) }
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     s.onChanges = { [weak self] keys in self?.apply(keys) }
     link = .ready
     apply([.all])
+  }
+
+  private func restoreHidden(from d: UserDefaults) {
+    hidden = d.dictionary(forKey: Self.hiddenKey) as? [String: String] ?? [:]
+    defaults = d
   }
 
   // MARK: connection
