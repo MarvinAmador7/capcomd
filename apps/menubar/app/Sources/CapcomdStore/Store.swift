@@ -114,6 +114,10 @@ public final class CapcomdStore {
   /// Runs whose goal notice was raised (or is on its way): once per run, whatever the feed sends again.
   public internal(set) var goalNoticed: Set<String> = []
   var branchesAsked: String?
+  /// Renaming agents (`agents.title`; AgentTitle.swift): a rename on its way or why the last one failed, per agent.
+  let titler: AgentTitling?
+  public internal(set) var titleActions: [String: TitleAction] = [:]
+  var pendingTitleKeys: [String: String] = [:]
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
   var pendingReset: [String: ResetBuffer] = [:]
@@ -137,13 +141,14 @@ public final class CapcomdStore {
 
   public init(subscriber: StreamSubscribing? = nil, decider: ApprovalDeciding? = nil, detail: RunDetailFetching? = nil, controls: RunControlling? = nil,
               starter: RunStarting? = nil, messenger: AgentMessaging? = nil, daemonInfo: DaemonInfoFetching? = nil, thread: ThreadFetching? = nil,
-              projects: ProjectSettingUp? = nil, goals: GoalBranchActing? = nil,
+              projects: ProjectSettingUp? = nil, goals: GoalBranchActing? = nil, titles: AgentTitling? = nil,
               prefs: PreferenceStoring = InMemoryPreferences(), clientId: String = "menubar", makeKey: (() -> String)? = nil) {
     self.subscriber = subscriber; self.decider = decider; self.detail = detail; self.controls = controls; self.starter = starter
     self.messenger = messenger; self.daemonInfo = daemonInfo; self.threadSource = thread; self.prefs = UIPreferences(store: prefs); self.clientId = clientId
     // The live daemon adapter sets projects up too; tests may pass a port of their own.
     self.projectSetter = projects ?? (daemonInfo as? ProjectSettingUp)
     self.goalActor = goals ?? (daemonInfo as? GoalBranchActing)
+    self.titler = titles ?? (messenger as? AgentTitling)
     self.makeKey = makeKey ?? { "\(clientId)-\(UUID().uuidString.lowercased())" }
   }
 
@@ -217,7 +222,7 @@ public final class CapcomdStore {
       return kids.map { a in
         let children = build(a.id, depth: depth + 1)
         let w = waiting.contains(a.id)
-        var node = AgentNode(id: a.id, name: a.displayName, suffix: suffixes[a.id], kind: a.kind, status: a.status, activity: a.activity, depth: depth,
+        var node = AgentNode(id: a.id, name: a.displayName, title: a.titleText, suffix: suffixes[a.id], kind: a.kind, status: a.status, activity: a.activity, depth: depth,
                              waiting: w, descendantWaiting: children.contains { $0.waiting || $0.descendantWaiting }, children: children)
         node.repo = a.repo
         return node
@@ -226,10 +231,16 @@ public final class CapcomdStore {
     return build("", depth: 0)
   }
 
-  /// Siblings sharing a profile get a suffix: repo if each has a distinct one, else short task id, else last 4 of agentId.
+  /// Siblings with a title (`agents.title`) get a suffix only when another has the same title and profile: the last 4
+  /// of the agent id. Without titles (older daemons), siblings sharing a profile get one: repo if each has a distinct
+  /// one, else short task id, else last 4 of agentId.
   nonisolated static func disambiguate(_ sibs: [Agent]) -> [String: String] {
     var out: [String: String] = [:]
-    for (_, group) in Dictionary(grouping: sibs, by: { ($0.profile ?? "").lowercased() }) where group.count > 1 {
+    let titled = sibs.filter { $0.titleText != nil }
+    for (_, group) in Dictionary(grouping: titled, by: { "\(($0.profile ?? "").lowercased())\u{0}\($0.titleText!)" }) where group.count > 1 {
+      for a in group { out[a.id] = String(a.id.suffix(4)) }
+    }
+    for (_, group) in Dictionary(grouping: sibs.filter { $0.titleText == nil }, by: { ($0.profile ?? "").lowercased() }) where group.count > 1 {
       let repos = group.compactMap(\.repo)
       let keys = group.compactMap { $0.key.map(shortId) }
       let useRepo = repos.count == group.count && Set(repos).count == group.count
@@ -368,6 +379,7 @@ public final class CapcomdStore {
       ag.provider = Provider(wire: a.provider) ?? old?.provider; ag.model = a.model ?? old?.model
       ag.activityAtMs = epochMs(iso: a.activity?.at) ?? old?.activityAtMs
       ag.read(result: a.result)
+      ag.title = a.title.map(UntrustedText.init) ?? old?.title; ag.titleSource = a.titleSource ?? old?.titleSource
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
     }
@@ -381,6 +393,12 @@ public final class CapcomdStore {
       approvalSeq[a.approvalId] = snapshotSeq
     }
     lastSeq[scope] = snapshotSeq
+  }
+
+  /// Changes one agent (AgentTitle.swift: its title): `runs` is set here only.
+  func updateAgent(_ runId: String, _ agentId: String, _ f: (inout Agent) -> Void) {
+    guard runs[runId]?.agents[agentId] != nil else { return }
+    f(&runs[runId]!.agents[agentId]!)
   }
 
   /// Changes one run's goal branch (GoalBranch.swift): `runs` is set here only.
@@ -423,6 +441,14 @@ public final class CapcomdStore {
     case "run.new":
       guard let runId else { return }
       runs[runId]?.label = d["label"]?.string
+    case "run.titled":
+      // Its planner named the run (agents.title): the title bar's name, unless the run has a label of its own.
+      guard let runId else { return }
+      runs[runId]?.agentTitle = d["title"]?.string.map { UntrustedText($0).firstLine }
+    case "agent.titled":
+      // Not narrowed: a title also names the agent in its siblings' rows (a shared title brings back suffixes), the
+      // decks' "who asks" and the project's title.
+      applyTitle(e, runId: runId, agentId: agentId)
     case "agent.spawned":
       guard let runId, let id = agentId ?? Optional(e.entity) else { return }
       let parent = d["parent"]?.string
@@ -435,6 +461,7 @@ public final class CapcomdStore {
       a.provider = Provider(wire: d["agent"]?["provider"]?.string ?? d["agent"]?["kind"]?.string)
       a.model = d["agent"]?["model"]?.string
       a.createdAtMs = e.epochMs
+      a.title = d["title"]?.string.map(UntrustedText.init); a.titleSource = d["titleSource"]?.string
       runs[runId]?.agents[id] = a
       upsertStep(runId: runId, Step(id: "agent:\(id)", seq: e.seq, epochMs: e.epochMs, agentId: id, kind: .agent,
                                     phase: Self.phase(a.kind), text: a.displayName, detail: a.task, status: .queued))
@@ -527,7 +554,9 @@ public final class CapcomdStore {
     switch e.type {
     case "approval.requested":
       guard let id = e.data["approvalId"]?.string, let a = approvals[id] else { return }
-      onNotify(.approvalRequested(approvalId: id, runId: a.runId, question: a.question))
+      // Named as its column and tab name it ("lead · login redirect asks").
+      let asker = a.runId.flatMap { rid in waitingAgent(a).flatMap { columnHeader(runId: rid, agentId: $0)?.label } }
+      onNotify(.approvalRequested(approvalId: id, runId: a.runId, question: a.question, asker: asker))
     case "run.goal_completed":
       // Ready: the notice says how much landed, so it waits for the goal view.
       guard let rid = e.runId ?? e.data["runId"]?.string, goalNoticed.insert(rid).inserted else { return }
@@ -574,6 +603,7 @@ public final class CapcomdStore {
         old.activityAtMs = epochMs(iso: a.activity?.at) ?? old.activityAtMs
         old.createdAtMs = epochMs(iso: a.createdAt) ?? old.createdAtMs
         old.read(result: a.result)
+        if let t = a.title { old.title = UntrustedText(t); old.titleSource = a.titleSource }
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
@@ -583,6 +613,7 @@ public final class CapcomdStore {
         ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind
         ag.provider = Provider(wire: a.provider); ag.model = a.model
         ag.activityAtMs = epochMs(iso: a.activity?.at); ag.read(result: a.result)
+        ag.title = a.title.map(UntrustedText.init); ag.titleSource = a.titleSource
         runs[a.runId]?.agents[a.id] = ag
       }
     }

@@ -83,6 +83,9 @@ public struct SnapshotAgent: Codable, Sendable, Hashable {
   /// "claude" | "codex" | null, and the model it runs (both optional: older daemons send neither).
   public var provider: String?
   public var model: String?
+  /// Its title (`agents.title`; agent-written, untrusted) and where it comes from; older daemons send neither.
+  public var title: String?
+  public var titleSource: String?
 }
 public struct SnapshotApproval: Codable, Sendable, Hashable {
   public var approvalId: String; public var kind: String; public var status: String; public var question: String

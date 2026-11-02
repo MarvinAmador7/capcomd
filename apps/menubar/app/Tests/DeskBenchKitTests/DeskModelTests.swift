@@ -129,5 +129,49 @@ final class DeskModelTests: XCTestCase {
     s.receive(.link(up: true), scope: "daemon")
     XCTAssertFalse(m.unreachable)
   }
+
+  /// Agent titles (agents.title): tabs and headers read them; a double-click opens one rename field at a time; Return
+  /// with a name capcomd would refuse keeps it open; a good one closes it and the tab shows it at once.
+  @MainActor func testTabsAndHeadersReadTitlesAndRenameInPlace() async {
+    let t = DeskTitler()
+    let s = CapcomdStore(daemonInfo: DeskInfo(), titles: t)
+    ev(s, "run.created", nil, ["goal": .string("Fix the login redirect")], at: 1_000)
+    ev(s, "agent.spawned", "ld", ["profile": .string("lead"), "title": .string("fix login redirect"), "titleSource": .string("derived")], at: 1_001)
+    ev(s, "agent.spawned", "w1", ["profile": .string("worker"), "parent": .string("ld"), "title": .string("login redirect"), "titleSource": .string("self")], at: 1_002)
+    let m = DeskModel(store: s)
+    XCTAssertEqual(m.agent("w1")?.header.tabLabel, "login redirect")
+    XCTAssertEqual(m.agent("w1")?.header.title, "login redirect")
+    m.beginRename("w1", at: .tab)
+    XCTAssertEqual(m.agent("w1")?.renaming, .tab)
+    m.beginRename("ld", at: .header)
+    XCTAssertNil(m.agent("w1")?.renaming, "one field at a time")
+    m.endRename("ld")
+    m.beginRename("w1", at: .tab)
+    var e = m.titleEdit("w1")!
+    XCTAssertEqual(e.draft, "login redirect")
+    e.draft = "one two three four five"
+    XCTAssertFalse(m.commitRename("w1", e))
+    XCTAssertEqual(m.agent("w1")?.renaming, .tab, "a refused name keeps the field open")
+    e.draft = "Redirect Loop"
+    XCTAssertTrue(m.commitRename("w1", e))
+    XCTAssertNil(m.agent("w1")?.renaming)
+    await Task.yield()
+    XCTAssertEqual(m.agent("w1")?.header.tabLabel, "redirect loop", "shown before the daemon answers")
+    for _ in 0..<50 where t.calls.isEmpty { await Task.yield() }
+    XCTAssertEqual(t.calls.map(\.title), ["redirect loop"])
+    XCTAssertEqual(m.agent("w1")?.header.userTitled, true)
+  }
   #endif
+}
+
+/// The daemon side of a rename (DeskModelTests): answers with the title it was given, as the person's.
+final class DeskTitler: AgentTitling, @unchecked Sendable {
+  var calls: [(title: String?, key: String)] = []
+  func setTitle(runId: String, agentId: String, title: String?, idempotencyKey: String) async throws -> (title: String?, titleSource: String?) {
+    calls.append((title, idempotencyKey)); return (title, title == nil ? "derived" : "user")
+  }
+}
+struct DeskInfo: DaemonInfoFetching {
+  func capabilities() async throws -> Set<String> { [Capability.agentsTitle] }
+  func skills() async throws -> [SkillInfo] { [] }
 }

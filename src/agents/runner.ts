@@ -10,7 +10,7 @@ import { taskKey } from "../merge/config";
 import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils/tracing-simple";
 import { readFileSync } from "fs";
 import { StuckWatch, type Stuck } from "./stuck";
-import { threadBuilder, type ItemDraft } from "../../packages/agent-thread/src/index";
+import { namingCalls, threadBuilder, type ItemDraft } from "../../packages/agent-thread/src/index";
 import type { ThreadAttachment } from "../actors/scope";
 import { withSkills, type AttachedSkill } from "./skills";
 import { isTransientSandboxError } from "../providers/boxd-errors";
@@ -107,6 +107,13 @@ export interface AgentRunOptions {
   now?: () => number;
   /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
   subagents?: { skill: string; cliSource: string; rpcDir: string };
+  /**
+   * Capability agents.title, for an agent without `subagents`: a `capcomd` on its PATH that only names its tab (the
+   * shim, src/primitives/title-rules.mjs: it checks the title and talks to nobody) and the lines that ask it to. Each
+   * `capcomd title …` it runs by itself, as its tool calls show it, is `onTitle` (once per call id).
+   */
+  naming?: { shimSource: string; skill: string };
+  onTitle?: (t: { title: string; callId: string }) => void;
   /**
    * ADR-021 §2: the run's idle machine lifetime (seconds; default AGENT_VM_TTL_SECONDS). The VM's delete deadline is
    * renewed to this from now every 10 minutes while the agent runs.
@@ -418,6 +425,20 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
         appendSystemFile = `${W}/append-system.txt`;
         await provider.upload(vmId, appendSystemFile, new TextEncoder().encode([cfg.appendSystemPrompt ? r.text(cfg.appendSystemPrompt) : "", sa.skill].filter(Boolean).join("\n\n")));
       } else promptText = [promptText, sa.skill].join("\n\n");
+    } else if (opts.naming) {
+      // agents.title: any other gets a `capcomd` that only names its tab, checked locally, no RPC (the daemon reads the
+      // call from its tool calls below). Without node it still prints a line; the call is read all the same.
+      const bin = `${W}/bin`, shim = `${bin}/capcomd-title.mjs`;
+      must(await sh(`mkdir -p ${sq(bin)}`), "mkdir capcomd shim dir", "install");
+      await provider.upload(vmId, shim, new TextEncoder().encode(opts.naming.shimSource));
+      await provider.upload(vmId, `${bin}/capcomd`, new TextEncoder().encode(`#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo "noted: $*"; exit 0; }\nexec node ${sq(shim)} "$@"\n`));
+      must(await sh(`chmod 755 ${sq(`${bin}/capcomd`)}`), "install capcomd shim", "install");
+      capcomdPrelude = `export PATH=${sq(bin)}:"$PATH"`;
+      if (adapter.kind === "claude-code") {
+        if (cfg.allowedTools) cfg = { ...cfg, allowedTools: [...cfg.allowedTools, "Bash(capcomd title:*)"] };
+        appendSystemFile = `${W}/append-system.txt`;
+        await provider.upload(vmId, appendSystemFile, new TextEncoder().encode([cfg.appendSystemPrompt ? r.text(cfg.appendSystemPrompt) : "", opts.naming.skill].filter(Boolean).join("\n\n")));
+      } else promptText = [promptText, opts.naming.skill].join("\n\n");
     }
     await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(promptText)));
     const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`, outbox = `${W}/outbox.jsonl`;
@@ -468,6 +489,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
       link: { root: repo }, onImage: (img) => images.push({ id: img.id, sha256: img.sha256, bytes: img.bytes, mime: img.mime, base64: img.base64 }),
     }) : null;
     const flushItems = () => { if (items.size || images.length) { opts.onItems?.([...items.values()], images.splice(0)); items.clear(); } };
+    const namedCalls = new Set<string>();
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck, noChangeAfterMs: cfg.noChangeAfterMs }, now());
@@ -518,6 +540,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-loc
           ...(ev.tool ? { "agent.tool": ev.tool } : {}), ...(ev.text ? { "agent.text": ev.text } : {}),
         });
         opts.onEvent?.(ev);
+        // agents.title: `capcomd title …` by itself names its tab (the shim only checked it).
+        if (opts.onTitle) for (const n of namingCalls(ev.raw)) if (!namedCalls.has(n.callId)) { namedCalls.add(n.callId); opts.onTitle(n); }
         logLines.push(...logLinesOf(ev));
         if (thread) for (const d of thread.event(ev.raw)) items.set(d.id, d);
       }

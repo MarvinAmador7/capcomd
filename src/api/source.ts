@@ -16,6 +16,7 @@ import type { VmInfo } from "../providers/sandbox";
 import { memorySettingsStore, type SettingsStore } from "../providers/settings";
 import { inspectProject, projectBranches, setUpProject, type BranchLister, type ProjectBranchesQuery, type ProjectBranchesResult, type ProjectDeps, type ProjectInspection, type ProjectSetupInput, type SetupOutcome } from "./projects";
 import { initGit, publishOptions, publishProject, type GitInitOutcome, type OptionsOutcome, type PublishInput, type PublishOutcome } from "./project-git";
+import { applyTitle, normalizeTitle, shownTitle, type TitleState } from "../primitives/agent-title";
 
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
@@ -30,6 +31,8 @@ export type CreateRunInput = { goal: string; repo?: string; profile?: string; ta
 export class CreateRunError extends Error {
 	constructor(message: string, readonly field?: string) { super(message); }
 }
+/** PUT/DELETE …/title (capability agents.title): Agent.title after it, or why the title was refused (422). */
+export type TitleOutcome = { ok: true; title: string | null; titleSource: O<typeof Agent>["titleSource"] | null; changed: boolean } | { ok: false; message: string };
 /** A goal-branch action's outcome (POST …/pull-request, …/keep-branch): the body, or a refusal with its status. */
 export type GoalOutcome<T> = { ok: true; body: T } | { ok: false; status: 404 | 409 | 422; code: "not_found" | "conflict" | "stopped" | "invalid"; message: string };
 
@@ -115,6 +118,9 @@ export interface HarnessSource {
 	openPullRequest(runId: string, by: string, o?: { stopped?: boolean }): Promise<GoalOutcome<O<typeof GoalPullRequestResult>>>;
 	/** POST /v1/runs/{runId}/keep-branch (`by`: client:<id>). */
 	keepBranch(runId: string, by: string): Promise<GoalOutcome<{ runId: string; branch: string; base: string; kept: true; changed: boolean }>>;
+	/** PUT …/agents/{agentId}/title (capability agents.title): the user's title; null clears it (DELETE). `key` makes a
+	 *  retry safe across restarts. null for an unknown run or agent (404). */
+	setAgentTitle(runId: string, agentId: string, title: string | null, key: string): Promise<TitleOutcome | null>;
 }
 export type RunAction = "pause" | "resume" | "cancel";
 export type ControlResult = { changed: string[]; pending: string[]; noop: string | null };
@@ -214,6 +220,16 @@ export function memorySource(seed: Partial<{
 	const approvals = seed.approvals ?? {};
 	const runs = seed.runs ?? [];
 	const autoTitled = new WeakSet<SeedRun>();
+	// Seeded agents without a title get the daemon's (derived from the task, or what PUT …/title set).
+	const autoNamed = new WeakSet<O<typeof Agent>>();
+	const titleStates = new Map<string, TitleState>();
+	const nameAgents = (runId: string, list: O<typeof Agent>[]) => {
+		for (const a of list) {
+			if (a.title === undefined) autoNamed.add(a);
+			if (autoNamed.has(a)) Object.assign(a, shownTitle(titleStates.get(`${runId}\u0000${a.id}`), a.task));
+		}
+		return list;
+	};
 	const decided: Array<{ approvalId: string; approve: boolean; by: string }> = [];
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
@@ -316,7 +332,7 @@ export function memorySource(seed: Partial<{
 			return runs as O<typeof Run>[];
 		},
 		projects: async () => [],
-		agents: async (r) => seed.agents?.[r] ?? (seed.runs?.some((x) => x.id === r) ? [] : null),
+		agents: async (r) => (seed.agents?.[r] ? nameAgents(r, seed.agents[r]) : seed.runs?.some((x) => x.id === r) ? [] : null),
 		events: async (r, after) => (events[r] ?? []).filter((e) => e.seq > after),
 		transcript: async () => [],
 		attachment: async (r, id) => { const a = seed.attachments?.[r]?.[id]; return a ? { attachment: { id, bytes: a.bytes.length, sha256: "0".repeat(64), mediaType: a.mime }, text: Buffer.from(a.bytes).toString(a.mime.startsWith("text/") ? "utf8" : "base64"), encoding: a.mime.startsWith("text/") ? "utf8" as const : "base64" as const } : null; },
@@ -373,6 +389,21 @@ export function memorySource(seed: Partial<{
 			push(runId, { at: Date.now(), type: "RUN_PR_OPENED", agentId: null, data: { branch: g!.branch, base: g!.base, number: 1, url: g!.pullRequest.url, by } });
 			syncGoal(runId);
 			return { ok: true, body: { runId, branch: g!.branch, base: g!.base, created: true, pullRequest: { ...g!.pullRequest, state: "open" } } };
+		},
+		setAgentTitle: async (runId, agentId, title, _key) => {
+			const a = seed.agents?.[runId]?.find((x) => x.id === agentId);
+			if (!a) return null;
+			let t: string | null = null;
+			if (title !== null) { const n = normalizeTitle(title); if (!n.ok) return { ok: false, message: n.error }; t = n.title; }
+			autoNamed.add(a);
+			const k = `${runId}\u0000${agentId}`;
+			const ch = applyTitle(titleStates.get(k), a.task, { title: t, by: "user", setBy: "user", now: Date.now() });
+			if (ch.changed) {
+				titleStates.set(k, ch.next);
+				push(runId, { at: Date.now(), type: "AGENT_TITLED", agentId, data: { agentId, title: t ?? ch.title, by: t === null ? "cleared" : "user", setBy: "user", shown: ch.shown, titleSource: ch.titleSource } });
+			}
+			nameAgents(runId, [a]);
+			return { ok: true, title: ch.title, titleSource: ch.titleSource, changed: ch.changed };
 		},
 		keepBranch: async (runId, by) => {
 			const g = goals[runId];

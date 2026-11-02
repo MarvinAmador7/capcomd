@@ -30,6 +30,7 @@ import type { AgentSpec } from "../agents/profiles";
 import type { AttachedSkill } from "../agents/skills";
 import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
 import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
+import { applyTitle, normalizeTitle, renameRefusal, shownTitle, type TitleBy, type TitleState } from "../primitives/agent-title";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
@@ -134,6 +135,8 @@ function rowToAgent(r: any) {
     pauseRequested: (r.pause_requested as string | null) ?? null,
     /** ADR-022: how it is driven (CAPCOMD_SPAWN_EXEC, CAPCOMD_SCRIPT_*, driver timings), as its spawner's env had it. */
     driveEnv: r.drive_env ? (JSON.parse(r.drive_env as string) as Record<string, string>) : null,
+    /** Its title (capability agents.title): the user's, the latest agent-set one, the rename counts; null: nobody named it. */
+    titleState: r.title ? (JSON.parse(r.title as string) as TitleState) : null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -162,6 +165,14 @@ const isPlanner = (a: ScopeAgent) => !a.parent && !(a.contract as Record<string,
 export type GoalDecision = { choice: "pull_request" | "keep"; by: string; at: number; pr?: { number: number; url: string | null } };
 /** The goal branch as getScope reports it: the branch, when its planner finished (`ready`), and the user's choice. */
 export type GoalState = { branch: string; base: string; ready: { at: number; plannerId: string } | null; decision: GoalDecision | null };
+
+/** The run's title as its planner set it (`capcomd title --run`, scope_meta run_title), with its rename counts. */
+export type RunAgentTitle = { title: string; setBy: string; at: number; count: number; last: Record<string, number> };
+
+/** agent.titled: what an agent's title change records (by "cleared": the user cleared theirs; `title` is then the one shown). */
+function titledEvent(agentId: string, title: string | null, by: TitleBy | "cleared", setBy: string, ch: { shown: boolean; titleSource: string | null }) {
+  return { agentId, title, by, setBy, shown: ch.shown, titleSource: ch.titleSource };
+}
 
 /** recordStep: an agent's step history (agent.step) keeps at most this many; later steps are dropped. */
 export const STEPS_MAX = 500;
@@ -299,6 +310,7 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "workspace", "TEXT");
       await addColumn(database, "agents_v2", "pause_requested", "TEXT");
       await addColumn(database, "agents_v2", "drive_env", "TEXT");
+      await addColumn(database, "agents_v2", "title", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -354,8 +366,10 @@ export const scopeActor = actor({
       const meta2 = g ? await c.db.execute("SELECT k, v FROM scope_meta WHERE k IN ('goal_ready', 'goal_decision')") : [];
       const pick = (k: string) => { const row = meta2.find((x: any) => x.k === k); return row ? JSON.parse(row.v as string) : null; };
       const goalBranch: GoalState | null = g ? { ...g, ready: pick("goal_ready"), decision: pick("goal_decision") } : null;
+      const rt = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'run_title'");
+      const agentTitle = rt.length ? (({ title, setBy, at }: RunAgentTitle) => ({ title, setBy, at }))(JSON.parse(rt[0]!.v as string) as RunAgentTitle) : null;
       return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated,
-        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null, goalBranch };
+        ended: ended.length ? (JSON.parse(ended[0]!.v as string) as RunEnd) : null, goalBranch, agentTitle };
     },
 
     /**
@@ -403,6 +417,71 @@ export const scopeActor = actor({
       return out;
     },
 
+    /**
+     * Set an agent's title (capability agents.title), or clear the user's (title null, by "user"). The agent's own and
+     * its parent's renames are rate limited (RENAME_WINDOW_MS per setter, RENAMES_MAX per agent); a user title sticks:
+     * a later agent or parent title is recorded under it (shown: false) and shows once the user clears theirs. The same
+     * title from the same source again changes nothing. `key`: a retry with the same key answers as the first call did.
+     */
+    async setTitle(c, params: { agentId: string; title: string | null; by: TitleBy; setBy: string; key?: string }) {
+      let out: { agentId: string; changed: boolean; shown: boolean; title: string | null; titleSource: string | null } | null = null;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const r = await tx.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
+        if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
+        const a = rowToAgent(r[0]);
+        const task = redactShapes(a.task);
+        const idem = `title-${a.agentId}-${params.key ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`}`;
+        if (params.key && (await tx.execute("SELECT 1 FROM scope_events WHERE idem_key = ?", idem)).length) {
+          const s = shownTitle(a.titleState, task);
+          out = { agentId: a.agentId, changed: false, shown: params.title === null || s.title === params.title, ...s };
+          return;
+        }
+        let title: string | null = null;
+        if (params.title !== null) {
+          const n = normalizeTitle(params.title);
+          if (!n.ok) fail("usage", n.error);
+          title = (n as { title: string }).title;
+        } else if (params.by !== "user") fail("usage", "only the user clears a title");
+        const now = Date.now();
+        const ch = applyTitle(a.titleState, task, { title, by: params.by, setBy: params.setBy, now });
+        if (ch.changed && (params.by === "self" || params.by === "parent")) {
+          const no = renameRefusal(a.titleState, params.setBy, params.by === "self" ? "your tab" : a.agentId, now);
+          if (no) fail("rate_limited", no);
+        }
+        out = { agentId: a.agentId, changed: ch.changed, shown: ch.shown, title: ch.title, titleSource: ch.titleSource };
+        if (!ch.changed) return;
+        await tx.execute("UPDATE agents_v2 SET title = ? WHERE agent_id = ?", JSON.stringify(ch.next), a.agentId);
+        await addEvent(tx, "AGENT_TITLED", a.agentId, title === null ? titledEvent(a.agentId, ch.title, "cleared", params.setBy, ch) : titledEvent(a.agentId, title, params.by, params.setBy, ch), idem);
+      }, { name: "scopeSetTitle" });
+      return out!;
+    },
+
+    /**
+     * The run's title from its planner (`capcomd title --run`): Run.title with titleSource agent, below a label of the
+     * run's own. Rate limited like an agent's own renames. `key`: a retry with the same key answers as the first did.
+     */
+    async setRunTitle(c, params: { title: string; setBy: string; key?: string }) {
+      let out: { changed: boolean; title: string } | null = null;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const n = normalizeTitle(params.title);
+        if (!n.ok) fail("usage", n.error);
+        const title = (n as { title: string }).title;
+        const idem = `run-title-${params.key ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`}`;
+        const prev = await tx.execute("SELECT v FROM scope_meta WHERE k = 'run_title'");
+        const had = prev.length ? (JSON.parse(prev[0]!.v as string) as RunAgentTitle) : null;
+        if (params.key && (await tx.execute("SELECT 1 FROM scope_events WHERE idem_key = ?", idem)).length) { out = { changed: false, title: had?.title ?? title }; return; }
+        if (had?.title === title) { out = { changed: false, title }; return; }
+        const now = Date.now();
+        const no = renameRefusal(had, params.setBy, "the run", now);
+        if (no) fail("rate_limited", no);
+        const next: RunAgentTitle = { title, setBy: params.setBy, at: now, count: (had?.count ?? 0) + 1, last: { ...(had?.last ?? {}), [params.setBy]: now } };
+        await tx.execute("INSERT INTO scope_meta (k, v) VALUES ('run_title', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(next));
+        await addEvent(tx, "RUN_TITLED", params.setBy.startsWith("agt-") ? params.setBy : null, { title, setBy: params.setBy }, idem);
+        out = { changed: true, title };
+      }, { name: "scopeSetRunTitle" });
+      return out!;
+    },
+
     async spawn(
       c,
       params: {
@@ -411,6 +490,8 @@ export const scopeActor = actor({
         task: string; contract?: Record<string, unknown> | null; budget?: Budget; operator?: boolean; grant?: Grant; review?: boolean;
         /** ADR-022: the spawner's drive settings (not part of the params hash: a retry from another shell is the same spawn). */
         driveEnv?: Record<string, string>;
+        /** Its title, from its spawner (`spawn --title`; already normalized). Not part of the params hash: a retry is the same spawn. */
+        title?: { title: string; by: "parent" | "driver"; setBy: string };
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -475,12 +556,19 @@ export const scopeActor = actor({
         killpoint("scope.spawn.mid");
         // Same redaction path as message bodies: the row keeps the raw task for the worker; event + attachment are redacted.
         const taskInl = inlineOrAttach(redactShapes(params.task));
+        const redacted = taskInl.text ?? redactShapes(params.task);
+        // Its title: the spawner's (agent.titled follows agent.spawned), else derived from the task.
+        const titled = params.title ? applyTitle(null, redacted, { title: params.title.title, by: params.title.by, setBy: params.title.setBy, now, counted: false }) : null;
+        if (titled) await tx.execute("UPDATE agents_v2 SET title = ? WHERE agent_id = ?", JSON.stringify(titled.next), params.agentId);
+        const shown = titled ?? shownTitle(null, redacted);
         if (taskInl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", taskInl.attachment.id, taskInl.attachment.sha256, taskInl.attachment.bytes, taskInl.attachment.mediaType, taskInl.body, now);
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
           agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
           ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}), workspace,
+          ...(shown.title ? { title: shown.title, titleSource: shown.titleSource } : {}),
         }, `spawn-${params.agentId}`);
+        if (titled) await addEvent(tx, "AGENT_TITLED", params.agentId, titledEvent(params.agentId, titled.title, params.title!.by, params.title!.setBy, titled), `title-${params.agentId}-spawn`);
         out = await get(params.agentId);
         created = true;
       }, { name: "scopeSpawn" });

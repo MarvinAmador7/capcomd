@@ -8,6 +8,7 @@ import { z } from "zod";
 import { AttachmentRef } from "./inline-cap";
 import { AgentWorkspace } from "./workspace";
 import { ACTIVITY_KINDS } from "../../packages/agent-thread/src/kinds";
+import { AGENT_TITLE_SOURCES, TITLE_MAX_CHARS, TITLE_WORDS_MAX } from "../primitives/agent-title";
 
 /** Text written by an agent or worker. Render as plain text only: never as markdown, links or actions. */
 export const UntrustedText = z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions" });
@@ -55,11 +56,14 @@ export const SpawnedAgent = z.looseObject({
 /** Set on lifecycle-feed copies of state-change events (GET /v1/runs/{runId}/lifecycle, ?feed=lifecycle): trusted reason code. */
 const cause = { cause: S.optional().describe("Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)") };
 const kv = { k: S, version: N, writer: S.optional() };
+/** Agent.titleSource / agent.titled titleSource: who named the agent (derived: the daemon, from its task). */
+export const AgentTitleSource = z.enum(AGENT_TITLE_SOURCES).describe("Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source");
+const AgentTitleText = UntrustedText.describe(`Agent-written text: render as plain text, never markdown, links or actions. 1 to ${TITLE_WORDS_MAX} lowercase words, at most ${TITLE_MAX_CHARS} characters, one line`);
 
 /** Every type scope.ts emits. Adding one here without a schema fails the guard test; emitting one not listed fails typecheck. */
 export const SCOPE_EVENT_TYPES = [
-	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED", "RUN_GOAL_COMPLETED", "RUN_PR_OPENED", "RUN_BRANCH_KEPT",
-	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED", "AGENT_STEP",
+	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED", "RUN_GOAL_COMPLETED", "RUN_PR_OPENED", "RUN_BRANCH_KEPT", "RUN_TITLED",
+	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_TITLED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED", "AGENT_STEP",
 	"AGENT_PAUSED", "AGENT_RESUMED", "AGENT_GRANTED", "AGENT_ADOPTED", "AGENT_REAPED", "AGENT_CANCELLED",
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
@@ -79,8 +83,20 @@ export const LegacyEventShapes = {
 	"run.goal_completed": { branch: S.describe("The run's goal branch"), base: S.describe("The branch it was cut from, which a pull request goes into"), plannerId: S.describe("The planner agent whose finish made the run ready"), ...cause },
 	"run.pr_opened": { branch: S, base: S, number: N.describe("The pull request's number on GitHub"), url: nS.describe("Its page on GitHub"), by: S.describe("Who opened it: client:<id>, operator or driver"), ...cause },
 	"run.branch_kept": { branch: S, base: S, by: S.describe("Who chose to keep it: client:<id>, operator or driver"), ...cause },
-	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(), ...cause },
+	"run.titled": { title: AgentTitleText.describe(`Agent-written text: render as plain text, never markdown, links or actions. The run's new title from its planner (\`capcomd title --run\`): Run.title with titleSource agent, unless the run has a label of its own. 1 to ${TITLE_WORDS_MAX} lowercase words`), setBy: S.describe("The agent that named the run (its planner)"), ...cause },
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(),
+		title: AgentTitleText.optional().describe("Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title: its title at spawn (Agent.title): its spawner's (`spawn --title`; agent.titled follows), else derived from the task. Absent when it has none, and from older daemons"),
+		titleSource: AgentTitleSource.optional(), ...cause },
 	"agent.started": { ...cause },
+	"agent.titled": {
+		agentId: S,
+		title: AgentTitleText.nullable().describe("Agent-written text: render as plain text, never markdown, links or actions. The title this change set; with by cleared, the title shown now (the latest agent-set one, else the derived one; null when there is none)"),
+		by: z.enum(["self", "parent", "driver", "user", "cleared"]).describe("Who set it (see Agent.titleSource), or cleared: the user cleared theirs (DELETE …/title)"),
+		setBy: S.describe("The agent that set it (by self or parent), driver, or user"),
+		shown: z.boolean().describe("This title is Agent.title now. false: a user title holds the tab (this one is kept and shows once the user clears theirs). A client sets Agent.title and titleSource from this event only when shown"),
+		titleSource: AgentTitleSource.nullable().describe("Agent.titleSource after the change"),
+		...cause,
+	},
 	"agent.done": { ...finish, ...cause },
 	"agent.failed": { ...finish, ...cause },
 	"agent.checkpointed": { ref: S, sha: S, at: N, reason: T, files: N },

@@ -23,6 +23,13 @@ extension Theme {
     static let deckHead: CGFloat = 22, deckHeadOverlap: CGFloat = 15
     static let askFill = Theme.amber.opacity(0.14), askStroke = Theme.amber.opacity(0.55)
     static let iconButton: CGFloat = 30
+    /// A crew tab's title stops here and ends with "…" (titles are at most 32 characters; most fit), so a long one never
+    /// pushes the strip around. The column header's title has more room.
+    static let tabTitleMax: CGFloat = 150
+    static let headerTitleMax: CGFloat = 240
+    /// The header's rename field: room for a 32-character name without squeezing the profile, state and clock.
+    static let headerField: CGFloat = 170
+    static let renameStroke = Theme.accent.opacity(0.6), renameRefused = Theme.red.opacity(0.8)
 
     // Reel.
     static let gap: CGFloat = 10

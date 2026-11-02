@@ -1,8 +1,18 @@
 // ADR-017: the orchestration skill appended to the system prompt of agents whose effective
-// limits allow spawning. Agents without children.allowSpawn never get it (nor the CLI/MCP).
+// limits allow spawning. Agents without children.allowSpawn get only the naming lines (capability agents.title) and a
+// local `capcomd` that can do just that (src/primitives/title-rules.mjs).
 import type { Limits, Budget } from "../primitives/policy";
 
 export const VM_RPC_DIR = "/tmp/capcomd-rpc";
+
+/** Every agent names its tab, Rex-style: injected into every real agent's instructions, so it stays short. */
+export function namingSkill(o: { mcp: boolean; planner?: boolean }): string {
+  return `# Name your tab (capcomd)
+Once you understand your task, run \`capcomd title "<2-4 lowercase words>"\`${o.mcp ? " (or the capcomd_title tool)" : " as a command of its own"} naming what you're working on
+(e.g. "login redirect"). Rename only when your focus really changes.${o.planner === undefined ? "" : `
+Give each child a title when you spawn it (\`--title "…"\`)${o.planner ? `, and name the run once you've planned it
+(\`capcomd title --run "<2-4 words>"\`)` : ""}.`}`;
+}
 
 export function orchestrationSkill(o: { agentId: string; limits: Limits; budget: Budget; mcp: boolean; goal?: { branch: string; base: string } | null; root?: boolean }): string {
   const L = o.limits;
@@ -19,7 +29,9 @@ deciding whether to open a pull request from ${o.goal.branch} into ${o.goal.base
 and why; per task, what landed (child, verified, reviewed) and what didn't, and why; what is left to do.` : `You are a lead: merge your verified children into ${o.goal.branch}, and end with a summary of what landed and what
 didn't; your parent puts it in front of the person.`}
 ` : "";
-  return `# Orchestrating child agents (capcomd)
+  return `${namingSkill({ mcp: o.mcp, planner: !!o.root })}
+
+# Orchestrating child agents (capcomd)
 
 You are agent ${o.agentId}. You may delegate parts of your task to child agents, each in its own VM
 with its own git branch. Use the \`capcomd\` command${o.mcp ? " (or the equivalent capcomd_* MCP tools)" : ""}. All output is JSON.
@@ -30,7 +42,7 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
 - your budget: ${b}  (check with \`capcomd budget\`)
 
 ## Core loop
-  capcomd spawn --task "<self-contained task: files, acceptance, constraints>" --profile <p> --key <stable-name> \\
+  capcomd spawn --task "<self-contained task: files, acceptance, constraints>" --title "<2-4 words>" --profile <p> --key <stable-name> \\
                 --budget usd=…,turns=…  --children.maxChildren=0      # leaf worker: cannot fan out
   capcomd wait-any <agt…>   |   capcomd await <agt…>                    # structured results
   capcomd verify --ref <agt>                                            # runs operator-set checks; never trust a self-report

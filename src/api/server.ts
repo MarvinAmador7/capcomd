@@ -372,6 +372,24 @@ export function harnessApp(o: ServerOptions) {
 		});
 	}
 
+	// The user's title for an agent (capability agents.title): PUT sets it, DELETE clears it. Not rate limited (an agent's
+	// own renames are); the scope gets its own key too, so a retry after a daemon restart records it once.
+	const titleRoute = (c: Context, title: string | null) => {
+		const runId = c.req.param("runId")!, agentId = c.req.param("agentId")!;
+		return idempotent(c, ["agents.title", runId, agentId, title], async (client, key) => {
+			const r = await src.setAgentTitle(runId, agentId, title, `harness:${client.clientId}:${key}`);
+			if (!r) return (await src.agents(runId)) === null ? gone(`run ${runId}`) : gone(`agent ${agentId}`);
+			if (!r.ok) return { status: 422, body: { code: "invalid", message: r.message, field: "title" } };
+			return { status: 200, body: { runId, agentId, title: r.title, titleSource: r.titleSource, changed: r.changed } };
+		});
+	};
+	app.put("/v1/runs/:runId/agents/:agentId/title", async (c) => {
+		const raw = await c.req.json().catch(() => null) as { title?: unknown } | null;
+		if (!raw || typeof raw.title !== "string" || raw.title.length > 200) return err(c, 422, "invalid", "body must be {title: 1 to 4 words}", { field: "title" });
+		return titleRoute(c, raw.title);
+	});
+	app.delete("/v1/runs/:runId/agents/:agentId/title", (c) => titleRoute(c, null));
+
 	app.post("/v1/runs/:runId/agents/:agentId/messages", async (c) => {
 		const runId = c.req.param("runId"), agentId = c.req.param("agentId");
 		const raw = await c.req.json().catch(() => null) as { body?: unknown; skills?: unknown } | null;

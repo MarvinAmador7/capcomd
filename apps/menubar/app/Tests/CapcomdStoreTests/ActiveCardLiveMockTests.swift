@@ -45,7 +45,7 @@ final class ActiveCardLiveMockTests: XCTestCase {
     // The screenshot case: worker asks to merge, with its two files.
     let ask = s.activeCard(try XCTUnwrap(byRun["run-cl01"]))
     guard case .ask(let a) = ask.body else { return XCTFail("\(ask.body)") }
-    XCTAssertEqual(a.question, "Merge worker's work into main?")
+    XCTAssertEqual(a.question, "Merge work from worker into main?")
     XCTAssertEqual(a.waiters.map(\.name), ["planner", "critic"])
     XCTAssertEqual(a.approval.diff?.files.map(\.path.plain), ["src/math.test.ts", "src/math.ts"])
     XCTAssertEqual(a.approval.diff.map { [$0.total, $0.added, $0.removed] }, [2, 24, 0])

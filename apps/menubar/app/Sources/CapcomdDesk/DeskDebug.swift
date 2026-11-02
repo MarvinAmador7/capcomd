@@ -68,8 +68,10 @@ import AppKit
   /// half second it runs the lines of <dir>/cmd (then deletes it) and writes the model's state to <dir>/state.txt.
   /// Lines: `project N`, `agent N`, `focus ±1`, `scroll <agentId>`, `follow on|off`, `steer <agentId> <text>`,
   /// `decide <approvalId> approve|deny`, `goal open|confirm|cancel|keep` (the goal card's buttons), `openrun <runId>` (a click on its notification), `swipe <dx>` (a two-finger swipe of dx points handed to the reel's scroll
-  /// view, as deskbench's swipes are; negative scrolls toward later columns), `snap <name>` (the window, now, into <dir>/<name>.png), `key <char|return|escape|left|right> [cmd] [ctrl] [shift]` (a key event handed to
-  /// this app's own window and menu, never posted to the system).
+  /// view, as deskbench's swipes are; negative scrolls toward later columns), `snap <name>` (the window, now, into <dir>/<name>.png), `key <char|return|escape|delete|left|right> [cmd] [ctrl] [shift]` (a key event handed to
+  /// this app's own window and menu, never posted to the system), `rename <N|agentId> tab|header` (a double-click on
+  /// that agent's tab or header: its rename field opens), `type <text>` (the text typed into the focused field, as key
+  /// events handed to this window; select it all first with `key a cmd`).
   static func control(_ model: DeskModel, _ dir: URL) {
     let cmd = dir.appendingPathComponent("cmd")
     if let text = try? String(contentsOf: cmd, encoding: .utf8) {
@@ -89,6 +91,11 @@ import AppKit
         case "swipe": if let dx = w.dropFirst().first.flatMap(Double.init) { swipe(dx) }
         case "goal": goal(model, w.dropFirst().first ?? "")
         case "openrun": if w.count > 1 { model.openRun(w[1]) }   // as a click on its notification
+        case "rename":
+          guard w.count > 1 else { break }
+          let id = Int(w[1]).flatMap { n in model.columns.indices.contains(n - 1) ? model.columns[n - 1] : nil } ?? w[1]
+          model.beginRename(id, at: w.dropFirst(2).first == "header" ? .header : .tab)
+        case "type": type(String(line.dropFirst(5)))
         default: break
         }
       }
@@ -132,7 +139,7 @@ import AppKit
     var flags: NSEvent.ModifierFlags = []
     if w.contains("cmd") { flags.insert(.command) }; if w.contains("ctrl") { flags.insert(.control) }; if w.contains("shift") { flags.insert(.shift) }
     let (chars, code): (String, UInt16) = switch k {
-    case "return": ("\r", 36); case "escape": ("\u{1b}", 53)
+    case "return": ("\r", 36); case "escape": ("\u{1b}", 53); case "delete": ("\u{7f}", 51)
     case "left": (String(UnicodeScalar(NSLeftArrowFunctionKey)!), 123); case "right": (String(UnicodeScalar(NSRightArrowFunctionKey)!), 124)
     default: (k, [ "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25 ][k] ?? 0)
     }
@@ -146,6 +153,18 @@ import AppKit
     win.firstResponder?.keyDown(with: e)
   }
 
+  /// Types `text` into this window's focused field, one key event per character (never posted to the system).
+  static func type(_ text: String) {
+    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    for ch in text {
+      let s = String(ch)
+      guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                     windowNumber: win.windowNumber, context: nil, characters: s, charactersIgnoringModifiers: s,
+                                     isARepeat: false, keyCode: 0) else { continue }
+      win.firstResponder?.keyDown(with: e)
+    }
+  }
+
   static func state(_ model: DeskModel) -> String {
     let s = model.store
     var out = ["link \(model.link) unreachable \(s.daemonUnreachable) unauthorized \(s.unauthorized) follow \(model.follow) across \(model.across)",
@@ -156,7 +175,7 @@ import AppKit
     for id in model.columns {
       guard let a = model.agent(id) else { out.append("col \(id) (no slice)"); continue }
       let h = a.header, t = model.peekThread(id)
-      out.append("col \(id) \(h.name) \(h.suffix ?? "") \(h.status) warm \(a.warm) seen \(a.onScreen) focus \(a.focused) ask \(a.approval?.id ?? "-") "
+      out.append("col \(id) \(h.name) title \(h.title.map { "\"\($0)\"" } ?? "-") tab \"\(h.tabLabel)\" user \(h.userTitled) renaming \(a.renaming.map { "\($0)" } ?? "-") failed \(a.renameFailure ?? "-") \(h.suffix ?? "") \(h.status) warm \(a.warm) seen \(a.onScreen) focus \(a.focused) ask \(a.approval?.id ?? "-") "
         + "spawned \(h.spawnedAtMs) store \(s.threadEntries(agentId: id).count) shown \(t.map { "\($0.entries.count)" } ?? "-") "
         + "pending \(t.map { $0.pending.map { "\($0.state)" }.joined(separator: ",") } ?? "-")")
     }

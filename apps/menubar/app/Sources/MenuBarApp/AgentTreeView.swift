@@ -3,8 +3,9 @@ import SwiftUI
 import CapcomdStore
 import CapcomdBot
 
-/// SPEC §4.4 / tree-card-v3: an outline with hairline guides. 26 pt rows: chevron · profile icon · name · suffix ·
-/// folder chip · status. Under a row, at its name column: its approval when it waits, else its live activity. A
+/// SPEC §4.4 / tree-card-v3: an outline with hairline guides. 26 pt rows: chevron · profile icon · name · title (the
+/// suffix only when siblings share a title, or from an older daemon) · folder chip · status. Rename… (the row's context
+/// menu) edits the title in place: Return saves, Esc cancels, an empty name clears yours. Under a row, at its name column: its approval when it waits, else its live activity. A
 /// collapsed ancestor shows the amber hand when anything below it waits.
 struct AgentTreeView: View {
   @Environment(AppModel.self) private var model
@@ -91,6 +92,9 @@ struct AgentTreeRow: View {
   @Environment(AppModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var blinking = false
+  /// Renaming it in place (agents.title): the field's draft, nil while it isn't.
+  @State private var renaming: TitleEdit?
+  @FocusState private var renameFocused: Bool
   let runId: String
   let line: TreeLine
   let showFolder: Bool
@@ -133,28 +137,12 @@ struct AgentTreeRow: View {
       avatar(node)   // the waiting state stays the amber mark
         .help(model.botName(runId: runId, agentId: node.id) ?? "")
         .frame(width: Theme.Tree.icon).padding(.leading, Theme.Tree.iconLeading).padding(.trailing, Theme.Tree.iconTrailing)
-      Button { model.path.append(.thread(runId: runId, agentId: node.id)) } label: {
-        HStack(spacing: 0) {
-          Text(verbatim: node.name)
-            .font(node.status == .running ? Theme.Tree.nameRunningFont : Theme.Tree.nameFont)
-            .foregroundStyle(node.status == .running ? Theme.Tree.nameRunning : node.status == .pending ? Theme.Tree.nameQueued : Theme.Tree.nameText)
-            .lineLimit(1)
-          if let s = node.suffix {
-            Text(verbatim: s).font(Theme.Tree.suffixFont).foregroundStyle(Theme.Tree.suffixText).padding(.leading, Theme.Tree.suffixLeading).lineLimit(1)
-          }
-          Spacer(minLength: 0)
-          if showFolder, let repo = node.repo, repo != node.suffix {
-            HStack(spacing: Theme.Tree.chipGap) {
-              Image(systemName: "folder").font(Theme.Tree.chipIcon)
-              Text(verbatim: repo).font(Theme.Tree.chipFont).lineLimit(1)
-            }
-            .foregroundStyle(Theme.Tree.chipText)
-            .padding(.leading, Theme.Tree.chipLeading)
-          }
-        }
-        .contentShape(Rectangle())
+      // While it's renamed the row is the field, not a button (a click in the field would open the thread).
+      if renaming != nil { rowContent(node).frame(maxWidth: .infinity, alignment: .leading) }
+      else {
+        Button { model.path.append(.thread(runId: runId, agentId: node.id)) } label: { rowContent(node).contentShape(Rectangle()) }
+          .buttonStyle(PressableStyle())
       }
-      .buttonStyle(PressableStyle())
       if let p = model.provider(runId: runId, agentId: node.id) {
         ProviderMark(provider: p.provider, size: Theme.Provider.rowSize).foregroundStyle(Theme.Provider.rowText)
           .padding(.leading, Theme.Provider.rowLeading)
@@ -171,6 +159,60 @@ struct AgentTreeRow: View {
     .accessibilityElement(children: .combine)
     .accessibilityLabel(node.accessibilityLabel + (model.botName(runId: runId, agentId: node.id).map { ", \($0)" } ?? ""))
     .accessibilityHint("Opens its thread")
+    .contextMenu { Button("Rename…") { beginRename() } }
+    .accessibilityAction(named: "Rename") { beginRename() }
+  }
+
+  /// Name, title (or the rename field), suffix, folder chip.
+  @ViewBuilder private func rowContent(_ node: AgentNode) -> some View {
+    HStack(spacing: 0) {
+      Text(verbatim: node.name)
+        .font(node.status == .running ? Theme.Tree.nameRunningFont : Theme.Tree.nameFont)
+        .foregroundStyle(node.status == .running ? Theme.Tree.nameRunning : node.status == .pending ? Theme.Tree.nameQueued : Theme.Tree.nameText)
+        .lineLimit(1)
+      if renaming != nil { renameField(node) }
+      else if let t = node.title {
+        // Agent-written: plain text, never markdown.
+        Text(verbatim: t).font(Theme.Tree.titleFont).foregroundStyle(Theme.Tree.titleText).padding(.leading, Theme.Tree.titleLeading)
+          .lineLimit(1).truncationMode(.tail).layoutPriority(-1)
+      }
+      if let s = node.suffix {
+        Text(verbatim: s).font(Theme.Tree.suffixFont).foregroundStyle(Theme.Tree.suffixText).padding(.leading, Theme.Tree.suffixLeading).lineLimit(1)
+      }
+      Spacer(minLength: 0)
+      if showFolder, let repo = node.repo, repo != node.suffix {
+        HStack(spacing: Theme.Tree.chipGap) {
+          Image(systemName: "folder").font(Theme.Tree.chipIcon)
+          Text(verbatim: repo).font(Theme.Tree.chipFont).lineLimit(1)
+        }
+        .foregroundStyle(Theme.Tree.chipText)
+        .padding(.leading, Theme.Tree.chipLeading)
+      }
+    }
+  }
+
+  private func beginRename() { renaming = model.titleEdit(runId: runId, agentId: line.node.id); renameFocused = true }
+
+  /// The title as a field: Return saves (a name capcomd would refuse keeps it open, outlined), Esc or a click
+  /// elsewhere cancels.
+  @ViewBuilder private func renameField(_ node: AgentNode) -> some View {
+    let draft = Binding(get: { renaming?.draft ?? "" }, set: { renaming?.draft = $0 })
+    TextField("Name", text: draft)
+      .textFieldStyle(.plain).font(Theme.Tree.titleFont).lineLimit(1)
+      .focused($renameFocused)
+      .onSubmit {
+        guard let e = renaming else { return }
+        if case .invalid = e.commit { renameFocused = true; return }
+        renaming = nil
+        model.rename(runId: runId, agentId: node.id, e.commit)
+      }
+      .onExitCommand { renaming = nil }
+      .onChange(of: renameFocused) { _, f in if !f { renaming = nil } }
+      .padding(.horizontal, 3)
+      .frame(width: Theme.Tree.titleField, height: 18)
+      .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(renaming?.error != nil ? Theme.red.opacity(0.8) : Theme.accent.opacity(0.6), lineWidth: 1))
+      .help(renaming?.error ?? "Return saves · Esc cancels · empty clears your name")
+      .padding(.leading, Theme.Tree.titleLeading)
   }
 }
 #endif

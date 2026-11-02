@@ -11,7 +11,7 @@ final class RunTitleTests: XCTestCase {
   struct Fixture: Decodable {
     struct Short: Decodable { var input: String; var title: String? }
     struct RunCase: Decodable {
-      struct In: Decodable { var label: String?; var goal: String?; var agents: [A] }
+      struct In: Decodable { var label: String?; var goal: String?; var agentTitle: String?; var agents: [A] }
       struct A: Decodable { var parent: String?; var task: String?; var result: JSONValue? }
       var name: String; var run: In; var title: String?; var titleSource: String?
     }
@@ -33,7 +33,7 @@ final class RunTitleTests: XCTestCase {
         ag.read(result: a.result)
         return ag
       }
-      let t = RunTitle.of(label: c.run.label, goal: c.run.goal, agents: agents)
+      let t = RunTitle.of(label: c.run.label, goal: c.run.goal, agentTitle: c.run.agentTitle, agents: agents)
       XCTAssertEqual(t?.text, c.title, c.name)
       XCTAssertEqual(t.map { "\($0.source)" }, c.titleSource, c.name)
     }

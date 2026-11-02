@@ -24,6 +24,7 @@ import { MACHINE_PREFIX, type SandboxProvider } from "../providers/sandbox";
 import { sandboxName, type ListedProvider } from "../providers/registry";
 import { forgetMachine, jobOwnerText, jobsHeld, machineNameFor, readMachineLedger, type AgentMachine, type LedgerEntry } from "../providers/machines";
 import { fileSettingsStore, settingsPath } from "../providers/settings";
+import { shownTitle } from "../primitives/agent-title";
 
 const lower = (p: string | null) => (p ? p.toLowerCase() : null);
 const cap = (t: string) => (Buffer.byteLength(t) <= INLINE_TEXT_MAX_BYTES ? t : Buffer.from(t).subarray(0, INLINE_TEXT_MAX_BYTES).toString("utf8").replace(/\uFFFD+$/, ""));
@@ -186,12 +187,12 @@ export function rivetSource(): HarnessSource {
 	const runsIndex = () => recentRuns(500);
 	const runs = async () => Promise.all(runsIndex().map(async (r) => {
 		const s = await existingScope(r.runId).catch(() => null);
-		const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null } | null;
+		const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null; agentTitle?: { title: string } | null } | null;
 		const agents = s && meta ? await s.listAgents({}).catch(() => []) : [];
 		const live = (agents as Array<{ status: string }>).some((a) => a.status === "running" || a.status === "pending" || a.status === "paused");
 		// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
 		const goal = meta?.goal ?? null;
-		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt),
+		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agentTitle: meta?.agentTitle?.title ?? null, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt),
 			goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended) };
 	}));
 	const surface = sandboxSurface({
@@ -248,6 +249,7 @@ export function rivetSource(): HarnessSource {
 					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: agentActivity(a.activity, a.status),
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
 					...agentRuntime(a.spec), createdAt: a.createdAt ? isoTs(a.createdAt) : null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
+					...shownTitle(a.titleState, inl.text ?? redactShapes(String(a.task ?? ""))),
 				};
 			});
 		},
@@ -357,6 +359,20 @@ export function rivetSource(): HarnessSource {
 			// A run that hadn't ended is cancelled even with no agent left to stop (runEnded): only an ended run is the noop.
 			if (r.kind === "agents") return { changed: r.agents.cancelled, pending: [], noop: r.agents.cancelled.length || r.agents.runEnded ? null : agentId ? `nothing to cancel in ${runId}: every agent has ended` : `nothing to cancel: ${runId} has ended` };
 			return { changed: r.agents?.cancelled ?? [], pending: [], noop: r.run.changed ? null : `${runId} is ${r.run.state}; nothing to cancel` };
+		},
+		// The user's title (PUT/DELETE …/title): the same scope action as the CLI, the MCP tools and `capcomd title` in a VM.
+		setAgentTitle: async (runId, agentId, title, key) => {
+			const s = await existingScope(runId);
+			if (!s) return null;
+			try {
+				const r = await s.setTitle({ agentId, title, by: "user", setBy: "user", key });
+				return { ok: true, title: r.title, titleSource: r.titleSource as never, changed: r.changed };
+			} catch (e) {
+				const code = (e as { code?: string }).code;
+				if (code === "not_found") return null;
+				if (code === "usage") return { ok: false, message: (e as Error).message };
+				throw e;
+			}
 		},
 		send: async (runId, to, body, key, skills) => {
 			const r = await sendToAgent(runId, { to, from: "operator", body, key, ...(skills?.length ? { skills } : {}) });

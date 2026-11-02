@@ -63,7 +63,7 @@ struct BracketBounds: PreferenceKey {
   static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) { value += nextValue() }
 }
 
-/// The open project: its name and clock, then its crew in tree order, with the on-screen columns bracketed.
+/// The open project: its name, then its crew in tree order, with the on-screen columns bracketed.
 struct OpenGroup: View {
   @Environment(DeskModel.self) private var model
   let deck: DeckInfo
@@ -73,11 +73,8 @@ struct OpenGroup: View {
     let first = cols.firstIndex(where: seen.contains) ?? -1, last = cols.lastIndex(where: seen.contains) ?? -1
     return HStack(spacing: 2) {
       PlaceIcon(sandbox: deck.sandbox).padding(.trailing, 6)
-      VStack(alignment: .leading, spacing: 1) {
-        Text(verbatim: deck.title).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).lineLimit(1)
-        DeckClock(deck: deck)
-      }
-      .frame(maxWidth: 200, alignment: .leading)
+      Text(verbatim: deck.title).font(Theme.Desk.name).foregroundStyle(Theme.Desk.text).lineLimit(1)
+        .frame(maxWidth: 200, alignment: .leading)
       .padding(.trailing, 8)
       // One row of tabs whose identity never changes as the reel scrolls; the bracket is drawn behind the on-screen
       // ones from their bounds, so moving it re-lays out one shape instead of rebuilding tabs.
@@ -107,22 +104,6 @@ struct OpenGroup: View {
   }
 }
 
-/// The run's clock: elapsed while it runs (drawn by the system each second, no re-render), its duration once ended.
-struct DeckClock: View {
-  let deck: DeckInfo
-  var body: some View {
-    HStack(spacing: 0) {
-      if let p = Place(sandbox: deck.sandbox) { Text(verbatim: p.word + " · ") }
-      if let ended = deck.endedHead {
-        Text(verbatim: ended)
-      } else if let start = deck.startedAtMs {
-        Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
-      }
-    }
-    .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()
-  }
-}
-
 /// Where a project runs, as the menu bar's Local / Cloud switch shows it. A place this app doesn't know shows nothing.
 enum Place {
   case local, cloud
@@ -143,7 +124,9 @@ struct PlaceIcon: View {
   }
 }
 
-/// One agent's tab: its head and short name; amber when it asks, dim while queued. A click scrolls the reel to it.
+/// One agent's tab: its head and its title (capability agents.title; an older daemon's: the suffix, else the profile);
+/// amber when it asks, dim while queued. A click scrolls the reel to it; a double-click renames it in place. A long
+/// title ends with "…" at a fixed width, so the strip doesn't move as titles change.
 struct CrewTab: View {
   @Environment(DeskModel.self) private var model
   let agentId: String
@@ -154,7 +137,12 @@ struct CrewTab: View {
       Button { model.scroll(to: agentId) } label: {
         HStack(spacing: 5) {
           BotAvatar(traits: a.bot, size: .xs, cell: 1.5)
-          Text(verbatim: h.suffix ?? h.name).font(Theme.Desk.label)
+          if a.renaming == .tab {
+            InlineTitleField(agentId: agentId, font: Theme.Desk.label, width: Theme.Desk.tabTitleMax)
+          } else {
+            Text(verbatim: h.tabLabel).font(Theme.Desk.label).lineLimit(1).truncationMode(.tail)
+              .frame(maxWidth: Theme.Desk.tabTitleMax, alignment: .leading).fixedSize(horizontal: true, vertical: false)
+          }
           if asks { Text("asks").font(Theme.Desk.label).foregroundStyle(Theme.amber) }
         }
         .foregroundStyle(asks || a.onScreen ? Theme.Desk.text : Theme.Desk.secondary)
@@ -166,12 +154,15 @@ struct CrewTab: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(PressableStyle())
-      .accessibilityLabel([h.name, h.suffix, asks ? "asks" : nil].compactMap { $0 }.joined(separator: " "))
+      .simultaneousGesture(TapGesture(count: 2).onEnded { model.beginRename(agentId, at: .tab) })
+      .help(a.renameFailure.map { "Couldn't rename it: \($0)" } ?? h.label)
+      .accessibilityLabel([h.label, asks ? "asks" : nil].compactMap { $0 }.joined(separator: " "))
+      .accessibilityAction(named: "Rename") { model.beginRename(agentId, at: .tab) }
     }
   }
 }
 
-/// A folded project: its name and one status line, then its crew's heads stacked. Amber when an agent in it asks.
+/// A folded project: its name, then its crew's heads stacked. Amber, and who asks under the name, when an agent in it asks.
 struct FoldedDeck: View {
   @Environment(DeskModel.self) private var model
   let deck: DeckInfo
@@ -184,7 +175,6 @@ struct FoldedDeck: View {
         VStack(alignment: .leading, spacing: 1) {
           Text(verbatim: deck.title).font(Theme.Desk.label).foregroundStyle(Theme.Desk.text).lineLimit(1)
           if asks, let who = deck.askingName { Text(verbatim: "\(who) asks").font(Theme.Desk.meta).foregroundStyle(Theme.amber) }
-          else { DeckClock(deck: deck) }
         }
         .frame(maxWidth: 150, alignment: .leading)
         HStack(spacing: -Theme.Desk.deckHeadOverlap) {
