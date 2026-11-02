@@ -4,3 +4,7 @@ node_modules/
 out/
 next-env.d.ts
 *.tsbuildinfo
+# Design working files, kept local: screenshots and the art-direction comps.
+shots/
+directions/
+DIRECTIONS.md

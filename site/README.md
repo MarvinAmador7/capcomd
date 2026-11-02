@@ -10,7 +10,7 @@ root workspace.
 cd site
 bun install            # the site's own dependencies (exact versions, site/bun.lock)
 bun run dev            # http://localhost:4173, with hot reload
-bun run build          # static export to out/ (fetches the two Google fonts once, to self-host them)
+bun run build          # static export to out/
 bun run preview        # serve out/ like a static host on http://127.0.0.1:4173 (gzip; 404.html for missing paths)
 bun run typecheck      # tsc --noEmit for the site
 bun run vendor         # re-vendor packages/bot-avatar after the avatar engine changes
@@ -22,7 +22,7 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 
 | Path | What |
 |---|---|
-| `app/layout.tsx` | Fonts (`next/font/google`: Bebas Neue and EB Garamond, self-hosted at build time, SIL OFL), metadata (title, description, canonical, Open Graph, Twitter, icons), and the one inline script that marks the page as scripted. |
+| `app/layout.tsx` | Fonts (`next/font/local`: Geist Serif, Geist and Geist Pixel, vendored in `app/fonts/`, SIL OFL), metadata (title, description, canonical, Open Graph, Twitter, icons), and the one inline script that marks the page as scripted. |
 | `app/page.tsx` | The page: Hero, Run, Sandboxes, RoleTree, AtScale, Patterns, Drive, Footer. |
 | `app/globals.css` | Tailwind, the design tokens in `@theme` (colours, type, spacing, easing), and the art direction's components in `@layer components` (the hero slot, the stages, the app panels, the tree), which read only those tokens. Simple layouts such as the footer use utilities. |
 | `app/bots/page.tsx`, `components/playground/`, `lib/playground.ts` | The bot playground at `/bots/`: pull a bot from an id and a role, set any of its 14 parts, a mood and a size, keep a crew (localStorage), download SVG or PNG, share a link (`#s=…&r=…&t=…&z=…`) that redraws the bot exactly. Its OG image is `app/bots/og.png/route.tsx`. |
@@ -37,11 +37,10 @@ Stack: Next.js 16.4.3, React 19.3.1, Tailwind CSS 4.3.3 (`@tailwindcss/postcss`)
 | `lib/runtime-icons.ts`, `public/logos/` | The Docker and Podman marks (simple-icons 16.36.0, CC0), OrbStack's app icon (orbstack.dev) and Colima's llama (cropped from the colima repository's logo) for "Supported sandboxes". The marks belong to their owners. |
 | `lib/crew.ts`, `lib/marks.ts` | The crew's roles and default seed (`run_7e9410`, what the static HTML is drawn with), the wordmark, the menu bar mark. |
 | `lib/vendor/bot-avatar.js` | packages/bot-avatar, bundled as one ESM file by `bun run vendor` (with hand-written types beside it). |
-| `public/fonts/OFL-*.txt` | The fonts' licences, linked from the footer. |
+| `public/fonts/OFL-Geist.txt` | The fonts' licence, linked from the footer. |
+| `app/desktop/`, `components/desktop/` | `/desktop/` (the native Mac app) and `/desktop/perf/` (its perf log). Their data is in `lib/desktop.ts`, `lib/perf*.{ts,json}` and `public/desktop/`; `CONTENT.md` says where each claim comes from. |
 | `scripts/` | The vendoring script and the preview server (Bun). |
 | `CONTENT.md` | Where every claim comes from, and the sample content to confirm. |
-| `directions/`, `DIRECTIONS.md` | The art-direction comps (A, B, B2, B3) that led here. They aren't part of the build. |
-| `shots/` | Screenshots of the exported site. |
 
 ## Notes
 
@@ -66,8 +65,7 @@ Project settings (Vercel → New Project → import the capcomd repository):
 | Node.js version | 22.x (Next.js 16 needs 20.9 or later; `engines` in `package.json` says so) |
 | Environment variables | None |
 
-Before building, check that the domain in `lib/site.ts` is the one the project gets. The build fetches the two
-Google fonts once to self-host them, so it needs network access, which Vercel builds have.
+Before building, check that the domain in `lib/site.ts` is the one the project gets.
 
 ## Note for the repo
 
