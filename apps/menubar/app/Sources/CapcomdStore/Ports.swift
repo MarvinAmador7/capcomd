@@ -114,7 +114,7 @@ public final class UIPreferences {
   public func allows(_ n: Notice) -> Bool {
     switch n {
     case .approvalRequested: notifyApprovals
-    case .runFinished: notifyRunFinished
+    case .runFinished, .goalReady: notifyRunFinished   // a ready goal branch is how its run finished
     }
   }
   /// The stored effort pick for "let the CLI choose".

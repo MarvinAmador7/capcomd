@@ -111,6 +111,8 @@ public final class CapcomdStore {
   public internal(set) var goalActions: [String: GoalActionState] = [:]
   public internal(set) var projectBranches: Fetched<ProjectBranches>?
   var pendingGoalKeys: [String: String] = [:]
+  /// Runs whose goal notice was raised (or is on its way): once per run, whatever the feed sends again.
+  public internal(set) var goalNoticed: Set<String> = []
   var branchesAsked: String?
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]
@@ -526,9 +528,21 @@ public final class CapcomdStore {
     case "approval.requested":
       guard let id = e.data["approvalId"]?.string, let a = approvals[id] else { return }
       onNotify(.approvalRequested(approvalId: id, runId: a.runId, question: a.question))
+    case "run.goal_completed":
+      // Ready: the notice says how much landed, so it waits for the goal view.
+      guard let rid = e.runId ?? e.data["runId"]?.string, goalNoticed.insert(rid).inserted else { return }
+      Task { await self.raiseGoalNotice(rid, stopped: false, otherwise: nil) }
     case "run.completed", "run.failed", "run.cancelled":
       guard let rid = e.runId ?? e.data["runId"]?.string else { return }
-      onNotify(.runFinished(runId: rid, type: e.type, title: runs[rid]?.title ?? rid))
+      let finished = Notice.runFinished(runId: rid, type: e.type, title: runs[rid]?.title ?? rid)
+      // A goal branch run that stopped (failed or cancelled before the planner was done): with work landed, the goal
+      // notice says so instead; without, it is a run that failed or was stopped, as before.
+      if e.type != "run.completed", goalBranchSupported, let g = runs[rid]?.goalBranch, g.state != GoalBranchSummary.prOpened,
+         g.state != GoalBranchSummary.kept, goalNoticed.insert(rid).inserted {
+        Task { await self.raiseGoalNotice(rid, stopped: true, otherwise: finished) }
+        return
+      }
+      onNotify(finished)
     default: return
     }
   }

@@ -74,6 +74,9 @@ public struct GoalCard: Sendable, Hashable {
   public var collapsible: Bool { landed.count + notLanded.count > Self.rowsFolded }
   /// The card docks at the column's foot (or unfolds on the menu bar): a decision to make, or a question asked.
   public var docks: Bool { phase == .deciding || confirm != nil }
+  /// The flag on a one-line row (the menu bar's older Recent rows): "Ready" or "Stopped" while a decision is up; the
+  /// run's detail has the bar.
+  public var rowFlag: String? { phase == .deciding ? (stopped ? "Stopped" : "Ready") : nil }
 
   public static func make(runId: String, summary g: GoalBranchSummary, view: Fetched<GoalView>?, action: GoalActionState?) -> GoalCard {
     let v = view?.value
@@ -151,5 +154,39 @@ extension CapcomdStore {
   public func goalCard(runId: String) -> GoalCard? {
     guard let g = runs[runId]?.goalBranch else { return nil }
     return GoalCard.make(runId: runId, summary: g, view: goalViews[runId], action: goalActions[runId])
+  }
+}
+
+/// A goal branch run that became ready, or stopped with work landed: the notification's words. Clicking it opens the
+/// run (the menu bar's detail, the desktop's planner column with its card).
+public struct GoalNotice: Sendable, Hashable {
+  public var runId: String
+  /// The run's title.
+  public var title: String
+  public var branch: String, base: String
+  public var stopped: Bool
+  /// Tasks that landed of all the tasks with work; nil when the goal view couldn't be read.
+  public var landed: Int?, total: Int?
+  public init(runId: String, title: String, branch: String, base: String, stopped: Bool, landed: Int? = nil, total: Int? = nil) {
+    self.runId = runId; self.title = title; self.branch = branch; self.base = base; self.stopped = stopped; self.landed = landed; self.total = total
+  }
+  /// "Ready: capcomd/add-x → dev: 2 of 3 tasks landed" ("Stopped: …").
+  public var line: String {
+    let head = "\(stopped ? "Stopped" : "Ready"): \(branch) → \(base)"
+    guard let landed, let total, total > 0 else { return head }
+    return "\(head): \(landed) of \(total) \(total == 1 ? "task" : "tasks") landed"
+  }
+}
+
+extension CapcomdStore {
+  /// Reads the goal view, then raises the run's goal notice: ready always; stopped only with work landed, else
+  /// `otherwise` (the run's plain failed / stopped notice).
+  func raiseGoalNotice(_ runId: String, stopped: Bool, otherwise: Notice?) async {
+    await loadGoal(runId: runId)
+    let v = goalViews[runId]?.value, g = runs[runId]?.goalBranch
+    guard let branch = v?.branch ?? g?.branch, let base = v?.base ?? g?.base else { if let otherwise { onNotify?(otherwise) }; return }
+    let landed = v?.landed.count, total = v.map { $0.landed.count + $0.notLanded.count }
+    if stopped, (landed ?? 0) == 0 { if let otherwise { onNotify?(otherwise) }; return }
+    onNotify?(.goalReady(GoalNotice(runId: runId, title: runs[runId]?.title ?? runId, branch: branch, base: base, stopped: stopped, landed: landed, total: total)))
   }
 }
