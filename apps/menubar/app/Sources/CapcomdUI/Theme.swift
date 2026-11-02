@@ -428,6 +428,9 @@ package enum Theme {
     package static let rowGap: CGFloat = 6, lineGap: CGFloat = 4, labelGap: CGFloat = 5, barGap: CGFloat = 8
     package static let icon = Font.system(size: 11, weight: .medium)
     package static let spinnerOffset: CGFloat = 18
+    /// The flag on an older Recent row.
+    package static let flagFont = Font.system(size: 10.5, weight: .semibold), flagIcon = Font.system(size: 8.5, weight: .bold)
+    package static let flagPadding: CGFloat = 6, flagHeight: CGFloat = 16
   }
   /// The composer's inline project setup (design/setup/Inline*.dc.html): a picked folder's next steps in the card.
   package enum Setup {

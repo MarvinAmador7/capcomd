@@ -17,9 +17,10 @@ struct StartProjectField: View {
     let starting = state == .starting
     // A picked folder that isn't set up yet: its next steps take the tool row's place (design/setup).
     let setup = model.setupScreen(goal: goal).flatMap { $0.phase == .loading ? nil : $0 }
-    // Goal branches: under the goal, the branch the work lands on and its base, once there is a goal to name it after.
+    // Goal branches: under the goal, the branch the work lands on and its base, as soon as a project folder is chosen
+    // (the base menu fills at once; the branch field follows the goal once there is one).
     let branches = model.goalBranchesOffered && setup == nil && !model.setup.isOpen
-    let showBranches = branches && !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let showBranches = branches
     let ready = !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !starting && (!branches || model.goalSetup.canStart)
     VStack(alignment: .leading, spacing: 0) {
       // Composer board: the panel's centrepiece. Context chips, large text, a tool row, the white send.

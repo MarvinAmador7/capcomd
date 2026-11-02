@@ -186,6 +186,26 @@ struct GoalReadyBar: View {
   }
 }
 
+/// "Ready" / "Stopped" on an older Recent row: a small tinted capsule, as the composer's tinted chips.
+struct GoalRowFlag: View {
+  let text: String
+  let stopped: Bool
+  let branch: String
+  var body: some View {
+    let tint = stopped ? Theme.Ask.amber : Theme.Ask.green
+    HStack(spacing: 3) {
+      Image(systemName: stopped ? "exclamationmark.triangle" : "arrow.triangle.branch").font(Theme.Goal.flagIcon)
+      Text(verbatim: text).font(Theme.Goal.flagFont)
+    }
+    .foregroundStyle(tint)
+    .padding(.horizontal, Theme.Goal.flagPadding).frame(height: Theme.Goal.flagHeight)
+    .background(Capsule().fill(tint.opacity(0.16)))
+    .fixedSize()
+    .help("\(branch) waits on you: open the run to open a pull request or keep the branch")
+    .accessibilityHidden(true)   // the row's label says it
+  }
+}
+
 /// The bar's chrome: docked to a card's foot on the darker step (as the Active card's decision bar), or a sunk box.
 private struct GoalBarChrome: ViewModifier {
   let docked: Bool

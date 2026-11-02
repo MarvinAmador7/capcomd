@@ -165,6 +165,8 @@ struct RecentRow: View {
           HStack(spacing: Theme.Composer2.rowMarkGap) {
             if let o = outcome { OutcomeMark(end: o.end, label: o.head, font: Theme.Composer2.rowMark) }
             Text(verbatim: project.endedLine ?? "Done").font(Theme.Composer2.rowSub).foregroundStyle(Theme.Composer2.rowSubText).lineLimit(1)
+            // Its goal branch waits on a decision: a flag here, the Ready bar in its detail.
+            if let run, let card = model.goalCard(run.id), let flag = card.rowFlag { GoalRowFlag(text: flag, stopped: card.stopped, branch: card.branch) }
           }
         }
         Spacer(minLength: 0)
@@ -179,7 +181,8 @@ struct RecentRow: View {
     .onHover { hover = $0 }
     .keyboardShortcut(index <= 3 ? KeyEquivalent(Character("\(index)")) : KeyEquivalent(Character("0")), modifiers: index <= 3 ? .command : [.command, .option, .control, .shift])
     // The words already say how it ended, except that its work merged.
-    .accessibilityLabel([project.title, outcome?.end == .merged ? outcome?.head : nil, project.endedLine ?? "done"].compactMap { $0 }.joined(separator: ", "))
+    .accessibilityLabel([project.title, outcome?.end == .merged ? outcome?.head : nil, project.endedLine ?? "done",
+                         run.flatMap { model.goalCard($0.id)?.rowFlag.map { "\($0): its goal branch waits on you" } }].compactMap { $0 }.joined(separator: ", "))
     .accessibilityHint("Opens the run")
   }
 
