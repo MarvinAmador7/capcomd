@@ -32,6 +32,9 @@ jobs:
       - name: openapi/capcomd.json, docs/events.md and docs/harness-contract.md match src/api
         run: bun scripts/gen-harness-contract.ts --check
 
+      - name: src/primitives/title-shim.gen.ts matches title-rules.mjs
+        run: bun scripts/gen-title-shim.ts --check
+
       - name: Type check
         run: bun run typecheck
 
