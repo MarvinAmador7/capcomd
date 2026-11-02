@@ -223,7 +223,8 @@ enum Commands {
     var builds: [String: BuildInfo] = [:], knobs: [String: [String: String]] = [:]
     let env = o.sampler ? [:] : ["DESKBENCH_SAMPLER": "off"]
     for (i, first) in order.enumerated() {
-      for (pos, label) in (first == "AB" ? ["A", "B"] : ["B", "A"]).enumerated() {
+      let labels: [String] = first == "AB" ? ["A", "B"] : ["B", "A"]   // typed: older Swift can't infer the ternary here
+      for (pos, label) in labels.enumerated() {
         let exe = label == "A" ? a : b
         var args = ["run", scenario, "--fixture", fixture, "--reps", "1", "--json", "--quiet-check", "0", "--variant", label]
         for p in params { args += ["--set", p] }
