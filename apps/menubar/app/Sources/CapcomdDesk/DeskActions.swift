@@ -58,6 +58,13 @@ extension DeskModel {
     newProject = nil
   }
 
+  /// Esc in the goal field: a folder's setup is cancelled first (the goal stays); else an empty column closes. A typed
+  /// goal is never thrown away by Esc.
+  package func newProjectEscape() {
+    if setupFlow.isOpen { cancelSetup(); return }
+    if newProject?.form.escCloses == true { closeNewProject() }
+  }
+
   package func toggleNewProject() { if newProject == nil { openNewProject() } else { closeNewProject() } }
 
   /// The goal field changed: the bot wakes up at the first word, and the goal branch suggestion follows the goal.

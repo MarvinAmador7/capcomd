@@ -47,18 +47,48 @@ One window, two parts.
     A folded project that asks has an amber ring and says who asks.
   - Too many to fit: decks drop their names, then the rest go into a "+n" deck (its menu lists them). An asking
     project is never in the overflow.
-  - The project name opens the project menu (`ReelMenu`): goal, repos, place; Message the planner (⌘L), Changes,
-    Trace (⌘T), Browse the workspace, Pause/Resume (⌥⌘P), Stop… (asks first), Fold into the title bar, Copy run ID.
-    Only actions the daemon has.
+  - The open project's name (with a chevron) opens the project menu (`ReelMenu`; 360 pt, #232326, 13 pt corners, 30 pt
+    rows), dropped under its group over a dimmed reel: the whole goal, its repos as chips, and its place ("Cloud ·
+    boxd · 6 agents · started 21:30"); then Message the planner… (⌘L: the planner's column comes on screen and its
+    message box takes the focus; while the run is active), Changes +A −R · N files (the goal branch against its base on
+    GitHub, with the goal view's counts; hidden for a run without a goal branch on GitHub, since the desktop has no
+    diff view yet); Pause project / Resume project (⌥⌘P) and Stop project… (red; asks first, it cancels every agent),
+    both with `run.controls` on a run that hasn't ended; Fold into the title bar (⌘W: back into its deck, it keeps
+    running, and no project is open until one is picked), or for a finished project Remove from the title bar (hidden
+    until it has news: a new run, an ask, work again); Copy run ID (shows the short id, copies the whole). Only actions
+    the daemon and the app have: Trace and Browse the workspace are hidden until the desktop has views for them, and
+    rename, duplicate, archive and export are out on purpose.
+  - **Actions ⌘K** (the ⌘ button): a small palette over the window, the menu's surface: type to filter (every word
+    typed starts a word of the entry; entries that start with it come first), ↑ ↓ move, Return runs, Esc or a click
+    outside closes. Entries: the open project's menu items, New project, Follow on/off, switch to each other project
+    (⌘1–9 shown), focus each agent by its title (⌃1–9 shown).
 - **Reel**: the open project's agents as full-height columns in tree order (`Reel`). Three columns at 1440 pt, two at
   1100, one under 760; the neighbours peek 44 pt at both edges. A column is header (bot, then "profile · title · state"
   (a double-click on the title renames it, as the tab does; the bot's name isn't repeated), place, elapsed) · thread (the menu bar's thread renderer) · its own message box. An agent that asks docks the
   decision at its column's foot (View diff · Deny · Approve ↩) instead of the box.
 - **Swarms** (`ReelSwarm`): leads' subtrees fold into stacks in the title bar; only the subtree on screen is fanned
   out. An asking agent always steps out of its stack. A strip at the foot shows one cell per agent, grouped by lead.
-- **New project** (`ReelNew`): + (⇧⌘N) opens one plain column, no agent header, with the composer card (folder and
-  branch chips, goal, + · Local/Cloud · model with effort bars · mic · Start). The planner-to-be bot waits sleepy,
-  smiles once you type (one change, no loop), and on Start becomes the column's header.
+- **New project** (`ReelNew`): + (⇧⌘N), at the right end of the title bar, opens one plain column where the planner's
+  column will stand (the reel's first column), no agent header, and the dashed space where the crew will. While it's
+  open the + stays held down and every project shows as a deck; the reel stays built underneath, so closing the column
+  (+ again, ⌘W, or Esc with nothing typed) shows it at once, and a goal that didn't start is kept for next time.
+  - The planner-to-be (112 pt) waits sleepy over "Hi, I'm <Name>. What are we building?", smiles once you type (one
+    change, no loop), and on Start moves into the column's header.
+  - The composer card at its foot (#1D1D21, 14 pt corners, 1 pt stroke, the blue ring while focused): the folder chip
+    (the remembered project checkout, × back to the default project; Default project chooses a folder), then with
+    `runs.goal_branch` and a project folder the goal branch row beside it: the base menu (the repository's branches,
+    the daemon's `suggestedBase` preselected; never a guessed main: with no suggestion nothing is picked, Start waits
+    and "Pick the branch this work starts from" shows) and the goal branch's name (the daemon's suggestion for the goal
+    until edited), with the daemon's sentences under them. Older daemons: no branch row. Then the goal (14 pt), then
+    one tool row: + (Choose Project Folder…, Use the Default Project), Local / Cloud, the model with its effort bars
+    (the run options the menu bar's composer uses), Start. No mic until voice input (phase 3). Return starts.
+  - A folder that isn't set up swaps the tool row for the menu bar's inline setup (the same views, on
+    `ProjectSetupFlow`); Esc cancels it, Return presses Set Up (and Start).
+  - Start is the menu bar's start (`POST /v1/runs` with the store's run choice: project, driver, place, effort, base
+    and goal branch). Started, the column shows the planner's header with the goal as its first message; once the
+    feed lists the run with its planner, the project opens on the planner's column, takes its tab after the others,
+    and the crew's columns fill in as the planner spawns them. A refused start keeps the column and shows the
+    daemon's sentence under the field it names (the base, the goal branch, else the goal).
 
 # 3. Follow, overview, zoom
 
@@ -68,13 +98,21 @@ without bounce; scrolling yourself turns it off. ⌘0 overview (every agent as a
 # 4. Keyboard
 
 ⌘1–9 projects · ⌃1–9 agents · ⌃← ⌃→ focus the neighbour column (the reel scrolls only when the focused column would
-leave the window, 180 ms ease-out) · ⌘0 overview · ⇧⌘↩ zoom · ⌘K actions · ⇧⌘N new project · Return approves while
-an ask has focus; Esc never denies. Keyboard actions never animate otherwise.
+leave the window, 180 ms ease-out) · ⌘0 overview · ⇧⌘↩ zoom · ⌘K actions · ⇧⌘N new project · ⌘L message the planner ·
+⌥⌘P pause / resume the project · ⌘W fold the project into the title bar (a finished one: remove it; the new project
+column: close it; the window's own Close is replaced) · ⇧⌘F Follow. ⌘T (Trace) is bound once the desktop has a trace
+view. Each is in the app's menus (File, Project, Go). Return approves while an ask has focus and nothing else takes
+Return: never while a text field has the keyboard (a column's message box, a rename field, the new project column's
+composer, the palette), nor while the menu or the Stop question is up. Esc never denies; it closes the palette and the
+menu, cancels a folder's setup, and closes the new project column while nothing is typed. Keyboard actions never
+animate otherwise.
 
 # 5. Motion
 
 Transform and opacity only, ≤ 300 ms, interruptible springs without bounce, Reduce Motion → 150 ms crossfades. Deck
-fan-out spring 0.3 s, names fade in over the last 120 ms. Menu bar → window: one shape grows from the menu bar icon,
+fan-out spring 0.3 s, names fade in over the last 120 ms. The new project column comes in and goes with a 0.3 s spring
+(opacity, 8 pt rise); the bot's face crossfades once (150 ms); on Start the bot moves into the header (0.3 s spring).
+The menu and the palette: 0.2 s spring, opacity with a 0.98 scale from the top. Menu bar → window: one shape grows from the menu bar icon,
 300 ms (0.32, 0.72, 0, 1), pointer only (`Expand`). Bots: no loops; the menu bar's approved moments only.
 
 # 6. Store work this needs
@@ -91,5 +129,5 @@ fan-out spring 0.3 s, names fade in over the last 120 ms. Menu bar → window: o
 1. The `CapcomdDesktop` app (a regular Dock app; the shared pieces live in the `CapcomdUI` library), title bar with
    projects and crew tabs, the reel with real threads, message boxes and decisions, Follow, keyboard. Keyed changes
    and many threads in the store.
-2. New project column, project menu, overview and zoom.
-3. Swarm folding and the strip, menu bar → window motion, voice input.
+2. New project column, project menu and ⌘K actions (built), then overview and zoom.
+3. Swarm folding and the strip, menu bar → window motion, voice input (the new project column's mic).

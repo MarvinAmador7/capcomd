@@ -42,8 +42,8 @@ struct NewProjectColumn: View {
       if started {
         HStack(spacing: 8) {
           BotAvatar(traits: np.happy, size: .xs, cell: 1.5).matchedGeometryEffect(id: "bot", in: bot)
-          Text("planner").font(Theme.Desk.name).foregroundStyle(Theme.Desk.text)
-          Text(verbatim: " · starting").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.secondary)
+          (Text("planner").font(Theme.Desk.name).foregroundColor(Theme.Desk.text)
+            + Text(verbatim: " · starting").font(Theme.Desk.meta).foregroundColor(Theme.Desk.secondary))
           Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).frame(height: Theme.Desk.columnHeader)
@@ -131,11 +131,7 @@ struct NewProjectComposer: View {
         .padding(.horizontal, 3).padding(.vertical, 2)
         .focused($focused).disabled(starting)
         .onSubmit(submit)
-        .onKeyPress(.escape) {
-          if model.setupFlow.isOpen { model.cancelSetup(); return .handled }
-          if model.newProject?.form.escCloses == true { model.closeNewProject() }
-          return .handled
-        }
+        .onKeyPress(.escape) { model.newProjectEscape(); return .handled }
         .accessibilityLabel("Describe a project for your agents")
       if let line = form.goalLine(branches: branches) {
         Text(verbatim: line).font(Theme.Setup.noteFont).foregroundStyle(Theme.red).fixedSize(horizontal: false, vertical: true)

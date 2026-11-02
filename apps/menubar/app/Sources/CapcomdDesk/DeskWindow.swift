@@ -22,34 +22,28 @@ package struct DeskWindowContent: View {
 }
 
 /// Keyboard (SPEC §4): ⌘1–9 projects, ⌃1–9 agents, ⌃← ⌃→ the neighbour column, ⇧⌘N a new project, ⌘K actions, and the
-/// project menu's ⌘L, ⌥⌘P and ⌘W. None of these animate. The items read only what changes rarely (whether a project is
-/// open), never the store, so the main menu isn't rebuilt as runs move; an item whose action the open project doesn't
-/// have does nothing.
+/// project menu's ⌘L, ⌥⌘P and ⌘W. None of these animate. An item whose action the open project doesn't have does nothing
+/// (⌘W also closes the new project column, and removes a finished project from the title bar).
 package struct DeskCommands: Commands {
   let model: DeskModel
   package init(model: DeskModel) { self.model = model }
   package var body: some Commands {
-    // File: New Project, and ⌘W folds instead of closing the window (the window's own Close is replaced).
+    // File: New Project, and ⌘W folds instead of closing the window (the window's own Close is replaced). The items stay
+    // enabled with fixed titles: Commands don't follow the model's changes, so an item that does nothing now does nothing.
     CommandGroup(replacing: .newItem) {
       Button("New Project") { model.openNewProject() }.keyboardShortcut("n", modifiers: [.command, .shift])
     }
     CommandGroup(replacing: .saveItem) {
-      Button(model.newProject != nil ? "Close New Project" : "Fold into the Title Bar") { model.foldShortcut() }
-        .keyboardShortcut("w", modifiers: .command)
-        .disabled(model.newProject == nil && model.openRunId == nil)
+      Button("Fold into the Title Bar") { model.foldShortcut() }.keyboardShortcut("w", modifiers: .command)
     }
     CommandMenu("Project") {
       Button("Actions…") { model.togglePalette() }.keyboardShortcut("k", modifiers: .command)
       Divider()
       Button("Message the Planner…") { model.messagePlannerShortcut() }.keyboardShortcut("l", modifiers: .command)
-        .disabled(model.openRunId == nil || model.newProject != nil)
       Button("Pause or Resume Project") { model.pauseShortcut() }.keyboardShortcut("p", modifiers: [.command, .option])
-        .disabled(model.openRunId == nil || model.newProject != nil)
       Button("Stop Project…") { if let i = model.menuItem("stop") { model.perform(i) } }
-        .disabled(model.openRunId == nil || model.newProject != nil)
       Divider()
       Button("Copy Run ID") { if let i = model.menuItem("copy") { model.perform(i) } }
-        .disabled(model.openRunId == nil || model.newProject != nil)
     }
     CommandMenu("Go") {
       ForEach(1..<10) { n in

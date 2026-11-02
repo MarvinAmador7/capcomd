@@ -73,13 +73,13 @@ import CapcomdStore
   /// this app's own window and menu, never posted to the system), `rename <N|agentId> tab|header` (a double-click on
   /// that agent's tab or header: its rename field opens), `type <text>` (the text typed into the focused field, as key
   /// events handed to this window; select it all first with `key a cmd`).
-  /// The new project column (ReelNew): `new` (as + or ⇧⌘N), `new close`, `goal <text>` (the goal field's text),
-  /// `folder <path>|default` (a folder picked, as Choose Project Folder… would, or Use the Default Project), `base <branch>`,
-  /// `branch <name>` (the goal branch field), `setup <setUp|setUpAndStart|initializeGit|publish|tryAgain>` (a button of
-  /// the folder's setup), `start` (Return). The project menu (ReelMenu): `menu` (a click on the name), `menu <message|
-  /// changes|pause|resume|stop|fold|remove|copy>` (that item), `menu confirm|cancel` (the Stop question). The palette:
-  /// `palette [query]` (⌘K, with that query typed), `palette up|down|run|close`. `menus` writes the main menu's items and
-  /// their shortcuts to <dir>/menus.txt.
+  /// The new project column (ReelNew): `new` (as + or ⇧⌘N), `new close`, `draft <text>` (the goal field's text),
+  /// `folder <path>|default` (a folder picked, as Choose Project Folder… would, or Use the Default Project),
+  /// `base <branch>`, `branch <name>` (the goal branch field), `setup <setUp|setUpAndStart|initializeGit|publish|
+  /// tryAgain|cancel>` (a button of the folder's setup), `escape` (Esc in the goal field), `start` (Return). The project
+  /// menu (ReelMenu): `menu` (a click on the name), `menu <message|changes|pause|resume|stop|fold|remove|copy>` (that
+  /// item), `menu confirm|cancel` (the Stop question). The palette: `palette [query]` (⌘K, with that query typed),
+  /// `palette up|down|run|close`. `menus` writes the main menu's items and their shortcuts to <dir>/menus.txt.
   static func control(_ model: DeskModel, _ dir: URL) {
     let cmd = dir.appendingPathComponent("cmd")
     if let text = try? String(contentsOf: cmd, encoding: .utf8) {
@@ -105,13 +105,15 @@ import CapcomdStore
           model.beginRename(id, at: w.dropFirst(2).first == "header" ? .header : .tab)
         case "type": type(String(line.dropFirst(5)))
         case "new": if w.dropFirst().first == "close" { model.closeNewProject() } else { model.openNewProject() }
-        case "goal": model.typeGoal(String(line.dropFirst(5)))
+        case "draft": model.typeGoal(String(line.dropFirst(6)))
         case "folder":
           let path = String(line.dropFirst(7))
           if path == "default" { model.useDefaultProject() } else if !path.isEmpty { Task { await model.pickFolder(path) } }
         case "base": if w.count > 1 { model.pickBase(w[1]) }
         case "branch": model.typeBranch(String(line.dropFirst(7)))
-        case "setup": if let a = setupAction(w.dropFirst().first ?? "") { model.setupAction(a) }
+        case "setup":
+          if w.dropFirst().first == "cancel" { model.cancelSetup() } else if let a = setupAction(w.dropFirst().first ?? "") { model.setupAction(a) }
+        case "escape": model.newProjectEscape()   // Esc in the goal field
         case "start": Task { await model.startNewProject() }
         case "menu":
           switch w.dropFirst().first {
