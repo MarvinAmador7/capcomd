@@ -4,12 +4,14 @@ on:
     paths: ["apps/menubar/**", "tools/perfloop/**", "openapi/**", ".github/workflows/menubar.yml"]
   push:
     branches: [main]
-    paths: ["apps/menubar/**", "tools/perfloop/**", "openapi/**"]
+    paths: ["apps/menubar/**", "tools/perfloop/**", "openapi/**", ".github/workflows/menubar.yml"]
+  # Run workflow on main warms the Swift build cache that PRs read.
+  workflow_dispatch:
 jobs:
   macos:
     runs-on: macos-15
     # One macOS runner serves every PR: a hung test must fail, not hold it for hours.
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -31,6 +33,7 @@ jobs:
         working-directory: apps/menubar/client
         run: swift test
       - name: App build and tests (includes SwiftUI views)
-        timeout-minutes: 15
+        # A cold build (no cache, or a new runner image) of the app and its tests takes ~16 min since the desktop app.
+        timeout-minutes: 25
         working-directory: apps/menubar/app
         run: swift build --build-tests && swift test --skip-build
