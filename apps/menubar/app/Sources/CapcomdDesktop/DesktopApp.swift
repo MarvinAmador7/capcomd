@@ -10,6 +10,10 @@ struct CapcomdDesktopApp: App {
   @NSApplicationDelegateAdaptor private var delegate: DesktopDelegate
   @State private var model = DeskModel()
 
+  /// The app is "capcomd" in the menu bar and its About/Hide/Quit items, also when run without a bundle (whose name
+  /// would otherwise be the executable's, CapcomdDesktop).
+  init() { ProcessInfo.processInfo.processName = "capcomd" }
+
   var body: some Scene {
     Window("capcomd", id: "main") {
       DeskWindowContent(model: model)
