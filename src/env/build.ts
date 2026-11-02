@@ -257,11 +257,12 @@ export function pinnedManager(field: string): { name: string; version: string } 
  * else CAPCOMD_BUN_VERSION or BUN_VERSION for bun. null: the default command (npm ci, or the image's own tool).
  */
 async function packageManager(sh: Sh, T: string, lockFile: string, home: string, log: (l: string) => void): Promise<string | null> {
-  const out = (await sh(`cd ${sq(T)} && node -p 'try { require("./package.json").packageManager || "" } catch { "" }' 2>/dev/null; echo; cat .bun-version 2>/dev/null; true`)).stdout.split("\n");
-  const pin = pinnedManager(out[0] ?? "");
+  const out = (await sh(`cd ${sq(T)} && printf 'pm=%s\\nbv=%s\\n' "$(node -p 'try { require("./package.json").packageManager || "" } catch { "" }' 2>/dev/null)" "$(cat .bun-version 2>/dev/null)"; true`)).stdout;
+  const val = (k: string) => new RegExp(`^${k}=(.*)$`, "m").exec(out)?.[1]?.trim() ?? "";
+  const pin = pinnedManager(val("pm"));
   if (lockFile.startsWith("bun")) {
     if ((await sh(`command -v bun >/dev/null && echo yes; true`)).stdout.includes("yes")) return null;
-    const version = (pin?.name === "bun" ? pin.version : null) ?? (/^\d+\.\d+\.\d+$/.test(out[1]?.trim() ?? "") ? out[1]!.trim() : null) ?? process.env.CAPCOMD_BUN_VERSION ?? BUN_VERSION;
+    const version = (pin?.name === "bun" ? pin.version : null) ?? (/^\d+\.\d+\.\d+$/.test(val("bv")) ? val("bv") : null) ?? process.env.CAPCOMD_BUN_VERSION ?? BUN_VERSION;
     log(`deps: bun not in image → installing bun@${version}`);
     const res = await sh(`NPM=$(command -v npm || echo ${sq(`${home}/node/bin/npm`)}) && "$NPM" install -g --prefix ${sq(`${home}/npm`)} --no-fund --no-audit ${sq(`bun@${version}`)} && bun --version`, 600_000);
     if (res.code !== 0) log(`deps: installing bun@${version} failed (exit ${res.code}): ${(res.stderr || res.stdout).slice(-300)}`);
