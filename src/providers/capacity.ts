@@ -3,39 +3,22 @@
 // is Docker's memory (`docker info` MemTotal) divided by a per-agent budget (1 GB by default). Above it, a new agent
 // waits (it stays `pending`: its workflow isn't started) and starts when another finishes. The cloud (boxd) has no cap.
 //
-// The budget is a setting in the ADR-021 sense: CAPCOMD_DOCKER_AGENT_MEMORY_MB in capcomd's environment wins, then the
-// user config (`sandboxes.docker.agentMemoryMb`), then the default. Slots are counted in the engine's process: agents
+// The budget is a setting in the ADR-021 sense (Memory per agent, `agentMemory`: 512 MB, 1 GB, 2 GB or 4 GB in the
+// apps): CAPCOMD_DOCKER_AGENT_MEMORY_MB in capcomd's environment wins, then the user config (`sandboxes.docker.agentMemory`,
+// MB), then the default (src/providers/settings.ts `currentAgentMemory`). It is read each time an agent asks, never
+// cached, so a change applies to the next agent that starts. Slots are counted in the engine's process: agents
 // admitted here, plus capcomd agent containers Docker runs now (so agents that were running before a restart count).
-import { existsSync, readFileSync } from "node:fs";
 import { dockerBin, DOCKER_LABEL } from "./docker";
-import { settingsPath } from "./settings";
+import { AGENT_MEMORY_DEFAULT_MB, AGENT_MEMORY_ENV, AGENT_MEMORY_MIN_MB, currentAgentMemory, fileSettingsStore, settingsPath, type AgentMemory } from "./settings";
+
+export { AGENT_MEMORY_DEFAULT_MB, AGENT_MEMORY_ENV, AGENT_MEMORY_MIN_MB, type AgentMemory };
 
 type Env = Record<string, string | undefined>;
-
-export const AGENT_MEMORY_ENV = "CAPCOMD_DOCKER_AGENT_MEMORY_MB";
-export const AGENT_MEMORY_DEFAULT_MB = 1024;
-/** Less than this can't run an agent CLI at all. */
-export const AGENT_MEMORY_MIN_MB = 256;
 const MB = 1024 * 1024;
 
-export interface AgentMemory { mb: number; source: "env" | "config" | "default" }
-
-const validMb = (v: unknown): number | null => {
-  const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v) : v;
-  return typeof n === "number" && Number.isSafeInteger(n) && n >= AGENT_MEMORY_MIN_MB && n <= 1024 * 1024 ? n : null;
-};
-
-/** The per-agent memory budget on Docker: the environment variable, else the user config, else 1 GB. */
+/** The per-agent memory budget on Docker: the environment variable, else the user config (at `configPath`), else 1 GB. */
 export function agentMemory(env: Env = process.env, configPath: string | null = settingsPath(env)): AgentMemory {
-  const fromEnv = validMb(env[AGENT_MEMORY_ENV]);
-  if (fromEnv !== null) return { mb: fromEnv, source: "env" };
-  if (configPath && existsSync(configPath)) {
-    try {
-      const v = validMb(JSON.parse(readFileSync(configPath, "utf8"))?.sandboxes?.docker?.agentMemoryMb);
-      if (v !== null) return { mb: v, source: "config" };
-    } catch { /* a broken config: the default */ }
-  }
-  return { mb: AGENT_MEMORY_DEFAULT_MB, source: "default" };
+  return currentAgentMemory("docker", { env, store: fileSettingsStore(configPath) });
 }
 
 /** Agents that fit at once: the memory over the budget, rounded down, and never fewer than one. */
@@ -98,6 +81,9 @@ export class AgentSlots {
     this.admitted.delete(name);
     this.waiting.delete(name);
   }
+
+  /** Whether `name` holds a slot here now (admitted, not yet released): tests and the release on a workflow's end. */
+  holds(name: string): boolean { return this.admitted.has(name); }
 }
 
 /** Runs the docker CLI for a short answer (3 s), or null when it doesn't give one. */
@@ -146,14 +132,26 @@ function fakeSlots(): AgentSlots | null {
   return fakes.slots;
 }
 
+/**
+ * An agent's machine will never be (or is no longer) asked for: free its slot on every place that has one. Safe at any
+ * time after the agent's workflow ended: a container that still runs is counted from `docker ps` anyway, so only an
+ * admitted agent whose container never appeared (its start failed, it was cancelled or paused first) gets its slot
+ * back sooner than the grace period.
+ */
+export function releaseSlot(name: string): void {
+  docker?.release(name);
+  fakes?.slots.release(name);
+}
+
 /** The slots of a place, or null when it has no cap (the cloud, the test fakes). */
 export function slotsFor(place: string | null | undefined): AgentSlots | null {
   if (place === "fake" || place === "fake-host") return fakeSlots();
   return place && Object.hasOwn(PLACES, place) ? PLACES[place]!() : null;
 }
 
-/** What the place's info row shows: Docker's memory and the budget, or null when the place has no cap. */
-export async function slotsInfo(place: string, env: Env = process.env): Promise<{ memTotal: number | null; memory: AgentMemory } | null> {
+/** What the place's info row needs from Docker: its memory (the budget is the setting's, read with the row), or null
+ *  when the place has no cap. */
+export async function slotsInfo(place: string): Promise<{ memTotal: number | null } | null> {
   if (!Object.hasOwn(PLACES, place)) return null;
-  return { memTotal: await dockerMemTotal().catch(() => null), memory: agentMemory(env) };
+  return { memTotal: await dockerMemTotal().catch(() => null) };
 }

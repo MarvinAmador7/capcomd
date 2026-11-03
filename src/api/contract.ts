@@ -12,7 +12,7 @@ import { AgentWorkspace } from "./workspace";
 import { TITLE_MAX, TITLE_SOURCES } from "./run-title";
 import { SKILL_MAX_BYTES, SKILLS_PER_MESSAGE_MAX } from "../agents/skills";
 import { isListedProvider, LISTED_PROVIDERS, PROVIDER_LABEL } from "../providers/registry";
-import { IDLE_LIFETIME_CHOICES } from "./sandboxes";
+import { AGENT_MEMORY_CHOICES, IDLE_LIFETIME_CHOICES } from "./sandboxes";
 import { CODE_MAX_LINES, DIFF_LINE_MAX_CHARS, DIFF_MAX_LINES, ITEM_MAX_BYTES, TABLE_MAX_COLS, TABLE_MAX_ROWS, THREAD_FORMAT, ThreadItem } from "../../packages/agent-thread/src/index";
 
 export { ThreadItem };
@@ -384,7 +384,7 @@ export const CAPABILITIES = {
 	service: "GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it",
 	sandboxes: "GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`",
 	"sandboxes.resources": "GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one",
-	"sandboxes.settings": "PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned",
+	"sandboxes.settings": "PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime; Docker's memory per agent); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned",
 	"sandboxes.actions": "POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream",
 	"projects.setup": "GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream",
 	"projects.git": "POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`",
@@ -516,7 +516,7 @@ export const SandboxDescriptor = z.object({
 	mark: z.string().describe("Id of a mark the app bundles (docker, boxd); fall back to the kind's glyph for an id you don't have. Never an image"),
 	listed: z.boolean().describe("Always true here (unlisted test providers are never served)"),
 	caps: SandboxCaps.describe("What it can do. Ignore caps you don't know"),
-	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime). Ignore ids you don't know"),
+	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime; agentMemory on a place with a memory cap, today docker). Ignore ids you don't know"),
 	info: z.array(z.string()).describe("Info row ids its details show (logins, checkpoints; agentSlots on a place with a memory cap, today docker). Ignore ids you don't know"),
 	resourceKinds: z.array(z.string()).describe("Kinds of resource it lists (machine)"),
 	actions: z.array(z.string()).describe("Resource actions this daemon serves for it, from a closed list: open_terminal, delete (capability sandboxes.actions; more come with later capabilities). Ignore actions you don't know"),
@@ -529,34 +529,34 @@ export const SandboxSummary = SandboxDescriptor.extend({
 export const Sandboxes = z.object({ sandboxes: z.array(SandboxSummary).describe("Every listed place, in order: today docker, then boxd") });
 export const FieldChoice = z.object({ value: z.string(), label: z.string().describe("Daemon-written, e.g. \"1 hour\"") });
 export const SandboxField = z.object({
-	id: z.string().describe("Stable id: idleLifetime (settings); logins, checkpoints, agentSlots (info). More may be added"),
+	id: z.string().describe("Stable id: idleLifetime, agentMemory (settings); logins, checkpoints, agentSlots (info). More may be added"),
 	type: z.string().describe("choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"),
 	label: z.string().describe("Row title (daemon-written)"),
 	help: z.string().nullable().describe("A footnote under the row (daemon-written, trusted); null when none"),
-	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)"),
+	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime in seconds, agentMemory in MB; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)"),
 	display: z.string().describe("The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"),
 	default: z.string().nullable().describe("A setting's default value; null for info rows"),
-	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
+	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}; agentMemory: ${AGENT_MEMORY_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
 	source: z.string().describe("Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which, e.g. \"Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment\"), config (capcomd's user config: the user chose it), daemon (an info row the daemon works out)"),
 	editable: z.boolean().describe("Capability sandboxes.settings: the user can change it here with PATCH /v1/sandboxes/{name}/settings (needs the configure scope). false for info rows, a setting an environment variable sets, and every row of a daemon without sandboxes.settings"),
-	appliesTo: z.string().nullable().describe("new_runs: a change applies to runs started after it; null for info rows"),
+	appliesTo: z.string().nullable().describe("new_runs: a change applies to runs started after it (idleLifetime); new_agents: to agents that start after it, those waiting for a slot included (agentMemory); null for info rows. More may be added"),
 	needsRestart: z.boolean().describe("A change needs the daemon restarted"),
 	state: z.string().nullable().describe("A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type"),
 });
 export const SandboxDetail = z.object({
 	descriptor: SandboxDescriptor,
-	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900)"),
-	info: z.array(SandboxField).describe("Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work), agentSlots (how many agents run at once here: Docker's memory over a per-agent budget, CAPCOMD_DOCKER_AGENT_MEMORY_MB, 1 GB by default; more wait as pending and start as others finish)"),
+	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900. agentMemory: how much of Docker's memory each agent gets, in MB, which sets agentSlots; CAPCOMD_DOCKER_AGENT_MEMORY_MB wins)"),
+	info: z.array(SandboxField).describe("Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work), agentSlots (how many agents run at once here: Docker's memory over the agentMemory setting, 1 GB by default; more wait as pending and start as others finish)"),
 	rev: z.string().describe("Changes whenever a setting's value, source or editability does; PATCH …/settings sends it back (a stale one is 409 conflict)"),
 });
 export const SettingsBody = z.object({
-	values: z.record(z.string(), z.string()).describe("Setting id → the new value, one of the field's `choices` values (idleLifetime: \"900\", \"3600\", \"14400\" or \"43200\", seconds)"),
+	values: z.record(z.string(), z.string()).describe("Setting id → the new value, one of the field's `choices` values (idleLifetime: \"900\", \"3600\", \"14400\" or \"43200\", seconds; agentMemory: \"512\", \"1024\", \"2048\" or \"4096\", MB)"),
 	rev: z.string().min(1).max(200).describe("The `rev` of the GET /v1/sandboxes/{name} the change was made from"),
 });
 export const SETTINGS_DOC = "Capability sandboxes.settings. Change a place's settings: the body names each setting by id with a value from its `choices`, and the `rev` it was read with. Needs the `configure` scope (403 `forbidden` without it: settings change what future runs do, like how long their machines and billing live). " +
-	"Stored in capcomd's user config (`~/.capcomd/config.json` `sandboxes.<name>.<id>`), never in a project's; it applies to runs started after it (`appliesTo: new_runs`: each run records the settings it started with), and needs no restart. Answers like GET /v1/sandboxes/{name}, with the new values and `rev`. " +
+	"Stored in capcomd's user config (`~/.capcomd/config.json` `sandboxes.<name>.<id>`), never in a project's; the idle lifetime applies to runs started after it (`appliesTo: new_runs`: each run records the settings it started with), the memory per agent to agents that start after it (`appliesTo: new_agents`, those waiting for a slot included), and neither needs a restart. Answers like GET /v1/sandboxes/{name}, with the new values and `rev`. " +
 	"Every change is audited: a durable sandbox.settings_changed event on the `daemon` stream ({sandbox, id, from, to, clientId}). " +
-	"409 `conflict` when `rev` isn't the current one (the body carries the current `rev`: read the place again, then retry). 422 `invalid` for a setting the place doesn't have, a value not in its `choices`, an idle lifetime under 15 minutes, or a setting that isn't editable (an environment variable such as CAPCOMD_SANDBOX_IDLE_SECONDS sets it); `message` says which. 404 `not_found` for a name that isn't a listed place.";
+	"409 `conflict` when `rev` isn't the current one (the body carries the current `rev`: read the place again, then retry). 422 `invalid` for a setting the place doesn't have, a value not in its `choices`, an idle lifetime under 15 minutes, or a setting that isn't editable (an environment variable such as CAPCOMD_SANDBOX_IDLE_SECONDS or CAPCOMD_DOCKER_AGENT_MEMORY_MB sets it); `message` says which. 404 `not_found` for a name that isn't a listed place.";
 export const SANDBOX_DOC = "Capability sandboxes. One place agents run: its descriptor, its settings and its info rows as typed fields the app renders generically (an unknown field type renders as a read-only `label` and `display`). " +
 	"Needs the `read` scope. Local reads only (no provider call), so poll it freely. Never contains a credential: every `display`, `help` and `reason` is written by the daemon. 404 `not_found` for a name that isn't a listed place. " +
 	"`v`: the descriptor version the client understands (only 1 exists).";

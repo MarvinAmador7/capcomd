@@ -12,7 +12,7 @@ import { HarnessEvent } from "../../src/api/envelope";
 import { harnessApp } from "../../src/api/server";
 import { memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
-import { currentIdleLifetime, fileSettingsStore, idleLifetimeFromEnv, memorySettingsStore, settingsPath, type SettingsStore } from "../../src/providers/settings";
+import { currentAgentMemory, currentIdleLifetime, fileSettingsStore, idleLifetimeFromEnv, memorySettingsStore, settingsPath, type SettingsStore } from "../../src/providers/settings";
 import { capcomd } from "../helpers/engine";
 import spec from "../../openapi/capcomd.json";
 
@@ -100,7 +100,7 @@ describe("PATCH /v1/sandboxes/{name}/settings", () => {
 		expect(stale.body.rev).not.toBe(rev);
 		expect(settings.read("docker")).toEqual({ idleLifetime: 900 });
 		const fresh = await patch("docker", { values: { idleLifetime: "43200" }, rev: stale.body.rev });
-		expect(fresh.body).toMatchObject({ settings: [{ value: "43200", display: "12 hours" }] });
+		expect(fresh.body.settings[0]).toMatchObject({ id: "idleLifetime", value: "43200", display: "12 hours" });
 	});
 
 	test("422 invalid: not a choice, under the 15-minute minimum, an unknown setting, a bad body; 404 for an unknown place", async () => {
@@ -147,6 +147,81 @@ describe("PATCH /v1/sandboxes/{name}/settings", () => {
 		expect(idleLifetimeFromEnv({ CAPCOMD_SANDBOX_IDLE_SECONDS: "60" })).toBe(900);
 		for (const v of ["", "abc", "-5", "0", "1e4", " "]) expect(idleLifetimeFromEnv({ CAPCOMD_SANDBOX_IDLE_SECONDS: v })).toBeNull();
 		expect(currentIdleLifetime("docker", { env: { CAPCOMD_SANDBOX_IDLE_SECONDS: "nope" }, store }).source).toBe("config");
+	});
+});
+
+describe("Memory per agent (agentMemory, Docker): presets, precedence, and the Agents at once row follows it", () => {
+	const GB = 1024 ** 3;
+	const withSlots = (o: { settings?: SettingsStore; env?: Record<string, string> } = {}) => {
+		const settings = o.settings ?? memorySettingsStore();
+		// Docker has 8 GB here (the row's only provider fact; the budget is the setting's).
+		const src = memorySource({ settings, surface: { env: { CAPCOMD_NO_CONFIG: "1", ...(o.env ?? {}) }, agentSlots: async (n: string) => (n === "docker" ? { memTotal: 8 * GB } : null) } });
+		const app = harnessApp({ source: src, clients: () => loadClients(cpath), state: harnessState(null), pollMs: 20 });
+		const req = async (method: string, p: string, body?: unknown) => {
+			const r = await app.request(p, { method, headers: { authorization: `Bearer ${configurer.token}`, "content-type": "application/json" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+			return { status: r.status, body: (await r.json()) as any };
+		};
+		return { settings, get: (p: string) => req("GET", p), patch: (n: string, b: unknown) => req("PATCH", `/v1/sandboxes/${n}/settings`, b) };
+	};
+	const field = (d: any, id: string) => [...d.settings, ...d.info].find((f: any) => f.id === id);
+
+	test("docker offers it as a choice of 512 MB, 1 GB, 2 GB and 4 GB at 1 GB by default; boxd doesn't have it", async () => {
+		const { get } = withSlots();
+		const d = (await get("/v1/sandboxes/docker")).body;
+		expect(SandboxDetail.safeParse(d).success).toBe(true);
+		expect(d.descriptor.settings).toEqual(["idleLifetime", "agentMemory"]);
+		expect(field(d, "agentMemory")).toEqual({
+			id: "agentMemory", type: "choice", label: "Memory per agent", help: expect.stringContaining("Agents here share Docker's memory"),
+			value: "1024", display: "1 GB", default: "1024",
+			choices: [{ value: "512", label: "512 MB" }, { value: "1024", label: "1 GB" }, { value: "2048", label: "2 GB" }, { value: "4096", label: "4 GB" }],
+			source: "default", editable: true, appliesTo: "new_agents", needsRestart: false, state: null,
+		});
+		expect(field(d, "agentSlots")).toMatchObject({ value: "8", display: "8 (8 GB ÷ 1 GB per agent)" });
+		const boxd = (await get("/v1/sandboxes/boxd")).body;
+		expect(boxd.settings.map((f: any) => f.id)).toEqual(["idleLifetime"]);
+	});
+
+	test("a change is stored, and the same answer's Agents at once row already uses it (no stale budget)", async () => {
+		const { get, patch, settings } = withSlots();
+		const rev = (await get("/v1/sandboxes/docker")).body.rev;
+		const r = await patch("docker", { values: { agentMemory: "512" }, rev });
+		expect(r.status).toBe(200);
+		expect(settings.read("docker")).toEqual({ agentMemory: 512 });
+		expect(field(r.body, "agentMemory")).toMatchObject({ value: "512", display: "512 MB", source: "config" });
+		expect(field(r.body, "agentSlots")).toMatchObject({ value: "16", display: "16 (8 GB ÷ 512 MB per agent)" });
+		expect(r.body.rev).not.toBe(rev);
+		// GET agrees, and a second change from the new rev works.
+		const again = (await get("/v1/sandboxes/docker")).body;
+		expect(field(again, "agentSlots").value).toBe("16");
+		const four = await patch("docker", { values: { agentMemory: "4096" }, rev: again.rev });
+		expect(field(four.body, "agentSlots")).toMatchObject({ value: "2", display: "2 (8 GB ÷ 4 GB per agent)" });
+		// Only the presets; and not on boxd.
+		expect((await patch("docker", { values: { agentMemory: "1536" }, rev: four.body.rev })).body.message).toBe("Memory per agent: use one of 512 (512 MB), 1024 (1 GB), 2048 (2 GB), 4096 (4 GB)");
+		expect((await patch("boxd", { values: { agentMemory: "512" }, rev: (await get("/v1/sandboxes/boxd")).body.rev })).body.message).toBe("\"agentMemory\" isn't a setting of boxd (its settings: idleLifetime)");
+	});
+
+	test("CAPCOMD_DOCKER_AGENT_MEMORY_MB wins over the user config: read-only, said so; a change is 422", async () => {
+		const { get, patch } = withSlots({ settings: memorySettingsStore({ docker: { agentMemory: 4096 } }), env: { CAPCOMD_DOCKER_AGENT_MEMORY_MB: "2048" } });
+		const d = (await get("/v1/sandboxes/docker")).body;
+		expect(field(d, "agentMemory")).toMatchObject({ value: "2048", source: "env", editable: false, display: "Set by CAPCOMD_DOCKER_AGENT_MEMORY_MB in capcomd's environment" });
+		expect(field(d, "agentSlots")).toMatchObject({ value: "4", source: "env" });
+		const r = await patch("docker", { values: { agentMemory: "512" }, rev: d.rev });
+		expect(r).toEqual({ status: 422, body: { code: "invalid", message: "Memory per agent is set by CAPCOMD_DOCKER_AGENT_MEMORY_MB in capcomd's environment, so it can't be changed here" } });
+	});
+
+	test("precedence: env, then the user config, then 1 GB; a stored value capcomd wouldn't accept reads as unset", () => {
+		const store = memorySettingsStore({ docker: { agentMemory: 2048 } });
+		expect(currentAgentMemory("docker", { env: {}, store })).toEqual({ mb: 2048, source: "config" });
+		expect(currentAgentMemory("docker", { env: { CAPCOMD_DOCKER_AGENT_MEMORY_MB: "768" }, store })).toEqual({ mb: 768, source: "env" });
+		expect(currentAgentMemory("docker", { env: { CAPCOMD_DOCKER_AGENT_MEMORY_MB: "100" }, store })).toEqual({ mb: 2048, source: "config" });
+		expect(currentAgentMemory("docker", { env: {}, store: memorySettingsStore() })).toEqual({ mb: 1024, source: "default" });
+		const home = mkdtempSync(join(dir, "mem-"));
+		const path = settingsPath({ CAPCOMD_HOME: home })!;
+		writeFileSync(path, JSON.stringify({ sandboxes: { docker: { agentMemory: 100, idleLifetime: 900 } } }));
+		expect(fileSettingsStore(path).read("docker")).toEqual({ idleLifetime: 900 });
+		fileSettingsStore(path).write("docker", "agentMemory", 512);
+		expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ sandboxes: { docker: { agentMemory: 512, idleLifetime: 900 } } });
+		expect(currentAgentMemory("docker", { env: { CAPCOMD_HOME: home } })).toEqual({ mb: 512, source: "config" });
 	});
 });
 

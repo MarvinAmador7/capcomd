@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { admits, agentMemory, agentSlots, AgentSlots, slotsFor } from "../../src/providers/capacity";
+import { admits, agentMemory, agentSlots, AgentSlots, releaseSlot, slotsFor } from "../../src/providers/capacity";
 import { agentSlotsField } from "../../src/api/sandboxes";
 
 const GB = 1024 ** 3;
@@ -26,7 +26,7 @@ describe("the arithmetic", () => {
     const dir = mkdtempSync(join(tmpdir(), "capcomd-cap-"));
     const cfg = join(dir, "config.json");
     expect(agentMemory({}, null)).toEqual({ mb: 1024, source: "default" });
-    writeFileSync(cfg, JSON.stringify({ sandboxes: { docker: { agentMemoryMb: 2048 } } }));
+    writeFileSync(cfg, JSON.stringify({ sandboxes: { docker: { agentMemory: 2048 } } }));
     expect(agentMemory({}, cfg)).toEqual({ mb: 2048, source: "config" });
     expect(agentMemory({ CAPCOMD_DOCKER_AGENT_MEMORY_MB: "512" }, cfg)).toEqual({ mb: 512, source: "env" });
     expect(agentMemory({ CAPCOMD_DOCKER_AGENT_MEMORY_MB: "12" }, null)).toEqual({ mb: 1024, source: "default" }); // under the minimum
@@ -79,6 +79,28 @@ describe("AgentSlots", () => {
     const down = make({ mem: null }).slots;
     expect(await down.request("a", 1)).toMatchObject({ admitted: true, slots: null });
   });
+  test("the budget is read on every request: a change applies to the next agent that asks (nothing cached)", async () => {
+    let mb = 1024;
+    const slots = new AgentSlots({ memTotal: async () => 2 * GB, running: async () => [], perAgentMb: () => mb });
+    await slots.request("a", 1); await slots.request("b", 2);
+    expect(await slots.request("c", 3)).toMatchObject({ admitted: false, slots: 2, perAgentMb: 1024 });
+    mb = 512;
+    expect(await slots.request("c", 3)).toMatchObject({ admitted: true, slots: 4, perAgentMb: 512 });
+    // The fakes' slots (and Docker's) read the setting itself each time: here its environment variable.
+    const saved = { mem: process.env.CAPCOMD_FAKE_MEMORY_MB, budget: process.env.CAPCOMD_DOCKER_AGENT_MEMORY_MB };
+    try {
+      process.env.CAPCOMD_FAKE_MEMORY_MB = "2048";
+      process.env.CAPCOMD_DOCKER_AGENT_MEMORY_MB = "1024";
+      const fake = slotsFor("fake")!;
+      expect((await fake.request("budget-a", 1)).slots).toBe(2);
+      process.env.CAPCOMD_DOCKER_AGENT_MEMORY_MB = "512";
+      expect((await fake.request("budget-b", 2)).slots).toBe(4);
+      releaseSlot("budget-a"); releaseSlot("budget-b");
+      expect(fake.holds("budget-a") || fake.holds("budget-b")).toBe(false);
+    } finally {
+      for (const [k, v] of [["CAPCOMD_FAKE_MEMORY_MB", saved.mem], ["CAPCOMD_DOCKER_AGENT_MEMORY_MB", saved.budget]] as const) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  });
   test("only Docker has a cap (the cloud doesn't); the fakes only with the test knob", () => {
     expect(slotsFor("docker")).toBeInstanceOf(AgentSlots);
     expect(slotsFor("boxd")).toBeNull();
@@ -95,6 +117,7 @@ describe("AgentSlots", () => {
 test("the Agents at once row: the cap from Docker's memory and the budget, and who set the budget", () => {
   expect(agentSlotsField({ memTotal: 8 * GB, memory: { mb: 1024, source: "default" } })).toMatchObject({ id: "agentSlots", value: "8", display: "8 (8 GB ÷ 1 GB per agent)", source: "daemon", editable: false });
   const env = agentSlotsField({ memTotal: 7.8 * GB, memory: { mb: 1536, source: "env" } });
-  expect(env).toMatchObject({ value: "5", display: "5 (7.8 GB ÷ 1536 MB per agent)", source: "env" });
+  expect(env).toMatchObject({ value: "5", display: "5 (7.8 GB ÷ 1.5 GB per agent)", source: "env" });
   expect(env.help).toContain("Set by CAPCOMD_DOCKER_AGENT_MEMORY_MB");
+  expect(agentSlotsField({ memTotal: 8 * GB, memory: { mb: 512, source: "config" } })).toMatchObject({ value: "16", display: "16 (8 GB ÷ 512 MB per agent)", help: expect.stringContaining("Change it with Memory per agent.") });
 });
