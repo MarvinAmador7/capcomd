@@ -2,6 +2,7 @@ import { AtScale } from "@/components/AtScale";
 import { BotsCta } from "@/components/BotsCta";
 import { CrewProvider } from "@/components/crew";
 import { Durable } from "@/components/Durable";
+import { FlightRecorder } from "@/components/FlightRecorder";
 import { Footer } from "@/components/Footer";
 import { Hero } from "@/components/Hero";
 import { Patterns } from "@/components/Patterns";
@@ -23,6 +24,7 @@ export default function Home() {
         <Sandboxes />
         <RoleTree />
         <Patterns />
+        <FlightRecorder />
         <Start />
         <BotsCta />
       </main>
