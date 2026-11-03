@@ -98,7 +98,7 @@ describe("setup steps (non-interactive)", () => {
     });
     const agents = JSON.parse(readFileSync(join(repo, ".capcomd", "agents.json"), "utf8")).agents;
     expect(Object.keys(agents).sort()).toEqual(["codex-worker", "lead", "planner", "reviewer", "worker"]);
-    expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker"]);
+    expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead"]);
     // A module lead: the worker's settings (every tool, so it runs any check itself), up to 3 worker helpers, one level.
     expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
     // The reviewer runs the check and the package manager's test runner (bun test as well as bun run).

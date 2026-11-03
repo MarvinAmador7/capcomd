@@ -5,8 +5,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { planProject, testTools } from "../../src/config/project-setup";
-import { abilityText, leadText, validateFile, type AgentsFile } from "../../src/agents/profiles";
-import { applyGrant, rootLimits } from "../../src/primitives/policy";
+import { abilityText, leadText, validateFile, widenings, type AgentsFile } from "../../src/agents/profiles";
+import { applyGrant, childLimits, rootLimits } from "../../src/primitives/policy";
 import { placeCapacity, teamShapeHint } from "../../src/providers/capacity";
 import { INSTRUCTIONS } from "../../src/mcp/server";
 import { ORCHESTRATION_SKILL } from "../../src/utils/assets";
@@ -69,6 +69,14 @@ describe("a children grant that would have no effect", () => {
     expect(applyGrant(worker, { maxChildren: 0 })).toMatchObject({ ok: true, limits: { allowSpawn: false } });
     const lead = rootLimits({ allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] });
     expect(applyGrant(lead, { maxChildren: 2, maxDepth: 1 })).toMatchObject({ ok: true, limits: { allowSpawn: true, maxChildren: 2 } });
+  });
+
+  test("a planner may spawn a lead, and the lead keeps its own helpers one level down", () => {
+    const by = Object.fromEntries(planProject(answers(mkdtempSync(join(tmpdir(), "capcomd-ts-")))).profiles) as Record<string, any>;
+    expect(by.planner.children.allowedChildProfiles).toEqual(["worker", "lead"]);
+    expect(widenings(by.planner, by.lead)).toEqual([]);
+    const underPlanner = childLimits(rootLimits(by.planner.children), by.lead.children);
+    expect(applyGrant(underPlanner, { maxChildren: 3, maxDepth: 1 })).toMatchObject({ ok: true, limits: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] } });
   });
 });
 

@@ -21,7 +21,8 @@ export function plannerBrief(goal: string, gates: { checks: string[]; reviewer: 
     "You are the planner for this goal. Don't change files yourself: use the capcomd command (see the orchestration skill in your instructions).",
     ...(goalBranch ? [`This run's work goes onto its goal branch ${goalBranch}, cut from ${gates.base}. Every child you verify and merge lands there right away, with no approval; when you finish, the user reads your summary and decides whether to open a pull request from ${goalBranch} into ${gates.base}.`, ""] : []),
     "1. Split the goal into tasks that child agents can do independently, and spawn one child per task (`capcomd spawn --task … --key <name>`), each with a self-contained task that says which files to change and how to check the result." +
-      (gates.checks.length ? ` Pin the check that fits each child with --check (the operator's checks: ${gates.checks.join(", ")}).` : ""),
+      (gates.checks.length ? ` Pin the check that fits each child with --check (the operator's checks: ${gates.checks.join(", ")}).` : "") +
+      " Land the shared pieces (types, stubs) first in one small child, then spawn every independent task at once. A task with two or more independent parts goes to a lead (`--profile lead --children.maxChildren=3 --children.maxDepth=1`), which splits it among helpers and verifies and merges their work itself.",
     "2. `capcomd await` them. Verify each finished child (`capcomd verify --ref <agt> --key v-<agt>`" + (gates.reviewer ? "; a reviewer agent also reviews it, so give the command a 10-minute timeout and run it again if it is cut off" : "") + `), and merge the ones that pass (\`capcomd merge --ref <agt> --require <vfyId>\`) into ${gates.target ?? "the run's target"}.`,
     "3. A child that failed or didn't pass: spawn one replacement with the failure in its task, or continue its work with `capcomd spawn --continue <agt>`; then verify and merge it.",
     goalBranch
