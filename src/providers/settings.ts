@@ -1,10 +1,13 @@
-// ADR-021 §2 (phase 2): provider settings the user can change. Today one, the idle machine lifetime: how long a machine
-// capcomd made lives without its lease being renewed (a running agent renews it every 10 minutes), so one left behind
-// (a crash, a stopped run) is deleted and stops billing. Precedence: CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's
-// environment, then the user config (`~/.capcomd/config.json` `sandboxes.<name>.idleLifetime`, seconds), then the
-// default (1 hour). Settings live in the user config, never the project's: they decide billing for the machine and
-// account. `run new` records the value with the run (src/providers/run-sandbox.ts), so a change applies to new runs
-// and needs no restart.
+// ADR-021 §2 (phase 2): provider settings the user can change. Two today:
+// - the idle machine lifetime (every place): how long a machine capcomd made lives without its lease being renewed (a
+//   running agent renews it every 10 minutes), so one left behind (a crash, a stopped run) is deleted and stops billing.
+//   Precedence: CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment, then the user config (`~/.capcomd/config.json`
+//   `sandboxes.<name>.idleLifetime`, seconds), then the default (1 hour). `run new` records the value with the run
+//   (src/providers/run-sandbox.ts), so a change applies to new runs and needs no restart.
+// - the memory per agent (Docker, src/providers/capacity.ts): how much of Docker's memory each agent gets, which caps
+//   how many run at once. Precedence: CAPCOMD_DOCKER_AGENT_MEMORY_MB, then `sandboxes.docker.agentMemory` (MB), then
+//   1 GB. Read each time an agent asks for a slot, so a change applies to the next agent that starts.
+// Settings live in the user config, never the project's: they decide billing and load for the machine and account.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { userConfigPath } from "../config/store";
@@ -21,6 +24,25 @@ export const IDLE_LIFETIME_PRESETS = [900, 3600, 14400, 43200] as const;
 
 export type SettingSource = "default" | "env" | "config";
 export interface IdleLifetime { seconds: number; source: SettingSource }
+
+export const AGENT_MEMORY_ENV = "CAPCOMD_DOCKER_AGENT_MEMORY_MB";
+export const AGENT_MEMORY_DEFAULT_MB = 1024;
+/** Less than this can't run an agent CLI at all (an environment variable may go this low; the app offers the presets). */
+export const AGENT_MEMORY_MIN_MB = 256;
+/** The presets the app offers (decided 2026-11-03), in MB. */
+export const AGENT_MEMORY_PRESETS = [512, 1024, 2048, 4096] as const;
+export interface AgentMemory { mb: number; source: SettingSource }
+
+/** A memory budget capcomd accepts (the environment, the user config): whole MB, at least the minimum, at most 1 TB. */
+export function validMemoryMb(v: unknown): number | null {
+	const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v) : v;
+	return typeof n === "number" && Number.isSafeInteger(n) && n >= AGENT_MEMORY_MIN_MB && n <= 1024 * 1024 ? n : null;
+}
+
+/** The values a setting holds in the user config, by id (only valid ones are read back). */
+export interface StoredSettings { idleLifetime?: number; agentMemory?: number }
+export type StoredSettingId = keyof StoredSettings;
+const VALID: Record<StoredSettingId, (v: unknown) => number | null> = { idleLifetime: (v) => validLifetime(v), agentMemory: validMemoryMb };
 
 /** CAPCOMD_SANDBOX_IDLE_SECONDS as seconds: a positive whole number, raised to the 15-minute minimum; null when unset or
  *  not a number (then the user config and the default apply). */
@@ -47,10 +69,10 @@ export function settingsPath(env: Env = process.env): string | null {
 /** Where provider settings are kept: the user config file, or memory (tests, the in-memory API source). */
 export interface SettingsStore {
 	/** The stored values for one provider (only valid ones). */
-	read(name: string): { idleLifetime?: number };
+	read(name: string): StoredSettings;
 	/** Whether a value can be written at all (false while settings are off). */
 	writable(): boolean;
-	write(name: string, id: "idleLifetime", value: number): void;
+	write(name: string, id: StoredSettingId, value: number): void;
 }
 
 export class ConfigFileError extends Error {}
@@ -77,8 +99,13 @@ export function fileSettingsStore(path: string | null): SettingsStore {
 			try { raw = readRaw(path); } catch { return {}; }
 			const all = raw.sandboxes;
 			const mine = all && typeof all === "object" ? (all as Record<string, unknown>)[name] : undefined;
-			const v = mine && typeof mine === "object" ? validLifetime((mine as Record<string, unknown>).idleLifetime) : null;
-			return v !== null ? { idleLifetime: v } : {};
+			if (!mine || typeof mine !== "object") return {};
+			const out: StoredSettings = {};
+			for (const id of Object.keys(VALID) as StoredSettingId[]) {
+				const v = VALID[id]((mine as Record<string, unknown>)[id]);
+				if (v !== null) out[id] = v;
+			}
+			return out;
 		},
 		writable: () => path !== null,
 		write(name, id, value) {
@@ -98,8 +125,8 @@ export function fileSettingsStore(path: string | null): SettingsStore {
 }
 
 /** Settings in memory (tests and the in-memory API source). */
-export function memorySettingsStore(initial: Record<string, { idleLifetime?: number }> = {}, o: { writable?: boolean } = {}): SettingsStore & { values: Record<string, { idleLifetime?: number }> } {
-	const values: Record<string, { idleLifetime?: number }> = JSON.parse(JSON.stringify(initial));
+export function memorySettingsStore(initial: Record<string, StoredSettings> = {}, o: { writable?: boolean } = {}): SettingsStore & { values: Record<string, StoredSettings> } {
+	const values: Record<string, StoredSettings> = JSON.parse(JSON.stringify(initial));
 	return {
 		values,
 		read: (name) => ({ ...(values[name] ?? {}) }),
@@ -116,6 +143,19 @@ export function currentIdleLifetime(name: string, o: { env?: Env; store?: Settin
 	const stored = (o.store ?? fileSettingsStore(settingsPath(env))).read(name).idleLifetime;
 	if (stored !== undefined) return { seconds: stored, source: "config" };
 	return { seconds: IDLE_LIFETIME_DEFAULT, source: "default" };
+}
+
+/**
+ * The memory each agent on `name` gets (Docker): CAPCOMD_DOCKER_AGENT_MEMORY_MB, else the user config, else 1 GB. Read
+ * fresh on every call (nothing caches it), so the cap and the Agents at once row follow a change at once.
+ */
+export function currentAgentMemory(name = "docker", o: { env?: Env; store?: SettingsStore } = {}): AgentMemory {
+	const env = o.env ?? process.env;
+	const fromEnv = validMemoryMb(env[AGENT_MEMORY_ENV]);
+	if (fromEnv !== null) return { mb: fromEnv, source: "env" };
+	const stored = (o.store ?? fileSettingsStore(settingsPath(env))).read(name).agentMemory;
+	if (stored !== undefined) return { mb: stored, source: "config" };
+	return { mb: AGENT_MEMORY_DEFAULT_MB, source: "default" };
 }
 
 /** What `run new` records with a run (`_sandbox.settings`): the provider's settings as they are now. */

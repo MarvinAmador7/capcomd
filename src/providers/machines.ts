@@ -29,7 +29,7 @@ export interface JobMachine {
 	/** The place it runs (a provider name). */
 	sandbox: string;
 	kind: JobKind;
-	/** What exactly: checks, auth-login, auth-status, env-build, doctor. */
+	/** What exactly: checks, auth-login, auth-status, auth-carry-read/-write (env build moving a login), env-build, doctor. */
 	purpose: string;
 	/** check: the run (and task) whose checks run there. */
 	runId: string | null;
@@ -179,7 +179,7 @@ export function jobOwnerText(m: Pick<JobMachine, "kind" | "purpose" | "runId" | 
 	const ai = (m.agent && AI[m.agent]) ?? "an AI";
 	switch (m.kind) {
 		case "check": return { role: "checks", label: m.runId && SAFE.test(m.runId) ? `Checks for ${m.runId}` : "Checks" };
-		case "login": return { role: "login", label: m.purpose === "auth-status" ? `Checking the ${ai} login` : `Logging in to ${ai}` };
+		case "login": return { role: "login", label: m.purpose === "auth-status" ? `Checking the ${ai} login` : m.purpose.startsWith("auth-carry") ? `Moving the ${ai} login to the new environment` : `Logging in to ${ai}` };
 		case "env_build": return { role: "environment", label: "Building the agent environment" };
 		case "doctor": return { role: "environment", label: "Checking the agent environment" };
 	}

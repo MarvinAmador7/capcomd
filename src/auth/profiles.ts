@@ -15,8 +15,12 @@ export interface AuthProfile {
   store: "secret" | "snapshot";
   /** claude: setup-token (CLAUDE_CODE_OAUTH_TOKEN) | codex: device-auth (~/.codex/auth.json). */
   method: "setup-token" | "device-auth";
+  /** The env snapshot the login image was made from (agents with the login boot from it, so from this env). */
   env: string;
   createdAt: string;
+  /** `capcomd env build` moved the login onto `env` from this older env snapshot (src/auth/carry.ts), and when. */
+  carriedFrom?: string;
+  carriedAt?: string;
   verifiedAt?: string;
   verified?: boolean;
 }

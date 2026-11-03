@@ -133,14 +133,24 @@ async function admitted(c: any, p: StartAgent): Promise<boolean> {
 export async function admitStart(c: any, p: StartAgent): Promise<{ queued: boolean; waiting?: boolean }> {
   const a = await (await scopeOf(p.runId)).getAgent({ agentId: p.agentId }).catch(() => null);
   if (a && (TERMINAL_AGENT.has(a.status) || a.status === "paused" || a.epoch !== p.epoch)) {
-    const { slotsFor } = await import("../providers/capacity");
-    const { machineNameFor } = await import("../providers/machines");
-    let place: string | null = null;
-    try { place = (await (await import("../providers/run-sandbox")).runSandbox(p.runId)) ?? (await import("../providers/registry")).sandboxName(); } catch { /* unknown: nothing to release */ }
-    slotsFor(place)?.release(machineNameFor(agentVmIdemKey(p.runId, p.agentId, p.epoch)));
+    await freeSlot(p);
     return { queued: false };
   }
   return queueStart(c, p);
+}
+
+/**
+ * This epoch's agent no longer needs (or will never get) a machine: free its memory slot (src/providers/capacity.ts) on
+ * whichever place holds it. Without this an admitted agent whose container never appeared (it failed or was cancelled
+ * before its machine started, or paused at a usage limit) kept its slot for the grace period (10 minutes). Safe at
+ * any time after: a container that still runs is counted from Docker's own list anyway. In memory, idempotent.
+ */
+export async function freeSlot(p: StartAgent): Promise<void> {
+  try {
+    const { releaseSlot } = await import("../providers/capacity");
+    const { machineNameFor } = await import("../providers/machines");
+    releaseSlot(machineNameFor(agentVmIdemKey(p.runId, p.agentId, p.epoch)));
+  } catch { /* nothing held */ }
 }
 
 /** The worker actions behind the step wake (STEP_WAKE_MS); untraced: bookkeeping, not work. */
@@ -313,6 +323,14 @@ const gate = async (ctx: any, name: string, latest: number) => (DRILL() === "ung
 async function agentLifecycle(ctx: any): Promise<void> {
   const msg = await ctx.queue.next("wait-start", { names: ["start"] });
   const p = msg.body as StartAgent;
+  await lifecycleOf(ctx, p);
+  // Ended (done, failed, given up, cancelled or paused): this epoch's slot is free for the next waiting agent. Not a
+  // step (it records nothing, so the workflow's shape is unchanged): in memory, idempotent, harmless on a replay.
+  await freeSlot(p);
+}
+
+/** The lifecycle after its `start`: every exit returns (the caller frees the agent's slot). */
+async function lifecycleOf(ctx: any, p: StartAgent): Promise<void> {
   const shape: number = await gate(ctx, "lifecycle-shape", LIFECYCLE_SHAPE());
   const driver = `wf-${p.agentId}-e${p.epoch}`;
   // The agent's drive settings (recorded at spawn: how it runs, the driver's timings), over this host's env, for every
@@ -423,6 +441,8 @@ async function agentLifecycle(ctx: any): Promise<void> {
  * epoch runs in that epoch's worker, started like any agent. `wakeDue` checks it is still this pause.
  */
 async function wakeAt(ctx: any, step: (name: string, run: (c: any) => Promise<any>, o?: Record<string, unknown>) => Promise<any>, p: StartAgent, until: number) {
+  // Paused until the reset: its next epoch asks for a slot of its own, so this one's is free now, not after the sleep.
+  await freeSlot(p);
   await ctx.sleepUntil("usage-reset", Math.ceil(until));
   // (The scope's own wakeDue alarm is the backstop: whichever comes first resumes it, the other finds it resumed.)
   await step("wake", async () => (await scopeOf(p.runId)).wakeDue({ agentId: p.agentId, epoch: p.epoch }));
