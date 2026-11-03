@@ -231,7 +231,10 @@ export async function verify(a: { runId: string; ref: string; check?: string; ac
   const r = await bounded(work, waitMs(a.timeoutMs));
   if (!r.done) return { id, state: "running", next: `The checks (then the review, if the run has a reviewer) are still running; call capcomd_verify again with the same ref${a.key ? " and key" : ""}.` };
   const v: any = r.value;
-  return { ...v, next: v.state === "passed" ? `Merge with capcomd_merge {runId: "${a.runId}", ref: "${a.ref}", require: "${v.id}"}.` : "Not merged: send the failure to the agent (capcomd_send) or spawn a fix with it in the task." };
+  const setupFailed = typeof v.checks?.reason === "string" && v.checks.reason.startsWith("checks couldn't run");
+  return { ...v, next: v.state === "passed" ? `Merge with capcomd_merge {runId: "${a.runId}", ref: "${a.ref}", require: "${v.id}"}.`
+    : setupFailed ? "Not the agent's fault: the checks sandbox couldn't be set up (checks.output says why, usually `capcomd env build --sandbox …`). Tell the user, run what it says once they agree, then call capcomd_verify again with a new key."
+    : "Not merged: send the failure to the agent (capcomd_send) or spawn a fix with it in the task." };
 }
 
 export async function merge(a: { runId: string; ref: string; require: string; key?: string; timeoutMs?: number }) {

@@ -3,7 +3,7 @@ import type { MergeConfig } from "./config";
 import { taskKey, withRepoFile } from "./config";
 import { findExistingMerge, openClone } from "./repo";
 import { integrate } from "./integrate";
-import { runTests } from "./verify";
+import { checksFailReason, runTests } from "./verify";
 import type { MergeOutcome, MergeRequest } from "./types";
 
 /** Test seam: runs right before the push (e.g. to move the target and force a lease rejection). */
@@ -43,7 +43,7 @@ export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, clone
     if (!merged.ok) return { status: "conflict", files: merged.files, targetSha, taskSha };
 
     const tests = await runTests(git, req.testCommand ?? cfg.testCommand, { CAPCOMD_RUN_ID: req.runId, CAPCOMD_TASK_ID: req.taskId, CAPCOMD_TARGET: req.target });
-    if (!tests.passed) return { status: "failed", reason: "tests failed on branch merged with latest target", output: tests.output };
+    if (!tests.passed) return { status: "failed", reason: checksFailReason(tests), output: tests.output };
     if (req.testOnly) return { status: "verified", sha: merged.head, output: tests.output, taskSha };
     if (merged.head === targetSha) {
       return { status: "merged", sha: targetSha, already: true, how: "noop", strategy: cfg.strategy, mode: "direct", attempts };
