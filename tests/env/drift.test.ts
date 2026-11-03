@@ -1,5 +1,5 @@
 // Drift of the env image's warm template (src/env/drift.ts): commits behind the target, a changed lockfile, a
-// rewritten target. Read from a local bare repo, as `env status` / `env doctor` read the project's remote.
+// rewritten target. Read from a local bare repo, as `env status` / `doctor` read the project's remote.
 import { describe, expect, test } from "bun:test";
 import { bareRepo } from "../merge/gitfixture";
 import { driftOf, loginsOnOlderEnv, templateDrift, templateDriftFacts } from "../../src/env/drift";

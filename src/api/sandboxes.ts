@@ -252,7 +252,7 @@ export const OWNER_KINDS = ["agent", "check", "login", "env_build", "doctor"] as
 export type OwnerKind = (typeof OWNER_KINDS)[number];
 export interface ResourceOwner {
 	/** agent: an agent's machine (run, agent, role = its profile, task). check: a run's checks (verify). login:
-	 *  `capcomd auth login` or `auth status`. env_build: `capcomd env build`. doctor: `capcomd env doctor`. */
+	 *  `capcomd auth login` or `auth status`. env_build: `capcomd env build`. doctor: `capcomd doctor`. */
 	kind: OwnerKind;
 	runId: string | null; agentId: string | null; role: string | null; task: string | null;
 	/** A daemon-written line for capcomd's own machines ("Checks for run-8kq2", "Logging in to Claude Code"); null for agents. */

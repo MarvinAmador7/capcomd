@@ -17,7 +17,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `node_modules`. On a repository the size of capcomd, 16 agents get their workspace in about 3 s instead of 18 s,
   and each uses about 1.5 MB of disk instead of about 590 MB. Rebuild it when your target branch moves on or the
   lockfile changes; until then, agents clone as before.
-- Local (Docker): `capcomd env status` and `capcomd env doctor` show how many commits the warm checkout is behind your
+- Local (Docker): `capcomd env status` and `capcomd doctor` show how many commits the warm checkout is behind your
   target branch, and whether the lockfile has changed (agents then clone and install their own dependencies). They
   also give the command that rebuilds it.
 - Local (Docker): capcomd only runs as many agents at once as fit in Docker's memory. Choose how much memory each

@@ -571,7 +571,7 @@ export const SANDBOX_DOC = "Capability sandboxes. One place agents run: its desc
 	"Needs the `read` scope. Local reads only (no provider call), so poll it freely. Never contains a credential: every `display`, `help` and `reason` is written by the daemon. 404 `not_found` for a name that isn't a listed place. " +
 	"`v`: the descriptor version the client understands (only 1 exists).";
 export const ResourceOwner = z.object({
-	kind: z.string().describe("Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd env doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"),
+	kind: z.string().describe("Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"),
 	runId: z.string().nullable().describe("The run (agent, check); null for a job that belongs to no run"),
 	agentId: z.string().nullable().describe("The agent (kind agent); null otherwise"),
 	role: z.string().nullable().describe("An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment"),

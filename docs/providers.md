@@ -55,7 +55,7 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
   it (`auths-docker.json`: `snapshot`, `env`, and `carriedFrom`/`carriedAt`), and the old login image is removed. The
   env image itself never holds a login: its secret scan runs before it is saved, as before, and nothing writes to it
   afterwards. The build lists each login it moved (`logins` in `--json`). A login it couldn't move keeps working from
-  its old image (older CLIs and template); the build says why and what to run, and `env status` / `env doctor` keep
+  its old image (older CLIs and template); the build says why and what to run, and `env status` / `doctor` keep
   naming it until the next build moves it or `capcomd auth login … --sandbox docker` replaces it.
 - **Agents at once.** Agents' containers share Docker's memory (Docker Desktop's or OrbStack's VM), and memory runs out
   before disk does (one agent CLI is 0.3-0.6 GB). So at most `docker info` MemTotal ÷ the memory per agent run at once.
@@ -155,7 +155,7 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
    `sweepIdle` does; deletes a platform makes by itself aren't reported.
 
    **Machines capcomd's own jobs make.** Every capcomd process that makes a machine outside an agent's worker (the
-   checks VM in `verify`, `auth login` / `auth status`, `env build`, `env doctor`) records it in capcomd's machines
+   checks VM in `verify`, `auth login` / `auth status`, `env build`, `doctor`) records it in capcomd's machines
    ledger (`<state>/machines/<name>.json`, or `CAPCOMD_MACHINES_LEDGER`; `src/providers/machines.ts`) before `ensure`
    and removes the record once it destroyed the machine. A record counts while the process that wrote it is alive and
    the machine's lifetime isn't up. The resources route lists such a machine as `running` with an owner of its `kind`
