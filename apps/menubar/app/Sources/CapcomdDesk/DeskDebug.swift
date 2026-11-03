@@ -37,6 +37,16 @@ import CapcomdStore
         FileHandle.standardError.write(Data(line.utf8))
       }
     }
+    // CAPCOMD_DESK_THREAD_LOG=<file>: one line each time a column's thread entries change (the first, empty, when its
+    // thread opens): milliseconds of uptime, the agent, how many entries, and the last one's id. For time-to-latest.
+    if let path = ProcessInfo.processInfo.environment["CAPCOMD_DESK_THREAD_LOG"], !path.isEmpty {
+      let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+      ThreadSlice.trace = { id, entries in
+        let line = "\(Int(ProcessInfo.processInfo.systemUptime * 1000)) \(id) \(entries.count) \(entries.last?.id ?? "-")\n"
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? Data(line.utf8).write(to: url) }
+      }
+    }
     let counter = ProcessInfo.processInfo.environment["CAPCOMD_DESK_BODIES"].map { (BodyCounter(), URL(fileURLWithPath: $0)) }
     if let counter { DeskProbe.sink = counter.0 }
     if let s = ProcessInfo.processInfo.environment["CAPCOMD_DESK_AUTOSCROLL"].flatMap(Double.init) {
@@ -97,6 +107,7 @@ import CapcomdStore
         case "key": key(w.dropFirst().joined(separator: " "))
         case "snap": if w.count > 1 { snapshot(into: dir, name: w[1]) }
         case "swipe": if let dx = w.dropFirst().first.flatMap(Double.init) { swipe(dx) }
+        case "vscroll": if w.count > 2, let n = Int(w[1]), let dy = Double(w[2]) { vscroll(column: n - 1, dy) }
         case "goal": goal(model, w.dropFirst().first ?? "")
         case "openrun": if w.count > 1 { model.openRun(w[1]) }   // as a click on its notification
         case "rename":
@@ -191,6 +202,33 @@ import CapcomdStore
     }
   }
 
+  /// `vscroll N dy`: a two-finger scroll of dy points handed to the thread of the N-th column on screen (from the left;
+  /// positive scrolls up, toward older messages), as `swipe` hands one to the reel.
+  static func vscroll(column n: Int, _ dy: Double) {
+    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+          let root = win.contentView?.superview ?? win.contentView else { return }
+    var found: [NSScrollView] = []
+    func walk(_ v: NSView) {
+      if let s = v as? NSScrollView, !(s is SnapScrollView), s.frame.height > 200 { found.append(s) }
+      v.subviews.forEach(walk)
+    }
+    walk(root)
+    let threads = found.sorted { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+    guard threads.indices.contains(n) else { return }
+    let sv = threads[n], steps = 12, t0 = ProcessInfo.processInfo.systemUptime
+    for k in 0...(steps + 1) {
+      let phase: Int64 = k == 0 ? 1 : k <= steps ? 2 : 4
+      let d = k == 0 || k > steps ? 0 : Int32(dy / Double(steps))
+      guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: d, wheel2: 0, wheel3: 0) else { return }
+      cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+      cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: Double(d))
+      cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Double(d))
+      cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+      cg.timestamp = CGEventTimestamp((t0 + Double(k) * 0.012) * 1e9)
+      if let e = NSEvent(cgEvent: cg) { sv.scrollWheel(with: e) }
+    }
+  }
+
   static func key(_ spec: String) {
     let w = spec.split(separator: " ").map(String.init)
     guard let k = w.first, let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
@@ -235,7 +273,9 @@ import CapcomdStore
       let h = a.header, t = model.peekThread(id)
       out.append("col \(id) \(h.name) title \(h.title.map { "\"\($0)\"" } ?? "-") tab \"\(h.tabLabel)\" user \(h.userTitled) renaming \(a.renaming.map { "\($0)" } ?? "-") failed \(a.renameFailure ?? "-") \(h.suffix ?? "") \(h.status) warm \(a.warm) seen \(a.onScreen) focus \(a.focused) ask \(a.approval?.id ?? "-") "
         + "spawned \(h.spawnedAtMs) store \(s.threadEntries(agentId: id).count) shown \(t.map { "\($0.entries.count)" } ?? "-") "
-        + "pending \(t.map { $0.pending.map { "\($0.state)" }.joined(separator: ",") } ?? "-")")
+        + "pending \(t.map { $0.pending.map { "\($0.state)" }.joined(separator: ",") } ?? "-") "
+        + "top \(t?.top.map(String.init) ?? "-") earlier \(t?.loadingEarlier == true ? "loading" : "-") unavailable \(t?.unavailable.map { "\($0)" } ?? "-") "
+        + "last \(t?.entries.last?.id ?? "-")")
     }
     for a in s.pendingApprovals { out.append("approval \(a.id) run \(a.runId ?? "-") agent \(a.agentId ?? "-") \(a.decision)") }
     out.append("folded \(model.folded) hidden \(model.hidden.keys.sorted().joined(separator: ",")) returnApproves \(model.returnApproves) typing \(model.typingIn ?? "-") stopAsked \(model.stopAsked)")

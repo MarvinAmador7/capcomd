@@ -158,3 +158,49 @@ test("full-size writes reach the scope: a 64 KB message and a 5 MB image, throug
   expect(bytes.headers.get("content-type")).toBe("image/png");
   expect((await bytes.arrayBuffer()).byteLength).toBe(png.length);
 }, 120_000);
+
+test("the tail against the scope (agents.thread_tail): newest by position, across actor calls, paged up to the start, joined by cursor", async () => {
+  const { client } = await import("../../src/core/relay");
+  const { itemWriter } = await import("../../src/agents/thread-store");
+  const { threadBuilder } = await import("../../packages/agent-thread/src/index");
+  const { ThreadTail } = await import("../../src/api/contract");
+  const run = (await cj(["run", "new"])).j?.runId;
+  const a = (await cj(["spawn", run, "--profile", "worker", "--task", "x", "--key", "tail", "--no-start"])).j?.agentId;
+  const write = itemWriter(client().scope.getOrCreate([run]) as any, a);
+  const b = threadBuilder({ cli: "claude", idPrefix: `itm-${a}-tail`, now: () => 0 });
+  const ev = (e: unknown) => b.event(e);
+  const put = (drafts: ReturnType<typeof ev>) => write(drafts, []);
+  // A tool call first (it finishes last), then 70 messages: more than two actor calls' worth of rows.
+  put(ev({ type: "assistant", message: { id: "m-t", content: [{ type: "tool_use", id: "t0", name: "Bash", input: { command: "ls" } }] } }));
+  for (let i = 0; i < 70; i++) put(ev({ type: "assistant", message: { id: `m-${i}`, content: [{ type: "text", text: `message ${i}` }] } }));
+  await write.flush();
+  const tail = async (q: string) => {
+    const res = await get(`/v1/runs/${run}/agents/${a}/thread/tail${q}`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(ThreadTail.safeParse(body).success).toBe(true);
+    return body;
+  };
+  const t = await tail("?limit=30");
+  expect(t.items.map((i: any) => i.text)).toEqual(Array.from({ length: 30 }, (_, i) => `message ${40 + i}`));
+  expect(t.before).toBe(t.items[0].order);
+  // Writes after the tail: the tool finishes, a new message. `after` = cursor brings exactly those.
+  put(ev({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t0", content: "ok" }] } }));
+  put(ev({ type: "assistant", message: { id: "m-new", content: [{ type: "text", text: "after the tail" }] } }));
+  await write.flush();
+  const caught = await (await get(`/v1/runs/${run}/agents/${a}/thread?after=${t.cursor}`)).json() as any;
+  expect(caught.items.map((i: any) => (i.kind === "tool" ? `tool ${i.status}` : i.text))).toEqual(["tool done", "after the tail"]);
+  // Up to the start, 30 at a time: every item once, the tool at its latest rev.
+  let above: any[] = [];
+  for (let before = t.before; before !== null;) { const p = await tail(`?limit=30&before=${before}`); above = [...p.items, ...above]; before = p.before; }
+  expect(above.length).toBe(41);
+  expect(above[0]).toMatchObject({ kind: "tool", status: "done", rev: 2 });
+  const shown = [...above, ...t.items, caught.items.at(-1)];
+  expect(new Set(shown.map((i) => i.id)).size).toBe(72);
+  const full: any[] = [];
+  for (let after = 0; ;) { const p = await (await get(`/v1/runs/${run}/agents/${a}/thread?after=${after}&limit=500`)).json() as any; full.push(...p.items); if (p.next === null) break; after = p.next; }
+  const latest = new Map<string, any>();
+  for (const it of full) if (!latest.has(it.id) || latest.get(it.id).rev < it.rev) latest.set(it.id, it);
+  const byOrder = (x: any, y: any) => x.order - y.order;
+  expect([...shown].sort(byOrder).map((i) => [i.id, i.rev])).toEqual([...latest.values()].sort(byOrder).map((i) => [i.id, i.rev]));
+}, 120_000);

@@ -24,6 +24,11 @@ public final class CapcomdStore {
   public internal(set) var books: [String: Book] = [:]
   var threadCursor: [String: Int] = [:]
   public internal(set) var threadUnavailable: [String: DetailUnavailable] = [:]
+  /// Agents whose thread is being read, and those to read again once that read ends (StoreThreadItems.swift).
+  var threadReads: Set<String> = []
+  var threadRereads: Set<String> = []
+  /// Agents whose page above the shown thread (`agents.thread_tail`) is on its way.
+  public internal(set) var threadLoadingEarlier: Set<String> = []
   public internal(set) var media: [MediaKey: Fetched<Data>] = [:]
   /// Who follows which run's live thread items: the panel's open thread ("panel") and the desktop reel ("reel") each
   /// hold at most one run. Those runs' lifecycle feeds carry `thread=1`; it covers every agent of the run.
@@ -311,6 +316,9 @@ public final class CapcomdStore {
     case .unauthorized:
       unauthorized = true
     case .link(let up):
+      // A followed run's feed (re)connected: thread frames are live only, so what was written while it was away is read
+      // from the route, and a column that failed while the daemon was unreachable reads again now.
+      if up, let run = Self.lifecycleRun(scope), threadStreamRuns.contains(run) { rereadThreads(runs: [run]); return }
       guard scope == "daemon" else { return }   // the panel follows the daemon feed only
       if up, !daemonLoaded {
         // The daemon answered. Its run list follows on the same connection (the daemon scope has no snapshot to end);
@@ -323,6 +331,9 @@ public final class CapcomdStore {
       // Back: what the daemon can do and offers may have changed (a restart, an upgrade), and a first read made while it
       // was down got nothing, which hid the composer's Local/VM and driver row until the app was restarted.
       if up { Task { await refreshDaemonInfo() } }
+      // Back: every followed thread reads again from its cursor, a failed one included (its error clears when it
+      // works). A finished run has no lifecycle feed to say so itself.
+      if up { rereadThreads(runs: threadStreamRuns) }
     case .snapshotSteps(let st): pendingReset[scope, default: ResetBuffer()].steps += st; return
     case .snapshotThreads(let m): pendingReset[scope, default: ResetBuffer()].messages += m; return
     case .reset(let s, _):

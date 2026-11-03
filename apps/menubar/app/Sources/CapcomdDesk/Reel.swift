@@ -663,7 +663,7 @@ final class ReelView: NSView, ReelColumnViews {
       guard let self, let a = self.model.agent(id) else { return }
       _ = (a.header, a.bot, a.approval, a.focused, a.warm, a.goal)
       let t = self.model.thread(id)
-      _ = (t.entries, t.pending, t.unavailable)
+      _ = (t.entries, t.pending, t.unavailable, t.top, t.loadingEarlier)
       _ = self.model.mediaSlice.items.count
     } onChange: { [weak self] in
       RunLoop.main.perform { MainActor.assumeIsolated { _ = self?.bitmaps.removeValue(forKey: id) } }
@@ -908,14 +908,27 @@ struct ColumnHead: View {
 /// The thread: rows from the shared renderer, newest at the bottom. Rows are Equatable, so a new or changed item
 /// re-renders that row only.
 struct ColumnThread: View {
+  @Environment(DeskModel.self) private var model
+  /// The row that was first when the page above was asked for: put back at the top once that page is in.
+  @State private var keep: String?
   let runId: String
   let agentId: String
   let thread: ThreadSlice
   var body: some View {
     DeskProbe.body("ColumnThread", id: agentId)
     let entries = thread.entries
-    return ScrollView {
+    return ScrollViewReader { proxy in ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
+        // Read newest first: the top of what is shown asks for the page above as it comes into view (or is clicked).
+        // The page goes in above, and the row that was first is put back at the top (below), so what you were reading
+        // stays where it was: the bottom anchor doesn't hold a position when content grows above it. That moves this
+        // row out of view; it asks again when it comes back.
+        if thread.top != nil {
+          EarlierRow(loading: thread.loadingEarlier)
+            .contentShape(Rectangle())
+            .onAppear(perform: loadEarlier)
+            .onTapGesture(perform: loadEarlier)
+        }
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
           EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1])).equatable()
         }
@@ -928,9 +941,39 @@ struct ColumnThread: View {
     }
     .defaultScrollAnchor(.bottom)
     .scrollIndicators(.never)
+    // The page above is in: the row that was first goes back to the top, once the update that added the page is laid out.
+    .onChange(of: entries.first?.id) { _, _ in
+      guard let k = keep else { return }
+      keep = nil
+      proxy.scrollTo(k, anchor: .top)
+      DispatchQueue.main.async { proxy.scrollTo(k, anchor: .top) }   // again after a scroll event being handled now
+    }
+    }
   }
   static func bottomMargin(_ e: ThreadEntry) -> CGFloat {
     switch e { case .item(let i, _): ThreadItemRow.bottomMargin(i); case .event: Theme.Content.proseBottom }
+  }
+
+  private func loadEarlier() {
+    guard keep == nil, !thread.loadingEarlier, let first = thread.entries.first?.id else { return }
+    keep = first
+    Task {
+      await model.loadEarlier(agentId: agentId)
+      if thread.entries.first?.id == first { keep = nil }   // nothing came (it failed): nothing to put back
+    }
+  }
+}
+
+/// The top of a thread read newest first: older messages load as it scrolls into view.
+struct EarlierRow: View {
+  let loading: Bool
+  var body: some View {
+    HStack(spacing: 6) {
+      if loading { ProgressView().controlSize(.mini) }
+      Text(verbatim: loading ? "Loading earlier messages…" : "Earlier messages").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
+    }
+    .frame(maxWidth: .infinity, minHeight: 28)
+    .accessibilityElement(children: .combine)
   }
 }
 

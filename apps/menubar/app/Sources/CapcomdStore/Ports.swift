@@ -141,6 +141,16 @@ public protocol ThreadFetching: Sendable {
   func attachment(runId: String, id: String) async throws -> Data
   /// `GET /v1/runs/{runId}/agents/{agentId}/workspace?path=`.
   func workspaceFile(runId: String, agentId: String, path: String) async throws -> Data
+  /// `GET /v1/runs/{runId}/agents/{agentId}/thread/tail` (capability `agents.thread_tail`): the newest items placed
+  /// before `before` (nil: the newest of all). `.unsupported` from a daemon without the route.
+  func threadTail(runId: String, agentId: String, before: Int?, limit: Int) async throws -> CapcomdThread.Tail
+}
+
+extension ThreadFetching {
+  /// A source without the tail route: callers read the thread from its start.
+  public func threadTail(runId: String, agentId: String, before: Int?, limit: Int) async throws -> CapcomdThread.Tail {
+    throw DetailUnavailable.unsupported
+  }
 }
 
 /// `POST /v1/runs/{runId}/{pause|resume|cancel}` with `Idempotency-Key` (steer scope).

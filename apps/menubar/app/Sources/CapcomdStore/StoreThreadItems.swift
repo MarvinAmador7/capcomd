@@ -57,34 +57,97 @@ extension CapcomdStore {
     subscribe(key, scope: runId, feed: "lifecycle")
   }
 
-  /// Reads the agent's thread from the route's cursor to the end, a page at a time. The cursor is the highest seq the
-  /// route returned, never one from a live frame: a frame can run ahead of items the route hasn't returned yet.
+  /// Reads the agent's thread: on a first read, its newest page first (`agents.thread_tail`), shown at once; then from
+  /// the route's cursor to the end, a page at a time. The cursor is one the route returned (the tail's, or the highest
+  /// seq it served), never one from a live frame: a frame can run ahead of items the route hasn't returned yet.
   ///
-  /// The pages go into the book together, once the read ends. Applied page by page, any change in between (a live
-  /// frame, an activity line) showed the thread as far as it had been read: the oldest items, oldest first, so a long
-  /// thread opened on its first hundred items and reached its newest seconds later.
+  /// The pages after the cursor go into the book together, once the read ends. Applied page by page, any change in
+  /// between (a live frame, an activity line) showed the thread as far as it had been read: the oldest items, oldest
+  /// first, so a long thread opened on its first hundred items and reached its newest seconds later. A daemon without
+  /// the tail route is read that way from the start, as before.
+  ///
+  /// One read per agent at a time: a call while one is on its way makes it read once more when it ends (a reconnect
+  /// mid-read must not be answered by the read that failed). A read cancelled with its view leaves no error behind.
   public func refreshThread(runId: String, agentId: String) async {
+    guard threadReads.insert(agentId).inserted else { threadRereads.insert(agentId); return }
+    defer { threadReads.remove(agentId) }
+    repeat {
+      threadRereads.remove(agentId)
+      await readThread(runId: runId, agentId: agentId)
+    } while threadRereads.contains(agentId) && !Task.isCancelled
+  }
+
+  /// Whether a first read asks for the newest page first: the daemon says it has the route, or hasn't been asked yet (a
+  /// daemon without it answers 404, and the read goes on from the start).
+  var threadTailUsable: Bool { daemonVersion == nil || capabilities.contains(Capability.agentsThreadTail) }
+
+  private func readThread(runId: String, agentId: String) async {
     guard let threadSource else { return }
-    var read: [CapcomdThread.Item] = [], cursor = threadCursor[agentId] ?? 0
     var failure: Error?
-    do {
-      for _ in 0..<50 {   // bounded: a long thread catches up over a few refreshes
-        let page = try await threadSource.thread(runId: runId, agentId: agentId, after: cursor, limit: Self.threadPage)
-        read += page.items
-        cursor = max(cursor, page.items.map(\.seq).max() ?? cursor, page.next ?? cursor)
-        guard page.next != nil, !page.items.isEmpty else { break }
+    if threadCursor[agentId] == nil, threadTailUsable {
+      do {
+        let t = try await threadSource.threadTail(runId: runId, agentId: agentId, before: nil, limit: Self.threadPage)
+        if threadCursor[agentId] == nil {   // nothing read it meanwhile
+          books[agentId, default: Book()].start(tail: t.items, before: t.before)
+          threadCursor[agentId] = t.cursor
+          threadUnavailable[agentId] = nil
+          mark(.thread(agentId)); changed()   // the newest show now; the catch-up below is small
+        }
       }
-    } catch { failure = error }
+      catch DetailUnavailable.unsupported {}   // no tail route (or no such agent): read from the start
+      catch { failure = error }
+    }
+    var read: [CapcomdThread.Item] = [], cursor = threadCursor[agentId] ?? 0
+    if failure == nil {
+      do {
+        for _ in 0..<50 {   // bounded: a long thread catches up over a few refreshes
+          let page = try await threadSource.thread(runId: runId, agentId: agentId, after: cursor, limit: Self.threadPage)
+          read += page.items
+          cursor = max(cursor, page.items.map(\.seq).max() ?? cursor, page.next ?? cursor)
+          guard page.next != nil, !page.items.isEmpty else { break }
+        }
+      } catch { failure = error }
+    }
     if !read.isEmpty || failure == nil {
       books[agentId, default: Book()].apply(read)   // into the live book: frames applied meanwhile stay (highest rev wins)
       threadCursor[agentId] = max(threadCursor[agentId] ?? 0, cursor)
     }
+    if failure != nil, Task.isCancelled || failure is CancellationError { changed(); return }   // its view went: not a failure
     switch failure {
     case nil: threadUnavailable[agentId] = nil; mark(.thread(agentId))
     case is Unauthorized?: unauthorized = true
     case let e?: threadUnavailable[agentId] = e as? DetailUnavailable ?? .failed("Couldn't reach capcomd"); mark(.thread(agentId))
     }
     changed()
+  }
+
+  /// Reads again every followed thread of `runs` that was read or failed (after a reconnect).
+  func rereadThreads(runs ids: Set<String>) {
+    for id in ids {
+      for agentId in runs[id]?.agents.keys.sorted() ?? [] where books[agentId] != nil || threadUnavailable[agentId] != nil {
+        Task { await refreshThread(runId: id, agentId: agentId) }
+      }
+    }
+  }
+
+  /// Whether the thread has items above what it shows (read newest first, `agents.thread_tail`).
+  public func threadHasEarlier(agentId: String) -> Bool { books[agentId]?.hasEarlier ?? false }
+  /// Where the shown thread starts (the `before` of the page above it); nil when it shows everything.
+  public func threadTop(agentId: String) -> Int? { books[agentId]?.top }
+
+  /// The page above the shown thread (the view scrolled up to its top): read and shown above it. One at a time per
+  /// agent; a failure leaves the thread as it was, and scrolling up again tries again.
+  public func loadEarlierThread(runId: String, agentId: String) async {
+    guard let threadSource, let top = books[agentId]?.top, threadLoadingEarlier.insert(agentId).inserted else { return }
+    mark(.thread(agentId)); changed()
+    do {
+      let t = try await threadSource.threadTail(runId: runId, agentId: agentId, before: top, limit: Self.threadPage)
+      books[agentId]?.extend(above: t.items, before: t.before)
+    }
+    catch is Unauthorized { unauthorized = true }
+    catch {}
+    threadLoadingEarlier.remove(agentId)
+    mark(.thread(agentId)); changed()
   }
 
   /// `agent.thread_item_changed` (ephemeral, `?thread=1`): a full item, latest rev wins.
@@ -105,11 +168,14 @@ extension CapcomdStore {
     guard let book = books[agentId], threadSupported(agentId: agentId) == true else { return events.map(ThreadEntry.event) }
     // The agent's own output is in the book; keep only messages from someone else (steers, other agents).
     let messages = events.filter { if case .message(let from, _, _, _) = $0.kind { return from != agentId }; return false }
-    var out: [ThreadEntry] = []; out.reserveCapacity(book.items.count + messages.count)
-    var m = messages.sorted { ($0.epochMs, $0.seq) < ($1.epochMs, $1.seq) }[...]
-    for (n, item) in book.items.enumerated() {
+    // Read newest first, the thread shows from its top down; messages from before its first item wait with it.
+    let items = Array(book.shown)
+    let from = book.hasEarlier ? items.first?.atMs ?? Int.max : Int.min
+    var out: [ThreadEntry] = []; out.reserveCapacity(items.count + messages.count)
+    var m = messages.filter { $0.epochMs >= from }.sorted { ($0.epochMs, $0.seq) < ($1.epochMs, $1.seq) }[...]
+    for (n, item) in items.enumerated() {
       while let first = m.first, first.epochMs <= item.atMs { out.append(.event(first)); m = m.dropFirst() }
-      out.append(.item(item, next: n + 1 < book.items.count ? book.items[n + 1] : nil))
+      out.append(.item(item, next: n + 1 < items.count ? items[n + 1] : nil))
     }
     out += m.map(ThreadEntry.event)
     return out

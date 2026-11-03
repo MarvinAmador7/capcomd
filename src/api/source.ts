@@ -50,6 +50,9 @@ export interface HarnessSource {
 	attachment(runId: string, id: string): Promise<O<typeof Attachment> | null>;
 	/** An agent's thread items after `after` (seq), in write order; null when the run or agent is unknown. */
 	thread(runId: string, agentId: string, after: number, limit: number): Promise<O<typeof ThreadItem>[] | null>;
+	/** An agent's items placed before `before` (an `order`; null: the newest), newest first, at most `limit`; null when
+	 * the run or agent is unknown. */
+	threadBefore(runId: string, agentId: string, before: number | null, limit: number): Promise<O<typeof ThreadItem>[] | null>;
 	/** The whole run's thread writes after `after` (live frames). */
 	threadAfter(runId: string, after: number, limit: number): Promise<O<typeof ThreadItem>[]>;
 	/** The run's newest thread write (0 when none). */
@@ -339,6 +342,10 @@ export function memorySource(seed: Partial<{
 		thread: async (r, agentId, after, limit) => {
 			if (!seed.agents?.[r]?.some((a) => a.id === agentId)) return null;
 			return (seed.items?.[r] ?? []).filter((i) => i.agentId === agentId && i.seq > after).sort((a, b) => a.seq - b.seq).slice(0, limit);
+		},
+		threadBefore: async (r, agentId, before, limit) => {
+			if (!seed.agents?.[r]?.some((a) => a.id === agentId)) return null;
+			return (seed.items?.[r] ?? []).filter((i) => i.agentId === agentId && (before === null || i.order < before)).sort((a, b) => b.order - a.order).slice(0, limit);
 		},
 		threadAfter: async (r, after, limit) => (seed.items?.[r] ?? []).filter((i) => i.seq > after).sort((a, b) => a.seq - b.seq).slice(0, limit),
 		threadHead: async (r) => Math.max(0, ...(seed.items?.[r] ?? []).map((i) => i.seq)),

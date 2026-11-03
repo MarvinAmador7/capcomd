@@ -126,6 +126,23 @@ export function harnessApp(o: ServerOptions) {
 				}
 				return { items: page, next: items.length > page.length ? page.at(-1)!.seq : null };
 			}),
+			// Capability agents.thread_tail: the newest items by position, about THREAD_PAGE_MAX_BYTES of them at most (always
+			// at least one). The cursor is read first: a write after it comes back by GET …/thread?after=cursor.
+			threadTail: os.agents.threadTail.handler(async ({ input }) => {
+				const limit = Math.min(input.limit ?? 100, THREAD_PAGE_MAX);
+				const cursor = await src.threadHead(input.runId);
+				const items = await src.threadBefore(input.runId, input.agentId, input.before ?? null, limit + 1);
+				if (!items) throw nf(input.agentId);
+				const page: typeof items = [];   // newest first
+				let bytes = 0;
+				for (const it of items.slice(0, limit)) {
+					const n = Buffer.byteLength(JSON.stringify(it));
+					if (page.length && bytes + n > THREAD_PAGE_MAX_BYTES) break;
+					page.push(it); bytes += n;
+				}
+				const before = items.length > page.length ? page.at(-1)!.order : null;
+				return { items: page.reverse(), before, cursor };
+			}),
 			// Raw bytes: served by the native route below (this handler is never reached).
 			workspace: os.agents.workspace.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},

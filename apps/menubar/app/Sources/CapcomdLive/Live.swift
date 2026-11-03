@@ -125,6 +125,14 @@ public struct LiveThread: ThreadFetching {
     }
     catch is DecodingError { throw DetailUnavailable.failed("unexpected response") }
   }
+  public func threadTail(runId: String, agentId: String, before: Int?, limit: Int) async throws -> CapcomdThread.Tail {
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread/tail?limit=\(limit)" + (before.map { "&before=\($0)" } ?? "")
+    do { return try await transport.getJSON(path, as: CapcomdThread.Tail.self, maxBytes: 16 << 20) }
+    catch let e as HTTPStatusError {
+      switch e.status { case 401: throw Unauthorized(); case 404: throw DetailUnavailable.unsupported; default: throw DetailUnavailable.failed("HTTP \(e.status)") }
+    }
+    catch is DecodingError { throw DetailUnavailable.failed("unexpected response") }
+  }
   public func attachment(runId: String, id: String) async throws -> Data {
     try await bytes("/v1/runs/\(LiveDetail.seg(runId))/attachments/\(LiveDetail.seg(id))/content")
   }

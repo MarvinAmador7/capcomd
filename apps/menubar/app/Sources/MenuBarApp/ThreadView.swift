@@ -10,15 +10,29 @@ struct ThreadView: View {
   let runId: String
   let agentId: String
   @State private var size = (total: CGFloat(0), scroll: CGFloat(0), content: CGFloat(0))
+  /// The row that was first when the page above was asked for: put back at the top once that page is in.
+  @State private var keep: String?
 
   var body: some View {
     let agent = model.run(runId)?.agents[agentId]
     let entries = model.threadEntries(agentId)
     VStack(alignment: .leading, spacing: 0) {
       ThreadHeader(runId: runId, agentId: agentId)
-      ScrollView {
+      ScrollViewReader { proxy in ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
-          if let task = agent?.task { TaskRow(task: task).id(agentId) }
+          // Read newest first (agents.thread_tail): the task and the thread's start wait above the page that loads
+          // as the top scrolls into view.
+          // The page goes in above and the row that was first goes back to the top, so what you read stays put.
+          if model.threadTop(agentId) != nil {
+            HStack(spacing: 6) {
+              if model.threadLoadingEarlier(agentId) { ProgressView().controlSize(.mini) }
+              Text(verbatim: model.threadLoadingEarlier(agentId) ? "Loading earlier messages…" : "Earlier messages")
+            }
+            .font(Theme.Content.otherFont).foregroundStyle(Theme.Content.otherText).frame(maxWidth: .infinity, minHeight: 28)
+            .contentShape(Rectangle())
+            .onAppear { loadEarlier(entries) }
+            .onTapGesture { loadEarlier(entries) }
+          } else if let task = agent?.task { TaskRow(task: task).id(agentId) }
           ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
             switch e {
             case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]))
@@ -44,6 +58,13 @@ struct ThreadView: View {
       }
       .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { size.scroll = $0; report() }
       .defaultScrollAnchor(.bottom)
+      .onChange(of: entries.first?.id) { _, _ in
+        guard let k = keep else { return }
+        keep = nil
+        proxy.scrollTo(k, anchor: .top)
+        DispatchQueue.main.async { proxy.scrollTo(k, anchor: .top) }
+      }
+      }
       .padding(.horizontal, -Theme.Content.padding.leading + Theme.Drill.headerPadding.leading)   // .th bleeds to 16 inside the panel
       .mask(VStack(spacing: 0) {
         LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Theme.Content.topFade)
@@ -66,6 +87,15 @@ struct ThreadView: View {
       }
     }
     .onDisappear { model.closeThread(agentId: agentId) }
+  }
+
+  private func loadEarlier(_ entries: [ThreadEntry]) {
+    guard keep == nil, !model.threadLoadingEarlier(agentId), let first = entries.first?.id else { return }
+    keep = first
+    Task {
+      await model.loadEarlierThread(runId: runId, agentId: agentId)
+      if model.threadEntries(agentId).first?.id == first { keep = nil }   // nothing came: nothing to put back
+    }
   }
 
   static func bottomMargin(_ e: ThreadEntry) -> CGFloat {

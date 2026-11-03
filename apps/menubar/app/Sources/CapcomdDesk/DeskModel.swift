@@ -59,10 +59,20 @@ package final class ThreadSlice {
   package private(set) var entries: [ThreadEntry] = [] { didSet { Mutations.record("ThreadSlice.entries") } }
   package private(set) var pending: [PendingSteer] = [] { didSet { Mutations.record("ThreadSlice.pending") } }
   package private(set) var unavailable: DetailUnavailable? { didSet { Mutations.record("ThreadSlice.unavailable") } }
-  func set(entries e: [ThreadEntry], pending p: [PendingSteer], unavailable u: DetailUnavailable?) {
-    if entries != e { entries = e }
+  @ObservationIgnored let agentId: String
+  /// Development only (DeskDebug, CAPCOMD_DESK_THREAD_LOG): told each time a column's entries change. Nil otherwise.
+  @ObservationIgnored package static var trace: (@MainActor (_ agentId: String, _ entries: [ThreadEntry]) -> Void)?
+  /// Read newest first (`agents.thread_tail`): where the shown thread starts, nil when it shows everything; and whether
+  /// the page above it is on its way.
+  package private(set) var top: Int? { didSet { Mutations.record("ThreadSlice.top") } }
+  package private(set) var loadingEarlier = false { didSet { Mutations.record("ThreadSlice.loadingEarlier") } }
+  init(agentId: String) { self.agentId = agentId }
+  func set(entries e: [ThreadEntry], pending p: [PendingSteer], unavailable u: DetailUnavailable?, top t: Int? = nil, loadingEarlier l: Bool = false) {
+    if entries != e { entries = e; Self.trace?(agentId, e) }
     if pending != p { pending = p }
     if unavailable != u { unavailable = u }
+    if top != t { top = t }
+    if loadingEarlier != l { loadingEarlier = l }
   }
 }
 
@@ -264,7 +274,8 @@ package final class DeskModel {
       followFailures(Set(cols.filter { $0.status == .failed }.map(\.agentId)))
     }
     for (id, t) in threads where all || keys.contains(.thread(id)) {
-      t.set(entries: store.threadEntries(agentId: id), pending: store.pendingSteers(agentId: id), unavailable: store.threadUnavailable[id])
+      t.set(entries: store.threadEntries(agentId: id), pending: store.pendingSteers(agentId: id), unavailable: store.threadUnavailable[id],
+            top: store.threadTop(agentId: id), loadingEarlier: store.threadLoadingEarlier.contains(id))
     }
     if all { for (k, v) in store.media where mediaSlice.items[k] != v { mediaSlice.items[k] = v } }
     if all { newProjectChanged() }
@@ -445,8 +456,10 @@ package final class DeskModel {
   /// The column's thread, created when the column first shows (its pages load then, not before).
   package func thread(_ agentId: String) -> ThreadSlice {
     if let t = threads[agentId] { return t }
-    let t = ThreadSlice(); threads[agentId] = t
-    t.set(entries: store.threadEntries(agentId: agentId), pending: store.pendingSteers(agentId: agentId), unavailable: store.threadUnavailable[agentId])
+    let t = ThreadSlice(agentId: agentId); threads[agentId] = t
+    ThreadSlice.trace?(agentId, [])   // the column's thread opened
+    t.set(entries: store.threadEntries(agentId: agentId), pending: store.pendingSteers(agentId: agentId), unavailable: store.threadUnavailable[agentId],
+          top: store.threadTop(agentId: agentId), loadingEarlier: store.threadLoadingEarlier.contains(agentId))
     return t
   }
 
@@ -457,6 +470,13 @@ package final class DeskModel {
       await store.refreshThread(runId: runId, agentId: agentId)
       try? await Task.sleep(for: .seconds(15))
     }
+  }
+
+  /// The column scrolled up to the top of what it shows: the page above it loads, and shows above without moving what
+  /// is on screen (the thread's scroll keeps its bottom where it was).
+  package func loadEarlier(agentId: String) async {
+    guard let runId = openRunId else { return }
+    await store.loadEarlierThread(runId: runId, agentId: agentId)
   }
 
   package func steer(agentId: String, body: String) {

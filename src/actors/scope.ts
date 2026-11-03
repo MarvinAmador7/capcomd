@@ -65,6 +65,14 @@ async function putItemTx(tx: RawAccess, agentId: string, it: ItemDraft): Promise
   return seq;
 }
 
+/** A stored thread item as the routes serve it. */
+function itemRow(r: any) {
+  const it = JSON.parse(r.body as string);
+  // tool.diff came later: a row written before it reads as no diff.
+  if (it.tool && !("diff" in it.tool)) it.tool.diff = null;
+  return { ...it, seq: Number(r.seq), order: Number(r.ord), agentId: r.agent_id as string };
+}
+
 /** A finished child's hand-back card for its parent's thread. */
 function handoffOf(parent: string, child: string, status: string, result: Record<string, unknown>): ItemDraft {
   const s = (x: unknown) => (typeof x === "string" ? x : "");
@@ -322,6 +330,8 @@ export const scopeActor = actor({
       // cursor (advanced by every write), ord its position in the thread (fixed at creation).
       await database.execute(`CREATE TABLE IF NOT EXISTS agent_items (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, seq INTEGER NOT NULL UNIQUE, ord INTEGER NOT NULL, rev INTEGER NOT NULL, at INTEGER NOT NULL, body TEXT NOT NULL)`);
       await database.execute(`CREATE INDEX IF NOT EXISTS agent_items_agent_seq ON agent_items (agent_id, seq)`);
+      // The thread's newest items first (GET …/thread/tail): by position, not by write.
+      await database.execute(`CREATE INDEX IF NOT EXISTS agent_items_agent_ord ON agent_items (agent_id, ord)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS idem (idem_key TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`
         CREATE TABLE IF NOT EXISTS scope_events (
@@ -931,12 +941,14 @@ export const scopeActor = actor({
       const rows = (params.agentId
         ? await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?", params.agentId, params.after ?? 0, params.limit ?? 200)
         : await c.db.execute("SELECT * FROM agent_items WHERE seq > ? ORDER BY seq LIMIT ?", params.after ?? 0, params.limit ?? 200)) as any[];
-      return rows.map((r) => {
-        const it = JSON.parse(r.body as string);
-        // tool.diff came later: a row written before it reads as no diff.
-        if (it.tool && !("diff" in it.tool)) it.tool.diff = null;
-        return { ...it, seq: Number(r.seq), order: Number(r.ord), agentId: r.agent_id as string };
-      });
+      return rows.map(itemRow);
+    },
+    /** One agent's items by position, newest first: those placed before `before` (an `order`), else the newest. */
+    async getItemsBefore(c, params: { agentId: string; before?: number; limit?: number }) {
+      const rows = (params.before !== undefined
+        ? await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? AND ord < ? ORDER BY ord DESC LIMIT ?", params.agentId, params.before, params.limit ?? 200)
+        : await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? ORDER BY ord DESC LIMIT ?", params.agentId, params.limit ?? 200)) as any[];
+      return rows.map(itemRow);
     },
     /** The run's newest thread write (a live-frame cursor). */
     async itemsHead(c) {
