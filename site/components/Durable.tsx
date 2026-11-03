@@ -13,7 +13,7 @@ import { rng } from "@/lib/vendor/bot-avatar.js";
 import { Bot, GoalTitle } from "./crew";
 import { delay } from "./marks";
 
-type Phase = "idle" | "moving" | "dark" | "waking" | "checking" | "done";
+type Phase = "idle" | "moving" | "yank" | "dark" | "waking" | "checking" | "done";
 type Cut = null | "before" | "after";
 
 const MOVE_MS = 7000;   // from approved to written down, if nobody pulls the plug
@@ -26,6 +26,29 @@ const KILL_POINTS: Array<[string, string[]]> = [
   ["Pull request", ["merge.pr.before_merge", "merge.after_pr_merge.before_event"]],
   ["Workflow", ["workflow.start_agent.mid"]],
 ];
+
+/** The socket at the top of the room and the cable down to the bot, in the bots' pixels. `out` pulls the plug. */
+function Power({ out }: { out: boolean }) {
+  return (
+    <div className={`power${out ? " is-out" : ""}`} aria-hidden="true">
+      <svg className="power__socket" viewBox="0 0 16 9" shapeRendering="crispEdges">
+        <path fill="#9EA3B7" d="M1 0h14v7h-1v1H2v-1H1z" /><path fill="#DADDE8" d="M2 0h12v6H2z" />
+        <path fill="#2B0E57" d="M5 3h1v3H5zM10 3h1v3h-1z" /><path fill="#62677C" d="M2 6h12v1H2z" />
+      </svg>
+      <svg className="power__spark" viewBox="0 0 12 6" shapeRendering="crispEdges">
+        <path fill="#FFD60A" d="M1 1h1v1H1zM3 3h1v1H3zM8 2h1v1H8zM10 0h1v1h-1zM6 4h1v1H6z" /><path fill="#FFFFFF" d="M2 2h1v1H2zM9 1h1v1H9zM5 5h1v1H5z" />
+      </svg>
+      <div className="power__cord">
+        <svg className="power__plug" viewBox="0 0 12 11" shapeRendering="crispEdges">
+          <path fill="#BDB7BC" d="M3 0h1v3H3zM8 0h1v3H8z" />
+          <path fill="#FF7410" d="M1 3h10v5H1z" /><path fill="#FFB566" d="M2 3h8v1H2z" /><path fill="#C8530E" d="M1 7h10v1H1zM3 8h6v1H3z" />
+          <path fill="#0E0818" d="M5 9h2v2H5z" />
+        </svg>
+        <i className="power__wire" />
+      </div>
+    </div>
+  );
+}
 
 export function Durable() {
   const [phase, setPhase] = useState<Phase>("done");
@@ -60,12 +83,13 @@ export function Durable() {
     const at = p;
     const c: Cut = at < LANDS_AT ? "before" : "after";
     setCut(c);
-    setPhase("dark");
-    later(1300, () => setPhase("waking"));
-    if (c === "before") later(3300, () => move(Math.max(0, at - 0.08)));
+    setPhase("yank");                    // the plug comes out first, then the lights go
+    later(450, () => setPhase("dark"));
+    later(1750, () => setPhase("waking")); // and it goes back in as they come on
+    if (c === "before") later(3750, () => move(Math.max(0, at - 0.08)));
     else {
-      later(3300, () => setPhase("checking"));
-      later(5600, () => { setP(1); setPhase("done"); });
+      later(3750, () => setPhase("checking"));
+      later(6050, () => { setP(1); setPhase("done"); });
     }
   };
 
@@ -79,13 +103,13 @@ export function Durable() {
 
   const landed = p >= LANDS_AT;
   const noted = phase === "done" || (phase === "moving" && p >= NOTED_AT);
-  const mood = phase === "dark" || phase === "waking" ? "sleepy" : phase === "checking" ? "oops" : phase === "done" ? "happy" : undefined;
+  const mood = phase === "dark" || phase === "waking" ? "sleepy" : phase === "checking" || phase === "yank" ? "oops" : phase === "done" ? "happy" : undefined;
   const pose = phase === "done" && cut ? "cheer" : phase === "done" ? "wave" : undefined;
   const say =
     phase === "idle" ? "An approved change is about to move onto main."
     : phase === "moving" && !cut ? (landed ? "It's on main. Writing it down…" : "Moving the approved change onto main. Pull the plug whenever you like.")
     : phase === "moving" ? (landed ? "It's on main. Writing it down…" : "Picking up where it stopped…")
-    : phase === "dark" ? "Power cut."
+    : phase === "yank" || phase === "dark" ? "Power cut."
     : phase === "waking" ? (cut === "before" ? "Back up. Its notes say the change never reached main." : "Back up. Its notes stop before the change was written down.")
     : phase === "checking" ? "So it looks at main first. The change is already there."
     : cut === "before" ? "It picked up where it stopped. One change on main: nothing lost, nothing twice."
@@ -113,9 +137,12 @@ export function Durable() {
       <div className="plug" data-reveal style={delay(200)}>
         <div className={`plug__room is-${phase}`} ref={box}>
           <div className="plug__bot">
-            {phase === "done" && cut ? <span className="plug__confetti" aria-hidden="true">{confetti.map((c, k) => <i key={k} style={{ left: `${c.x}%`, top: `${c.y}%`, width: c.s, height: c.s, background: c.c, ["--k" as string]: k } as CSSProperties} />)}</span> : null}
-            <Bot i={0} mood={mood} pose={pose} className="plug__me" />
-            {phase === "checking" ? <span className="plug__bubble">Already on main?</span> : null}
+            <Power out={phase === "yank" || phase === "dark"} />
+            <div className="plug__body">
+              {phase === "done" && cut ? <span className="plug__confetti" aria-hidden="true">{confetti.map((c, k) => <i key={k} style={{ left: `${c.x}%`, top: `${c.y}%`, width: c.s, height: c.s, background: c.c, ["--k" as string]: k } as CSSProperties} />)}</span> : null}
+              <Bot i={0} mood={mood} pose={pose} className="plug__me" />
+              {phase === "checking" ? <span className="plug__bubble">Already on main?</span> : null}
+            </div>
           </div>
 
           <div className="plug__main">
