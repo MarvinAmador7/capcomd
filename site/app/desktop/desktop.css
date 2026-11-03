@@ -43,9 +43,9 @@ img { display: block; max-width: 100%; height: auto; }
 @keyframes dk-settle { from { transform: scale(1.06); transform-origin: 0 0; } to { transform: none; transform-origin: 0 0; } }
 
 /* ---------- The window ([data-ui]: the app's own look) ---------- */
-.dk-win, .dk-tb, .dk-board, .dk-lab__col { color: var(--a-text); font: 400 13px/1.45 var(--font-ui); letter-spacing: 0; -webkit-font-smoothing: antialiased; }
+.dk-win, .dk-tb, .dk-shot, .dk-lab__col { color: var(--a-text); font: 400 13px/1.45 var(--font-ui); letter-spacing: 0; -webkit-font-smoothing: antialiased; }
 .dk-win { display: flex; flex-direction: column; background: var(--a-bg); border-radius: 12px 0 0 0; box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.14); overflow: hidden; } /* taste-skill-ignore: interface fragment, window chrome */
-.dk-win :focus-visible, .dk-tb :focus-visible, .dk-board :focus-visible, .dk-lab__col :focus-visible { outline: 2px solid var(--a-blue); outline-offset: 2px; }
+.dk-win :focus-visible, .dk-tb :focus-visible, .dk-shot :focus-visible, .dk-lab__col :focus-visible { outline: 2px solid var(--a-blue); outline-offset: 2px; }
 .dk-ic { flex: none; }
 .dk-bot { display: inline-block; width: 18px; height: 18px; flex: none; }
 .dk-bot svg, .dk-col__bot svg, .dk-lumen__bot svg { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
@@ -148,12 +148,12 @@ img { display: block; max-width: 100%; height: auto; }
 .dk-block h3 { margin: 0; font: 400 clamp(1.625rem, 1.3rem + 0.9vw, 2rem)/1.15 var(--font-display); letter-spacing: -0.015em; }
 .dk-block p { margin: 14px 0 0; }
 .dk-seg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 24px; }
-.dk-seg button, .dk-cap, .dk-ex, .dk-pill { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 16px; background: var(--color-surface); color: var(--color-ink); font: 500 var(--text-small)/1 var(--font-text); cursor: pointer; transition: background-color 160ms ease, color 160ms ease, transform 120ms var(--ease-out); }
-.dk-seg button:hover, .dk-cap:hover, .dk-ex:hover, .dk-pill:hover { background: #D3D0DA; }
-.dk-seg button:active, .dk-cap:active, .dk-ex:active, .dk-pill:active { transform: scale(0.97); }
+.dk-seg button, .dk-cap, .dk-pill { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 16px; background: var(--color-surface); color: var(--color-ink); font: 500 var(--text-small)/1 var(--font-text); cursor: pointer; transition: background-color 160ms ease, color 160ms ease, transform 120ms var(--ease-out); }
+.dk-seg button:hover, .dk-cap:hover, .dk-pill:hover { background: #D3D0DA; }
+.dk-seg button:active, .dk-cap:active, .dk-pill:active { transform: scale(0.97); }
 .dk-seg button[aria-checked="true"] { background: var(--color-ink); color: var(--color-paper); }
 .dk-seg kbd { font: inherit; opacity: 0.6; }
-.dk-seg button:focus-visible, .dk-cap:focus-visible, .dk-ex:focus-visible, .dk-pill:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+.dk-seg button:focus-visible, .dk-cap:focus-visible, .dk-pill:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
 .dk-say { display: flex; gap: 6px; margin-top: 24px; }
 .dk-say input { all: unset; box-sizing: border-box; flex: 1; min-width: 0; height: 44px; padding: 0 14px; background: var(--color-page); font: 400 var(--text-body)/1 var(--font-text); }
 .dk-say input:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 0; }
@@ -171,47 +171,45 @@ img { display: block; max-width: 100%; height: auto; }
 .dk-realask { margin-top: 32px; }
 .dk-realask img { width: 100%; max-width: 436px; }
 
-/* ---------- Start with a sentence: a plum stage like the hero's. The goal is typed straight onto it at display size and
-   the window it opens comes in from the right and runs off the edge. ---------- */
+/* ---------- Swarms, made human: one shot in the desktop window, on a plum stage like the hero's. The window runs
+   off the right edge; the camera inside it follows the swarm to its last column. ---------- */
 .dk-start { margin-top: var(--dk-gap); padding: 112px var(--spacing-gutter) 0; background: var(--color-plum); color: var(--color-on-dark); overflow: hidden; }
 .dk-start :focus-visible { outline-color: var(--color-accent); }
 .dk-start__head { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; align-items: end; }
 .dk-start__head .dk-h2 { grid-column: 1 / span 7; }
 .dk-start__lead { grid-column: 9 / span 4; margin: 0; max-width: 36ch; color: var(--color-on-dark-soft); }
-.dk-start__line { margin-top: 72px; }
-.dk-goal { all: unset; box-sizing: border-box; display: block; width: 100%; resize: none; overflow: hidden; padding-bottom: 14px; box-shadow: inset 0 -3px 0 var(--color-stage-3); font: 400 var(--dk-display)/1.04 var(--font-display); letter-spacing: -0.04em; color: var(--color-on-dark); caret-color: var(--color-accent); white-space: pre-wrap; overflow-wrap: anywhere; transition: box-shadow 180ms ease; } /* taste-skill-ignore: the goal line's underline, accent while typing */
-.dk-goal:focus { box-shadow: inset 0 -3px 0 var(--color-accent); }
-.dk-goal::placeholder { color: var(--color-stage-3); }
-.dk-start__act { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 32px; margin-top: 32px; }
-.dk-start__go { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 12px; height: 52px; padding: 0 22px; background: var(--color-accent); color: var(--color-accent-ink); font: 400 22px/1 var(--font-pixel); text-transform: uppercase; cursor: pointer; transition: transform 140ms var(--ease-out), background-color 180ms ease, opacity 180ms ease; }
+.dk-start__act { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px 40px; margin-top: 64px; }
+.dk-start__note { margin: 0; max-width: 46ch; min-height: 3em; display: flex; align-items: center; color: var(--color-on-dark-soft); }
+.dk-start__go { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 12px; height: 44px; padding: 0 18px; background: var(--color-accent); color: var(--color-accent-ink); font: 400 20px/1 var(--font-pixel); text-transform: uppercase; cursor: pointer; transition: transform 140ms var(--ease-out), background-color 180ms ease, opacity 180ms ease; }
 .dk-start__go:hover { background: var(--color-on-dark); color: var(--color-ink); }
 .dk-start__go:active { transform: scale(0.97); }
 .dk-start__go:focus-visible { outline: 3px solid var(--color-on-dark); outline-offset: 3px; }
-.dk-start__go:disabled { opacity: 0.4; cursor: default; }
-.dk-start__go.is-again { background: var(--color-on-dark); color: var(--color-ink); }
-.dk-start__go.is-again:hover { background: var(--color-accent); color: var(--color-accent-ink); }
-.dk-start__try { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
-.dk-start__try > span { margin-right: 6px; color: var(--color-on-dark-soft); }
-.dk-start .dk-ex { background: var(--color-stage-2); color: var(--color-on-dark); }
-.dk-start .dk-ex:hover { background: var(--color-stage-3); }
-.dk-start .dk-ex[aria-pressed="true"] { background: var(--color-on-dark); color: var(--color-ink); }
-.dk-start__note { margin: 56px 0 0; max-width: 64ch; min-height: 1.5em; color: var(--color-on-dark-soft); }
-.dk-board { display: grid; grid-template-columns: minmax(0, 440px) minmax(0, 1fr); gap: 12px; height: 560px; margin: 20px calc(-1 * var(--spacing-gutter)) 0 0; padding: 12px 0 0 12px; background: var(--a-bg); border-radius: 12px 0 0 0; box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.14); } /* taste-skill-ignore: interface fragment, window chrome */
-.dk-new { display: flex; flex-direction: column; background: var(--a-col); border-radius: 12px 12px 0 0; overflow: hidden; }
+.dk-start__go:disabled, .dk-start__go:disabled:hover { background: var(--color-stage-2); color: var(--color-on-dark-soft); cursor: default; }
+
+.dk-shot { display: flex; flex-direction: column; height: 620px; margin: 32px calc(-1 * var(--spacing-gutter)) 0 0; background: var(--a-bg); border-radius: 12px 0 0 0; box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.14); overflow: hidden; } /* taste-skill-ignore: interface fragment, window chrome */
+.dk-shot__reel { position: relative; flex: 1; min-height: 0; overflow: hidden; padding: 4px 0 0 14px; }
+.dk-shot__track { display: flex; gap: 14px; height: 100%; will-change: transform, filter; }
+.dk-shot .dk-col { width: 400px; border-radius: 12px 12px 0 0; }
+.dk-shot .dk-col.is-in { animation: dk-spawn 420ms var(--ease-out) both; }
+.dk-shot .dk-col.is-in .dk-thread > * { animation: dk-fade 320ms ease 160ms both; }
+.dk-shot .dk-col.is-ghost { background: none; box-shadow: none; border: 1.5px dashed rgba(255, 255, 255, 0.12); border-bottom: 0; } /* taste-skill-ignore: interface fragment, a column not spawned yet */
+.dk-shot .dk-tab { animation: dk-fade 200ms ease both; }
+.dk-col--lumen .dk-thread > * { animation: dk-fade 260ms ease both; }
 .dk-new__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .dk-lumen { margin: auto; display: grid; justify-items: center; gap: 14px; color: #C7C7CE; font-size: 15px; }
 .dk-lumen p { margin: 0; }
 .dk-lumen b { color: var(--a-text); }
 .dk-lumen__bot { display: block; width: 136px; height: 136px; }
-.dk-board .dk-thread > * { animation: dk-fade 260ms ease both; }
 .dk-plan { margin: 0; list-style: decimal; padding: 12px 14px 12px 34px; border-radius: 10px; background: var(--a-raise); display: grid; gap: 6px; font-size: 13.5px; line-height: 1.4; }
 .dk-plan li::marker { color: var(--a-dim); font-variant-numeric: tabular-nums; }
-.dk-card { margin: 12px; padding: 12px 12px 10px; border-radius: 14px; background: #1E1E22; box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.55), 0 0 0 3px rgba(10, 132, 255, 0.18); } /* taste-skill-ignore: interface fragment, focus ring */
+.dk-card { flex: none; margin: 12px; padding: 12px 12px 10px; border-radius: 14px; background: #1E1E22; box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.55), 0 0 0 3px rgba(10, 132, 255, 0.18); transition: box-shadow 240ms ease; } /* taste-skill-ignore: interface fragment, focus ring */
 .dk-card p { margin: 0; }
 .dk-card__chips { display: flex; gap: 12px; align-items: center; font-size: 12.5px; }
 .dk-card__chips > span { display: inline-flex; align-items: center; gap: 6px; }
 .dk-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 6px; background: #2A2A2F; }
 .dk-card__goal { margin: 12px 4px 14px !important; font-size: 15px; line-height: 1.4; min-height: 2.8em; overflow-wrap: anywhere; }
+.dk-caret { display: inline-block; width: 2px; height: 1.15em; margin-left: 1px; vertical-align: -0.2em; background: var(--a-blue); animation: dk-blink 1s steps(1) infinite; }
+@keyframes dk-blink { 50% { opacity: 0; } }
 .dk-card__tools { display: flex; align-items: center; gap: 8px; }
 .dk-round, .dk-mic, .dk-go { flex: none; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; }
 .dk-round { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16); } /* taste-skill-ignore: interface fragment */
@@ -220,19 +218,11 @@ img { display: block; max-width: 100%; height: auto; }
 .dk-local button[aria-checked="true"] { background: #3A3A40; color: var(--a-text); }
 .dk-model { margin-left: 6px; white-space: nowrap; }
 .dk-mic { margin-left: auto; color: var(--a-dim); }
-.dk-go { all: unset; flex: none; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #fff; color: #111; cursor: pointer; transition: transform 120ms var(--ease-out); }
-.dk-go:hover { transform: scale(1.06); }
-.dk-go:active { transform: scale(0.94); }
+.dk-go { background: #fff; color: #111; transition: transform 160ms var(--ease-out); }
+.dk-go.is-press { transform: scale(0.86); }
 .dk-card.is-sent { box-shadow: inset 0 0 0 1px var(--a-line); } /* taste-skill-ignore: interface fragment, the composer after send */
-.dk-go:disabled { opacity: 0.35; cursor: default; transform: none; }
-.dk-space { display: flex; gap: 12px; min-width: 0; overflow: hidden; }
-.dk-stub { flex: 1 1 0; min-width: 230px; display: flex; flex-direction: column; border-radius: 12px 12px 0 0; border: 1.5px dashed rgba(255, 255, 255, 0.16); border-bottom: 0; transition: background-color 360ms ease, border-color 360ms ease; } /* taste-skill-ignore: interface fragment, a column not spawned yet */
-.dk-stub .dk-col__bot { opacity: 0.3; filter: grayscale(1); transition: opacity 360ms ease, filter 360ms ease; }
-.dk-stub .dk-col__head b { color: var(--a-dim); }
-.dk-stub.is-on { background: var(--a-col); border-color: transparent; animation: dk-spawn 460ms var(--ease-out) both; }
-.dk-stub.is-on .dk-col__bot { opacity: 1; filter: none; }
-.dk-stub.is-on .dk-col__head b { color: var(--a-text); }
-@keyframes dk-spawn { from { opacity: 0.4; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+.dk-card.is-sent .dk-go { opacity: 0.35; }
+@keyframes dk-spawn { from { opacity: 0; transform: translateX(48px) scale(0.97); } to { opacity: 1; transform: none; } }
 
 /* ---------- Other projects wait in the title bar ---------- */
 .dk-decks { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto; margin-top: var(--dk-gap); }
@@ -410,8 +400,8 @@ img { display: block; max-width: 100%; height: auto; }
 @keyframes dk-return { from { transform: translate(6%, 8%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .js .dk-stage__in, .js .dk-stage__in > .dk-win, .dk-band, .dk-decks__clause, .dk-tb { animation: none; }
-  .dk-reel__track, .dk-stub, .dk-stub .dk-col__bot, .dk-prog i { transition: none; }
-  .dk-stub.is-on, .dk-board .dk-thread > * { animation: none; }
+  .dk-reel__track, .dk-prog i { transition: none; }
+  .dk-shot .dk-col.is-in, .dk-shot .dk-thread > *, .dk-shot .dk-tab, .dk-caret { animation: none; }
 }
 
 /* ---------- Narrower screens: their own composition ---------- */
@@ -424,9 +414,6 @@ img { display: block; max-width: 100%; height: auto; }
   .dk-lab__col { width: min(420px, calc(100% - 48px)); }
   .dk-start__head .dk-h2, .dk-start__lead { grid-column: 1 / -1; }
   .dk-start__lead { margin-top: 24px; }
-  .dk-board { grid-template-columns: minmax(0, 1fr); height: auto; }
-  .dk-new { height: 520px; }
-  .dk-space { height: 160px; }
   .dk-decks { grid-template-columns: 1fr; }
   .dk-decks__words { min-height: 0; }
   .dk-budgets__head, .dk-ledger { grid-column: 1 / -1; }
@@ -460,15 +447,11 @@ img { display: block; max-width: 100%; height: auto; }
   .dk-lab__field { order: 1; position: static; height: auto; margin-top: 40px; padding: 24px 0; }
   .dk-lab__col { width: calc(100% - 32px); max-width: 420px; height: 520px; }
   .dk-block { min-height: 0; padding-top: 72px; }
-  .dk-goal { font-size: var(--dk-display); }
   .dk-start { padding-top: 72px; }
-  .dk-start__line { margin-top: 48px; }
-  .dk-start__act { gap: 20px; }
-  .dk-start__note { margin-top: 40px; }
-  .dk-board { padding: 8px 0 0 8px; gap: 8px; }
-  .dk-new { height: 500px; }
-  .dk-space { height: 120px; gap: 8px; padding-bottom: 0; }
-  .dk-stub { flex: none; width: 230px; }
+  .dk-start__act { margin-top: 40px; gap: 16px; }
+  .dk-shot { height: 600px; }
+  .dk-shot .dk-col { width: calc(100vw - 72px); }
+  .dk-shot .dk-bar__end { display: none; }
   .dk-decks__pic { padding: 32px 0 32px 16px; }
   .dk-slide__names li { font-size: var(--text-small); padding: 0 !important; }
   .dk-keys__head { display: block; }
