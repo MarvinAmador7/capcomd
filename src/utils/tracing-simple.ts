@@ -178,7 +178,8 @@ export async function withSpan<T>(
     endSpan(span);
     return result;
   } catch (error) {
-    span.status.code = 2;
+    // A cancel (an AgentError of kind "cancelled") ends the span without counting as an error.
+    span.status.code = (error as { kind?: unknown } | null)?.kind === "cancelled" ? 1 : 2;
     span.status.message = error instanceof Error ? error.message : String(error);
     endSpan(span);
     throw error;

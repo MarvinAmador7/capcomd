@@ -465,7 +465,7 @@ export interface RunStatus {
   /** ISO-8601 UTC of the run's first event (null if none yet); startedAtMs is the same in ms. */
   startedAt: string | null;
   startedAtMs: number | null;
-  /** Primitives scope runs (`capcomd run new`): agent counts and a derived state (idle|running|done|failed). */
+  /** Primitives scope runs (`capcomd run new`): agent counts and a derived state (running|done|failed|cancelled). */
   scope: { state: string; agents: number; byStatus: Record<string, number> } | null;
   events: number;
 }
@@ -512,7 +512,10 @@ export async function getStatus(runId: string): Promise<RunStatus> {
     for (const a of agents) byStatus[a.status] = (byStatus[a.status] ?? 0) + 1;
     const live = agents.some((a) => !["done", "failed", "cancelled"].includes(a.status));
     const roots = agents.filter((a) => !a.parent);
-    scope = { state: live ? "running" : roots.every((a) => a.status === "done") ? "done" : "failed", agents: agents.length, byStatus };
+    // Ended: done when every root finished its work; cancelled when the run (or its roots) was cancelled; else failed.
+    const state = live ? "running" : run.state === "cancelled" ? "cancelled" : roots.every((a) => a.status === "done") ? "done"
+      : roots.some((a) => a.status === "failed") ? "failed" : "cancelled";
+    scope = { state, agents: agents.length, byStatus };
   }
   return {
     runId: run.runId,

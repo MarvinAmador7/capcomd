@@ -100,26 +100,48 @@ export async function prOpen(a: { runId: string; stopped?: boolean }) {
   return { ...r, next: `Tell the user: pull request #${r.pullRequest.number}${r.pullRequest.url ? ` (${r.pullRequest.url})` : ""} from ${r.branch} into ${r.base}. They review and merge it on GitHub.` };
 }
 
+/** How long capcomd_runs waits for one run's records. */
+const RUN_READ_MS = 5_000;
+
+/** A run's state as the harness API reports it (GET /v1/runs): running while an agent is live; else how it ended
+ *  (cancelled, failed), idle once its agents finished, new before any; unknown without a scope. */
+export function runState(meta: { ended?: { state: string } | null } | null, agents: Array<{ status: string }>): string {
+  if (!meta) return "unknown";
+  if (agents.some((a) => a.status === "running" || a.status === "pending" || a.status === "paused")) return "running";
+  return meta.ended ? meta.ended.state : agents.length ? "idle" : "new";
+}
+
 export async function runs(a: { limit?: number; project?: { name: string; path: string } | null }) {
   const P = await import("../config/projects");
   const limit = Math.min(Number(a.limit ?? 10), 50);
   // Each run's project: the checkout it was started in (the runs index records the directory).
   const all = O.recentRuns(a.project ? 500 : limit).map((r) => { const dir = r.cwd ? P.projectDirOf(r.cwd) : null; return { ...r, dir, project: dir ? P.projectNameOf(dir) : null }; });
   const rows = (a.project ? all.filter((r) => r.dir && P.samePath(r.dir, a.project!.path)) : all).slice(0, limit).map(({ dir: _d, ...r }) => r);
-  const out = [];
-  for (const r of rows) {
-    // A listed run whose scope this engine doesn't have (another engine's) lists no agents: never create one.
-    const agents = await existingActor("scope", [r.runId]).then((s) => s?.listAgents({}) ?? null).catch(() => null);
-    const counts: Record<string, number> = {};
-    for (const x of agents ?? []) counts[x.status] = (counts[x.status] ?? 0) + 1;
-    out.push({ ...r, agents: counts, pendingApprovals: (await O.pendingMerges(r.runId)).map((m) => m.taskId) });
-  }
+  // One engine read per run, all at once, each bounded: a run whose scope is slow to answer (an actor waking up, an
+  // engine under load) is listed with what's unknown instead of holding the whole list.
+  const { within } = await import("../utils/within");
+  const out = await Promise.all(rows.map(async (r) => {
+    try {
+      return await within((async () => {
+        // A listed run whose scope this engine doesn't have (another engine's) lists no agents: never create one.
+        const s = await existingActor("scope", [r.runId]);
+        if (!s) return { ...r, state: "unknown", agents: {}, pendingApprovals: [] };
+        const [meta, agents, ops] = await Promise.all([s.getScope({}).catch(() => null), s.listAgents({}).catch(() => []), s.listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])]) as [any, any[], any[]];
+        const counts: Record<string, number> = {};
+        for (const x of agents) counts[x.status] = (counts[x.status] ?? 0) + 1;
+        return { ...r, state: runState(meta, agents), agents: counts, pendingApprovals: ops.map((m) => m.id) };
+      })(), RUN_READ_MS, `reading ${r.runId}`);
+    } catch {
+      return { ...r, state: "unknown", agents: null, pendingApprovals: null, note: `the engine didn't answer for this run within ${RUN_READ_MS / 1000}s; capcomd_tree reads it on its own` };
+    }
+  }));
   return { runs: out };
 }
 
 export async function tree(a: { runId: string; root?: string }) {
   const t: any = await O.treeOf(a.runId, a.root);
-  return { ...t, pendingApprovals: await O.pendingMerges(a.runId) };
+  const { within } = await import("../utils/within");
+  return { ...t, pendingApprovals: await within(O.pendingMerges(a.runId), RUN_READ_MS).catch(() => null) };
 }
 
 export async function inspect(a: { runId: string; agent: string; tail?: number }) {

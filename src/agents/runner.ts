@@ -778,7 +778,14 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     must(await git(["push", "--porcelain", lease, "origin", `HEAD:refs/heads/${task.branch}`], repo, 300_000), "git push");
     setSpanAttributes(span, { "git.sha": sha });
     return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt };
-  } catch (e) {
+  } catch (err) {
+    // An agent cancelled mid-step (its machine destroyed under it, so a command failed before the cancel was seen) was
+    // cancelled, not an error: said so in its trace, which the TUI and the apps read.
+    let e = err;
+    if (!(e instanceof AgentError) && opts.isCancelled && (await opts.isCancelled().catch(() => false))) {
+      addSpanEvent(span, "agent.cancelled");
+      e = new AgentError("cancelled", `${name} cancelled for ${key}`);
+    }
     // Failed/timed-out spans still carry what was spent so far (subscription billing: cost 0, notional set).
     const st = live as AgentRunState | null;
     const sub = span.attributes["agent.billing"] === "subscription" || span.attributes["agent.credential_mode"] === "subscription";

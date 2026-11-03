@@ -1087,8 +1087,8 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
   let runEnded = false;
   if (!agentId) {
     await c.run.getOrCreate([runId]).cancel({ runId });
-    // A run its agents didn't end (none ever ran: it never started, or its planner couldn't be spawned) ends here.
-    runEnded = await endRun(runId, "cancelled", reason ?? "run cancelled", by).then((r) => r.changed, () => false);
+    // A run-wide cancel ends the run as cancelled, whatever its agents did (it reads "cancelled" everywhere, never idle).
+    runEnded = await endRun(runId, "cancelled", reason ?? "run cancelled", by, { evenIfAgentsEnded: true }).then((r) => r.changed, () => false);
   }
   return { runId, target: agentId ?? null, cancelled: res.cancelled, affected: affected.map((a: { agentId: string; status: string }) => ({ agentId: a.agentId, status: a.status })), ...(runEnded ? { runEnded } : {}) };
 }
@@ -1097,13 +1097,13 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
  * Record that the run itself ended (scope RUN_ENDED → lifecycle run.failed / run.cancelled), unless it already has:
  * by its agents (the lifecycle feed's own fold) or an earlier end. `changed`: this call ended it.
  */
-export async function endRun(runId: string, state: "failed" | "cancelled", reason: string, by?: string | null): Promise<{ changed: boolean; state: string }> {
+export async function endRun(runId: string, state: "failed" | "cancelled", reason: string, by?: string | null, o: { evenIfAgentsEnded?: boolean } = {}): Promise<{ changed: boolean; state: string }> {
   await assertEngine();
   const s = client().scope.getOrCreate([runId]);
   const had = (await s.getScope({}))?.ended;
   if (had) return { changed: false, state: had.state };
   const { runPhase } = await import("../api/lifecycle");
-  if (runPhase(runId, await s.getEvents({})) === "ended") return { changed: false, state: "ended" };
+  if (!o.evenIfAgentsEnded && runPhase(runId, await s.getEvents({})) === "ended") return { changed: false, state: "ended" };
   const r = await s.endRun({ state, reason, by: by ?? null });
   if (r.changed && state === "failed") await client().run.getOrCreate([runId]).configFail({ runId, reason }).catch(() => {});
   return { changed: r.changed, state: r.ended.state };
