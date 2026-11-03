@@ -57,8 +57,8 @@ driver
 `capcomd_profiles` entry has `canLead` can lead (`capcomd setup` writes `lead`: up to 3 worker helpers, one level;
 `planner` has no fan-out limits). The lead splits its part, spawns its helpers in parallel, verifies and merges their
 work onto the run's target (the goal branch) itself, and ends with a summary of what landed and what didn't (or hands
-the rest back to you in it). `children` fan-out for a profile that can't spawn (`worker`, `reviewer`) would have no effect, so the spawn
-is refused (`reason: "cannot_spawn"`): spawn a lead instead, or leave `children` out.
+the rest back to you in it). `children` fan-out for a profile that can't spawn (`worker`, `reviewer`) would have no
+effect, so the spawn is refused (`reason: "cannot_spawn"`): spawn a lead instead, or leave `children` out.
 
 Shapes combine: contract first, then wide with a lead on each big part, is the usual shape for "build me X".
 
