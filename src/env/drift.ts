@@ -87,12 +87,13 @@ export async function templateDrift(rec: EnvRecord | undefined, cfg: MergeConfig
 
 /**
  * Plan logins saved on an older env image than `current`: agents with that login boot from the login's image, so they
- * get its warm template (and CLIs), not the current one's, until the login is made again.
+ * get its warm template (and CLIs), not the current one's. `capcomd env build --sandbox docker` moves them onto the new
+ * image itself (src/auth/carry.ts), so one left here is one it couldn't move: the note says what to run.
  */
 export function loginsOnOlderEnv(current: string | undefined, profiles: Array<{ agent: string; snapshot?: string; env: string }>): string[] {
   if (!current) return [];
   return profiles.filter((p) => p.snapshot && p.env !== current).map((p) => {
     const cli = p.agent === "claude-code" ? "claude" : "codex";
-    return `plan login for ${cli} was saved on ${p.env}: its agents boot from that image (its warm template), not ${current}; run \`capcomd auth login ${cli} --sandbox docker\` to move it`;
+    return `plan login for ${cli} is still on ${p.env}: its agents boot from that image (its warm template), not ${current}. \`${REBUILD}\` moves it (it tries again), or run \`capcomd auth login ${cli} --sandbox docker\``;
   });
 }
