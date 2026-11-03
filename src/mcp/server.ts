@@ -60,7 +60,7 @@ async function handle(fn: () => Promise<unknown>, needsEngine = true): Promise<T
 
 const run = z.string().min(1).describe("Run id (run-…) from capcomd_run_new or capcomd_runs");
 const key = z.string().optional().describe("Idempotency key: a retry with the same key returns the first result");
-const wait = z.number().int().min(1000).max(D.WAIT_MAX_MS).optional().describe(`Max wait in ms (default ${D.WAIT_DEFAULT_MS}); returns pending/running when it runs out`);
+const wait = z.number().int().min(0).max(D.WAIT_MAX_MS).optional().describe(`Max wait in ms (default ${D.WAIT_DEFAULT_MS}; 0: answer at once); returns pending/running when it runs out`);
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true } as const;
@@ -77,6 +77,17 @@ const project = z.string().optional().describe("Project: a name from capcomd_pro
 export const INSTRUCTIONS = `capcomd runs a team of coding agents for you: each agent works in its own VM (or container) on its own branch, capcomd_verify runs the project's checks and reviewer on its work, and capcomd_merge lands only the verified commit. You are the driver: you choose the team and its shape.
 Team shapes: single loop (one agent: one coherent change); wide fan-out (independent parts at once); contract first, then wide (land the shared types/stubs, then start every part at once, consumers against the stubs); leads with helpers (a lead profile, spawned with children: {maxChildren: N, maxDepth: 1}, splits its part among helpers and verifies and merges their work). When the user asks for parallel work, a team or a swarm, go wide and give a lead to any part with two or more independent sub-parts.
 Load the capcomd-orchestration skill (its "Choose a team shape" section) before planning. Start with capcomd_setup: it says whether capcomd is ready, the project's gates and how many agents run at once here.`;
+
+/**
+ * What an agent does when capcomd has no projects: the command that adds the checkout it works in. Setting a project
+ * up puts it on the list at once; this server reads the list on every call, so no restart is needed.
+ */
+export function noProjectsHint(cwd = process.cwd()): string {
+  const { gitRoot } = require("../config/project-setup") as typeof import("../config/project-setup");
+  const here = gitRoot(cwd);
+  const cmd = "capcomd setup project --yes --sandbox docker|boxd [--target BRANCH] [--check 'CMD']";
+  return `No projects yet. To add the repository you're working in, run \`${cmd}\` in its checkout${here ? ` (this server runs in ${here}: \`cd ${JSON.stringify(here)} && ${cmd}\`)` : ""}; ask the user which sandbox, target branch and check they want. It's listed here at once (no restart): call capcomd_projects again, then capcomd_setup {project}.`;
+}
 
 export function buildServer(): McpServer {
   const version = VERSION;
@@ -123,7 +134,7 @@ export function buildServer(): McpServer {
     if (me && !list.some((p) => samePath(p.path, me.path))) projects.push({ name: me.name, path: me.path, default: false, ready: true });
     return {
       default: dflt, here: me?.name ?? null, projects,
-      next: projects.length ? "Pass project: <name> to name one; otherwise the default applies (always say which project you act on)." : "No projects yet: ask the user to run `capcomd setup agent` in a repository's checkout.",
+      next: projects.length ? "Pass project: <name> to name one; otherwise the default applies (always say which project you act on)." : noProjectsHint(),
     };
   }, false));
 
@@ -143,7 +154,7 @@ export function buildServer(): McpServer {
   // ── runs ──
   server.registerTool("capcomd_run_new", {
     title: "Start a run",
-    description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Returns runId, the gates and how many agents run at once here (`capacity`).",
+    description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Its sandbox is the project's unless you pass one. Returns runId, the gates, the sandbox the run uses and how many agents run at once there (`capacity`).",
     inputSchema: {
       budget: z.string().optional().describe('Budget, e.g. "usd=5,turns=200,wallSeconds=3600"; omit for none'),
       label: z.string().optional().describe("What the run is for, as a short title the way you'd title a pull request (\"Add multiply to src/math.ts\"): the capcomd app names the run by it"),
@@ -151,6 +162,7 @@ export function buildServer(): McpServer {
       targetFrom: z.string().optional().describe("Create target from this branch"),
       goalBranch: z.string().optional().describe("The run's goal branch, e.g. capcomd/add-multiply: created from base; verified, reviewed merges land on it with no approval, and the user opens a pull request from it at the end (capcomd_pr_open). Omit it with base set to get a suggested name"),
       base: z.string().optional().describe("The branch the goal branch starts from and the pull request goes into (ask the user; default: the project's target, else the repository's default branch)"),
+      sandbox: z.string().optional().describe("Where this run's agents and checks run: docker (containers on this machine) or boxd (cloud VMs). Default: the project's sandbox (capcomd_setup says which, and from where). The result's `sandbox` says which one the run uses"),
       key, project,
     },
     annotations: WRITE,
@@ -158,8 +170,13 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_goal", {
     title: "Goal branch",
-    description: "A goal-branch run's result: the goal branch against its base (commits, files, lines), what each agent landed and how it was reviewed, what didn't land and why, the planner's summary, and whether a pull request can be opened. Show it to the user before capcomd_pr_open.",
-    inputSchema: { runId: run, project }, annotations: READ,
+    description: "A goal-branch run's result: the goal branch against its base (commits, files, lines), what each agent landed and how it was reviewed, what didn't land and why, the planner's summary, and whether a pull request can be opened. Show it to the user before capcomd_pr_open. In a run you drive yourself (no planner agent), pass done: true with a summary once all its work is merged: that makes the goal ready.",
+    inputSchema: {
+      runId: run,
+      done: z.boolean().optional().describe("A run you drive yourself (no planner agent): its work is done (every agent finished, verified work merged). Marks the goal branch ready for the user; refused while an agent still works"),
+      summary: z.string().optional().describe("With done: what landed and what didn't, for the user and the pull request"),
+      project,
+    }, annotations: WRITE,
   }, routed("capcomd_goal", (a) => D.goal(a)));
 
   server.registerTool("capcomd_pr_open", {
@@ -220,8 +237,12 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_await", {
     title: "Wait for agents",
-    description: "Wait until the agents finish (mode all) or one does (mode any), up to timeoutMs; returns done (with results, fenced) and pending. It also returns early with `notices` when an agent looks stuck (idle, spinning on the same call, failing with the same error); it keeps running (stopped, work kept, only if its profile sets a stuck window). Call again for what is pending: agents keep working between calls.",
-    inputSchema: { runId: run, agents: z.array(z.string().min(1)).min(1), mode: z.enum(["all", "any"]).optional(), timeoutMs: wait, project },
+    description: "Wait until the agents, verifies and merges finish (mode all) or one does (mode any), up to timeoutMs; it answers as soon as one finishes. Returns done (agents, with results, fenced), ops (finished verifies and merges, with their records) and pending (ids still running). It also returns early with `notices` when an agent looks stuck (idle, spinning on the same call, failing with the same error); it keeps running (stopped, work kept, only if its profile sets a stuck window). Call again for what is pending: everything keeps working between calls. Start several verifies with capcomd_verify (timeoutMs 0 returns at once), then wait for them here together with mode any.",
+    inputSchema: {
+      runId: run, agents: z.array(z.string().min(1)).optional().describe("Agent ids (agt-…) from capcomd_spawn"),
+      ops: z.array(z.string().min(1)).optional().describe("vfy-… / mrg-… ids from capcomd_verify and capcomd_merge: a verify or merge counts as finished once it isn't running (passed, failed, merged, or waiting for an approval)"),
+      mode: z.enum(["all", "any"]).optional(), timeoutMs: wait, project,
+    },
     annotations: READ,
   }, routed("capcomd_await", (a) => D.awaitAgents(a)));
 
@@ -263,11 +284,12 @@ export function buildServer(): McpServer {
   // ── gates ──
   server.registerTool("capcomd_verify", {
     title: "Verify",
-    description: "Run the run's checks on an agent's branch merged with the latest target (in a fresh VM), then the run's reviewer agent. Both must pass. Long: returns state running after timeoutMs; call again with the same ref.",
+    description: "Run the run's checks on an agent's branch merged with the latest target (in a fresh VM) and the run's reviewer agent (alongside the checks). Both must pass. Long: returns {id, state: running} after timeoutMs (0: at once). Poll it with just {runId, id} (or the same key and ref): no other parameters are needed, and only ones you give that differ conflict. To verify several, start each, then wait for any with capcomd_await {ops: [ids]}. The result's timings say where the time went.",
     inputSchema: {
-      runId: run, ref: z.string().min(1).describe("Agent id (agt-…) or branch"),
+      runId: run, ref: z.string().min(1).optional().describe("Agent id (agt-…) or branch to verify; not needed to poll by id"),
+      id: z.string().min(1).optional().describe("vfy-… id of a verification to poll (from an earlier call)"),
       check: z.string().optional().describe("A check name; default: the one pinned at spawn"),
-      acceptance: z.unknown().optional().describe("Acceptance criteria for the reviewer"),
+      acceptance: z.unknown().optional().describe("Acceptance criteria for the reviewer (only when starting it)"),
       key, timeoutMs: wait, project,
     },
     annotations: WRITE,
@@ -275,8 +297,13 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_merge", {
     title: "Merge",
-    description: "Land exactly the commit a passing capcomd_verify tested (require: its vfy-… id). A protected target parks the merge for a person's approval. Long: returns state running after timeoutMs; call again.",
-    inputSchema: { runId: run, ref: z.string().min(1), require: z.string().min(1).describe("vfy-… id of a passing verify"), key, timeoutMs: wait, project },
+    description: "Land exactly the commit a passing capcomd_verify tested (require: its vfy-… id). When the target hasn't moved since that verify, the verified commit is pushed as it is (seconds); when it moved, the checks run again on the new target first. A protected target parks the merge for a person's approval. Returns {id, state: running} after timeoutMs; poll with just {runId, id}, or wait with capcomd_await {ops: [id]}.",
+    inputSchema: {
+      runId: run, ref: z.string().min(1).optional().describe("Agent id (agt-…) or branch to merge; not needed to poll by id"),
+      require: z.string().min(1).optional().describe("vfy-… id of a passing verify (needed to start a merge)"),
+      id: z.string().min(1).optional().describe("mrg-… id of a merge to poll (from an earlier call)"),
+      key, timeoutMs: wait, project,
+    },
     annotations: DESTRUCTIVE,
   }, routed("capcomd_merge", (a) => D.merge(a)));
 

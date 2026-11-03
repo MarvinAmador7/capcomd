@@ -88,10 +88,17 @@ override an explicit request for parallel work.
 
 ### Waiting and polling
 <!-- capcomd: waiting and polling guidance. Other changes add their lines to this list. -->
-- Waits are bounded: `capcomd_await`, `capcomd_verify` and `capcomd_merge` return `pending` / `state: "running"` after
-  `timeoutMs` (max 55 s); call again with the same arguments. Agents keep working in between.
-- Wait on all the agents you have running at once (`capcomd_await {agents: [...], mode: "any"}`), and verify each
-  as it finishes, rather than one agent at a time.
+- Waits are bounded: `capcomd_await`, `capcomd_verify` and `capcomd_merge` return `pending` / `state: "running"` (with
+  the `id`) after `timeoutMs` (max 55 s; 0 answers at once). The work goes on in between.
+- Never poll with `sleep` or `docker ps`: `capcomd_await` is the wait.
+- Wait on everything you have running at once: `capcomd_await {runId, agents: [...], ops: [vfy-…, mrg-…], mode: "any"}`
+  returns as soon as one agent, verify or merge finishes.
+- Verify several in parallel, then await any: start each `capcomd_verify` with `timeoutMs: 0`, put its id in `ops`,
+  and merge each one as it passes while the rest go on.
+- Poll a verify or merge with just `{runId, id}` (or the same `key` and `ref`). Don't resend `acceptance` or other
+  parameters: only ones you give that differ conflict.
+- A merge whose target hasn't moved since its verify lands in seconds (no second check run); one whose target another
+  merge moved runs the checks again first. Each verify and merge result has `timings` (checks, review, queue, push).
 <!-- end: waiting and polling guidance -->
 
 ### Before you call it done
@@ -119,6 +126,11 @@ As the user's agent you are the **driver**:
   alone for a suggested name) on `capcomd_run_new`. Every verified merge then lands on the goal branch with no
   approval and no pull request per child. When the work is done, show the user `capcomd_goal` (what landed, what
   didn't, the summary) and call `capcomd_pr_open` only when they ask for the pull request; capcomd never merges it.
+- **Run your own goal to the end:** in a run you drive yourself (no planner agent), once every agent's work is verified
+  and merged, call `capcomd_goal {runId, done: true, summary}`. That makes the goal ready.
+- **Sandbox:** a run's agents and checks run in the project's sandbox (`capcomd_setup` says which). Pass
+  `sandbox: "docker"` or `"boxd"` on `capcomd_run_new` only when the user asks for another; the result's `sandbox`
+  says which the run uses.
 - **A stopped planner** (state `stopped`): `capcomd_goal` and `capcomd_pr_open` give you a question (how many tasks
   landed). Ask the user exactly that, and call `capcomd_pr_open` with `stopped: true` only if they say yes.
 - **Approvals:** without a goal branch, a merge into a protected branch parks: tell the user to run

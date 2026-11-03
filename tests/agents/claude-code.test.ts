@@ -39,7 +39,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(res.costUsd).toBeCloseTo(0.123);
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBe(res.sha);
     const msg = await new Git(s.r.bare).ok(["log", "-1", "--format=%B", s.task.branch]);
-    expect(msg).toStartWith("make the failing test pass\n");                 // what it does; the task is in the trailer
+    expect(msg).toStartWith("Make the failing test pass\n");                 // what it does; the task is in the trailer
     expect(msg).toContain("Capcomd-Task: r1/task-1");
     expect(msg).toContain("Capcomd-Epoch: 1");
     expect(msg).toContain(`Capcomd-Agent: claude-code@${CLAUDE_CODE_VERSION}`);
@@ -330,6 +330,24 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(existsSync(`/proc/${pid}`)).toBe(false);
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBeNull();
     expect(getFinishedSpans().find((x) => x.name === "agent.claude_code")!.events.map((e) => e.name)).toContain("agent.cancelled");
+  }, 30_000);
+
+  test("cancelled while its machine is destroyed under it: a cancel in its trace, not an error", async () => {
+    const s = await setup("[sleep] hang");
+    let gone = false;
+    const t0 = Date.now();
+    const exec = s.provider.exec.bind(s.provider);
+    // The run's cancel destroys the machine: the runner's next command fails before it polls the cancel.
+    (s.provider as any).exec = async (...a: Parameters<typeof exec>) => {
+      if (!gone && Date.now() - t0 > 800) { gone = true; throw new Error(`machine ${s.id} not found`); }
+      return exec(...a);
+    };
+    const err = await runClaudeCode(s.provider, s.id, s.task, s.cfg, { apiKey: KEY, isCancelled: async () => gone }).catch((e) => e);
+    expect(err.kind).toBe("cancelled");
+    const span = getFinishedSpans().find((x) => x.name === "agent.claude_code")!;
+    expect(span.attributes["agent.error_kind"]).toBe("cancelled");
+    expect(span.status.code).toBe(1);
+    await (exec as any)(s.id, ["sh", "-c", `kill $(cat ${s.W}/agent.pid) 2>/dev/null; true`], {}).catch(() => {});
   }, 30_000);
 
   test("no changes and agent errors are typed failures", async () => {

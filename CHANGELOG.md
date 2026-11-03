@@ -5,6 +5,43 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Merging a verified commit is much faster. When the target hasn't moved since the verify, capcomd pushes the verified
+  commit as it is, in one round trip, with no second run of the checks. When the target has moved, the checks still
+  run again first. Merge results show `timings.path` (`fast` or `full`).
+- Verifies of the same target run side by side instead of one at a time, and the reviewer starts alongside the checks
+  instead of after them. Set `CAPCOMD_REVIEW_PARALLEL=0` to review only after the checks.
+- `capcomd_await` waits on verifies and merges as well as agents (`ops: ["vfy-…", "mrg-…"]`). With `mode: "any"`, it
+  returns as soon as the first one finishes.
+- Checking on a verify or merge no longer fails with a conflict. Poll it with `capcomd_verify {runId, id}` or
+  `capcomd_merge {runId, id}`, or with the same key without resending `acceptance`; only a parameter you give that
+  differs is a conflict. Both tools always answer with the id, and `timeoutMs: 0` starts one without waiting.
+- Verify and merge results and events include `timings` (checks, review, queue, fetch, push), so you can see where
+  the time went.
+
+- **Breaking:** if you drive a goal-branch run yourself (no planner agent), it is now ready only when you mark it done,
+  with `capcomd goal done <runId> --summary "…"` or `capcomd_goal {runId, done: true, summary}`. Before, it became
+  ready as soon as its first agent finished, so the apps showed it ready while most of the work was still running.
+- A run uses its project's sandbox (from `.capcomd/config.json`), then the one in your user config, instead of the
+  sandbox the engine was started with. You can choose one per run with `capcomd run new --sandbox docker|boxd` or
+  `sandbox` on `capcomd_run_new`, and the result says which sandbox the run uses and why. Set a project's sandbox with
+  `capcomd setup project --sandbox docker|boxd`.
+- `capcomd setup project` adds the project to capcomd's project list right away, so your agent's `capcomd_projects`
+  and `capcomd_setup` see it without a restart. `capcomd setup agent --default-project` now works without Hermes.
+- `capcomd setup check` and `capcomd_setup` report the sandbox the project's runs will use and where that setting
+  comes from. They also run that sandbox's checks: whether Docker is running or a boxd key is set, the logins, and the
+  env image.
+- On Docker, setup tells you when the env image has no warm checkout of your repository, or an outdated one, and
+  offers to run `capcomd env build --sandbox docker` (`--env-build` builds without asking).
+- Creating a run with a goal branch no longer clones the repository, so it takes a few seconds instead of about a
+  minute. A new run can reuse a goal branch left empty by a cancelled run with the same name; a goal branch with
+  commits is never reused or deleted.
+- When the checks can't run, for example because the image has no bun, verify says so and tells you how to fix it,
+  instead of reporting "tests failed". Verify also installs the project's pinned bun when the image lacks it.
+- When capcomd commits an agent's work, the commit message uses the agent's own words (its commit, summary or title),
+  not the first line of its task.
+- `capcomd_runs` returns within seconds even when a run is slow to answer, and lists each run's state.
+- A cancelled run and its agents show as cancelled everywhere (status, TUI, run list), never as "failed" or "error".
+
 ## 0.8.0 (2026-11-03)
 
 Local mode on Docker is now fast enough to use day to day. Each agent starts from a warm checkout baked into the agent

@@ -772,8 +772,9 @@ export const GoalView = z.object({
 	state: GoalBranchState,
 	goal: UntrustedText.nullable().describe("The run's goal, as the user wrote it"),
 	readyAt: Timestamp.nullable(),
-	plannerId: z.string().nullable().describe("The planner agent (the run's root)"),
-	summary: UntrustedText.nullable().describe("The planner's own summary (`capcomd result --summary`): what it shows first; null while it works or when it wrote none"),
+	plannerId: z.string().nullable().describe("The planner agent (the run's root); null in a run its driver runs itself (an MCP or CLI driver, no planner agent)"),
+	summary: UntrustedText.nullable().describe("The planner's own summary (`capcomd result --summary`), or in a driver's run the summary it gave when it marked the goal done: what it shows first; null while it works or when it wrote none"),
+	driven: z.boolean().optional().describe("The run has no planner agent: its driver (the user's own agent, over MCP or the CLI) marks the goal done (`capcomd_goal {done: true}`, `capcomd goal done`), which makes it ready"),
 	compare: z.object({
 		baseSha: z.string().nullable(), headSha: z.string().nullable(),
 		ahead: z.number().int().nonnegative().nullable().describe("Commits on the goal branch that the base doesn't have"),

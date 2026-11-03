@@ -141,7 +141,7 @@ describe("setup steps (non-interactive)", () => {
   test("agent: no Claude Code or Codex CLI: installs the orchestration skill and says how to add the MCP server", () => {
     const r = json(run(["setup", "agent", "--yes", "--json"], { cwd: repo, env: { ...env, CAPCOMD_CLAUDE_CLI: "/nonexistent/claude", CAPCOMD_CODEX_CLI: "/nonexistent/codex" } }).out);
     expect(r.ok).toBe(true);
-    expect(r.steps[0].detail).toContain("claude mcp add capcomd -- capcomd mcp");
+    expect(r.steps.find((s: any) => s.step === "agent skill").detail).toContain("claude mcp add capcomd -- capcomd mcp");
     expect(existsSync(join(home, ".claude", "skills", "capcomd-orchestration", "SKILL.md"))).toBe(true);
   });
 
@@ -155,7 +155,8 @@ describe("setup steps (non-interactive)", () => {
     const e = { ...env, CAPCOMD_CLAUDE_CLI: join(bin, "claude"), CAPCOMD_CODEX_CLI: join(bin, "codex"), CAPCOMD_PLUGIN_MARKETPLACE: "acme/capcomd-fork" };
     const r = json(run(["setup", "agent", "--yes", "--json"], { cwd: repo, env: e }).out);
     expect(r.ok).toBe(true);
-    expect(r.steps.map((s: any) => s.step)).toEqual(["claude plugin", "codex plugin"]);
+    // The checkout is a project: it's on capcomd's project list too (setup project put it there already).
+    expect(r.steps.map((s: any) => s.step)).toEqual(["project list", "claude plugin", "codex plugin"]);
     const log = readFileSync(calls, "utf8");
     expect(log).toContain("claude plugin install capcomd --marketplace acme/capcomd-fork --json");
     expect(log).toContain("codex plugin marketplace add acme/capcomd-fork");
@@ -164,12 +165,44 @@ describe("setup steps (non-interactive)", () => {
     expect(c.steps.find((s: any) => s.step === "agent plugin")).toMatchObject({ ok: true });
   });
 
-  test("check: reports the project and the skill; no engine and no key show as not ok with a hint", () => {
+  test("check: reports the project and the skill; no sandbox and no engine show as not ok with a hint", () => {
     const r = run(["setup", "check", "--json"], { cwd: repo, env: { ...env, BOXD_API_KEY: "" } });
     const steps = json(r.out).steps as any[];
     expect(steps.find((s) => s.step === "project")).toMatchObject({ ok: true });
     expect(steps.find((s) => s.step === "agent plugin")).toMatchObject({ ok: false });
-    expect(steps.find((s) => s.step === "boxd key")).toMatchObject({ ok: false });
+    expect(steps.find((s) => s.step === "sandbox")).toMatchObject({ ok: false, sandbox: { name: null, source: "engine" }, hint: expect.stringContaining("setup project --sandbox") });
     expect(r.code).toBe(1);
   });
+
+  test("project: goes on the projects list at once, --sandbox is the project's, and check reports it with its source", () => {
+    const h = mkdtempSync(join(tmpdir(), "capcomd-setup-list-home-"));
+    const e = { HOME: h, CAPCOMD_HOME: join(h, ".capcomd"), CAPCOMD_NO_CONFIG: "" };
+    const r3 = mkdtempSync(join(tmpdir(), "capcomd-setup-list-repo-"));
+    Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: r3 });
+    Bun.spawnSync(["git", "remote", "add", "origin", "git@github.com:acme/calc.git"], { cwd: r3 });
+    // The user's own config says boxd; the project says docker: the project's wins for its runs.
+    mkdirSync(join(h, ".capcomd"), { recursive: true });
+    writeFileSync(join(h, ".capcomd", "config.json"), JSON.stringify({ env: { CAPCOMD_SANDBOX: "boxd" } }));
+    const out = json(run(["setup", "project", "--yes", "--mode", "direct", "--target", "dev", "--check", "true", "--sandbox", "docker", "--json"], { cwd: r3, env: e }).out);
+    expect(out.ok).toBe(true);
+    expect(out.steps.find((s: any) => s.step === "project list")).toMatchObject({ ok: true, detail: expect.stringContaining("capcomd_projects") });
+    const user = JSON.parse(readFileSync(join(h, ".capcomd", "config.json"), "utf8"));
+    expect(user.projects.list.map((p: any) => p.path)).toEqual([Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: r3 }).stdout.toString().trim()]);
+    expect(user.projects.default).toBe(user.projects.list[0].name);
+    expect(user.env.CAPCOMD_SANDBOX).toBe("boxd");
+    expect(JSON.parse(readFileSync(join(r3, ".capcomd", "config.json"), "utf8")).env.CAPCOMD_SANDBOX).toBe("docker");
+    // Docker, and no env image yet: setup says to build one (never builds it under --yes).
+    expect(out.steps.find((s: any) => s.step === "env image")).toMatchObject({ ok: true, advice: true, command: "capcomd env build --sandbox docker" });
+    // Running it again: still one entry. `setup agent` there doesn't add a second.
+    run(["setup", "project", "--yes", "--json"], { cwd: r3, env: e });
+    run(["setup", "agent", "--yes", "--no-hermes", "--no-plugin", "--default-project", "--json"], { cwd: r3, env: e });
+    expect(JSON.parse(readFileSync(join(h, ".capcomd", "config.json"), "utf8")).projects.list).toHaveLength(1);
+    const c = json(run(["setup", "check", "--json"], { cwd: r3, env: { ...e, CAPCOMD_DOCKER_BIN: "/nonexistent/docker" } }).out);
+    expect(c.steps.find((s: any) => s.step === "sandbox")).toMatchObject({ ok: true, sandbox: { name: "docker", source: "project" }, detail: expect.stringContaining("project: ") });
+    expect(c.steps.find((s: any) => s.step === "docker")).toMatchObject({ ok: false });
+    expect(c.steps.find((s: any) => s.step === "boxd key")).toBeUndefined();
+    expect(c.steps.find((s: any) => s.step === "env image")).toMatchObject({ advice: true, command: "capcomd env build --sandbox docker" });
+    const bad = json(run(["setup", "project", "--yes", "--sandbox", "kubernetes", "--json"], { cwd: r3, env: e }).out);
+    expect(bad.steps[0]).toMatchObject({ ok: false, detail: "--sandbox kubernetes?" });
+  }, 60_000);
 });

@@ -192,6 +192,35 @@ export function commitSubject(goal: string, max = 72): string {
   return `${(at > max / 2 ? cut.slice(0, at) : cut).replace(/[\s,;:(\-]+$/, "")}…`;
 }
 
+const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+/** The first sentence of `text`'s first line with words: markdown and a "Task:"/"Summary:" label dropped. */
+function firstSentence(text: string): string {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/^\s*(?:#+|[-*>]|\d+[.)])\s+/, "").replace(/[*_`]+/g, "").replace(/^(?:goal|task|summary)\s*:\s*/i, "").trim().replace(/\s+/g, " ");
+    if (!/[A-Za-z]/.test(line) || /^(?:goal|task|summary|context|overview)$/i.test(line)) continue;
+    const end = /[.!?](?=\s|$)|;\s|\s[—–]\s/.exec(line);
+    return end ? line.slice(0, end.index) : line;
+  }
+  return "";
+}
+/** A task brief as a subject: role framing ("You are …", "Your task is to …") dropped, its first sentence. */
+export function taskSubject(goal: string): string {
+  const s = firstSentence(goal).replace(/^(?:you are|you're|you will be|your (?:task|job) is(?: to)?|please)\s+/i, "").replace(/^(?:going|asked|tasked|responsible) (?:to|with|for)\s+/i, "");
+  return s ? cap(s) : goal.split("\n")[0]!.trim();
+}
+/** What a capcomd commit's subject says: the agent's own commit message, else its summary's first sentence (when it reads
+ *  like one), else the title it gave itself, else the task brief's first sentence; never the raw brief. */
+export function subjectFor(o: { own?: string | null; summary?: string | null; title?: string | null; goal: string }): string {
+  const own = o.own?.trim();
+  if (own) return own;
+  const sum = firstSentence(o.summary ?? "");
+  const words = sum.split(" ").length;
+  if (sum && words >= 3 && sum.length <= 100 && !/[:,]$/.test(sum) && !/^(?:done|all done|ok|okay|here(?:'s| is)|i have finished|finished|summary)\b/i.test(sum)) return cap(sum);
+  const title = o.title?.trim();
+  if (title) return cap(title);
+  return taskSubject(o.goal);
+}
+
 export function buildPrompt(t: AgentTask): string {
   const lines = [
     `You are working in a git checkout of the repository on branch ${t.branch} (based on ${t.target}).`,
@@ -332,9 +361,10 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     // 1. The workspace: the image's warm template in place when it fits (Docker), else a fresh clone. Either way the
     //    branch and tree the agent starts from are the same.
     const wsStarted = now();
-    const existing = await git(["ls-remote", "--heads", task.repoUrl, `refs/heads/${task.branch}`]);
-    must(existing, "git ls-remote");
-    const branchExists = existing.stdout.trim().length > 0;
+    // A reviewer reads one commit and never pushes: its own branch doesn't matter, so no round trip to ask for it.
+    const existing = task.review ? null : await git(["ls-remote", "--heads", task.repoUrl, `refs/heads/${task.branch}`]);
+    if (existing) must(existing, "git ls-remote");
+    const branchExists = !!existing && existing.stdout.trim().length > 0;
     const T = templateDir(cfg);
     // A continuation starts from the stopped agent's work, until its own branch exists.
     const startFrom = task.from && !branchExists && !task.report ? "FETCH_HEAD" : null;
@@ -545,6 +575,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     }) : null;
     const flushItems = () => { if (items.size || images.length) { opts.onItems?.([...items.values()], images.splice(0)); items.clear(); } };
     const namedCalls = new Set<string>();
+    let lastTitle: string | null = null;
     let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck, noChangeAfterMs: cfg.noChangeAfterMs }, now());
@@ -596,7 +627,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         });
         opts.onEvent?.(ev);
         // agents.title: `capcomd title …` by itself names its tab (the shim only checked it).
-        if (opts.onTitle) for (const n of namingCalls(ev.raw)) if (!namedCalls.has(n.callId)) { namedCalls.add(n.callId); opts.onTitle(n); }
+        for (const n of namingCalls(ev.raw)) if (!namedCalls.has(n.callId)) { namedCalls.add(n.callId); lastTitle = n.title; opts.onTitle?.(n); }
         logLines.push(...logLinesOf(ev));
         if (thread) for (const d of thread.event(ev.raw)) items.set(d.id, d);
       }
@@ -768,7 +799,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     }
     // At a limit the stop is always recorded in a commit (empty if the agent committed everything itself), so a replay sees it.
     if (status.stdout.trim() || limit) {
-      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${commitSubject(task.goal)}`;
+      // The agent's own words for the change: its last commit's subject (not capcomd's), else its summary or title.
+      const own = (await git(["log", "-1", "--format=%s", "--invert-grep", "--grep=^Capcomd-Task: ", `origin/${task.target}..HEAD`], repo)).stdout.trim();
+      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${commitSubject(subjectFor({ own, summary: limit ? null : r.text(state.resultText ?? ""), title: lastTitle, goal: task.goal }))}`;
       const msg = `${subject}\n\n${r.text(state.resultText ?? "").slice(0, 1500)}\n\nCapcomd-Task: ${key}\nCapcomd-Epoch: ${task.epoch}\nCapcomd-Agent: ${name}@${version}\n${limit ? `Capcomd-Stop: ${limit}\n` : ""}`;
       await provider.upload(vmId, `${W}/commit-msg.txt`, new TextEncoder().encode(msg));
       must(await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", ...(limit ? ["--allow-empty"] : []), "-F", `${W}/commit-msg.txt`], repo), "git commit");
@@ -778,7 +811,14 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     must(await git(["push", "--porcelain", lease, "origin", `HEAD:refs/heads/${task.branch}`], repo, 300_000), "git push");
     setSpanAttributes(span, { "git.sha": sha });
     return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt };
-  } catch (e) {
+  } catch (err) {
+    // An agent cancelled mid-step (its machine destroyed under it, so a command failed before the cancel was seen) was
+    // cancelled, not an error: said so in its trace, which the TUI and the apps read.
+    let e = err;
+    if (!(e instanceof AgentError) && opts.isCancelled && (await opts.isCancelled().catch(() => false))) {
+      addSpanEvent(span, "agent.cancelled");
+      e = new AgentError("cancelled", `${name} cancelled for ${key}`);
+    }
     // Failed/timed-out spans still carry what was spent so far (subscription billing: cost 0, notional set).
     const st = live as AgentRunState | null;
     const sub = span.attributes["agent.billing"] === "subscription" || span.attributes["agent.credential_mode"] === "subscription";

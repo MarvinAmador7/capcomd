@@ -19,7 +19,8 @@ type Env = Record<string, string | undefined>;
  * Where a run starts and with which settings.
  * - `repo` given: an absolute path to a project checkout (the nearest .capcomd/config.json from it, written by
  *   `capcomd setup project`). The daemon's own repository settings are dropped, so the project's apply in full (then
- *   the user's ~/.capcomd/config.json fills gaps, as for any CLI command); the run starts in that directory, so the
+ *   the user's ~/.capcomd/config.json fills gaps, as for any CLI command); a project that names a sandbox
+ *   (CAPCOMD_SANDBOX in its config) gets it over the daemon's; the run starts in that directory, so the
  *   project's agent profiles and run defaults (checks, reviewer, target) apply too.
  * - `repo` omitted: the daemon's own settings and directory, when they name a repository (CAPCOMD_REPO).
  * Either way, no repository is a CreateRunError: a run without one would only record dry-run merges.
@@ -43,6 +44,9 @@ function contextFor(repo: string | undefined, base: Env, cwd: string): { cwd: st
 	if (!project) throw new CreateRunError(`${dir} is not a capcomd project (no .capcomd/config.json in it or above it). Run \`capcomd setup project\` in it first.`);
 	const env: Env = { ...base };
 	for (const k of REPO_ENV_KEYS) { delete env[`CAPCOMD_${k}`]; delete env[`RELAY_${k}`]; }
+	// So does the project's sandbox: a run of a project that names one runs there, not on the daemon's CAPCOMD_SANDBOX.
+	const projEnv = readConfig(project).env ?? {};
+	if (projEnv.CAPCOMD_SANDBOX || projEnv.RELAY_SANDBOX) { delete env.CAPCOMD_SANDBOX; delete env.RELAY_SANDBOX; }
 	// The project's own profiles (.capcomd/agents.json, which the CLI finds from its directory) win over the daemon's file.
 	if (existsSync(join(dir, ".capcomd", "agents.json"))) { delete env.CAPCOMD_AGENTS_FILE; delete env.RELAY_AGENTS_FILE; }
 	// CAPCOMD_NO_CONFIG (tests) skips the user's settings, never the project the request named.

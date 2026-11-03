@@ -128,27 +128,76 @@ export async function runGoal(runId: string): Promise<{ branch: string; base: st
 const onGoal = (goal: { branch: string } | undefined, target: string) => !!goal && goal.branch === target;
 
 const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,200}(?<![./])$/;
-/** Create `branch` on the remote from `from` if it doesn't exist yet (a per-run staging branch). */
-async function ensureBranch(runId: string, branch: string, from: string): Promise<{ created: boolean }> {
+/**
+ * Create `branch` on the remote at `from`'s tip if it doesn't exist yet (a per-run staging branch, or a run's goal
+ * branch). Ref work only: one `ls-remote`, a shallow fetch of `from` and a ref push, each bounded (no clone of the
+ * repository). `goal`: the branch is this run's goal branch; one that exists is used only when it is this run's own
+ * (`own`), or a leftover with nothing on it beyond `from` whose run has ended (`reusable`), then moved up to `from`'s tip.
+ */
+async function ensureBranch(runId: string, branch: string, from: string, o: { goal?: boolean; own?: boolean; reusable?: (sha: string) => Promise<string | null> } = {}): Promise<{ created: boolean; reused?: boolean; ms: number }> {
+  const t0 = Date.now();
   const { loadMergeConfig } = await import("../merge/config");
   const cfg = loadMergeConfig();
-  if (!cfg) throw new RelayError("config", "--target-from needs a repository (CAPCOMD_REPO)", "Set CAPCOMD_REPO, or create the branch yourself and pass only --target.");
-  const { openClone } = await import("../merge/repo");
-  const git = await openClone(cfg, `${runId}-setup`);
-  if (await git.revParse(`refs/remotes/origin/${branch}`)) return { created: false };
-  const base = await git.revParse(`refs/remotes/origin/${from}`);
-  if (!base) throw new RelayError("not_found", `--target-from ${from}: branch not found on ${cfg.remote}`, "Name an existing branch to cut the target from.");
-  const push = await git.run(["push", "--porcelain", "origin", `${base}:refs/heads/${branch}`]);
-  if (push.code !== 0 && !(await git.ok(["ls-remote", "--heads", "origin", branch]).catch(() => ""))) throw new RelayError("conflict", `could not create ${branch}: ${(push.stdout + push.stderr).trim().slice(-300)}`, "Check push access to the repository.");
-  return { created: true };
+  if (!cfg) {
+    if (o.goal) return { created: false, ms: 0 }; // no repository: nothing to cut (dry-run merges)
+    throw new RelayError("config", "--target-from needs a repository (CAPCOMD_REPO)", "Set CAPCOMD_REPO, or create the branch yourself and pass only --target.");
+  }
+  const R = await import("../merge/repo");
+  let heads: Record<string, string | null>;
+  try { heads = await R.remoteHeads(cfg, [branch, from]); }
+  catch (e) { throw new RelayError("config", `couldn't read ${cfg.remote}: ${(e as Error).message}`, "Check the network and your git access to the repository, then try again.", { retryable: true }); }
+  const have = heads[branch] ?? null, base = heads[from] ?? null;
+  if (have && (!o.goal || o.own)) return { created: false, ms: Date.now() - t0 };
+  const where = o.goal ? "--base" : "--target-from";
+  if (!base) throw new RelayError("not_found", `${where} ${from}: branch not found on ${cfg.remote}`, "Name an existing branch to cut it from.", { code: o.goal ? "base" : undefined });
+  if (have) {
+    // A goal branch that is already there: another run's. Only a leftover with nothing of its own may be taken over.
+    if (have === base) {
+      const why = o.reusable ? await o.reusable(have) : null;
+      if (why) throw new RelayError("conflict", `goal branch ${branch} already exists on the remote: ${why}`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+      return { created: false, reused: true, ms: Date.now() - t0 };
+    }
+    const why = o.reusable ? await o.reusable(have) : null;
+    if (why) throw new RelayError("conflict", `goal branch ${branch} already exists on the remote: ${why}`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+    const ff = await R.pointRemoteBranch(cfg, branch, from, base, { expect: have, fastForwardOnly: true, depth: 200 });
+    if (!ff.ok) throw new RelayError("conflict", `goal branch ${branch} already exists on the remote${ff.reason === "not_ancestor" ? ` with commits ${from} doesn't have` : ` and couldn't be moved to ${from} (${ff.detail})`}`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+    return { created: false, reused: true, ms: Date.now() - t0 };
+  }
+  const made = await R.pointRemoteBranch(cfg, branch, from, base, { expect: null });
+  if (!made.ok) {
+    // Someone else made it meanwhile: fine for a staging branch; a goal branch is checked again on the retry.
+    const now = await R.remoteHeads(cfg, [branch]).catch(() => ({} as Record<string, string | null>));
+    if (!now[branch] || o.goal) throw new RelayError("conflict", `could not create ${branch}: ${made.detail}`, "Check push access to the repository.");
+  }
+  return { created: true, ms: Date.now() - t0 };
 }
-/** The remote (CAPCOMD_REPO) has `branch` (false without a repository: the push that creates it reports that). */
-async function remoteHasBranch(branch: string): Promise<boolean> {
-  const cfg = (await import("../merge/config")).loadMergeConfig();
-  if (!cfg) return false;
-  const { Git } = await import("../merge/git");
-  const r = await new Git(process.cwd()).run(["ls-remote", "--heads", cfg.remote, `refs/heads/${branch}`], { timeoutMs: 20_000 });
-  return r.code === 0 && r.stdout.trim().length > 0;
+
+/**
+ * Why an existing goal branch can't be this new run's (null: it can): another run on this machine made it and hasn't
+ * ended. Its commit is at (or behind) the base, so nothing landed on it. Bounded reads; a run that doesn't answer counts
+ * as live.
+ */
+async function goalBranchOwner(runId: string, branch: string): Promise<string | null> {
+  const { within } = await import("../utils/within");
+  const rows = recentRuns(200).filter((r) => r.runId !== runId);
+  const live = await Promise.all(rows.map(async (r) => {
+    // Rows written before runs recorded their goal branch: read it from the run itself.
+    if (r.goalBranch !== undefined && r.goalBranch !== branch) return null;
+    try {
+      return await within((async () => {
+        const sc = await existingActor("scope", [r.runId]);
+        if (!sc) return null;
+        if (r.goalBranch === undefined) {
+          const g: any = (await sc.kvGet({ k: GOAL_KV }).catch(() => null))?.value;
+          if (g?.branch !== branch) return null;
+        }
+        const meta = await sc.getScope({});
+        return meta && !meta.ended ? r.runId : null;
+      })(), 5_000);
+    } catch { return r.goalBranch === branch ? r.runId : null; }
+  }));
+  const owner = live.find(Boolean);
+  return owner ? `run ${owner} uses it and hasn't ended (cancel it first, or pick a new name)` : null;
 }
 const CHECK_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -189,6 +238,11 @@ export async function runNew(o: RunNewOpts) {
   const c = client();
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
+  if (o.sandbox !== undefined) {
+    const n = o.sandbox.toLowerCase();
+    if (!(await import("../providers/registry")).isProviderName(n)) throw new RelayError("usage", `sandbox ${JSON.stringify(o.sandbox)} isn't one capcomd knows`, `Name one of: ${(await import("../providers/registry")).LISTED_PROVIDERS.join(", ")}.`, { code: "sandbox" });
+    o = { ...o, sandbox: n };
+  }
   if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
   if (o.goalBranch !== undefined || o.base !== undefined) {
     // A goal branch is the run's target, cut from its base: never "main" by default, never protected, never the base.
@@ -202,7 +256,8 @@ export async function runNew(o: RunNewOpts) {
     // A new run's goal branch is a new branch: another run's (or anyone's) work must not end up in this run's pull request.
     const prior = await runGoal(runId);
     if (prior && (prior.branch !== o.goalBranch || prior.base !== o.base)) throw new RelayError("conflict", `run ${runId} already has goal branch ${prior.branch} (from ${prior.base})`, "Start a new run for another goal branch.", { code: "goalBranch" });
-    if (!prior && (await remoteHasBranch(o.goalBranch))) throw new RelayError("conflict", `goal branch ${o.goalBranch} already exists on the remote`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+    // An existing goal branch is checked when it's cut (ensureBranch): this run's own, or a leftover of an ended run
+    // with nothing on it, is used; anything else is refused.
     o = { ...o, target: o.goalBranch, targetFrom: o.base };
   }
   if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from <base>.");
@@ -212,37 +267,49 @@ export async function runNew(o: RunNewOpts) {
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
   const repoEnv = repoEnvOf(process.env);
   if (Object.keys(repoEnv).length) await (await import("./state")).kvWrite(runId, { k: RUN_REPO_KV, value: repoEnv, writer: "operator" }).catch(() => {});
-  // The run's place (when it has its own) and that provider's settings as they are now (ADR-021 §2): a run keeps the
-  // idle machine lifetime it started with. A retry keeps the settings the first call recorded.
+  // The run's place and that provider's settings as they are now (ADR-021 §2): a run keeps the idle machine lifetime
+  // it started with. The place: the one asked for, else the project's (its .capcomd/config.json), else the user's
+  // config, read from the files now, not from the engine's environment (src/config/sandbox.ts); none of those: the
+  // engine's own. A retry keeps what the first call recorded.
+  let sandbox: { name: string | null; source: import("../config/sandbox").SandboxSource };
+  let branchSetup: { branch: string; from: string; created: boolean; reused?: boolean; ms: number } | null = null;
   {
     const RS = await import("../providers/run-sandbox");
     const prior = await c.scope.getOrCreate([runId]).kvGet({ k: RS.RUN_SANDBOX_KV }).catch(() => null) as { value?: unknown; deleted?: boolean } | null;
     const had = prior && !prior.deleted ? RS.parseRunSandbox(prior.value) : null;
-    let place: string = o.sandbox ?? "fake";
-    if (!o.sandbox) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
+    const choice = o.sandbox ? { name: o.sandbox, source: "run" as const } : (await import("../config/sandbox")).configuredSandbox(process.cwd());
+    if (!had && "invalid" in choice && choice.invalid) throw new RelayError("config", `CAPCOMD_SANDBOX=${choice.invalid} (${choice.path ?? "environment"}) isn't a sandbox capcomd knows`, `Set it to one of: ${(await import("../providers/registry")).LISTED_PROVIDERS.join(", ")}.`, { code: "sandbox" });
+    const name = o.sandbox ?? (had ? had.name : choice.name);
+    sandbox = { name, source: had && !o.sandbox && had.name !== choice.name ? "run" : choice.source };
+    let place: string = name ?? "fake";
+    if (!name) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
     const settings = had?.settings.idleLifetime !== undefined ? { idleLifetime: had.settings.idleLifetime } : (await import("../providers/settings")).settingsForRun(place);
-    const value = RS.runSandboxValue(o.sandbox, settings);
-    // Unchanged on a retry: not written again. A run on the daemon's own place still starts if this write fails
-    // (its machines then get the place's setting when they start); a run with its own place doesn't.
+    const value = RS.runSandboxValue(name, settings);
+    // Unchanged on a retry: not written again. A run on the engine's own place still starts if this write fails
+    // (its machines then get the place's setting when they start); a run with a place of its own doesn't.
     if (!prior || prior.deleted || JSON.stringify(prior.value) !== JSON.stringify(value)) {
       const put = (await import("./state")).kvWrite(runId, { k: RS.RUN_SANDBOX_KV, value, writer: "operator" });
-      await (o.sandbox ? put : put.catch(() => {}));
+      await (name ? put : put.catch(() => {}));
     }
   }
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
   if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
   if (o.target) {
-    if (o.targetFrom) await ensureBranch(runId, o.target, o.targetFrom);
+    if (o.targetFrom) {
+      const own = o.goalBranch ? !!(await runGoal(runId)) : false;
+      const b = await ensureBranch(runId, o.target, o.targetFrom, o.goalBranch ? { goal: true, own, reusable: () => goalBranchOwner(runId, o.goalBranch!) } : {});
+      branchSetup = { branch: o.target, from: o.targetFrom, created: b.created, ...(b.reused ? { reused: true } : {}), ms: b.ms };
+    }
     // The goal first: a merge that reads the target and finds no goal would go the repo's way (a PR, an approval).
     if (o.goalBranch) await (await import("./state")).kvWrite(runId, { k: GOAL_KV, value: { branch: o.goalBranch, base: o.base }, writer: "operator" });
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
   if (res.created) await (await import("./state")).kvWrite(runId, { k: TRACE_KV, value: { dir: (await import("../utils/tracing-simple")).traceDir() }, writer: "operator" }).catch(() => {});
-  if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now() });
+  if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}) });
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
-  return { runId, created: res.created, budget: res.budget, ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
+  return { runId, created: res.created, budget: res.budget, sandbox, ...(branchSetup ? { branchSetup } : {}), ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
 }
 
 /**
@@ -250,10 +317,10 @@ export async function runNew(o: RunNewOpts) {
  * daemon's run list. CAPCOMD_RUNS_INDEX names another file (the live e2e scripts keep their runs out of the user's list).
  */
 export const runsIndexPath = () => env("RUNS_INDEX") || join(stateDir(), "runs.jsonl");
-function recordRun(r: { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }) {
+function recordRun(r: { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number; goalBranch?: string }) {
   try { const p = runsIndexPath(); mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, JSON.stringify(r) + "\n"); } catch { /* an index, not state */ }
 }
-export function recentRuns(limit = 20): Array<{ runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }> {
+export function recentRuns(limit = 20): Array<{ runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number; goalBranch?: string }> {
   if (!existsSync(runsIndexPath())) return [];
   const rows = readFileSync(runsIndexPath(), "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
   const seen = new Set<string>();
@@ -296,6 +363,12 @@ export function spawnChecks(ref: string | null, source: Record<string, string | 
     throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   return { resolved, spec };
 }
+
+/** The id `spawnAgent` gives a top-level agent spawned with `key` (stable: the same run and key, the same id). The
+ *  scope actor's plannerOf computes the same for the key "planner". */
+export const rootAgentIdFor = (runId: string, key: string) => stableId("agt", `${runId}\0operator`, key);
+/** kv: the run's planner agent ({agentId}), written by `capcomd run` before it spawns the planner. Reserved. */
+export const PLANNER_KV = "_planner";
 
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
@@ -903,17 +976,28 @@ export async function getAgentOrThrow(runId: string, agentId: string): Promise<S
  * Wait until the agents are terminal; take over stale drivers. Timeout returns status "timeout". With `notices`
  * (ADR-019 §2), a stuck notice raised on an awaited agent while waiting ends the wait too, as `notices`, so the
  * waiter hears about trouble when it happens; one already showing when the wait began doesn't.
+ * `ops` (vfy-… / mrg-… ids) are waited on with the agents: an op is finished once it isn't running (passed, failed,
+ * merged, or parked for an approval); `ops` in the result has each one's record. With `any`, the first agent or op to
+ * finish ends the wait. An op left running by a caller that went away (another session, a restarted server) is resumed
+ * here, as a call with its id would (idempotent: the verifier shares one run per op).
  */
-export async function awaitAgents(runId: string, ids: string[], opts: { timeoutMs?: number; any?: boolean; notices?: boolean } = {}) {
+export async function awaitAgents(runId: string, ids: string[], opts: { timeoutMs?: number; any?: boolean; notices?: boolean; ops?: string[] } = {}) {
   await assertEngine();
   const deadline = Date.now() + (opts.timeoutMs ?? 30 * 60_000);
   const kicked = new Map<string, number>();
   const done = new Map<string, ScopeAgent>();
   const latest = new Map<string, ScopeAgent>();
   const noticeAt = new Map<string, number>();
+  const opIds = [...new Set(opts.ops ?? [])];
+  const opsDone = new Map<string, ReturnType<typeof opView>>();
+  const opsLatest = new Map<string, ReturnType<typeof opView>>();
+  const resumed = new Set<string>();
   // ADR-022: with the agent workflow, wait for the scope's "agents changed" event instead of polling every pollMs()
-  // (a slow poll stays as the fallback: an event missed while reconnecting, a kick that's due).
-  const feed = (await engineDrivesAgents(runId)) ? changeFeed(runId) : null;
+  // (a slow poll stays as the fallback: an event missed while reconnecting, a kick that's due). Ops always wait on the
+  // scope's "ops changed" event, and on the settling of an op this process runs.
+  const feed = opIds.length || (await engineDrivesAgents(runId)) ? changeFeed(runId) : null;
+  const s = client().scope.getOrCreate([runId]);
+  const opsView = () => opIds.map((i) => opsDone.get(i) ?? opsLatest.get(i)!);
   try {
   for (let poll = 0; ; poll++) {
     const noticed: ScopeAgent[] = [];
@@ -930,10 +1014,37 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       if (opts.notices && poll > 0 && at && at !== noticeAt.get(id)) noticed.push(a);
       noticeAt.set(id, at);
     }
-    if (opts.any && done.size) { const [first] = [...done.values()].sort((x, y) => x.updatedAt - y.updatedAt); return { first: view(first!), agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "running" })) }; }
-    if (done.size === ids.length) return { agents: ids.map((i) => view(done.get(i)!)) };
-    if (noticed.length) return { notices: noticed.map((a) => ({ agentId: a.agentId, ...a.notice! })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)) };
-    if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })) };
+    for (const id of opIds) {
+      if (opsDone.has(id)) continue;
+      const op = await s.getOp({ opId: id });
+      // Started here a moment ago and not recorded yet (a verify answers with its id before it has resolved its ref).
+      if (!op && inflightOps.has(id)) {
+        opsLatest.set(id, { id, kind: id.startsWith("vfy-") ? "verify" : "merge", state: "running" } as any);
+        if (feed) void inflightOps.get(id)!.then(feed.poke, feed.poke);
+        continue;
+      }
+      if (!op || (op.kind !== "verify" && op.kind !== "merge")) throw new RelayError("not_found", `${id} not found in ${runId}`, "Pass the vfy-… / mrg-… ids capcomd verify and capcomd merge returned.");
+      const v = opView(op);
+      opsLatest.set(id, v);
+      if (op.state !== "running") { opsDone.set(id, v); continue; }
+      const mine = inflightOps.get(id);
+      if (mine) { if (feed) void mine.then(feed.poke, feed.poke); }
+      else if (!resumed.has(id)) {
+        resumed.add(id);
+        const p = op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id }) : mergeRef({ runId, ref: op.data.ref as string, id });
+        p.catch(() => {}); // its record says how it ended; the next look reads it
+        if (feed) void p.then(feed.poke, feed.poke);
+      }
+    }
+    const anyDone = done.size + opsDone.size > 0;
+    const withOps = opIds.length ? { ops: opsView() } : {};
+    if (opts.any && anyDone) {
+      const first = done.size ? [...done.values()].sort((x, y) => x.updatedAt - y.updatedAt)[0] : null;
+      return { ...(first ? { first: view(first) } : {}), agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "running" })), ...withOps };
+    }
+    if (done.size === ids.length && opsDone.size === opIds.length) return { agents: ids.map((i) => view(done.get(i)!)), ...withOps };
+    if (noticed.length) return { notices: noticed.map((a) => ({ agentId: a.agentId, ...a.notice! })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)), ...withOps };
+    if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })), ...withOps };
     if (feed) await feed.wait(Math.min(eventFallbackMs(), Math.max(0, deadline - Date.now()) + 1)); else await sleep(pollMs());
   }
   } finally { feed?.close(); }
@@ -942,15 +1053,19 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
 const eventFallbackMs = () => Number(env("AWAIT_FALLBACK_MS") ?? 5000);
 
 /**
- * The scope's `agentsChanged` events (ADR-022) as a wait: resolves at the next event, or after `ms`. An event that
- * came while nobody waited makes the next wait return at once, so none is lost between a look and the wait.
+ * The scope's `agentsChanged` and `opsChanged` events (ADR-022) as a wait: resolves at the next event, or after `ms`.
+ * No wake-up is lost: an event (or a `poke`) that came while nobody waited makes the next wait return at once, and so
+ * does each (re)connect, since events sent before it can't have reached this connection.
  */
-function changeFeed(runId: string): { wait: (ms: number) => Promise<void>; close: () => void } | null {
+function changeFeed(runId: string): { wait: (ms: number) => Promise<void>; poke: () => void; close: () => void } | null {
   try {
     const conn: any = client().scope.getOrCreate([runId]).connect();
     let dirty = false;
     let wake: (() => void) | null = null;
-    conn.on("agentsChanged", () => { if (wake) { const w = wake; wake = null; w(); } else dirty = true; });
+    const poke = () => { if (wake) { const w = wake; wake = null; w(); } else dirty = true; };
+    conn.on("agentsChanged", poke);
+    conn.on("opsChanged", poke);
+    conn.onOpen?.(poke);
     conn.onError?.(() => {});
     return {
       wait: (ms) => new Promise<void>((resolve) => {
@@ -958,6 +1073,7 @@ function changeFeed(runId: string): { wait: (ms: number) => Promise<void>; close
         const t = setTimeout(() => { wake = null; resolve(); }, ms);
         wake = () => { clearTimeout(t); resolve(); };
       }),
+      poke,
       close: () => { try { void conn.dispose?.(); } catch {} },
     };
   } catch { return null; }
@@ -1078,8 +1194,8 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
   let runEnded = false;
   if (!agentId) {
     await c.run.getOrCreate([runId]).cancel({ runId });
-    // A run its agents didn't end (none ever ran: it never started, or its planner couldn't be spawned) ends here.
-    runEnded = await endRun(runId, "cancelled", reason ?? "run cancelled", by).then((r) => r.changed, () => false);
+    // A run-wide cancel ends the run as cancelled, whatever its agents did (it reads "cancelled" everywhere, never idle).
+    runEnded = await endRun(runId, "cancelled", reason ?? "run cancelled", by, { evenIfAgentsEnded: true }).then((r) => r.changed, () => false);
   }
   return { runId, target: agentId ?? null, cancelled: res.cancelled, affected: affected.map((a: { agentId: string; status: string }) => ({ agentId: a.agentId, status: a.status })), ...(runEnded ? { runEnded } : {}) };
 }
@@ -1088,13 +1204,13 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
  * Record that the run itself ended (scope RUN_ENDED → lifecycle run.failed / run.cancelled), unless it already has:
  * by its agents (the lifecycle feed's own fold) or an earlier end. `changed`: this call ended it.
  */
-export async function endRun(runId: string, state: "failed" | "cancelled", reason: string, by?: string | null): Promise<{ changed: boolean; state: string }> {
+export async function endRun(runId: string, state: "failed" | "cancelled", reason: string, by?: string | null, o: { evenIfAgentsEnded?: boolean } = {}): Promise<{ changed: boolean; state: string }> {
   await assertEngine();
   const s = client().scope.getOrCreate([runId]);
   const had = (await s.getScope({}))?.ended;
   if (had) return { changed: false, state: had.state };
   const { runPhase } = await import("../api/lifecycle");
-  if (runPhase(runId, await s.getEvents({})) === "ended") return { changed: false, state: "ended" };
+  if (!o.evenIfAgentsEnded && runPhase(runId, await s.getEvents({})) === "ended") return { changed: false, state: "ended" };
   const r = await s.endRun({ state, reason, by: by ?? null });
   if (r.changed && state === "failed") await client().run.getOrCreate([runId]).configFail({ runId, reason }).catch(() => {});
   return { changed: r.changed, state: r.ended.state };
@@ -1129,6 +1245,9 @@ async function resolveRef(runId: string, ref: string): Promise<{ branch: string;
 
 export interface VerifyOpts {
   runId: string; ref: string; checks?: string; check?: string; acceptance?: unknown; target?: string; key?: string;
+  /** The verification's id (vfy-…): an existing one is polled (attached to: its record, or its run until it ends); a new
+   *  one (with ref) is started under this id. Without it, the id comes from the key (a random one without a key). */
+  id?: string;
   /** Reviewer profile; default: the run's (`run new --reviewer`). In-VM verify never sets it. */
   reviewProfile?: string;
   /** Deprecated alias of reviewProfile. */
@@ -1144,8 +1263,23 @@ export async function finishedVerify(runId: string, vfyId: string) {
   const op = await client().scope.getOrCreate([runId]).getOp({ opId: vfyId }).catch(() => null);
   return op && op.kind === "verify" && op.state !== "running" ? opView(op) : null;
 }
-/** A verify with a review runs for minutes; calls for the same vfy while it runs share one run. */
-const inflightVerify = new Map<string, Promise<any>>();
+/** The verifies and merges this process runs, by id: a second call for one shares its run (never a second run here). */
+const inflightOps = new Map<string, Promise<any>>();
+/** Run `work` as the one run of op `id` in this process (the caller checked there is none). */
+function track<T>(id: string, work: () => Promise<T>): Promise<T> {
+  const p = work().finally(() => { if (inflightOps.get(id) === p) inflightOps.delete(id); });
+  inflightOps.set(id, p);
+  return p;
+}
+
+const sameJson = (a: unknown, b: unknown) => paramsHash(a ?? null) === paramsHash(b ?? null);
+/** A call for an op that exists conflicts only on a parameter it gives explicitly that differs from the recorded one:
+ *  a poll (the id or the key, and nothing else) never does. */
+function assertSameOp(id: string, op: import("../actors/scope").ScopeOp, given: Record<string, unknown>) {
+  const differ = Object.entries(given).filter(([k, v]) => v !== undefined && !sameJson(v, op.data[k])).map(([k]) => k);
+  if (differ.length) throw new RelayError("conflict", `${id} already exists with different parameters (${differ.join(", ")})`,
+    `Poll it with just its id (or the same key) and no other parameters, or pass a new key for a new ${op.kind}.`);
+}
 
 /**
  * Run checks (the repo's test command, --checks, or the operator-named --check) on the ref merged with the latest target, in
@@ -1153,14 +1287,26 @@ const inflightVerify = new Map<string, Promise<any>>();
  * With a reviewer (the run's, or --review-profile), a reviewer agent then reads the commit against the
  * acceptance criteria; both must pass, and no verdict is a fail.
  * Records vfy-… with the exact branch commit tested, which `merge --require` checks.
+ * Idempotent by id (the key's, or `id`): a call for one that exists returns its record, or shares its run while it
+ * runs (resuming it when the process that ran it is gone); only a parameter given explicitly that differs conflicts.
  */
 export function verifyRef(o: VerifyOpts): Promise<any> {
-  const id = verifyIdFor(o.runId, o.ref, o.key);
-  const live = inflightVerify.get(id);
-  if (live) return live;
-  const p = verifyOnce(o).finally(() => inflightVerify.delete(id));
-  inflightVerify.set(id, p);
-  return p;
+  const id = o.id ?? verifyIdFor(o.runId, o.ref, o.key);
+  if (!/^vfy-[A-Za-z0-9]+$/.test(id)) return Promise.reject(new RelayError("usage", `${id} isn't a verification id`, "Pass the vfy-… id capcomd verify returned."));
+  const given = { ref: o.ref || undefined, check: o.check, checks: o.check === undefined ? o.checks : undefined, acceptance: o.acceptance, target: o.target, reviewProfile: o.reviewProfile ?? o.judgeProfile };
+  const live = inflightOps.get(id);
+  if (live) return (async () => { const op = await client().scope.getOrCreate([o.runId]).getOp({ opId: id }); if (op) assertSameOp(id, op, given); return live; })();
+  return track(id, async () => {
+    await assertEngine();
+    const op = await client().scope.getOrCreate([o.runId]).getOp({ opId: id });
+    if (op) {
+      if (op.kind !== "verify") throw new RelayError("not_found", `${id} is a ${op.kind}, not a verification`, "Pass the vfy-… id capcomd verify returned.");
+      assertSameOp(id, op, given);
+      return op.state === "running" ? runVerify(o.runId, op, o.reviewParent) : opView(op);
+    }
+    if (!o.ref) throw new RelayError("not_found", `verification ${id} not found in ${o.runId}`, "Pass the vfy-… id capcomd verify returned, or a ref to start one.");
+    return verifyOnce(o, id);
+  });
 }
 
 /** The run's reviewer profile, if the operator set one. */
@@ -1178,10 +1324,14 @@ function reviewerSpec(profile: string): Record<string, any> | null {
 }
 
 interface Review { profile: string; agentId: string | null; passed: boolean; reasons: string[]; error?: string }
+interface ReviewTarget { runId: string; vfyId: string; profile: string; branch: string; sha: string; target: string; agentId: string | null; acceptance?: unknown; parent?: string; key?: string }
+type Reviewing = { agentId: string; sha: string; spec: Record<string, any> | null; startedAt: number } | { failed: Review };
 
-/** Spawn the reviewer for this verification (keyed: a retry reuses it), await it, read its verdict. Fails closed. */
-async function reviewRef(o: { runId: string; vfyId: string; profile: string; branch: string; sha: string; target: string; agentId: string | null; acceptance?: unknown; parent?: string }): Promise<Review> {
-  let reviewer: string | null = null;
+const reviewFailed = (o: ReviewTarget, reviewer: string | null, e: unknown): Review =>
+  ({ profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: `review failed: ${String((e as Error)?.message ?? e).slice(0, 300)}` });
+
+/** Spawn the reviewer for this verification (keyed: a retry reuses it). */
+async function startReview(o: ReviewTarget): Promise<Reviewing> {
   try {
     const spec = reviewerSpec(o.profile);
     const childTask = o.agentId ? (await getAgentOrThrow(o.runId, o.agentId)).task : null;
@@ -1190,57 +1340,113 @@ async function reviewRef(o: { runId: string; vfyId: string; profile: string; bra
     if (spec?.timeoutMs) requested.wallSeconds = Math.ceil(spec.timeoutMs / 1000);
     if (spec?.maxBudgetUsd) requested.usd = spec.maxBudgetUsd;
     const r = await spawnAgent({
-      runId: o.runId, task: reviewBrief({ criteria: o.acceptance, childTask }), profile: o.profile, key: `review-${o.vfyId}`,
+      runId: o.runId, task: reviewBrief({ criteria: o.acceptance, childTask }), profile: o.profile, key: o.key ?? `review-${o.vfyId}`,
       ...(o.parent ? { parent: o.parent } : {}), contract: { review: { sha: o.sha, branch: o.branch, target: o.target, of: o.agentId ?? o.branch } },
       ...(Object.keys(requested).length ? { budget: requested } : {}), review: true,
     });
-    reviewer = r.agentId;
-    const [a] = (await awaitAgents(o.runId, [r.agentId], { timeoutMs: spec?.timeoutMs ? spec.timeoutMs + 10 * 60_000 : Infinity })).agents as any[];
-    const v = a?.status === "done" ? (a.result?.verdict ?? null) : null;
-    if (v) return { profile: o.profile, agentId: reviewer, passed: v.passed === true, reasons: v.reasons ?? [] };
-    return { profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "reasons": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };
-  } catch (e) {
-    return { profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: `review failed: ${String((e as Error)?.message ?? e).slice(0, 300)}` };
-  }
+    return { agentId: r.agentId, sha: o.sha, spec, startedAt: Date.now() };
+  } catch (e) { return { failed: reviewFailed(o, null, e) }; }
 }
 
-async function verifyOnce(o: VerifyOpts) {
-  await assertEngine();
-  const c = client();
-  const s = c.scope.getOrCreate([o.runId]);
+/** Await the reviewer, read its verdict. Fails closed. */
+async function finishReview(o: ReviewTarget, started: Reviewing): Promise<Review> {
+  if ("failed" in started) return started.failed;
+  try {
+    const { agentId, spec } = started;
+    const [a] = (await awaitAgents(o.runId, [agentId], { timeoutMs: spec?.timeoutMs ? spec.timeoutMs + 10 * 60_000 : Infinity })).agents as any[];
+    const v = a?.status === "done" ? (a.result?.verdict ?? null) : null;
+    if (v) return { profile: o.profile, agentId, passed: v.passed === true, reasons: v.reasons ?? [] };
+    return { profile: o.profile, agentId, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "reasons": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };
+  } catch (e) { return reviewFailed(o, started.agentId, e); }
+}
+
+/** A reviewer started alongside the checks that turned out not to be needed (the checks failed, or the work had landed
+ *  already): stop it, best effort. */
+function dropReview(runId: string, started: Reviewing | null, why: string) {
+  if (started && !("failed" in started)) void cancelAgents(runId, started.agentId, why).catch(() => {});
+}
+
+/**
+ * Whether the reviewer starts with the checks instead of after them (CAPCOMD_REVIEW_PARALLEL=0 turns it off). The
+ * reviewer reads the agent's pushed commit, not the checks' result, so it needn't wait for them: a verify then takes
+ * about max(checks, review) instead of their sum. The gate is unchanged: both must pass, for the same commit (a reviewer
+ * that read another commit than the one the checks tested is replaced by one for the tested commit). The price: when the
+ * checks fail, the reviewer has already started, and is cancelled (a few seconds of its tokens).
+ */
+const reviewInParallel = () => env("REVIEW_PARALLEL") !== "0";
+
+async function verifyOnce(o: VerifyOpts, vfyId: string) {
+  const s = client().scope.getOrCreate([o.runId]);
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(o.runId);
   // No repository (cfg null) is a dry run: "main" only labels it, nothing is merged anywhere.
   const target = o.target ?? (await runTarget(o.runId)) ?? cfg?.target ?? "main";
-  const direct = onGoal(await runGoal(o.runId), target);
-  const { branch, agentId, label, pinnedCheck } = await resolveRef(o.runId, o.ref);
+  const { branch, agentId, pinnedCheck } = await resolveRef(o.runId, o.ref);
   if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
   // A child pinned to a check at spawn is verified with it unless the caller names another.
   if (o.check === undefined && !o.checks && pinnedCheck) o = { ...o, check: pinnedCheck };
   const checks = o.check !== undefined ? await namedCheck(o.runId, o.check) : o.checks;
-  const vfyId = verifyIdFor(o.runId, o.ref, o.key);
   const reviewProfile = o.reviewProfile ?? o.judgeProfile ?? (await runReviewer(o.runId));
   if (reviewProfile) reviewerSpec(reviewProfile); // an unknown reviewer is refused before anything runs
   // The record names the check and the exact command it ran; merge --require re-runs that command.
   const data = { ref: o.ref, agentId, branch, target, ...(o.check !== undefined ? { check: o.check } : {}), checks: checks ?? null, acceptance: o.acceptance ?? null, reviewProfile: reviewProfile ?? null };
   const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
-  const res: any = await c.verifier.getOrCreate([o.runId, vfyId]).verify({
-    verifierId: vfyId, taskId: label, branch, runId: o.runId, target, testOnly: true, ...(checks ? { testCommand: checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
+  return runVerify(o.runId, st.op, o.reviewParent);
+}
+
+/** Run (or resume: everything it calls is keyed by the op) a recorded verification, from its recorded parameters. */
+async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, reviewParent?: string) {
+  const t0 = Date.now();
+  const c = client();
+  const s = c.scope.getOrCreate([runId]);
+  const vfyId = op.id;
+  const d = op.data as { ref: string; agentId: string | null; branch: string; target: string; checks: string | null; acceptance: unknown; reviewProfile: string | null };
+  const { branch, agentId, target } = d;
+  const { label } = await resolveRef(runId, d.ref);
+  const direct = onGoal(await runGoal(runId), target);
+  const reviewProfile = d.reviewProfile ?? undefined;
+  const reviewOf = (sha: string, key?: string): ReviewTarget => ({ runId, vfyId, profile: reviewProfile!, branch, sha, target, agentId, acceptance: d.acceptance ?? undefined, ...(reviewParent ? { parent: reviewParent } : {}), ...(key ? { key } : {}) });
+  // The commit the agent pushed (its result), which the checks are about to test: the reviewer can read it already.
+  const pushed = agentId ? ((await getAgentOrThrow(runId, agentId)).result?.commit as string | undefined) : undefined;
+  const early = reviewProfile && pushed && reviewInParallel() ? await startReview(reviewOf(pushed)) : null;
+  const c0 = Date.now();
+  const res: any = await c.verifier.getOrCreate([runId, vfyId]).verify({
+    verifierId: vfyId, taskId: label, branch, runId, target, testOnly: true, ...(d.checks ? { testCommand: d.checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
+    ...(pushed ? { branchSha: pushed } : {}),
   });
+  const checksMs = Date.now() - c0;
   const out = res.outcome as import("../merge/types").MergeOutcome;
   // Already on the target (merged earlier): nothing new to check or review, so it passes as already merged.
   const alreadyMerged = out.status === "merged";
   const checksPassed = out.status === "verified" || alreadyMerged;
-  // Checks first (cheap, deterministic); the reviewer only reads a commit that already passes them.
-  const review = checksPassed && reviewProfile && out.status === "verified" && out.taskSha
-    ? await reviewRef({ runId: o.runId, vfyId, profile: reviewProfile, branch, sha: out.taskSha, target, agentId, acceptance: o.acceptance, ...(o.reviewParent ? { parent: o.reviewParent } : {}) })
-    : null;
+  let review: Review | null = null;
+  let reviewStarted: number | null = null;
+  if (checksPassed && reviewProfile && out.status === "verified" && out.taskSha) {
+    // The reviewer must have read the commit the checks tested; one that read another (the branch moved) is replaced.
+    let started = early && !("failed" in early) && early.sha !== out.taskSha ? (dropReview(runId, early, "replaced: it read another commit than the one the checks tested"), null) : early;
+    started ??= await startReview(reviewOf(out.taskSha, early ? `review-${vfyId}-${out.taskSha.slice(0, 12)}` : undefined));
+    reviewStarted = "failed" in started ? null : started.startedAt;
+    review = await finishReview(reviewOf(out.taskSha), started);
+  } else dropReview(runId, early, alreadyMerged ? "not needed: the work is on the target already" : "not needed: the checks failed");
   const pass = checksPassed && (review ? review.passed : true);
+  const g = out.timings ?? {};
+  const end = Date.now();
+  // Where the time went: the checks (fetch, integrate, run), the review (from its start; with the checks when it ran
+  // alongside them), and the wait for the target's lock.
+  const timings = {
+    totalMs: end - t0, checksMs, queueMs: g.lockWaitMs ?? 0,
+    ...(g.fetchMs !== undefined ? { fetchMs: g.fetchMs } : {}), ...(g.integrateMs !== undefined ? { integrateMs: g.integrateMs } : {}),
+    ...(g.checksMs !== undefined ? { checksRunMs: g.checksMs, checksWhere: g.checksWhere } : {}),
+    ...(review && reviewStarted ? { reviewMs: end - reviewStarted, reviewWith: reviewStarted < c0 + checksMs ? "checks" : "after_checks" } : {}),
+  };
   const result = {
     pass, branch, target, commit: out.status === "verified" ? (out.taskSha ?? null) : null, ...(alreadyMerged ? { alreadyMerged: true, mergedSha: out.sha } : {}),
+    // What the checks ran on: the branch put on the target (`sha`, the commit a merge pushes when the target is still `targetSha`).
+    ...(out.status === "verified" && out.sha && out.targetSha ? { tested: { sha: out.sha, targetSha: out.targetSha, ...(out.how ? { how: out.how } : {}) } } : {}),
     checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
     // `judge` mirrors `review` for callers of the old --judge-profile contract.
     ...(review ? { review, judge: { profile: review.profile, passed: review.passed, feedback: (review.error ?? review.reasons.join("; ")).slice(0, 1000) } } : {}),
+    timings,
   };
   const fin = opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
   // A failed check says how on the agent's result too, with the lines of its output that name the failure (the app's card).
@@ -1251,15 +1457,48 @@ async function verifyOnce(o: VerifyOpts) {
 
 export interface MergeOpts {
   runId: string; ref: string; require?: string; target?: string; operator?: boolean; key?: string;
+  /** The merge's id (mrg-…): an existing one is polled (its record, or its run until it ends); a new one (with ref and
+   *  require) is started under this id. Without it, the id comes from the key (a random one without a key). */
+  id?: string;
   /** In-VM merges: a protected target parks the merge for `capcomd approve <runId> <mrgId>` instead of refusing. */
   requestApproval?: boolean;
   /** The agent that asked for the merge (in-VM merges): it waits on the decision, so the approval shows on its column. */
   askedBy?: string;
 }
 
-/** Land a ref. Requires a passing vfy for that exact commit and target, unless --operator. */
+/** The merge target a call means: its own, else the run's, else the repository's, else "main" (a dry run's label). */
+async function mergeTargetOf(runId: string, target?: string): Promise<string> {
+  if (target) return target;
+  const runEnv = await (await import("../merge/run-config")).runEnv(runId);
+  return (await runTarget(runId)) ?? (await import("../merge/config")).loadMergeConfig(runEnv)?.target ?? "main";
+}
+
+/** The id a merge call gets: from its key (random without one). */
+export async function mergeIdFor(runId: string, ref: string, key?: string, target?: string): Promise<string> {
+  return stableId("mrg", `${runId}\0${ref}\0${await mergeTargetOf(runId, target)}`, key);
+}
+
+/** Land a ref. Requires a passing vfy for that exact commit and target, unless --operator. Idempotent by id, like verifyRef. */
 export async function mergeRef(o: MergeOpts) {
-  await assertEngine();
+  const id = o.id ?? (await mergeIdFor(o.runId, o.ref, o.key, o.target));
+  if (!/^mrg-[A-Za-z0-9]+$/.test(id)) throw new RelayError("usage", `${id} isn't a merge id`, "Pass the mrg-… id capcomd merge returned.");
+  const given = { ref: o.ref || undefined, require: o.require, target: o.target, operator: o.operator || undefined };
+  const live = inflightOps.get(id);
+  if (live) { const op = await client().scope.getOrCreate([o.runId]).getOp({ opId: id }); if (op) assertSameOp(id, op, given); return live; }
+  return track(id, async () => {
+    await assertEngine();
+    const op = await client().scope.getOrCreate([o.runId]).getOp({ opId: id });
+    if (op) {
+      if (op.kind !== "merge") throw new RelayError("not_found", `${id} is a ${op.kind}, not a merge`, "Pass the mrg-… id capcomd merge returned.");
+      assertSameOp(id, op, given);
+      return op.state === "running" ? executeMerge(o.runId, op) : opView(op);
+    }
+    if (!o.ref) throw new RelayError("not_found", `merge ${id} not found in ${o.runId}`, "Pass the mrg-… id capcomd merge returned, or a ref and require to start one.");
+    return startMerge(o, id);
+  });
+}
+
+async function startMerge(o: MergeOpts, mrgId: string) {
   const c = client();
   const s = c.scope.getOrCreate([o.runId]);
   const { isProtectedBranch } = await import("../utils/protected");
@@ -1284,7 +1523,6 @@ export async function mergeRef(o: MergeOpts) {
   // base, when the planner is done (it can't be a protected branch: `run new` refuses that).
   const needsApproval = !!cfg && !goal && isProtectedBranch(target, runEnv) && !o.operator;
   if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
-  const mrgId = stableId("mrg", `${o.runId}\0${o.ref}\0${target}`, o.key);
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
   // Who asked is not a parameter of the merge: a retry by another caller is the same merge.
   const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data: o.askedBy ? { ...data, askedBy: o.askedBy } : data }).catch(asRelay);
@@ -1302,8 +1540,17 @@ async function dropCheckpoints(runId: string, agentId: string) {
   if (cfg) await (await import("../merge/repo")).deleteRemoteRef(cfg, checkpointRef(agentId));
 }
 
-/** Run a recorded merge op: land its ref (only the verified commit, re-running the checks verify passed with). */
+/** Cleanups started after a merge was recorded (a remote round trip each), off the merge's path. */
+const cleanups = new Set<Promise<unknown>>();
+/** Wait (at most `ms`) for the cleanups this process started: a CLI that exits right after a merge calls it. */
+export async function settleCleanups(ms = 30_000) {
+  if (cleanups.size) await Promise.race([Promise.allSettled([...cleanups]), sleep(ms)]);
+}
+
+/** Run a recorded merge op: land its ref (only the verified commit; the fast path when the target hasn't moved since
+ *  the verify, else re-running the checks verify passed with). */
 async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp) {
+  const t0 = Date.now();
   const c = client();
   const s = c.scope.getOrCreate([runId]);
   const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null };
@@ -1311,19 +1558,29 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   // Re-run the checks that verification passed with (the target may have moved), not the repo default.
   const v = d.require ? await s.getOp({ opId: d.require }) : null;
   const checks = typeof v?.data.checks === "string" && v.data.checks ? (v.data.checks as string) : undefined;
+  // What the verification tested, for the exact commit this merge lands: pushed as it is while the target hasn't moved.
+  const tested = v?.result?.tested as { sha?: string; targetSha?: string; how?: string } | undefined;
+  const verified = d.expectSha && v?.result?.commit === d.expectSha && tested?.sha && tested.targetSha ? { sha: tested.sha, targetSha: tested.targetSha, ...(tested.how ? { how: tested.how } : {}) } : undefined;
   const direct = onGoal(await runGoal(runId), d.target);
   const res: any = await c.verifier.getOrCreate([runId, op.id]).verify({
     verifierId: op.id, taskId: label, branch: d.branch, runId, target: d.target, testOnly: false, ...(d.expectSha ? { expectSha: d.expectSha } : {}), ...(checks ? { testCommand: checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
+    ...(verified ? { verified } : {}),
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   const merged = out.status === "merged";
-  // Its checkpoints were only for continuing the work, which has landed now (best effort).
-  if (merged && d.agentId) await dropCheckpoints(runId, d.agentId).catch(() => {});
+  const g = out.timings ?? {};
+  const timings = { totalMs: Date.now() - t0, queueMs: g.lockWaitMs ?? 0, ...Object.fromEntries(Object.entries(g).filter(([k]) => k !== "lockWaitMs")) };
   const result = merged
-    ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}), ...(out.targetBefore ? { targetBefore: out.targetBefore } : {}) }
-    : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}) };
+    ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}), ...(out.targetBefore ? { targetBefore: out.targetBefore } : {}), timings }
+    : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), timings };
   const fin = opView(await s.finishOp({ opId: op.id, state: merged ? "merged" : "failed", result }));
   if (d.agentId) await s.annotateResult({ agentId: d.agentId, patch: { merge: { id: op.id, target: d.target, state: merged ? "merged" : "failed", ...(merged ? { sha: out.sha, ...(out.pr ? { pr: out.pr } : {}) } : { status: out.status }) } } }).catch(() => {});
+  // Its checkpoints were only for continuing the work, which has landed now: deleted after the record, off its path
+  // (a remote round trip), best effort.
+  if (merged && d.agentId) {
+    const p: Promise<unknown> = dropCheckpoints(runId, d.agentId).catch(() => {}).finally(() => cleanups.delete(p));
+    cleanups.add(p);
+  }
   return fin;
 }
 
@@ -1349,7 +1606,7 @@ export async function decideMerge(runId: string, mrgId: string, o: { approve: bo
   if (op.state !== "awaiting_approval" && op.state !== "running") return opView(op);
   const { decided, op: now } = await s.decideOp({ opId: mrgId, approve: o.approve, by: o.by ?? "operator", ...(o.reason ? { reason: o.reason } : {}) });
   // Approved (now, or by an earlier call that crashed before merging): run it.
-  if (o.approve && now.state === "running") return executeMerge(runId, now);
+  if (o.approve && now.state === "running") return inflightOps.get(mrgId) ?? track(mrgId, () => executeMerge(runId, now));
   if (!decided && now.state === "running") throw new RelayError("conflict", `${mrgId} is already merging`, "Wait for it, then check its state.");
   if (decided && !o.approve && typeof op.data.agentId === "string")
     await s.annotateResult({ agentId: op.data.agentId, patch: { merge: { id: mrgId, target: op.data.target ?? null, state: "denied" } } }).catch(() => {});

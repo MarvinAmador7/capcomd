@@ -89,6 +89,10 @@ export function writeConfig(path: string, patch: CapcomdConfig): CapcomdConfig {
 
 export interface Applied { user: string | null; project: string | null; keys: string[]; boxdKeyFrom: "env" | "keychain" | "file" | null }
 
+/** The values applyConfig put into process.env (a key whose value is still this one came from a config file, not the
+ *  environment the process was started with). */
+export const APPLIED_TO_PROCESS = new Map<string, string>();
+
 /**
  * Fill `env` with the persisted defaults (never overriding what's set). The boxd key comes from the OS
  * keychain when the user config says so and BOXD_API_KEY isn't already set.
@@ -100,7 +104,7 @@ export function applyConfig(env: Source = process.env, cwd = process.cwd(), keyc
   const project = readConfig(projectPath);
   const keys: string[] = [];
   for (const [k, v] of Object.entries({ ...(user.env ?? {}), ...(project.env ?? {}) })) {
-    if (env[k] === undefined && typeof v === "string") { env[k] = v; keys.push(k); }
+    if (env[k] === undefined && typeof v === "string") { env[k] = v; keys.push(k); if (env === process.env) APPLIED_TO_PROCESS.set(k, v); }
   }
   let boxdKeyFrom: Applied["boxdKeyFrom"] = env.BOXD_API_KEY ? "env" : null;
   if (!env.BOXD_API_KEY && user.boxdKey === "keychain") {

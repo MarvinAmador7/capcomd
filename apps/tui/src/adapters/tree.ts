@@ -81,7 +81,7 @@ function fromCliSpans(trace: Trace): AgentNode[] {
     if (s.attrs["agent.max_budget_usd"] !== undefined) cur.budget.usd = num(s.attrs["agent.max_budget_usd"]);
     if (s.attrs["agent.max_turns"] !== undefined) cur.budget.turns = num(s.attrs["agent.max_turns"]);
     if (s.status === "error") cur.status = "failed";
-    if (s.attrs["agent.error_kind"]) cur.errorKind = String(s.attrs["agent.error_kind"]);
+    if (s.attrs["agent.error_kind"] && s.attrs["agent.error_kind"] !== "cancelled") cur.errorKind = String(s.attrs["agent.error_kind"]);
     by.set(id, cur);
   }
   return [...by.values()];
@@ -96,7 +96,8 @@ export function attachErrorKinds(trace: Trace | null, by: Map<string, AgentNode>
   for (const s of trace?.spans ?? []) {
     const k = s.attrs["agent.error_kind"];
     const id = s.attrs["relay.agent_id"] as string | undefined;
-    if (k && id && by.has(id)) by.get(id)!.errorKind = String(k);
+    // A cancelled agent's status says so; its cancel isn't an error to show next to it.
+    if (k && k !== "cancelled" && id && by.has(id)) by.get(id)!.errorKind = String(k);
   }
 }
 

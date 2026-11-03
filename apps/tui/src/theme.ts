@@ -33,7 +33,7 @@ export const familyColor = (fam: string): string =>
   fam === "agent" ? c.accent : fam === "git" ? c.fg : fam === "relay" ? c.faint : c.dim;
 
 export const statusColor = (s: string): string =>
-  /fail|error|cancel/.test(s) ? c.err : /await|pending|stuck|block/.test(s) ? c.warn : /done|ok|complet|merged|success/.test(s) ? c.ok : /run|exec|leas/.test(s) ? c.accent : c.dim;
+  /fail|error/.test(s) ? c.err : /cancel|await|pending|stuck|block/.test(s) ? c.warn : /done|ok|complet|merged|success/.test(s) ? c.ok : /run|exec|leas/.test(s) ? c.accent : c.dim;
 
 /** Status marks from the approved glyph set (single-width, East-Asian-Width N). */
 export const statusGlyph = (s: string): string =>

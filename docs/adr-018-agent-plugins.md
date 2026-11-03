@@ -86,7 +86,7 @@ The host server exposes the primitives with the same names and shapes as the in-
 |---|---|---|
 | Discover | `capcomd_setup` (setup check: engine, provider, logins, project gates, profiles), `capcomd_profiles` | Read-only |
 | Runs | `capcomd_run_new`, `capcomd_runs`, `capcomd_tree`, `capcomd_inspect`, `capcomd_events`, `capcomd_trace` | `run_new` takes gates from the project (§4) |
-| Agents | `capcomd_spawn`, `capcomd_await` (`mode: all\|any`), `capcomd_send`, `capcomd_cancel` | `cancel` propagates |
+| Agents | `capcomd_spawn`, `capcomd_await` (`mode: all\|any`; agents, verifies and merges), `capcomd_send`, `capcomd_cancel` | `cancel` propagates |
 | Gates | `capcomd_verify`, `capcomd_merge`, `capcomd_approve` | `merge` needs `require: vfy-…`; approve: §4 |
 | Shared state | `capcomd_task` (`action: add\|list\|claim\|renew\|release\|done`), `capcomd_kv` (`get\|put\|cas\|del\|list`), `capcomd_budget` | Same as in-VM |
 
@@ -97,7 +97,10 @@ declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`), 
 **Waiting never blocks past the client.** `capcomd_await` and `capcomd_verify` take `timeoutMs` (default 25s,
 max 55s, under Codex's default 60s tool timeout) and return `{ done: [...], pending: [...], next }` when time runs
 out, with progress notifications while waiting where the client supports them; the agent calls again. Nothing is
-lost between calls: the run is durable and the agents keep working.
+lost between calls: the run is durable and the agents keep working. A verify or merge answers with its id
+(`timeoutMs: 0` starts it without waiting); `capcomd_verify {id}` / `capcomd_merge {id}` (or the same key and ref)
+poll it with no other parameters, and `capcomd_await {ops: [vfy-…, mrg-…], agents, mode: "any"}` waits on several
+verifies, merges and agents at once, answering when the first finishes (event-driven, 2026-11-03).
 
 The old `capcomd_run` (the recipe with the fake planner) is removed from the tool list until the recipe plans
 with a real agent (ROADMAP §2); the driver agent is the planner.

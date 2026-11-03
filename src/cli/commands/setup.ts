@@ -21,7 +21,15 @@ import { keychainGet, keychainKind, keychainSet } from "../../config/keychain";
 import { githubRepoOf, gitRoot, httpsRemote, isUserConfigDir, originHead, originUrl, parseBudget, planProject, projectValues, suggestCheck, writeProject } from "../../config/project-setup";
 import { prompter, type Prompter } from "../prompt";
 
-export interface Step { step: string; ok: boolean; detail: string; hint?: string }
+export interface Step {
+  step: string; ok: boolean; detail: string; hint?: string;
+  /** Works, but a command would make it better (e.g. a warm checkout in the env image): shown with its hint. */
+  advice?: boolean;
+  /** The command that fixes it or makes it better, as a person or an agent would run it. */
+  command?: string;
+  /** The "sandbox" step: the sandbox this project's runs use, and where that comes from. */
+  sandbox?: { name: string | null; source: string; path: string | null };
+}
 type Values = Record<string, unknown>;
 
 /** Run this CLI as a subprocess (inheriting the terminal for interactive steps like a login). */
@@ -229,7 +237,7 @@ export async function agentAccountsStep(p: Prompter, v: Values, log: (s: string)
  * 2. The project: repository, target, merge mode, a default check and reviewer, and the agent profiles. The questions
  * are asked here; the decisions and the writing are src/config/project-setup.ts's (POST /v1/projects calls it too).
  */
-export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): Promise<Step[]> {
+export async function projectStep(p: Prompter, v: Values, cwd = process.cwd(), log: (s: string) => void = () => {}): Promise<Step[]> {
   // The project's settings live in its checkout (.capcomd/): the one setup runs in, else the one the person names.
   // Never the home directory: its .capcomd/config.json is capcomd's user config, so the project would apply everywhere.
   const here = tildePath(cwd);
@@ -273,12 +281,65 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd()): 
     if ("error" in b) return [{ step: "project", ok: false, detail: b.error, hint: "Pass --budget 20 (USD per run), or leave it empty for no limit." }];
     cap = b.cap;
   }
+  // The project's sandbox (`--sandbox docker|boxd`): where its runs' agents and checks run, over your user config's.
+  let sandbox: string | null = null;
+  if (v.sandbox !== undefined) {
+    const R = await import("../../providers/registry");
+    const n = String(v.sandbox).trim().toLowerCase();
+    if (!R.isListedProvider(n)) return [{ step: "project", ok: false, detail: `--sandbox ${String(v.sandbox)}?`, hint: `Name where this project's agents run: ${R.LISTED_PROVIDERS.join(" or ")}.` }];
+    sandbox = n;
+  }
   const plan = planProject({ dir, repo, mode, target, check, agents, authOf, cap });
+  if (sandbox) plan.patch.env = { ...plan.patch.env, CAPCOMD_SANDBOX: sandbox };
   const { made, kept } = writeProject(plan);
+  // On the projects list the MCP server reads, so an agent's capcomd_projects (and capcomd_setup {project}) sees it now.
+  const P = await import("../../config/projects");
+  const listed = P.registerProject(dir, { makeDefault: v["default-project"] === true });
+  const env = await envImageStep(p, v, dir, log);
   return [
     { step: "project", ok: true, detail: `${repo} → ${target ?? "no target branch (each run asks for its base; --target B sets one)"} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${plan.configPath}` },
     { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${plan.agentsPath})` },
+    { step: "project list", ok: true, detail: P.registeredLine(listed, userConfigPath()) },
+    ...env,
   ];
+}
+
+/**
+ * Docker only: the env image agents of the project at `dir` boot from, and whether it holds a warm checkout of this
+ * repository (src/env/warm.ts). A step with the command when `capcomd env build --sandbox docker` would help; agents
+ * work without it (they clone and install), so a missing one is advice, not a failure.
+ */
+export async function envImageCheck(dir: string, o: { status?: typeof import("../../env/warm").warmTemplateStatus } = {}): Promise<Step[]> {
+  let env: Record<string, string | undefined>;
+  try { env = (await import("../../api/create-run")).launchContext(dir).env; } catch { return []; }
+  const w = await (o.status ?? (await import("../../env/warm")).warmTemplateStatus)(env);
+  if (w.state === "no-repo") return [];
+  return [{ step: "env image", ok: true, detail: w.detail, ...(w.ok ? {} : { advice: true }), ...(w.command ? { command: w.command, hint: `Run \`${w.command}\` in ${tildePath(dir)} (a few minutes): agents then start from a warm checkout with its dependencies installed instead of cloning.` } : {}) }];
+}
+
+/**
+ * After `setup project` on Docker: the env image check, and an offer to run the build when it would help (asked in a
+ * terminal; `--env-build` runs it without asking; `--yes` alone never starts it).
+ */
+async function envImageStep(p: Prompter, v: Values, dir: string, log: (s: string) => void): Promise<Step[]> {
+  const { configuredSandbox } = await import("../../config/sandbox");
+  if (configuredSandbox(dir).name !== "docker") return [];
+  const steps = await envImageCheck(dir);
+  const s = steps[0];
+  if (!s?.command || v["no-env-build"] === true) return steps;
+  const go = v["env-build"] === true || (p.interactive && await p.confirm(`${s.detail}. Build the Docker env image with a warm checkout now (\`${s.command}\`, a few minutes)?`, true));
+  if (!go) return steps;
+  log(`  ${s.command} (a few minutes)…`);
+  const b = self(["env", "build", "--sandbox", "docker"], { cwd: dir, inherit: p.interactive });
+  return [b.code === 0 ? { step: "env image", ok: true, detail: "built: agents start from a warm checkout of this repository" } : { step: "env image", ok: false, detail: "env build failed", command: s.command, hint: `Run \`${s.command}\` in ${tildePath(dir)} to see why.` }];
+}
+
+/** `setup agent` in a project's checkout: it goes on the projects list the MCP tools read (`--default-project`: the default). */
+function listProjectHere(v: Values, cwd: string): Step | null {
+  const P = require("../../config/projects") as typeof import("../../config/projects");
+  const dir = P.projectDirOf(cwd);
+  if (!dir || isUserConfigDir(dir)) return v["default-project"] === true ? { step: "project list", ok: false, detail: "--default-project needs a project here", hint: "Run it in your repository's checkout, after `capcomd setup project`." } : null;
+  return { step: "project list", ok: true, detail: P.registeredLine(P.registerProject(dir, { makeDefault: v["default-project"] === true }), userConfigPath()) };
 }
 
 /** `~/x` for a path under the home directory. */
@@ -316,7 +377,10 @@ export function claudePluginInstalled(): boolean {
 export async function agentIntegrationStep(p: Prompter, v: Values, cwd = process.cwd()): Promise<Step[]> {
   const steps: Step[] = [];
   const hermes = v["no-hermes"] === true ? null : await hermesStep(p, v, cwd);
-  if (v["no-skill"] === true || v["no-plugin"] === true) return [{ step: "agent plugin", ok: true, detail: "skipped" }, ...(hermes ? [hermes] : [])];
+  // In a project's checkout: it goes on the projects list the MCP tools read (with or without Hermes).
+  const listed = listProjectHere(v, cwd);
+  if (listed) steps.push(listed);
+  if (v["no-skill"] === true || v["no-plugin"] === true) return [...steps, { step: "agent plugin", ok: true, detail: "skipped" }, ...(hermes ? [hermes] : [])];
   const source = pluginMarketplace();
   const hasClaude = runs(claudeBin()), hasCodex = runs(codexBin());
   const tryIt = `Then ask your agent: "Use capcomd to fix the failing tests: one worker per file, each verified and reviewed, then merged."`;
@@ -338,12 +402,13 @@ export async function agentIntegrationStep(p: Prompter, v: Values, cwd = process
       ? { step: "codex plugin", ok, detail: `marketplace added (${source}): install capcomd from /plugins in Codex. ${tryIt}` }
       : { step: "codex plugin", ok, detail: `marketplace add failed: ${(r.stderr || r.stdout || "").trim().slice(0, 200)}`, hint: `Run \`codex plugin marketplace add ${source}\`, then install capcomd from /plugins.` });
   }
-  if (steps.length) return [...steps.filter((x) => x !== hermes), ...(hermes ? [hermes] : [])];
+  if (steps.some((x) => x !== listed)) return [...steps.filter((x) => x !== hermes), ...(hermes ? [hermes] : [])];
+  const pre = steps.filter((x) => x !== hermes);
   // No plugin host: the skill alone (agents with a shell use the CLI), and how to register the MCP server.
-  if (!(await p.confirm("No Claude Code or Codex CLI found. Install the capcomd skill for Claude Code anyway?", true))) return [{ step: "agent skill", ok: true, detail: "skipped" }];
+  if (!(await p.confirm("No Claude Code or Codex CLI found. Install the capcomd skill for Claude Code anyway?", true))) return [...pre, { step: "agent skill", ok: true, detail: "skipped" }];
   mkdirSync(legacySkill(), { recursive: true });
   writeFileSync(join(legacySkill(), "SKILL.md"), ORCHESTRATION_SKILL);
-  return [{ step: "agent skill", ok: true, detail: `skill installed in ${legacySkill()}; for the MCP tools: \`claude mcp add capcomd -- capcomd mcp\`. ${tryIt}` }];
+  return [...pre, { step: "agent skill", ok: true, detail: `skill installed in ${legacySkill()}; for the MCP tools: \`claude mcp add capcomd -- capcomd mcp\`. ${tryIt}` }];
 }
 
 /**
@@ -453,18 +518,31 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
   const user = readConfig(userConfigPath());
   const projPath = projectConfigPath(cwd);
   const proj = readConfig(projPath);
-  // Settings count wherever they come from: the config files (applied to the environment at startup) or the environment.
-  const sandbox = process.env.CAPCOMD_SANDBOX ?? process.env.RELAY_SANDBOX;
-  out.push({ step: "user config", ok: !!sandbox, detail: `sandbox ${sandbox ?? "unset"}${user.env?.CAPCOMD_SANDBOX ? ` (${userConfigPath()})` : sandbox ? " (environment)" : ""}`, ...(sandbox ? {} : { hint: "Run `capcomd setup`." }) });
-  const keyFrom = process.env.BOXD_API_KEY ? (user.boxdKey === "keychain" && keychainGet() === process.env.BOXD_API_KEY ? "keychain" : "environment") : null;
-  const machine = keyFrom ? null : await (await import("../../providers/boxd-machine")).boxdMachine();
-  if (machine?.credentials) out.push({ step: "boxd key", ok: true, detail: `none needed: ${machine.detail}` });
-  else out.push({ step: "boxd key", ok: !!keyFrom && (await validBoxdKey(process.env.BOXD_API_KEY!)), detail: keyFrom ? `from the ${keyFrom}` : machine?.inside ? `none (${machine.detail})` : "none", ...(keyFrom ? {} : { hint: "Run `capcomd setup accounts`." }) });
-  const auth = json(self(["auth", "status", "--json"]).stdout)?.profiles ?? [];
-  for (const a of auth) out.push({ step: `${a.agent} login`, ok: !!a.present && a.valid !== false, detail: a.detail ?? (a.present ? a.store : "not logged in") });
+  // The sandbox this project's runs use (what `run new` records with a run that doesn't name one), and where that
+  // comes from: src/config/sandbox.ts. Then that sandbox's own readiness: Docker answering, or a boxd key.
+  const { configuredSandbox, describeSandbox } = await import("../../config/sandbox");
+  const sb = configuredSandbox(cwd);
+  const sandbox = sb.name;
+  out.push({ step: "sandbox", ok: !!sandbox, detail: describeSandbox(sb), sandbox: { name: sandbox, source: sb.source, path: sb.path },
+    ...(sandbox ? {} : { hint: sb.invalid ? `Set CAPCOMD_SANDBOX to docker or boxd in ${sb.path ?? "the environment"}.` : "Pick where this project's agents run: `capcomd setup project --sandbox docker` (or boxd) in its checkout." }) });
+  if (sandbox === "docker") {
+    const d = await (await import("../../api/run-options")).dockerReachable();
+    out.push({ step: "docker", ok: d.ok, detail: d.ok ? "Docker answers" : d.reason ?? "Docker isn't running", ...(d.ok ? {} : { hint: "Start Docker (Docker Desktop, OrbStack or Colima)." }) });
+  }
+  if (sandbox === "boxd") {
+    const keyFrom = process.env.BOXD_API_KEY ? (user.boxdKey === "keychain" && keychainGet() === process.env.BOXD_API_KEY ? "keychain" : "environment") : null;
+    const machine = keyFrom ? null : await (await import("../../providers/boxd-machine")).boxdMachine();
+    if (machine?.credentials) out.push({ step: "boxd key", ok: true, detail: `none needed: ${machine.detail}` });
+    else out.push({ step: "boxd key", ok: !!keyFrom && (await validBoxdKey(process.env.BOXD_API_KEY!)), detail: keyFrom ? `from the ${keyFrom}` : machine?.inside ? `none (${machine.detail})` : "none", ...(keyFrom ? {} : { hint: "Run `capcomd setup accounts`." }) });
+  }
+  // Logins are per sandbox: the ones agents of this project's runs will use.
+  const auth = sandbox && !sandbox.startsWith("fake") ? json(self(["auth", "status", "--json"], { cwd, env: { CAPCOMD_SANDBOX: sandbox, RELAY_SANDBOX: undefined } }).stdout)?.profiles ?? [] : [];
+  for (const a of auth) out.push({ step: `${a.agent} login`, ok: !!a.present && a.valid !== false, detail: `${a.detail ?? (a.present ? a.store : "not logged in")}${sandbox ? ` (${sandbox})` : ""}`, ...(a.present ? {} : { hint: `Run \`capcomd auth login ${a.agent === "claude-code" ? "claude" : a.agent} --sandbox ${sandbox}\` in a terminal.` }) });
   const repo = process.env.CAPCOMD_REPO ?? proj.env?.CAPCOMD_REPO;
   const target = proj.run?.target ?? process.env.CAPCOMD_MERGE_TARGET ?? proj.env?.CAPCOMD_MERGE_TARGET ?? null;
   out.push({ step: "project", ok: !!repo, detail: repo ? `${repo} → ${target ?? "no target branch set (each run asks for its base)"}${projPath ? ` (${projPath})` : " (environment)"}` : "no .capcomd/config.json here or above", ...(repo ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
+  // Docker: the env image agents boot from, and whether it has this project's warm checkout (`capcomd env build`).
+  if (sandbox === "docker" && projPath) out.push(...(await envImageCheck(dirname(dirname(projPath)))));
   const plugin = runs(claudeBin()) && claudePluginInstalled();
   const skill = existsSync(join(legacySkill(), "SKILL.md"));
   const hermes = (await import("./hermes")).hermesStatus();
@@ -481,7 +559,7 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
 }
 
 export function formatSteps(steps: Step[]): string {
-  return steps.map((s) => `  ${s.ok ? "✓" : "✗"} ${s.step.padEnd(16)} ${s.detail}${s.hint && !s.ok ? `\n      → ${s.hint}` : ""}`).join("\n");
+  return steps.map((s) => `  ${!s.ok ? "✗" : s.advice ? "!" : "✓"} ${s.step.padEnd(16)} ${s.detail}${s.hint && (!s.ok || s.advice) ? `\n      → ${s.hint}` : ""}`).join("\n");
 }
 
 /** The whole wizard (or one part: demo | accounts | project | agent | service). */
@@ -503,7 +581,7 @@ export async function setup(part: string | undefined, v: Values, log: (s: string
     if (k.ok) steps.push(...(await agentAccountsStep(p, v, log)));
     if (!k.ok && all) return steps;
   }
-  if (all || part === "project") { section("Project"); steps.push(...(await projectStep(p, v))); }
+  if (all || part === "project") { section("Project"); steps.push(...(await projectStep(p, v, process.cwd(), log))); }
   if (all || part === "agent") { section("Agent integration"); steps.push(...(await agentIntegrationStep(p, v))); }
   if (all || part === "service") { section("Engine"); steps.push(await serviceStep(p, v)); }
   return steps;
