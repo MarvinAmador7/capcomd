@@ -13,8 +13,8 @@ import { Reveals } from "@/components/Reveals";
 import { FIXES, READOUTS } from "@/lib/perf";
 import { SITE } from "@/lib/site";
 
-const title = "capcomd Desktop · every agent, one native window";
-const description = "capcomd Desktop is a native Mac app, written entirely in Swift, that shows each coding agent in a run as its own column and calls on you only when one of them needs a decision. In development.";
+const title = "capcomd Desktop · in command of the swarm";
+const description = "capcomd Desktop is the native Mac app for capcomd's orchestration engine. Every agent in a swarm gets a live column; the engine reviews and merges, and brings you only the decisions that are yours. In development.";
 
 export const metadata: Metadata = {
   title, description,
@@ -44,9 +44,7 @@ const NATIVE_FACTS: Array<[string, string]> = [["0", "web views"], ["100%", "Swi
 
 const CREDITS = (
   <>
-    Photographs: <a href="https://commons.wikimedia.org/wiki/File:Overall_view_of_Mission_Control_on_first_day_of_Apollo_7_space_mission_(S68-49301).jpg">Mission Control on the first day of Apollo 7</a> and{" "}
-    <a href="https://commons.wikimedia.org/wiki/File:Activity_in_the_Mission_Control_Center_during_Apollo_14_(S71-17610).jpg">Mission Control during Apollo 14</a>, NASA Johnson Space Center, public domain;{" "}
-    <a href="https://commons.wikimedia.org/wiki/File:Apollo_Mission_Control_Consoles_(2342101272).jpg">Apollo Mission Control Consoles</a> by Mike Renlund, <a href="https://creativecommons.org/licenses/by/2.0">CC BY 2.0</a>. All via Wikimedia Commons.
+    Photograph: <a href="https://commons.wikimedia.org/wiki/File:Apollo_Mission_Control_Consoles_(2342101272).jpg">Apollo Mission Control Consoles</a> by Mike Renlund, <a href="https://creativecommons.org/licenses/by/2.0">CC BY 2.0</a>, via Wikimedia Commons.
   </>
 );
 
@@ -57,11 +55,11 @@ export default function DesktopPage() {
       <header className="dk-hero">
         <Nav home={false} current="desktop" />
         <div className="dk-hero__words">
-          <h1 className="dk-h1" data-load style={delay(60)}>Every agent. One native window.</h1>
-          <p className="dk-hero__lead" data-load style={delay(160)}>A Mac app written entirely in Swift. No web view, no Electron. Each coding agent in your run gets its own column, and you hear from them only when one needs a decision.</p>
+          <h1 className="dk-h1" data-load style={delay(60)}>In command.</h1>
+          <p className="dk-hero__lead" data-load style={delay(160)}>The Mac app for capcomd&apos;s orchestration engine. Every agent in the swarm gets a live column; the engine reviews and merges, and brings you only the decisions that are yours.</p>
           <p className="dk-hero__act" data-load style={delay(240)}>
             <a className="button" href={SITE.repo}>Watch on GitHub</a>
-            <span>In development for macOS. The CLI works today: <a href="/#install">install it</a>.</span>
+            <span>In development for macOS. The engine runs today from the CLI: <a href="/#install">install it</a>.</span>
           </p>
         </div>
         <div className="dk-stage">
@@ -70,10 +68,21 @@ export default function DesktopPage() {
       </header>
 
       <main id="main" tabIndex={-1}>
+
+        <StartLumen />
+        <Decks />
+        <ColumnLab />
+        <Keys />
+
+        <figure className="dk-rest" aria-labelledby="rest-cap">
+          <div className="dk-drift dk-drift--wide"><img src="/desktop/mcc-consoles.jpg" width={1920} height={1285} alt="The row of Apollo consoles in Historic Mission Control, their screens dark, hundreds of square keys along the desk." loading="lazy" decoding="async" /></div>
+          <figcaption id="rest-cap"><span>The Apollo consoles in Historic Mission Control, Houston: one station, one controller, a desk of keys.</span><span>Photograph: Mike Renlund, CC BY 2.0</span></figcaption>
+        </figure>
+
         <section className="dk-native" id="native" aria-labelledby="native-h">
           <div className="dk-native__head">
-            <h2 id="native-h" className="dk-h2" data-reveal>Native, all the way down.</h2>
-            <p className="dk-lead" data-reveal style={delay(80)}>No web view, no bundled browser, no JavaScript in the window. capcomd Desktop is Swift from the first pixel to the socket, built on the frameworks macOS itself is drawn with.</p>
+            <h2 id="native-h" className="dk-h2" data-reveal>Built for the Mac.</h2>
+            <p className="dk-lead" data-reveal style={delay(80)}>A swarm is dozens of live columns at once. So there is no web view and no JavaScript in the window: capcomd Desktop is Swift from the first pixel to the socket.</p>
             <dl className="dk-native__facts">
               {NATIVE_FACTS.map(([n, what], k) => <div key={what} data-reveal style={delay(140 + 60 * k)}><dt>{n}</dt><dd>{what}</dd></div>)}
             </dl>
@@ -88,35 +97,6 @@ export default function DesktopPage() {
             ))}
           </ol>
         </section>
-
-        <section className="dk-room" id="room" aria-labelledby="room-h">
-          <h2 id="room-h" className="dk-h2" data-reveal>One voice to the crew.</h2>
-          <p className="dk-lead dk-room__lead" data-reveal style={delay(80)}>
-            In Apollo&apos;s Mission Control every controller watched a console of their own, and one of them, the capsule communicator, spoke to the crew. capcomd is named after that seat. The desktop app gives every agent its own station and keeps you as the voice.
-          </p>
-          <figure className="dk-room__wide" data-reveal style={delay(140)}>
-            <div className="dk-drift"><img src="/desktop/mcc-apollo7.jpg" width={1920} height={1266} alt="Rows of consoles in Mission Control, Houston, each with a controller at it, the world map lit on the front wall." loading="lazy" decoding="async" /></div>
-            <figcaption>Mission Operations Control Room, Houston, on the first day of Apollo 7, 11 October 1968.</figcaption>
-          </figure>
-          <div className="dk-room__tile" data-reveal style={delay(220)}>
-            <img src="/desktop/mcc-apollo14.jpg" width={1920} height={1290} alt="A flight controller in a headset points at a console screen while another works through the flight plan, Apollo 14, 1971." loading="lazy" decoding="async" />
-            <ul>
-              <li><h3>A station per agent.</h3><p>Seventeen agents, seventeen columns, in tree order.</p></li>
-              <li><h3>One voice, yours.</h3><p>Every question an agent asks comes to you, and only those.</p></li>
-              <li><h3>Eyes where needed.</h3><p>Follow moves the reel only for an ask or a failure.</p></li>
-            </ul>
-          </div>
-        </section>
-
-        <ColumnLab />
-        <StartLumen />
-        <Decks />
-        <Keys />
-
-        <figure className="dk-rest" aria-labelledby="rest-cap">
-          <div className="dk-drift dk-drift--wide"><img src="/desktop/mcc-consoles.jpg" width={1920} height={1285} alt="The row of Apollo consoles in Historic Mission Control, their screens dark, hundreds of square keys along the desk." loading="lazy" decoding="async" /></div>
-          <figcaption id="rest-cap"><span>The Apollo consoles in Historic Mission Control, Houston: one station, one controller, a desk of keys.</span><span>Photograph: Mike Renlund, CC BY 2.0</span></figcaption>
-        </figure>
 
         <section className="dk-budgets" id="budgets" aria-labelledby="budgets-h">
           <div className="dk-budgets__head">
@@ -167,7 +147,7 @@ export default function DesktopPage() {
           </div>
           <div className="dk-today__words">
             <h2 id="today-h" className="dk-h2" data-reveal>The window today.</h2>
-            <p data-reveal style={delay(80)}>Drawn by the app&apos;s own test bench from the current build, with 17 agents of generated work. capcomd Desktop is in development; the first build will come out on GitHub. Until then, the CLI and the menu bar app run every crew on this page.</p>
+            <p data-reveal style={delay(80)}>Drawn by the app&apos;s own test bench from the current build, with 17 agents of generated work. capcomd Desktop is in development; the first build will come out on GitHub. Until then, the engine runs every swarm on this page from the CLI, and the menu bar app keeps watch.</p>
             <p className="dk-today__act" data-reveal style={delay(160)}>
               <a className="button" href={SITE.repo}>Watch on GitHub</a>
               <a href="/#install">Install the CLI</a>

@@ -2,7 +2,6 @@
 // (rebuilt from apps/menubar/design at true size; illustrations, not captures).
 import type { ReactNode } from "react";
 import { AgentSuffix, Bot, GoalComposer, GoalTitle, TryGoals } from "./crew";
-import { Durable } from "./Durable";
 import { RunAccordion, type Stage } from "./RunAccordion";
 import { Check, Hand, MarkFace, MenuBar, delay, step } from "./marks";
 
@@ -129,12 +128,11 @@ export function Run() {
       <div className="run__intro">
         <h2 id="run-title" data-reveal><span>Spawn, await,</span> <span>verify, merge.</span></h2>
         <div className="cols">
-          <p data-reveal style={delay(80)}>You tell your agent what you want: &ldquo;Use capcomd to fix the failing tests in <code>src/</code>: one worker per file, each verified and reviewed, then merged.&rdquo; It does the rest with five calls: <code>run new</code> sets the gates, <code>spawn</code> starts an agent in its own VM and branch, <code>await</code> waits on it, <code>verify</code> runs your checks (and a reviewer, if the run has one), and <code>merge</code> lands the commit that passed.</p>
+          <p data-reveal style={delay(80)}>Tell your agent the outcome: &ldquo;Use capcomd to fix the failing tests in <code>src/</code>, one worker per file.&rdquo; It does the rest with five calls: <code>run new</code>, <code>spawn</code>, <code>await</code>, <code>verify</code> and <code>merge</code>.</p>
           <p data-reveal style={delay(140)}>Building blocks, not a fixed workflow. Your agent drives them through the plugin, MCP or the CLI; so can an agent in a VM that may delegate, or you. Spawned agents keep working after your agent&apos;s session ends.</p>
         </div>
       </div>
       <RunAccordion stages={stages} initial="swarm" />
-      <Durable />
     </section>
   );
 }

@@ -1,155 +1,361 @@
 "use client";
 
-// "Start with a sentence", on a plum stage like the hero's: the goal line is the new project's composer, set at display size. Lumen, the planner-to-be,
-// sleeps in the empty column and smiles once you type (one change, no loop). The crew's columns wait beside it as
-// outlines. On Start, Lumen becomes the column's header with your goal as its first message, reads the repository,
-// writes a plan and spawns the crew one column at a time. With reduced motion the run lands at its last step at once.
+// "Swarms, made human", played as one shot in the desktop window, title bar and all. Lumen, the planner, is docked at
+// the left and stays there; the crew's columns slide in under it. When the window comes into view Lumen's composer
+// types a goal and sends it. Lumen reads the repository, writes a three-step plan and spawns a lead per step; each
+// lead spawns four workers and a critic. The camera follows the newest column to the last one, a spring whose speed
+// sets the blur. Then the work lands: workers finish, critics approve their diffs, leads merge their steps into the
+// goal branch, and Lumen's thread logs all of it until the one decision that is yours: open the pull request. The
+// title bar folds every subtree off screen into a stack, as the app does. With reduced motion the shot lands on its
+// last frame at once.
 import { useEffect, useRef, useState } from "react";
-import { Bot, Icon } from "./parts";
+import { botName } from "@/lib/vendor/bot-avatar.js";
+import { Bot, Decision, Icon } from "./parts";
 
-const LUMEN = "dk-0";
-const DEFAULT = "Backfill addriva_id for 2024";
-const PLANS: Record<string, string[]> = {
-  [DEFAULT]: ["Find every 2024 row missing addriva_id", "Backfill in batches of 5,000, resumable", "Check the counts before the merge"],
-  "Migrate matchkey to v3.2": ["List the call sites of matchkey v3.1", "Move them to v3.2 behind the old tests", "Diff the match rates on last week's data"],
-  "Fix proration rounding": ["Reproduce the cent drift in a failing test", "Round once, at the invoice line", "Check last month's invoices still match"],
-  "Add rate limiting to the API": ["Pick the routes and the limits", "Add a token bucket per API key", "Load-test it before the merge"],
-};
-const GENERIC = ["Read what the goal touches", "Make the change behind a test", "Review the diff before it merges"];
-const EXAMPLES = Object.keys(PLANS).slice(1);
-const CREW = [
-  { seed: "dk-47", role: "lead", name: "Nugget" },
-  { seed: "dk-8", role: "worker", name: "Tinker" },
-  { seed: "dk-201", role: "critic", name: "Mica" },
+const GOAL = "Backfill addriva_id for 2024";
+const BRANCH = "backfill-addriva-2024";
+const PLAN = ["Find every 2024 row missing addriva_id", "Backfill in batches of 5,000, resumable", "Check the counts before the merge"];
+
+type Role = "planner" | "lead" | "worker" | "critic";
+type Member = { seed: string; role: Role; label: string; step: number; part: number };
+const LEADS = ["dk-47", "dk-28", "dk-20"];
+const CRITICS = ["dk-201", "dk-202", "dk-207"];
+const WORKERS = [["dk-8", "d3ce"], ["dk-88", "4423"], ["dk-41", "9b1f"], ["dk-50", "7c2e"], ["dk-10", "a91c"], ["dk-12", "316f"],
+  ["dk-13", "e07b"], ["dk-23", "52d8"], ["dk-21", "b6a4"], ["dk-25", "0f39"], ["dk-32", "c2e1"], ["dk-34", "8d5a"]];
+// The swarm in tree order: Lumen, then per step its lead, four workers and the critic who reviews them.
+const SWARM: Member[] = [
+  { seed: "dk-0", role: "planner", label: "planner", step: -1, part: 0 },
+  ...LEADS.flatMap((seed, s): Member[] => [
+    { seed, role: "lead", label: `lead ${s + 1}`, step: s, part: 0 },
+    ...WORKERS.slice(s * 4, s * 4 + 4).map(([w, label], p): Member => ({ seed: w, role: "worker", label, step: s, part: p + 1 })),
+    { seed: CRITICS[s], role: "critic", label: `critic ${s + 1}`, step: s, part: 0 },
+  ]),
 ];
-// When each step of the run lands, in ms after Start: read, plan, the three spawns, then the lead hands out task 1.
-const AT = [0, 900, 1500, 2500, 3000, 3500, 4000, 5200];
-const LAST = AT.length - 1;
+const N = SWARM.length;
+const SIZE = 6; // a lead, four workers, a critic
+const at = (s: number, p: number) => 1 + s * SIZE + p; // p: 0 lead, 1–4 workers, 5 critic
+const GROUPS = LEADS.map((_, s) => Array.from({ length: SIZE }, (_, p) => at(s, p)));
+const name = (i: number) => botName(SWARM[i].seed);
+const diff = (i: number) => [18 + ((i * 37) % 60), 2 + ((i * 13) % 11)];
+const WORK: Array<Array<[string, string]>> = [
+  [["doc", "Read the code it touches"], ["term", "Writing a failing test"]],
+  [["check", "Read 38 files"], ["term", "Running the suite"]],
+  [["check", "Wrote the test"], ["term", "Making the change"]],
+  [["doc", "Read the last run's logs"], ["eye", "Checking the edge cases"]],
+];
 
+// The work, in ms after the last spawn: workers finish across the subtrees, each critic approves a diff a beat later,
+// and a lead merges its step once all four of its workers are approved. Then Lumen asks.
+type Ev = { t: number; kind: "done" | "ok" | "merge"; i: number };
+const EVENTS: Ev[] = (() => {
+  const evs: Ev[] = [];
+  const last = [0, 0, 0];
+  for (let p = 1; p <= 4; p++) for (let s = 0; s < 3; s++) {
+    const k = (p - 1) * 3 + s, i = at(s, p);
+    evs.push({ t: k * 230, kind: "done", i }, { t: k * 230 + 460, kind: "ok", i });
+    last[s] = Math.max(last[s], k * 230 + 460);
+  }
+  last.forEach((t, s) => evs.push({ t: t + 300, kind: "merge", i: at(s, 0) }));
+  return evs.sort((a, b) => a.t - b.t);
+})();
+const ASK_AT = EVENTS[EVENTS.length - 1].t + 450;
+
+// The shot, in ms after Send.
+const READ = 650, WRITE = 1150, SWARM_AT = 1500, SPAWN = 150, WORK_AT = SWARM_AT + N * SPAWN + 400;
+const GAP = 14, PAD = 14;
+
+type Phase = "idle" | "typing" | "run" | "done" | "rewind";
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const stamp = (ms: number) => clock(Math.floor(ms / 1000));
 
 export function StartLumen() {
-  const [goal, setGoal] = useState(DEFAULT);
-  const [typed, setTyped] = useState(false);
-  const [step, setStep] = useState(-1);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [typed, setTyped] = useState(0);
+  const [sent, setSent] = useState(false);
+  const [step, setStep] = useState(-1); // Lumen: 0 reading, 1 writing the plan, 2 the plan, 3 spawning
+  const [spawned, setSpawned] = useState(0); // columns after Lumen's
+  const [tick, setTick] = useState(0); // work events landed
+  const [answer, setAnswer] = useState<"pr" | "keep" | null>(null);
   const [secs, setSecs] = useState(1);
   const [cloud, setCloud] = useState(true);
-  const field = useRef<HTMLTextAreaElement>(null);
-  const started = step >= 0;
-  const plan = PLANS[goal.trim()] ?? GENERIC;
+  const [pin, setPin] = useState<number | null>(null);
+  const [geo, setGeo] = useState({ col: 400, left: 442, vw: 1200 });
+  const win = useRef<HTMLDivElement>(null);
+  const reel = useRef<HTMLDivElement>(null);
+  const track = useRef<HTMLDivElement>(null);
+  const timers = useRef<number[]>([]);
+  const cam = useRef({ x: 0, v: 0, to: 0, raf: 0, last: 0, still: false });
 
-  // The goal line grows to its wrapped height, so a long goal takes a second line instead of scrolling sideways.
+  const running = phase === "run" || phase === "done";
+  const live = running || phase === "rewind";
+  const count = live ? spawned : 0;
+  const past = EVENTS.slice(0, tick);
+  const done = new Set(past.filter((e) => e.kind === "done").map((e) => e.i));
+  const ok = new Set(past.filter((e) => e.kind === "ok").map((e) => e.i));
+  const merged = new Set(past.filter((e) => e.kind === "merge").map((e) => e.i));
+  const asking = phase === "done" && answer === null;
+
+  // Where the camera wants to be: on a pinned column, else far enough right to show the newest one.
+  const unit = geo.col + GAP;
+  const end = Math.max(0, geo.left + count * unit - GAP + PAD - geo.vw);
+  const to = phase === "rewind" ? 0 : pin !== null ? Math.min(end, Math.max(0, pin - 1) * unit) : end;
+  const shown = Math.max(1, Math.floor((geo.vw - geo.left + GAP / 2) / unit));
+  const first = 1 + Math.min(Math.round(to / unit), Math.max(0, count - shown));
+  const inView = (i: number) => i === 0 || (i >= first && i < first + shown && i <= count);
+
   useEffect(() => {
-    const el = field.current; if (!el) return;
-    const fit = () => { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; };
-    fit();
-    const ro = new ResizeObserver(fit); ro.observe(el);
+    const el = reel.current; if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const c = track.current?.firstElementChild as HTMLElement | null;
+      setGeo({ col: c?.offsetWidth || 400, left: c?.offsetLeft ?? 442, vw: el.clientWidth });
+    });
+    ro.observe(el);
     return () => ro.disconnect();
-  }, [goal]);
+  }, []);
+
+  // The camera: a spring toward `to`, written straight to the track. Its speed sets the blur.
+  useEffect(() => {
+    const c = cam.current; c.to = to;
+    const t = track.current; if (!t) return;
+    const paint = () => {
+      const blur = Math.min(3.5, Math.abs(c.v) / 900);
+      t.style.transform = `translate3d(${-c.x}px, 0, 0)`;
+      t.style.filter = blur > 0.25 ? `blur(${blur.toFixed(2)}px)` : "";
+    };
+    if (c.still) { c.x = to; c.v = 0; paint(); return; }
+    const frame = (now: number) => {
+      const dt = Math.min(0.032, (now - c.last) / 1000); c.last = now;
+      const k = 120, d = 2 * Math.sqrt(k) * 0.92;
+      c.v += (k * (c.to - c.x) - d * c.v) * dt; c.x += c.v * dt;
+      const still = Math.abs(c.to - c.x) < 0.5 && Math.abs(c.v) < 4;
+      if (still) { c.x = c.to; c.v = 0; }
+      paint();
+      c.raf = still ? 0 : requestAnimationFrame(frame);
+    };
+    if (!c.raf) { c.last = performance.now(); c.raf = requestAnimationFrame(frame); }
+  }, [to]);
+  useEffect(() => () => { const c = cam.current; cancelAnimationFrame(c.raf); c.raf = 0; timers.current.forEach(clearTimeout); timers.current = []; }, []);
 
   useEffect(() => {
-    if (!started) return;
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { setStep(LAST); setSecs(4); return; }
-    const timers = AT.slice(1).map((ms, i) => setTimeout(() => setStep((s) => Math.max(s, i + 1)), ms));
-    const tick = setInterval(() => setSecs((s) => s + 1), 1000);
-    return () => { timers.forEach(clearTimeout); clearInterval(tick); };
-  }, [started]);
+    if (phase !== "run") return;
+    const t = setInterval(() => setSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
 
-  const type = (v: string) => { setGoal(v.replace(/\n/g, " ")); setTyped(true); setStep(-1); setSecs(1); };
-  const start = () => { if (goal.trim() && !started) setStep(0); };
-  const reset = () => { setStep(-1); setSecs(1); field.current?.focus(); };
+  const later = (ms: number, f: () => void) => { timers.current.push(window.setTimeout(f, ms)); };
+
+  const play = () => {
+    timers.current.forEach(clearTimeout); timers.current = [];
+    setPin(null); setAnswer(null);
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      cam.current.still = true;
+      setTyped(GOAL.length); setSent(true); setStep(3); setSpawned(N - 1); setTick(EVENTS.length); setSecs(9); setPhase("done");
+      return;
+    }
+    const begin = () => {
+      setPhase("typing"); setTyped(0); setSent(false); setStep(-1); setSpawned(0); setTick(0); setSecs(1);
+      let t = 380;
+      for (let i = 1; i <= GOAL.length; i++) { t += 34 + ((i * 7) % 5) * 9; later(t, () => setTyped(i)); }
+      t += 420; later(t, () => setSent(true));
+      t += 180; later(t, () => { setPhase("run"); setStep(0); });
+      later(t + READ, () => setStep(1));
+      later(t + WRITE, () => setStep(2));
+      later(t + SWARM_AT, () => setStep(3));
+      for (let k = 1; k < N; k++) later(t + SWARM_AT + k * SPAWN, () => setSpawned(k));
+      EVENTS.forEach((e, n) => later(t + WORK_AT + e.t, () => setTick(n + 1)));
+      later(t + WORK_AT + ASK_AT, () => setPhase("done"));
+    };
+    if (phase === "idle") begin();
+    else { setPhase("rewind"); later(650, begin); }
+  };
+
+  // The shot starts once, when most of the window is on screen.
+  useEffect(() => {
+    const el = win.current; if (!el) return;
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) { io.disconnect(); play(); } }, { threshold: 0.45 });
+    io.observe(el);
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const typing = phase === "typing" || phase === "idle";
+  const shownGoal = phase === "typing" ? GOAL.slice(0, typed) : phase === "idle" ? "" : GOAL;
+  const where = cloud ? "in the cloud" : "on this Mac";
+  const when = (i: number) => stamp(SWARM_AT + i * SPAWN);
+  const wt = (e: Ev) => stamp(WORK_AT + e.t);
+  const plannerState = answer ? "done" : asking ? "waiting on you" : step >= 3 && spawned === N - 1 ? "watching the crew" : "working";
 
   return (
     <section className="dk-start" id="start" aria-labelledby="start-h">
       <div className="dk-start__head">
-        <h2 id="start-h" className="dk-h2" data-reveal>Start with a sentence.</h2>
-        <p className="dk-start__lead" data-reveal>Type the goal the way you&apos;d say it. Lumen, the planner, reads the repository, writes the plan and spawns the crew, each in its own column.</p>
+        <h2 id="start-h" className="dk-h2" data-reveal>Swarms, made human.</h2>
+        <p className="dk-start__lead" data-reveal>One goal becomes a tree of agents: a planner, a lead per step, workers under each lead, a critic on every diff. The engine runs the tree in parallel. Lumen stays docked beside it and logs every spawn, approval and merge, until the one decision that is yours.</p>
       </div>
 
-      <form className="dk-start__line" data-reveal onSubmit={(e) => { e.preventDefault(); start(); }}>
-        <label className="sr" htmlFor="dk-goal">The new project&apos;s goal</label>
-        <textarea id="dk-goal" ref={field} className="dk-goal" rows={1} value={goal} placeholder="Describe the goal…" spellCheck={false} autoComplete="off" maxLength={80}
-          onChange={(e) => type(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); start(); } }} />
-        <div className="dk-start__act">
-          {started ? (
-            <button type="button" className="dk-start__go is-again" onClick={reset}>Try another</button>
-          ) : (
-            <button type="submit" className="dk-start__go" disabled={!goal.trim()}>Start <Icon name="ret" size={18} /></button>
-          )}
-          <p className="dk-start__try"><span>Or try</span>{EXAMPLES.map((x) => <button key={x} type="button" className="dk-ex" aria-pressed={goal === x} onClick={() => type(x)}>{x}</button>)}</p>
-        </div>
-      </form>
+      <div className="dk-start__act" data-reveal>
+        <p className="dk-start__note" aria-live="polite">
+          {answer === "pr" ? `Pull request opened from ${BRANCH}.`
+            : answer === "keep" ? `The work stays on ${BRANCH}.`
+            : phase === "done" ? `${N} agents, ${ok.size} diffs approved, ${merged.size} steps merged ${where}. One decision is waiting for you.`
+            : running ? `Planning against dev ${where}, then assigning the steps.`
+            : "Waiting for a goal."}
+        </p>
+        <button type="button" className="dk-start__go" onClick={play} disabled={phase === "typing" || phase === "run" || phase === "rewind"}>Replay</button>
+      </div>
 
-      <p className="dk-start__note" aria-live="polite">
-        {!started ? "Press Start. The crew's columns fill the space beside Lumen as it spawns them."
-          : step < LAST ? `Lumen is planning ${cloud ? "in the cloud" : "on this Mac"}.`
-          : `Four columns from one sentence, running ${cloud ? "in the cloud" : "on this Mac"}. You hear from them when one needs a decision.`}
-      </p>
-
-      <div className="dk-board" data-ui data-reveal>
-        <div className="dk-new" role="group" aria-label="The new project's column">
-          {started ? (
-            <div className="dk-col__head"><Bot seed={LUMEN} role="planner" size="small" className="dk-col__bot" /><b>planner</b><span className="dk-dim">Lumen</span><span className="dk-st">· {step < LAST ? "working" : "waiting on the crew"}</span><span className="dk-col__clock">{clock(secs)}</span></div>
-          ) : null}
-          <div className="dk-new__body">
-            {started ? (
-              <div className="dk-thread" aria-live="polite">
-                <div className="dk-hand dk-hand--you"><p><b>You</b></p><p>{goal}</p></div>
-                {step < 1 ? <Tool icon="doc" live t={clock(secs)}>Reading the repository</Tool> : <Tool icon="check" ok t="0:01">Read 214 files on main</Tool>}
-                {step >= 2 ? (step < 3 ? <Tool icon="doc" live t={clock(secs)}>Writing the plan</Tool> : <Tool icon="check" ok t="0:02">Wrote the plan</Tool>) : null}
-                {step >= 3 ? <ol className="dk-plan">{plan.map((p) => <li key={p}>{p}</li>)}</ol> : null}
-                {step >= 4 ? <Tool icon="spawn" t={clock(Math.min(secs, 4))}>Spawned {CREW.slice(0, step - 3).map((c) => c.role).join(", ")}</Tool> : null}
-              </div>
-            ) : (
-              <div className="dk-lumen">
-                <Bot seed={LUMEN} role="planner" size="full" mood={typed ? "happy" : "sleepy"} className="dk-lumen__bot" />
-                <p>Hi, I&apos;m <b>Lumen</b>. What are we building?</p>
-              </div>
-            )}
+      <div className="dk-shot" ref={win} data-ui data-reveal role="group" aria-label="The capcomd Desktop window: a new project, its planner docked at the left and the crew it spawns">
+        <div className="dk-bar">
+          <span className="dk-lights" aria-hidden="true"><i /><i /><i /></span>
+          <div className="dk-open">
+            <span className="dk-open__name"><Icon name={cloud ? "cloud" : "laptop"} size={17} /><span><b>{running ? GOAL : "New project"}</b><small>{cloud ? "Cloud" : "Local"}{running ? ` · ${clock(secs)} · ${count + 1} agent${count ? "s" : ""}` : " · not started"}</small></span></span>
+            <Tabs show={live} count={count} inView={inView} asking={asking} onPick={phase === "done" ? setPin : undefined} />
           </div>
-          <div className={`dk-card${started ? " is-sent" : ""}`}>
-            <p className="dk-card__chips"><span className="dk-chip"><Icon name="folder" size={13} />my-app</span><span className="dk-dim"><Icon name="branch" size={13} /> main</span></p>
-            <p className="dk-card__goal">{started ? <span className="dk-dim">Reply to Lumen…</span> : goal || <span className="dk-dim">Describe the goal…</span>}</p>
-            <div className="dk-card__tools">
-              <span className="dk-round" aria-hidden="true"><Icon name="plus" size={14} /></span>
-              <span className="dk-local" role="radiogroup" aria-label="Where it runs">
-                <button type="button" role="radio" aria-checked={!cloud} onClick={() => setCloud(false)}><Icon name="laptop" size={14} />Local</button>
-                <button type="button" role="radio" aria-checked={cloud} onClick={() => setCloud(true)}><Icon name="cloud" size={14} />Cloud</button>
-              </span>
-              <span className="dk-dim dk-model">Opus 5.5</span>
-              <span className="dk-mic" aria-hidden="true"><Icon name="mic" size={15} /></span>
-              <button type="button" className="dk-go" onClick={start} disabled={started} aria-label="Start"><Icon name="up" size={15} /></button>
+          <span className="dk-bar__end" aria-hidden="true"><Icon name="cmd" size={17} /><Icon name="plus" size={17} /></span>
+        </div>
+
+        <div className="dk-shot__body">
+          <div className="dk-dock">
+            <section className={`dk-col dk-col--lumen${asking ? " is-asks" : ""}`} aria-label="planner Lumen, docked">
+              {live ? (
+                <div className="dk-col__head"><Bot seed="dk-0" role="planner" size="small" className="dk-col__bot" /><b>planner</b><span className="dk-dim">Lumen</span><span className={`dk-st${asking ? " dk-st--asks" : answer ? " dk-st--merged" : ""}`}>· {plannerState}</span><span className="dk-col__clock">{clock(secs)}</span></div>
+              ) : null}
+              <div className="dk-new__body">
+                {live ? (
+                  <div className="dk-thread dk-feed">
+                    <div className="dk-hand dk-hand--you"><p><b>You</b></p><p>{GOAL}</p></div>
+                    {step < 1 ? <Tool icon="doc" live t={clock(secs)}>Reading the repository</Tool> : <Tool icon="check" ok t="0:01">Read 214 files on dev</Tool>}
+                    {step >= 1 ? (step < 2 ? <Tool icon="doc" live t={clock(secs)}>Writing the plan</Tool> : <Tool icon="check" ok t="0:01">Wrote the plan</Tool>) : null}
+                    {step >= 2 ? <ol className="dk-plan">{PLAN.map((p) => <li key={p}>{p}</li>)}</ol> : null}
+                    {LEADS.flatMap((_, s) => {
+                      const l = at(s, 0), c = at(s, SIZE - 1);
+                      return [
+                        count >= l ? <Tool key={`l${s}`} icon="spawn" t={when(l)}>Spawned lead {s + 1} · {name(l)}</Tool> : null,
+                        count >= c ? <Tool key={`c${s}`} icon="spawn" t={when(c)}>{name(l)} spawned four workers and a critic</Tool> : null,
+                      ];
+                    })}
+                    {past.map((e) => e.kind === "ok"
+                      ? <Tool key={`ok${e.i}`} icon="check" ok t={wt(e)}>{name(at(SWARM[e.i].step, SIZE - 1))} approved worker {SWARM[e.i].label} <span className="dk-dim">+{diff(e.i)[0]} −{diff(e.i)[1]}</span></Tool>
+                      : e.kind === "merge"
+                        ? <div key={`m${e.i}`} className="dk-hand"><p><b>lead {SWARM[e.i].step + 1}</b> <span className="dk-dim">handed back</span></p><p>Step {SWARM[e.i].step + 1} is merged into {BRANCH}.</p></div>
+                        : null)}
+                    {answer === "pr" ? <Tool icon="check" ok t={clock(secs)}>Opened a pull request from {BRANCH}</Tool> : null}
+                    {answer === "keep" ? <Tool icon="check" t={clock(secs)}>Kept the work on {BRANCH}</Tool> : null}
+                  </div>
+                ) : (
+                  <div className="dk-lumen">
+                    <Bot seed="dk-0" role="planner" size="full" mood={phase === "typing" ? "happy" : "sleepy"} className="dk-lumen__bot" />
+                    <p>Hi, I&apos;m <b>Lumen</b>. What are we building?</p>
+                  </div>
+                )}
+              </div>
+              {asking ? (
+                <div onKeyDown={(e) => { if (e.key === "Enter" && !(e.target as HTMLElement).closest(".dk-b--deny")) { e.preventDefault(); setAnswer("pr"); } }}>
+                  <Decision title={`Open a pull request from ${BRANCH}?`} sub={`3 steps merged · 12 diffs approved · ${N} agents`} onApprove={() => setAnswer("pr")} onDeny={() => setAnswer("keep")} />
+                </div>
+              ) : (
+                <div className={`dk-card${sent ? " is-sent" : ""}`}>
+                  <p className="dk-card__chips"><span className="dk-chip"><Icon name="folder" size={13} />my-app</span><span className="dk-dim"><Icon name="branch" size={13} /> dev</span></p>
+                  <p className="dk-card__goal">{sent ? <span className="dk-dim">Reply to Lumen…</span> : <>{shownGoal}{typing ? <i className="dk-caret" /> : null}</>}</p>
+                  <div className="dk-card__tools">
+                    <span className="dk-round" aria-hidden="true"><Icon name="plus" size={14} /></span>
+                    <span className="dk-local" role="radiogroup" aria-label="Where it runs">
+                      <button type="button" role="radio" aria-checked={!cloud} onClick={() => setCloud(false)}><Icon name="laptop" size={14} />Local</button>
+                      <button type="button" role="radio" aria-checked={cloud} onClick={() => setCloud(true)}><Icon name="cloud" size={14} />Cloud</button>
+                    </span>
+                    <span className="dk-dim dk-model">Opus 5.5</span>
+                    <span className="dk-mic" aria-hidden="true"><Icon name="mic" size={15} /></span>
+                    <span className={`dk-go${phase === "typing" && typed === GOAL.length ? " is-press" : ""}`} aria-hidden="true"><Icon name="up" size={15} /></span>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+
+          <div className="dk-shot__reel" ref={reel}>
+            <div className="dk-shot__track" ref={track}>
+              {SWARM.slice(1).map((m, j) => {
+                const i = j + 1;
+                if (!(live && i <= spawned)) return <div key={m.seed} className="dk-col is-ghost" aria-hidden="true" />;
+                const st = status(m, i, done, ok, merged);
+                return (
+                  <section key={m.seed} className="dk-col is-in" aria-label={`${m.role} ${m.label}`}>
+                    <div className="dk-col__head"><Bot seed={m.seed} role={m.role} size="small" className="dk-col__bot" /><b>{m.role}</b><span className="dk-id">{m.role === "worker" ? m.label : `step ${m.step + 1}`}</span><span className="dk-dim">{botName(m.seed)}</span><span className={`dk-st${st === "approved" || st === "merged" || st === "done" ? " dk-st--merged" : ""}`}>· {st}</span><span className="dk-col__clock">{clock(Math.max(0, secs - 3))}</span></div>
+                    <div className="dk-thread">{say(m, i, done, ok, merged)}</div>
+                    <p className="dk-box">Tell {m.role === "worker" ? `worker ${m.label}` : m.label}…</p>
+                  </section>
+                );
+              })}
             </div>
           </div>
         </div>
-
-        <div className="dk-space" aria-label="The crew's columns">
-          {CREW.map((c, i) => {
-            const on = step >= 4 + i;
-            return (
-              <div key={c.seed} className={`dk-stub${on ? " is-on" : ""}`}>
-                <div className="dk-col__head"><Bot seed={c.seed} role={c.role} size="small" className="dk-col__bot" /><b>{c.role}</b><span className="dk-dim">{on ? c.name : "not spawned"}</span>{on ? <span className="dk-st">· {i === 2 || (i === 1 && step < LAST) ? "waiting" : "working"}</span> : null}</div>
-                {on ? <div className="dk-thread">{crewLines(i, step, plan)}</div> : null}
-              </div>
-            );
-          })}
-        </div>
       </div>
-
     </section>
   );
 }
 
-/** What each crew column shows once it is spawned: the lead reads the plan and hands task 1 to the worker. */
-function crewLines(i: number, step: number, plan: string[]) {
-  const handed = step >= LAST;
-  if (i === 0) return handed
-    ? <><Tool icon="check" ok t="0:01">Read Lumen&apos;s plan</Tool><Tool icon="spawn" t="0:01">Gave task 1 to Tinker</Tool></>
-    : <Tool icon="doc" live t="0:00">Reading Lumen&apos;s plan</Tool>;
-  if (i === 1) return handed
-    ? <><div className="dk-hand"><p><b>Nugget</b> <span className="dk-dim">task 1</span></p><p>{plan[0]}</p></div><Tool icon="term" live t="0:00">Working on it</Tool></>
-    : <Tool icon="term" t="0:00">Waiting for a task</Tool>;
-  return <Tool icon="eye" t="0:00">Waiting for the first diff</Tool>;
+/** The title bar's crew: Lumen, docked, then every subtree on screen fanned out into tabs and the rest folded into a
+ * stack. A bracket marks the columns on screen; after the shot a tab moves the camera to its column. */
+function Tabs({ show, count, inView, asking, onPick }: { show: boolean; count: number; inView: (i: number) => boolean; asking: boolean; onPick?: (i: number) => void }) {
+  if (!show) return null;
+  type T = { key: string; i: number; stack?: number[] };
+  const tabs: T[] = [];
+  for (const g of GROUPS) {
+    const here = g.filter((i) => i <= count);
+    if (!here.length) continue;
+    if (here.some((i) => i > 0 && inView(i))) here.forEach((i) => tabs.push({ key: SWARM[i].seed, i }));
+    else tabs.push({ key: `stack-${here[0]}`, i: here[0], stack: here });
+  }
+  const on = tabs.map((t) => !t.stack && inView(t.i));
+  const lo = on.indexOf(true), hi = on.lastIndexOf(true);
+  const tab = (t: T, cls: string, pressed: boolean) => (
+    <button key={t.key} type="button" tabIndex={onPick ? 0 : -1} aria-pressed={pressed}
+      className={`dk-tab${cls}${t.stack ? " is-stack" : ""}`} onClick={() => onPick?.(t.i)}>
+      {t.stack ? <span className="dk-heads">{t.stack.slice(0, 3).map((i) => <Bot key={i} seed={SWARM[i].seed} role={SWARM[i].role} />)}</span> : <Bot seed={SWARM[t.i].seed} role={SWARM[t.i].role} />}
+      <span>{SWARM[t.i].label}{t.stack ? <small> {t.stack.length}</small> : null}{t.i === 0 && asking ? <em> asks</em> : null}</span>
+    </button>
+  );
+  return (
+    <div className="dk-tabs" role="group" aria-label="Crew, in tree order">
+      {tab({ key: "planner", i: 0 }, asking ? " is-asks" : " is-on is-first is-last is-dock", false)}
+      {tabs.map((t, k) => tab(t, `${on[k] ? " is-on" : ""}${k === lo ? " is-first" : ""}${k === hi ? " is-last" : ""}`, k === lo))}
+    </div>
+  );
+}
+
+function status(m: Member, i: number, done: Set<number>, ok: Set<number>, merged: Set<number>) {
+  if (m.role === "lead") return merged.has(i) ? "merged" : "working";
+  if (m.role === "worker") return ok.has(i) ? "approved" : done.has(i) ? "in review" : "working";
+  const mine = [1, 2, 3, 4].map((p) => at(m.step, p));
+  if (mine.every((w) => ok.has(w))) return "done";
+  return mine.some((w) => done.has(w) && !ok.has(w)) ? "reviewing" : "waiting";
+}
+
+/** What a spawned column says as the work lands: a worker finishes and sends its diff, its critic reviews and
+ * approves it, its lead merges the step. */
+function say(m: Member, i: number, done: Set<number>, ok: Set<number>, merged: Set<number>) {
+  const s = m.step, critic = botName(CRITICS[s]);
+  if (m.role === "lead") return <>
+    <div className="dk-hand"><p><b>Lumen</b> <span className="dk-dim">step {s + 1} of 3</span></p><p>{PLAN[s]}</p></div>
+    <Tool icon="spawn" t="0:01">Spawned four workers and a critic</Tool>
+    {merged.has(i) ? <Tool icon="check" ok t="0:07">Merged step {s + 1} into {BRANCH}</Tool> : <Tool icon="eye" live t="0:02">Watching four workers</Tool>}
+  </>;
+  if (m.role === "worker") {
+    const [a, d] = diff(i), [[i1, t1], [i2, t2]] = WORK[(m.part - 1 + s) % 4];
+    return <>
+      <div className="dk-hand"><p><b>{botName(LEADS[s])}</b> <span className="dk-dim">part {m.part} of 4</span></p><p>{PLAN[s]}</p></div>
+      <Tool icon={i1} ok={i1 === "check"} t="0:00">{t1}</Tool>
+      <Tool icon={done.has(i) ? "check" : i2} ok={done.has(i)} live={!done.has(i)} t="0:01">{t2}</Tool>
+      {done.has(i) ? <Tool icon="spawn" t="0:05">Sent the diff to {critic} <span className="dk-dim">+{a} −{d}</span></Tool> : null}
+      {ok.has(i) ? <Tool icon="check" ok t="0:06">Approved by {critic}</Tool> : null}
+    </>;
+  }
+  const mine = [1, 2, 3, 4].map((p) => at(s, p));
+  const reviewing = mine.find((w) => done.has(w) && !ok.has(w));
+  return <>
+    <Tool icon="check" ok t="0:01">Read Lumen&apos;s plan</Tool>
+    {mine.filter((w) => ok.has(w)).map((w) => <Tool key={w} icon="check" ok t="0:06">Approved worker {SWARM[w].label} <span className="dk-dim">+{diff(w)[0]} −{diff(w)[1]}</span></Tool>)}
+    {reviewing ? <Tool icon="eye" live t="0:05">Reviewing worker {SWARM[reviewing].label}</Tool> : mine.every((w) => ok.has(w)) ? null : <Tool icon="eye" t="0:00">Waiting for the {mine.some((w) => ok.has(w)) ? "next" : "first"} diff</Tool>}
+  </>;
 }
 
 function Tool({ icon, live, ok, t, children }: { icon: string; live?: boolean; ok?: boolean; t: string; children: React.ReactNode }) {

@@ -1,8 +1,8 @@
 "use client";
 
-// The hero's fragment: the desktop window's title bar and reel at true size, working. A crew tab slides the reel to
-// that agent's column (the bracket follows the columns on screen); the ask docked under worker 4423 approves with
-// its button or with Return while it has focus. Without script it is the same window, standing still.
+// The hero's fragment: the desktop window's title bar and reel at true size, at the goal's finish. A crew tab slides
+// the reel to that agent's column (the bracket follows the columns on screen); the planner's ask to open the pull
+// request approves with its button or with Return while it has focus. Without script it is the same window.
 import { useEffect, useRef, useState } from "react";
 import { ASK, CREW, RUN } from "@/lib/desktop";
 import { Bot, ColumnHead, Decision, Icon, Thread } from "./parts";
@@ -10,9 +10,8 @@ import { Bot, ColumnHead, Decision, Icon, Thread } from "./parts";
 const GAP = 14;
 
 export function HeroReel() {
-  const [lead, setLead] = useState(2); // the leading column: d3ce, then 4423 with its ask
+  const [lead, setLead] = useState(0); // the leading column: the planner with its ask, then the lead
   const [approved, setApproved] = useState(false);
-  const [done, setDone] = useState(118);
   const [shown, setShown] = useState(2);
   const [col, setCol] = useState(420);
   const reel = useRef<HTMLDivElement>(null);
@@ -21,27 +20,17 @@ export function HeroReel() {
   useEffect(() => {
     const el = reel.current?.parentElement;
     if (!el) return;
-    let first = true;
     const ro = new ResizeObserver(() => {
       const w = (reel.current?.firstElementChild as HTMLElement | null)?.offsetWidth || 420;
       setCol(w);
       const n = Math.max(1, Math.round((el.clientWidth - 20) / (w + GAP)));
       setShown(n);
-      if (first && n === 1) setLead(3); // a phone shows one column: the one that asks
-      first = false;
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  // d3ce keeps writing shards: one every few seconds, as its log says.
-  useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const t = setInterval(() => setDone((d) => (d < 256 ? d + 1 : d)), 3200);
-    return () => clearInterval(t);
-  }, []);
-
-  const crew = CREW.map((a) => (a.id === "4423" && approved ? { ...a, state: "merged" as const } : a));
+  const crew = CREW.map((a) => (a.id === "planner" && approved ? { ...a, state: "done" as const } : a));
   const go = (i: number) => setLead(Math.min(i, CREW.length - 1));
 
   return (
@@ -75,7 +64,7 @@ export function HeroReel() {
             return (
               <section key={a.id} className={`dk-col${a.state === "asks" ? " is-asks" : ""}`} aria-label={`${a.role} ${a.label}`} aria-hidden={!visible || undefined}>
                 <ColumnHead a={a} onClose={a.state === "asks"} />
-                <Thread lines={a.id === "4423" && approved ? [...a.thread, { kind: "check", text: "Merged into main", t: "now" }] : a.thread} progress={a.id === "d3ce" ? done : undefined} />
+                <Thread lines={a.id === "planner" && approved ? [...a.thread, { kind: "check", text: `Opened a pull request into ${RUN.base}`, t: "now" }] : a.thread} />
                 {a.state === "asks" ? (
                   <div onKeyDown={(e) => { if (e.key === "Enter" && !(e.target as HTMLElement).closest(".dk-b--deny")) { e.preventDefault(); setApproved(true); } }}>
                     <Decision title={ASK.title} sub={ASK.sub} onApprove={() => setApproved(true)} tabIndex={visible ? 0 : -1} />

@@ -1,20 +1,20 @@
 "use client";
 
-// "Other projects wait in the title bar": one slider drives a clause and the title bar beside it, through four states
-// from the approved boards (ReelStack, ReelSwarm): one project open, a folded one asking, that one fanned out, and a
-// 17-agent swarm whose subtrees fold into stacks while an ask steps out of its stack.
+// "Many projects, one title bar": one slider drives a clause and the title bar beside it, through four states
+// from the approved boards (ReelStack, ReelSwarm): one project open, a folded one whose run is ready and asks, that
+// one fanned out, and a 17-agent swarm whose subtrees fold into stacks.
 import { useState } from "react";
 import { Bot, Icon } from "./parts";
 
 // What the first columns on screen say, by tab, for the crop of the reel under the title bar.
 const SAYS: Record<string, [string, string]> = {
-  planner: ["working", "Matchkey moves to v3.2 in three parts; nothing merges before the critic has read it."],
+  planner: ["working", "Matchkey moves to v3.2. One lead takes ids/v1; a critic reads every diff before it lands."],
   lead: ["working", "Splitting ids/v1 across three workers. 4423 fixed the join; checking it against the nulls."],
   "lead ids/v1": ["working", "Four workers on ids/v1. 4423 fixed the join; d3ce is writing shards; 9b1f waits."],
   d3ce: ["working", "Writing the v3.2 shards to r2://staging/mk: 118 of 256."],
-  "7c2e": ["waiting on you", "Proration now rounds per line, not per invoice. Merge it into main?"],
+  "7c2e": ["merged", "Proration rounds per line now, not per invoice. Approved by the critic and merged into fix-proration."],
 };
-const PLANNER_P: [string, string] = ["working", "Proration was off by a cent on 3% of invoices. One worker on the fix, then verify."];
+const PLANNER_P: [string, string] = ["waiting on you", "fix-proration is ready: one fix, reviewed, checks green. Open a pull request into dev?"];
 
 type Head = { seed: string; role: string };
 type Deck = { name: string; cloud: boolean; status: string; heads: Head[]; asks?: string };
@@ -24,7 +24,7 @@ type Cell = "w" | "a" | "q" | "d";
 const H = (seed: string, role: string): Head => ({ seed, role });
 const MATCHKEY_HEADS = [H("dk-98", "planner"), H("dk-47", "lead"), H("dk-8", "worker"), H("dk-88", "worker")];
 const PRORATION_HEADS = [H("dk-6", "planner"), H("dk-50", "worker")];
-const ADDRIVA: Deck = { name: "addriva", cloud: true, status: "Merged · 3 of 3", heads: [H("dk-0", "planner"), H("dk-28", "worker"), H("dk-41", "worker")] };
+const ADDRIVA: Deck = { name: "addriva", cloud: true, status: "Pull request open", heads: [H("dk-0", "planner"), H("dk-28", "worker"), H("dk-41", "worker")] };
 
 const MATCHKEY_TABS: Tab[] = [
   { label: "planner", seed: "dk-98", role: "planner" }, { label: "lead", seed: "dk-47", role: "lead" }, { label: "d3ce", seed: "dk-8", role: "worker" },
@@ -34,35 +34,35 @@ const MATCHKEY_TABS: Tab[] = [
 const STAGES: Array<{ name: string; clause: string; note: string; open: { name: string; cloud: boolean; sub: string; tabs: Tab[] }; decks: Deck[]; cells: Cell[][] }> = [
   {
     name: "One open", clause: "One project is open, the rest fold.",
-    note: "The open project shows its crew as tabs; every other one is a deck of its crew's heads with one line of status.",
+    note: "The open project shows its crew as tabs. Every other project folds into a deck of its crew's heads with one line of status.",
     open: { name: "Migrate matchkey", cloud: true, sub: "Cloud · 18:40", tabs: MATCHKEY_TABS },
     decks: [{ name: "Fix proration", cloud: false, status: "2 working", heads: PRORATION_HEADS }, ADDRIVA],
-    cells: [["w", "w"], ["w", "w", "a", "q"], ["d"]],
+    cells: [["w", "w"], ["w", "w", "d", "q"], ["d"]],
   },
   {
-    name: "One asks", clause: "A folded project asks for you.",
-    note: "Its deck gets an amber ring and says who asks. An asking project never drops into the overflow.",
+    name: "One asks", clause: "A folded project is ready for you.",
+    note: "Its planner asks whether to open the pull request. The deck gets an amber ring and says who asks, and an asking project never drops into the overflow.",
     open: { name: "Migrate matchkey", cloud: true, sub: "Cloud · 18:44", tabs: MATCHKEY_TABS },
-    decks: [{ name: "Fix proration", cloud: false, status: "worker 7c2e asks", heads: PRORATION_HEADS, asks: "7c2e" }, ADDRIVA],
-    cells: [["w", "w"], ["w", "w", "a", "q"], ["d"]],
+    decks: [{ name: "Fix proration", cloud: false, status: "planner asks", heads: PRORATION_HEADS, asks: "planner" }, ADDRIVA],
+    cells: [["w", "w"], ["w", "w", "d", "q"], ["d"]],
   },
   {
     name: "Fans out", clause: "Click it, and its crew fans out.",
     note: "The deck opens in place into crew tabs, and the project you were in folds into a deck of its own.",
-    open: { name: "Fix proration", cloud: false, sub: "Local · 0:52", tabs: [{ label: "planner", seed: "dk-6", role: "planner" }, { label: "7c2e", seed: "dk-50", role: "worker", asks: true }] },
+    open: { name: "Fix proration", cloud: false, sub: "Local · 0:52", tabs: [{ label: "planner", seed: "dk-6", role: "planner", asks: true }, { label: "7c2e", seed: "dk-50", role: "worker" }] },
     decks: [{ name: "Migrate matchkey", cloud: true, status: "5 working", heads: MATCHKEY_HEADS }, ADDRIVA],
-    cells: [["w", "a"]],
+    cells: [["a", "d"]],
   },
   {
     name: "Swarm", clause: "A swarm folds the same way.",
-    note: "17 agents: each lead and its workers are one stack, and only the subtree on screen fans out. Asks step out of their stack, at any depth.",
+    note: "17 agents: each lead and its workers are one stack, and only the subtree on screen fans out. However wide the tree, the bar stays one line.",
     open: { name: "Migrate matchkey", cloud: true, sub: "Cloud · 18:40 · 17 agents", tabs: [
       { label: "planner", seed: "dk-98", role: "planner" }, { label: "lead ids/v1", seed: "dk-47", role: "lead" }, { label: "d3ce", seed: "dk-8", role: "worker" },
-      { label: "4423", seed: "dk-88", role: "worker", asks: true }, { label: "9b1f", seed: "dk-41", role: "worker", dim: true },
-      { label: "addriva", seed: "dk-28", role: "lead", stack: 5 }, { label: "matchkey", seed: "dk-201", role: "lead", stack: 4 }, { label: "a91c", seed: "dk-50", role: "worker", asks: true },
+      { label: "4423", seed: "dk-88", role: "worker" }, { label: "9b1f", seed: "dk-41", role: "worker", dim: true },
+      { label: "addriva", seed: "dk-28", role: "lead", stack: 5 }, { label: "matchkey", seed: "dk-201", role: "lead", stack: 5 },
     ] },
     decks: [{ name: "Fix proration", cloud: false, status: "2 working", heads: PRORATION_HEADS }],
-    cells: [["w"], ["w", "w", "a", "q", "w"], ["w", "w", "w", "w", "w"], ["w", "q", "w", "w", "a"], ["q"]],
+    cells: [["w"], ["w", "w", "d", "q", "w"], ["w", "w", "w", "w", "w"], ["w", "q", "w", "w", "d"], ["q"]],
   },
 ];
 
@@ -74,7 +74,7 @@ export function Decks() {
   return (
     <section className="dk-decks" id="decks" aria-labelledby="decks-h">
       <div className="dk-decks__words">
-        <h2 id="decks-h" className="dk-h2" data-reveal>Other projects wait in the title bar.</h2>
+        <h2 id="decks-h" className="dk-h2" data-reveal>Many projects, one title bar.</h2>
         <div className="dk-decks__clause" aria-live="polite" key={i}>
           <p className="dk-lead">{s.clause}</p>
           <p>{s.note}</p>
@@ -117,7 +117,7 @@ export function Decks() {
           </div>
           <div className="dk-strip">
             {s.cells.map((g, gi) => <span key={gi} className="dk-strip__g">{g.map((c, ci) => <i key={ci} className={`c-${c}`} />)}</span>)}
-            <span className="dk-strip__sum">{counts.w ?? 0} working{counts.a ? <> · <em>{counts.a} ask{counts.a > 1 ? "" : "s"}</em></> : null}{counts.q ? ` · ${counts.q} queued` : ""}{counts.d ? ` · ${counts.d} done` : ""}</span>
+            <span className="dk-strip__sum">{[counts.w && `${counts.w} working`, counts.a && <em key="a">{counts.a} ask{counts.a > 1 ? "" : "s"}</em>, counts.q && `${counts.q} queued`, counts.d && `${counts.d} done`].filter(Boolean).flatMap((x, k) => (k ? [" · ", x] : [x]))}</span>
           </div>
         </div>
       </div>
