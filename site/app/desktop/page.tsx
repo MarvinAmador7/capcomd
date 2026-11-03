@@ -34,7 +34,7 @@ export default function DesktopPage() {
       <header className="dt-hero">
         <Nav home={false} current="desktop" />
         <div className="dt-hero__words">
-          <h1 className="dt-h1" data-load style={delay(60)}>In command.</h1>
+          <h1 className="dt-h1" data-load style={delay(60)}>capcomd Desktop</h1>
           <p className="dt-sub" data-load style={delay(140)}>The Mac app for capcomd&apos;s orchestration engine.</p>
           <p className="dt-act" data-load style={delay(220)}>
             <a className="button" href={SITE.repo}>Watch on GitHub</a>
