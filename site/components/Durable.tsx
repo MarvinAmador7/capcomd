@@ -10,7 +10,7 @@
 // listed for engineers at the foot. Without the page script, or with reduced motion, the scene shows the second ending.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { rng } from "@/lib/vendor/bot-avatar.js";
-import { Bot, GoalTitle } from "./crew";
+import { Bot, GoalTitle, README_GOALS, useGoal } from "./crew";
 import { delay } from "./marks";
 
 type Phase = "idle" | "moving" | "yank" | "dark" | "waking" | "checking" | "done";
@@ -101,6 +101,8 @@ export function Durable() {
     return () => { io.disconnect(); clear(); };
   }, []);
 
+  const goal = useGoal().trim().toLowerCase();
+  const older = README_GOALS.filter((g) => g.toLowerCase() !== goal).slice(0, 2).map((t, k) => [["8c1f2a0", "3e9b7d4"][k]!, t] as const);
   const landed = p >= LANDS_AT;
   const noted = phase === "done" || (phase === "moving" && p >= NOTED_AT);
   const mood = phase === "dark" || phase === "waking" ? "sleepy" : phase === "checking" || phase === "yank" ? "oops" : phase === "done" ? "happy" : undefined;
@@ -146,15 +148,28 @@ export function Durable() {
           </div>
 
           <div className="plug__main">
-            <p className="plug__label">main</p>
-            <div className="plug__lane">
-              <span className="plug__old" aria-hidden="true"><i /><i /><i /><i /></span>
-              <span className={`plug__new${landed ? " is-on" : ""}${phase === "checking" ? " is-found" : ""}`} style={{ ["--p" as string]: Math.min(p / LANDS_AT, 1) } as CSSProperties}>
-                <Bot i={1} size="xs" className="plug__by" />
-                <span className="plug__title"><GoalTitle /></span>
-              </span>
+            <div className="plug__flow" style={{ ["--p" as string]: Math.min(p / LANDS_AT, 1) } as CSSProperties}>
+              <div className="plug__from">
+                <p className="plug__label">Its branch</p>
+                <span className="plug__slot" />
+              </div>
+              <span className="plug__path" aria-hidden="true" />
+              <div className="plug__to">
+                <p className="plug__label">main</p>
+                <ol className="plug__log">
+                  <li className={`plug__row plug__row--new${landed ? " is-on" : ""}${phase === "checking" ? " is-found" : ""}`}>
+                    {landed ? <><Bot i={1} size="xs" className="plug__by" /><span className="plug__title"><GoalTitle /></span></> : null}
+                  </li>
+                  {older.map(([sha, t]) => <li key={sha} className="plug__row"><code>{sha}</code><span className="plug__title">{t}</span></li>)}
+                </ol>
+              </div>
+              {landed ? null : (
+                <span className="plug__card">
+                  <Bot i={1} size="xs" className="plug__by" />
+                  <span className="plug__title"><GoalTitle /></span>
+                </span>
+              )}
             </div>
-            <div className="plug__rail" aria-hidden="true"><i style={{ width: `${p * 100}%` }} /></div>
           </div>
 
           <div className="plug__notes">

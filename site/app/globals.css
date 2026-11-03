@@ -952,19 +952,22 @@ html:not(.js) .stage__title { display: block; }
   .plug__confetti { position: absolute; inset: -20px -10px 30% -10px; pointer-events: none; }
   .plug__confetti i { position: absolute; animation: plug-fall 1600ms var(--ease-out) both; animation-delay: calc(var(--k) * 18ms); }
 
-  .plug__label { margin: 0 0 10px; color: var(--color-on-dark-soft); font: 400 18px/1 var(--font-pixel); text-transform: uppercase; }
-  .plug__lane { display: flex; align-items: center; gap: 10px; min-height: 64px; padding: 0 14px; border-radius: 10px; background: rgba(0,0,0,0.28); }
-  .plug__old { display: flex; gap: 8px; flex: none; }
-  .plug__old i { width: 18px; height: 18px; border-radius: 4px; background: rgba(243,240,248,0.28); }
-  .plug__new { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; padding: 8px 12px 8px 8px; border-radius: 8px; background: rgba(243,240,248,0.1); color: var(--color-on-dark-soft); font: 500 14px/1.2 var(--font-ui); transform: translateX(calc((1 - var(--p)) * 60px)); opacity: calc(0.45 + var(--p) * 0.55); outline: 2px dashed rgba(243,240,248,0.35); outline-offset: -2px; }
-  .plug__new.is-on { background: var(--color-app-green); color: #06200F; outline-color: transparent; }
-  .plug__new.is-found { box-shadow: 0 0 0 4px var(--color-plum), 0 0 0 7px var(--color-on-dark); }
+  /* The trip: the change leaves its branch along the path and drops into the empty slot at the top of main. */
+  .plug__flow { position: relative; display: grid; grid-template-columns: 40% 10% 50%; align-items: start; --row: 44px; --top: 30px; }
+  .plug__label { height: 18px; margin: 0 0 12px; color: var(--color-on-dark-soft); font: 400 18px/1 var(--font-pixel); text-transform: uppercase; white-space: nowrap; }
+  .plug__slot { display: block; height: var(--row); border-radius: 8px; outline: 2px dashed rgba(243,240,248,0.28); outline-offset: -2px; }
+  .plug__path { position: relative; height: 2px; margin: calc(var(--top) + var(--row) / 2 - 1px) 8px 0; background: repeating-linear-gradient(90deg, rgba(243,240,248,0.45) 0 6px, transparent 6px 11px); }
+  .plug__path::after { content: ""; position: absolute; right: -2px; top: -4px; border: 5px solid transparent; border-left: 7px solid rgba(243,240,248,0.45); border-right: 0; }
+  .plug__log { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; }
+  .plug__row { display: flex; align-items: center; gap: 10px; min-width: 0; height: var(--row); padding: 0 12px; border-radius: 8px; background: rgba(0,0,0,0.28); color: var(--color-on-dark-soft); font: 400 14px/1.2 var(--font-ui); }
+  .plug__row code { flex: none; color: rgba(243,240,248,0.5); font: 500 12px/1 var(--font-mono); }
+  .plug__row--new { background: transparent; outline: 2px dashed rgba(243,240,248,0.28); outline-offset: -2px; }
+  .plug__row--new.is-on { background: var(--color-app-green); color: #06200F; font-weight: 500; outline-color: transparent; animation: plug-pop 260ms var(--ease-out) both; }
+  .plug__row--new.is-found { box-shadow: 0 0 0 4px var(--color-plum), 0 0 0 7px var(--color-on-dark); }
+  .plug__card { position: absolute; top: var(--top); left: calc(var(--p) * 60%); width: 40%; height: var(--row); display: flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; border-radius: 8px; background: var(--color-on-dark); color: var(--color-ink); font: 500 14px/1.2 var(--font-ui); box-shadow: 0 6px 18px rgba(0,0,0,0.3); }
   .plug__by { display: block; flex: none; width: 22px; }
   .plug__by svg { display: block; width: 100%; height: auto; }
-  .plug__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .plug__rail { height: 6px; margin-top: 16px; border-radius: 3px; background: rgba(0,0,0,0.3); overflow: hidden; }
-  .plug__rail i { display: block; height: 100%; background: var(--color-accent-light); }
-
+  .plug__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .plug__notes { align-self: stretch; padding: 20px 22px; border-radius: 6px; background: var(--color-page); color: var(--color-ink); background-image: repeating-linear-gradient(transparent 0 35px, rgba(20,11,34,0.08) 35px 36px); transform: rotate(1.2deg); box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
   .plug__nh { margin: 0 0 10px; font: 400 26px/1 var(--font-display); }
   .plug__notes ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font: 400 16px/1.4 var(--font-ui); }
@@ -1032,7 +1035,9 @@ html:not(.js) .stage__title { display: block; }
     .plug__nh { font-size: 20px; }
     .plug__notes ol { font-size: 14px; }
     .plug__bubble { right: -4px; font-size: 13px; }
-    .plug__old i:nth-child(n+3) { display: none; }
+    .plug__flow { grid-template-columns: 38% 8% 54%; }
+    .plug__card { left: calc(var(--p) * 62%); width: 38%; }
+    .plug__row code { display: none; }
     .plug__bar { flex-direction: column; align-items: stretch; gap: 16px; }
     .plug__switch { justify-content: center; }
     .durable__cases { grid-template-columns: 1fr; }
