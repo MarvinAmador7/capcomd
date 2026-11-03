@@ -39,7 +39,8 @@ export interface SlotRequest { admitted: boolean; slots: number | null; used: nu
 /**
  * The slots of one place, in the engine's process. `request(name, since)`: may the agent whose machine will be `name`
  * start now? Agents are admitted oldest request first; an admitted agent holds its slot until `release(name)` (its
- * machine is destroyed), or, if its machine never shows up among the running ones, for `graceMs`.
+ * machine is destroyed, or its workflow ended: src/actors/agent-workflow.ts `freeSlot`), or, if its machine never shows
+ * up among the running ones, for `graceMs`: a backstop for an agent still starting (its machine's start being retried).
  */
 export class AgentSlots {
   private admitted = new Map<string, number>();
