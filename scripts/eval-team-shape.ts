@@ -2,7 +2,7 @@
 // The team-shape eval: a real Claude Code driver (`claude -p`) gets the tinycalc request and plans a team through
 // capcomd; the agents it spawns are scripted fakes, so only the driver uses a model. Afterwards it prints the shape
 // the driver chose: the tree, peak agents at once against the slots, the phases on the critical path, whether the
-// consumers started against the stubs, the wall time and the driver's cost. See docs/eval-team-shape.md.
+// consumers started against the stubs, the wall time and the driver's cost. See DEVELOPMENT.md, "Team-shape eval".
 //
 //   bun scripts/eval-team-shape.ts [--ref origin/main] [--model sonnet] [--port 6491] [--keep]
 //
@@ -124,7 +124,9 @@ log(`profiles: ${Object.keys(JSON.parse(readFileSync(join(PROJECT, ".capcomd", "
 // ── 4. the engine ────────────────────────────────────────────────────────────────────────────────
 const engine = spawn("bun", [CLI, "serve", "--port", String(PORT)], {
   cwd: WORK, detached: true, stdio: ["ignore", "ignore", "ignore"],
-  env: { ...process.env, ...common, CAPCOMD_ENGINE_DATA: join(WORK, "engine"), CAPCOMD_HARNESS_SOCKET: join(WORK, "harness.sock"), CAPCOMD_NO_CONFIG: "1" },
+  // CAPCOMD_AGENT=fake: a scripted agent's push names no profile, and the project's default profile (a real Claude
+  // worker) would otherwise run against the fake machine.
+  env: { ...process.env, ...common, CAPCOMD_AGENT: "fake", CAPCOMD_ENGINE_DATA: join(WORK, "engine"), CAPCOMD_HARNESS_SOCKET: join(WORK, "harness.sock"), CAPCOMD_NO_CONFIG: "1" },
 });
 let driver: ReturnType<typeof spawn> | null = null;
 const stopAll = () => {
@@ -133,8 +135,14 @@ const stopAll = () => {
 };
 process.on("SIGINT", () => { stopAll(); process.exit(130); });
 process.on("SIGTERM", () => { stopAll(); process.exit(143); });
-const probe = spawnSync("bun", [join(ROOT, "tests", "helpers", "ready-probe.ts"), String(PORT)], { encoding: "utf8", env: { ...process.env, CAPCOMD_READY_DEADLINE_MS: "90000" } });
-if (probe.status !== 0) { stopAll(); throw new Error(`engine not ready: ${probe.stderr}`); }
+const probe = spawnSync("bun", [join(ROOT, "tests", "helpers", "ready-probe.ts"), String(PORT)], { encoding: "utf8", env: { ...process.env, CAPCOMD_READY_DEADLINE_MS: "240000" } });
+if (probe.status !== 0) {
+  stopAll();
+  await new Promise((r) => setTimeout(r, 3000));
+  spawnSync("sh", ["-c", `ps -axo pid=,command= | grep -F ${JSON.stringify(WORK)} | grep -v grep | awk -v me=$$ '$1 != me {print $1}' | xargs kill -9 2>/dev/null || true`]);
+  if (!a.keep) rmSync(WORK, { recursive: true, force: true });
+  throw new Error(`engine not ready: ${probe.stderr}`);
+}
 log(`engine on :${PORT}, work ${WORK}`);
 
 // ── 5. the driver ────────────────────────────────────────────────────────────────────────────────

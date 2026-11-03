@@ -135,6 +135,30 @@ a private GitHub repo (it prints the delete command) and ends with `E2E PASS` or
 loads `plugins/capcomd` and may use only the plugin's MCP tools and skills (no shell, no edits). It needs `claude`
 logged in as well, and fails if the session used any other tool.
 
+### Team-shape eval
+
+`scripts/eval-team-shape.ts` checks how a real Claude Code driver organizes a team from capcomd's steering (the
+orchestration skill, the MCP server's instructions and tool results, the profiles `capcomd setup` writes). A headless
+`claude -p --model sonnet` session gets the tinycalc request (a mid-size build that asks for parallel work, shared
+pieces first and careful reviews), with the plugin loaded by `--plugin-dir` (a scratch copy without its own MCP server)
+and this checkout's `capcomd mcp` by `--mcp-config --strict-mcp-config`. It talks to a scratch engine on its own port
+with the fake sandbox and scripted agents (`CAPCOMD_SPAWN_EXEC=script`): workers take `--worker-seconds` (45) and
+commit a placeholder, a lead or planner splits its part between two helpers and verifies and merges them, the reviewer
+passes; the repository is a local bare repo. Only the driver uses a model. Afterwards it prints the tree, the driver's
+spawns by phase (a phase starts after a merge landed), peak agents at once against the slots (`--slots`, 7), the
+phase of the parser, printer, CLI and end-to-end work (`consumersOnStubs`: the CLI started no later than the parser),
+the wall time and the driver's cost.
+
+```bash
+bun scripts/eval-team-shape.ts --out after.json                    # this checkout
+bun scripts/eval-team-shape.ts --ref origin/main --port 6492       # capcomd as it is on origin/main (git archive)
+```
+
+Everything is in one scratch folder (`CAPCOMD_EVAL_TMP`, else the system temp dir), deleted at the end (`--keep`
+keeps it, with `session.ndjson` and `events.json`). It never uses `~/.capcomd`, :6420, Docker or your Claude Code
+settings (`--setting-sources project`, `--no-session-persistence`); it needs `claude` logged in. Runs vary: compare a
+few of each.
+
 ### Killpoints
 
 `CAPCOMD_KILLPOINT=<name>[:n]` kills the process (SIGKILL) the n-th time it reaches a named point, which the merge
