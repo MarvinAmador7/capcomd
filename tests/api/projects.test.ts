@@ -202,7 +202,7 @@ describe("POST /v1/projects", () => {
 		expect(cfg).toEqual({ env: { CAPCOMD_SANDBOX: "docker", CAPCOMD_REPO: "https://github.com/acme/app.git", CAPCOMD_MERGE_MODE: "pr", CAPCOMD_MERGE_TARGET: "main", CAPCOMD_GITHUB_REPO: "acme/app" }, driver: { approvals: "elicit" }, run: { reviewer: "reviewer" } });
 		const agents = JSON.parse(read(join(co, ".capcomd", "agents.json"))).agents;
 		expect(agents.worker.model).toBe("claude-opus-5-5");
-		expect(Object.keys(agents)).toEqual(["worker", "reviewer", "planner"]);
+		expect(Object.keys(agents)).toEqual(["worker", "reviewer", "lead", "planner"]);
 		const again = await w.post(answers(co, { mode: "pr", check: "" }));
 		expect(again.body.changed).toBe(false);
 		expect(w.state.daemonEvents().length).toBe(1);
