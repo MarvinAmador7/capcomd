@@ -196,6 +196,14 @@ describe("launchContext: where a run starts", () => {
 		expect(ctx.env).toMatchObject({ CAPCOMD_REPO: "/srv/git/app.git", CAPCOMD_MERGE_MODE: "direct", CAPCOMD_SANDBOX: "docker" });
 	});
 
+	test("repo: a project that names a sandbox gets it over the daemon's CAPCOMD_SANDBOX; one that doesn't keeps the daemon's", () => {
+		const d = project({ CAPCOMD_REPO: "/srv/git/app.git", CAPCOMD_SANDBOX: "docker" });
+		expect(launchContext(d, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_SANDBOX: "boxd" }).env.CAPCOMD_SANDBOX).toBe("docker");
+		expect(launchContext(d, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", RELAY_SANDBOX: "boxd" }).env).toMatchObject({ CAPCOMD_SANDBOX: "docker" });
+		const plain = project({ CAPCOMD_REPO: "/srv/git/app.git" });
+		expect(launchContext(plain, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_SANDBOX: "boxd" }).env.CAPCOMD_SANDBOX).toBe("boxd");
+	});
+
 	test("repo that isn't a set-up project checkout: 422 with what to do", () => {
 		const base = { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_REPO: "/daemon/repo" };
 		expect(() => launchContext("rel/path", base)).toThrow(/absolute path/);

@@ -63,7 +63,7 @@ Usage:
              [--sandbox docker|boxd]       where this run's agents and checks run (default: CAPCOMD_SANDBOX)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
   capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages; configure: change settings, set up projects)
-  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE] | --goal-branch G --base B]  → runId (a scope; plans nothing)
+  capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE] | --goal-branch G --base B] [--sandbox docker|boxd]  → runId (a scope; plans nothing; sandbox default: the project's, then your user config's)
   capcomd spawn <runId> --task T [--title "2-4 words"] [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
@@ -104,7 +104,10 @@ Usage:
         [--yes] [--demo|--skip-demo] [--agents claude,codex] [--auth subscription|apikey] [--repo URL]
         [--mode pr|direct] [--target B] [--check CMD] [--budget USD] [--service|--no-service] [--no-plugin] [--no-store]
         [--org NAME]                   (the boxd org for the key setup creates with your boxd CLI login)
-        [--no-hermes] [--approvals elicit|human] [--default-project] [--hermes-entry-per-project]
+        [--sandbox docker|boxd]        (setup project: where this project's agents run, over your user config's)
+        [--env-build|--no-env-build]   (setup project on Docker: build the env image with a warm checkout now, or don't ask)
+        [--default-project]            (setup project/agent: make this checkout the default project of capcomd's MCP tools)
+        [--no-hermes] [--approvals elicit|human] [--hermes-entry-per-project]
                                        (capcomd in Hermes, when it's installed: one entry for all your projects, this
                                        checkout added to them; who approves merges into protected branches: elicit,
                                        capcomd asks you in Hermes (recommended), or human, capcomd approve)
@@ -216,6 +219,8 @@ async function main(argv: string[]): Promise<number> {
         "no-hermes": { type: "boolean" },
         "hermes-entry-per-project": { type: "boolean" },
         "default-project": { type: "boolean" },
+        "env-build": { type: "boolean" },
+        "no-env-build": { type: "boolean" },
         approvals: { type: "string" },
         "no-store": { type: "boolean" },
         org: { type: "string" },
@@ -354,7 +359,9 @@ async function main(argv: string[]): Promise<number> {
           // --goal-branch G --base B: the run's target is G, cut from B (no default base: the operator names both).
           const goalBranch = values["goal-branch"] as string | undefined, base = values.base as string | undefined;
           if ((goalBranch !== undefined || base !== undefined) && (values.target !== undefined || values["target-from"] !== undefined)) usage("--goal-branch/--base replace --target/--target-from: pass one pair");
-          const r = await P.runNew({ budget, label: values.label as string | undefined, ...(values.goal ? { goal: values.goal as string } : {}), key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}),
+          // --sandbox NAME: where this run's agents and checks run (recorded with the run); default: the project's.
+          const sandbox = values.sandbox !== undefined ? await (await import("../config/sandbox")).askedSandbox(String(values.sandbox)) : undefined;
+          const r = await P.runNew({ budget, label: values.label as string | undefined, ...(values.goal ? { goal: values.goal as string } : {}), key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}), ...(sandbox ? { sandbox } : {}),
             ...(goalBranch !== undefined || base !== undefined ? { ...(goalBranch !== undefined ? { goalBranch } : {}), ...(base !== undefined ? { base } : {}) } : { ...(target ? { target } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) }) });
           if (json) out(r); else console.log(r.runId);
           return EXIT.ok;

@@ -40,7 +40,7 @@ async function policy() {
 
 // ── runs ──────────────────────────────────────────────────────────────────────────────────────────
 
-export async function runNew(a: { budget?: string; label?: string; key?: string; target?: string; targetFrom?: string; goalBranch?: string; base?: string }) {
+export async function runNew(a: { budget?: string; label?: string; key?: string; target?: string; targetFrom?: string; goalBranch?: string; base?: string; sandbox?: string }) {
   let budget: Budget;
   try { budget = parseBudget(a.budget ?? ""); } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Pass units, e.g. budget: \"usd=5,turns=200,wallSeconds=3600\"."); }
   const p = await policy();
@@ -49,6 +49,8 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
     const over = Object.entries(cap).filter(([u, max]) => (budget as Record<string, number>)[u] === undefined || (budget as Record<string, number>)[u]! > max);
     if (over.length) deny(`budget ${a.budget ?? "(none)"} is over this project's cap per run (${p.maxRunBudget})`, `Ask for at most ${p.maxRunBudget} (every capped unit must be given); the cap is driver.maxRunBudget in .capcomd/config.json.`);
   }
+  // Where the run's agents and checks run: the one asked for (it must be up), else the project's (src/config/sandbox.ts).
+  const sandbox = a.sandbox === undefined ? undefined : await (await import("../config/sandbox")).askedSandbox(a.sandbox);
   // Gates come from the project (`capcomd setup`), never from the driver.
   const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
   if (a.target !== undefined) {
@@ -68,10 +70,13 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
     goal = { branch: r.goalBranch, base: r.base };
   }
   const target = goal ? goal.branch : a.target ?? d.target;
-  const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(goal ? { goalBranch: goal.branch, base: goal.base } : { ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) }) });
+  const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(sandbox ? { sandbox } : {}), ...(goal ? { goalBranch: goal.branch, base: goal.base } : { ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) }) });
+  const where = r.sandbox.name ? `Its agents and checks run on ${r.sandbox.name} (${SANDBOX_FROM[r.sandbox.source]}).` : "Its agents and checks run on the engine's own sandbox (nothing configured for this project: pass sandbox, or set it with `capcomd setup project --sandbox docker|boxd`).";
   return { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
-    next: goal ? `Spawn agents with capcomd_spawn; verified merges land on ${goal.branch} with no approval. When the work is done, show the user capcomd_goal and ask before capcomd_pr_open.` : "Spawn agents with capcomd_spawn; give each a check name from gates.checks." };
+    next: `${where} ` + (goal ? `Spawn agents with capcomd_spawn; verified merges land on ${goal.branch} with no approval. When the work is done, show the user capcomd_goal and ask before capcomd_pr_open.` : "Spawn agents with capcomd_spawn; give each a check name from gates.checks.") };
 }
+
+const SANDBOX_FROM: Record<string, string> = { run: "chosen for this run", environment: "CAPCOMD_SANDBOX in capcomd's environment", project: "the project's setting", user: "your user config", engine: "the engine's own" };
 
 /** The goal branch against its base: what landed, what didn't, the planner's summary, and whether a PR can be opened. */
 export async function goal(a: { runId: string }) {
@@ -398,11 +403,18 @@ export async function setup() {
   const steps = await checkSetup();
   const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
   const p = await policy();
+  const ready = steps.every((s) => s.ok);
+  const failing = steps.filter((s) => !s.ok).map((s) => `${s.step}: ${s.hint ?? s.detail}`);
+  const advice = steps.filter((s) => s.ok && s.advice && s.command).map((s) => `${s.step}: ${s.detail}. Recommended: \`${s.command}\` (a few minutes; ask the user first)`);
   return {
-    ready: steps.every((s) => s.ok), steps,
-    gates: { checks: d.checks ?? {}, reviewer: d.reviewer ?? null, target: d.target ?? null },
+    ready, sandbox: steps.find((s) => s.step === "sandbox")?.sandbox ?? null, steps,
+    // The target: the project's run default, else its merge target (what `capcomd setup project --target` writes).
+    gates: { checks: d.checks ?? {}, reviewer: d.reviewer ?? null, target: d.target ?? (await import("../utils/env")).env("MERGE_TARGET") ?? null },
     driver: { approvals: p.approvals ?? "human", maxRunBudget: p.maxRunBudget ?? null },
-    next: steps.every((s) => s.ok) ? "Start with capcomd_run_new." : "Ask the user to run `capcomd setup` in this repository (or `capcomd setup --yes` for the defaults).",
+    ...(advice.length ? { advice } : {}),
+    next: ready
+      ? `${advice.length ? `${advice.join(" ")} Then start` : "Start"} with capcomd_run_new (its sandbox is this project's unless you pass one).`
+      : `Not ready: ${failing.join("; ")}. Fix these (\`capcomd setup\` in this repository walks through them), then call capcomd_setup again.`,
   };
 }
 

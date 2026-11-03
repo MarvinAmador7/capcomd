@@ -189,6 +189,11 @@ export async function runNew(o: RunNewOpts) {
   const c = client();
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
+  if (o.sandbox !== undefined) {
+    const n = o.sandbox.toLowerCase();
+    if (!(await import("../providers/registry")).isProviderName(n)) throw new RelayError("usage", `sandbox ${JSON.stringify(o.sandbox)} isn't one capcomd knows`, `Name one of: ${(await import("../providers/registry")).LISTED_PROVIDERS.join(", ")}.`, { code: "sandbox" });
+    o = { ...o, sandbox: n };
+  }
   if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
   if (o.goalBranch !== undefined || o.base !== undefined) {
     // A goal branch is the run's target, cut from its base: never "main" by default, never protected, never the base.
@@ -212,21 +217,28 @@ export async function runNew(o: RunNewOpts) {
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
   const repoEnv = repoEnvOf(process.env);
   if (Object.keys(repoEnv).length) await (await import("./state")).kvWrite(runId, { k: RUN_REPO_KV, value: repoEnv, writer: "operator" }).catch(() => {});
-  // The run's place (when it has its own) and that provider's settings as they are now (ADR-021 §2): a run keeps the
-  // idle machine lifetime it started with. A retry keeps the settings the first call recorded.
+  // The run's place and that provider's settings as they are now (ADR-021 §2): a run keeps the idle machine lifetime
+  // it started with. The place: the one asked for, else the project's (its .capcomd/config.json), else the user's
+  // config, read from the files now, not from the engine's environment (src/config/sandbox.ts); none of those: the
+  // engine's own. A retry keeps what the first call recorded.
+  let sandbox: { name: string | null; source: import("../config/sandbox").SandboxSource };
   {
     const RS = await import("../providers/run-sandbox");
     const prior = await c.scope.getOrCreate([runId]).kvGet({ k: RS.RUN_SANDBOX_KV }).catch(() => null) as { value?: unknown; deleted?: boolean } | null;
     const had = prior && !prior.deleted ? RS.parseRunSandbox(prior.value) : null;
-    let place: string = o.sandbox ?? "fake";
-    if (!o.sandbox) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
+    const choice = o.sandbox ? { name: o.sandbox, source: "run" as const } : (await import("../config/sandbox")).configuredSandbox(process.cwd());
+    if (!had && "invalid" in choice && choice.invalid) throw new RelayError("config", `CAPCOMD_SANDBOX=${choice.invalid} (${choice.path ?? "environment"}) isn't a sandbox capcomd knows`, `Set it to one of: ${(await import("../providers/registry")).LISTED_PROVIDERS.join(", ")}.`, { code: "sandbox" });
+    const name = o.sandbox ?? (had ? had.name : choice.name);
+    sandbox = { name, source: had && !o.sandbox && had.name !== choice.name ? "run" : choice.source };
+    let place: string = name ?? "fake";
+    if (!name) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
     const settings = had?.settings.idleLifetime !== undefined ? { idleLifetime: had.settings.idleLifetime } : (await import("../providers/settings")).settingsForRun(place);
-    const value = RS.runSandboxValue(o.sandbox, settings);
-    // Unchanged on a retry: not written again. A run on the daemon's own place still starts if this write fails
-    // (its machines then get the place's setting when they start); a run with its own place doesn't.
+    const value = RS.runSandboxValue(name, settings);
+    // Unchanged on a retry: not written again. A run on the engine's own place still starts if this write fails
+    // (its machines then get the place's setting when they start); a run with a place of its own doesn't.
     if (!prior || prior.deleted || JSON.stringify(prior.value) !== JSON.stringify(value)) {
       const put = (await import("./state")).kvWrite(runId, { k: RS.RUN_SANDBOX_KV, value, writer: "operator" });
-      await (o.sandbox ? put : put.catch(() => {}));
+      await (name ? put : put.catch(() => {}));
     }
   }
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
@@ -242,7 +254,7 @@ export async function runNew(o: RunNewOpts) {
   if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now() });
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
-  return { runId, created: res.created, budget: res.budget, ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
+  return { runId, created: res.created, budget: res.budget, sandbox, ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
 }
 
 /**

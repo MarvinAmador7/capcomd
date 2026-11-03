@@ -70,6 +70,17 @@ const APPROVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: tru
 const APPROVE_META = { "anthropic/requiresUserInteraction": true } as const;
 const project = z.string().optional().describe("Project: a name from capcomd_projects, or a checkout's path. Default: the run's own project, else this server's checkout, else the default project");
 
+/**
+ * What an agent does when capcomd has no projects: the command that adds the checkout it works in. Setting a project
+ * up puts it on the list at once; this server reads the list on every call, so no restart is needed.
+ */
+export function noProjectsHint(cwd = process.cwd()): string {
+  const { gitRoot } = require("../config/project-setup") as typeof import("../config/project-setup");
+  const here = gitRoot(cwd);
+  const cmd = "capcomd setup project --yes --sandbox docker|boxd [--target BRANCH] [--check 'CMD']";
+  return `No projects yet. To add the repository you're working in, run \`${cmd}\` in its checkout${here ? ` (this server runs in ${here}: \`cd ${JSON.stringify(here)} && ${cmd}\`)` : ""}; ask the user which sandbox, target branch and check they want. It's listed here at once (no restart): call capcomd_projects again, then capcomd_setup {project}.`;
+}
+
 export function buildServer(): McpServer {
   const version = VERSION;
   const server = new McpServer({ name: "capcomd", version });
@@ -115,7 +126,7 @@ export function buildServer(): McpServer {
     if (me && !list.some((p) => samePath(p.path, me.path))) projects.push({ name: me.name, path: me.path, default: false, ready: true });
     return {
       default: dflt, here: me?.name ?? null, projects,
-      next: projects.length ? "Pass project: <name> to name one; otherwise the default applies (always say which project you act on)." : "No projects yet: ask the user to run `capcomd setup agent` in a repository's checkout.",
+      next: projects.length ? "Pass project: <name> to name one; otherwise the default applies (always say which project you act on)." : noProjectsHint(),
     };
   }, false));
 
@@ -135,7 +146,7 @@ export function buildServer(): McpServer {
   // ── runs ──
   server.registerTool("capcomd_run_new", {
     title: "Start a run",
-    description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Returns runId and the gates.",
+    description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Its sandbox is the project's unless you pass one. Returns runId, the gates and the sandbox the run uses.",
     inputSchema: {
       budget: z.string().optional().describe('Budget, e.g. "usd=5,turns=200,wallSeconds=3600"; omit for none'),
       label: z.string().optional().describe("What the run is for, as a short title the way you'd title a pull request (\"Add multiply to src/math.ts\"): the capcomd app names the run by it"),
@@ -143,6 +154,7 @@ export function buildServer(): McpServer {
       targetFrom: z.string().optional().describe("Create target from this branch"),
       goalBranch: z.string().optional().describe("The run's goal branch, e.g. capcomd/add-multiply: created from base; verified, reviewed merges land on it with no approval, and the user opens a pull request from it at the end (capcomd_pr_open). Omit it with base set to get a suggested name"),
       base: z.string().optional().describe("The branch the goal branch starts from and the pull request goes into (ask the user; default: the project's target, else the repository's default branch)"),
+      sandbox: z.string().optional().describe("Where this run's agents and checks run: docker (containers on this machine) or boxd (cloud VMs). Default: the project's sandbox (capcomd_setup says which, and from where). The result's `sandbox` says which one the run uses"),
       key, project,
     },
     annotations: WRITE,
