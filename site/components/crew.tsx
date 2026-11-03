@@ -67,9 +67,6 @@ export function AgentSuffix({ i }: { i: number }) {
 }
 
 
-/** The goal as typed, for pieces that need the text rather than the title. */
-export const useGoal = () => useCrew().goal;
-
 /** The goal, as each later stage's panel titles the run. */
 export function GoalTitle() {
   const { goal } = useCrew();
