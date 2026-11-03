@@ -162,8 +162,13 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_goal", {
     title: "Goal branch",
-    description: "A goal-branch run's result: the goal branch against its base (commits, files, lines), what each agent landed and how it was reviewed, what didn't land and why, the planner's summary, and whether a pull request can be opened. Show it to the user before capcomd_pr_open.",
-    inputSchema: { runId: run, project }, annotations: READ,
+    description: "A goal-branch run's result: the goal branch against its base (commits, files, lines), what each agent landed and how it was reviewed, what didn't land and why, the planner's summary, and whether a pull request can be opened. Show it to the user before capcomd_pr_open. In a run you drive yourself (no planner agent), pass done: true with a summary once all its work is merged: that makes the goal ready.",
+    inputSchema: {
+      runId: run,
+      done: z.boolean().optional().describe("A run you drive yourself (no planner agent): its work is done (every agent finished, verified work merged). Marks the goal branch ready for the user; refused while an agent still works"),
+      summary: z.string().optional().describe("With done: what landed and what didn't, for the user and the pull request"),
+      project,
+    }, annotations: WRITE,
   }, routed("capcomd_goal", (a) => D.goal(a)));
 
   server.registerTool("capcomd_pr_open", {

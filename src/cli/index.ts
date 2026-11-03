@@ -56,6 +56,8 @@ Usage:
   capcomd pr open <runId> [--yes]          open a pull request from the goal branch into its base (your gh login; idempotent;
                                            capcomd never merges it; a run whose planner stopped asks first, --yes without a
                                            terminal)  ·  capcomd goal keep <runId>: keep the branch, no PR
+  capcomd goal done <runId> [--summary S]  a run you drive yourself (no planner agent): its work is done, the goal
+                                           branch is ready for a pull request (refused while an agent still works)
                                            (default on boxd: the profile named "planner", which capcomd setup writes)
              [--planner-provider claude|codex]  run the planner on that provider (its model and login: the project's
                                            profile on it, else the provider's defaults)
@@ -220,6 +222,7 @@ async function main(argv: string[]): Promise<number> {
         "hermes-entry-per-project": { type: "boolean" },
         "default-project": { type: "boolean" },
         "env-build": { type: "boolean" },
+        summary: { type: "string" },
         "no-env-build": { type: "boolean" },
         approvals: { type: "string" },
         "no-store": { type: "boolean" },
@@ -508,6 +511,12 @@ async function main(argv: string[]): Promise<number> {
       case "goal": {
         // capcomd goal <runId> | capcomd goal keep <runId>
         const G = await import("../primitives/goal");
+        if (positionals[1] === "done") {
+          const runId = positionals[2] ?? usage("runId required: capcomd goal done <runId> [--summary S]");
+          const v = await G.markGoalDone(runId, { by: (values.by as string | undefined) ?? "operator", summary: (values.summary as string | undefined) ?? null });
+          if (json) out({ goal: v }); else console.log(`${v.branch} is ready (${v.landed.length} landed). Open a pull request with \`capcomd pr open ${runId}\`.`);
+          return EXIT.ok;
+        }
         if (positionals[1] === "keep") {
           const runId = positionals[2] ?? usage("runId required: capcomd goal keep <runId>");
           const r = await G.keepGoalBranch(runId, { by: (values.by as string | undefined) ?? "operator" });

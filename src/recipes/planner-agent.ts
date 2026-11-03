@@ -49,6 +49,9 @@ export async function runWithPlanner(opts: RunOptions & { profile: string; drive
   if (!run.created) emit("run.resumed", { runId }, "✓ Run resumed");
   let root: Awaited<ReturnType<typeof spawnAgent>>;
   try {
+    // The run is a planner's: its goal is ready when this agent finishes (not when any top-level agent does).
+    const { rootAgentIdFor, PLANNER_KV } = await import("../primitives/ops");
+    await (await import("../primitives/state")).kvWrite(runId, { k: PLANNER_KV, value: { agentId: rootAgentIdFor(runId, "planner") }, writer: "operator" });
     root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates), key: "planner" });
   } catch (e) {
     // The run started, but its planner can't: the run ends failed with the reason (not left "started" with no agent).

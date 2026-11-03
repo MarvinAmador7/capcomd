@@ -120,8 +120,15 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "description": "The branch it was cut from, which a pull request goes into"
     },
     "plannerId": {
-      "type": "string",
-      "description": "The planner agent whose finish made the run ready"
+      "description": "The planner agent whose finish made the run ready; null when the run's driver marked it done (a run with no planner agent)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "by": {
+      "description": "Who marked it done (driver, operator), in a run with no planner agent",
+      "type": "string"
     },
     "cause": {
       "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",

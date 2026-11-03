@@ -55,7 +55,8 @@ test("base dev, pr mode: verified children land on the goal branch directly, wit
   run = r.j.runId;
   // The goal branch was cut from dev.
   expect(await w.repo.sha(GOAL)).toBe((await w.repo.sha("dev"))!);
-  const root = await spawnRoot(w, run, "planner", planner(), { task: "plan add a and b" });
+  // The run's planner: a top-level agent spawned with the key "planner", as `capcomd run` spawns it.
+  const root = await spawnRoot(w, run, "planner", planner(), { task: "plan add a and b", args: ["--key", "planner"] });
   expect((await waitAll(w, run, [root])).agents[0].status).toBe("done");
   const logs = (await w.cj(["logs", run, root])).j.lines.map((l: any) => l.line).join("\n");
   expect(logs).toMatch(/merge a: merged/);
@@ -127,7 +128,7 @@ const goalRun = async (env: Record<string, string>, key: string, o: { end?: stri
   const root = await spawnRoot(w, id, "planner", w.script(`p-${key}`, `W=${JSON.stringify(worker)}
 id=$(capcomd spawn --profile worker --task "write src/e.txt" --key e --budget turns=10 --children.maxChildren=0 --contract "${job("e")}" | $S/jget agentId)
 capcomd await $id >/dev/null; v=$(capcomd verify --ref $id --key v); capcomd merge --ref $id --require "$(echo "$v" | $S/jget id)" --key m >/dev/null
-${o.end ?? 'capcomd result --summary "Added e." >/dev/null'}`));
+${o.end ?? 'capcomd result --summary "Added e." >/dev/null'}`), { args: ["--key", "planner"] });
   expect((await waitAll(w, id, [root])).agents[0].status).toBe(o.status ?? "done");
   return id;
 };
@@ -233,4 +234,46 @@ test("a cancelled run's empty goal branch is reused by a new run; a live run's, 
   expect(refused.code).not.toBe(0);
   expect(refused.j.error).toMatchObject({ code: "conflict", reason: "goalBranch", message: expect.stringContaining("commits dev doesn't have") });
   expect(await w.repo.sha(G)).toBe(kept);
+}, 120_000);
+
+// A run driven from outside (the user's agent over MCP, or the CLI: no planner agent) isn't ready when its first
+// top-level worker finishes: its driver marks the goal done, once nothing is working, with a summary.
+test("a driver's run: not ready after its first worker; ready when the driver marks it done; then a pull request", async () => {
+  const G = `capcomd/scn-driven-${Date.now().toString(36)}`;
+  const r = await w.cj(["run", "new", "--key", `drv-${G}`, "--goal", "Add f and g", "--goal-branch", G, "--base", "dev"]);
+  expect(r.code).toBe(0);
+  const run = r.j.runId as string;
+  const land = async (f: string) => {
+    const id = (await w.cj(["spawn", run, "--profile", "worker", "--task", `write src/${f}.txt`, "--key", f, "--contract", JSON.stringify({ script: `FILE=src/${f}.txt CONTENT=${f} SPENT=1 ${worker}` })])).j.agentId as string;
+    expect((await waitAll(w, run, [id])).agents[0].status).toBe("done");
+    const v = (await w.cj(["verify", run, "--ref", id, "--key", `v-${f}`])).j;
+    expect(v.state).toBe("passed");
+    expect((await w.cj(["merge", run, "--ref", id, "--require", v.id, "--key", `m-${f}`])).j.state).toBe("merged");
+    return id;
+  };
+  const first = await land("f");
+  const after1 = (await w.cj(["goal", run])).j.goal;
+  expect(after1).toMatchObject({ state: "working", readyAt: null, plannerId: null, driven: true });
+  expect(after1.landed.map((l: any) => l.agentId)).toEqual([first]);
+  const listed = (await rivetSource().runs()).find((x: any) => x.id === run);
+  expect(listed?.goalBranch).toMatchObject({ state: "working", readyAt: null });
+  // Marking it done while an agent works is refused.
+  const slow = (await w.cj(["spawn", run, "--profile", "worker", "--task", "write src/g.txt", "--key", "g-slow", "--contract", JSON.stringify({ script: `SLEEP=3 FILE=src/g.txt CONTENT=g SPENT=1 ${worker}` })])).j.agentId as string;
+  const early = await w.cj(["goal", "done", run, "--summary", "too soon"]);
+  expect(early.code).not.toBe(0);
+  expect(early.j.error).toMatchObject({ code: "conflict", message: expect.stringContaining("still working") });
+  expect((await waitAll(w, run, [slow])).agents[0].status).toBe("done");
+  const v = (await w.cj(["verify", run, "--ref", slow, "--key", "v-g"])).j;
+  expect((await w.cj(["merge", run, "--ref", slow, "--require", v.id, "--key", "m-g"])).j.state).toBe("merged");
+  expect((await w.cj(["goal", run])).j.goal.state).toBe("working");
+  const done = await w.cj(["goal", "done", run, "--summary", "Added f and g."]);
+  expect(done.code).toBe(0);
+  expect(done.j.goal).toMatchObject({ state: "ready", plannerId: null, summary: "Added f and g.", driven: true });
+  expect(done.j.goal.readyAt).toBeTruthy();
+  expect(await types(w, run)).toContain("RUN_GOAL_COMPLETED");
+  // Again: the same, no second event.
+  expect((await w.cj(["goal", "done", run])).code).toBe(0);
+  expect((await types(w, run)).filter((t) => t === "RUN_GOAL_COMPLETED")).toHaveLength(1);
+  const pr = await capcomd(["pr", "open", run, "--json"], { ...w.env, PWD: w.dir });
+  expect(JSON.parse(pr.stdout.trim().split("\n").pop()!)).toMatchObject({ ok: true, created: true });
 }, 120_000);

@@ -364,6 +364,12 @@ export function spawnChecks(ref: string | null, source: Record<string, string | 
   return { resolved, spec };
 }
 
+/** The id `spawnAgent` gives a top-level agent spawned with `key` (stable: the same run and key, the same id). The
+ *  scope actor's plannerOf computes the same for the key "planner". */
+export const rootAgentIdFor = (runId: string, key: string) => stableId("agt", `${runId}\0operator`, key);
+/** kv: the run's planner agent ({agentId}), written by `capcomd run` before it spawns the planner. Reserved. */
+export const PLANNER_KV = "_planner";
+
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
   // A title that would be refused refuses the spawn, before anything is recorded.

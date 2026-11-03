@@ -81,15 +81,18 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
 const SANDBOX_FROM: Record<string, string> = { run: "chosen for this run", environment: "CAPCOMD_SANDBOX in capcomd's environment", project: "the project's setting", user: "your user config", engine: "the engine's own" };
 
 /** The goal branch against its base: what landed, what didn't, the planner's summary, and whether a PR can be opened. */
-export async function goal(a: { runId: string }) {
-  const v = await (await import("../primitives/goal")).goalView(a.runId);
+export async function goal(a: { runId: string; done?: boolean; summary?: string }) {
+  const G = await import("../primitives/goal");
+  // A run you drive yourself (no planner agent) is ready when you say its work is done, with what you did.
+  const v = a.done ? await G.markGoalDone(a.runId, { by: DRIVER, summary: a.summary ?? null }) : await G.goalView(a.runId);
   const f = (id: string, t: string | null) => (t == null ? t : fence(id, t).text);
   return {
     ...v, summary: v.plannerId ? f(v.plannerId, v.summary) : v.summary,
     landed: v.landed.map((l) => ({ ...l, task: f(l.agentId, l.task), review: l.review ? { ...l.review, reasons: l.review.reasons.map((r) => fence(l.review!.agentId ?? l.agentId, r).text) } : null })),
     notLanded: v.notLanded.map((n) => ({ ...n, task: f(n.agentId, n.task), detail: f(n.agentId, n.detail) })),
     compare: { ...v.compare, commits: v.compare.commits.map((c) => ({ ...c, subject: fence("commit", c.subject).text })) },
-    next: v.pullRequest ? `The pull request is #${v.pullRequest.number}${v.pullRequest.url ? ` (${v.pullRequest.url})` : ""}: the user reviews and merges it on GitHub.`
+    next: v.driven && v.state === "working" ? "You drive this run: when every agent's work is verified and merged (or given up), call capcomd_goal {runId, done: true, summary: \"what landed\"}; the user then decides on a pull request."
+      : v.pullRequest ? `The pull request is #${v.pullRequest.number}${v.pullRequest.url ? ` (${v.pullRequest.url})` : ""}: the user reviews and merges it on GitHub.`
       : v.openPullRequest.available && v.openPullRequest.confirm ? `${v.openPullRequest.confirm} Ask the user this, showing what landed and what didn't; only if they say yes, call capcomd_pr_open with stopped: true.`
       : v.openPullRequest.available ? `Show the user what landed and the summary, and ask whether to open a pull request into ${v.base} (capcomd_pr_open) or keep the branch.`
       : `${v.openPullRequest.reason}`,

@@ -19,21 +19,27 @@ export type NotLandedReason =
   | "failed" | "cancelled" | "still_working";
 
 const isReview = (a: Pick<ScopeAgent, "contract">) => !!(a.contract as Record<string, unknown> | null)?.review;
-const isPlanner = (a: Pick<ScopeAgent, "parent" | "contract">) => !a.parent && !isReview(a);
+type Who = Pick<ScopeAgent, "parent" | "contract"> & { agentId?: string };
+/**
+ * Is `a` the run's planner? The run records its planner (`planner`: its id; null: a driver's run, which has none). A
+ * record without the field (older): any top-level agent that isn't a reviewer, as before.
+ */
+const plannerTest = (planner: string | null | undefined) => (a: Who) => planner === undefined ? !a.parent && !isReview(a) : planner !== null && !a.parent && a.agentId === planner;
 const LIVE = new Set(["pending", "running", "paused"]);
 
 /** The goal branch's state from what the scope records and how its planners stand. */
-export function goalStateOf(g: GoalState, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status">>, ended: boolean): GoalBranchState {
+export function goalStateOf(g: GoalState, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status"> & { agentId?: string }>, ended: boolean): GoalBranchState {
   if (g.decision?.choice === "pull_request") return "pr_opened";
   if (g.decision?.choice === "keep") return "kept";
   if (g.ready) return "ready";
-  const planners = agents.filter(isPlanner);
+  // A driver's run (no planner) is ready only when its driver says so (capcomd_goal done); it stops when the run ends.
+  const planners = agents.filter(plannerTest(g.planner));
   if (ended || (planners.length > 0 && planners.every((a) => TERMINAL_AGENT.has(a.status)))) return "stopped";
   return "working";
 }
 
 /** Run.goalBranch: the light summary GET /v1/runs carries. */
-export function goalSummary(g: GoalState | null | undefined, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status">>, ended: boolean) {
+export function goalSummary(g: GoalState | null | undefined, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status"> & { agentId?: string }>, ended: boolean) {
   if (!g) return null;
   const pr = g.decision?.choice === "pull_request" && g.decision.pr ? { number: g.decision.pr.number, url: g.decision.pr.url } : null;
   return { branch: g.branch, base: g.base, state: goalStateOf(g, agents, ended), readyAt: g.ready ? new Date(g.ready.at).toISOString() : null, pullRequest: pr };
@@ -63,7 +69,8 @@ export interface NotLandedWork {
 }
 
 /** What landed on the goal branch and what didn't, from the run's agents and its verify and merge records. */
-export function landedOf(goal: { branch: string }, agents: ScopeAgent[], ops: ScopeOp[]): { landed: LandedWork[]; notLanded: NotLandedWork[] } {
+export function landedOf(goal: { branch: string; planner?: string | null }, agents: ScopeAgent[], ops: ScopeOp[]): { landed: LandedWork[]; notLanded: NotLandedWork[] } {
+  const isPlanner = plannerTest(goal.planner);
   const landed: LandedWork[] = [], notLanded: NotLandedWork[] = [];
   const byAgent = (kind: string, id: string) => ops.filter((o) => o.kind === kind && o.data.agentId === id).sort((a, b) => a.updatedAt - b.updatedAt);
   const hasKids = new Set(agents.map((a) => a.parent).filter(Boolean) as string[]);
@@ -141,9 +148,11 @@ async function pullRequestFit(runId: string, branch: string): Promise<PullReques
 
 /** A stopped goal (the planner failed or was cancelled before it finished): the question to put to the person before a
  *  pull request is opened with what landed. null for any other state. */
-export function stoppedQuestion(state: GoalBranchState, branch: string, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status">>, w: { landed: unknown[]; notLanded: unknown[] }): string | null {
+export function stoppedQuestion(state: GoalBranchState, branch: string, agents: Array<Pick<ScopeAgent, "parent" | "contract" | "status"> & { agentId?: string }>, w: { landed: unknown[]; notLanded: unknown[] }, plannerId?: string | null): string | null {
   if (state !== "stopped") return null;
-  const planner = agents.filter(isPlanner).at(-1);
+  const total0 = w.landed.length + w.notLanded.length;
+  if (plannerId === null) return `The run ended before its goal was marked done: ${w.landed.length} of ${total0} ${total0 === 1 ? "task" : "tasks"} landed on ${branch}. Open a pull request with what landed?`;
+  const planner = agents.filter(plannerTest(plannerId)).at(-1);
   const how = planner?.status === "failed" ? " (it failed)" : planner?.status === "cancelled" ? " (it was cancelled)" : "";
   const total = w.landed.length + w.notLanded.length;
   return `The planner stopped before it finished${how}: ${w.landed.length} of ${total} ${total === 1 ? "task" : "tasks"} landed on ${branch}. Open a pull request with what landed?`;
@@ -164,6 +173,7 @@ export async function goalView(runId: string) {
   const { s, meta, g } = await scopeOf(runId);
   const [agents, ops] = await Promise.all([s.listAgents({}) as Promise<ScopeAgent[]>, s.listOps({}) as Promise<ScopeOp[]>]);
   const state = goalStateOf(g, agents, !!meta.ended);
+  const isPlanner = plannerTest(g.planner);
   const planner = agents.find((a) => a.agentId === g.ready?.plannerId) ?? agents.filter(isPlanner).at(-1) ?? null;
   const { landed, notLanded } = landedOf(g, agents, ops);
   const fit = await pullRequestFit(runId, g.branch);
@@ -178,14 +188,16 @@ export async function goalView(runId: string) {
   return {
     runId, branch: g.branch, base: g.base, state, goal: (meta.goal as string | null) ?? null,
     readyAt: g.ready ? new Date(g.ready.at).toISOString() : null, plannerId: planner?.agentId ?? null,
-    summary: planner && typeof (planner.result as any)?.summary === "string" ? String((planner.result as any).summary).slice(0, 64 * 1024) : null,
+    summary: planner && typeof (planner.result as any)?.summary === "string" ? String((planner.result as any).summary).slice(0, 64 * 1024) : g.ready?.summary ?? null,
+    // A driver's run: it says the goal is done itself (capcomd_goal done: true), its summary is the driver's.
+    driven: g.planner === null,
     compare: "error" in compare
       ? { baseSha: null, headSha: null, ahead: null, behind: null, commits: [], commitsTotal: null, files: [], filesTotal: null, added: null, removed: null, error: compare.error }
       : { baseSha: compare.baseSha, headSha: compare.headSha, ahead: compare.ahead, behind: compare.behind, commits: compare.commits, commitsTotal: compare.ahead,
         ...((d) => ({ files: compare.files.slice(0, GOAL_FILES_MAX).map((f) => ({ path: f.path, oldPath: f.oldPath, status: f.status, added: f.added, removed: f.removed })), filesTotal: d.filesTotal, added: d.added, removed: d.removed }))(pres(compare.files)),
         error: null },
     landed, notLanded, pullRequest: pr,
-    openPullRequest: { available: open.available, reason: open.reason, repo: open.repo, confirm: open.available ? stoppedQuestion(state, g.branch, agents, { landed, notLanded }) : null }, decision,
+    openPullRequest: { available: open.available, reason: open.reason, repo: open.repo, confirm: open.available ? stoppedQuestion(state, g.branch, agents, { landed, notLanded }, g.planner) : null }, decision,
   };
 }
 export const GOAL_FILES_MAX = 200;
@@ -228,6 +240,7 @@ export function pullRequestBody(o: { runId: string; branch: string; summary: str
 
 /** Refuse a choice while the planner works (the user decides once the run is ready). */
 function assertDecidable(agents: ScopeAgent[], g: GoalState) {
+  const isPlanner = plannerTest(g.planner);
   if (agents.some((a) => isPlanner(a) && LIVE.has(a.status)))
     throw new RelayError("conflict", `the planner is still working on ${g.branch}`, "Wait until the run is ready (run.goal_completed), then open the pull request.", { code: "not_ready" });
 }
@@ -259,13 +272,13 @@ export async function openGoalPullRequest(runId: string, o: { by: string; stoppe
   if (!("error" in compare) && compare.ahead === 0) throw new RelayError("conflict", `nothing landed on ${g.branch}: it has no commits that ${g.base} doesn't`, "There is nothing to open a pull request for.", { code: "empty" });
   const { landed, notLanded } = landedOf(g, agents, ops);
   const state = goalStateOf(g, agents, !!meta.ended);
-  const ask = stoppedQuestion(state, g.branch, agents, { landed, notLanded });
+  const ask = stoppedQuestion(state, g.branch, agents, { landed, notLanded }, g.planner);
   if (ask && !o.stopped) throw new RelayError("conflict", ask, "Ask the person first; if they want it, open it with `capcomd pr open <runId> --yes` (POST …/pull-request {\"stopped\": true}).", { code: "stopped" });
-  const planner = agents.find((a) => a.agentId === g.ready?.plannerId) ?? agents.filter(isPlanner).at(-1);
+  const planner = agents.find((a) => a.agentId === g.ready?.plannerId) ?? agents.filter(plannerTest(g.planner)).at(-1);
   const goal = (meta.goal as string | null) ?? (meta.label as string | null) ?? g.branch;
   const title = firstLine(goal, 120) || g.branch;
   const stopped = !ask ? null : planner?.status === "failed" ? "the planner failed" : planner?.status === "cancelled" ? "the planner was cancelled" : "the run ended first";
-  const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : null, landed, notLanded, stopped });
+  const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : g.ready?.summary ?? null, landed, notLanded, stopped });
   const pr = await gh.createPull(fit.repo, { head: g.branch, base: g.base, title, body }).catch((e) => { throw new RelayError("conflict", `GitHub refused the pull request: ${(e as Error).message}`, "Check the branch on GitHub and your access to the repository.", { code: "github" }); });
   return record(view(pr, true));
 }
@@ -280,4 +293,20 @@ export async function keepGoalBranch(runId: string, o: { by: string }) {
     throw e;
   })) as { changed: boolean; decision: GoalDecision };
   return { runId, branch: g.branch, base: g.base, kept: true, changed: r.changed };
+}
+
+/**
+ * A driver's run (no planner agent): the driver says its goal is done, with a summary of what it did. The goal branch
+ * is then ready for the user (run.goal_completed), as a planner run is when its planner finishes. Refused while an agent
+ * works, and in a planner's run.
+ */
+export async function markGoalDone(runId: string, o: { by: string; summary?: string | null }) {
+  await assertEngine();
+  const { s } = await scopeOf(runId);
+  try { await s.goalDone({ by: o.by, summary: o.summary ?? null }); }
+  catch (e) {
+    const m = (e as Error)?.message ?? String(e);
+    throw new RelayError("conflict", m.replace(/^\w+: /, ""), /still working/.test(m) ? "Wait for them (capcomd_await), verify and merge what's done, then mark the goal done." : "A run started with a planner agent is ready when its planner finishes.", { code: "not_ready" });
+  }
+  return goalView(runId);
 }
