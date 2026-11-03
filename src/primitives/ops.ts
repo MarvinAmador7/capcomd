@@ -327,6 +327,9 @@ export async function spawnAgent(o: SpawnOpts) {
   let grant: Grant;
   try { grant = { ...parseGrant(o.contract?.children), ...parseGrant(o.grant) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Grant fan-out with --children.maxChildren=N, --children.maxDepth=N, --children.maxTotalDescendants=N, --children.allowedChildProfiles=a,b, --children.budgetShare=0.5 (each may only narrow the ceiling)."); }
   const hasGrant = Object.keys(grant).length > 0;
+  // Fan-out for a profile that can't spawn (a worker) would have no effect: refuse it by name, with what to do instead.
+  const asksFanOut = grant.allowSpawn === true || (grant.maxChildren ?? 0) > 0 || (grant.maxDepth ?? 0) > 0 || (grant.maxTotalDescendants ?? 0) > 0 || !!grant.allowedChildProfiles?.length;
+  if (asksFanOut && !(spec as any)?.children?.allowSpawn) throw new RelayError("config", `profile ${resolved.name} can't spawn, so children (fan-out) would have no effect on it`, "To delegate a part, spawn a profile that can lead (capcomd_profiles canLead, e.g. lead) with children {maxChildren: N, maxDepth: 1}. For an agent that works alone, leave children out.", { code: "cannot_spawn" });
   // Recorded with the agent (agent.spawned, harness.v1 Agent.model): the model it runs with, as the worker decides it
   // (loadAgentConfig: CAPCOMD_AGENT_MODEL, else the profile's). A fake agent runs no model.
   const model = isRealAgent(resolved.kind) ? agentModel(resolved.spec) : undefined;

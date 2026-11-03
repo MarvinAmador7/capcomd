@@ -69,8 +69,26 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
   }
   const target = goal ? goal.branch : a.target ?? d.target;
   const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(goal ? { goalBranch: goal.branch, base: goal.base } : { ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) }) });
-  return { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
+  const out = { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
     next: goal ? `Spawn agents with capcomd_spawn; verified merges land on ${goal.branch} with no approval. When the work is done, show the user capcomd_goal and ask before capcomd_pr_open.` : "Spawn agents with capcomd_spawn; give each a check name from gates.checks." };
+  return withTeamShape(out, await runCapacity(r.runId));
+}
+
+// ── team shape (how many agents run at once here; the skill's "Choose a team shape") ───────────────
+
+/** The capacity of the place a run's agents use: its own sandbox when it has one, else this process's. */
+async function runCapacity(runId: string | null) {
+  const { placeCapacity } = await import("../providers/capacity");
+  const { runSandbox } = await import("../providers/run-sandbox");
+  const { sandboxName } = await import("../providers/registry");
+  let place: string;
+  try { place = (runId ? await runSandbox(runId) : null) ?? sandboxName(); } catch { place = "fake"; }
+  return placeCapacity(place);
+}
+/** A result with `capacity` and the plan-the-team-shape hint in front of its `next`. */
+async function withTeamShape<T extends { next?: string }>(out: T, capacity: Awaited<ReturnType<typeof runCapacity>>) {
+  const { teamShapeHint } = await import("../providers/capacity");
+  return { ...out, capacity, next: [teamShapeHint(capacity), out.next].filter(Boolean).join(" ") };
 }
 
 /** The goal branch against its base: what landed, what didn't, the planner's summary, and whether a PR can be opened. */
@@ -402,13 +420,21 @@ export async function setup() {
     ready: steps.every((s) => s.ok), steps,
     gates: { checks: d.checks ?? {}, reviewer: d.reviewer ?? null, target: d.target ?? null },
     driver: { approvals: p.approvals ?? "human", maxRunBudget: p.maxRunBudget ?? null },
+    // How many agents run at once here (the team shape's budget of parallelism).
+    capacity: await runCapacity(null),
     next: steps.every((s) => s.ok) ? "Start with capcomd_run_new." : "Ask the user to run `capcomd setup` in this repository (or `capcomd setup --yes` for the defaults).",
   };
 }
 
 export async function profiles() {
-  const { agentsFilePath, readAgentsFile } = await import("../agents/profiles");
+  const { agentsFilePath, readAgentsFile, leadText, abilityText } = await import("../agents/profiles");
   const { readiness } = await import("../cli/commands/agents");
   const f = readAgentsFile(agentsFilePath());
-  return { default: f.default ?? null, profiles: Object.entries(f.agents).map(([name, s]) => ({ name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, ...readiness(name, s) })) };
+  const profiles = Object.entries(f.agents).map(([name, s]) => ({ name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, canLead: leadText(s), does: abilityText(s), ...readiness(name, s) }));
+  const leads = profiles.filter((p) => p.canLead).map((p) => p.name);
+  return {
+    default: f.default ?? null, profiles,
+    next: leads.length ? `To give a part with two or more independent sub-parts a lead, spawn ${leads.join(" or ")} with children: {maxChildren: N, maxDepth: 1} (skill: Choose a team shape).`
+      : "No profile here can lead (spawn helpers): every agent does its task itself. Ask the user to run `capcomd setup project` again for a lead profile, or `capcomd agents add lead …`.",
+  };
 }

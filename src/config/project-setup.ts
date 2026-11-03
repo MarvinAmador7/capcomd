@@ -56,6 +56,35 @@ export function suggestCheck(dir: string): string | null {
   } catch { return null; }
 }
 
+/** The project's package manager, from its lockfile (else the check's own command, else npm for a package.json). */
+function packageManager(dir: string, check: string): "bun" | "pnpm" | "yarn" | "npm" | null {
+  if (existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"))) return "bun";
+  if (existsSync(join(dir, "pnpm-lock.yaml"))) return "pnpm";
+  if (existsSync(join(dir, "yarn.lock"))) return "yarn";
+  const first = /^\s*(bun|pnpm|yarn|npm)\b/.exec(check)?.[1] as "bun" | "pnpm" | "yarn" | "npm" | undefined;
+  if (first) return first;
+  return existsSync(join(dir, "package.json")) ? "npm" : null;
+}
+
+/**
+ * The Bash rules a read-only reviewer needs to run the project's tests: each command of the check (its first two
+ * words, e.g. `bun run test && bun x tsc` → `Bash(bun run:*)`, `Bash(bun x:*)`), and the test runner of the project's
+ * package manager or toolchain (`bun test`, `npm test`, `pnpm test`, `yarn test`, `cargo test`, `go test`, `pytest`).
+ */
+export function testTools(check: string, dir: string): string[] {
+  const rules = new Set<string>();
+  for (const part of check.split(/&&|\|\||;|\|/)) {
+    const words = part.trim().split(/\s+/).filter((w) => w && !/^[A-Z_][A-Z0-9_]*=/.test(w));
+    if (words.length) rules.add(`Bash(${words.slice(0, 2).join(" ")}:*)`);
+  }
+  const pm = packageManager(dir, check);
+  if (pm) for (const sub of ["test", "run"]) rules.add(`Bash(${pm} ${sub}:*)`);
+  if (existsSync(join(dir, "Cargo.toml"))) rules.add("Bash(cargo test:*)");
+  if (existsSync(join(dir, "go.mod"))) rules.add("Bash(go test:*)");
+  if (["pyproject.toml", "setup.py", "pytest.ini"].some((f) => existsSync(join(dir, f)))) { rules.add("Bash(pytest:*)"); rules.add("Bash(python -m pytest:*)"); }
+  return [...rules];
+}
+
 /** The path with its symlinks resolved, as far as they exist (the rest appended). */
 export function realish(f: string): string {
   const d = dirname(f);
@@ -100,7 +129,8 @@ export interface ProjectPlan {
   /** What goes into .capcomd/config.json (merged into what's there). */
   patch: CapcomdConfig;
   cap: string | null;
-  /** The profiles to add, in order: one worker per agent, a read-only reviewer, a planner that may spawn the workers. */
+  /** The profiles to add, in order: one worker per agent, a read-only reviewer, a lead and a planner that may spawn
+   *  the workers. */
   profiles: Array<[string, Record<string, unknown>]>;
 }
 
@@ -112,7 +142,11 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
   const workers = a.agents.map((x) => (x === provider ? "worker" : `${x}-worker`));
   const profiles: Array<[string, Record<string, unknown>]> = [
     ...a.agents.map((x, i): [string, Record<string, unknown>] => [workers[i]!, { provider: x, auth: a.authOf(x) }]),
-    ["reviewer", { provider, auth, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...(a.check ? [`Bash(${a.check.split(" ").slice(0, 2).join(" ")}:*)`] : [])] }],
+    ["reviewer", { provider, auth, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...testTools(a.check, a.dir)] }],
+    // A module lead: the worker's settings (so it runs any check or test itself), and up to 3 worker helpers at once,
+    // one level down. The driver spawns it for a part with two or more independent sub-parts; it verifies and merges
+    // its helpers' work itself, or hands its branch back.
+    ["lead", { provider, auth, children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }],
     // No fan-out limits either: the planner may spawn workers as it sees fit (set children.* to bound it).
     ["planner", { provider, auth, children: { allowSpawn: true, allowedChildProfiles: workers } }],
   ];

@@ -192,6 +192,27 @@ const SANDBOX_RANK: Record<string, number> = { "read-only": 0, "workspace-write"
 const DEFAULT_SANDBOX = "workspace-write";
 
 /**
+ * Whether a profile can lead (spawn helpers), in plain words for a driver choosing a team shape: "up to 3 worker
+ * helpers, one level"; null when it can't spawn (then fan-out in `children` on its spawn is refused: it would do nothing).
+ */
+export function leadText(s: Pick<AgentSpec, "children">): string | null {
+  const c = s.children;
+  if (!c?.allowSpawn || !c.allowedChildProfiles?.length) return null;
+  const who = c.allowedChildProfiles.join(" or ");
+  const many = c.maxChildren === undefined ? `any number of ${who} helpers` : `up to ${c.maxChildren} ${who} helper${c.maxChildren === 1 ? "" : "s"}`;
+  const depth = c.maxDepth === undefined ? "any depth" : c.maxDepth === 1 ? "one level" : `${c.maxDepth} levels`;
+  return `${many}, ${depth}`;
+}
+
+/** What a profile is for, in plain words (capcomd_profiles, `capcomd agents list`). */
+export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools">): string {
+  const lead = leadText(s);
+  if (lead) return `leads a part: spawns ${lead}, and verifies and merges their work (spawn it with children: {maxChildren, maxDepth} to size it)`;
+  const ro = s.allowedTools?.length && !s.allowedTools.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t));
+  return ro ? "reads and runs its allowed commands (read-only: a reviewer); can't spawn helpers" : "does its task itself; can't spawn helpers (fan-out for it is refused)";
+}
+
+/**
  * Narrowing check: does `next` grant nothing beyond `base`? Returns the widenings found.
  * Limits must be <=, allow-lists subsets, deny-lists supersets, sandbox no looser,
  * children policy no broader. Unset in base = the harness default/unbounded for that field.
