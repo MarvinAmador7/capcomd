@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { z } from "zod";
-import { ACTIVITY_DOC, ApiError, CAPABILITIES, CAPABILITY_NAMES, ATTACHMENT_CONTENT_DOC, BINARY_ROUTES, contract, ERROR_STATUSES, EventData, LIFECYCLE_DOC, StreamFrames, STREAM_DOC, THREAD_DOC, THREAD_STREAM_DOC, WORKSPACE_FILE_DOC } from "../src/api/contract";
+import { ACTIVITY_DOC, ApiError, CAPABILITIES, CAPABILITY_NAMES, ATTACHMENT_CONTENT_DOC, BINARY_ROUTES, contract, ERROR_STATUSES, EventData, LIFECYCLE_DOC, StreamFrames, STREAM_DOC, THREAD_DOC, THREAD_STREAM_DOC, THREAD_TAIL_DOC, WORKSPACE_FILE_DOC } from "../src/api/contract";
 import { Block, Inline, Link, ListItem, MediaSource, THREAD_FORMAT, ThreadItem, threadItemJsonSchema } from "../packages/agent-thread/src/index";
 import { HarnessEvent, TIMESTAMP_DOC, TIMESTAMP_PATTERN } from "../src/api/envelope";
 import { AgentWorkspace, WORKSPACE_DOC } from "../src/api/workspace";
@@ -54,7 +54,8 @@ for (const [id, s] of Object.entries<z.ZodType>({ ThreadItem, ThreadBlock: Block
 const threadSchemas = (z.toJSONSchema(threadReg, { uri: (id) => `#/components/schemas/${id}`, unrepresentable: "any" }) as any).schemas as Record<string, any>;
 for (const s of Object.values(threadSchemas)) { delete s.$schema; delete s.id; delete s.$id; }
 const threadRef = { $ref: "#/components/schemas/ThreadItem" };
-(spec as any).paths["/v1/runs/{runId}/agents/{agentId}/thread"].get.responses["200"].content["application/json"].schema.properties.items.items = threadRef;
+for (const p of ["/v1/runs/{runId}/agents/{agentId}/thread", "/v1/runs/{runId}/agents/{agentId}/thread/tail"])
+	(spec as any).paths[p].get.responses["200"].content["application/json"].schema.properties.items.items = threadRef;
 payloads.AgentThreadItemChangedData = { type: "object", properties: { agentId: { type: "string" }, item: threadRef }, required: ["agentId", "item"], additionalProperties: {}, description: (EventData as any)["agent.thread_item_changed"].description, "x-event-type": "agent.thread_item_changed" };
 (spec as any).components = { ...(spec as any).components, schemas: { ...(spec as any).components?.schemas, Error: errorSchema, ...payloads, ...threadSchemas } };
 for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) {
@@ -140,7 +141,7 @@ hc += `\`\`\`json\n${JSON.stringify(nullFold(z.toJSONSchema(HarnessEvent)), null
 hc += `\n## Agent activity\n\n${ACTIVITY_DOC}\n`;
 const itemSchema = nullFold(threadItemJsonSchema()) as any;
 delete itemSchema.$schema;
-hc += `\n## Agent threads\n\n${THREAD_DOC}\n\n### Live items\n\n${THREAD_STREAM_DOC}\n\n### Media files\n\n${WORKSPACE_FILE_DOC}\n\n${ATTACHMENT_CONTENT_DOC}\n`;
+hc += `\n## Agent threads\n\n${THREAD_DOC}\n\n### Newest first\n\n${THREAD_TAIL_DOC}\n\n### Live items\n\n${THREAD_STREAM_DOC}\n\n### Media files\n\n${WORKSPACE_FILE_DOC}\n\n${ATTACHMENT_CONTENT_DOC}\n`;
 hc += `\n### Security\n\nAgent text stays untrusted inside the tree. Clients show a web link's host next to its text, and the full URL when \`mismatch\` is set; \`none\` links are plain text; remote media never loads by itself (only on an explicit click), and attachment, inline and workspace media load through the daemon only (the raw routes above: nosniff, a CSP that runs nothing, never HTML or svg). No client action is ever derived from item text.\n`;
 hc += `\n### Item schema (\`${THREAD_FORMAT}\`)\n\nAlso exported by packages/agent-thread (\`threadItemJsonSchema()\`); golden sessions for other languages' decoders are in packages/agent-thread/fixtures/golden.\n\n\`\`\`json\n${JSON.stringify(itemSchema, null, 2)}\n\`\`\`\n`;
 hc += `\n## Event types\n\n${Object.keys(EventData).map((t) => `- [\`${t}\`](events.md#${t.replace(/\./g, "")})`).join("\n")}\n`;

@@ -46,6 +46,19 @@ async function itemsAfter(s: Scope, after: number, limit: number, agentId?: stri
 	return out;
 }
 
+/** One agent's items placed before `before` (null: the newest), newest first, in calls of ITEMS_PER_CALL rows. */
+async function itemsBefore(s: Scope, agentId: string, before: number | null, limit: number): Promise<any[]> {
+	const out: any[] = [];
+	for (let cur = before; out.length < limit;) {
+		const want = Math.min(ITEMS_PER_CALL, limit - out.length);
+		const rows = (await s.getItemsBefore({ agentId, ...(cur === null ? {} : { before: cur }), limit: want })) as any[];
+		out.push(...rows);
+		if (rows.length < want) break;
+		cur = rows.at(-1)!.order;
+	}
+	return out;
+}
+
 /** harness.v1 Agent.provider/model from the spec recorded at spawn ({...profile, kind, model}): the profile's provider,
  * else the runner's (an agent chosen by CAPCOMD_AGENT has no profile); a fake agent has neither. */
 export function agentRuntime(spec: unknown): { provider: "claude" | "codex" | null; model: string | null; effort: string | null } {
@@ -281,6 +294,12 @@ export function rivetSource(): HarnessSource {
 			const a = s ? await s.getAgent({ agentId }).catch(() => null) : null;
 			if (!s || !a) return null;
 			return itemsAfter(s, after, limit, agentId);
+		},
+		threadBefore: async (runId, agentId, before, limit) => {
+			const s = await existingScope(runId).catch(() => null);
+			const a = s ? await s.getAgent({ agentId }).catch(() => null) : null;
+			if (!s || !a) return null;
+			return itemsBefore(s, agentId, before, limit);
 		},
 		threadAfter: async (runId, after, limit) => existingScope(runId).then((s) => (s ? itemsAfter(s, after, limit) : [])).catch(() => []),
 		threadHead: async (runId) => Number(await existingScope(runId).then((s) => s?.itemsHead() ?? 0).catch(() => 0)),

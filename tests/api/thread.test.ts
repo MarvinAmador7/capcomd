@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addClient, loadClients } from "../../src/api/clients";
-import { EventData, ThreadItem, ThreadPage } from "../../src/api/contract";
+import { CAPABILITY_NAMES, EventData, ThreadItem, ThreadPage, ThreadTail } from "../../src/api/contract";
 import { HarnessEvent } from "../../src/api/envelope";
 import { INLINE_TEXT_MAX_BYTES } from "../../src/api/inline-cap";
 import { harnessApp, servedType } from "../../src/api/server";
@@ -95,6 +95,103 @@ describe("GET …/thread", () => {
 
 	test("the per-item cap is the daemon's inline text cap", () => {
 		expect(ITEM_MAX_BYTES).toBe(INLINE_TEXT_MAX_BYTES);
+	});
+});
+
+describe("GET …/thread/tail (agents.thread_tail)", () => {
+	/** Highest rev of each id wins, sorted by position: the thread as a client holds it. */
+	const merge = (...pages: any[][]) => {
+		const m = new Map<string, any>();
+		for (const it of pages.flat()) if (!m.has(it.id) || m.get(it.id).rev < it.rev) m.set(it.id, it);
+		return [...m.values()].sort((a, b) => a.order - b.order);
+	};
+	const tail = async (req: ReturnType<typeof app>["req"], q = "") => {
+		const res = await req(`/v1/runs/run-1/agents/a1/thread/tail${q}`);
+		expect(res.status).toBe(200);
+		const body = await res.json() as any;
+		expect(ThreadTail.safeParse(body).success).toBe(true);
+		return body;
+	};
+
+	test("advertised in /v1/health", async () => {
+		const { req } = app();
+		expect(CAPABILITY_NAMES).toContain("agents.thread_tail");
+		expect(((await (await req("/v1/health")).json()) as any).capabilities).toContain("agents.thread_tail");
+	});
+
+	test("the newest items by position, oldest first, each at its latest rev; `before` pages up until null; 404s", async () => {
+		const { req, feed } = app();
+		feed(toolUse("t0", "Glob", { pattern: "*.ts" }));   // placed first, finished last: its position stays first
+		for (let i = 0; i < 9; i++) feed(say(`message ${i}`));
+		feed(toolResult("t0"));
+		const p1 = await tail(req, "?limit=4");
+		expect(p1.items.map((i: any) => i.text)).toEqual([5, 6, 7, 8].map((i) => `message ${i}`));
+		expect(p1.items.map((i: any) => i.order)).toEqual([...p1.items.map((i: any) => i.order)].sort((a: number, b: number) => a - b));
+		expect(p1.before).toBe(p1.items[0].order);
+		const p2 = await tail(req, `?limit=4&before=${p1.before}`);
+		expect(p2.items.map((i: any) => i.text)).toEqual([1, 2, 3, 4].map((i) => `message ${i}`));
+		const p3 = await tail(req, `?limit=4&before=${p2.before}`);
+		expect(p3.items.map((i: any) => [i.kind, i.text ?? null])).toEqual([["tool", expect.anything()], ["say", "message 0"]]);
+		expect(p3.items[0]).toMatchObject({ status: "done", rev: 2 });
+		expect(p3.before).toBeNull();
+		// Together: the whole thread, each item once, as a read from the start gives it.
+		const all = [...p3.items, ...p2.items, ...p1.items];
+		expect(new Set(all.map((i) => i.id)).size).toBe(all.length);
+		const full = await (await req("/v1/runs/run-1/agents/a1/thread?limit=500")).json() as any;
+		expect(all).toEqual(merge(full.items));
+		// Defaults: everything fits one page.
+		const whole = await tail(req);
+		expect([whole.items.length, whole.before]).toEqual([10, null]);
+		expect((await req("/v1/runs/run-1/agents/nope/thread/tail")).status).toBe(404);
+		expect((await req("/v1/runs/run-x/agents/a1/thread/tail")).status).toBe(404);
+		expect((await req("/v1/runs/run-1/agents/a1/thread/tail?limit=501")).status).toBe(422);
+	});
+
+	test("an empty thread: no items, nothing above, the run's cursor", async () => {
+		const { req } = app();
+		expect(await tail(req)).toEqual({ items: [], before: null, cursor: 0 });
+	});
+
+	test("the cursor joins the route: every write after the tail comes back by `after`, none is lost or doubled", async () => {
+		const { req, feed, st } = app();
+		feed(toolUse("t1"));                                  // open, above the tail's page
+		for (let i = 0; i < 6; i++) feed(say(`message ${i}`));
+		feed(toolUse("t2"));                                  // open, in the tail's page
+		const t = await tail(req, "?limit=3");
+		expect(t.cursor).toBe(Math.max(...st.items.map((i) => i.seq)));
+		// Writes after the tail was read: both tools finish, two new messages.
+		feed(toolResult("t1")); feed(toolResult("t2")); feed(say("after the tail")); feed(say("and another"));
+		const caught = await (await req(`/v1/runs/run-1/agents/a1/thread?after=${t.cursor}`)).json() as any;
+		expect(caught.items.every((i: any) => i.seq > t.cursor)).toBe(true);
+		const floor = t.items[0].order;
+		const shown = merge(t.items, caught.items).filter((i) => i.order >= floor);
+		const truth = merge(st.items).filter((i) => i.order >= floor);
+		expect(shown).toEqual(truth);
+		expect(shown.filter((i) => i.kind === "tool").map((i) => [i.status, i.rev])).toEqual([["done", 2]]);   // t2, finished after the tail
+		// t1 changed above the page: it came by cursor at its latest rev; a page above reaches it later, the same.
+		const t1 = caught.items.find((i: any) => i.order < floor);
+		expect(t1).toMatchObject({ kind: "tool", status: "done", rev: 2 });
+		let above: any[] = [];
+		for (let before = t.before; before !== null;) { const p = await tail(req, `?limit=2&before=${before}`); above = [...p.items, ...above]; before = p.before; }
+		expect(merge(above, t.items, caught.items)).toEqual(merge(st.items));
+	});
+
+	test("the cursor joins the live stream: open the stream, read the tail, then frames and `after` meet with no gap", async () => {
+		const { req, feed, st } = app();
+		for (let i = 0; i < 5; i++) feed(say(`old ${i}`));
+		const res = await req("/v1/streams/run-1/events?thread=1");
+		await Bun.sleep(30);                                  // the stream's poller has its starting point
+		const t = await tail(req, "?limit=2");
+		setTimeout(() => { feed(toolUse("t9")); feed(say("live one")); }, 40);
+		setTimeout(() => feed(toolResult("t9")), 200);
+		const text = await read(res, 1500, /"rev":2/);
+		const live = frames(text).map((f) => env(f).data.item);
+		expect(live.length).toBeGreaterThan(0);
+		expect(live.every((i) => i.seq > t.cursor)).toBe(true);
+		const caught = await (await req(`/v1/runs/run-1/agents/a1/thread?after=${t.cursor}`)).json() as any;
+		const floor = t.items[0].order;
+		expect(merge(t.items, live, caught.items).filter((i) => i.order >= floor)).toEqual(merge(st.items).filter((i) => i.order >= floor));
+		expect(merge(t.items, live).filter((i) => i.order >= floor).map((i) => (i.kind === "say" ? i.text : `${i.kind} ${i.status}`))).toEqual(["old 3", "old 4", "tool done", "live one"]);
 	});
 });
 
