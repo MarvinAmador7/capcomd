@@ -177,7 +177,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     let depsInstalled = false;
     if (lockFile !== "none") {
       const pm = o.warm ? await packageManager(sh, T, lockFile, home, log) : null;
-      const cmd = pm ?? (lockFile.startsWith("bun") ? "bun install --frozen-lockfile" : lockFile === "package-lock.json" ? "npm ci --no-fund --no-audit" : lockFile === "pnpm-lock.yaml" ? "npx --yes pnpm install --frozen-lockfile" : "npx --yes yarn install --frozen-lockfile");
+      const cmd = pm ?? defaultInstall(lockFile);
       const tool = cmd.split(" ")[0]!;
       const has = (await sh(`command -v ${tool} >/dev/null && echo yes; true`)).stdout.includes("yes");
       if (has) {
@@ -245,6 +245,9 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
 
 type Sh = (s: string, timeoutMs?: number) => Promise<{ code: number; stdout: string; stderr: string }>;
 
+/** A lockfile's frozen install with the package manager it names (no pin). */
+export const defaultInstall = (lockFile: string) => lockFile.startsWith("bun") ? "bun install --frozen-lockfile" : lockFile === "package-lock.json" ? "npm ci --no-fund --no-audit" : lockFile === "pnpm-lock.yaml" ? "npx --yes pnpm install --frozen-lockfile" : "npx --yes yarn install --frozen-lockfile";
+
 /** `packageManager` in package.json ("pnpm@9.12.0+sha512…"): the name and exact version, or null. */
 export function pinnedManager(field: string): { name: string; version: string } | null {
   const m = /^(bun|pnpm|yarn|npm)@(\d+\.\d+\.\d+[\w.-]*)/.exec(field.trim());
@@ -256,7 +259,7 @@ export function pinnedManager(field: string): { name: string; version: string } 
  * needs in the agent home when the image has none: the version the project pins (`packageManager`, `.bun-version`),
  * else CAPCOMD_BUN_VERSION or BUN_VERSION for bun. null: the default command (npm ci, or the image's own tool).
  */
-async function packageManager(sh: Sh, T: string, lockFile: string, home: string, log: (l: string) => void): Promise<string | null> {
+export async function packageManager(sh: Sh, T: string, lockFile: string, home: string, log: (l: string) => void): Promise<string | null> {
   const out = (await sh(`cd ${sq(T)} && printf 'pm=%s\\nbv=%s\\n' "$(node -p 'try { require("./package.json").packageManager || "" } catch { "" }' 2>/dev/null)" "$(cat .bun-version 2>/dev/null)"; true`)).stdout;
   const val = (k: string) => new RegExp(`^${k}=(.*)$`, "m").exec(out)?.[1]?.trim() ?? "";
   const pin = pinnedManager(val("pm"));

@@ -17,7 +17,7 @@ export function checksMode(source: Record<string, string | undefined> = process.
 }
 
 /** Run the repo's test command in the merged worktree. No command configured = pass (reported). */
-export async function runTests(git: Git, command: string, env: Record<string, string>): Promise<{ passed: boolean; output: string; where?: ChecksMode | "reused" }> {
+export async function runTests(git: Git, command: string, env: Record<string, string>): Promise<{ passed: boolean; output: string; where?: ChecksMode | "reused"; stage?: ChecksStage }> {
   if (!command.trim()) return { passed: true, output: "(no test command configured)" };
   // The same tree already passed the same command (verify, then a merge onto a target that hasn't moved): its result
   // is known, so no second run, and no second checks VM. Only passes are kept; CAPCOMD_CHECKS_REUSE=0 turns it off.
@@ -25,7 +25,7 @@ export async function runTests(git: Git, command: string, env: Record<string, st
   const cache = key ? await passFile(git) : null;
   const prior = key && cache ? passes(cache).get(key) : undefined;
   if (prior) return { passed: true, output: `(this tree passed \`${command}\` at ${new Date(prior.at).toISOString()}; not run again)\n${prior.output}`.slice(-4000), where: "reused" };
-  let r: { passed: boolean; output: string; where: ChecksMode };
+  let r: { passed: boolean; output: string; where: ChecksMode; stage?: ChecksStage };
   // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
   const source = await (await import("../providers/run-sandbox")).runSandboxEnv(env.CAPCOMD_RUN_ID);
   if (checksMode(source) === "vm") r = { ...(await runInVm(git, command, env, source)), where: "vm" };
@@ -79,7 +79,11 @@ const CHECKS_TIMEOUT_MS = () => Number(process.env.CAPCOMD_CHECKS_TIMEOUT_MS ?? 
  * no .git), deps reused from the snapshot when the lockfile matches (else installed), the command with
  * only the run/task/target ids in its env, and the VM always destroyed.
  */
-async function runInVm(git: Git, command: string, env: Record<string, string>, source: Record<string, string | undefined> = process.env): Promise<{ passed: boolean; output: string }> {
+/** Why checks didn't pass when it wasn't the check command: the sandbox couldn't be set up (`setup`: a missing tool, an
+ *  upload), or the branch's dependencies didn't install (`deps`). Absent: the command ran and failed. */
+export type ChecksStage = "setup" | "deps";
+
+async function runInVm(git: Git, command: string, env: Record<string, string>, source: Record<string, string | undefined> = process.env): Promise<{ passed: boolean; output: string; stage?: ChecksStage }> {
   const { providerNamed } = await import("../dependencies");
   const { loadAgentConfig, BASE_EGRESS } = await import("../agents/config");
   const { agentHome, agentPath, templateDir, sq } = await import("../agents/runner");
@@ -109,18 +113,31 @@ async function runInVm(git: Git, command: string, env: Record<string, string>, s
     await provider.waitReady(id, 120_000);
     const archive = Bun.spawn(["git", "archive", "--format=tar", "HEAD"], { cwd: git.cwd, stdout: "pipe", stderr: "pipe" });
     const [tar, archiveErr, code] = await Promise.all([new Response(archive.stdout).arrayBuffer(), new Response(archive.stderr).text(), archive.exited]);
-    if (code !== 0) return { passed: false, output: `checks VM: git archive failed: ${archiveErr.slice(-500)}` };
+    if (code !== 0) return { passed: false, stage: "setup", output: `checks VM: git archive failed: ${archiveErr.slice(-500)}` };
     await provider.upload(id, `${W}.tar`, new Uint8Array(tar));
     const unpack = await sh(`rm -rf ${sq(W)} && mkdir -p ${sq(W)} && tar -xf ${sq(`${W}.tar`)} -C ${sq(W)} && rm -f ${sq(`${W}.tar`)}`);
-    if (unpack.code !== 0) return { passed: false, output: `checks VM: unpacking the tree failed: ${(unpack.stderr || unpack.stdout).slice(-500)}` };
-    // Deps: the snapshot's node_modules when the lockfile matches; else a frozen install.
+    if (unpack.code !== 0) return { passed: false, stage: "setup", output: `checks VM: unpacking the tree failed: ${(unpack.stderr || unpack.stdout).slice(-500)}` };
+    // Deps: the snapshot's node_modules when the lockfile matches; else a frozen install with the package manager the
+    // project pins, put in the agent home first when the image lacks it (as `capcomd env build` does).
     const T = templateDir(cfg);
-    const deps = await sh(`cd ${sq(W)} || exit 1
+    const found = await sh(`cd ${sq(W)} || exit 1
 L=; F=; for f in bun.lock bun.lockb package-lock.json pnpm-lock.yaml yarn.lock; do [ -f "$f" ] && { F=$f; L=$(sha256sum "$f" | cut -c1-64); break; }; done
 if [ -z "$F" ]; then echo "deps: none"; exit 0; fi
 if [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-lockhash 2>/dev/null || cat ${sq(T)}/.git/capcomd-lockhash 2>/dev/null)" = "$L" ]; then cp -a ${sq(T)}/node_modules node_modules && echo "deps: reused"; exit 0; fi
-case "$F" in bun.lock*) bun install --frozen-lockfile;; package-lock.json) npm ci --no-fund --no-audit;; pnpm-lock.yaml) npx --yes pnpm install --frozen-lockfile;; *) npx --yes yarn install --frozen-lockfile;; esac`, 900_000);
-    if (deps.code !== 0) return { passed: false, output: `checks VM: installing dependencies failed (exit ${deps.code}): ${(deps.stdout + deps.stderr).slice(-1500)}` };
+echo "deps: install $F"`);
+    if (found.code !== 0) return { passed: false, stage: "setup", output: `checks VM: reading the lockfile failed: ${(found.stdout + found.stderr).slice(-500)}` };
+    const lock = /^deps: install (\S+)$/m.exec(found.stdout)?.[1];
+    if (lock) {
+      const { packageManager, defaultInstall } = await import("../env/build");
+      const notes: string[] = [];
+      const cmd = (await packageManager(sh, W, lock, home, (l) => notes.push(l)).catch(() => null)) ?? defaultInstall(lock);
+      const tool = cmd.split(" ")[0]!;
+      const rebuild = `capcomd env build --sandbox ${place ?? "docker"}`;
+      if (!(await sh(`command -v ${tool} >/dev/null && echo yes; true`)).stdout.includes("yes"))
+        return { passed: false, stage: "setup", output: `checks VM: ${tool} isn't in the agent environment image and couldn't be installed, so ${lock}'s dependencies weren't installed (the checks didn't run). Run \`${rebuild}\`, then verify again.${notes.length ? `\n${notes.join("\n")}` : ""}` };
+      const deps = await sh(`cd ${sq(W)} && ${cmd}`, 900_000);
+      if (deps.code !== 0) return { passed: false, stage: deps.code === 127 ? "setup" : "deps", output: `checks VM: installing dependencies failed (\`${cmd}\`, exit ${deps.code})${deps.code === 127 ? `: a command is missing from the agent environment image; run \`${rebuild}\`` : ""}: ${(deps.stdout + deps.stderr).slice(-1500)}` };
+    }
     const ids = Object.entries(env).map(([k, v]) => `${k}=${sq(v)}`).join(" ");
     const run = await sh(`cd ${sq(W)} && env ${ids} sh -c ${sq(command)}`, CHECKS_TIMEOUT_MS());
     return { passed: run.code === 0, output: (run.stdout + run.stderr).slice(-4000) };
@@ -128,4 +145,11 @@ case "$F" in bun.lock*) bun install --frozen-lockfile;; package-lock.json) npm c
     await provider.destroy(id).catch(() => {});
     release();
   }
+}
+
+/** A failed checks result's reason: the tests, or the setup/install before them (not the branch's tests). */
+export function checksFailReason(t: { stage?: ChecksStage }): string {
+  return t.stage === "setup" ? "checks couldn't run: setting up the checks sandbox failed (not the branch's tests)"
+    : t.stage === "deps" ? "installing dependencies failed on branch merged with latest target"
+    : "tests failed on branch merged with latest target";
 }

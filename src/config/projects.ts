@@ -65,3 +65,24 @@ export function findProject(arg: string, list: ProjectEntry[]): ProjectEntry | n
   const p = expand(arg);
   return list.find((x) => samePath(x.path, p)) ?? null;
 }
+
+/**
+ * Put the checkout at `dir` on the projects list the MCP server reads (capcomd_projects, a tool's `project`), so an agent
+ * sees it as soon as it's set up; `makeDefault` makes it the default. What `capcomd setup project` (and `setup agent`
+ * in a checkout) does, with or without Hermes.
+ */
+export function registerProject(dir: string, o: { makeDefault?: boolean } = {}, env: Source = process.env): { project: ProjectEntry; added: boolean; madeDefault: boolean; isDefault: boolean } {
+  const a = addProject(dir, env);
+  let madeDefault = a.madeDefault;
+  const cur = readProjects(env);
+  if (o.makeDefault && cur.default !== a.project.name) {
+    writeConfig(userConfigPath(env), { projects: { list: cur.list, default: a.project.name } });
+    madeDefault = true;
+  }
+  return { ...a, madeDefault, isDefault: madeDefault || readProjects(env).default === a.project.name };
+}
+
+/** One line for setup: what happened to the project list. */
+export function registeredLine(r: ReturnType<typeof registerProject>, configPath: string): string {
+  return `${r.added ? "added" : "already listed:"} ${r.project.name} (${r.project.path}) ${r.added ? "to" : "in"} capcomd's projects (${configPath})${r.madeDefault ? ", now the default" : r.isDefault ? ", the default" : ""}: agents see it in capcomd_projects`;
+}

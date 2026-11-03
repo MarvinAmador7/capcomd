@@ -25,7 +25,7 @@ import { agentWorkflowOn } from "../utils/agent-workflow-flag";
 function agentsChanged(c: any): void {
   try { c.broadcast("agentsChanged", { at: Date.now() }); } catch { /* no connections: nothing to tell */ }
 }
-import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
+import { stableId, available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import type { AttachedSkill } from "../agents/skills";
 import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
@@ -167,12 +167,35 @@ async function goalOf(tx: any): Promise<{ branch: string; base: string } | null>
   const v = JSON.parse(r[0]!.v as string);
   return typeof v?.branch === "string" && typeof v?.base === "string" ? { branch: v.branch, base: v.base } : null;
 }
-/** The goal's planner: a top-level agent that isn't a reviewer (a verify's reviewer is spawned at the top level). */
-const isPlanner = (a: ScopeAgent) => !a.parent && !(a.contract as Record<string, unknown> | null)?.review;
+/**
+ * The run's planner agent, when it has one: `capcomd run` with a planner (src/recipes/planner-agent.ts) records it under
+ * `_planner` before spawning it. A run without one is driven from outside (an MCP driver, the CLI): its root agents are
+ * workers, and its goal is ready when the driver says so (goalDone), never when one of them finishes.
+ */
+async function plannerOf(tx: any, runId: string | null): Promise<string | null> {
+  const r = await tx.execute("SELECT v, deleted FROM kv WHERE k = '_planner'");
+  if (r.length && Number(r[0]!.deleted) !== 1) {
+    const v = JSON.parse(r[0]!.v as string);
+    if (typeof v?.agentId === "string") return v.agentId;
+  }
+  // Runs from before the record (and a driver that spawns its own planner with --key planner): the top-level agent
+  // spawned with the key "planner", which is how `capcomd run` has always spawned its planner, when there is one.
+  if (!runId) return null;
+  const id = stableId("agt", `${runId}\0operator`, "planner");
+  return (await tx.execute("SELECT agent_id FROM agents_v2 WHERE agent_id = ? AND parent IS NULL", id)).length ? id : null;
+}
+const runIdOf = (c: any): string | null => (Array.isArray(c?.key) && typeof c.key[0] === "string" ? c.key[0] : null);
 /** What the user chose for a ready goal branch (scope_meta goal_decision): a pull request, or keeping the branch. */
 export type GoalDecision = { choice: "pull_request" | "keep"; by: string; at: number; pr?: { number: number; url: string | null } };
 /** The goal branch as getScope reports it: the branch, when its planner finished (`ready`), and the user's choice. */
-export type GoalState = { branch: string; base: string; ready: { at: number; plannerId: string } | null; decision: GoalDecision | null };
+export type GoalState = {
+  branch: string; base: string;
+  /** Ready: its planner finished (plannerId), or, in a run without one, its driver declared it done (by, summary). */
+  ready: { at: number; plannerId: string | null; by?: string; summary?: string | null } | null;
+  decision: GoalDecision | null;
+  /** The run's planner agent (null: a driver's run, whose root agents are workers). Absent on records from older daemons. */
+  planner?: string | null;
+};
 
 /** The run's title as its planner set it (`capcomd title --run`, scope_meta run_title), with its rename counts. */
 export type RunAgentTitle = { title: string; setBy: string; at: number; count: number; last: Record<string, number> };
@@ -375,7 +398,7 @@ export const scopeActor = actor({
       const g = await goalOf(c.db);
       const meta2 = g ? await c.db.execute("SELECT k, v FROM scope_meta WHERE k IN ('goal_ready', 'goal_decision')") : [];
       const pick = (k: string) => { const row = meta2.find((x: any) => x.k === k); return row ? JSON.parse(row.v as string) : null; };
-      const goalBranch: GoalState | null = g ? { ...g, ready: pick("goal_ready"), decision: pick("goal_decision") } : null;
+      const goalBranch: GoalState | null = g ? { ...g, ready: pick("goal_ready"), decision: pick("goal_decision"), planner: await plannerOf(c.db, runIdOf(c)) } : null;
       const rt = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'run_title'");
       const agentTitle = rt.length ? (({ title, setBy, at }: RunAgentTitle) => ({ title, setBy, at }))(JSON.parse(rt[0]!.v as string) as RunAgentTitle) : null;
       return { budget: meta.budget as Budget, label: meta.label as string | null, goal: (meta.goal as string | undefined) ?? null, createdAt: meta.createdAt as number, spent, unallocated,
@@ -398,6 +421,28 @@ export const scopeActor = actor({
         await addEvent(tx, "RUN_ENDED", null, { state: end.state, reason: end.reason, by: end.by }, "run-ended");
       }, { name: "scopeEndRun" });
       return { changed: true, ended: (await read())! };
+    },
+
+    /**
+     * A driver's run (no planner agent) is done: its goal branch is ready for the user (run.goal_completed), with the
+     * driver's summary. Refused while an agent still works, and in a run whose planner decides that. Once per run.
+     */
+    async goalDone(c, params: { by: string; summary?: string | null }) {
+      let out: { changed: boolean; ready: NonNullable<GoalState["ready"]> | null } = { changed: false, ready: null };
+      await c.db.transaction(async (tx: RawAccess) => {
+        const g = await goalOf(tx);
+        if (!g) fail("not_found", "this run has no goal branch");
+        const prior = await tx.execute("SELECT v FROM scope_meta WHERE k = 'goal_ready'");
+        if (prior.length) { out = { changed: false, ready: JSON.parse(prior[0]!.v as string) }; return; }
+        if (await plannerOf(tx, runIdOf(c))) fail("conflict", "this run's planner agent decides when its goal is done");
+        const live = (await tx.execute("SELECT agent_id FROM agents_v2 WHERE status IN ('pending','running','paused')")).map((x: any) => String(x.agent_id));
+        if (live.length) fail("conflict", `${live.length} agent${live.length === 1 ? " is" : "s are"} still working (${live.slice(0, 5).join(", ")}${live.length > 5 ? ", …" : ""}): mark the goal done once they finish`);
+        const ready = { at: Date.now(), plannerId: null, by: params.by, summary: params.summary ? String(params.summary).slice(0, 64 * 1024) : null };
+        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('goal_ready', ?)", JSON.stringify(ready));
+        await addEvent(tx, "RUN_GOAL_COMPLETED", null, { branch: g!.branch, base: g!.base, plannerId: null, by: params.by }, "goal-ready");
+        out = { changed: true, ready };
+      }, { name: "scopeGoalDone" });
+      return out;
     },
 
     /**
@@ -615,10 +660,9 @@ export const scopeActor = actor({
         await addEvent(tx, params.status === "done" ? "AGENT_DONE" : "AGENT_FAILED", params.agentId, { result: params.result, spent: params.spent ?? a.spent, budget: a.budget }, `finish-${params.agentId}`);
         // A goal-branch run is ready when its planner finished its work and no other planner is still at it: the user
         // then sees the goal branch against its base and opens a pull request (or keeps the branch). Once per run.
-        if (params.status === "done" && isPlanner(a)) {
+        if (params.status === "done" && !a.parent && (await plannerOf(tx, runIdOf(c))) === params.agentId) {
           const g = await goalOf(tx);
-          const others = g ? (await tx.execute("SELECT * FROM agents_v2 WHERE parent IS NULL AND agent_id != ? AND status IN ('pending','running','paused')", params.agentId)).map(rowToAgent).filter(isPlanner) : [];
-          if (g && !others.length) {
+          if (g) {
             const at = Date.now();
             await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('goal_ready', ?)", JSON.stringify({ at, plannerId: params.agentId }));
             await addEvent(tx, "RUN_GOAL_COMPLETED", params.agentId, { branch: g.branch, base: g.base, plannerId: params.agentId }, "goal-ready");

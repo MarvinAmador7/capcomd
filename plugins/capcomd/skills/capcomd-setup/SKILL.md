@@ -1,6 +1,6 @@
 ---
 name: capcomd-setup
-description: Get capcomd ready for the user, in this repository: install the CLI, connect the sandbox provider (boxd), log in the coding agents, set the project's checks and target, start the engine. Use when the capcomd tools are missing or capcomd_setup reports something not ready, or when the user asks to set up capcomd.
+description: Get capcomd ready for the user, in this repository: install the CLI, connect the sandbox provider (Docker or boxd), log in the coding agents, set the project's checks and target, start the engine. Use when the capcomd tools are missing or capcomd_setup reports something not ready, or when the user asks to set up capcomd.
 ---
 # Setting up capcomd
 
@@ -58,12 +58,24 @@ Agents log in with the user's plan (Claude or ChatGPT) or an API key:
 
 ## 5. The project's gates (the user decides these)
 
-The checks, the reviewer and the target branch are the user's gates: agents (you included) can't change them
-later. Propose, then let the user confirm:
+The checks, the reviewer, the target branch and where agents run are the user's gates: agents (you included) can't
+change them later. Propose, then let the user confirm:
 
 ```bash
-capcomd setup project --yes --target main --mode pr --check "bun test"
+capcomd setup project --yes --target main --mode pr --check "bun test" --sandbox docker   # or --sandbox boxd
 ```
+
+Run it in the repository's checkout. It puts the project on capcomd's project list at once: `capcomd_projects` lists
+it and `capcomd_setup {project}` reports on it in the same session, no restart. `--sandbox` is where this
+project's agents and checks run (`docker`: containers on this machine; `boxd`: cloud VMs); it wins over the user
+config's, and `capcomd_setup` says which one applies and from where (`sandbox.source`: project, user config,
+environment). Don't edit `.capcomd/config.json` by hand for this.
+
+**On Docker, build the env image with this repository in it** when `capcomd_setup` has an `env image` step with
+`advice: true` (no image yet, no warm checkout of this repository, or one that drifted): ask the user, then run its
+`command`, `capcomd env build --sandbox docker`, in the checkout. It takes a few minutes; afterwards each agent starts
+from a warm checkout with the dependencies installed instead of cloning, and the checks find the project's package
+manager (bun, pnpm). Agents work without it, only slower.
 
 `--mode pr` opens a pull request per merge; `direct` pushes to the target. Setup detects the repository and a
 default check from `package.json`, and creates `worker`, `reviewer` and `planner` agent profiles, with no turn, time
@@ -83,5 +95,5 @@ The MCP server starts the engine when it isn't running. To keep it running acros
 
 ## 7. Done
 
-Call `capcomd_setup` again: `ready: true`. Tell the user what's set (provider, agents, gates) and try a small run
+Call `capcomd_setup` again: `ready: true` (an `env image` advice doesn't block it). Tell the user what's set (provider, agents, gates) and try a small run
 first (one worker, one check) before a big swarm.

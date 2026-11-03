@@ -76,9 +76,9 @@ export async function templateDriftFacts(m: EnvManifest, cfg: MergeConfig, o: { 
 }
 
 /** The drift of an env build's warm template, or null when it has none (a shallow template, or no repository). */
-export async function templateDrift(rec: EnvRecord | undefined, cfg: MergeConfig | null): Promise<Drift | null> {
+export async function templateDrift(rec: EnvRecord | undefined, cfg: MergeConfig | null, o: { timeoutMs?: number } = {}): Promise<Drift | null> {
   if (!rec?.manifest.template || !cfg) return null;
-  const f = await templateDriftFacts(rec.manifest, cfg);
+  const f = await templateDriftFacts(rec.manifest, cfg, o);
   // Without installed dependencies a lockfile change costs nothing: agents install their own either way. (A record of
   // an image this ledger found already built, buildMs 0, doesn't know: then the change counts.)
   const noDeps = rec.buildMs > 0 && !rec.depsInstalled;
