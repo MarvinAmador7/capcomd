@@ -5,6 +5,20 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Local (Docker): `capcomd env build --sandbox docker` now keeps a warm checkout of your project in the agent image:
+  its full history with the dependencies installed. Each agent starts from it in place instead of cloning and copying
+  `node_modules`. On a repository the size of capcomd, 16 agents get their workspace in about 3 s instead of 18 s,
+  and each uses about 1.5 MB of disk instead of about 590 MB. Rebuild it when your target branch moves on or the
+  lockfile changes; until then, agents clone as before.
+- Local (Docker): `capcomd env status` and `capcomd env doctor` show how many commits the warm checkout is behind your
+  target branch, and whether the lockfile has changed (agents then clone and install their own dependencies). They
+  also give the command that rebuilds it.
+- Local (Docker): capcomd only runs as many agents at once as fit in Docker's memory, 1 GB each by default (set
+  `CAPCOMD_DOCKER_AGENT_MEMORY_MB` or `sandboxes.docker.agentMemoryMb` in the config to change it). The rest wait as
+  pending and start as earlier ones finish. Local's details show the limit as Agents at once. API: the Docker
+  sandbox's `info` has a new `agentSlots` row.
+- Fix: an agent's checkpoints no longer rewrite every unchanged file into git.
+
 ## 0.7.0 (2026-11-02)
 
 The desktop app (build it with `apps/menubar/scripts/build-app.sh --desktop`), goal branches (a run's reviewed work
