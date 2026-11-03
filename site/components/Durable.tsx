@@ -1,138 +1,169 @@
 "use client";
 
-// "Kill it mid-merge": the engine killed with SIGKILL at a named kill point, run again, and the work counted once. Each kill
-// point here is one the tests use today, with the outcome they check:
-//   tests/merge/direct.test.ts  merge.lock.acquired, merge.after_fetch.before_integrate, merge.before_cas,
-//                               merge.after_cas.before_event: the rerun lands the task exactly once (src/merge/direct.ts
-//                               finds an earlier landing by its Capcomd-Task trailer, findExistingMerge);
-//   tests/merge/pr.test.ts      merge.pr.before_merge, merge.after_pr_merge.before_event: one PR, one merge call;
-//   tests/subagents/workflow.test.ts  workflow.start_agent.mid: the worker wakes by itself and finishes the agent.
-// The track draws the run left to right: what happened before the kill, the cut, then what the rerun did. The lane
-// under it is main (or the agent); the floor is the run's record, ticked where a step is recorded. Without the page script, or
-// with reduced motion, the whole run is simply there.
-import { useEffect, useRef, useState } from "react";
+// "Pull the plug": the page's planner bot moves an approved change onto main while the visitor holds the plug. Pull it
+// whenever you like; the two endings are the two cases the merge tests check after a SIGKILL:
+//   before the change reached main (merge.lock.acquired, merge.after_fetch.before_integrate, merge.before_cas): the
+//   rerun picks up and lands it once;
+//   after it reached main, before the record said so (merge.after_cas.before_event): the rerun finds it on main by its
+//   Capcomd-Task trailer (src/merge/direct.ts, findExistingMerge) and records it once.
+// tests/merge/direct.test.ts, tests/merge/pr.test.ts and tests/subagents/workflow.test.ts hold the seven kill points
+// listed for engineers at the foot. Without the page script, or with reduced motion, the scene shows the second ending.
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { rng } from "@/lib/vendor/bot-avatar.js";
+import { Bot, GoalTitle } from "./crew";
 import { delay } from "./marks";
 
-type Step = { t: string; code?: boolean; rec?: boolean; land?: boolean; found?: boolean };
-type Point = { name: string; group: "Direct merge" | "Pull request" | "Workflow"; before: Step[]; after: Step[]; outcome: string; unit: string; lane: string };
+type Phase = "idle" | "moving" | "dark" | "waking" | "checking" | "done";
+type Cut = null | "before" | "after";
 
-const CLAIM: Step = { t: "task.claimed", code: true, rec: true };
-const VERIFY: Step = { t: "verify.passed", code: true, rec: true };
-const LOCK: Step = { t: "merge lock" };
-const FETCH: Step = { t: "fetch main" };
-const SQUASH: Step = { t: "squash commit" };
-const CAS: Step = { t: "compare-and-swap", land: true };
-const DONE: Step = { t: "merge.succeeded", code: true, rec: true };
-const FOUND: Step = { t: "found by its trailer", found: true };
-const OPEN: Step = { t: "open the pull request" };
-const PRMERGE: Step = { t: "merge the pull request", land: true };
-const FOUND_PR: Step = { t: "found it merged", found: true };
+const MOVE_MS = 7000;   // from approved to written down, if nobody pulls the plug
+const LANDS_AT = 0.72;  // where on the way the change reaches main
+const NOTED_AT = 0.94;  // and where it's written down
+const CONFETTI = ["#FF7A10", "#9457DC", "#5EE6FF", "#F7A3DA"]; // the app's run-finished moment (Theme.Moments)
 
-const POINTS: Point[] = [
-  { name: "merge.lock.acquired", group: "Direct merge", before: [CLAIM, VERIFY, LOCK], after: [LOCK, FETCH, SQUASH, CAS, DONE], unit: "landing on main", lane: "main",
-    outcome: "Killed holding the merge lock, before anything moved. The rerun takes the lock again and lands the task once." },
-  { name: "merge.after_fetch.before_integrate", group: "Direct merge", before: [CLAIM, VERIFY, LOCK, FETCH], after: [LOCK, FETCH, SQUASH, CAS, DONE], unit: "landing on main", lane: "main",
-    outcome: "Killed after fetching main. The rerun fetches again, builds the commit and lands it once." },
-  { name: "merge.before_cas", group: "Direct merge", before: [CLAIM, VERIFY, LOCK, FETCH, SQUASH], after: [LOCK, FETCH, SQUASH, CAS, DONE], unit: "landing on main", lane: "main",
-    outcome: "Killed with the commit built but not pushed. main never moved; the rerun lands it once." },
-  { name: "merge.after_cas.before_event", group: "Direct merge", before: [CLAIM, VERIFY, LOCK, FETCH, SQUASH, CAS], after: [FOUND, DONE], unit: "landing on main", lane: "main",
-    outcome: "Killed after the commit landed, before the record said so. The rerun finds the landing by its Capcomd-Task trailer and records it: still one commit on main." },
-  { name: "merge.pr.before_merge", group: "Pull request", before: [CLAIM, VERIFY, OPEN], after: [OPEN, PRMERGE, DONE], unit: "pull request, merged once", lane: "main",
-    outcome: "Killed with the pull request open, before merging it. The rerun reuses that pull request and merges it: one pull request, one merge call." },
-  { name: "merge.after_pr_merge.before_event", group: "Pull request", before: [CLAIM, VERIFY, OPEN, PRMERGE], after: [FOUND_PR, DONE], unit: "pull request, merged once", lane: "main",
-    outcome: "Killed after GitHub merged it, before the record said so. The rerun sees it merged and records its commit: one pull request, one merge call." },
-  { name: "workflow.start_agent.mid", group: "Workflow", before: [{ t: "spawn", code: true, rec: true }, { t: "claimed by its workflow", rec: true }, { t: "start-agent step" }],
-    after: [{ t: "wakes by itself", found: true }, { t: "start-agent step" }, { t: "agent done", land: true, rec: true }], unit: "agent, finished by itself", lane: "agent",
-    outcome: "Killed inside a workflow step, with nothing left to call the worker. After the restart it wakes on its own and finishes the agent, with its commit." },
+const KILL_POINTS: Array<[string, string[]]> = [
+  ["Direct merge", ["merge.lock.acquired", "merge.after_fetch.before_integrate", "merge.before_cas", "merge.after_cas.before_event"]],
+  ["Pull request", ["merge.pr.before_merge", "merge.after_pr_merge.before_event"]],
+  ["Workflow", ["workflow.start_agent.mid"]],
 ];
-const GROUPS = ["Direct merge", "Pull request", "Workflow"] as const;
-const STEP_MS = 520;
 
 export function Durable() {
-  const [pick, setPick] = useState(3);           // the case the page told before: killed after the commit landed
-  const [shown, setShown] = useState(Infinity);   // the whole run until the script plays it
-  const timer = useRef(0);
-  const io = useRef<IntersectionObserver | null>(null);
+  const [phase, setPhase] = useState<Phase>("done");
+  const [cut, setCut] = useState<Cut>("after");   // the static picture: cut after it landed, then found and noted
+  const [p, setP] = useState(1);                    // progress of the move, 0–1
+  const raf = useRef(0);
+  const timers = useRef<number[]>([]);
+  const started = useRef(0);
   const box = useRef<HTMLDivElement>(null);
-  const p = POINTS[pick];
-  const nodes = [...p.before.map((s) => ({ ...s, side: "before" as const })), { t: "", side: "cut" as const }, ...p.after.map((s) => ({ ...s, side: "after" as const }))];
 
-  const play = (i: number) => {
-    io.current?.disconnect();
-    clearInterval(timer.current);
-    setPick(i);
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { setShown(Infinity); return; }
-    setShown(0);
-    let n = 0; const total = POINTS[i].before.length + POINTS[i].after.length + 1;
-    timer.current = window.setInterval(() => {
-      n += 1; setShown(n);
-      if (n >= total) clearInterval(timer.current);
-    }, STEP_MS);
+  const clear = () => { cancelAnimationFrame(raf.current); timers.current.forEach(clearTimeout); timers.current = []; };
+  const later = (ms: number, f: () => void) => { timers.current.push(window.setTimeout(f, ms)); };
+
+  // Runs the move from `from` to the end.
+  const move = (from: number) => {
+    setPhase("moving");
+    started.current = performance.now() - from * MOVE_MS;
+    const tick = (now: number) => {
+      const v = Math.min(1, (now - started.current) / MOVE_MS);
+      setP(v);
+      if (v >= 1) { setPhase("done"); return; }
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
   };
+
+  const start = () => { clear(); setCut(null); setP(0); move(0); };
+
+  const pull = () => {
+    if (phase !== "moving") return;
+    clear();
+    const at = p;
+    const c: Cut = at < LANDS_AT ? "before" : "after";
+    setCut(c);
+    setPhase("dark");
+    later(1300, () => setPhase("waking"));
+    if (c === "before") later(3300, () => move(Math.max(0, at - 0.08)));
+    else {
+      later(3300, () => setPhase("checking"));
+      later(5600, () => { setP(1); setPhase("done"); });
+    }
+  };
+
   useEffect(() => {
     const el = box.current;
     if (!el || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    io.current = new IntersectionObserver(([e]) => { if (e?.isIntersecting) play(3); }, { threshold: 0.4 });
-    io.current.observe(el);
-    return () => { io.current?.disconnect(); clearInterval(timer.current); };
+    const io = new IntersectionObserver(([e]) => { if (e?.isIntersecting) { io.disconnect(); start(); } }, { threshold: 0.5 });
+    io.observe(el);
+    return () => { io.disconnect(); clear(); };
   }, []);
 
-  const cutAt = p.before.length;
-  const landed = nodes.some((s, k) => k < shown && "land" in s && s.land);
-  const killed = shown > cutAt;
-  const playing = shown < nodes.length;
+  const landed = p >= LANDS_AT;
+  const noted = phase === "done" || (phase === "moving" && p >= NOTED_AT);
+  const mood = phase === "dark" || phase === "waking" ? "sleepy" : phase === "checking" ? "oops" : phase === "done" ? "happy" : undefined;
+  const pose = phase === "done" && cut ? "cheer" : phase === "done" ? "wave" : undefined;
+  const say =
+    phase === "idle" ? "An approved change is about to move onto main."
+    : phase === "moving" && !cut ? (landed ? "It's on main. Writing it down…" : "Moving the approved change onto main. Pull the plug whenever you like.")
+    : phase === "moving" ? (landed ? "It's on main. Writing it down…" : "Picking up where it stopped…")
+    : phase === "dark" ? "Power cut."
+    : phase === "waking" ? (cut === "before" ? "Back up. Its notes say the change never reached main." : "Back up. Its notes stop before the change was written down.")
+    : phase === "checking" ? "So it looks at main first. The change is already there."
+    : cut === "before" ? "It picked up where it stopped. One change on main: nothing lost, nothing twice."
+    : cut === "after" ? "It found the change on main and wrote it down, once. Nothing lost, nothing twice."
+    : "Done, without a power cut. Run it again and pull the plug halfway.";
+
+  const confetti = useMemo(() => {
+    const r = rng("pull-the-plug", "confetti");
+    return Array.from({ length: 26 }, () => ({ x: (r() % 10000) / 100, y: (r() % 10000) / 140, s: r() % 2 === 0 ? 6 : 9, c: CONFETTI[r() % CONFETTI.length]! }));
+  }, []);
 
   return (
     <section className="durable" id="durable" aria-labelledby="durable-title">
       <div className="durable__head">
         <div className="durable__words">
-          <h2 id="durable-title" className="durable__title" data-reveal style={delay(60)}><span>Kill it mid-merge.</span> <span>It lands once.</span></h2>
-          <p data-reveal style={delay(120)}>Every step of a run is recorded before it counts. Kill the engine anywhere and run it again: it resumes from the last recorded step, and a step it repeats never acts twice.</p>
+          <h2 id="durable-title" className="durable__title" data-reveal><span>Pull the plug.</span> <span>Nothing lands twice.</span></h2>
+          <p data-reveal style={delay(80)}>capcomd writes every step down before it counts. Cut the power in the middle of a merge, and when it comes back it reads its notes and carries on: nothing lost, nothing done twice.</p>
         </div>
-        <p className="durable__one" aria-live="polite" data-reveal style={delay(160)}>
+        <p className="durable__one" data-reveal style={delay(140)}>
           <span className="durable__n">{landed ? 1 : 0}</span>
-          <span className="durable__unit">{p.unit}, after a SIGKILL at <code>{p.name}</code></span>
+          <span className="durable__unit">{landed ? "change on main, however you cut it." : "changes on main so far."}</span>
         </p>
       </div>
 
-      <div className="cut" data-reveal style={delay(200)}>
-      <div className={`cut__frame${killed ? " is-killed" : ""}${playing ? " is-playing" : ""}`} ref={box}>
-        <div className="win win--big cut__win" data-ui role="img" aria-label={`The run, killed at ${p.name} and run again. ${p.outcome}`}>
-          <span className="win__bar" aria-hidden="true"><i /><i /><i /><span>capcomd engine · killed at {p.name}</span></span>
-          <div className="cut__track" style={{ ["--n" as string]: nodes.length }} key={pick}>
-            {nodes.map((s, k) => s.side === "cut" ? (
-              <div key={k} className={`cut__slash${k < shown ? " is-in" : ""}`} aria-hidden="true">
-                <b>SIGKILL</b><small>exit 137</small><small>engine restarts</small>
-              </div>
-            ) : (
-              <div key={k} className={`cut__node cut__node--${s.side}${k < shown ? " is-in" : ""}${s.found ? " is-found" : ""}`}>
-                <span className="cut__ev">{s.code ? <code>{s.t}</code> : s.t}</span>
-                <span className="cut__dot" />
-                <span className={`cut__main${s.land ? " is-land" : ""}`}>{s.land ? <i /> : null}</span>
-                <span className={`cut__rec${s.rec ? " is-rec" : ""}`} />
-              </div>
-            ))}
-            <span className="cut__lane" aria-hidden="true">{p.lane}</span>
-            <span className="cut__floor" aria-hidden="true">the run&apos;s record</span>
+      <div className="plug" data-reveal style={delay(200)}>
+        <div className={`plug__room is-${phase}`} ref={box}>
+          <div className="plug__bot">
+            {phase === "done" && cut ? <span className="plug__confetti" aria-hidden="true">{confetti.map((c, k) => <i key={k} style={{ left: `${c.x}%`, top: `${c.y}%`, width: c.s, height: c.s, background: c.c, ["--k" as string]: k } as CSSProperties} />)}</span> : null}
+            <Bot i={0} mood={mood} pose={pose} className="plug__me" />
+            {phase === "checking" ? <span className="plug__bubble">Already on main?</span> : null}
           </div>
-          <p className="cut__out" aria-live="polite">{shown >= nodes.length ? p.outcome : " "}</p>
+
+          <div className="plug__main">
+            <p className="plug__label">main</p>
+            <div className="plug__lane">
+              <span className="plug__old" aria-hidden="true"><i /><i /><i /><i /></span>
+              <span className={`plug__new${landed ? " is-on" : ""}${phase === "checking" ? " is-found" : ""}`} style={{ ["--p" as string]: Math.min(p / LANDS_AT, 1) } as CSSProperties}>
+                <Bot i={1} size="xs" className="plug__by" />
+                <span className="plug__title"><GoalTitle /></span>
+              </span>
+            </div>
+            <div className="plug__rail" aria-hidden="true"><i style={{ width: `${p * 100}%` }} /></div>
+          </div>
+
+          <div className="plug__notes">
+            <p className="plug__nh">Its notes</p>
+            <ol>
+              <li className="is-done">Change approved</li>
+              <li className={phase === "idle" ? "" : "is-done"}>Started moving it onto main</li>
+              <li className={noted ? "is-done" : "is-blank"}>{noted ? "On main" : "…"}</li>
+            </ol>
+          </div>
+
+          <span className="plug__dark" aria-hidden="true" />
         </div>
-      </div>
+
+        <div className="plug__bar">
+          {phase === "moving" ? (
+            <button type="button" className="plug__switch" onClick={pull}><span className="plug__knob" aria-hidden="true" />Pull the plug</button>
+          ) : phase === "done" ? (
+            <button type="button" className="plug__switch is-again" onClick={start}><span className="plug__knob" aria-hidden="true" />Run it again</button>
+          ) : (
+            <button type="button" className="plug__switch is-off" disabled><span className="plug__knob" aria-hidden="true" />{phase === "idle" ? "Pull the plug" : "Unplugged"}</button>
+          )}
+          <p className="plug__say" aria-live="polite">{say}</p>
+        </div>
       </div>
 
-      <div className="durable__points" data-reveal style={delay(240)}>
-        <p className="durable__ask">Pick where to kill it.</p>
-        <div className="durable__keys">
-          {GROUPS.map((g) => (
-            <div key={g} className="durable__group" role="group" aria-label={g}>
-              <span>{g}</span>
-              {POINTS.map((pt, i) => pt.group === g ? (
-                <button key={pt.name} type="button" aria-pressed={pick === i} onClick={() => play(i)}>{pt.name}</button>
-              ) : null)}
-            </div>
-          ))}
-        </div>
-        <p className="durable__note">The merge and workflow tests kill the engine with SIGKILL at each of these seven points, run it again and check the outcome above. A worker VM that dies hands its task back to the board under a new lease, and anything the dead one sends later is ignored. While the engine is down, worker VMs keep working and pushing their branches; nothing merges until it&apos;s back.</p>
+      <div className="durable__foot" data-reveal style={delay(240)}>
+        <dl className="durable__cases">
+          <div><dt>A worker&apos;s machine dies</dt><dd>Its task goes back on the board for a new agent; anything the old one sends later is ignored.</dd></div>
+          <div><dt>capcomd itself is down</dt><dd>Workers keep working and pushing their branches. Nothing merges until it&apos;s back.</dd></div>
+        </dl>
+        <details className="durable__eng">
+          <summary>For engineers: the seven kill points</summary>
+          <p>The merge and workflow tests kill the engine with SIGKILL at each of these points, run it again and check the outcome: the change lands once, the pull request is merged once, the agent finishes by itself.</p>
+          {KILL_POINTS.map(([g, names]) => <p key={g} className="durable__kp"><b>{g}</b>{names.map((n) => <code key={n}>{n}</code>)}</p>)}
+        </details>
       </div>
     </section>
   );
