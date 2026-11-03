@@ -159,6 +159,9 @@ final class AppModel {
   func openThread(runId: String, agentId: String) { store.openThread(runId: runId, agentId: agentId) }
   func closeThread(agentId: String) { if store.openThreadAgent == agentId { store.closeThread() } }
   func refreshThread(runId: String, agentId: String) async { await store.refreshThread(runId: runId, agentId: agentId) }
+  func threadTop(_ agentId: String) -> Int? { _ = revision; return store.threadTop(agentId: agentId) }
+  func threadLoadingEarlier(_ agentId: String) -> Bool { _ = revision; return store.threadLoadingEarlier.contains(agentId) }
+  func loadEarlierThread(runId: String, agentId: String) async { await store.loadEarlierThread(runId: runId, agentId: agentId) }
 
   var drillView: DrillView {
     get { _ = revision; return store.prefs.drillView }

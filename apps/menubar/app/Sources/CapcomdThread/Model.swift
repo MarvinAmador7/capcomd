@@ -124,6 +124,17 @@ public struct Page: Sendable, Decodable {
   public var next: Int?
 }
 
+/// `GET /v1/runs/{runId}/agents/{agentId}/thread/tail` (capability `agents.thread_tail`): the newest items by position,
+/// oldest first, each at its latest rev.
+public struct Tail: Sendable, Decodable {
+  public var items: [Item]
+  /// Older items are waiting: pass it as `before` for the page above these. nil: these reach the thread's start.
+  public var before: Int?
+  /// The write cursor from just before these were read: the `after` that the thread route (and live frames) go on from.
+  public var cursor: Int
+  public init(items: [Item], before: Int?, cursor: Int) { self.items = items; self.before = before; self.cursor = cursor }
+}
+
 public struct Link: Sendable, Hashable, Decodable {
   public enum Target: String, Sendable, Hashable { case web, artifact, file, agent, run, none }
   public var text: String

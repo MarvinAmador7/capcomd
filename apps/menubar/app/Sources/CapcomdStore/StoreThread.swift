@@ -46,6 +46,8 @@ public enum Capability {
   /// Goal branches: POST /v1/runs `base` / `goalBranch`, Run.goalBranch, GET /v1/projects/branches, GET …/goal,
   /// POST …/pull-request and …/keep-branch.
   public static let runsGoalBranch = "runs.goal_branch"
+  /// `GET …/agents/{agentId}/thread/tail`: a thread's newest items first, and the pages above them on demand.
+  public static let agentsThreadTail = "agents.thread_tail"
 }
 
 extension CapcomdStore {
