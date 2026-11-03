@@ -13,11 +13,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Local (Docker): `capcomd env status` and `capcomd env doctor` show how many commits the warm checkout is behind your
   target branch, and whether the lockfile has changed (agents then clone and install their own dependencies). They
   also give the command that rebuilds it.
-- Local (Docker): capcomd only runs as many agents at once as fit in Docker's memory, 1 GB each by default (set
-  `CAPCOMD_DOCKER_AGENT_MEMORY_MB` or `sandboxes.docker.agentMemoryMb` in the config to change it). The rest wait as
-  pending and start as earlier ones finish. Local's details show the limit as Agents at once. API: the Docker
-  sandbox's `info` has a new `agentSlots` row.
+- Local (Docker): capcomd only runs as many agents at once as fit in Docker's memory. Choose how much memory each
+  agent gets with Memory per agent in Local's details: 512 MB, 1 GB (the default), 2 GB or 4 GB. A change applies to
+  the next agent that starts, and Agents at once shows the new limit right away. `CAPCOMD_DOCKER_AGENT_MEMORY_MB`
+  still overrides the setting. Agents over the limit wait as pending and start as earlier ones finish. API: the Docker
+  sandbox has a new `agentMemory` setting (`appliesTo: new_agents`) next to its `agentSlots` info row.
+- Local (Docker): `capcomd env build --sandbox docker` now moves your Claude Code and Codex plan logins onto the new
+  agent image, so their agents get the new CLIs and warm checkout without logging in again. Only the login's own files
+  are copied, and the agent image itself never holds a login. If a login can't be moved, it keeps working from its old
+  image, and the build says to run `capcomd auth login … --sandbox docker`.
 - Fix: an agent's checkpoints no longer rewrite every unchanged file into git.
+- Fix (Local): an agent that was paused, cancelled or failed before its container started no longer holds an
+  agents-at-once slot for 10 minutes.
 
 ## 0.7.0 (2026-11-02)
 
