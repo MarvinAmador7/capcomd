@@ -25,6 +25,10 @@ import { agentWorkflowOn } from "../utils/agent-workflow-flag";
 function agentsChanged(c: any): void {
   try { c.broadcast("agentsChanged", { at: Date.now() }); } catch { /* no connections: nothing to tell */ }
 }
+/** Tell connected awaiters that a verify or merge changed state (started, finished, parked, decided): waits on ops look again. */
+function opsChanged(c: any, opId: string): void {
+  try { c.broadcast("opsChanged", { at: Date.now(), opId }); } catch { /* no connections: nothing to tell */ }
+}
 import { available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec } from "../agents/profiles";
 import type { AttachedSkill } from "../agents/skills";
@@ -1003,6 +1007,7 @@ export const scopeActor = actor({
         await addEvent(tx, params.kind === "verify" ? "VERIFY_STARTED" : "MERGE_STARTED", (params.data.agentId as string) ?? null, { id: params.opId, ...params.data }, `start-${params.opId}`);
         created = true;
       }, { name: "scopeStartOp" });
+      if (created) opsChanged(c, params.opId);
       return { created, op: (await get())! };
     },
 
@@ -1016,6 +1021,7 @@ export const scopeActor = actor({
         await tx.execute("UPDATE ops SET state = ?, result = ?, updated_at = ? WHERE op_id = ? AND state = 'running'", params.state, JSON.stringify(params.result), Date.now(), params.opId);
         await addEvent(tx, type, (op.data.agentId as string) ?? null, { id: params.opId, ...params.result }, `finish-${params.opId}`);
       }, { name: "scopeFinishOp" });
+      opsChanged(c, params.opId);
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
     },
 
@@ -1036,6 +1042,7 @@ export const scopeActor = actor({
         await tx.execute("UPDATE ops SET state = 'awaiting_approval', data = ?, updated_at = ? WHERE op_id = ? AND state = 'running'", JSON.stringify(data), Date.now(), params.opId);
         await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason, ...(params.diff ? { diff: params.diff } : {}), ...(op.data.askedBy ? { askedBy: op.data.askedBy } : {}) }, `park-${params.opId}`);
       }, { name: "scopeParkOp" });
+      opsChanged(c, params.opId);
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
     },
 
@@ -1058,6 +1065,7 @@ export const scopeActor = actor({
         }
         decided = true;
       }, { name: "scopeDecideOp" });
+      if (decided) opsChanged(c, params.opId);
       return { decided, op: opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]) };
     },
 
