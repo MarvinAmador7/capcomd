@@ -227,9 +227,8 @@
 .two { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; margin-top: 36px; }
 .two p { grid-column: span 5; margin: 0; }
 .two p + p { grid-column: 7 / span 5; }
-.facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px 40px; margin-top: 64px; }
-.facts h3, .band h3 { margin: 0 0 8px; font: 400 34px/1.05 var(--font-display); letter-spacing: -0.02em; }
-.facts p, .band p { margin: 0; }
+.band h3 { margin: 0 0 8px; font: 400 34px/1.05 var(--font-display); letter-spacing: -0.02em; }
+.band p { margin: 0; }
 
 .talk__grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; margin-top: 56px; align-items: start; }
 .talk__fig { grid-column: 1 / span 6; margin: 0; }
@@ -272,7 +271,7 @@
 .band + .sec { padding-top: 170px; }
 .win--big { margin-top: 0; }
 @media (max-width: 1100px) and (min-width: 761px) {
-  .facts, .band__cols { grid-template-columns: repeat(2, 1fr); }
+  .band__cols { grid-template-columns: repeat(2, 1fr); }
   .talk__fig { grid-column: 1 / span 12; max-width: 560px; } .talk__list { grid-column: 1 / span 12; }
   .pt__list, .pt__plus { grid-column: 1 / span 12; }
   .two p, .two p + p { grid-column: span 6; }
@@ -283,7 +282,7 @@
   .band + .sec { padding-top: 80px; }
   .big { font-size: 10.4vw; }
   .two { display: block; margin-top: 20px; } .two p + p { margin-top: 14px; }
-  .facts, .band__cols { grid-template-columns: 1fr; gap: 28px; margin-top: 40px; }
+  .band__cols { grid-template-columns: 1fr; gap: 28px; margin-top: 40px; }
   .talk__grid, .pt__grid, .dr__grid { display: block; margin-top: 32px; }
   .talk__list { margin-top: 32px; }
   .desk2 { aspect-ratio: 1 / 1.3; }
@@ -830,88 +829,97 @@ html:not(.js) .stage__title { display: block; }
   }
 }
 
-/* Sandboxes: the bay. Three workers in their VMs and the checks VM on the desk colour, the git graph below. The graph
-   draws in when the figure enters (desktop, motion allowed); otherwise it is simply there. */
+/* Sandboxes: three agents in their rooms, each one's branch running down through its checks into main; four promises
+   numbered on the picture; where they run, as a plain comparison; the details for engineers behind a disclosure. */
 @layer components {
-  .bay { margin: 72px 0 0; padding: 24px 14px 20px; background: var(--color-desk); color: var(--color-on-dark); border-radius: 16px; }
-  .bay__row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .bay__vm { margin: 0 10px; padding: 0 0 18px; background: rgba(255,255,255,0.05); border-radius: 12px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14); overflow: clip; } /* taste-skill-ignore: interface fragment, a machine's 1px edge */
-  .bay__vm--checks { background: transparent; box-shadow: none; outline: 1px dashed rgba(255,255,255,0.4); outline-offset: -1px; } /* taste-skill-ignore: a throwaway machine, dashed */
-  .bay__bar { margin: 0; display: flex; justify-content: space-between; gap: 8px; padding: 10px 14px; background: rgba(255,255,255,0.06); font: 500 13px/1.2 var(--font-ui); color: var(--color-on-dark-soft); }
-  .bay__bar span:first-child { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: var(--color-on-dark); }
-  .bay__mark { width: 14px; height: 14px; fill: currentColor; }
-  .bay__bar code { color: var(--color-on-dark); }
-  .bay__bot { display: block; width: 96px; height: 96px; margin: 20px auto 16px; }
-  .bay__bot svg { display: block; width: 100%; height: 100%; }
-  .bay__checks { display: grid; place-items: center; height: 96px; margin: 20px 14px 16px; font: 400 30px/1 var(--font-pixel); text-transform: uppercase; color: var(--color-on-dark-soft); }
-  .bay__vm ul { list-style: none; margin: 0; padding: 0 14px; display: grid; gap: 9px; font: 400 15px/1.35 var(--font-ui); color: var(--color-on-dark-soft); }
-  .bay__vm li { display: flex; gap: 9px; align-items: flex-start; }
-  .bay__vm li svg { flex: none; width: 16px; height: 16px; margin-top: 2px; fill: none; stroke: var(--color-accent-light); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
-  .bay__git { display: block; width: 100%; height: auto; margin-top: 6px; overflow: visible; }
-  .bay__main { fill: none; stroke: var(--color-on-dark-soft); stroke-width: 2; }
-  .bay__tip { fill: var(--color-on-dark-soft); }
-  .bay__lane { fill: none; stroke: var(--color-accent); stroke-width: 2.5; }
-  .bay__commit { fill: var(--color-desk); stroke: var(--color-accent); stroke-width: 2.5; }
-  .bay__vm-link { fill: none; stroke: rgba(255,255,255,0.28); stroke-width: 1.5; stroke-dasharray: 3 4; }
-  .bay__pass circle { fill: var(--color-accent-light); }
-  .bay__pass path { fill: none; stroke: var(--color-desk); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .bay__ckpt path { fill: none; stroke: var(--color-accent-light); stroke-width: 1.5; stroke-dasharray: 3 3; }
-  .bay__ckpt circle { fill: var(--color-desk); stroke: var(--color-accent-light); stroke-width: 2; }
-  .bay__lbl { font: 500 11px/1 var(--font-ui); fill: var(--color-on-dark-soft); }
+  .sbx__lead { max-width: 52ch; margin: 32px 0 0; font: 400 var(--text-lead)/1.3 var(--font-display); letter-spacing: -0.01em; }
+  .sbx__pic { position: relative; margin: 64px 0 0; padding: 32px 24px 28px; border-radius: 16px; background: var(--color-desk); color: var(--color-on-dark); }
+  .sbx__rooms { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto auto 1fr; }
+  .sbx__lane { grid-row: span 4; display: grid; grid-template-rows: subgrid; justify-items: center; padding: 0 12px; }
+  .sbx__room { position: relative; display: grid; justify-items: center; width: 100%; max-width: 300px; padding: 18px 16px 16px; border-radius: 14px; background: rgba(255,255,255,0.06); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14); } /* taste-skill-ignore: interface fragment, a machine's edge */
+  .sbx__who { margin: 0; color: var(--color-on-dark-soft); font: 500 13px/1.2 var(--font-ui); }
+  .sbx__bot { display: block; width: 104px; margin: 10px 0 6px; }
+  .sbx__bot svg { display: block; width: 100%; height: auto; }
+  .sbx__st { margin: 0; font: 500 14px/1.3 var(--font-ui); text-align: center; }
+  .is-merged .sbx__st { color: var(--color-app-green); }
+  .is-checking .sbx__st { color: var(--color-app-amber); }
+  .sbx__saved.is-empty { visibility: hidden; }
+  .sbx__saved { position: relative; margin: 10px 0 0; padding: 5px 10px; border-radius: 6px; background: rgba(255,181,102,0.14); color: var(--color-accent-light); font: 500 12.5px/1 var(--font-ui); }
 
-  @media (min-width: 761px) and (prefers-reduced-motion: no-preference) {
-    .reveal .bay .bay__vm { opacity: 0; transform: translateY(16px); transition: opacity 600ms var(--ease-out), transform 800ms var(--ease-out); transition-delay: calc(200ms + var(--k) * 90ms); }
-    .reveal .bay :is(.bay__main, .bay__lane) { stroke-dasharray: 1 1; stroke-dashoffset: 1; transition: stroke-dashoffset 1100ms var(--ease-out); }
-    .reveal .bay .bay__main { transition-delay: 500ms; }
-    .reveal .bay .bay__br .bay__lane { transition-delay: calc(700ms + var(--k) * 220ms); }
-    .reveal .bay :is(.bay__commit, .bay__pass, .bay__ckpt, .bay__tip) { opacity: 0; transition: opacity 360ms ease; }
-    .reveal .bay .bay__commit { transition-delay: calc(1100ms + var(--k) * 220ms + var(--j) * 90ms); }
-    .reveal .bay :is(.bay__pass, .bay__ckpt) { transition-delay: calc(1700ms + var(--k) * 220ms); }
-    .reveal .bay .bay__tip { transition-delay: 1400ms; }
-    .reveal .bay.is-in .bay__vm { opacity: 1; transform: none; }
-    .reveal .bay.is-in :is(.bay__main, .bay__lane) { stroke-dashoffset: 0; }
-    .reveal .bay.is-in :is(.bay__commit, .bay__pass, .bay__ckpt, .bay__tip) { opacity: 1; }
-    .bay.is-in .bay__br.is-live .bay__commit:nth-of-type(3) { animation: bay-live 1600ms ease-in-out 2600ms infinite; }
-    @keyframes bay-live { 50% { opacity: 0.35; } }
-  }
+  /* The branch: a wire of commits from the room down to its checks, then into main. */
+  .sbx__wire { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: space-evenly; width: 4px; height: 76px; background: var(--color-accent); }
+  .sbx__wire i { width: 14px; height: 14px; border-radius: 50%; background: var(--color-desk); box-shadow: inset 0 0 0 3px var(--color-accent); }
+  .is-working .sbx__wire { background: repeating-linear-gradient(var(--color-accent) 0 6px, transparent 6px 11px); }
+  .is-working .sbx__wire i:last-child { animation: sbx-live 1400ms ease-in-out infinite; }
+  .sbx__gate { position: relative; margin: 0; padding: 8px 14px; border-radius: 8px; font: 400 16px/1 var(--font-pixel); text-transform: uppercase; white-space: nowrap; background: rgba(255,255,255,0.06); color: var(--color-on-dark-soft); outline: 2px dashed rgba(243,240,248,0.25); outline-offset: -2px; }
+  .is-merged .sbx__gate { background: var(--color-app-green); color: #06200F; outline-color: transparent; }
+  .is-checking .sbx__gate { background: rgba(255,176,32,0.16); color: var(--color-app-amber); outline-color: rgba(255,176,32,0.5); }
+  .sbx__join { display: flex; flex-direction: column; align-items: center; width: 4px; min-height: 44px; background: var(--color-app-green); }
+  .sbx__join i { width: 16px; height: 16px; margin-top: auto; margin-bottom: -10px; border-radius: 50%; background: var(--color-app-green); box-shadow: 0 0 0 4px var(--color-desk); }
+  .is-checking .sbx__join, .is-working .sbx__join { background: repeating-linear-gradient(rgba(243,240,248,0.22) 0 5px, transparent 5px 10px); }
+  .is-checking .sbx__join i, .is-working .sbx__join i { background: var(--color-desk); box-shadow: inset 0 0 0 2px rgba(243,240,248,0.3), 0 0 0 4px var(--color-desk); }
+  .sbx__main { position: relative; height: 4px; margin: 0 4px; background: var(--color-on-dark-soft); }
+  .sbx__main::after { content: ""; position: absolute; right: -4px; top: -6px; border: 8px solid transparent; border-left: 10px solid var(--color-on-dark-soft); border-right: 0; }
+  .sbx__main span { position: absolute; left: 0; top: 14px; font: 400 18px/1 var(--font-pixel); text-transform: uppercase; color: var(--color-on-dark-soft); }
+  .sbx__pic::after { content: ""; display: block; height: 22px; }
+
+  /* The numbered pins and the promises they point to. */
+  .sbx__pin, .sbx__num { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--color-accent); color: var(--color-accent-ink); font: 400 16px/1 var(--font-pixel); }
+  .sbx__pin { position: absolute; z-index: 2; box-shadow: 0 0 0 3px var(--color-desk); }
+  .sbx__pin--room { top: -11px; right: -11px; }
+  .sbx__pin--wire { left: 16px; top: 22px; }
+  .sbx__pin--gate { right: -16px; top: -12px; }
+  .sbx__pin--save { right: -10px; top: -10px; width: 22px; height: 22px; font-size: 14px; }
+  .sbx__promises { list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 32px; margin: 48px 0 0; padding: 0; }
+  .sbx__promises h3 { margin: 14px 0 8px; font: 400 28px/1.05 var(--font-display); letter-spacing: -0.02em; }
+  .sbx__promises p { margin: 0; }
+
+  /* Where they run: two providers, four plain rows. */
+  .sbx__where { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; margin-top: 88px; }
+  .sbx__where > .sbx__table { grid-column: 4 / -1; }
+  .sbx__wh { grid-column: 1 / span 3; margin: 0; font: 400 clamp(2rem, 3vw, 2.75rem)/1 var(--font-display); letter-spacing: -0.02em; }
+  .sbx__table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .sbx__table th, .sbx__table td { padding: 12px 20px 12px 0; text-align: left; vertical-align: top; border-top: 1px solid rgba(20,11,34,0.12); }
+  .sbx__table thead th, .sbx__table thead td { border-top: 0; padding-top: 0; padding-bottom: 16px; vertical-align: top; }
+  .sbx__table tbody th { width: 30%; color: var(--color-muted); font-weight: 400; }
+  .sbx__prov { display: inline-flex; align-items: center; gap: 10px; font: 400 30px/1 var(--font-display); }
+  .sbx__boxd { width: 24px; height: 24px; fill: var(--color-ink); }
+  .sbx__table thead small { display: block; margin-top: 6px; color: var(--color-muted); font: 400 var(--text-small) var(--font-ui); }
+  .sbx__logos { display: flex; gap: 8px; margin-top: 12px; }
+  .sbx__logos svg, .sbx__logos img { display: block; width: 24px; height: 24px; }
+
+  .sbx__eng { margin-top: 40px; color: var(--color-muted); font-size: var(--text-small); }
+  .sbx__eng summary { cursor: pointer; color: var(--color-ink); text-decoration: underline; text-underline-offset: 0.2em; }
+  .sbx__eng dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 40px; margin: 20px 0 0; }
+  .sbx__eng dt { color: var(--color-ink); font-weight: 600; }
+  .sbx__eng dd { margin: 4px 0 0; }
+
+  @keyframes sbx-live { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.35); } }
+  @media (prefers-reduced-motion: reduce) { .is-working .sbx__wire i:last-child { animation: none; } }
   @media (max-width: 1100px) {
-    .bay__row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 0; }
-    .bay__git { display: none; }
+    .sbx__promises { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .sbx__wh, .sbx__where > .sbx__table { grid-column: 1 / -1; }
+    .sbx__wh { margin-bottom: 20px; }
   }
   @media (max-width: 760px) {
-    .bay { margin-top: 48px; padding: 16px 6px 16px; border-radius: 12px; }
-    .bay__vm { margin: 0 6px; }
-    .bay__bot { width: 64px; height: 64px; margin: 14px auto 12px; }
-    .bay__checks { height: 64px; margin: 14px 10px 12px; font-size: 20px; }
-    .bay__vm ul { padding: 0 10px; font-size: 14px; }
-    .bay__bar { padding: 8px 10px; font-size: 12px; }
-  }
-}
-
-
-/* Sandboxes: what agents run on, by provider. */
-@layer components {
-  .runs { margin-top: 72px; }
-  .runs__title { margin: 0 0 20px; font: 400 34px/1.05 var(--font-display); letter-spacing: -0.02em; }
-  .runs__grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 24px; }
-  .runs__group { padding: 20px; background: var(--color-surface); border-radius: 14px; }
-  .runs__kind { margin: 0 0 14px; font: 500 15px/1.3 var(--font-ui); color: var(--color-muted); }
-  .runs__list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .runs__item { display: grid; justify-items: center; gap: 10px; padding: 16px 8px 14px; background: var(--color-page); border-radius: 10px; text-align: center; }
-  .runs__item b { font: 600 15px/1.2 var(--font-ui); }
-  .runs__item--wide { grid-column: 1 / -1; grid-template-columns: auto 1fr; justify-items: start; align-items: center; gap: 16px; padding: 16px; text-align: left; }
-  .runs__item--wide small { display: block; margin-top: 4px; font: 400 15px/1.4 var(--font-ui); color: #3B3446; }
-  .runs__logo { display: grid; place-items: center; width: 48px; height: 48px; }
-  .runs__logo svg, .runs__logo img { width: 40px; height: 40px; }
-  .runs__boxd { fill: var(--color-ink); }
-  .runs__note { margin: 14px 0 0; font-size: var(--text-small); color: var(--color-muted); }
-  .runs__group .runs__note { margin-top: 12px; }
-  @media (max-width: 1100px) { .runs__grid { grid-template-columns: 1fr; } }
-  @media (max-width: 760px) {
-    .runs { margin-top: 48px; }
-    .runs__title { font-size: 28px; }
-    .runs__group { padding: 14px; }
-    .runs__list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .sbx__pic { margin-top: 40px; padding: 24px 6px 20px; }
+    .sbx__lane { padding: 0 4px; }
+    .sbx__room { padding: 14px 6px 12px; }
+    .sbx__who { font-size: 11px; }
+    .sbx__bot { width: 60px; }
+    .sbx__st { font-size: 12px; }
+    .sbx__saved { padding: 3px 5px; font-size: 10px; }
+    .sbx__gate { padding: 6px 6px; font-size: 12px; white-space: normal; text-align: center; }
+    .sbx__pin--room { right: -6px; }
+    .sbx__pin--wire { left: 10px; }
+    .sbx__pin--gate { right: -8px; }
+    .sbx__promises { grid-template-columns: 1fr; gap: 24px; margin-top: 36px; }
+    .sbx__where { margin-top: 56px; }
+    .sbx__table thead td { display: none; }
+    .sbx__table tbody th { width: 34%; }
+    .sbx__table th, .sbx__table td { padding: 12px 12px 12px 0; font-size: 15px; }
+    .sbx__prov { font-size: 22px; }
+    .sbx__eng dl { grid-template-columns: 1fr; }
   }
 }
 
