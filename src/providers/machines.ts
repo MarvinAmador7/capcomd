@@ -6,7 +6,7 @@
 // Two kinds of record. An agent's worker VM (src/actors/worker.ts): written before `provider.ensure`, removed once the
 // worker has destroyed the machine (or the provider confirmed it gone); it stays until then, whatever happens to the
 // process that wrote it. capcomd's own short jobs (the checks VM, `auth login` / `auth status`, `env build`,
-// `env doctor`): the process that makes one records it first and removes the record once the machine is destroyed; as
+// `doctor`): the process that makes one records it first and removes the record once the machine is destroyed; as
 // an *owner* such a record counts only while that process is alive and the machine's idle lifetime since it was made
 // isn't up, so a job that crashed leaves a machine that reads as orphaned (and is deleted when its lifetime is up).
 // Never the provider's labels, which a sandbox can forge.

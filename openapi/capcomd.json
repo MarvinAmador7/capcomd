@@ -7394,7 +7394,7 @@
                             "properties": {
                               "kind": {
                                 "type": "string",
-                                "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd env doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                                "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
                               },
                               "runId": {
                                 "description": "The run (agent, check); null for a job that belongs to no run",
@@ -7624,7 +7624,7 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd env doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                          "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
                         },
                         "runId": {
                           "description": "The run (agent, check); null for a job that belongs to no run",
@@ -8312,7 +8312,7 @@
                           "properties": {
                             "kind": {
                               "type": "string",
-                              "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd env doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                              "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
                             },
                             "runId": {
                               "description": "The run (agent, check); null for a job that belongs to no run",

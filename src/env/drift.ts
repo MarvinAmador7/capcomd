@@ -1,6 +1,6 @@
 // How far the env image's warm template (Docker, `capcomd env build`) is from the project's target now: commits behind,
 // and whether the lockfile changed (then agents clone and install their own dependencies). Images change only on
-// `capcomd env build` (no automatic rebuilds): `env status` and `env doctor` say when one is due. Read on this host from
+// `capcomd env build` (no automatic rebuilds): `env status` and `doctor` say when one is due. Read on this host from
 // a capcomd-owned mirror of commits and trees only (no file contents), next to the merge clones.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
@@ -28,7 +28,7 @@ export interface Drift {
   state: "current" | "behind" | "lockfile" | "diverged" | "unknown";
   behind: number | null;
   lockChanged: boolean | null;
-  /** One line for `env status` / `env doctor`. */
+  /** One line for `env status` / `doctor`. */
   message: string;
 }
 

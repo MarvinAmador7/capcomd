@@ -1,5 +1,5 @@
 // ADR-021 §3, the phase-3 prerequisite: capcomd's own short jobs (the checks VM, `auth login`/`status`, `env build`,
-// `env doctor`) make machines with capcomd's prefix too. Each records its machine in capcomd's own ledger while it runs,
+// `doctor`) make machines with capcomd's prefix too. Each records its machine in capcomd's own ledger while it runs,
 // so the resources route lists it as running with an owner of its kind and no actions, never as orphaned; once the job
 // ends (or its process is gone, or its lifetime is up) the record no longer counts. Provider labels are never read.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
