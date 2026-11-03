@@ -31,7 +31,7 @@ export interface ProviderCaps {
 export const SETTING_IDS = ["idleLifetime"] as const;
 export type SettingId = (typeof SETTING_IDS)[number];
 /** Read-only info rows (GET /v1/sandboxes/{name} `info`). */
-export const INFO_IDS = ["logins", "checkpoints"] as const;
+export const INFO_IDS = ["logins", "checkpoints", "agentSlots"] as const;
 export type InfoId = (typeof INFO_IDS)[number];
 /** Actions on a resource: a closed list in code; a descriptor says which of them its provider supports. */
 export const RESOURCE_ACTIONS = ["open_terminal", "delete"] as const;
@@ -73,7 +73,8 @@ export const PROVIDERS = {
   docker: {
     name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
     caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
-    settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
+    // agentSlots: how many agents run at once, from Docker's memory (src/providers/capacity.ts).
+    settings: ["idleLifetime"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
   },
   /** boxd cloud VMs. */
   boxd: {

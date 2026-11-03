@@ -1,5 +1,6 @@
-// `capcomd env build|status|rm`: a boxd snapshot with the agent CLIs, git config and the repo's
-// dependencies baked in, and no secrets. Workers boot from it (fromSnapshot). ADR-015.
+// `capcomd env build|status|rm`: a snapshot (a boxd snapshot, a Docker image) with the agent CLIs, git config and the
+// repo's dependencies baked in, and no secrets. Workers boot from it (fromSnapshot). ADR-015. On Docker it also keeps a
+// warm template: a full checkout of the project's target that each agent's container uses in place.
 import type { SandboxProvider } from "../providers/sandbox";
 import type { SnapshotPlatform, SnapshotInfo } from "./platform";
 import type { AgentConfig } from "../agents/config";
@@ -10,7 +11,10 @@ import { Redactor } from "../agents/redact";
 import { rmSync } from "node:fs";
 import { buildMarkerPath, ENV_PREFIX, ENV_SCHEMA, envName, ledgerPath, readBuildMarker, readLedger, writeBuildMarker, writeLedger, type EnvManifest, type EnvRecord } from "./resolve";
 
-export const LOCKFILES = ["bun.lock", "bun.lockb", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
+import { LOCKFILES, TEMPLATE_LOCKHASH, TEMPLATE_MARKER, type TemplateMarker } from "../agents/workspace";
+export { LOCKFILES };
+/** The bun that installs a bun.lock project's dependencies into a warm template when the image has none (npm package). */
+export const BUN_VERSION = "1.4.3";
 /** Shapes that must never be in a snapshot. */
 export const SECRET_SHAPES = "sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|bxd_[A-Za-z0-9]{16,}";
 
@@ -35,6 +39,13 @@ export interface BuildOptions {
   now?: () => number;
   /** Values that must not appear anywhere in the VM (local API keys); checked, never printed. */
   forbidden?: string[];
+  /**
+   * Keep a warm template (Docker): a full clone of the repo's `target` with its dependencies installed, which each
+   * agent's container uses in place (src/agents/workspace.ts). Off: a shallow clone, only node_modules is reused.
+   */
+  warm?: boolean;
+  /** The branch the warm template is built from (the project's target; default: the repository's default branch). */
+  target?: string;
 }
 
 export interface BuildResult { name: string; cached: boolean; record: EnvRecord; snapshot: SnapshotInfo }
@@ -109,13 +120,28 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     // 1. Repo + lockfile hash (the snapshot name depends on it).
     await must("clean template", `rm -rf ${sq(T)}`);
     let lockFile = "none", lockHash = "none";
+    let template: EnvManifest["template"];
     if (o.repoUrl) {
-      const clone = await p.exec(id, ["git", "clone", "--depth", "1", "--no-tags", o.repoUrl, T], { env: baseEnv, timeoutMs: 300_000 });
+      // Warm (Docker): the whole history of the target, so agents branch and rebase in it without cloning. Otherwise
+      // shallow: only its node_modules is reused.
+      const branch = o.warm && o.target ? ["--branch", o.target] : [];
+      const cloneArgs = o.warm ? ["clone", "--no-tags", ...branch, o.repoUrl, T] : ["clone", "--depth", "1", "--no-tags", o.repoUrl, T];
+      let clone = await p.exec(id, ["git", ...cloneArgs], { env: baseEnv, timeoutMs: o.warm ? 900_000 : 300_000 });
+      if (clone.code !== 0 && branch.length) {
+        log(`warm template: no branch ${o.target} to clone; using the repository's default branch`);
+        await sh(`rm -rf ${sq(T)}`);
+        clone = await p.exec(id, ["git", "clone", "--no-tags", o.repoUrl, T], { env: baseEnv, timeoutMs: 900_000 });
+      }
       if (clone.code !== 0) throw new Error(`env build: git clone failed: ${r.text(clone.stderr).slice(-400)}`);
       const lock = (await sh(`cd ${sq(T)} && for f in ${LOCKFILES.join(" ")}; do [ -f "$f" ] && { echo "$f $(sha256sum "$f" | cut -c1-64)"; break; }; done; true`)).stdout.trim();
       if (lock) [lockFile, lockHash] = lock.split(/\s+/) as [string, string];
+      if (o.warm) {
+        const head = (await sh(`cd ${sq(T)} && git rev-parse HEAD && git rev-parse --abbrev-ref HEAD`)).stdout.trim().split("\n");
+        if (/^[0-9a-f]{40}$/.test(head[0] ?? "") && head[1]) template = { commit: head[0]!, target: head[1]! };
+        else log("warm template: couldn't read the clone's commit; workers will clone");
+      }
     } else log("no repo given: baking CLIs + git config only (set CAPCOMD_REPO to bake deps)");
-    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash, lockFile, repo: o.repoUrl ?? "" };
+    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash, lockFile, repo: o.repoUrl ?? "", ...(template ? { template } : {}) };
     const name = envName(manifest);
     log(`content hash → ${name} (lockfile ${lockFile})`);
 
@@ -146,23 +172,44 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     // 3. Git identity (commits use -c too; this covers agent-run git).
     await must("git config", `git config --global user.name capcomd && git config --global user.email capcomd@users.noreply.github.com && git config --global init.defaultBranch main && git config --global advice.detachedHead false && git config --global --add safe.directory '*'`);
 
-    // 4. Repo dependencies into the template (workers copy node_modules when the lockfile matches).
+    // 4. Repo dependencies into the template (workers use them in place, or copy node_modules, when the lockfile
+    //    matches). A warm template gets the package manager its lockfile needs when the image lacks it (pinned).
     let depsInstalled = false;
     if (lockFile !== "none") {
-      const cmd = lockFile.startsWith("bun") ? "bun install --frozen-lockfile" : lockFile === "package-lock.json" ? "npm ci --no-fund --no-audit" : lockFile === "pnpm-lock.yaml" ? "npx --yes pnpm install --frozen-lockfile" : "npx --yes yarn install --frozen-lockfile";
+      const pm = o.warm ? await packageManager(sh, T, lockFile, home, log) : null;
+      const cmd = pm ?? (lockFile.startsWith("bun") ? "bun install --frozen-lockfile" : lockFile === "package-lock.json" ? "npm ci --no-fund --no-audit" : lockFile === "pnpm-lock.yaml" ? "npx --yes pnpm install --frozen-lockfile" : "npx --yes yarn install --frozen-lockfile");
       const tool = cmd.split(" ")[0]!;
       const has = (await sh(`command -v ${tool} >/dev/null && echo yes; true`)).stdout.includes("yes");
       if (has) {
+        const t = now();
         const res = await sh(`cd ${sq(T)} && ${cmd}`, 900_000);
         depsInstalled = res.code === 0;
-        log(depsInstalled ? `deps: ${cmd} ok` : `deps: ${cmd} failed (exit ${res.code}); workers will install themselves`);
+        log(depsInstalled ? `deps: ${cmd} ok (${now() - t}ms)` : `deps: ${cmd} failed (exit ${res.code}): ${r.text(res.stderr || res.stdout).slice(-400)}; workers will install themselves`);
       } else log(`deps: ${tool} not in image; skipped (workers install themselves)`);
-      if (depsInstalled) await must("lockhash", `printf %s ${sq(lockHash)} > ${sq(`${T}/.capcomd-lockhash`)}`);
+      // A warm template keeps the hash in its .git, out of the working tree agents commit from.
+      if (depsInstalled) await must("lockhash", `printf %s ${sq(lockHash)} > ${sq(o.warm ? `${T}/${TEMPLATE_LOCKHASH}` : `${T}/.capcomd-lockhash`)}`);
     } else log("deps: no lockfile; skipped");
+
+    // 4b. The warm template's record: only for a clean checkout (the install changed nothing git sees), so an agent's
+    //     tree in place is exactly a fresh clone's. Package manager caches go: node_modules doesn't need them.
+    if (template) {
+      await sh(`rm -rf ${sq(`${home}/.bun/install/cache`)} ${sq(`${home}/.cache/pnpm`)} ${sq(`${home}/.cache/yarn`)} 2>/dev/null; true`);
+      if (depsInstalled) await must("exclude", `cd ${sq(T)} && grep -qx node_modules .git/info/exclude 2>/dev/null || echo node_modules >> .git/info/exclude`);
+      const dirty = (await sh(`cd ${sq(T)} && git status --porcelain | head -5`)).stdout.trim();
+      if (dirty) {
+        log(`warm template: the dependency install changed the checkout (${dirty.split("\n").join(", ")}); workers will clone`);
+        template = undefined;
+        delete manifest.template;
+      } else {
+        const marker: TemplateMarker = { schema: 1, repo: o.repoUrl!, target: template.target, commit: template.commit, lockFile, lockHash, depsInstalled };
+        await p.upload(id, `${T}/${TEMPLATE_MARKER}`, new TextEncoder().encode(JSON.stringify(marker) + "\n"));
+        log(`warm template: ${template.target} at ${template.commit.slice(0, 12)}${depsInstalled ? ", dependencies installed" : ""}`);
+      }
+    }
 
     // 5. Scrub check: no credential-shaped strings or known local key values anywhere we wrote, or in env.
     await sh(`rm -f ${sq(home)}/.bash_history /root/.bash_history ${sq(T)}/.git/FETCH_HEAD 2>/dev/null; true`);
-    const scan = await sh(`{ env; cat ${sq(home)}/.gitconfig 2>/dev/null; cat ${sq(T)}/.git/config 2>/dev/null; } | grep -cE '${SECRET_SHAPES}'; grep -rIlE --exclude-dir=node_modules --exclude-dir=node --exclude-dir=npm --exclude-dir=.git '${SECRET_SHAPES}' ${sq(home)} 2>/dev/null | head -5; true`);
+    const scan = await sh(`{ env; cat ${sq(home)}/.gitconfig 2>/dev/null; cat ${sq(T)}/.git/config ${sq(`${T}/${TEMPLATE_MARKER}`)} 2>/dev/null; } | grep -cE '${SECRET_SHAPES}'; grep -rIlE --exclude-dir=node_modules --exclude-dir=node --exclude-dir=npm --exclude-dir=.git '${SECRET_SHAPES}' ${sq(home)} 2>/dev/null | head -5; true`);
     const hits = Number(scan.stdout.split("\n")[0]?.trim() || 0);
     const files = scan.stdout.split("\n").slice(1).filter(Boolean);
     if (hits > 0 || files.length) throw new Error(`env build: refusing to snapshot, credential-shaped data found (${hits} in env/git config${files.length ? `; files: ${files.join(", ")}` : ""})`);
@@ -194,6 +241,36 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     if (!keep) await p.destroy(id).catch(() => {});
     release();
   }
+}
+
+type Sh = (s: string, timeoutMs?: number) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+/** `packageManager` in package.json ("pnpm@9.12.0+sha512…"): the name and exact version, or null. */
+export function pinnedManager(field: string): { name: string; version: string } | null {
+  const m = /^(bun|pnpm|yarn|npm)@(\d+\.\d+\.\d+[\w.-]*)/.exec(field.trim());
+  return m ? { name: m[1]!, version: m[2]! } : null;
+}
+
+/**
+ * The command that installs a warm template's dependencies for its lockfile, after putting the package manager it
+ * needs in the agent home when the image has none: the version the project pins (`packageManager`, `.bun-version`),
+ * else CAPCOMD_BUN_VERSION or BUN_VERSION for bun. null: the default command (npm ci, or the image's own tool).
+ */
+async function packageManager(sh: Sh, T: string, lockFile: string, home: string, log: (l: string) => void): Promise<string | null> {
+  const out = (await sh(`cd ${sq(T)} && printf 'pm=%s\\nbv=%s\\n' "$(node -p 'try { require("./package.json").packageManager || "" } catch { "" }' 2>/dev/null)" "$(cat .bun-version 2>/dev/null)"; true`)).stdout;
+  const val = (k: string) => new RegExp(`^${k}=(.*)$`, "m").exec(out)?.[1]?.trim() ?? "";
+  const pin = pinnedManager(val("pm"));
+  if (lockFile.startsWith("bun")) {
+    if ((await sh(`command -v bun >/dev/null && echo yes; true`)).stdout.includes("yes")) return null;
+    const version = (pin?.name === "bun" ? pin.version : null) ?? (/^\d+\.\d+\.\d+$/.test(val("bv")) ? val("bv") : null) ?? process.env.CAPCOMD_BUN_VERSION ?? BUN_VERSION;
+    log(`deps: bun not in image → installing bun@${version}`);
+    const res = await sh(`NPM=$(command -v npm || echo ${sq(`${home}/node/bin/npm`)}) && "$NPM" install -g --prefix ${sq(`${home}/npm`)} --no-fund --no-audit ${sq(`bun@${version}`)} && bun --version`, 600_000);
+    if (res.code !== 0) log(`deps: installing bun@${version} failed (exit ${res.code}): ${(res.stderr || res.stdout).slice(-300)}`);
+    return "bun install --frozen-lockfile";
+  }
+  if (lockFile === "pnpm-lock.yaml" && pin?.name === "pnpm") return `npx --yes pnpm@${pin.version} install --frozen-lockfile`;
+  if (lockFile === "yarn.lock" && pin?.name === "yarn") return /^1\./.test(pin.version) ? `npx --yes yarn@${pin.version} install --frozen-lockfile` : `npx --yes yarn@${pin.version} install --immutable`;
+  return null;
 }
 
 export async function envStatus(p: SnapshotPlatform, ledgerPath?: string) {

@@ -6658,7 +6658,7 @@
                             "items": {
                               "type": "string"
                             },
-                            "description": "Info row ids its details show (logins, checkpoints). Ignore ids you don't know"
+                            "description": "Info row ids its details show (logins, checkpoints; agentSlots on a place with a memory cap, today docker). Ignore ids you don't know"
                           },
                           "resourceKinds": {
                             "type": "array",
@@ -6890,7 +6890,7 @@
                           "items": {
                             "type": "string"
                           },
-                          "description": "Info row ids its details show (logins, checkpoints). Ignore ids you don't know"
+                          "description": "Info row ids its details show (logins, checkpoints; agentSlots on a place with a memory cap, today docker). Ignore ids you don't know"
                         },
                         "resourceKinds": {
                           "type": "array",
@@ -6930,7 +6930,7 @@
                         "properties": {
                           "id": {
                             "type": "string",
-                            "description": "Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"
+                            "description": "Stable id: idleLifetime (settings); logins, checkpoints, agentSlots (info). More may be added"
                           },
                           "type": {
                             "type": "string",
@@ -6948,7 +6948,7 @@
                             ]
                           },
                           "value": {
-                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)",
+                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)",
                             "type": [
                               "string",
                               "null"
@@ -7037,7 +7037,7 @@
                         "properties": {
                           "id": {
                             "type": "string",
-                            "description": "Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"
+                            "description": "Stable id: idleLifetime (settings); logins, checkpoints, agentSlots (info). More may be added"
                           },
                           "type": {
                             "type": "string",
@@ -7055,7 +7055,7 @@
                             ]
                           },
                           "value": {
-                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)",
+                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)",
                             "type": [
                               "string",
                               "null"
@@ -7135,7 +7135,7 @@
                           "state"
                         ]
                       },
-                      "description": "Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work)"
+                      "description": "Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work), agentSlots (how many agents run at once here: Docker's memory over a per-agent budget, CAPCOMD_DOCKER_AGENT_MEMORY_MB, 1 GB by default; more wait as pending and start as others finish)"
                     },
                     "rev": {
                       "type": "string",
@@ -7792,7 +7792,7 @@
                           "items": {
                             "type": "string"
                           },
-                          "description": "Info row ids its details show (logins, checkpoints). Ignore ids you don't know"
+                          "description": "Info row ids its details show (logins, checkpoints; agentSlots on a place with a memory cap, today docker). Ignore ids you don't know"
                         },
                         "resourceKinds": {
                           "type": "array",
@@ -7832,7 +7832,7 @@
                         "properties": {
                           "id": {
                             "type": "string",
-                            "description": "Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"
+                            "description": "Stable id: idleLifetime (settings); logins, checkpoints, agentSlots (info). More may be added"
                           },
                           "type": {
                             "type": "string",
@@ -7850,7 +7850,7 @@
                             ]
                           },
                           "value": {
-                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)",
+                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)",
                             "type": [
                               "string",
                               "null"
@@ -7939,7 +7939,7 @@
                         "properties": {
                           "id": {
                             "type": "string",
-                            "description": "Stable id: idleLifetime (settings); logins, checkpoints (info). More may be added"
+                            "description": "Stable id: idleLifetime (settings); logins, checkpoints, agentSlots (info). More may be added"
                           },
                           "type": {
                             "type": "string",
@@ -7957,7 +7957,7 @@
                             ]
                           },
                           "value": {
-                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms)",
+                            "description": "The current value as a string (a choice's `value`: idleLifetime in seconds; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)",
                             "type": [
                               "string",
                               "null"
@@ -8037,7 +8037,7 @@
                           "state"
                         ]
                       },
-                      "description": "Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work)"
+                      "description": "Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work), agentSlots (how many agents run at once here: Docker's memory over a per-agent budget, CAPCOMD_DOCKER_AGENT_MEMORY_MB, 1 GB by default; more wait as pending and start as others finish)"
                     },
                     "rev": {
                       "type": "string",

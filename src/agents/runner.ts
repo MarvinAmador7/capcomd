@@ -15,6 +15,7 @@ import type { ThreadAttachment } from "../actors/scope";
 import { withSkills, type AttachedSkill } from "./skills";
 import { isTransientSandboxError } from "../providers/boxd-errors";
 import { outageWindowMs, providerLabel, reportOutage, unreachable } from "../providers/resilient";
+import { chooseWorkspace, LOCKFILES, parseTemplateMarker, startRef, TEMPLATE_CLAIM, TEMPLATE_LOCKHASH, TEMPLATE_MARKER, type WorkspaceChoice } from "./workspace";
 
 /** Where an agent's checkpoints are pushed (ADR-019 §3); deleted once its work merges. */
 export const checkpointRef = (agentId: string) => `refs/capcomd/checkpoints/${agentId}`;
@@ -121,6 +122,11 @@ export interface AgentRunOptions {
   vmTtlSeconds?: number;
   /** Called after each renewal with the lifetime it renewed (the worker keeps its own reap alarm in step). */
   onRenew?: (seconds: number) => void;
+  /**
+   * The sandbox is this agent's own copy of its image (Docker): a warm template baked in by `capcomd env build` may be
+   * used in place instead of a fresh clone (src/agents/workspace.ts). Off: always the clone, as before.
+   */
+  warmTemplate?: boolean;
 }
 
 export class AgentError extends Error {
@@ -293,7 +299,8 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
   const r = new Redactor([opts.apiKey, ...(opts.secrets ?? [])]);
   const now = opts.now ?? Date.now;
   const W = `${cfg.workdir}/${task.taskId}-e${task.epoch}`;
-  const repo = `${W}/repo`;
+  // The agent's checkout: a fresh clone here, or the env image's warm template used in place (warmWorkspace).
+  let repo = `${W}/repo`;
   const home = agentHome(cfg);
   const baseEnv = { PATH: agentPath(home), HOME: home };
   const name = adapter.kind;
@@ -322,13 +329,49 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     // stop it before starting over, so two agent CLIs never work in one checkout or race on its exit file.
     await sh(stopStaleRun(W)).catch(() => {});
 
-    // 1. Clone.
+    // 1. The workspace: the image's warm template in place when it fits (Docker), else a fresh clone. Either way the
+    //    branch and tree the agent starts from are the same.
+    const wsStarted = now();
     const existing = await git(["ls-remote", "--heads", task.repoUrl, `refs/heads/${task.branch}`]);
     must(existing, "git ls-remote");
     const branchExists = existing.stdout.trim().length > 0;
-    must(await sh(`rm -rf ${sq(repo)}`), "clean");
-    must(await git(["clone", "--no-tags", "--branch", task.target, task.repoUrl, repo], undefined, 300_000), "git clone");
-    if (branchExists) must(await git(["fetch", "origin", `+refs/heads/${task.branch}:refs/remotes/origin/${task.branch}`], repo), "git fetch branch");
+    const T = templateDir(cfg);
+    // A continuation starts from the stopped agent's work, until its own branch exists.
+    const startFrom = task.from && !branchExists && !task.report ? "FETCH_HEAD" : null;
+    // The warm template fits when chooseWorkspace says so from what's in the sandbox: its record and claim, then (only if
+    // those fit) the fetches a fresh clone would make, the target's history and the start tree's lockfile.
+    const warmWorkspace = async (): Promise<WorkspaceChoice> => {
+      const read = await sh(`cat ${sq(`${T}/${TEMPLATE_MARKER}`)} 2>/dev/null; printf '\\n__CAPCOMD_CLAIM__%s' "$([ -e ${sq(`${T}/${TEMPLATE_CLAIM}`)} ] && echo yes)"`);
+      const [text, claim] = read.stdout.split("\n__CAPCOMD_CLAIM__");
+      const facts = { allowed: true, marker: parseTemplateMarker(text ?? ""), claimed: (claim ?? "").trim() === "yes", repoUrl: task.repoUrl, fetched: null, ancestor: null, startFound: null, startLockHash: null };
+      // What it would say if everything still to look at fit: a clone already (no template, used, another repository).
+      const early = chooseWorkspace({ ...facts, fetched: true, ancestor: true, startFound: true, startLockHash: facts.marker?.lockHash ?? "none" });
+      if (early.path === "clone" || !facts.marker) return early;
+      // The refs a fresh clone has (every branch, as remote-tracking refs), and the continued agent's work.
+      const fetched = (await git(["fetch", "--no-tags", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"], T, 300_000)).code === 0
+        && (!startFrom || (await git(["fetch", "origin", task.from!.ref], T, 300_000)).code === 0);
+      if (!fetched) return chooseWorkspace({ ...facts, fetched });
+      const ref = startRef(task, branchExists);
+      const look = await sh(`cd ${sq(T)} || exit 1
+git merge-base --is-ancestor ${sq(facts.marker.commit)} ${sq(`origin/${task.target}`)} 2>/dev/null && echo ancestor=yes || echo ancestor=no
+if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=none
+  for f in ${LOCKFILES.join(" ")}; do if git cat-file -e ${sq(ref)}:"$f" 2>/dev/null; then L=$(git cat-file blob ${sq(ref)}:"$f" | sha256sum | cut -c1-64); break; fi; done
+  echo "lock=$L"; else echo start=no; fi`);
+      const val = (k: string) => new RegExp(`^${k}=(.*)$`, "m").exec(look.stdout)?.[1]?.trim() ?? null;
+      const choice = chooseWorkspace({ ...facts, fetched, ancestor: look.code === 0 ? val("ancestor") === "yes" : null, startFound: look.code === 0 ? val("start") === "yes" : null, startLockHash: val("lock") });
+      if (choice.path === "clone") return choice;
+      // Claim it (mkdir is atomic): a later run in this sandbox finds it used and clones.
+      const claimed = await sh(`mkdir ${sq(`${T}/${TEMPLATE_CLAIM}`)} 2>/dev/null && printf %s ${sq(W)} > ${sq(`${T}/${TEMPLATE_CLAIM}/by`)} && echo claimed; true`);
+      return claimed.stdout.includes("claimed") ? choice : chooseWorkspace({ ...facts, claimed: true });
+    };
+    const workspace: WorkspaceChoice | null = opts.warmTemplate ? await warmWorkspace() : null;
+    const inPlace = workspace?.path === "in_place";
+    if (inPlace) repo = T;
+    else {
+      must(await sh(`rm -rf ${sq(repo)}`), "clean");
+      must(await git(["clone", "--no-tags", "--branch", task.target, task.repoUrl, repo], undefined, 300_000), "git clone");
+      if (branchExists) must(await git(["fetch", "origin", `+refs/heads/${task.branch}:refs/remotes/origin/${task.branch}`], repo), "git fetch branch");
+    }
 
     if (task.review) {
       must(await git(["checkout", "-q", "--detach", task.review.sha], repo), "git checkout (review)");
@@ -342,18 +385,30 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
         return { sha, already: true, costUsd: 0, turns: 0, stopReason: "already_pushed", events: 0, ...(stop?.trim() ? { limit: stop.trim() } : {}) };
       }
     }
-    // A continuation starts from the stopped agent's work, until its own branch exists.
-    const startFrom = task.from && !branchExists && !task.report ? "FETCH_HEAD" : null;
     if (startFrom) must(await git(["fetch", "origin", task.from!.ref], repo), "git fetch (continue)");
-    if (!task.review) must(await git(["checkout", "-B", task.branch, startFrom ?? (branchExists && !task.rework ? `origin/${task.branch}` : `origin/${task.target}`)], repo), "git checkout");
+    if (!task.review) must(await git(["checkout", "-B", task.branch, startRef(task, branchExists)], repo), "git checkout");
+    // In place, the local branches are what a fresh clone has: the target at its tip, and the task branch. Its
+    // dependencies are already there (env build installed them for this lockfile).
+    const local = inPlace ? must(await sh(`cd ${sq(repo)} && git branch -f --track ${sq(task.target)} ${sq(`origin/${task.target}`)} >/dev/null && git for-each-ref --format='%(refname:short)' refs/heads/ | while read -r b; do [ "$b" = ${sq(task.target)} ] || [ "$b" = ${sq(task.branch)} ] || git branch -D -q "$b"; done; [ -d node_modules ] && echo reused; true`), "git branch (target)") : null;
 
-    // Reuse dependencies baked into the env snapshot when the lockfile matches (capcomd env build).
-    const T = templateDir(cfg);
-    const deps = await sh(`L=; for f in bun.lock bun.lockb package-lock.json pnpm-lock.yaml yarn.lock; do [ -f ${sq(repo)}/$f ] && { L=$(sha256sum ${sq(repo)}/$f | cut -c1-64); break; }; done
-if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-lockhash 2>/dev/null)" = "$L" ] && [ ! -e ${sq(repo)}/node_modules ]; then
+    // Reuse dependencies baked into the env snapshot when the lockfile matches (capcomd env build): a clone copies them,
+    // unless an earlier run in this sandbox used (and changed) the template.
+    const deps = local ?? await sh(`L=; for f in ${LOCKFILES.join(" ")}; do [ -f ${sq(repo)}/$f ] && { L=$(sha256sum ${sq(repo)}/$f | cut -c1-64); break; }; done
+H=$(cat ${sq(T)}/.capcomd-lockhash 2>/dev/null || cat ${sq(`${T}/${TEMPLATE_LOCKHASH}`)} 2>/dev/null)
+if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq(repo)}/node_modules ] && [ ! -e ${sq(`${T}/${TEMPLATE_CLAIM}`)} ]; then
   cp -a ${sq(T)}/node_modules ${sq(repo)}/node_modules && echo node_modules >> ${sq(repo)}/.git/info/exclude && echo reused; fi; true`);
     const depsReused = deps.stdout.includes("reused");
     if (depsReused) addSpanEvent(span, "agent.deps_reused", {});
+    // How long the workspace took (clone or in place, deps included), and with a warm template which path was taken and
+    // why: the agent's log and its span, not the user's output.
+    const wsMs = now() - wsStarted;
+    setSpanAttributes(span, { "agent.workspace_ms": wsMs });
+    if (workspace) {
+      const ms = wsMs;
+      addSpanEvent(span, "agent.workspace", { "agent.workspace": workspace.path, ...(workspace.path === "clone" ? { "agent.workspace_reason": workspace.reason } : {}), "agent.workspace_ms": ms });
+      setSpanAttributes(span, { "agent.workspace": workspace.path });
+      opts.onLog?.([workspace.path === "in_place" ? `[capcomd] workspace: the env image's warm checkout, in place (${ms} ms)` : `[capcomd] workspace: a fresh clone, ${workspace.reason} (${ms} ms)`]);
+    }
 
     // 2. Detect the CLI (image or snapshot may already have it); install the pin only if absent.
     let bin = adapter.kind === "claude-code" ? (cfg.agentBin ?? cfg.claudeBin) : cfg.agentBin;

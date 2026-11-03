@@ -199,6 +199,8 @@ export function rivetSource(): HarnessSource {
 		// The user config (~/.capcomd/config.json `sandboxes`); off with CAPCOMD_NO_CONFIG.
 		settings: fileSettingsStore(settingsPath()),
 		logins: async () => (await import("./settings")).logins(),
+		// Docker's memory for the Agents at once row (asked of the docker CLI at most every 5 minutes, 3 s timeout).
+		agentSlots: async (name) => (await import("../providers/capacity")).slotsInfo(name),
 		availability: async (name) => {
 			const { sandboxAvailable } = await import("./run-options");
 			let current: string | null = null;

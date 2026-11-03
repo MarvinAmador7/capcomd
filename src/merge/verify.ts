@@ -118,7 +118,7 @@ async function runInVm(git: Git, command: string, env: Record<string, string>, s
     const deps = await sh(`cd ${sq(W)} || exit 1
 L=; F=; for f in bun.lock bun.lockb package-lock.json pnpm-lock.yaml yarn.lock; do [ -f "$f" ] && { F=$f; L=$(sha256sum "$f" | cut -c1-64); break; }; done
 if [ -z "$F" ]; then echo "deps: none"; exit 0; fi
-if [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-lockhash 2>/dev/null)" = "$L" ]; then cp -a ${sq(T)}/node_modules node_modules && echo "deps: reused"; exit 0; fi
+if [ -d ${sq(T)}/node_modules ] && [ "$(cat ${sq(T)}/.capcomd-lockhash 2>/dev/null || cat ${sq(T)}/.git/capcomd-lockhash 2>/dev/null)" = "$L" ]; then cp -a ${sq(T)}/node_modules node_modules && echo "deps: reused"; exit 0; fi
 case "$F" in bun.lock*) bun install --frozen-lockfile;; package-lock.json) npm ci --no-fund --no-audit;; pnpm-lock.yaml) npx --yes pnpm install --frozen-lockfile;; *) npx --yes yarn install --frozen-lockfile;; esac`, 900_000);
     if (deps.code !== 0) return { passed: false, output: `checks VM: installing dependencies failed (exit ${deps.code}): ${(deps.stdout + deps.stderr).slice(-1500)}` };
     const ids = Object.entries(env).map(([k, v]) => `${k}=${sq(v)}`).join(" ");

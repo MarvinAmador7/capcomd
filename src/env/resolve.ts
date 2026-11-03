@@ -18,6 +18,11 @@ export interface EnvManifest {
   lockFile: string;
   /** Repo whose deps were baked in ("" when none). */
   repo: string;
+  /**
+   * The warm template (Docker): the commit of `target` checked out in the image with its dependencies, which agents
+   * use in place (src/agents/workspace.ts). Absent for a shallow template (boxd) or when it couldn't be kept.
+   */
+  template?: { commit: string; target: string };
 }
 export interface EnvRecord {
   name: string;
@@ -32,8 +37,9 @@ export interface EnvLedger { current?: EnvRecord; history: EnvRecord[] }
 
 /** Content hash of pins + lockfile; same inputs → same snapshot name → build is skipped. */
 export function envName(m: EnvManifest): string {
-  // Repo is informational only: any repo with the same lockfile (or none) shares the snapshot.
-  const canon = JSON.stringify({ schema: m.schema, pins: m.pins, lockHash: m.lockHash });
+  // Repo is informational only: any repo with the same lockfile (or none) shares the snapshot. A warm template holds
+  // the repo itself, so its repo and commit are content too (a rebuild at a newer commit is a new image).
+  const canon = JSON.stringify({ schema: m.schema, pins: m.pins, lockHash: m.lockHash, ...(m.template ? { repo: m.repo, template: m.template.commit } : {}) });
   return ENV_PREFIX + createHash("sha256").update(canon).digest("hex").slice(0, 16);
 }
 

@@ -37,12 +37,19 @@ function sample() {
 // commit on HEAD stored at cfg.ref. The agent's tree, index and history are unchanged.
 const git = (args, env = {}) =>
   execFileSync("git", args, { cwd: cfg.repo, env: { ...process.env, ...env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+// A temporary index of HEAD whose entries match the files on disk, so `add -A` hashes and writes only what changed.
+// (Written again, every unchanged blob "freshens" the pack holding it: on a checkout from an image layer, the warm
+// template, that copies the whole pack into the container.) `--refresh` exits 1 when files differ: that's expected.
+function headIndex(idx, ref = "HEAD") {
+  git(["read-tree", ref], idx);
+  try { git(["update-index", "-q", "--refresh"], idx); } catch { /* changed files: add -A takes them */ }
+}
 let lastTree = null, lastHead = null;
 function checkpoint(reason) {
   try {
     const head = git(["rev-parse", "HEAD"]);
     const idx = { GIT_INDEX_FILE: `${cfg.dir}/checkpoint.index` };
-    git(["read-tree", head], idx);
+    headIndex(idx, head);
     git(["add", "-A"], idx);
     const tree = git(["write-tree"], idx);
     const headTree = git(["rev-parse", "HEAD^{tree}"]);
@@ -62,7 +69,7 @@ function checkpoint(reason) {
 function workTree() {
   try {
     const idx = { GIT_INDEX_FILE: `${cfg.dir}/tree.index` };
-    git(["read-tree", "HEAD"], idx);
+    headIndex(idx);
     git(["add", "-A"], idx);
     return git(["write-tree"], idx);
   } catch { return undefined; }

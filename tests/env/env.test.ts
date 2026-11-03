@@ -27,7 +27,7 @@ async function fixture(opts: { lock?: boolean } = {}) {
   sh(join(home, "node/bin/node"), `case "$1" in -v) echo v22.9.0;; -p) echo 22;; esac`);
   sh(join(home, "node/bin/npm"), `
 if [ "$1" = ci ]; then mkdir -p node_modules/leftpad && echo ok > node_modules/leftpad/index.js; exit 0; fi
-prefix=; pkg=; while [ $# -gt 0 ]; do case "$1" in --prefix) prefix="$2"; shift 2;; @*) pkg="$1"; shift;; *) shift;; esac; done
+prefix=; pkg=; while [ $# -gt 0 ]; do case "$1" in --prefix) prefix="$2"; shift 2;; @*|[a-z]*@[0-9]*) pkg="$1"; shift;; *) shift;; esac; done
 name=$(echo "$pkg" | sed -E 's#^@[^/]+/##; s#@.*$##'); ver=\${pkg##*@}; [ "$name" = claude-code ] && name=claude
 mkdir -p "$prefix/bin"; printf '#!/bin/sh\\necho "%s-cli %s"\\n' "$name" "$ver" > "$prefix/bin/$name"; chmod +x "$prefix/bin/$name"`);
   sh(join(home, "npm/bin/claude"), `echo "2.1.290 (Claude Code)"`);
@@ -129,6 +129,62 @@ test("a worker on the snapshot reuses the baked node_modules when the lockfile m
   const { Git } = await import("../../src/merge/git");
   expect((await new Git(f.r.bare).run(["show", "--stat", "--format=", res.sha])).stdout).not.toContain("node_modules");
 }, 30_000);
+
+describe("a warm template (Docker)", () => {
+  test("full history of the target, deps installed, its record in .git; agents use it in place", async () => {
+    const f = await fixture();
+    const logs: string[] = [];
+    const res = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, log: (l) => logs.push(l), pollMs: 1, warm: true, target: "main" });
+    const T = join(f.workdir, "template");
+    const { Git } = await import("../../src/merge/git");
+    const main = (await f.r.sha("refs/heads/main"))!;
+    expect(res.record.manifest.template).toEqual({ commit: main, target: "main" });
+    expect(res.record.depsInstalled).toBe(true);
+    // Not shallow: the whole history is there to branch and rebase on.
+    expect((await new Git(T).ok(["rev-parse", "--is-shallow-repository"])).trim()).toBe("false");
+    expect(Number((await new Git(T).ok(["rev-list", "--count", "HEAD"])).trim())).toBe(2);
+    const marker = JSON.parse(readFileSync(join(T, ".git/capcomd-template.json"), "utf8"));
+    expect(marker).toEqual({ schema: 1, repo: f.r.bare, target: "main", commit: main, lockFile: "package-lock.json", lockHash: res.record.manifest.lockHash, depsInstalled: true });
+    // The hash lives in .git (out of the tree agents commit from), and node_modules is excluded: the checkout is clean.
+    expect(readFileSync(join(T, ".git/capcomd-lockhash"), "utf8")).toBe(res.record.manifest.lockHash);
+    expect(existsSync(join(T, ".capcomd-lockhash"))).toBe(false);
+    expect((await new Git(T).ok(["status", "--porcelain"])).trim()).toBe("");
+    expect(logs.join("\n")).toContain("warm template: main at");
+    expect(logs.join("\n")).toContain("scrub: clean");
+    // The commit is part of the image's name: a rebuild after main moved is a new image, not "up to date".
+    const shallow = await envBuild(new FakeProvider({ hostExec: true }), { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: join(f.workdir, "other.json"), pollMs: 1 });
+    expect(shallow.name).not.toBe(res.name);
+    await f.r.pushToMain("later.txt", "later\n");
+    const moved = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1, warm: true, target: "main" });
+    expect(moved.cached).toBe(false);
+    expect(moved.name).not.toBe(res.name);
+
+    // A worker in that image works in the template in place, with its dependencies, and pushes its branch.
+    resetSpans();
+    const { id } = await f.provider.ensure({ idemKey: "w-warm", isolated: true, ttlSeconds: 60, egressAllow: ["github.com"], labels: {}, fromSnapshot: moved.name });
+    await f.provider.waitReady(id, 1000);
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AGENT_WORKDIR: f.workdir, CAPCOMD_AGENT_BIN: new URL("../agents/fake-codex.sh", import.meta.url).pathname, CAPCOMD_AGENT_POLL_MS: "50", CAPCOMD_CREDENTIALS: "env" });
+    const run = await runAgent(codexAdapter, f.provider, id, { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: f.r.bare, goal: "fix" }, cfg, { apiKey: "sk-proj-x-0123456789abcdef", warmTemplate: true });
+    const span = getFinishedSpans().find((s) => s.name === "agent.codex")!;
+    expect(span.attributes["agent.workspace"]).toBe("in_place");
+    expect(span.events.map((e) => e.name)).toContain("agent.deps_reused");
+    expect(existsSync(join(f.workdir, "task-1-e1/repo"))).toBe(false);
+    expect((await new Git(f.r.bare).run(["show", "--stat", "--format=", run.sha])).stdout).not.toContain("node_modules");
+    expect((await new Git(f.r.bare).ok(["rev-parse", `${run.sha}^`])).trim()).toBe((await f.r.sha("refs/heads/main"))!);
+  }, 60_000);
+
+  test("a bun.lock project on an image without bun: the pinned bun is installed, then the frozen install", async () => {
+    const f = await fixture({ lock: false });
+    await f.r.pushToMain("bun.lock", '{"lockfileVersion":1}\n');
+    await f.r.pushToMain(".bun-version", "1.4.2\n");
+    const logs: string[] = [];
+    const res = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, log: (l) => logs.push(l), pollMs: 1, warm: true, target: "main" });
+    expect(logs.join("\n")).toContain("bun not in image → installing bun@1.4.2");
+    expect(readFileSync(join(f.home, "npm/bin/bun"), "utf8")).toContain("bun-cli 1.4.2");
+    expect(logs.join("\n")).toContain("deps: bun install --frozen-lockfile ok");
+    expect(res.record.depsInstalled).toBe(true);
+  }, 60_000);
+});
 
 describe("capcomd doctor", () => {
   test("reports CLI versions, placeholder-in-VM, and API acceptance through substitution", async () => {

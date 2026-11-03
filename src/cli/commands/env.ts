@@ -59,13 +59,19 @@ export async function envCommand(command: string, pos: string[], values: Record<
     const rep = await doctor(p, { cfg: toolCfg(), snapshot, modes, snapshots });
     // --strict (scripts): every checked agent must pass; default: at least one usable agent.
     const ok = values.strict ? rep.agents.length > 0 && rep.agents.every((a) => a.ok) : rep.agents.some((a) => a.ok);
-    emit(json, { ok, ...rep }, formatDoctor(rep));
+    // Docker: how far the warm template is behind (informational: a stale one only means agents clone).
+    const { readLedger } = await import("../../env/resolve");
+    const { drift, notes } = await templateNotes(readLedger().current);
+    emit(json, { ok, ...rep, drift, notes }, [formatDoctor(rep), ...(drift ? [`  ${drift.message}`] : []), ...notes.map((n) => `  ${n}`)].join("\n"));
     return ok ? 0 : 1;
   }
   const sub = pos[1];
   if (sub === "build") {
     const repo = loadMergeConfig();
-    const res = await envBuild(platform(), { repoUrl: repo?.remote, cfg: toolCfg(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[] });
+    // A sandbox per container (Docker) keeps a warm template agents use in place; a VM's snapshot stays shallow.
+    const { sandboxCaps } = await import("../../providers/registry");
+    const warm = sandboxCaps().isolation === "container";
+    const res = await envBuild(platform(), { repoUrl: repo?.remote, cfg: toolCfg(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[], ...(warm ? { warm, target: repo?.target } : {}) });
     const v = Object.entries(res.record.versions).map(([k, x]) => `${k}=${x.version}(${x.source})`).join(" ");
     emit(json, { name: res.name, cached: res.cached, record: res.record }, `${res.cached ? "up to date" : "built"}: ${res.name}  ${v}${res.record.buildMs ? `  ${res.record.buildMs}ms` : ""}`);
     return 0;
@@ -73,7 +79,8 @@ export async function envCommand(command: string, pos: string[], values: Record<
   if (sub === "status") {
     const st = await envStatus(platform());
     const text = st.snapshots.length ? st.snapshots.map((s) => `${s.current ? "*" : " "} ${s.name}  ${s.status}${s.record ? `  built ${s.record.builtAt}  ${Object.entries(s.record.versions).map(([k, x]) => `${k}=${x.version}`).join(" ")}` : ""}`).join("\n") : "no capcomd env snapshots (run `capcomd env build`)";
-    emit(json, st as any, `${text}\nworkers use: ${resolveEnvSnapshot() ?? "default image"}`);
+    const { drift, notes } = await templateNotes(st.current);
+    emit(json, { ...st, drift, notes } as any, [text, `workers use: ${resolveEnvSnapshot() ?? "default image"}`, ...(drift ? [drift.message] : []), ...notes].join("\n"));
     return 0;
   }
   if (sub === "rm") {
@@ -82,6 +89,15 @@ export async function envCommand(command: string, pos: string[], values: Record<
     return 0;
   }
   throw new RelayError("usage", "usage: capcomd env build [--force] | env status | env rm [name|all]", "");
+}
+
+/** The warm template's drift (Docker env builds) and plan logins saved on an older image: lines for status/doctor. */
+async function templateNotes(current: import("../../env/resolve").EnvRecord | undefined): Promise<{ drift: import("../../env/drift").Drift | null; notes: string[] }> {
+  if (!current?.manifest.template) return { drift: null, notes: [] };
+  const { templateDrift, loginsOnOlderEnv } = await import("../../env/drift");
+  const { readAuthLedger } = await import("../../auth/profiles");
+  const drift = await templateDrift(current, loadMergeConfig()).catch(() => null);
+  return { drift, notes: loginsOnOlderEnv(current.name, Object.values(readAuthLedger())) };
 }
 
 async function authCommand(pos: string[], values: Record<string, any>): Promise<number> {
