@@ -42,8 +42,8 @@ export async function resolveTarget(arg: string | undefined, runId: string | und
     let p: Target | null = findProject(arg, list);
     if (!p && me && (arg === me.name || samePath(arg.replace(/^~(?=$|\/)/, process.env.HOME ?? "~"), me.path))) p = me;
     if (!p) throw new RelayError("usage", `unknown project "${arg}"`, list.length
-      ? `Known projects: ${listing(list)} (capcomd_projects lists them). To add one, the user runs \`capcomd setup agent\` in its checkout.`
-      : "No projects are configured: the user runs `capcomd setup agent` in a repository's checkout to add it.", { code: "unknown_project" });
+      ? `Known projects: ${listing(list)} (capcomd_projects lists them). To add one, run \`capcomd setup project --yes\` in its checkout (it's listed at once).`
+      : "No projects are configured: run `capcomd setup project --yes` in the repository's checkout to add it (it's listed at once).", { code: "unknown_project" });
     if (ofRun && !samePath(ofRun.path, p.path)) throw new RelayError("usage", `run ${runId} belongs to project ${ofRun.name}, not ${p.name}`, `Pass project: "${ofRun.name}" (or leave it out: a run's own project applies).`, { code: "wrong_project" });
     return p;
   }

@@ -4,7 +4,7 @@ import { taskKey, withRepoFile } from "./config";
 import type { GitHubApi, PullRequest } from "./github";
 import { findExistingMerge, openClone } from "./repo";
 import { integrate } from "./integrate";
-import { runTests } from "./verify";
+import { checksFailReason, runTests } from "./verify";
 import type { MergeOutcome, MergeRequest } from "./types";
 import { MergeRetryableError } from "./types";
 
@@ -40,7 +40,7 @@ export async function prMerge(baseCfg: MergeConfig, req: MergeRequest, gh: GitHu
   const trial = await integrate(git, cfg, cfg.strategy, targetSha, taskSha, key, subject);
   if (!trial.ok) return { status: "conflict", files: trial.files, targetSha, taskSha };
   const tests = await runTests(git, req.testCommand ?? cfg.testCommand, { CAPCOMD_RUN_ID: req.runId, CAPCOMD_TASK_ID: req.taskId, CAPCOMD_TARGET: req.target });
-  if (!tests.passed) return { status: "failed", reason: "tests failed on branch merged with latest target", output: tests.output };
+  if (!tests.passed) return { status: "failed", reason: checksFailReason(tests), output: tests.output };
   if (req.testOnly) return { status: "verified", sha: trial.head, output: tests.output, taskSha };
 
   let pr: PullRequest = existingPr && existingPr.state === "open"

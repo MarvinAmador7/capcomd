@@ -128,27 +128,76 @@ export async function runGoal(runId: string): Promise<{ branch: string; base: st
 const onGoal = (goal: { branch: string } | undefined, target: string) => !!goal && goal.branch === target;
 
 const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,200}(?<![./])$/;
-/** Create `branch` on the remote from `from` if it doesn't exist yet (a per-run staging branch). */
-async function ensureBranch(runId: string, branch: string, from: string): Promise<{ created: boolean }> {
+/**
+ * Create `branch` on the remote at `from`'s tip if it doesn't exist yet (a per-run staging branch, or a run's goal
+ * branch). Ref work only: one `ls-remote`, a shallow fetch of `from` and a ref push, each bounded (no clone of the
+ * repository). `goal`: the branch is this run's goal branch; one that exists is used only when it is this run's own
+ * (`own`), or a leftover with nothing on it beyond `from` whose run has ended (`reusable`), then moved up to `from`'s tip.
+ */
+async function ensureBranch(runId: string, branch: string, from: string, o: { goal?: boolean; own?: boolean; reusable?: (sha: string) => Promise<string | null> } = {}): Promise<{ created: boolean; reused?: boolean; ms: number }> {
+  const t0 = Date.now();
   const { loadMergeConfig } = await import("../merge/config");
   const cfg = loadMergeConfig();
-  if (!cfg) throw new RelayError("config", "--target-from needs a repository (CAPCOMD_REPO)", "Set CAPCOMD_REPO, or create the branch yourself and pass only --target.");
-  const { openClone } = await import("../merge/repo");
-  const git = await openClone(cfg, `${runId}-setup`);
-  if (await git.revParse(`refs/remotes/origin/${branch}`)) return { created: false };
-  const base = await git.revParse(`refs/remotes/origin/${from}`);
-  if (!base) throw new RelayError("not_found", `--target-from ${from}: branch not found on ${cfg.remote}`, "Name an existing branch to cut the target from.");
-  const push = await git.run(["push", "--porcelain", "origin", `${base}:refs/heads/${branch}`]);
-  if (push.code !== 0 && !(await git.ok(["ls-remote", "--heads", "origin", branch]).catch(() => ""))) throw new RelayError("conflict", `could not create ${branch}: ${(push.stdout + push.stderr).trim().slice(-300)}`, "Check push access to the repository.");
-  return { created: true };
+  if (!cfg) {
+    if (o.goal) return { created: false, ms: 0 }; // no repository: nothing to cut (dry-run merges)
+    throw new RelayError("config", "--target-from needs a repository (CAPCOMD_REPO)", "Set CAPCOMD_REPO, or create the branch yourself and pass only --target.");
+  }
+  const R = await import("../merge/repo");
+  let heads: Record<string, string | null>;
+  try { heads = await R.remoteHeads(cfg, [branch, from]); }
+  catch (e) { throw new RelayError("config", `couldn't read ${cfg.remote}: ${(e as Error).message}`, "Check the network and your git access to the repository, then try again.", { retryable: true }); }
+  const have = heads[branch] ?? null, base = heads[from] ?? null;
+  if (have && (!o.goal || o.own)) return { created: false, ms: Date.now() - t0 };
+  const where = o.goal ? "--base" : "--target-from";
+  if (!base) throw new RelayError("not_found", `${where} ${from}: branch not found on ${cfg.remote}`, "Name an existing branch to cut it from.", { code: o.goal ? "base" : undefined });
+  if (have) {
+    // A goal branch that is already there: another run's. Only a leftover with nothing of its own may be taken over.
+    if (have === base) {
+      const why = o.reusable ? await o.reusable(have) : null;
+      if (why) throw new RelayError("conflict", `goal branch ${branch} already exists on the remote: ${why}`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+      return { created: false, reused: true, ms: Date.now() - t0 };
+    }
+    const why = o.reusable ? await o.reusable(have) : null;
+    if (why) throw new RelayError("conflict", `goal branch ${branch} already exists on the remote: ${why}`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+    const ff = await R.pointRemoteBranch(cfg, branch, from, base, { expect: have, fastForwardOnly: true, depth: 200 });
+    if (!ff.ok) throw new RelayError("conflict", `goal branch ${branch} already exists on the remote${ff.reason === "not_ancestor" ? ` with commits ${from} doesn't have` : ` and couldn't be moved to ${from} (${ff.detail})`}`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+    return { created: false, reused: true, ms: Date.now() - t0 };
+  }
+  const made = await R.pointRemoteBranch(cfg, branch, from, base, { expect: null });
+  if (!made.ok) {
+    // Someone else made it meanwhile: fine for a staging branch; a goal branch is checked again on the retry.
+    const now = await R.remoteHeads(cfg, [branch]).catch(() => ({} as Record<string, string | null>));
+    if (!now[branch] || o.goal) throw new RelayError("conflict", `could not create ${branch}: ${made.detail}`, "Check push access to the repository.");
+  }
+  return { created: true, ms: Date.now() - t0 };
 }
-/** The remote (CAPCOMD_REPO) has `branch` (false without a repository: the push that creates it reports that). */
-async function remoteHasBranch(branch: string): Promise<boolean> {
-  const cfg = (await import("../merge/config")).loadMergeConfig();
-  if (!cfg) return false;
-  const { Git } = await import("../merge/git");
-  const r = await new Git(process.cwd()).run(["ls-remote", "--heads", cfg.remote, `refs/heads/${branch}`], { timeoutMs: 20_000 });
-  return r.code === 0 && r.stdout.trim().length > 0;
+
+/**
+ * Why an existing goal branch can't be this new run's (null: it can): another run on this machine made it and hasn't
+ * ended. Its commit is at (or behind) the base, so nothing landed on it. Bounded reads; a run that doesn't answer counts
+ * as live.
+ */
+async function goalBranchOwner(runId: string, branch: string): Promise<string | null> {
+  const { within } = await import("../utils/within");
+  const rows = recentRuns(200).filter((r) => r.runId !== runId);
+  const live = await Promise.all(rows.map(async (r) => {
+    // Rows written before runs recorded their goal branch: read it from the run itself.
+    if (r.goalBranch !== undefined && r.goalBranch !== branch) return null;
+    try {
+      return await within((async () => {
+        const sc = await existingActor("scope", [r.runId]);
+        if (!sc) return null;
+        if (r.goalBranch === undefined) {
+          const g: any = (await sc.kvGet({ k: GOAL_KV }).catch(() => null))?.value;
+          if (g?.branch !== branch) return null;
+        }
+        const meta = await sc.getScope({});
+        return meta && !meta.ended ? r.runId : null;
+      })(), 5_000);
+    } catch { return r.goalBranch === branch ? r.runId : null; }
+  }));
+  const owner = live.find(Boolean);
+  return owner ? `run ${owner} uses it and hasn't ended (cancel it first, or pick a new name)` : null;
 }
 const CHECK_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -189,6 +238,11 @@ export async function runNew(o: RunNewOpts) {
   const c = client();
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
+  if (o.sandbox !== undefined) {
+    const n = o.sandbox.toLowerCase();
+    if (!(await import("../providers/registry")).isProviderName(n)) throw new RelayError("usage", `sandbox ${JSON.stringify(o.sandbox)} isn't one capcomd knows`, `Name one of: ${(await import("../providers/registry")).LISTED_PROVIDERS.join(", ")}.`, { code: "sandbox" });
+    o = { ...o, sandbox: n };
+  }
   if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
   if (o.goalBranch !== undefined || o.base !== undefined) {
     // A goal branch is the run's target, cut from its base: never "main" by default, never protected, never the base.
@@ -202,7 +256,8 @@ export async function runNew(o: RunNewOpts) {
     // A new run's goal branch is a new branch: another run's (or anyone's) work must not end up in this run's pull request.
     const prior = await runGoal(runId);
     if (prior && (prior.branch !== o.goalBranch || prior.base !== o.base)) throw new RelayError("conflict", `run ${runId} already has goal branch ${prior.branch} (from ${prior.base})`, "Start a new run for another goal branch.", { code: "goalBranch" });
-    if (!prior && (await remoteHasBranch(o.goalBranch))) throw new RelayError("conflict", `goal branch ${o.goalBranch} already exists on the remote`, "Pick a new name: each run's work lands on a branch of its own.", { code: "goalBranch" });
+    // An existing goal branch is checked when it's cut (ensureBranch): this run's own, or a leftover of an ended run
+    // with nothing on it, is used; anything else is refused.
     o = { ...o, target: o.goalBranch, targetFrom: o.base };
   }
   if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from <base>.");
@@ -212,37 +267,49 @@ export async function runNew(o: RunNewOpts) {
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
   const repoEnv = repoEnvOf(process.env);
   if (Object.keys(repoEnv).length) await (await import("./state")).kvWrite(runId, { k: RUN_REPO_KV, value: repoEnv, writer: "operator" }).catch(() => {});
-  // The run's place (when it has its own) and that provider's settings as they are now (ADR-021 §2): a run keeps the
-  // idle machine lifetime it started with. A retry keeps the settings the first call recorded.
+  // The run's place and that provider's settings as they are now (ADR-021 §2): a run keeps the idle machine lifetime
+  // it started with. The place: the one asked for, else the project's (its .capcomd/config.json), else the user's
+  // config, read from the files now, not from the engine's environment (src/config/sandbox.ts); none of those: the
+  // engine's own. A retry keeps what the first call recorded.
+  let sandbox: { name: string | null; source: import("../config/sandbox").SandboxSource };
+  let branchSetup: { branch: string; from: string; created: boolean; reused?: boolean; ms: number } | null = null;
   {
     const RS = await import("../providers/run-sandbox");
     const prior = await c.scope.getOrCreate([runId]).kvGet({ k: RS.RUN_SANDBOX_KV }).catch(() => null) as { value?: unknown; deleted?: boolean } | null;
     const had = prior && !prior.deleted ? RS.parseRunSandbox(prior.value) : null;
-    let place: string = o.sandbox ?? "fake";
-    if (!o.sandbox) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
+    const choice = o.sandbox ? { name: o.sandbox, source: "run" as const } : (await import("../config/sandbox")).configuredSandbox(process.cwd());
+    if (!had && "invalid" in choice && choice.invalid) throw new RelayError("config", `CAPCOMD_SANDBOX=${choice.invalid} (${choice.path ?? "environment"}) isn't a sandbox capcomd knows`, `Set it to one of: ${(await import("../providers/registry")).LISTED_PROVIDERS.join(", ")}.`, { code: "sandbox" });
+    const name = o.sandbox ?? (had ? had.name : choice.name);
+    sandbox = { name, source: had && !o.sandbox && had.name !== choice.name ? "run" : choice.source };
+    let place: string = name ?? "fake";
+    if (!name) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
     const settings = had?.settings.idleLifetime !== undefined ? { idleLifetime: had.settings.idleLifetime } : (await import("../providers/settings")).settingsForRun(place);
-    const value = RS.runSandboxValue(o.sandbox, settings);
-    // Unchanged on a retry: not written again. A run on the daemon's own place still starts if this write fails
-    // (its machines then get the place's setting when they start); a run with its own place doesn't.
+    const value = RS.runSandboxValue(name, settings);
+    // Unchanged on a retry: not written again. A run on the engine's own place still starts if this write fails
+    // (its machines then get the place's setting when they start); a run with a place of its own doesn't.
     if (!prior || prior.deleted || JSON.stringify(prior.value) !== JSON.stringify(value)) {
       const put = (await import("./state")).kvWrite(runId, { k: RS.RUN_SANDBOX_KV, value, writer: "operator" });
-      await (o.sandbox ? put : put.catch(() => {}));
+      await (name ? put : put.catch(() => {}));
     }
   }
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
   if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
   if (o.target) {
-    if (o.targetFrom) await ensureBranch(runId, o.target, o.targetFrom);
+    if (o.targetFrom) {
+      const own = o.goalBranch ? !!(await runGoal(runId)) : false;
+      const b = await ensureBranch(runId, o.target, o.targetFrom, o.goalBranch ? { goal: true, own, reusable: () => goalBranchOwner(runId, o.goalBranch!) } : {});
+      branchSetup = { branch: o.target, from: o.targetFrom, created: b.created, ...(b.reused ? { reused: true } : {}), ms: b.ms };
+    }
     // The goal first: a merge that reads the target and finds no goal would go the repo's way (a PR, an approval).
     if (o.goalBranch) await (await import("./state")).kvWrite(runId, { k: GOAL_KV, value: { branch: o.goalBranch, base: o.base }, writer: "operator" });
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
   if (res.created) await (await import("./state")).kvWrite(runId, { k: TRACE_KV, value: { dir: (await import("../utils/tracing-simple")).traceDir() }, writer: "operator" }).catch(() => {});
-  if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now() });
+  if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}) });
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
-  return { runId, created: res.created, budget: res.budget, ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
+  return { runId, created: res.created, budget: res.budget, sandbox, ...(branchSetup ? { branchSetup } : {}), ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
 }
 
 /**
@@ -250,10 +317,10 @@ export async function runNew(o: RunNewOpts) {
  * daemon's run list. CAPCOMD_RUNS_INDEX names another file (the live e2e scripts keep their runs out of the user's list).
  */
 export const runsIndexPath = () => env("RUNS_INDEX") || join(stateDir(), "runs.jsonl");
-function recordRun(r: { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }) {
+function recordRun(r: { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number; goalBranch?: string }) {
   try { const p = runsIndexPath(); mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, JSON.stringify(r) + "\n"); } catch { /* an index, not state */ }
 }
-export function recentRuns(limit = 20): Array<{ runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number }> {
+export function recentRuns(limit = 20): Array<{ runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number; goalBranch?: string }> {
   if (!existsSync(runsIndexPath())) return [];
   const rows = readFileSync(runsIndexPath(), "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
   const seen = new Set<string>();
@@ -296,6 +363,12 @@ export function spawnChecks(ref: string | null, source: Record<string, string | 
     throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   return { resolved, spec };
 }
+
+/** The id `spawnAgent` gives a top-level agent spawned with `key` (stable: the same run and key, the same id). The
+ *  scope actor's plannerOf computes the same for the key "planner". */
+export const rootAgentIdFor = (runId: string, key: string) => stableId("agt", `${runId}\0operator`, key);
+/** kv: the run's planner agent ({agentId}), written by `capcomd run` before it spawns the planner. Reserved. */
+export const PLANNER_KV = "_planner";
 
 export async function spawnAgent(o: SpawnOpts) {
   await assertEngine();
@@ -1118,8 +1191,8 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
   let runEnded = false;
   if (!agentId) {
     await c.run.getOrCreate([runId]).cancel({ runId });
-    // A run its agents didn't end (none ever ran: it never started, or its planner couldn't be spawned) ends here.
-    runEnded = await endRun(runId, "cancelled", reason ?? "run cancelled", by).then((r) => r.changed, () => false);
+    // A run-wide cancel ends the run as cancelled, whatever its agents did (it reads "cancelled" everywhere, never idle).
+    runEnded = await endRun(runId, "cancelled", reason ?? "run cancelled", by, { evenIfAgentsEnded: true }).then((r) => r.changed, () => false);
   }
   return { runId, target: agentId ?? null, cancelled: res.cancelled, affected: affected.map((a: { agentId: string; status: string }) => ({ agentId: a.agentId, status: a.status })), ...(runEnded ? { runEnded } : {}) };
 }
@@ -1128,13 +1201,13 @@ export async function cancelAgents(runId: string, agentId?: string, reason?: str
  * Record that the run itself ended (scope RUN_ENDED → lifecycle run.failed / run.cancelled), unless it already has:
  * by its agents (the lifecycle feed's own fold) or an earlier end. `changed`: this call ended it.
  */
-export async function endRun(runId: string, state: "failed" | "cancelled", reason: string, by?: string | null): Promise<{ changed: boolean; state: string }> {
+export async function endRun(runId: string, state: "failed" | "cancelled", reason: string, by?: string | null, o: { evenIfAgentsEnded?: boolean } = {}): Promise<{ changed: boolean; state: string }> {
   await assertEngine();
   const s = client().scope.getOrCreate([runId]);
   const had = (await s.getScope({}))?.ended;
   if (had) return { changed: false, state: had.state };
   const { runPhase } = await import("../api/lifecycle");
-  if (runPhase(runId, await s.getEvents({})) === "ended") return { changed: false, state: "ended" };
+  if (!o.evenIfAgentsEnded && runPhase(runId, await s.getEvents({})) === "ended") return { changed: false, state: "ended" };
   const r = await s.endRun({ state, reason, by: by ?? null });
   if (r.changed && state === "failed") await client().run.getOrCreate([runId]).configFail({ runId, reason }).catch(() => {});
   return { changed: r.changed, state: r.ended.state };

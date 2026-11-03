@@ -7,7 +7,7 @@ import { taskKey, withRepoFile } from "./config";
 import { Git } from "./git";
 import { cloneDir, findExistingMerge, openClone, withCloneLock, withWorktree } from "./repo";
 import { integrate } from "./integrate";
-import { runTests } from "./verify";
+import { checksFailReason, runTests } from "./verify";
 import type { MergeOutcome, MergeRequest, MergeTimings } from "./types";
 
 /** Test seam: runs right before the push (e.g. to move the target and force a lease rejection). `beforeFastPush`: before
@@ -61,7 +61,7 @@ export async function directVerify(baseCfg: MergeConfig, req: MergeRequest, clon
     if (req.expectSha && taskSha !== req.expectSha) return { status: "failed", reason: `branch ${req.branch} moved since verification (${req.expectSha.slice(0, 12)} → ${taskSha.slice(0, 12)})` };
     const { merged, tests } = await trial(git, baseCfg, req, targetSha, taskSha, t);
     if (!merged.ok) return { status: "conflict", files: merged.files, targetSha, taskSha };
-    if (!tests!.passed) return { status: "failed", reason: "tests failed on branch merged with latest target", output: tests!.output };
+    if (!tests!.passed) return { status: "failed", reason: checksFailReason(tests!), output: tests!.output };
     return { status: "verified", sha: merged.head, output: tests!.output, taskSha, targetSha, how: merged.how };
   }, req.branchSha ? { has: { ref: `refs/remotes/origin/${req.branch}`, sha: req.branchSha } } : {});
   return { ...(out ?? { status: "failed", reason: `target branch ${req.target} not found on ${baseCfg.remote}` }), timings: t };
@@ -143,7 +143,7 @@ export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, clone
     if (req.expectSha && taskSha !== req.expectSha) return done({ status: "failed", reason: `branch ${req.branch} moved since verification (${req.expectSha.slice(0, 12)} → ${taskSha.slice(0, 12)})` });
     const { cfg, merged, tests } = await trial(git, baseCfg, req, targetSha, taskSha, t);
     if (!merged.ok) return done({ status: "conflict", files: merged.files, targetSha, taskSha });
-    if (!tests!.passed) return done({ status: "failed", reason: "tests failed on branch merged with latest target", output: tests!.output });
+    if (!tests!.passed) return done({ status: "failed", reason: checksFailReason(tests!), output: tests!.output });
     if (merged.head === targetSha) {
       return done({ status: "merged", sha: targetSha, already: true, how: "noop", strategy: cfg.strategy, mode: "direct", attempts });
     }

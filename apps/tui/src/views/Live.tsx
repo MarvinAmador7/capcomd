@@ -19,7 +19,7 @@ export function Live({ data, width, height, live }: ViewProps & { data: RunData;
   return (
     <Box flexDirection="column" gap={1}>
       <Box gap={2}>
-        <Badge variant={/fail|cancel/.test(state) ? "error" : /complet|done/.test(state) ? "success" : "info"} bordered={false} bold>{`${statusGlyph(state)} ${state}`}</Badge>
+        <Badge variant={/fail/.test(state) ? "error" : /cancel/.test(state) ? "warning" : /complet|done/.test(state) ? "success" : "info"} bordered={false} bold>{`${statusGlyph(state)} ${state}`}</Badge>
         <Text color={c.fg}>{data.goal ?? data.runId}</Text>
         {live ? <Text color={c.accent}>● live</Text> : null}
       </Box>
@@ -108,7 +108,7 @@ function AgentRow({ a, prefix, label, pipeline, verdict, width, win }: { a: Agen
           : use ? <Text><Text color={frac > 0.8 ? c.warn : c.accent}>{"▰".repeat(filled)}</Text><Text color={c.faint}>{"▱".repeat(meterW - filled)} {UNIT_MARK[use.unit]}</Text></Text> : null}
       </Text>
       {a.stuck ? <Text color={c.warn}>{"    " + a.stuck}</Text> : null}
-      {a.errorKind ? <Text color={c.err}>{"    ✗ " + a.errorKind}</Text> : null}
+      {a.errorKind && a.status !== "cancelled" ? <Text color={c.err}>{"    ✗ " + a.errorKind}</Text> : null}
     </Box>
   );
 }

@@ -3292,7 +3292,7 @@
                       "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
                     },
                     "plannerId": {
-                      "description": "The planner agent (the run's root)",
+                      "description": "The planner agent (the run's root); null in a run its driver runs itself (an MCP or CLI driver, no planner agent)",
                       "type": [
                         "string",
                         "null"
@@ -3305,6 +3305,10 @@
                         "null"
                       ],
                       "x-untrusted": true
+                    },
+                    "driven": {
+                      "type": "boolean",
+                      "description": "The run has no planner agent: its driver (the user's own agent, over MCP or the CLI) marks the goal done (`capcomd_goal {done: true}`, `capcomd goal done`), which makes it ready"
                     },
                     "compare": {
                       "type": "object",
@@ -9488,8 +9492,15 @@
             "description": "The branch it was cut from, which a pull request goes into"
           },
           "plannerId": {
-            "type": "string",
-            "description": "The planner agent whose finish made the run ready"
+            "description": "The planner agent whose finish made the run ready; null when the run's driver marked it done (a run with no planner agent)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "description": "Who marked it done (driver, operator), in a run with no planner agent",
+            "type": "string"
           },
           "cause": {
             "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",

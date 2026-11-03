@@ -41,7 +41,7 @@ async function policy() {
 
 // ── runs ──────────────────────────────────────────────────────────────────────────────────────────
 
-export async function runNew(a: { budget?: string; label?: string; key?: string; target?: string; targetFrom?: string; goalBranch?: string; base?: string }) {
+export async function runNew(a: { budget?: string; label?: string; key?: string; target?: string; targetFrom?: string; goalBranch?: string; base?: string; sandbox?: string }) {
   let budget: Budget;
   try { budget = parseBudget(a.budget ?? ""); } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Pass units, e.g. budget: \"usd=5,turns=200,wallSeconds=3600\"."); }
   const p = await policy();
@@ -50,6 +50,8 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
     const over = Object.entries(cap).filter(([u, max]) => (budget as Record<string, number>)[u] === undefined || (budget as Record<string, number>)[u]! > max);
     if (over.length) deny(`budget ${a.budget ?? "(none)"} is over this project's cap per run (${p.maxRunBudget})`, `Ask for at most ${p.maxRunBudget} (every capped unit must be given); the cap is driver.maxRunBudget in .capcomd/config.json.`);
   }
+  // Where the run's agents and checks run: the one asked for (it must be up), else the project's (src/config/sandbox.ts).
+  const sandbox = a.sandbox === undefined ? undefined : await (await import("../config/sandbox")).askedSandbox(a.sandbox);
   // Gates come from the project (`capcomd setup`), never from the driver.
   const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
   if (a.target !== undefined) {
@@ -65,25 +67,33 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
     const cfg = (await import("../merge/config")).loadMergeConfig();
     const { env: envVar } = await import("../utils/env");
     const r = await (await import("../merge/goal")).resolveGoalBranch({ goal: a.label ?? "goal", base: a.base ?? null, goalBranch: a.goalBranch ?? null, projectTarget: d.target ?? envVar("MERGE_TARGET") ?? null,
-      remote: cfg?.remote ?? null, cwd: process.cwd() });
+      remote: cfg?.remote ?? null, cwd: process.cwd(),
+      // A goal branch that exists is decided when it's cut (O.runNew): a leftover of an ended run with nothing on it is used.
+      reuse: a.goalBranch ?? null });
     goal = { branch: r.goalBranch, base: r.base };
   }
   const target = goal ? goal.branch : a.target ?? d.target;
-  const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(goal ? { goalBranch: goal.branch, base: goal.base } : { ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) }) });
+  const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(sandbox ? { sandbox } : {}), ...(goal ? { goalBranch: goal.branch, base: goal.base } : { ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) }) });
+  const where = r.sandbox.name ? `Its agents and checks run on ${r.sandbox.name} (${SANDBOX_FROM[r.sandbox.source]}).` : "Its agents and checks run on the engine's own sandbox (nothing configured for this project: pass sandbox, or set it with `capcomd setup project --sandbox docker|boxd`).";
   return { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
-    next: goal ? `Spawn agents with capcomd_spawn; verified merges land on ${goal.branch} with no approval. When the work is done, show the user capcomd_goal and ask before capcomd_pr_open.` : "Spawn agents with capcomd_spawn; give each a check name from gates.checks." };
+    next: `${where} ` + (goal ? `Spawn agents with capcomd_spawn; verified merges land on ${goal.branch} with no approval. When the work is done, show the user capcomd_goal and ask before capcomd_pr_open.` : "Spawn agents with capcomd_spawn; give each a check name from gates.checks.") };
 }
 
+const SANDBOX_FROM: Record<string, string> = { run: "chosen for this run", environment: "CAPCOMD_SANDBOX in capcomd's environment", project: "the project's setting", user: "your user config", engine: "the engine's own" };
+
 /** The goal branch against its base: what landed, what didn't, the planner's summary, and whether a PR can be opened. */
-export async function goal(a: { runId: string }) {
-  const v = await (await import("../primitives/goal")).goalView(a.runId);
+export async function goal(a: { runId: string; done?: boolean; summary?: string }) {
+  const G = await import("../primitives/goal");
+  // A run you drive yourself (no planner agent) is ready when you say its work is done, with what you did.
+  const v = a.done ? await G.markGoalDone(a.runId, { by: DRIVER, summary: a.summary ?? null }) : await G.goalView(a.runId);
   const f = (id: string, t: string | null) => (t == null ? t : fence(id, t).text);
   return {
     ...v, summary: v.plannerId ? f(v.plannerId, v.summary) : v.summary,
     landed: v.landed.map((l) => ({ ...l, task: f(l.agentId, l.task), review: l.review ? { ...l.review, reasons: l.review.reasons.map((r) => fence(l.review!.agentId ?? l.agentId, r).text) } : null })),
     notLanded: v.notLanded.map((n) => ({ ...n, task: f(n.agentId, n.task), detail: f(n.agentId, n.detail) })),
     compare: { ...v.compare, commits: v.compare.commits.map((c) => ({ ...c, subject: fence("commit", c.subject).text })) },
-    next: v.pullRequest ? `The pull request is #${v.pullRequest.number}${v.pullRequest.url ? ` (${v.pullRequest.url})` : ""}: the user reviews and merges it on GitHub.`
+    next: v.driven && v.state === "working" ? "You drive this run: when every agent's work is verified and merged (or given up), call capcomd_goal {runId, done: true, summary: \"what landed\"}; the user then decides on a pull request."
+      : v.pullRequest ? `The pull request is #${v.pullRequest.number}${v.pullRequest.url ? ` (${v.pullRequest.url})` : ""}: the user reviews and merges it on GitHub.`
       : v.openPullRequest.available && v.openPullRequest.confirm ? `${v.openPullRequest.confirm} Ask the user this, showing what landed and what didn't; only if they say yes, call capcomd_pr_open with stopped: true.`
       : v.openPullRequest.available ? `Show the user what landed and the summary, and ask whether to open a pull request into ${v.base} (capcomd_pr_open) or keep the branch.`
       : `${v.openPullRequest.reason}`,
@@ -96,26 +106,48 @@ export async function prOpen(a: { runId: string; stopped?: boolean }) {
   return { ...r, next: `Tell the user: pull request #${r.pullRequest.number}${r.pullRequest.url ? ` (${r.pullRequest.url})` : ""} from ${r.branch} into ${r.base}. They review and merge it on GitHub.` };
 }
 
+/** How long capcomd_runs waits for one run's records. */
+const RUN_READ_MS = 5_000;
+
+/** A run's state as the harness API reports it (GET /v1/runs): running while an agent is live; else how it ended
+ *  (cancelled, failed), idle once its agents finished, new before any; unknown without a scope. */
+export function runState(meta: { ended?: { state: string } | null } | null, agents: Array<{ status: string }>): string {
+  if (!meta) return "unknown";
+  if (agents.some((a) => a.status === "running" || a.status === "pending" || a.status === "paused")) return "running";
+  return meta.ended ? meta.ended.state : agents.length ? "idle" : "new";
+}
+
 export async function runs(a: { limit?: number; project?: { name: string; path: string } | null }) {
   const P = await import("../config/projects");
   const limit = Math.min(Number(a.limit ?? 10), 50);
   // Each run's project: the checkout it was started in (the runs index records the directory).
   const all = O.recentRuns(a.project ? 500 : limit).map((r) => { const dir = r.cwd ? P.projectDirOf(r.cwd) : null; return { ...r, dir, project: dir ? P.projectNameOf(dir) : null }; });
   const rows = (a.project ? all.filter((r) => r.dir && P.samePath(r.dir, a.project!.path)) : all).slice(0, limit).map(({ dir: _d, ...r }) => r);
-  const out = [];
-  for (const r of rows) {
-    // A listed run whose scope this engine doesn't have (another engine's) lists no agents: never create one.
-    const agents = await existingActor("scope", [r.runId]).then((s) => s?.listAgents({}) ?? null).catch(() => null);
-    const counts: Record<string, number> = {};
-    for (const x of agents ?? []) counts[x.status] = (counts[x.status] ?? 0) + 1;
-    out.push({ ...r, agents: counts, pendingApprovals: (await O.pendingMerges(r.runId)).map((m) => m.taskId) });
-  }
+  // One engine read per run, all at once, each bounded: a run whose scope is slow to answer (an actor waking up, an
+  // engine under load) is listed with what's unknown instead of holding the whole list.
+  const { within } = await import("../utils/within");
+  const out = await Promise.all(rows.map(async (r) => {
+    try {
+      return await within((async () => {
+        // A listed run whose scope this engine doesn't have (another engine's) lists no agents: never create one.
+        const s = await existingActor("scope", [r.runId]);
+        if (!s) return { ...r, state: "unknown", agents: {}, pendingApprovals: [] };
+        const [meta, agents, ops] = await Promise.all([s.getScope({}).catch(() => null), s.listAgents({}).catch(() => []), s.listOps({ state: "awaiting_approval", kind: "merge" }).catch(() => [])]) as [any, any[], any[]];
+        const counts: Record<string, number> = {};
+        for (const x of agents) counts[x.status] = (counts[x.status] ?? 0) + 1;
+        return { ...r, state: runState(meta, agents), agents: counts, pendingApprovals: ops.map((m) => m.id) };
+      })(), RUN_READ_MS, `reading ${r.runId}`);
+    } catch {
+      return { ...r, state: "unknown", agents: null, pendingApprovals: null, note: `the engine didn't answer for this run within ${RUN_READ_MS / 1000}s; capcomd_tree reads it on its own` };
+    }
+  }));
   return { runs: out };
 }
 
 export async function tree(a: { runId: string; root?: string }) {
   const t: any = await O.treeOf(a.runId, a.root);
-  return { ...t, pendingApprovals: await O.pendingMerges(a.runId) };
+  const { within } = await import("../utils/within");
+  return { ...t, pendingApprovals: await within(O.pendingMerges(a.runId), RUN_READ_MS).catch(() => null) };
 }
 
 export async function inspect(a: { runId: string; agent: string; tail?: number }) {
@@ -207,7 +239,14 @@ async function bounded<T>(work: Promise<T>, ms: number): Promise<{ done: true; v
 
 /** What to do with a finished verify or merge. */
 function opNext(runId: string, v: any): string {
-  if (v.kind === "verify") return v.state === "passed" ? `Merge with capcomd_merge {runId: "${runId}", ref: "${v.ref}", require: "${v.id}"}.` : "Not merged: send the failure to the agent (capcomd_send) or spawn a fix with it in the task.";
+  if (v.kind === "verify") {
+    if (v.state === "passed") return `Merge with capcomd_merge {runId: "${runId}", ref: "${v.ref}", require: "${v.id}"}.`;
+    const setupFailed = typeof v.result?.checks?.reason === "string" && v.result.checks.reason.startsWith("checks couldn't run")
+      || typeof v.checks?.reason === "string" && v.checks.reason.startsWith("checks couldn't run");
+    return setupFailed
+      ? "Not the agent's fault: the checks sandbox couldn't be set up (checks.output says why, usually `capcomd env build --sandbox …`). Tell the user, run what it says once they agree, then call capcomd_verify again with a new key."
+      : "Not merged: send the failure to the agent (capcomd_send) or spawn a fix with it in the task.";
+  }
   if (v.state === "merged") return `Merged into ${v.target}.`;
   if (v.state === "awaiting_approval") return `${v.target ?? "The target"} is protected: it waits for a person's approval (capcomd_approve, or \`capcomd approve ${runId} ${v.id}\`).`;
   return `Not merged (${v.result?.status ?? v.state}${v.result?.reason ? `: ${v.result.reason}` : ""}).`;
@@ -423,11 +462,18 @@ export async function setup() {
   const steps = await checkSetup();
   const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
   const p = await policy();
+  const ready = steps.every((s) => s.ok);
+  const failing = steps.filter((s) => !s.ok).map((s) => `${s.step}: ${s.hint ?? s.detail}`);
+  const advice = steps.filter((s) => s.ok && s.advice && s.command).map((s) => `${s.step}: ${s.detail}. Recommended: \`${s.command}\` (a few minutes; ask the user first)`);
   return {
-    ready: steps.every((s) => s.ok), steps,
-    gates: { checks: d.checks ?? {}, reviewer: d.reviewer ?? null, target: d.target ?? null },
+    ready, sandbox: steps.find((s) => s.step === "sandbox")?.sandbox ?? null, steps,
+    // The target: the project's run default, else its merge target (what `capcomd setup project --target` writes).
+    gates: { checks: d.checks ?? {}, reviewer: d.reviewer ?? null, target: d.target ?? (await import("../utils/env")).env("MERGE_TARGET") ?? null },
     driver: { approvals: p.approvals ?? "human", maxRunBudget: p.maxRunBudget ?? null },
-    next: steps.every((s) => s.ok) ? "Start with capcomd_run_new." : "Ask the user to run `capcomd setup` in this repository (or `capcomd setup --yes` for the defaults).",
+    ...(advice.length ? { advice } : {}),
+    next: ready
+      ? `${advice.length ? `${advice.join(" ")} Then start` : "Start"} with capcomd_run_new (its sandbox is this project's unless you pass one).`
+      : `Not ready: ${failing.join("; ")}. Fix these (\`capcomd setup\` in this repository walks through them), then call capcomd_setup again.`,
   };
 }
 

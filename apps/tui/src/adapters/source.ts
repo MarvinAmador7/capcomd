@@ -45,7 +45,8 @@ function build(o: { runId?: string; source: string; trace: Trace | null; events:
   if (o.tree.length) attachErrorKinds(trace, new Map(flattenAgents(o.tree).map((a) => [a.agentId, a])));
   return {
     runId, source: o.source, goal: status?.goal ?? (started?.data.goal as string) ?? o.meta?.goal,
-    state: evState ?? scopeState ?? status?.state ?? o.meta?.state ?? (events.length ? undefined : "trace only"),
+    // A cancelled run reads cancelled, whatever its agents' end looked like.
+    state: (status?.state === "cancelled" ? "cancelled" : undefined) ?? evState ?? scopeState ?? status?.state ?? o.meta?.state ?? (events.length ? undefined : "trace only"),
     trace, events, agents: o.tree.length ? o.tree : agentsFromTrace(trace), agentsFromTree: o.tree.length > 0,
     pendingApprovals: pending(status),
   };

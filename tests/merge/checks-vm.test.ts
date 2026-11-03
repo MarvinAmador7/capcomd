@@ -24,7 +24,8 @@ beforeAll(async () => {
   await git.ok(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "seed"]);
   provider = new FakeProvider({ hostExec: true, log });
   initDependencies({ provider });
-  Object.assign(process.env, { CAPCOMD_CHECKS: "vm", CAPCOMD_AGENT_WORKDIR: mkdtempSync(join(tmpdir(), "capcomd-checks-vm-")), CAPCOMD_ENV: "image", CAPCOMD_CHECKS_HOST_SECRET: "sk-ant-api03-must-not-leak-0123456789" });
+  // No engine: a run's own sandbox is looked up on CAPCOMD_ENDPOINT, which must never be the user's daemon (:6420).
+  Object.assign(process.env, { CAPCOMD_ENDPOINT: "http://127.0.0.1:9", CAPCOMD_CHECKS: "vm", CAPCOMD_AGENT_WORKDIR: mkdtempSync(join(tmpdir(), "capcomd-checks-vm-")), CAPCOMD_ENV: "image", CAPCOMD_CHECKS_HOST_SECRET: "sk-ant-api03-must-not-leak-0123456789" });
 });
 afterAll(() => { resetDependencies(); for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved); });
 
@@ -55,7 +56,39 @@ describe("checks in a VM", () => {
     }
     expect((await provider.list("")).length).toBe(0); // nothing left running
     expect(log.every((l) => !l.envKeys.includes("CAPCOMD_CHECKS_HOST_SECRET"))).toBe(true);
-  });
+  }, 30_000);
+
+  test("a bun project on an image without bun: the pinned bun is installed first; when it can't be, a setup failure says what to run", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "capcomd-checks-bun-"));
+    const g = new Git(repo);
+    await g.ok(["init", "-q", "-b", "main"]);
+    writeFileSync(join(repo, "bun.lock"), "{}\n");
+    writeFileSync(join(repo, ".bun-version"), "1.4.2\n");
+    await g.ok(["add", "."]);
+    await g.ok(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "seed"]);
+    const home = join(process.env.CAPCOMD_AGENT_WORKDIR!, "home");
+    const { mkdirSync, chmodSync } = await import("fs");
+    mkdirSync(join(home, "node/bin"), { recursive: true });
+    const npm = (body: string) => { writeFileSync(join(home, "node/bin/npm"), `#!/bin/sh\n${body}\n`); chmodSync(join(home, "node/bin/npm"), 0o755); };
+    // A fake npm whose `install -g --prefix P bun@V` writes a bun that "installs" by making node_modules/.ok.
+    npm(`prefix=; pkg=; while [ $# -gt 0 ]; do case "$1" in --prefix) prefix="$2"; shift 2;; bun@*) pkg="$1"; shift;; *) shift;; esac; done
+mkdir -p "$prefix/bin"; printf '#!/bin/sh\\ncase "$1" in install) mkdir -p node_modules && touch node_modules/.ok;; --version) echo %s;; esac\\n' "\${pkg#bun@}" > "$prefix/bin/bun"; chmod +x "$prefix/bin/bun"`);
+    const ids = { CAPCOMD_RUN_ID: "run-b", CAPCOMD_TASK_ID: "agt-b", CAPCOMD_TARGET: "main" };
+    const ok = await runTests(g, "test -f node_modules/.ok && echo deps-in-place", ids);
+    expect(ok).toMatchObject({ passed: true, where: "vm" });
+    expect(ok.output).toContain("deps-in-place");
+    // No bun, and none can be installed: not a test failure, and it names the command that fixes it.
+    const { rmSync } = await import("fs");
+    rmSync(join(home, "npm"), { recursive: true, force: true });
+    npm("exit 1");
+    const bad = await runTests(g, "true", ids);
+    expect(bad).toMatchObject({ passed: false, stage: "setup" });
+    expect(bad.output).toContain("bun isn't in the agent environment image");
+    expect(bad.output).toContain("capcomd env build --sandbox");
+    const { checksFailReason } = await import("../../src/merge/verify");
+    expect(checksFailReason(bad)).toContain("checks couldn't run");
+    expect(checksFailReason({})).toBe("tests failed on branch merged with latest target");
+  }, 30_000);
 
   test("host mode keeps the old behavior (the worktree itself, on the host)", async () => {
     process.env.CAPCOMD_CHECKS = "host";
