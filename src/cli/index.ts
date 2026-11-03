@@ -464,7 +464,7 @@ async function main(argv: string[]): Promise<number> {
           // The remote itself (git ls-remote) says which branches exist; the GitHub API is for the setup screen's menu.
           const r = await G.resolveGoalBranch({
             goal: rawGoal, base: (values.base as string | undefined) ?? targetBranch ?? prior?.base ?? null, goalBranch: (values["goal-branch"] as string | undefined) ?? prior?.branch ?? null,
-            projectTarget: d.target ?? envVar("MERGE_TARGET") ?? null, remote: cfg?.remote ?? null, cwd: process.cwd(), reuse: prior?.branch ?? null,
+            projectTarget: d.target ?? envVar("MERGE_TARGET") ?? null, remote: cfg?.remote ?? null, cwd: process.cwd(), reuse: prior?.branch ?? (values["goal-branch"] as string | undefined) ?? null,
           });
           goalBranch = { branch: r.goalBranch, base: r.base };
           targetBranch = undefined;

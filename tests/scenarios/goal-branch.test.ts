@@ -193,3 +193,44 @@ test("no base given, no project target, no default branch on the remote: refused
     expect((await w.repo.seed.ok(["ls-remote", "--heads", "origin"])).split("\n").filter((l) => l.includes("refs/heads/capcomd/do-something"))).toEqual([]);
   } finally { g(["symbolic-ref", "HEAD", "refs/heads/main"]); }
 }, 60_000);
+
+// A goal branch with nothing on it, left by a run that was cancelled, is taken over by a new run of the same name (no
+// manual delete); while its run still goes it isn't; one with work on it never is (and nothing deletes it).
+test("a cancelled run's empty goal branch is reused by a new run; a live run's, or one with commits, is refused", async () => {
+  const G = `capcomd/scn-reuse-${Date.now().toString(36)}`;
+  const mk = (key: string) => w.cj(["run", "new", "--key", `${key}-${G}`, "--goal", "reuse", "--goal-branch", G, "--base", "dev"]);
+  const first = await mk("r1");
+  expect(first.code).toBe(0);
+  expect(first.j.branchSetup).toMatchObject({ branch: G, from: "dev", created: true });
+  expect(await w.repo.sha(G)).toBe((await w.repo.sha("dev"))!);
+  // Still going (not ended): another run can't take its branch.
+  const busy = await mk("r2");
+  expect(busy.code).not.toBe(0);
+  expect(busy.j.error).toMatchObject({ code: "conflict", reason: "goalBranch", message: expect.stringContaining(`run ${first.j.runId} uses it`) });
+  // Cancelled with nothing landed: the next run with that name uses it.
+  expect((await w.cj(["cancel", first.j.runId, "--reason", "start over"])).code).toBe(0);
+  const second = await mk("r3");
+  expect(second.code).toBe(0);
+  expect(second.j.branchSetup).toMatchObject({ branch: G, created: false, reused: true });
+  // dev moved on since: an empty leftover is moved up to dev's tip (fast-forward), still nothing lost.
+  expect((await w.cj(["cancel", second.j.runId])).code).toBe(0);
+  await w.repo.seed.ok(["fetch", "-q", "origin", "dev"]);
+  await w.repo.seed.ok(["checkout", "-q", "-B", "dev-move", "origin/dev"]);
+  await w.repo.seed.ok(["commit", "-q", "--allow-empty", "-m", "dev moves"]);
+  await w.repo.seed.ok(["push", "-q", "origin", "HEAD:dev"]);
+  const third = await mk("r4");
+  expect(third.code).toBe(0);
+  expect(third.j.branchSetup).toMatchObject({ reused: true });
+  expect(await w.repo.sha(G)).toBe((await w.repo.sha("dev"))!);
+  // Work on the leftover (a commit dev doesn't have): refused, and the branch stays as it is.
+  expect((await w.cj(["cancel", third.j.runId])).code).toBe(0);
+  await w.repo.seed.ok(["fetch", "-q", "origin", G]);
+  await w.repo.seed.ok(["checkout", "-q", "-B", "on-goal", `origin/${G}`]);
+  await w.repo.seed.ok(["commit", "-q", "--allow-empty", "-m", "landed work"]);
+  await w.repo.seed.ok(["push", "-q", "origin", `HEAD:${G}`]);
+  const kept = await w.repo.sha(G);
+  const refused = await mk("r5");
+  expect(refused.code).not.toBe(0);
+  expect(refused.j.error).toMatchObject({ code: "conflict", reason: "goalBranch", message: expect.stringContaining("commits dev doesn't have") });
+  expect(await w.repo.sha(G)).toBe(kept);
+}, 120_000);
