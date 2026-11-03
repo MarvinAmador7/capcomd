@@ -41,7 +41,9 @@ export async function runTests(git: Git, command: string, env: Record<string, st
 /** Passing checks by (tree, command), in the clone's git dir: verify and merge share the run's clone (a cache: losing
  *  it only costs a re-run). */
 async function passFile(git: Git): Promise<string | null> {
-  const dir = (await git.run(["rev-parse", "--absolute-git-dir"])).stdout.trim();
+  // The clone's own git dir, shared by its worktrees (a verify runs in one, the merge in the clone).
+  const common = await git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const dir = (common.code === 0 ? common.stdout : (await git.run(["rev-parse", "--absolute-git-dir"])).stdout).trim();
   return dir ? join(dir, "capcomd-checks-passed.json") : null;
 }
 async function passKey(git: Git, command: string): Promise<string | null> {

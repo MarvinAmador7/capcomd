@@ -2,10 +2,10 @@ import { join } from "path";
 import { killpoint } from "../utils/killpoint";
 import { loadMergeConfig, type MergeConfig } from "./config";
 import { withTargetLock } from "./lock";
-import { directMerge } from "./direct";
+import { directMerge, directVerify } from "./direct";
 import { prMerge } from "./pr";
 import { HttpGitHub, githubToken, type GitHubApi } from "./github";
-import type { MergeOutcome, MergeRequest } from "./types";
+import type { MergeOutcome, MergeRequest, MergeTimings } from "./types";
 
 let githubOverride: GitHubApi | null = null;
 /** Tests inject a fake GitHub adapter. */
@@ -32,8 +32,15 @@ export async function mergeTask(req: MergeRequest, cfg: MergeConfig | null = loa
       : { status: "merged", sha: "", already: false, how: "none", strategy: "none", mode: "none", attempts: 0 };
   }
   const clone = `${req.runId}-merge`;
+  const direct = (req.mode ?? cfg.mode) === "direct";
+  // A direct-mode verify pushes nothing: it works in a worktree of its own, beside the others and the merges.
+  if (direct && req.testOnly) return directVerify(cfg, req, clone);
+  const asked = Date.now();
   return withTargetLock(join(cfg.workdir, "locks"), cfg.remote, req.target, async () => {
     killpoint("merge.lock.acquired");
-    return (req.mode ?? cfg.mode) === "direct" ? directMerge(cfg, req, clone) : prMerge(cfg, req, await github(cfg), clone);
+    const t: MergeTimings = { lockWaitMs: Date.now() - asked };
+    if (direct) return directMerge(cfg, req, clone, t);
+    const out = await prMerge(cfg, req, await github(cfg), clone);
+    return { ...out, timings: { ...t, ...out.timings } };
   });
 }
