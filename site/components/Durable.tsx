@@ -1,90 +1,139 @@
 "use client";
 
-// "Built on Rivet": why a run survives a crash, told with one of the chaos suite's real cases. The engine is killed at
-// the kill point merge.after_cas.before_event (the merge has landed, its event isn't written yet), restarts, runs the
-// merge step again, finds the landing by its Capcomd-Task trailer, and records the merge once
-// (tests/chaos/cases.ts, src/merge/repo.ts, docs/durability.md). The replay plays once when it comes into view;
-// without the page script or with reduced motion every line is simply there.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+// "Kill it mid-merge": the engine killed with SIGKILL at a named kill point, run again, and the work counted once. Each kill
+// point here is one the tests use today, with the outcome they check:
+//   tests/merge/direct.test.ts  merge.lock.acquired, merge.after_fetch.before_integrate, merge.before_cas,
+//                               merge.after_cas.before_event: the rerun lands the task exactly once (src/merge/direct.ts
+//                               finds an earlier landing by its Capcomd-Task trailer, findExistingMerge);
+//   tests/merge/pr.test.ts      merge.pr.before_merge, merge.after_pr_merge.before_event: one PR, one merge call;
+//   tests/subagents/workflow.test.ts  workflow.start_agent.mid: the worker wakes by itself and finishes the agent.
+// The track draws the run left to right: what happened before the kill, the cut, then what the rerun did. The lane
+// under it is main (or the agent); the floor is the run's record, ticked where a step is recorded. Without the page script, or
+// with reduced motion, the whole run is simply there.
+import { useEffect, useRef, useState } from "react";
 import { delay } from "./marks";
 
-type Line = { k: "ev" | "do" | "kill" | "boot" | "ok"; t: ReactNode; note?: ReactNode };
-const LINES: Line[] = [
-  { k: "ev", t: <><code>task.claimed</code></>, note: "worker a1f2 takes the lease, epoch 1" },
-  { k: "ev", t: <><code>verify.passed</code></>, note: "checks ran on the branch merged with the latest target" },
-  { k: "ev", t: <><code>merge.started</code></> },
-  { k: "do", t: <>squash commit lands on <code>main</code></>, note: <>compare-and-swap on the target, trailer <code>Capcomd-Task: …/t1</code></> },
-  { k: "kill", t: <>killed at <code>merge.after_cas.before_event</code></>, note: "exit 137: the merge landed, its event was never written" },
-  { k: "boot", t: <>engine restarts</>, note: "the actors wake from their SQLite state; the driver runs the merge step again" },
-  { k: "do", t: <>finds the landing by its trailer</>, note: "nothing lands twice" },
-  { k: "ok", t: <><code>merge.succeeded</code></>, note: "recorded once; one landing on main" },
-];
-const STEP_MS = 900;
+type Step = { t: string; code?: boolean; rec?: boolean; land?: boolean; found?: boolean };
+type Point = { name: string; group: "Direct merge" | "Pull request" | "Workflow"; before: Step[]; after: Step[]; outcome: string; unit: string; lane: string };
 
-function Replay() {
-  const [shown, setShown] = useState(LINES.length);   // the static picture until the script runs
-  const [playing, setPlaying] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
+const CLAIM: Step = { t: "task.claimed", code: true, rec: true };
+const VERIFY: Step = { t: "verify.passed", code: true, rec: true };
+const LOCK: Step = { t: "merge lock" };
+const FETCH: Step = { t: "fetch main" };
+const SQUASH: Step = { t: "squash commit" };
+const CAS: Step = { t: "compare-and-swap", land: true };
+const DONE: Step = { t: "merge.succeeded", code: true, rec: true };
+const FOUND: Step = { t: "found by its trailer", found: true };
+const OPEN: Step = { t: "open the pull request" };
+const PRMERGE: Step = { t: "merge the pull request", land: true };
+const FOUND_PR: Step = { t: "found it merged", found: true };
+
+const POINTS: Point[] = [
+  { name: "merge.lock.acquired", group: "Direct merge", before: [CLAIM, VERIFY, LOCK], after: [LOCK, FETCH, SQUASH, CAS, DONE], unit: "landing on main", lane: "main",
+    outcome: "Killed holding the merge lock, before anything moved. The rerun takes the lock again and lands the task once." },
+  { name: "merge.after_fetch.before_integrate", group: "Direct merge", before: [CLAIM, VERIFY, LOCK, FETCH], after: [LOCK, FETCH, SQUASH, CAS, DONE], unit: "landing on main", lane: "main",
+    outcome: "Killed after fetching main. The rerun fetches again, builds the commit and lands it once." },
+  { name: "merge.before_cas", group: "Direct merge", before: [CLAIM, VERIFY, LOCK, FETCH, SQUASH], after: [LOCK, FETCH, SQUASH, CAS, DONE], unit: "landing on main", lane: "main",
+    outcome: "Killed with the commit built but not pushed. main never moved; the rerun lands it once." },
+  { name: "merge.after_cas.before_event", group: "Direct merge", before: [CLAIM, VERIFY, LOCK, FETCH, SQUASH, CAS], after: [FOUND, DONE], unit: "landing on main", lane: "main",
+    outcome: "Killed after the commit landed, before the record said so. The rerun finds the landing by its Capcomd-Task trailer and records it: still one commit on main." },
+  { name: "merge.pr.before_merge", group: "Pull request", before: [CLAIM, VERIFY, OPEN], after: [OPEN, PRMERGE, DONE], unit: "pull request, merged once", lane: "main",
+    outcome: "Killed with the pull request open, before merging it. The rerun reuses that pull request and merges it: one pull request, one merge call." },
+  { name: "merge.after_pr_merge.before_event", group: "Pull request", before: [CLAIM, VERIFY, OPEN, PRMERGE], after: [FOUND_PR, DONE], unit: "pull request, merged once", lane: "main",
+    outcome: "Killed after GitHub merged it, before the record said so. The rerun sees it merged and records its commit: one pull request, one merge call." },
+  { name: "workflow.start_agent.mid", group: "Workflow", before: [{ t: "spawn", code: true, rec: true }, { t: "claimed by its workflow", rec: true }, { t: "start-agent step" }],
+    after: [{ t: "wakes by itself", found: true }, { t: "start-agent step" }, { t: "agent done", land: true, rec: true }], unit: "agent, finished by itself", lane: "agent",
+    outcome: "Killed inside a workflow step, with nothing left to call the worker. After the restart it wakes on its own and finishes the agent, with its commit." },
+];
+const GROUPS = ["Direct merge", "Pull request", "Workflow"] as const;
+const STEP_MS = 520;
+
+export function Durable() {
+  const [pick, setPick] = useState(3);           // the case the page told before: killed after the commit landed
+  const [shown, setShown] = useState(Infinity);   // the whole run until the script plays it
   const timer = useRef(0);
   const io = useRef<IntersectionObserver | null>(null);
-  const play = () => {
+  const box = useRef<HTMLDivElement>(null);
+  const p = POINTS[pick];
+  const nodes = [...p.before.map((s) => ({ ...s, side: "before" as const })), { t: "", side: "cut" as const }, ...p.after.map((s) => ({ ...s, side: "after" as const }))];
+
+  const play = (i: number) => {
     io.current?.disconnect();
     clearInterval(timer.current);
-    setShown(0); setPlaying(true);
-    let n = 0;
+    setPick(i);
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { setShown(Infinity); return; }
+    setShown(0);
+    let n = 0; const total = POINTS[i].before.length + POINTS[i].after.length + 1;
     timer.current = window.setInterval(() => {
       n += 1; setShown(n);
-      if (n >= LINES.length) { clearInterval(timer.current); setPlaying(false); }
+      if (n >= total) clearInterval(timer.current);
     }, STEP_MS);
   };
   useEffect(() => {
     const el = box.current;
     if (!el || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    io.current = new IntersectionObserver(([e]) => { if (e?.isIntersecting) play(); }, { threshold: 0.5 });
+    io.current = new IntersectionObserver(([e]) => { if (e?.isIntersecting) play(3); }, { threshold: 0.4 });
     io.current.observe(el);
     return () => { io.current?.disconnect(); clearInterval(timer.current); };
   }, []);
-  const killed = shown >= 5 && shown < 6;
+
+  const cutAt = p.before.length;
+  const landed = nodes.some((s, k) => k < shown && "land" in s && s.land);
+  const killed = shown > cutAt;
+  const playing = shown < nodes.length;
+
   return (
-    <div className={`crash${killed ? " is-killed" : ""}`} ref={box}>
-      <div className="win win--big crash__win" data-ui role="group" aria-label="A chaos case, replayed">
-        <span className="win__bar" aria-hidden="true"><i /><i /><i /><span>capcomd engine · chaos case, direct merge</span></span>
-        <ol className="crash__log">
-          {LINES.map((l, i) => (
-            <li key={i} className={`crash__line crash__line--${l.k}${i < shown ? " is-in" : ""}`}>
-              <span className="crash__t">{l.t}</span>
-              {l.note ? <span className="crash__note">{l.note}</span> : null}
-            </li>
-          ))}
-        </ol>
-        <div className="crash__foot">
-          <span className="crash__count">landings on main: <b>{shown >= 4 ? 1 : 0}</b></span>
-          <button type="button" className="crash__replay" onClick={play} disabled={playing}>{playing ? "Replaying…" : "Replay"}</button>
+    <section className="durable" id="durable" aria-labelledby="durable-title">
+      <div className="durable__head">
+        <div className="durable__words">
+          <h2 id="durable-title" className="durable__title" data-reveal style={delay(60)}><span>Kill it mid-merge.</span> <span>It lands once.</span></h2>
+          <p data-reveal style={delay(120)}>Every step of a run is recorded before it counts. Kill the engine anywhere and run it again: it resumes from the last recorded step, and a step it repeats never acts twice.</p>
+        </div>
+        <p className="durable__one" aria-live="polite" data-reveal style={delay(160)}>
+          <span className="durable__n">{landed ? 1 : 0}</span>
+          <span className="durable__unit">{p.unit}, after a SIGKILL at <code>{p.name}</code></span>
+        </p>
+      </div>
+
+      <div className="cut" data-reveal style={delay(200)}>
+      <div className={`cut__frame${killed ? " is-killed" : ""}${playing ? " is-playing" : ""}`} ref={box}>
+        <div className="win win--big cut__win" data-ui role="img" aria-label={`The run, killed at ${p.name} and run again. ${p.outcome}`}>
+          <span className="win__bar" aria-hidden="true"><i /><i /><i /><span>capcomd engine · killed at {p.name}</span></span>
+          <div className="cut__track" style={{ ["--n" as string]: nodes.length }} key={pick}>
+            {nodes.map((s, k) => s.side === "cut" ? (
+              <div key={k} className={`cut__slash${k < shown ? " is-in" : ""}`} aria-hidden="true">
+                <b>SIGKILL</b><small>exit 137</small><small>engine restarts</small>
+              </div>
+            ) : (
+              <div key={k} className={`cut__node cut__node--${s.side}${k < shown ? " is-in" : ""}${s.found ? " is-found" : ""}`}>
+                <span className="cut__ev">{s.code ? <code>{s.t}</code> : s.t}</span>
+                <span className="cut__dot" />
+                <span className={`cut__main${s.land ? " is-land" : ""}`}>{s.land ? <i /> : null}</span>
+                <span className={`cut__rec${s.rec ? " is-rec" : ""}`} />
+              </div>
+            ))}
+            <span className="cut__lane" aria-hidden="true">{p.lane}</span>
+            <span className="cut__floor" aria-hidden="true">the run&apos;s record</span>
+          </div>
+          <p className="cut__out" aria-live="polite">{shown >= nodes.length ? p.outcome : " "}</p>
         </div>
       </div>
-    </div>
-  );
-}
+      </div>
 
-export function Durable() {
-  return (
-    <div className="durable">
-      <div className="durable__text">
-        <a className="durable__by" href="https://rivet.dev" target="_blank" rel="noopener noreferrer" aria-label="Built on Rivet (rivet.dev)" data-reveal>
-          <span>Built on</span><img src="/logos/rivet.svg" alt="" width={84} height={28} />
-        </a>
-        <h3 className="durable__title" data-reveal style={delay(60)}><span>Kill it mid-merge.</span> <span>It lands once.</span></h3>
-        <p data-reveal style={delay(120)}>Every step of a run is recorded before it counts, so a crashed engine resumes from the last recorded step and a retried step never acts twice. The record lives in Rivet actors, each with its own SQLite database.</p>
-        <dl className="durable__cases" data-reveal style={delay(200)}>
-          <div><dt>The engine crashes</dt><dd>It resumes from the last recorded step.</dd></div>
-          <div><dt>A worker VM dies</dt><dd>Its task goes back on the board for a new agent; anything the dead one sends later is ignored.</dd></div>
-          <div><dt>The engine is down</dt><dd>Worker VMs keep working and pushing their branches; nothing merges until it&apos;s back.</dd></div>
-        </dl>
+      <div className="durable__points" data-reveal style={delay(240)}>
+        <p className="durable__ask">Pick where to kill it.</p>
+        <div className="durable__keys">
+          {GROUPS.map((g) => (
+            <div key={g} className="durable__group" role="group" aria-label={g}>
+              <span>{g}</span>
+              {POINTS.map((pt, i) => pt.group === g ? (
+                <button key={pt.name} type="button" aria-pressed={pick === i} onClick={() => play(i)}>{pt.name}</button>
+              ) : null)}
+            </div>
+          ))}
+        </div>
+        <p className="durable__note">The merge and workflow tests kill the engine with SIGKILL at each of these seven points, run it again and check the outcome above. A worker VM that dies hands its task back to the board under a new lease, and anything the dead one sends later is ignored. While the engine is down, worker VMs keep working and pushing their branches; nothing merges until it&apos;s back.</p>
       </div>
-      <div className="durable__demo" data-reveal style={delay(140)}>
-        <Replay />
-        <p className="durable__suite">A chaos suite runs cases like this one at named kill points, and at random. After each it checks: no double merge, in the event log or in git; no lost task; every sandbox reaped; no double charge; no gap in any event log.</p>
-      </div>
-    </div>
+    </section>
   );
 }

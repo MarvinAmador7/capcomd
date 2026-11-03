@@ -2,7 +2,6 @@
 // (rebuilt from apps/menubar/design at true size; illustrations, not captures).
 import type { ReactNode } from "react";
 import { AgentSuffix, Bot, GoalComposer, GoalTitle, TryGoals } from "./crew";
-import { Durable } from "./Durable";
 import { RunAccordion, type Stage } from "./RunAccordion";
 import { Check, Hand, MarkFace, MenuBar, delay, step } from "./marks";
 
@@ -134,7 +133,6 @@ export function Run() {
         </div>
       </div>
       <RunAccordion stages={stages} initial="swarm" />
-      <Durable />
     </section>
   );
 }

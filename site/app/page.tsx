@@ -1,6 +1,7 @@
 import { AtScale } from "@/components/AtScale";
 import { BotsCta } from "@/components/BotsCta";
 import { CrewProvider } from "@/components/crew";
+import { Durable } from "@/components/Durable";
 import { Footer } from "@/components/Footer";
 import { Hero } from "@/components/Hero";
 import { Patterns } from "@/components/Patterns";
@@ -18,6 +19,7 @@ export default function Home() {
       <main id="main" tabIndex={-1}>
         <AtScale />
         <Run />
+        <Durable />
         <Sandboxes />
         <RoleTree />
         <Patterns />
