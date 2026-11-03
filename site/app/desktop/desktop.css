@@ -21,7 +21,7 @@
 }
 
 .dk-h1, .dk-h2 { margin: 0; font: 400 var(--dk-heading)/0.98 var(--font-display); letter-spacing: -0.035em; text-wrap: balance; }
-.dk-h1 { max-width: 9.6em; }
+.dk-h1 { max-width: 9.6em; font-size: var(--dk-display); letter-spacing: -0.045em; }
 .dk-lead { margin: 0; font: 400 var(--text-lead)/1.25 var(--font-display); letter-spacing: -0.01em; }
 figure { margin: 0; }
 figcaption { margin-top: 12px; font-size: var(--text-small); color: var(--color-muted); }
@@ -459,6 +459,7 @@ img { display: block; max-width: 100%; height: auto; }
 @media (max-width: 760px) {
   :root { --dk-display: clamp(2.5rem, 11vw, 3.5rem); --dk-heading: clamp(2.375rem, 10vw, 3rem); --dk-gap: 112px; }
   .dk-hero__words { padding-top: 32px; }
+  .dk-h1 { font-size: clamp(3rem, 16vw, 5rem); }
   .dk-stage { margin: 40px 0 0; height: 560px; clip-path: polygon(0 40px, 72px 40px, 72px 0, 100% 0, 100% 100%, 0 100%); }
   .dk-stage__in { inset: 64px 16px 0; }
   .dk-stage__in > .dk-win { border-radius: 12px 12px 0 0; }

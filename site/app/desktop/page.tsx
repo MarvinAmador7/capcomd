@@ -13,7 +13,7 @@ import { Reveals } from "@/components/Reveals";
 import { FIXES, READOUTS } from "@/lib/perf";
 import { SITE } from "@/lib/site";
 
-const title = "capcomd Desktop · every agent, one window, your call";
+const title = "capcomd Desktop · in command of every agent";
 const description = "capcomd Desktop is a native Mac app, written entirely in Swift, that shows each coding agent in a run as its own column and calls on you only when one of them needs a decision. In development.";
 
 export const metadata: Metadata = {
@@ -57,7 +57,7 @@ export default function DesktopPage() {
       <header className="dk-hero">
         <Nav home={false} current="desktop" />
         <div className="dk-hero__words">
-          <h1 className="dk-h1" data-load style={delay(60)}><span className="whitespace-nowrap">Every agent.</span> <span className="whitespace-nowrap">One window.</span> <span className="whitespace-nowrap">Your call.</span></h1>
+          <h1 className="dk-h1" data-load style={delay(60)}>In command.</h1>
           <p className="dk-hero__lead" data-load style={delay(160)}>A native Mac app that gives every coding agent in your run its own live column. They work side by side; you step in only when one needs a decision.</p>
           <p className="dk-hero__act" data-load style={delay(240)}>
             <a className="button" href={SITE.repo}>Watch on GitHub</a>
