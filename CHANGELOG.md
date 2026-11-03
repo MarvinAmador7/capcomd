@@ -5,13 +5,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.8.0 (2026-11-03)
+
+Local mode on Docker is now fast enough to use day to day. Each agent starts from a warm checkout baked into the agent
+image instead of cloning, and only as many agents run at once as fit in Docker's memory. Desktop threads also open on
+their newest messages. Checked with a live run before the release: three Claude Code agents ran on OrbStack with a Claude
+plan login, two at a time, each starting from the warm checkout, and all three pushed their work.
+
 - Desktop app: opening an agent's column shows its newest messages right away, even on very long threads (about
   50 ms instead of up to 20 s on a thread of 6,000 items). Earlier messages load as you scroll up.
 - Desktop and menu bar apps: a column stuck on "Couldn't load the thread" while capcomd was unreachable now reloads by
   itself as soon as capcomd is back.
 - API: a new route, `GET /v1/runs/{runId}/agents/{agentId}/thread/tail` (capability `agents.thread_tail`), returns an
   agent's newest thread items. It also returns cursors to page further back and to continue with live updates.
-
 - Local (Docker): `capcomd env build --sandbox docker` now keeps a warm checkout of your project in the agent image:
   its full history with the dependencies installed. Each agent starts from it in place instead of cloning and copying
   `node_modules`. On a repository the size of capcomd, 16 agents get their workspace in about 3 s instead of 18 s,
