@@ -33,9 +33,11 @@ export interface CapcomdConfig {
   harness?: { socket?: string };
   /**
    * Provider settings by place (ADR-021 §2; user config only, written by PATCH /v1/sandboxes/{name}/settings):
-   * `idleLifetime`, seconds a machine left behind lives (at least 900). CAPCOMD_SANDBOX_IDLE_SECONDS wins.
+   * `idleLifetime`, seconds a machine left behind lives (at least 900; CAPCOMD_SANDBOX_IDLE_SECONDS wins);
+   * `agentMemory` (docker), MB of Docker's memory each agent gets, which caps how many run at once (at least 256;
+   * CAPCOMD_DOCKER_AGENT_MEMORY_MB wins).
    */
-  sandboxes?: Record<string, { idleLifetime?: number }>;
+  sandboxes?: Record<string, { idleLifetime?: number; agentMemory?: number }>;
 }
 
 export type DriverApprovals = "human" | "elicit" | "client-confirmed";

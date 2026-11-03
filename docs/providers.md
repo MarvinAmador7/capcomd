@@ -44,16 +44,34 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
 - **Drift.** Images change only on `capcomd env build`, never by themselves. `capcomd env status` and `capcomd env
   doctor` say how far the template is behind the target (agents fetch the difference), when the lockfile changed
   (agents then clone and install their own dependencies) and when the target was rewritten, and suggest `capcomd env
-  build --sandbox docker`. A plan login is an image made from the env image of its day, so agents with it get that
-  image's template: they say so too, and `capcomd auth login … --sandbox docker` moves it to the current one.
+  build --sandbox docker`.
+- **Plan logins move with the env image.** A plan login is an image made from the env image of its day (the env
+  image plus the login's credential files), and agents with that login boot from it. So `capcomd env build --sandbox
+  docker` carries every such login over onto the new env image (src/auth/carry.ts): it starts a container of the old
+  login image and reads only the login's files from it (Claude Code: `~/.capcomd-auth/claude.env`, and
+  `~/.claude/.credentials.json` if there is one; Codex: `~/.codex/auth.json` and `~/.codex/config.toml`), writes them
+  into a container of the new env image (folders 0700, files 0600), checks that the agent finds the login there as
+  the runner does (no model call), and saves that container as the new login image. Only then does the login point at
+  it (`auths-docker.json`: `snapshot`, `env`, and `carriedFrom`/`carriedAt`), and the old login image is removed. The
+  env image itself never holds a login: its secret scan runs before it is saved, as before, and nothing writes to it
+  afterwards. The build lists each login it moved (`logins` in `--json`). A login it couldn't move keeps working from
+  its old image (older CLIs and template); the build says why and what to run, and `env status` / `env doctor` keep
+  naming it until the next build moves it or `capcomd auth login … --sandbox docker` replaces it.
 - **Agents at once.** Agents' containers share Docker's memory (Docker Desktop's or OrbStack's VM), and memory runs out
-  before disk does (one agent CLI is 0.3-0.6 GB). So at most `docker info` MemTotal ÷ a per-agent budget run at once:
-  1 GB by default, `CAPCOMD_DOCKER_AGENT_MEMORY_MB` in capcomd's environment (at least 256), or
-  `sandboxes.docker.agentMemoryMb` in the user config. Above the cap a new agent stays `pending` (its log says it waits
-  for a slot) and starts, oldest first, when another agent's container is removed. Running capcomd agent containers
-  count, so agents from before a daemon restart do too. The place's details show it as the Agents at once row
-  (`agentSlots`). It applies to agents the engine's workflow drives (the default; not with `CAPCOMD_AGENT_WORKFLOW=0`)
-  and not to boxd.
+  before disk does (one agent CLI is 0.3-0.6 GB). So at most `docker info` MemTotal ÷ the memory per agent run at once.
+  The memory per agent is a setting, Memory per agent (`agentMemory`) in Local's details: 512 MB, 1 GB (the default),
+  2 GB or 4 GB. `CAPCOMD_DOCKER_AGENT_MEMORY_MB` in capcomd's environment wins (any whole number of MB from 256; the
+  setting is then read-only), then the user config (`sandboxes.docker.agentMemory`, MB), then 1 GB. It is read each
+  time an agent asks for a slot, so a change applies to the next agent that starts (those waiting included) and needs
+  no restart; the Agents at once row (`agentSlots`) shows the new cap at once. Above the cap a new agent stays
+  `pending` (its log says it waits for a slot) and starts, oldest first, when a slot frees: when another agent's
+  container is removed, or when an admitted agent's workflow ends before its container appeared (it was cancelled or
+  paused first, or failed to start), or, as a backstop for one still starting, 10 minutes after it was admitted.
+  Running capcomd agent containers count, so agents from before a daemon restart do too. It applies to every agent the
+  engine's workflow drives (the default): agents spawned with `capcomd spawn`, by other agents, by a planner, and by
+  `capcomd run`'s recipe. Agents driven by `CAPCOMD_AGENT_WORKFLOW=0` (agent-drive processes, being retired) and
+  `capcomd run --legacy`'s single worker don't wait for a slot (their containers still count against it), and boxd
+  has no cap.
 - **Differences from boxd:**
   - Isolation is a container, not a VM: the agent can't see your files, but a kernel exploit would reach the host.
   - No host-bound secrets: an API key (auth `apikey`) reaches the agent in its environment, where it can read it.
@@ -109,8 +127,10 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
    - A sandbox that is each agent's own copy of its image (`isolation: "container"`) gets the warm workspace: `env
      build` keeps a warm template in its snapshot and the runner may use it in place (`warmTemplate`).
 
-   **Settings** (`PATCH /v1/sandboxes/{name}/settings`, the `configure` scope; `src/providers/settings.ts`). Today one,
-   `idleLifetime`: how long a machine left behind lives, in seconds. It is a lease: `ensure` gets it as `ttlSeconds`,
+   **Settings** (`PATCH /v1/sandboxes/{name}/settings`, the `configure` scope; `src/providers/settings.ts`). Two today.
+   `agentMemory` (Docker; with the `agentSlots` info row): how much of the machine's memory each agent gets, in MB,
+   from the presets 512, 1024, 2048 and 4096 (`appliesTo: new_agents`; see Agents at once above for its precedence).
+   A place that offers it needs a memory probe in `src/providers/capacity.ts`. And `idleLifetime`: how long a machine left behind lives, in seconds. It is a lease: `ensure` gets it as `ttlSeconds`,
    and a running agent renews it every 10 minutes (`extendTtl`), so the daemon refuses anything under 15 minutes. The
    presets are 15 minutes, 1 hour (the default), 4 hours and 12 hours, the same on every provider. Precedence:
    `CAPCOMD_SANDBOX_IDLE_SECONDS` in capcomd's environment (any whole number of seconds, raised to the 15-minute

@@ -35,7 +35,7 @@ export const parseAgentArg = (a: string | undefined): ProfileAgent => {
 
 /** Boots a login VM, recorded as capcomd's own (a login) until `destroyVm`, so it never reads as left behind. */
 const releases = new Map<string, () => void>();
-async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: string, t0: number) {
+export async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: string, t0: number) {
   const idemKey = `capcomd-${purpose}-${a.kind}-${t0}`;
   const { recordJobMachine } = await import("../providers/machines");
   const { sandboxName } = await import("../providers/registry");
@@ -52,7 +52,7 @@ async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: string, 
     throw e;
   }
 }
-async function destroyVm(p: P, id: string) {
+export async function destroyVm(p: P, id: string) {
   await p.destroy(id).catch(() => {});
   releases.get(id)?.();
   releases.delete(id);

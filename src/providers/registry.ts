@@ -27,8 +27,9 @@ export interface ProviderCaps {
   shell: boolean;
 }
 
-/** Setting rows a provider's details screen can show (GET /v1/sandboxes/{name} `settings`). */
-export const SETTING_IDS = ["idleLifetime"] as const;
+/** Setting rows a provider's details screen can show (GET /v1/sandboxes/{name} `settings`). agentMemory: a place
+ *  whose agents share one machine's memory (with agentSlots; src/providers/capacity.ts). */
+export const SETTING_IDS = ["idleLifetime", "agentMemory"] as const;
 export type SettingId = (typeof SETTING_IDS)[number];
 /** Read-only info rows (GET /v1/sandboxes/{name} `info`). */
 export const INFO_IDS = ["logins", "checkpoints", "agentSlots"] as const;
@@ -73,8 +74,9 @@ export const PROVIDERS = {
   docker: {
     name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
     caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
-    // agentSlots: how many agents run at once, from Docker's memory (src/providers/capacity.ts).
-    settings: ["idleLifetime"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
+    // agentMemory: how much of Docker's memory each agent gets; agentSlots: so how many run at once
+    // (src/providers/capacity.ts).
+    settings: ["idleLifetime", "agentMemory"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
   },
   /** boxd cloud VMs. */
   boxd: {

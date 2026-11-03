@@ -71,9 +71,14 @@ export async function envCommand(command: string, pos: string[], values: Record<
     // A sandbox per container (Docker) keeps a warm template agents use in place; a VM's snapshot stays shallow.
     const { sandboxCaps } = await import("../../providers/registry");
     const warm = sandboxCaps().isolation === "container";
-    const res = await envBuild(platform(), { repoUrl: repo?.remote, cfg: toolCfg(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[], ...(warm ? { warm, target: repo?.target } : {}) });
+    const place = platform();
+    const res = await envBuild(place, { repoUrl: repo?.remote, cfg: toolCfg(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[], ...(warm ? { warm, target: repo?.target } : {}) });
     const v = Object.entries(res.record.versions).map(([k, x]) => `${k}=${x.version}(${x.source})`).join(" ");
-    emit(json, { name: res.name, cached: res.cached, record: res.record }, `${res.cached ? "up to date" : "built"}: ${res.name}  ${v}${res.record.buildMs ? `  ${res.record.buildMs}ms` : ""}`);
+    // Docker: plan logins saved on an older env image move onto this one (only their credential files; src/auth/carry.ts),
+    // so their agents get its CLIs and warm template. One that can't be moved keeps working from its old image.
+    const logins = warm ? await (await import("../../auth/carry")).carryLogins(place, { envSnapshot: res.name, cfg: toolCfg(), sandbox: sandboxName(), log }) : [];
+    const moved = logins.map((l) => (l.status === "failed" ? `  ! ${l.message}` : `  ${l.message}`));
+    emit(json, { name: res.name, cached: res.cached, record: res.record, logins }, [`${res.cached ? "up to date" : "built"}: ${res.name}  ${v}${res.record.buildMs ? `  ${res.record.buildMs}ms` : ""}`, ...moved].join("\n"));
     return 0;
   }
   if (sub === "status") {
