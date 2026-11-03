@@ -79,8 +79,10 @@ export async function templateDriftFacts(m: EnvManifest, cfg: MergeConfig, o: { 
 export async function templateDrift(rec: EnvRecord | undefined, cfg: MergeConfig | null): Promise<Drift | null> {
   if (!rec?.manifest.template || !cfg) return null;
   const f = await templateDriftFacts(rec.manifest, cfg);
-  // Without installed dependencies a lockfile change costs nothing: agents install their own either way.
-  return driftOf(rec.manifest.template.commit, rec.depsInstalled ? f : { ...f, lockChanged: f.lockChanged === null ? null : false });
+  // Without installed dependencies a lockfile change costs nothing: agents install their own either way. (A record of
+  // an image this ledger found already built, buildMs 0, doesn't know: then the change counts.)
+  const noDeps = rec.buildMs > 0 && !rec.depsInstalled;
+  return driftOf(rec.manifest.template.commit, noDeps ? { ...f, lockChanged: f.lockChanged === null ? null : false } : f);
 }
 
 /**
