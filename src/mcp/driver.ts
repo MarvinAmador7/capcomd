@@ -75,8 +75,26 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
   const target = goal ? goal.branch : a.target ?? d.target;
   const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(sandbox ? { sandbox } : {}), ...(goal ? { goalBranch: goal.branch, base: goal.base } : { ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) }) });
   const where = r.sandbox.name ? `Its agents and checks run on ${r.sandbox.name} (${SANDBOX_FROM[r.sandbox.source]}).` : "Its agents and checks run on the engine's own sandbox (nothing configured for this project: pass sandbox, or set it with `capcomd setup project --sandbox docker|boxd`).";
-  return { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
+  const out = { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
     next: `${where} ` + (goal ? `Spawn agents with capcomd_spawn; verified merges land on ${goal.branch} with no approval. When the work is done, show the user capcomd_goal and ask before capcomd_pr_open.` : "Spawn agents with capcomd_spawn; give each a check name from gates.checks.") };
+  return withTeamShape(out, await runCapacity(r.runId));
+}
+
+// ── team shape (how many agents run at once here; the skill's "Choose a team shape") ───────────────
+
+/** The capacity of the place a run's agents use: its own sandbox when it has one, else this process's. */
+async function runCapacity(runId: string | null) {
+  const { placeCapacity } = await import("../providers/capacity");
+  const { runSandbox } = await import("../providers/run-sandbox");
+  const { sandboxName } = await import("../providers/registry");
+  let place: string;
+  try { place = (runId ? await runSandbox(runId) : null) ?? sandboxName(); } catch { place = "fake"; }
+  return placeCapacity(place);
+}
+/** A result with `capacity` and the plan-the-team-shape hint in front of its `next`. */
+async function withTeamShape<T extends { next?: string }>(out: T, capacity: Awaited<ReturnType<typeof runCapacity>>) {
+  const { teamShapeHint } = await import("../providers/capacity");
+  return { ...out, capacity, next: [teamShapeHint(capacity), out.next].filter(Boolean).join(" ") };
 }
 
 const SANDBOX_FROM: Record<string, string> = { run: "chosen for this run", environment: "CAPCOMD_SANDBOX in capcomd's environment", project: "the project's setting", user: "your user config", engine: "the engine's own" };
@@ -470,6 +488,8 @@ export async function setup() {
     // The target: the project's run default, else its merge target (what `capcomd setup project --target` writes).
     gates: { checks: d.checks ?? {}, reviewer: d.reviewer ?? null, target: d.target ?? (await import("../utils/env")).env("MERGE_TARGET") ?? null },
     driver: { approvals: p.approvals ?? "human", maxRunBudget: p.maxRunBudget ?? null },
+    // How many agents run at once here (the team shape's budget of parallelism).
+    capacity: await runCapacity(null),
     ...(advice.length ? { advice } : {}),
     next: ready
       ? `${advice.length ? `${advice.join(" ")} Then start` : "Start"} with capcomd_run_new (its sandbox is this project's unless you pass one).`
@@ -478,8 +498,14 @@ export async function setup() {
 }
 
 export async function profiles() {
-  const { agentsFilePath, readAgentsFile } = await import("../agents/profiles");
+  const { agentsFilePath, readAgentsFile, leadText, abilityText } = await import("../agents/profiles");
   const { readiness } = await import("../cli/commands/agents");
   const f = readAgentsFile(agentsFilePath());
-  return { default: f.default ?? null, profiles: Object.entries(f.agents).map(([name, s]) => ({ name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, ...readiness(name, s) })) };
+  const profiles = Object.entries(f.agents).map(([name, s]) => ({ name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, canLead: leadText(s), does: abilityText(s), ...readiness(name, s) }));
+  const leads = profiles.filter((p) => p.canLead).map((p) => p.name);
+  return {
+    default: f.default ?? null, profiles,
+    next: leads.length ? `To give a part with two or more independent sub-parts a lead, spawn ${leads.join(" or ")} with children: {maxChildren: N, maxDepth: 1} (skill: Choose a team shape).`
+      : "No profile here can lead (spawn helpers): every agent does its task itself. Ask the user to run `capcomd setup project` again for a lead profile, or `capcomd agents add lead …`.",
+  };
 }

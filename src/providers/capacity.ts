@@ -156,3 +156,35 @@ export async function slotsInfo(place: string): Promise<{ memTotal: number | nul
   if (!Object.hasOwn(PLACES, place)) return null;
   return { memTotal: await dockerMemTotal().catch(() => null) };
 }
+
+/** How many agents a place runs at once, for a driver planning its team (capcomd_setup, capcomd_run_new). */
+export interface PlaceCapacity {
+  sandbox: string;
+  /** The cap (Docker: its memory over the per-agent budget); null: no local cap, or Docker's memory isn't known. */
+  agentsAtOnce: number | null;
+  /** The same in words, with where it comes from. */
+  detail: string;
+}
+
+/** The capacity of `place` now. Docker is asked for its memory (3 s at most, cached); the others need no probe. */
+export async function placeCapacity(place: string, env: Env = process.env, memTotal: () => Promise<number | null> = dockerMemTotal): Promise<PlaceCapacity> {
+  const per = agentMemory(env).mb;
+  if (place === "docker") {
+    const mem = await memTotal().catch(() => null);
+    if (mem === null) return { sandbox: place, agentsAtOnce: null, detail: `Docker's memory isn't known (is Docker running?); each agent gets ${per} MB of it, and agents above the cap wait as pending` };
+    const n = agentSlots(mem, per);
+    return { sandbox: place, agentsAtOnce: n, detail: `${n} agents at once (Docker's ${gb(mem)} ÷ ${per} MB per agent); more wait as pending and start as others finish` };
+  }
+  if (place === "fake" || place === "fake-host") {
+    const mb = Number(env.CAPCOMD_FAKE_MEMORY_MB);
+    if (Number.isFinite(mb) && mb > 0) { const n = agentSlots(mb * MB, per); return { sandbox: place, agentsAtOnce: n, detail: `${n} agents at once (${mb} MB ÷ ${per} MB per agent); more wait as pending and start as others finish` }; }
+    return { sandbox: place, agentsAtOnce: null, detail: "no local cap (test fakes)" };
+  }
+  if (place === "boxd") return { sandbox: place, agentsAtOnce: null, detail: "no local cap: each agent runs in its own boxd cloud VM (only the fan-out limits of the profiles you spawn apply)" };
+  return { sandbox: place, agentsAtOnce: null, detail: "no cap known for this sandbox" };
+}
+
+/** The one-line hint a driver gets before its first spawn. */
+export function teamShapeHint(c: PlaceCapacity): string {
+  return `Plan the team shape first (skill: Choose a team shape): ${c.agentsAtOnce !== null ? `${c.agentsAtOnce} agents can run at once here (${c.sandbox})` : `there's no fixed number of agents at once here (${c.sandbox}: ${c.detail})`}.`;
+}

@@ -102,6 +102,32 @@ describe("capcomd mcp: the driver's tools", () => {
     expect((await ok("capcomd_profiles")).profiles.map((p: any) => p.name).sort()).toEqual(["coder", "sup"]);
   });
 
+  test("team shapes: the server's instructions, capacity in setup and run_new, who can lead, a children grant with no effect", async () => {
+    const instructions = mcp.getInstructions() ?? "";
+    expect(instructions).toContain("capcomd-orchestration skill");
+    expect(instructions).toContain("Start with capcomd_setup");
+    expect(instructions).toContain("leads with helpers");
+    // The test fakes have no local cap.
+    expect((await ok("capcomd_setup")).capacity).toEqual({ sandbox: "fake", agentsAtOnce: null, detail: "no local cap (test fakes)" });
+    const p = await ok("capcomd_profiles");
+    const by = Object.fromEntries(p.profiles.map((x: any) => [x.name, x]));
+    expect(by.sup).toMatchObject({ canSpawn: true, canLead: "up to 2 coder helpers, 2 levels" });
+    expect(by.coder).toMatchObject({ canSpawn: false, canLead: null, does: expect.stringContaining("can't spawn") });
+    expect(p.next).toContain("spawn sup with children");
+    const r = await ok("capcomd_run_new", { budget: "usd=5,turns=100", label: "shapes", target: "capcomd/shapes", targetFrom: "trunk", key: `ts-${Date.now()}` });
+    expect(r.capacity).toMatchObject({ sandbox: "fake", agentsAtOnce: null });
+    expect(r.next).toStartWith("Plan the team shape first (skill: Choose a team shape): there's no fixed number of agents at once here (fake");
+    expect(r.next).toContain("Spawn agents with capcomd_spawn");
+    // Fan-out for a profile that can't spawn would do nothing: refused by name, with what to do; a lead takes it.
+    const leaf = await call("capcomd_spawn", { runId: r.runId, task: "leaf", profile: "coder", children: { maxChildren: 2 }, budget: "usd=1,turns=10", key: "leaf" });
+    expect(leaf.isError).toBe(true);
+    expect(leaf.body.error).toMatchObject({ code: "config", reason: "cannot_spawn", message: expect.stringContaining("profile coder can't spawn"), hint: expect.stringContaining("capcomd_profiles canLead") });
+    const lead = await ok("capcomd_spawn", { runId: r.runId, task: "lead", profile: "sup", children: { maxChildren: 2, maxDepth: 1 }, budget: "usd=1,turns=10", key: "lead" });
+    expect(lead.limits).toMatchObject({ allowSpawn: true, maxChildren: 2, maxDepth: 1 });
+    expect((await ok("capcomd_spawn", { runId: r.runId, task: "plain", profile: "coder", children: { maxChildren: 0 }, budget: "usd=1,turns=10", key: "plain" })).limits.allowSpawn).toBe(false);
+    await ok("capcomd_cancel", { runId: r.runId });
+  }, 60_000);
+
   test("fan-out on a staging target: spawn 3, await, verify, merge each; only verified commits land", async () => {
     const r = await ok("capcomd_run_new", { budget: "usd=10,turns=200", label: "fan-out", target: "capcomd/fanout", targetFrom: "trunk", key: `fo-${Date.now()}` });
     expect(r.gates.checks).toEqual(expect.arrayContaining(["unit"]));

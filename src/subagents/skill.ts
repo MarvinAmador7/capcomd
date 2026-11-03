@@ -50,8 +50,11 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   capcomd result --summary "<what you did, what landed>"                # last thing before you exit
 
 ## Sizing fan-out (you decide per child, at spawn time)
-- Default every child to a leaf: --children.maxChildren=0. Grant fan-out only to a child whose task
-  is itself several independent parts, and only as much as it needs:
+- Split your task into parts that can run at once, and spawn them together (wait-any, verify each as it finishes):
+  parts that share an interface get a tiny contract child first, then everything else starts against it.
+- A child whose profile can't spawn is a leaf (--children.maxChildren=0 is harmless; more is refused, since it
+  would do nothing). Grant fan-out only to a child of a profile that can spawn whose task is
+  itself two or more independent parts, and only as much as it needs:
   --children.maxChildren=N --children.maxDepth=1 [--children.maxTotalDescendants=M --children.allowedChildProfiles=a,b --children.budgetShare=0.5]
 - A grant above your own limits is refused (not clamped). Split by independent files/modules so siblings
   don't conflict. A child spawned without --budget reserves nothing: its spend counts against yours as it

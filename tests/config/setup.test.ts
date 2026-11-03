@@ -88,7 +88,7 @@ describe("setup steps (non-interactive)", () => {
   writeFileSync(join(repo, "bun.lock"), "");
   mkdirSync(join(repo, "src"));
 
-  test("project: detects the repo, writes the project config and worker/reviewer/planner profiles", () => {
+  test("project: detects the repo, writes the project config and worker/reviewer/lead/planner profiles", () => {
     const r = run(["setup", "project", "--yes", "--agents", "claude,codex", "--mode", "direct", "--target", "capcomd/staging", "--json"], { cwd: join(repo, "src"), env });
     expect(r.code).toBe(0);
     const cfg = JSON.parse(readFileSync(join(repo, ".capcomd", "config.json"), "utf8"));
@@ -97,15 +97,33 @@ describe("setup steps (non-interactive)", () => {
       run: { checks: { unit: "bun run test" }, reviewer: "reviewer" },
     });
     const agents = JSON.parse(readFileSync(join(repo, ".capcomd", "agents.json"), "utf8")).agents;
-    expect(Object.keys(agents).sort()).toEqual(["codex-worker", "planner", "reviewer", "worker"]);
+    expect(Object.keys(agents).sort()).toEqual(["codex-worker", "lead", "planner", "reviewer", "worker"]);
     expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker"]);
-    expect(agents.reviewer.allowedTools).toContain("Bash(bun run:*)");
+    // A module lead: the worker's settings (every tool, so it runs any check itself), up to 3 worker helpers, one level.
+    expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
+    // The reviewer runs the check and the package manager's test runner (bun test as well as bun run).
+    expect(agents.reviewer.allowedTools).toEqual(expect.arrayContaining(["Bash(bun run:*)", "Bash(bun test:*)"]));
     expect(agents.reviewer.allowedTools).not.toContain("Edit");
     // No turn, time or money limits on the profiles setup makes (ADR-019).
     for (const p of Object.values(agents) as any[]) expect([p.maxTurns, p.timeoutMs, p.maxBudgetUsd]).toEqual([undefined, undefined, undefined]);
     // Re-running keeps existing profiles (your edits survive).
     const again = json(run(["setup", "project", "--yes", "--json"], { cwd: repo, env }).out);
-    expect(again.steps.find((s: any) => s.step === "profiles").detail).toContain("kept existing worker, reviewer, planner");
+    expect(again.steps.find((s: any) => s.step === "profiles").detail).toContain("kept existing worker, reviewer, lead, planner");
+  });
+
+  test("project: an existing project's agents.json keeps its profiles; setup only adds the missing lead", () => {
+    const r3 = mkdtempSync(join(tmpdir(), "capcomd-setup-repo-"));
+    Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: r3 });
+    Bun.spawnSync(["git", "remote", "add", "origin", "git@github.com:acme/app.git"], { cwd: r3 });
+    mkdirSync(join(r3, ".capcomd"));
+    const mine = { provider: "claude", auth: "subscription", model: "opus", allowedTools: ["Read"] };
+    writeFileSync(join(r3, ".capcomd", "agents.json"), JSON.stringify({ schema: "capcomd.agents/v1", default: "worker", agents: { worker: mine, reviewer: mine, planner: { ...mine, children: { allowSpawn: true, allowedChildProfiles: ["worker"] } } } }));
+    expect(json(run(["setup", "project", "--yes", "--mode", "direct", "--json"], { cwd: r3, env }).out).ok).toBe(true);
+    const after = JSON.parse(readFileSync(join(r3, ".capcomd", "agents.json"), "utf8"));
+    expect(after.agents.worker).toEqual(mine);
+    expect(after.agents.reviewer).toEqual(mine);
+    expect(after.default).toBe("worker");
+    expect(after.agents.lead.children).toMatchObject({ allowSpawn: true, maxChildren: 3, maxDepth: 1 });
   });
 
   test("project: an API-key login gets the spend cap per run it asks for (--budget), saved as driver.maxRunBudget", () => {

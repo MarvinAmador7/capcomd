@@ -5,6 +5,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- The orchestration skill now starts with "Choose a team shape": a single loop, a wide fan-out, contract first then
+  wide, or leads with helpers. It says which shape fits what you asked for, and has the driver check its plan before
+  the first agent starts (the tree, the longest chain of steps, and how many agents can run at once).
+- `capcomd setup` now writes a `lead` profile, which can spawn up to 3 worker helpers one level down and verifies and
+  merges their work itself. Give a part of the work that splits into pieces to a lead, spawned with
+  `children: {maxChildren: N, maxDepth: 1}`. Existing profiles are kept; re-running setup only adds missing ones.
+- The `reviewer` profile that setup writes can now run your project's test runner (`bun test`, `npm test`,
+  `pnpm test`, `cargo test`, …) as well as the check's own commands.
+- `capcomd_setup` and `capcomd_run_new` say how many agents can run at once in that sandbox (`capacity`).
+  `capcomd_profiles` and `capcomd agents list` say what each profile can do and whether it can lead (`canLead`).
+- The capcomd MCP server now gives your agent short instructions as soon as it connects: the team shapes, the skill
+  to load, and to start with `capcomd_setup`.
+- Asking a profile that can't spawn (such as `worker`) to fan out is refused with a message that names the profile
+  and what to spawn instead (`reason: "cannot_spawn"`).
+
 - Merging a verified commit is much faster. When the target hasn't moved since the verify, capcomd pushes the verified
   commit as it is, in one round trip, with no second run of the checks. When the target has moved, the checks still
   run again first. Merge results show `timings.path` (`fast` or `full`).

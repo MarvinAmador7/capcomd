@@ -202,6 +202,13 @@ export function applyGrant(ceiling: Limits, g: Grant | undefined): { ok: true; l
   if (!g || !Object.keys(g).length) return { ok: true, limits: ceiling };
   const L = { ...ceiling, allowedChildProfiles: [...ceiling.allowedChildProfiles] };
   const over = (k: string, want: number | string, max: number | string | undefined) => `grant children.${k}=${want} exceeds the ceiling ${max ?? "(none: spawning not allowed)"}`;
+  // Fan-out for an agent that can't spawn at all (its profile, e.g. worker, or the limits above it allow no children)
+  // would have no effect: refuse it with what to do instead.
+  if (!ceiling.allowSpawn) {
+    const asked = (["allowSpawn", "maxChildren", "maxDepth", "maxTotalDescendants"] as const).find((k) => k === "allowSpawn" ? g.allowSpawn === true : (g[k] ?? 0) > 0)
+      ?? (g.allowedChildProfiles?.length ? "allowedChildProfiles" : null);
+    if (asked) return { ok: false, error: `${over(asked, asked === "allowSpawn" ? "true" : asked === "allowedChildProfiles" ? g.allowedChildProfiles!.join(",") : (g as any)[asked], ceiling.maxDepth ?? 0)}: this agent can't spawn (its profile, e.g. worker, or the limits above it allow no children), so children would have no effect. To delegate a part, spawn a profile that can lead (capcomd_profiles canLead, e.g. lead) with children {maxChildren: N, maxDepth: 1}; for an agent that works alone, leave children out` };
+  }
   if (g.allowSpawn === true && !ceiling.allowSpawn) return { ok: false, error: over("allowSpawn", "true", "false") };
   if (g.allowSpawn === false) L.allowSpawn = false;
   if (g.maxDepth !== undefined) { if (ceiling.maxDepth !== undefined && g.maxDepth > ceiling.maxDepth) return { ok: false, error: over("maxDepth", g.maxDepth, ceiling.maxDepth) }; L.maxDepth = g.maxDepth; }

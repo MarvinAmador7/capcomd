@@ -71,6 +71,14 @@ const APPROVE_META = { "anthropic/requiresUserInteraction": true } as const;
 const project = z.string().optional().describe("Project: a name from capcomd_projects, or a checkout's path. Default: the run's own project, else this server's checkout, else the default project");
 
 /**
+ * What a client shows its model before any skill loads (MCP `instructions`): what capcomd is, the team shapes, and
+ * where to start. Kept short; the capcomd-orchestration skill has the rest.
+ */
+export const INSTRUCTIONS = `capcomd runs a team of coding agents for you: each agent works in its own VM (or container) on its own branch, capcomd_verify runs the project's checks and reviewer on its work, and capcomd_merge lands only the verified commit. You are the driver: you choose the team and its shape.
+Team shapes: single loop (one agent: one coherent change); wide fan-out (independent parts at once); contract first, then wide (land the shared types/stubs, then start every part at once, consumers against the stubs); leads with helpers (a lead profile, spawned with children: {maxChildren: N, maxDepth: 1}, splits its part among helpers and verifies and merges their work). When the user asks for parallel work, a team or a swarm, go wide and give a lead to any part with two or more independent sub-parts.
+Load the capcomd-orchestration skill (its "Choose a team shape" section) before planning. Start with capcomd_setup: it says whether capcomd is ready, the project's gates and how many agents run at once here.`;
+
+/**
  * What an agent does when capcomd has no projects: the command that adds the checkout it works in. Setting a project
  * up puts it on the list at once; this server reads the list on every call, so no restart is needed.
  */
@@ -83,7 +91,7 @@ export function noProjectsHint(cwd = process.cwd()): string {
 
 export function buildServer(): McpServer {
   const version = VERSION;
-  const server = new McpServer({ name: "capcomd", version });
+  const server = new McpServer({ name: "capcomd", version }, { instructions: INSTRUCTIONS });
   const kids = new ProjectServers(server.server);
   sessions.add(kids);
 
@@ -133,20 +141,20 @@ export function buildServer(): McpServer {
   // ── discover ──
   server.registerTool("capcomd_setup", {
     title: "Setup and gates",
-    description: "Is capcomd ready here (engine, sandbox provider, agent logins, project), and what are this project's gates: the named checks, the reviewer and the target branch. Call it first.",
+    description: "Is capcomd ready here (engine, sandbox provider, agent logins, project), what are this project's gates (the named checks, the reviewer and the target branch), and how many agents run at once here (`capacity`). Call it first.",
     inputSchema: { project }, annotations: READ,
   }, routed("capcomd_setup", () => D.setup(), false));
 
   server.registerTool("capcomd_profiles", {
     title: "Agent profiles",
-    description: "Agent profiles you can spawn (provider, login, model, whether it may spawn its own children) and whether each is ready.",
+    description: "Agent profiles you can spawn (provider, login, model) and whether each is ready, with what each can do in plain words (`does`) and, for a profile that can lead a part, how many helpers it may spawn (`canLead`, e.g. \"up to 3 worker helpers, one level\"; null: it works alone).",
     inputSchema: { project }, annotations: READ,
   }, routed("capcomd_profiles", () => D.profiles(), false));
 
   // ── runs ──
   server.registerTool("capcomd_run_new", {
     title: "Start a run",
-    description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Its sandbox is the project's unless you pass one. Returns runId, the gates and the sandbox the run uses.",
+    description: "Create a run: a durable scope, with a budget if you give one (none: unlimited). Its checks, reviewer and target come from the project (see capcomd_setup); you may pick a non-protected staging target. Its sandbox is the project's unless you pass one. Returns runId, the gates, the sandbox the run uses and how many agents run at once there (`capacity`).",
     inputSchema: {
       budget: z.string().optional().describe('Budget, e.g. "usd=5,turns=200,wallSeconds=3600"; omit for none'),
       label: z.string().optional().describe("What the run is for, as a short title the way you'd title a pull request (\"Add multiply to src/math.ts\"): the capcomd app names the run by it"),
@@ -211,7 +219,7 @@ export function buildServer(): McpServer {
   // ── agents ──
   server.registerTool("capcomd_spawn", {
     title: "Spawn an agent",
-    description: "Start a coding agent in its own VM and branch on a task. Pin one of the run's named checks with `check` (its verify uses it). `children` grants it fan-out (narrow-only). Returns at once; wait with capcomd_await.",
+    description: "Start a coding agent in its own VM and branch on a task. Pin one of the run's named checks with `check` (its verify uses it). `children` sizes the fan-out of a profile that can lead (see capcomd_profiles canLead). Returns at once; wait with capcomd_await.",
     inputSchema: {
       runId: run,
       task: z.string().min(1).describe("What the agent should do, with acceptance criteria"),
@@ -221,7 +229,7 @@ export function buildServer(): McpServer {
       check: z.string().optional().describe("One of the run's check names (capcomd_setup gates.checks)"),
       report: z.boolean().optional().describe("Read-only work whose answer is its result; nothing is pushed"),
       continue: z.string().optional().describe("A finished agent whose work this one continues from (its branch, else its last checkpoint), e.g. one stopped at a limit"),
-      children: z.record(z.string(), z.unknown()).optional().describe("Fan-out it may use: maxChildren, maxDepth, maxTotalDescendants, allowedChildProfiles, budgetShare"),
+      children: z.record(z.string(), z.unknown()).optional().describe("Fan-out it may use (narrow-only): maxChildren, maxDepth, maxTotalDescendants, allowedChildProfiles, budgetShare. To delegate a part with sub-parts, spawn a profile that can spawn (capcomd_profiles canLead, e.g. lead) with children: {maxChildren: N, maxDepth: 1}: it spawns its helpers and verifies and merges their work. Fan-out for a profile that can't spawn (e.g. worker) would have no effect, so it is refused (reason cannot_spawn); {maxChildren: 0} is accepted and changes nothing"),
       key, project,
     },
     annotations: WRITE,
