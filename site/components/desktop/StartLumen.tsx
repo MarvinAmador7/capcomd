@@ -197,7 +197,7 @@ export function StartLumen() {
           {answer === "pr" ? `Pull request opened from ${BRANCH}.`
             : answer === "keep" ? `The work stays on ${BRANCH}.`
             : phase === "done" ? `${N} agents, ${ok.size} diffs approved, ${merged.size} steps merged ${where}. One decision is waiting for you.`
-            : running ? `Planning against main ${where}, then assigning the steps.`
+            : running ? `Planning against dev ${where}, then assigning the steps.`
             : "Waiting for a goal."}
         </p>
         <button type="button" className="dk-start__go" onClick={play} disabled={phase === "typing" || phase === "run" || phase === "rewind"}>Replay</button>
@@ -223,7 +223,7 @@ export function StartLumen() {
                 {live ? (
                   <div className="dk-thread dk-feed">
                     <div className="dk-hand dk-hand--you"><p><b>You</b></p><p>{GOAL}</p></div>
-                    {step < 1 ? <Tool icon="doc" live t={clock(secs)}>Reading the repository</Tool> : <Tool icon="check" ok t="0:01">Read 214 files on main</Tool>}
+                    {step < 1 ? <Tool icon="doc" live t={clock(secs)}>Reading the repository</Tool> : <Tool icon="check" ok t="0:01">Read 214 files on dev</Tool>}
                     {step >= 1 ? (step < 2 ? <Tool icon="doc" live t={clock(secs)}>Writing the plan</Tool> : <Tool icon="check" ok t="0:01">Wrote the plan</Tool>) : null}
                     {step >= 2 ? <ol className="dk-plan">{PLAN.map((p) => <li key={p}>{p}</li>)}</ol> : null}
                     {LEADS.flatMap((_, s) => {
@@ -254,7 +254,7 @@ export function StartLumen() {
                 </div>
               ) : (
                 <div className={`dk-card${sent ? " is-sent" : ""}`}>
-                  <p className="dk-card__chips"><span className="dk-chip"><Icon name="folder" size={13} />my-app</span><span className="dk-dim"><Icon name="branch" size={13} /> main</span></p>
+                  <p className="dk-card__chips"><span className="dk-chip"><Icon name="folder" size={13} />my-app</span><span className="dk-dim"><Icon name="branch" size={13} /> dev</span></p>
                   <p className="dk-card__goal">{sent ? <span className="dk-dim">Reply to Lumen…</span> : <>{shownGoal}{typing ? <i className="dk-caret" /> : null}</>}</p>
                   <div className="dk-card__tools">
                     <span className="dk-round" aria-hidden="true"><Icon name="plus" size={14} /></span>

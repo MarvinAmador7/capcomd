@@ -13,8 +13,8 @@ import { Reveals } from "@/components/Reveals";
 import { FIXES, READOUTS } from "@/lib/perf";
 import { SITE } from "@/lib/site";
 
-const title = "capcomd Desktop · in command of every agent";
-const description = "capcomd Desktop is a native Mac app, written entirely in Swift, that shows each coding agent in a run as its own column and calls on you only when one of them needs a decision. In development.";
+const title = "capcomd Desktop · in command of the swarm";
+const description = "capcomd Desktop is the native Mac app for capcomd's orchestration engine. Every agent in a swarm gets a live column; the engine reviews and merges, and brings you only the decisions that are yours. In development.";
 
 export const metadata: Metadata = {
   title, description,
@@ -56,10 +56,10 @@ export default function DesktopPage() {
         <Nav home={false} current="desktop" />
         <div className="dk-hero__words">
           <h1 className="dk-h1" data-load style={delay(60)}>In command.</h1>
-          <p className="dk-hero__lead" data-load style={delay(160)}>A native Mac app that gives every coding agent in your run its own live column. They work side by side; you step in only when one needs a decision.</p>
+          <p className="dk-hero__lead" data-load style={delay(160)}>The Mac app for capcomd&apos;s orchestration engine. Every agent in the swarm gets a live column; the engine reviews and merges, and brings you only the decisions that are yours.</p>
           <p className="dk-hero__act" data-load style={delay(240)}>
             <a className="button" href={SITE.repo}>Watch on GitHub</a>
-            <span>In development for macOS. The CLI works today: <a href="/#install">install it</a>.</span>
+            <span>In development for macOS. The engine runs today from the CLI: <a href="/#install">install it</a>.</span>
           </p>
         </div>
         <div className="dk-stage">
@@ -68,10 +68,21 @@ export default function DesktopPage() {
       </header>
 
       <main id="main" tabIndex={-1}>
+
+        <StartLumen />
+        <Decks />
+        <ColumnLab />
+        <Keys />
+
+        <figure className="dk-rest" aria-labelledby="rest-cap">
+          <div className="dk-drift dk-drift--wide"><img src="/desktop/mcc-consoles.jpg" width={1920} height={1285} alt="The row of Apollo consoles in Historic Mission Control, their screens dark, hundreds of square keys along the desk." loading="lazy" decoding="async" /></div>
+          <figcaption id="rest-cap"><span>The Apollo consoles in Historic Mission Control, Houston: one station, one controller, a desk of keys.</span><span>Photograph: Mike Renlund, CC BY 2.0</span></figcaption>
+        </figure>
+
         <section className="dk-native" id="native" aria-labelledby="native-h">
           <div className="dk-native__head">
             <h2 id="native-h" className="dk-h2" data-reveal>Built for the Mac.</h2>
-            <p className="dk-lead" data-reveal style={delay(80)}>No web view, no bundled browser, no JavaScript in the window. capcomd Desktop is Swift from the first pixel to the socket, built on the frameworks macOS itself is drawn with.</p>
+            <p className="dk-lead" data-reveal style={delay(80)}>A swarm is dozens of live columns at once. So there is no web view and no JavaScript in the window: capcomd Desktop is Swift from the first pixel to the socket.</p>
             <dl className="dk-native__facts">
               {NATIVE_FACTS.map(([n, what], k) => <div key={what} data-reveal style={delay(140 + 60 * k)}><dt>{n}</dt><dd>{what}</dd></div>)}
             </dl>
@@ -86,16 +97,6 @@ export default function DesktopPage() {
             ))}
           </ol>
         </section>
-
-        <ColumnLab />
-        <StartLumen />
-        <Decks />
-        <Keys />
-
-        <figure className="dk-rest" aria-labelledby="rest-cap">
-          <div className="dk-drift dk-drift--wide"><img src="/desktop/mcc-consoles.jpg" width={1920} height={1285} alt="The row of Apollo consoles in Historic Mission Control, their screens dark, hundreds of square keys along the desk." loading="lazy" decoding="async" /></div>
-          <figcaption id="rest-cap"><span>The Apollo consoles in Historic Mission Control, Houston: one station, one controller, a desk of keys.</span><span>Photograph: Mike Renlund, CC BY 2.0</span></figcaption>
-        </figure>
 
         <section className="dk-budgets" id="budgets" aria-labelledby="budgets-h">
           <div className="dk-budgets__head">
@@ -146,7 +147,7 @@ export default function DesktopPage() {
           </div>
           <div className="dk-today__words">
             <h2 id="today-h" className="dk-h2" data-reveal>The window today.</h2>
-            <p data-reveal style={delay(80)}>Drawn by the app&apos;s own test bench from the current build, with 17 agents of generated work. capcomd Desktop is in development; the first build will come out on GitHub. Until then, the CLI and the menu bar app run every crew on this page.</p>
+            <p data-reveal style={delay(80)}>Drawn by the app&apos;s own test bench from the current build, with 17 agents of generated work. capcomd Desktop is in development; the first build will come out on GitHub. Until then, the engine runs every swarm on this page from the CLI, and the menu bar app keeps watch.</p>
             <p className="dk-today__act" data-reveal style={delay(160)}>
               <a className="button" href={SITE.repo}>Watch on GitHub</a>
               <a href="/#install">Install the CLI</a>

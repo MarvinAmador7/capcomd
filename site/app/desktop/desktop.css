@@ -92,7 +92,7 @@ img { display: block; max-width: 100%; height: auto; }
 .dk-msg { font-size: 13.5px; line-height: 1.5; }
 .dk-tool { display: flex; align-items: center; gap: 10px; color: #D6D6DC; }
 .dk-tool .dk-ic { color: var(--a-dim); }
-.dk-t { margin-left: auto; color: var(--a-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dk-t { margin-left: auto; color: var(--a-dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dk-t--live { color: #4DA3FF; }
 .dk-tool--ok .dk-ic { color: var(--a-green); }
 .dk-hand { padding: 10px 12px; border-radius: 10px; background: var(--a-raise); display: grid; gap: 4px; }
