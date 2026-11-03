@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- `capcomd run`'s planner can now hand a part of the goal that splits further to a lead, which splits it among
+  helpers and verifies and merges their work itself. New projects get this from `capcomd setup`. In an existing
+  project, add `"lead"` to the planner's `children.allowedChildProfiles` in `.capcomd/agents.json`.
+
 - The orchestration skill now starts with "Choose a team shape": a single loop, a wide fan-out, contract first then
   wide, or leads with helpers. It says which shape fits what you asked for, and has the driver check its plan before
   the first agent starts (the tree, the longest chain of steps, and how many agents can run at once).

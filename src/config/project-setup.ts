@@ -147,8 +147,9 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
     // one level down. The driver spawns it for a part with two or more independent sub-parts; it verifies and merges
     // its helpers' work itself, or hands its branch back.
     ["lead", { provider, auth, children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }],
-    // No fan-out limits either: the planner may spawn workers as it sees fit (set children.* to bound it).
-    ["planner", { provider, auth, children: { allowSpawn: true, allowedChildProfiles: workers } }],
+    // No fan-out limits either: the planner may spawn workers, and leads for parts that split further, as it sees fit
+    // (set children.* to bound it).
+    ["planner", { provider, auth, children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead"] } }],
   ];
   return {
     dir: a.dir, configPath: join(a.dir, ".capcomd", "config.json"), agentsPath: join(a.dir, ".capcomd", "agents.json"), cap: a.cap, profiles,
