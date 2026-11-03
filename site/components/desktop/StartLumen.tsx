@@ -189,11 +189,8 @@ export function StartLumen() {
     <section className="dk-start" id="start" aria-labelledby="start-h">
       <div className="dk-start__head">
         <h2 id="start-h" className="dk-h2" data-reveal>Swarms, made human.</h2>
-        <p className="dk-start__lead" data-reveal>One goal becomes a tree of agents: a planner, a lead per step, workers under each lead, a critic on every diff. The engine runs the tree in parallel. Lumen stays docked beside it and logs every spawn, approval and merge, until the one decision that is yours.</p>
-      </div>
-
-      <div className="dk-start__act" data-reveal>
-        <p className="dk-start__note" aria-live="polite">
+        <p className="dk-start__lead" data-reveal>One goal becomes a tree of agents that work in parallel, review each other and merge. You&apos;re asked once, at the end.</p>
+        <p className="sr" aria-live="polite">
           {answer === "pr" ? `Pull request opened from ${BRANCH}.`
             : answer === "keep" ? `The work stays on ${BRANCH}.`
             : phase === "done" ? `${N} agents, ${ok.size} diffs approved, ${merged.size} steps merged ${where}. One decision is waiting for you.`

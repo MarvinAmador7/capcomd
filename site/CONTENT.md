@@ -63,36 +63,31 @@ illustrations, not captures, and they show the menu bar app as it is on `main` (
 capcomd Desktop is in development (branch feat/desktop-shell, not on main yet), so the page says so in the hero and
 in the close, and its action is "Watch on GitHub".
 
-The page argues in this order: what the app is (the window onto capcomd's orchestration engine), the engine at scale
-(the swarm shot), how the window holds it (title bar, one column, keys), then why it's native and how fast it is.
+The page is six beats, one idea per screen (2026-11-03, the owner's "refined, minimalist, Apple-like" pass): what the app
+is (the window), the engine at scale (the swarm shot), three tiles (one column, the keys, the title bar), three figures
+(native, fast, measured) with the perf log one click away, the window today, and the close. The measurements, budgets
+and the layer-by-layer stack live on /desktop/perf/.
 Every ask on the page is the goal-finish decision of the goal-branch flow: reviewed work lands on the goal branch with
 no human step, and the planner asks whether to open the pull request. No sample shows a per-merge approval.
 
 | Section | Claims | Source |
 |---|---|---|
 | Hero, the reel | the Mac app for capcomd's orchestration engine; agents as full-height columns in tree order; the engine reviews and merges; crew tabs with a bracket on the columns on screen; the planner's ask to open the pull request docks at its column's foot (View diff · Deny · Approve ↩) | apps/menubar/design/desktop/SPEC.md §2; Reel.png; the goal-branch flow (in-between merges need no approval, the PR is the user's choice) |
-| Built for the Mac (after the photograph) | 0 web views, 100% Swift (81 Swift files, no other sources in the app); SwiftUI columns shared with the menu bar app; the reel an `NSScrollView` (`SnapScrollView`) with one `NSHostingView` per column; slides as one additive Core Animation animation; system fonts (`Font.system`); the Go menu (`CommandMenu("Go")`) with ⌘1–9, ⌃1–9, ⌃←/→; one SSE stream per run over the CapcomdClient Unix socket; macOS 14 or later | apps/menubar/app on feat/desktop-shell: Package.swift, Sources/CapcomdDesk/Reel.swift, DeskWindow.swift, Sources/CapcomdUI/Theme.swift, Sources/CapcomdLive/Live.swift; the perf log for the slide |
-| One column per agent | header (bot, profile, name, state, place, elapsed), thread, own message box; Return approves while an ask has focus, Esc never denies; the planner's ask opens the PR | SPEC.md §2, §4; the goal-branch flow |
 | Swarms, made human | One shot in the desktop window, title bar included, on a plum stage. Lumen, the planner, is docked at the left and the crew's columns slide in under it. Its composer types the goal and sends it; Lumen reads the repo, writes a three-step plan and spawns a lead per step, and each lead spawns four workers and a critic (19 agents, in tree order) while the camera follows to the last column (motion blur from the camera's speed). Then workers finish, critics approve their diffs, leads merge their steps into the goal branch, and Lumen's thread logs each spawn, approval and merge before asking the one decision: open the pull request (Approve or Deny). The title bar folds subtrees off screen into stacks. The plan, file count, names, ids, diff sizes and branch name are sample content | SPEC.md §2; ReelNew.png, ReelSwarm; the goal-branch flow |
-| Many projects, one title bar | decks of crew heads with one status line; a folded project whose run is ready asks through its planner; an asking deck gets an amber ring and is never in the overflow; a deck fans out in place; swarm subtrees fold into stacks; the strip | SPEC.md §2; ReelStack, ReelTabs, ReelSwarm boards |
-| Every move has a key | every shortcut listed | SPEC.md §4 and the project menu in §2 |
-| Fast is the feature | the order "performance, speed, design"; 100 ms first frame, 50 ms switch, 120 Hz with 17 agents (8.3 ms a frame), one stream per run. These are budgets, not measurements | SPEC.md §0, §1 |
-| Measured, not promised | the main-thread strips (9 s of `step` on crew17, 1 ms samples; `lib/perf-reel.json`); 257 → 52 hitches, 10.1 → 3.6 s main-thread CPU, frame p95 68 → 12.6 ms, project switch 544 → 170 ms; the four kept fixes and three dropped hypotheses; 170 ms against the 50 ms switch budget | "Benching the Reel", the perf log of 30 Oct 2026 (now the page /desktop/perf/): its xctrace exports and DeskBench A/B runs, 3a6b5b7 → 9bcd41a |
+| Tiles | one column per agent with its whole thread and the question docked at its foot; ⌘1 opens a project, ⌃→ the next agent, ↩ approves; moves never wait on an animation; one project open, the rest folded into decks that say when one needs you | SPEC.md §2, §4; Reel.png, ReelStack; the goal-branch flow |
+| Native. Fast. Measured. | 0 web views (Swift from the first pixel to the socket: 81 Swift files, no other sources in the app); 120 Hz slides drawn by Core Animation on ProMotion; ⅔ less main-thread work (10.1 → 3.6 s main-thread CPU on DeskBench, 3a6b5b7 → 9bcd41a) | apps/menubar/app on feat/desktop-shell (Package.swift, Reel.swift); the perf log of 30 Oct 2026 |
 | The window today | a capture of the real window | `CapcomdDeskBench snapshot --fixture crew17 --at 0` on feat/desktop-shell 9bcd41a (generated data) |
 
 Pictures:
 
-- `public/desktop/real-window.jpg`, `real-tb.jpg`, `real-ask.jpg`: the real window, drawn by DeskBench from the
-  `crew17` fixture and cropped. Its text is generated, and some of it repeats. Retake them when the app has a demo
-  run.
-- `public/desktop/mcc-consoles.jpg`: "Apollo Mission Control Consoles" by Mike Renlund, CC BY 2.0, from Wikimedia
-  Commons and credited in the footer.
+- `public/desktop/real-window.jpg`: the real window, drawn by DeskBench from the `crew17` fixture. Its text is
+  generated, and some of it repeats. Retake it when the app has a demo run.
 - The bots are the engine's own. Their seeds (`dk-*`) were picked so the names match the boards (Lumen, Nugget,
   Tinker, Volt, Mica, Loop, Radar).
 
 Samples to confirm: the matchkey run at its finish, its agents' text, times and counts (adapted from Reel.png); the goal
 branch `migrate-matchkey-v3.2`, the base `dev` and the pull request's size (9 files, +318 −41); "Fix proration" (ready,
-its planner asks) and "addriva" (pull request open) as other projects; "Opus 5.5" in the composer; `my-app` / `dev` on the new
+its planner asks), "Migrate matchkey" and "addriva" (pull request open) as decks in the title bar tile; "Opus 5.5" in the composer; `my-app` / `dev` on the new
 project's chips.
 
 ## The perf log (/desktop/perf/)
