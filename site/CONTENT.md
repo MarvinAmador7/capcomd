@@ -65,7 +65,6 @@ in the close, and its action is "Watch on GitHub".
 |---|---|---|
 | Hero, the reel | a native Mac app written entirely in Swift, no web view, no Electron; agents as full-height columns in tree order; crew tabs with a bracket on the columns on screen; an ask docks at its column's foot (View diff · Deny · Approve ↩) | apps/menubar/design/desktop/SPEC.md §2; Reel.png |
 | Built for the Mac | 0 web views, 100% Swift (81 Swift files, no other sources in the app); SwiftUI columns shared with the menu bar app; the reel an `NSScrollView` (`SnapScrollView`) with one `NSHostingView` per column; slides as one additive Core Animation animation; system fonts (`Font.system`); the Go menu (`CommandMenu("Go")`) with ⌘1–9, ⌃1–9, ⌃←/→; one SSE stream per run over the CapcomdClient Unix socket; macOS 14 or later | apps/menubar/app on feat/desktop-shell: Package.swift, Sources/CapcomdDesk/Reel.swift, DeskWindow.swift, Sources/CapcomdUI/Theme.swift, Sources/CapcomdLive/Live.swift; the perf log for the slide |
-| One voice to the crew | Follow moves only for an ask or a failure; 17 agents | SPEC.md §1, §3 |
 | One column per agent | header (bot, profile, name, state, place, elapsed), thread, own message box; Return approves while an ask has focus, Esc never denies | SPEC.md §2, §4 |
 | Start with a sentence | A plum stage like the hero's. The goal line is the composer at display size, typed straight onto the plum, with Start and three example goals. The board is one window: Lumen sleeps in the new column and smiles once you type; the crew's columns wait as outlines. On Start, Lumen reads the repo, writes a three-step plan (one per example goal, a generic one otherwise), spawns lead, worker and critic, and the lead hands task 1 to the worker. The plans, file count and names are sample content | SPEC.md §2; ReelNew.png |
 | Other projects wait in the title bar | decks of crew heads with one status line; an asking deck gets an amber ring and is never in the overflow; a deck fans out in place; swarm subtrees fold into stacks and asks step out; the strip | SPEC.md §2; ReelStack, ReelTabs, ReelSwarm boards |
@@ -79,9 +78,8 @@ Pictures:
 - `public/desktop/real-window.jpg`, `real-tb.jpg`, `real-ask.jpg`: the real window, drawn by DeskBench from the
   `crew17` fixture and cropped. Its text is generated, and some of it repeats. Retake them when the app has a demo
   run.
-- `public/desktop/mcc-apollo7.jpg` (S68-49301) and `mcc-apollo14.jpg` (S71-17610): NASA Johnson Space Center, public
-  domain. `mcc-consoles.jpg`: "Apollo Mission Control Consoles" by Mike Renlund, CC BY 2.0. All three come from
-  Wikimedia Commons and are credited in the footer.
+- `public/desktop/mcc-consoles.jpg`: "Apollo Mission Control Consoles" by Mike Renlund, CC BY 2.0, from Wikimedia
+  Commons and credited in the footer.
 - The bots are the engine's own. Their seeds (`dk-*`) were picked so the names match the boards (Lumen, Nugget,
   Tinker, Volt, Mica, Loop, Radar).
 
@@ -103,6 +101,3 @@ marks dropped). Its data was extracted from the log's own embedded data, not re-
 
 The page names the machine (MacBook Pro, MacBookPro18,3, macOS 27.0.1) and the build hashes, as the log did. Retake
 it when the switch work lands: the "Still slow" section says the next targets.
-
-Decision for the owner: the "One voice to the crew" section says what CAPCOM means. Until now the site deliberately
-didn't (see "Open decisions" above).

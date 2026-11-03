@@ -44,9 +44,7 @@ const NATIVE_FACTS: Array<[string, string]> = [["0", "web views"], ["100%", "Swi
 
 const CREDITS = (
   <>
-    Photographs: <a href="https://commons.wikimedia.org/wiki/File:Overall_view_of_Mission_Control_on_first_day_of_Apollo_7_space_mission_(S68-49301).jpg">Mission Control on the first day of Apollo 7</a> and{" "}
-    <a href="https://commons.wikimedia.org/wiki/File:Activity_in_the_Mission_Control_Center_during_Apollo_14_(S71-17610).jpg">Mission Control during Apollo 14</a>, NASA Johnson Space Center, public domain;{" "}
-    <a href="https://commons.wikimedia.org/wiki/File:Apollo_Mission_Control_Consoles_(2342101272).jpg">Apollo Mission Control Consoles</a> by Mike Renlund, <a href="https://creativecommons.org/licenses/by/2.0">CC BY 2.0</a>. All via Wikimedia Commons.
+    Photograph: <a href="https://commons.wikimedia.org/wiki/File:Apollo_Mission_Control_Consoles_(2342101272).jpg">Apollo Mission Control Consoles</a> by Mike Renlund, <a href="https://creativecommons.org/licenses/by/2.0">CC BY 2.0</a>, via Wikimedia Commons.
   </>
 );
 
@@ -87,25 +85,6 @@ export default function DesktopPage() {
               </li>
             ))}
           </ol>
-        </section>
-
-        <section className="dk-room" id="room" aria-labelledby="room-h">
-          <h2 id="room-h" className="dk-h2" data-reveal>One voice to the crew.</h2>
-          <p className="dk-lead dk-room__lead" data-reveal style={delay(80)}>
-            In Apollo&apos;s Mission Control every controller watched a console of their own, and one of them, the capsule communicator, spoke to the crew. capcomd is named after that seat. The desktop app gives every agent its own station and keeps you as the voice.
-          </p>
-          <figure className="dk-room__wide" data-reveal style={delay(140)}>
-            <div className="dk-drift"><img src="/desktop/mcc-apollo7.jpg" width={1920} height={1266} alt="Rows of consoles in Mission Control, Houston, each with a controller at it, the world map lit on the front wall." loading="lazy" decoding="async" /></div>
-            <figcaption>Mission Operations Control Room, Houston, on the first day of Apollo 7, 11 October 1968.</figcaption>
-          </figure>
-          <div className="dk-room__tile" data-reveal style={delay(220)}>
-            <img src="/desktop/mcc-apollo14.jpg" width={1920} height={1290} alt="A flight controller in a headset points at a console screen while another works through the flight plan, Apollo 14, 1971." loading="lazy" decoding="async" />
-            <ul>
-              <li><h3>A station per agent.</h3><p>Seventeen agents, seventeen columns, in tree order.</p></li>
-              <li><h3>One voice, yours.</h3><p>Every question an agent asks comes to you, and only those.</p></li>
-              <li><h3>Eyes where needed.</h3><p>Follow moves the reel only for an ask or a failure.</p></li>
-            </ul>
-          </div>
         </section>
 
         <ColumnLab />
