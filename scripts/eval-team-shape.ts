@@ -23,10 +23,12 @@ const { values: a } = parseArgs({
     "worker-seconds": { type: "string", default: "45" }, "max-turns": { type: "string", default: "200" },
     "timeout-min": { type: "string", default: "35" }, slots: { type: "string", default: "7" },
     keep: { type: "boolean", default: false }, claude: { type: "string", default: process.env.CLAUDE_BIN ?? "claude" },
-    work: { type: "string" }, out: { type: "string" },
+    work: { type: "string" }, out: { type: "string" }, analyze: { type: "string" },
   },
 });
 const ROOT = resolve(import.meta.dir, "..");
+// --analyze DIR: print the report of a kept run (its session.ndjson, events.json and meta.json) without running one.
+if (a.analyze) { report(resolve(a.analyze)); process.exit(0); }
 const PORT = Number(a.port);
 // The engine takes the port, the next one and port+10: keep two evals at least 20 apart.
 if ([6420, 6421, 6430].some((p) => [PORT, PORT + 1, PORT + 10].includes(p))) throw new Error("6420 is the user's daemon: pick another --port");
@@ -176,80 +178,16 @@ await new Promise<void>((done) => {
 });
 writeFileSync(transcriptFile, transcript.map((t) => JSON.stringify({ at: t.at, ...t.msg })).join("\n"));
 const wallSeconds = Math.round((Date.now() - t0) / 1000);
-
-// ── 6. what the driver did ───────────────────────────────────────────────────────────────────────
-const uses = transcript.flatMap((t) => (t.msg.message?.content ?? []).filter((c: any) => c.type === "tool_use").map((c: any) => ({ at: t.at, name: String(c.name), input: c.input ?? {}, id: c.id })));
-const results = new Map<string, any>();
-for (const t of transcript) for (const c of t.msg.message?.content ?? []) if (c.type === "tool_result") {
-  const text = Array.isArray(c.content) ? c.content.map((x: any) => x.text ?? "").join("") : String(c.content ?? "");
-  try { results.set(c.tool_use_id, JSON.parse(text)); } catch { results.set(c.tool_use_id, text); }
-}
-const short = (n: string) => n.replace(/^mcp__capcomd__/, "");
-const final = transcript.map((t) => t.msg).find((m) => m.type === "result");
-const skillLoaded = uses.some((u) => u.name === "Skill" && /orchestration/.test(JSON.stringify(u.input)));
-const runId = uses.map((u) => results.get(u.id)).find((r) => r && typeof r === "object" && typeof r.runId === "string" && /^run-/.test(r.runId))?.runId as string | undefined;
-
-// The tree, from the engine.
+// The run's events, from the engine, before it stops.
+const runIdOf = (r: any) => (r && typeof r === "object" && typeof r.runId === "string" && /^run-/.test(r.runId) ? r.runId : null);
+const parsed = transcript.flatMap((t) => (t.msg.message?.content ?? []).filter((c: any) => c.type === "tool_result")).map((c: any) => { try { return JSON.parse(Array.isArray(c.content) ? c.content.map((x: any) => x.text ?? "").join("") : String(c.content ?? "")); } catch { return null; } });
+const runId = parsed.map(runIdOf).find(Boolean) as string | undefined;
 const cj = (args: string[]) => { const r = spawnSync("bun", [CLI, ...args, "--json"], { cwd: PROJECT, encoding: "utf8", env: { ...process.env, ...common } }); try { return JSON.parse(r.stdout.trim().split("\n").pop()!); } catch { return null; } };
-const tree = runId ? cj(["tree", runId]) : null;
-type Node = { agentId: string; profile: string | null; title?: string; status: string; children?: Node[]; task?: string; depth?: number };
-const walk = (n: Node, d = 0): Array<Node & { d: number; parentId: string | null }> => [{ ...n, d, parentId: null }, ...(n.children ?? []).flatMap((c) => walk(c, d + 1).map((x) => (x.parentId === null && x.d === d + 1 ? { ...x, parentId: n.agentId } : x)))];
-const nodes = (tree?.tree ?? []).flatMap((n: Node) => walk(n));
-const team = nodes.filter((n: any) => n.profile !== "reviewer");
-
-// Agent lifetimes, from the run's events (spawned → finished).
-const ev = runId ? (() => { const all: any[] = []; let cursor: string | null = null; for (let i = 0; i < 50; i++) { const p = cj(["events", runId, "--limit", "500", ...(cursor ? ["--cursor", cursor] : [])]); const items = p?.events ?? p?.items ?? []; all.push(...items); cursor = p?.nextCursor ?? null; if (!cursor) break; } return all; })() : [];
-writeFileSync(join(WORK, "events.json"), JSON.stringify(ev));
-const ts = (e: any) => Date.parse(e.at ?? e.ts ?? e.time ?? e.timestamp ?? "") || Number(e.at ?? e.ts ?? 0);
-const agentOf = (e: any) => e.data?.agentId ?? e.agentId ?? e.data?.agent ?? e.entity?.replace?.(/^agent:/, "") ?? null;
-const start = new Map<string, number>(), end = new Map<string, number>();
-for (const e of ev) {
-  const id = agentOf(e), type = String(e.type ?? e.kind ?? "");
-  if (!id) continue;
-  if (/spawned/i.test(type) && !start.has(id)) start.set(id, ts(e));
-  if (/(finished|done|failed|cancelled|completed)$/i.test(type)) end.set(id, ts(e));
-}
-const reviewerIds = new Set(nodes.filter((n: any) => n.profile === "reviewer").map((n: any) => n.agentId));
-const peak = (ids: (id: string) => boolean) => {
-  const pts: Array<[number, number]> = [];
-  for (const [id, s] of start) if (ids(id)) { pts.push([s, 1]); pts.push([end.get(id) ?? Date.now(), -1]); }
-  pts.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
-  let cur = 0, max = 0; for (const [, d] of pts) { cur += d; max = Math.max(max, cur); } return max;
-};
-
-// The driver's spawns, in order, with the phase each falls in (a new phase starts after a merge landed).
-const spawns = uses.filter((u) => short(u.name) === "capcomd_spawn").map((u) => ({ ...u, result: results.get(u.id) }));
-const merges = uses.filter((u) => short(u.name) === "capcomd_merge").map((u) => ({ at: u.at, result: results.get(u.id) })).filter((m) => m.result?.state === "merged");
-let phase = 0, lastSpawn = 0;
-const rows = spawns.map((s) => {
-  if (phase === 0 || merges.some((m) => m.at > lastSpawn && m.at < s.at)) phase++;
-  lastSpawn = s.at;
-  return { phase, profile: s.input.profile ?? "(default)", children: s.input.children ?? null, title: s.input.title ?? "", task: String(s.input.task ?? "").slice(0, 70).replace(/\s+/g, " "), ok: s.result?.ok !== false && !!s.result?.agentId, error: s.result?.error?.message };
-});
-const phaseOf = (re: RegExp) => rows.find((r) => r.ok && re.test(`${r.title} ${r.task}`))?.phase ?? null;
-const P = {
-  contract: phaseOf(/contract|foundation|scaffold|shared|types|interface|ast|skeleton|setup/i),
-  parser: phaseOf(/pars/i), evaluator: phaseOf(/eval/i), printer: phaseOf(/print/i), cli: phaseOf(/\bcli\b|repl/i), e2e: phaseOf(/end-to-end|e2e/i),
-};
-const consumersOnStubs = P.cli !== null && P.parser !== null ? P.cli <= P.parser : null;
-const leads = rows.filter((r) => r.ok && r.children && Number((r.children as any).maxChildren ?? 0) > 0);
-
-const out = {
-  version: a.ref ?? "checkout", model: a.model, runId: runId ?? null, wallSeconds, costUsd: final?.total_cost_usd ?? null, turns: final?.num_turns ?? null,
-  skillLoaded, depth: team.length ? Math.max(...team.map((n: any) => n.d)) + 1 : 0, agents: team.length, reviewers: reviewerIds.size,
-  peakTeam: peak((id) => !reviewerIds.has(id)), peakAll: peak(() => true), slots: Number(a.slots),
-  phases: rows.length ? Math.max(...rows.map((r) => r.phase)) : 0, phaseOf: P, consumersOnStubs, leads: leads.length,
-  driverSpawns: rows.length, refusedSpawns: rows.filter((r) => !r.ok).length, merged: merges.length,
-  toolCalls: Object.fromEntries(Object.entries(uses.reduce((m: Record<string, number>, u) => ((m[short(u.name)] = (m[short(u.name)] ?? 0) + 1), m), {})).sort((x, y) => y[1] - x[1])),
-};
-const print = (n: Node, pre = "") => { console.log(`${pre}${n.profile ?? "?"}: ${n.title ?? ""} [${n.status}]`); for (const c of (n.children ?? []).filter((c) => c.profile !== "reviewer")) print(c, pre + "  "); };
-console.log(`\n=== team shape: ${out.version} (${a.model}) ===`);
-for (const n of (tree?.tree ?? []) as Node[]) if (n.profile !== "reviewer") print(n);
-console.log("\ndriver spawns (phase · profile · children · title/task):");
-for (const r of rows) console.log(`  ${r.phase} · ${r.profile} · ${r.children ? JSON.stringify(r.children) : "-"} · ${r.title || r.task}${r.ok ? "" : `  REFUSED: ${r.error}`}`);
-console.log(`\n${JSON.stringify(out, null, 2)}`);
-if (final?.result) console.log(`\nfinal message (first 1500 chars):\n${String(final.result).slice(0, 1500)}`);
-if (a.out) writeFileSync(a.out, JSON.stringify({ ...out, spawns: rows }, null, 2));
+const events: any[] = [];
+if (runId) { let cursor: string | null = null; for (let i = 0; i < 50; i++) { const p = cj(["events", runId, "--limit", "500", ...(cursor ? ["--cursor", cursor] : [])]); events.push(...(p?.events ?? [])); cursor = p?.nextCursor ?? null; if (!cursor) break; } }
+writeFileSync(join(WORK, "events.json"), JSON.stringify(events));
+writeFileSync(join(WORK, "meta.json"), JSON.stringify({ version: a.ref ?? "checkout", model: a.model, slots: Number(a.slots), wallSeconds, runId: runId ?? null }));
+report(WORK);
 
 // ── 7. cleanup ───────────────────────────────────────────────────────────────────────────────────
 stopAll();
@@ -259,3 +197,73 @@ spawnSync("sh", ["-c", `ps -axo pid=,command= | grep -F ${JSON.stringify(WORK)} 
 if (!a.keep) rmSync(WORK, { recursive: true, force: true });
 else log(`kept ${WORK}`);
 process.exit(0);
+
+// ── the report ───────────────────────────────────────────────────────────────────────────────────
+function report(dir: string) {
+  const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"));
+  const transcript = readFileSync(join(dir, "session.ndjson"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const ev: any[] = JSON.parse(readFileSync(join(dir, "events.json"), "utf8"));
+  const uses = transcript.flatMap((m: any) => (m.message?.content ?? []).filter((c: any) => c.type === "tool_use").map((c: any) => ({ at: m.at as number, name: String(c.name), input: c.input ?? {}, id: c.id })));
+  const results = new Map<string, any>();
+  for (const m of transcript) for (const c of m.message?.content ?? []) if (c.type === "tool_result") {
+    const text = Array.isArray(c.content) ? c.content.map((x: any) => x.text ?? "").join("") : String(c.content ?? "");
+    try { results.set(c.tool_use_id, JSON.parse(text)); } catch { results.set(c.tool_use_id, text); }
+  }
+  const short = (n: string) => n.replace(/^mcp__capcomd__/, "");
+  const final = transcript.find((m: any) => m.type === "result");
+
+  // The tree and each agent's time running (started → done/failed/cancelled), from the run's events.
+  type A = { id: string; parent: string | null; profile: string; title: string; status: string; started?: number; ended?: number; review: boolean };
+  const agents = new Map<string, A>();
+  for (const e of ev) {
+    const id = e.agentId as string | null; const d = e.event ?? {};
+    if (!id) continue;
+    if (e.type === "AGENT_SPAWNED") agents.set(id, { id, parent: d.parent ?? null, profile: d.profile ?? "?", title: String(d.title ?? ""), status: "pending", review: d.review === true });
+    const x = agents.get(id); if (!x) continue;
+    if (e.type === "AGENT_TITLED" && d.title) x.title = String(d.title);
+    if (e.type === "AGENT_STARTED" && x.started === undefined) { x.started = e.at; x.status = "running"; }
+    if (/^AGENT_(DONE|FAILED|CANCELLED)$/.test(e.type)) { x.ended = e.at; x.status = e.type.slice(6).toLowerCase(); }
+  }
+  // verify's reviewers are spawned by capcomd under the agent they review; the driver's own critics are its children.
+  const verifyReviewer = (x: A) => x.review;
+  const team = [...agents.values()].filter((x) => !verifyReviewer(x));
+  const depthOf = (x: A): number => (x.parent && agents.get(x.parent) ? 1 + depthOf(agents.get(x.parent)!) : 1);
+  const peak = (xs: A[]) => {
+    const pts: Array<[number, number]> = [];
+    for (const x of xs) if (x.started !== undefined) { pts.push([x.started, 1]); pts.push([x.ended ?? Number.MAX_SAFE_INTEGER, -1]); }
+    pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+    let cur = 0, max = 0; for (const [, d] of pts) { cur += d; max = Math.max(max, cur); } return max;
+  };
+  const runSpan = (() => { const ts = [...agents.values()].flatMap((x) => [x.started, x.ended]).filter((t): t is number => typeof t === "number"); return ts.length ? Math.round((Math.max(...ts) - Math.min(...ts)) / 1000) : 0; })();
+
+  // The driver's spawns in order, by phase: a new phase starts after a merge landed.
+  const spawns = uses.filter((u) => short(u.name) === "capcomd_spawn").map((u) => ({ ...u, result: results.get(u.id) }));
+  const merges = uses.filter((u) => short(u.name) === "capcomd_merge" && results.get(u.id)?.state === "merged");
+  let phase = 0, last = 0;
+  const rows = spawns.map((s) => {
+    if (phase === 0 || merges.some((m) => m.at > last && m.at < s.at)) phase++;
+    last = s.at;
+    return { phase, profile: String(s.input.profile ?? "(default)"), children: s.input.children ?? null, title: String(s.input.title ?? ""), task: String(s.input.task ?? "").slice(0, 70).replace(/\s+/g, " "), ok: !!s.result?.agentId, error: s.result?.error?.message as string | undefined };
+  });
+  const phaseOf = (re: RegExp) => rows.find((r) => r.ok && re.test(`${r.title} ${r.task}`))?.phase ?? null;
+  const P = { contract: phaseOf(/contract|foundation|scaffold|shared|types|interface|skeleton/i), parser: phaseOf(/pars/i), evaluator: phaseOf(/eval/i), printer: phaseOf(/print/i), cli: phaseOf(/\bcli\b|repl/i), e2e: phaseOf(/end.to.end|e2e/i) };
+  const out = {
+    version: meta.version, model: meta.model, runId: meta.runId, wallSeconds: meta.wallSeconds, runSeconds: runSpan, costUsd: final?.total_cost_usd ?? null, turns: final?.num_turns ?? null,
+    skillLoaded: uses.some((u) => u.name === "Skill" && /orchestration/.test(JSON.stringify(u.input))),
+    depth: team.length ? Math.max(...team.map(depthOf)) : 0, agents: team.length, verifyReviewers: agents.size - team.length,
+    peakTeam: peak(team), peakAll: peak([...agents.values()]), slots: meta.slots,
+    phases: rows.length ? Math.max(...rows.map((r) => r.phase)) : 0, phaseOf: P, consumersOnStubs: P.cli !== null && P.parser !== null ? P.cli <= P.parser : null,
+    leads: rows.filter((r) => r.ok && Number((r.children as any)?.maxChildren ?? 0) > 0).length, leafGrants: rows.filter((r) => r.ok && r.children && Number((r.children as any).maxChildren ?? 0) === 0).length,
+    driverSpawns: rows.length, refusedSpawns: rows.filter((r) => !r.ok).length, merged: merges.length,
+    toolCalls: Object.fromEntries(Object.entries(uses.reduce((m: Record<string, number>, u) => ((m[short(u.name)] = (m[short(u.name)] ?? 0) + 1), m), {})).sort((x, y) => y[1] - x[1])),
+  };
+  const kids = (id: string | null) => team.filter((x) => x.parent === id);
+  const print = (x: A, pre = "") => { console.log(`${pre}${x.profile}: ${x.title} [${x.status}]`); for (const c of kids(x.id)) print(c, pre + "  "); };
+  console.log(`\n=== team shape: ${out.version} (${out.model}) ===`);
+  for (const x of kids(null)) print(x);
+  console.log("\ndriver spawns (phase · profile · children · title/task):");
+  for (const r of rows) console.log(`  ${r.phase} · ${r.profile} · ${r.children ? JSON.stringify(r.children) : "-"} · ${r.title || r.task}${r.ok ? "" : `  REFUSED: ${r.error}`}`);
+  console.log(`\n${JSON.stringify(out, null, 2)}`);
+  if (final?.result) console.log(`\nfinal message (first 1500 chars):\n${String(final.result).slice(0, 1500)}`);
+  if (a.out) writeFileSync(a.out, JSON.stringify({ ...out, spawns: rows }, null, 2));
+}
