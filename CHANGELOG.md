@@ -5,6 +5,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Merging a verified commit is much faster. When the target hasn't moved since the verify, capcomd pushes the verified
+  commit as it is, in one round trip, with no second run of the checks. When the target has moved, the checks still
+  run again first. Merge results show `timings.path` (`fast` or `full`).
+- Verifies of the same target run side by side instead of one at a time, and the reviewer starts alongside the checks
+  instead of after them. Set `CAPCOMD_REVIEW_PARALLEL=0` to review only after the checks.
+- `capcomd_await` waits on verifies and merges as well as agents (`ops: ["vfy-…", "mrg-…"]`). With `mode: "any"`, it
+  returns as soon as the first one finishes.
+- Checking on a verify or merge no longer fails with a conflict. Poll it with `capcomd_verify {runId, id}` or
+  `capcomd_merge {runId, id}`, or with the same key without resending `acceptance`; only a parameter you give that
+  differs is a conflict. Both tools always answer with the id, and `timeoutMs: 0` starts one without waiting.
+- Verify and merge results and events include `timings` (checks, review, queue, fetch, push), so you can see where
+  the time went.
+
 - **Breaking:** if you drive a goal-branch run yourself (no planner agent), it is now ready only when you mark it done,
   with `capcomd goal done <runId> --summary "…"` or `capcomd_goal {runId, done: true, summary}`. Before, it became
   ready as soon as its first agent finished, so the apps showed it ready while most of the work was still running.
