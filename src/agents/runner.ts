@@ -361,9 +361,10 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     // 1. The workspace: the image's warm template in place when it fits (Docker), else a fresh clone. Either way the
     //    branch and tree the agent starts from are the same.
     const wsStarted = now();
-    const existing = await git(["ls-remote", "--heads", task.repoUrl, `refs/heads/${task.branch}`]);
-    must(existing, "git ls-remote");
-    const branchExists = existing.stdout.trim().length > 0;
+    // A reviewer reads one commit and never pushes: its own branch doesn't matter, so no round trip to ask for it.
+    const existing = task.review ? null : await git(["ls-remote", "--heads", task.repoUrl, `refs/heads/${task.branch}`]);
+    if (existing) must(existing, "git ls-remote");
+    const branchExists = !!existing && existing.stdout.trim().length > 0;
     const T = templateDir(cfg);
     // A continuation starts from the stopped agent's work, until its own branch exists.
     const startFrom = task.from && !branchExists && !task.report ? "FETCH_HEAD" : null;

@@ -102,3 +102,18 @@ test("verify + merge --require: gate, exact-commit check, idempotency, events", 
   const types = (await cj(["events", runId, "--limit", "1000"])).j.events.map((e: any) => e.type);
   for (const t of ["VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED"]) expect(types).toContain(t);
 }, 180_000);
+
+test("the reviewer starts with the checks; checks that fail end the verify and cancel it", async () => {
+  const runId = (await cj(["run", "new", "--budget", "usd=4,turns=100", "--key", `vp-${Date.now()}`])).j.runId;
+  const a = (await cj(["spawn", runId, "--profile", "coder", "--task", "work p", "--key", "p", "--budget", "usd=1,turns=10"])).j.agentId;
+  expect((await cj(["await", runId, a, "--timeout-ms", "60000"])).code).toBe(0);
+  const v = await cj(["verify", runId, "--ref", a, "--checks", "sleep 3; exit 3", "--review-profile", "coder", "--key", "par"]);
+  expect(v.j).toMatchObject({ state: "failed", result: { pass: false, checks: { passed: false } } });
+  expect(v.j.result.review).toBeUndefined();
+  expect(v.j.result.timings.checksMs).toBeGreaterThanOrEqual(3000);
+  const events = (await cj(["events", runId, "--limit", "1000"])).j.events as any[];
+  const spawned = events.find((e) => e.type === "AGENT_SPAWNED" && e.agentId !== a && e.event.profile === "coder");
+  const failed = events.find((e) => e.type === "VERIFY_FAILED" && e.event.id === v.j.id);
+  expect(spawned).toBeTruthy();
+  expect(failed.epochMs - spawned.epochMs).toBeGreaterThanOrEqual(2500); // spawned while the checks ran
+}, 120_000);

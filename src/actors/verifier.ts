@@ -6,6 +6,9 @@ import { setupLifecycleTables, transitionLifecycle, getLifecycle } from "../util
 import { mergeTask } from "../merge/service";
 import type { MergeOutcome } from "../merge/types";
 
+/** The verify/merge runs in progress in this process, by (run, op). */
+const running = new Map<string, Promise<{ verifierId: string; passed: boolean; commitSha: string; outcome: MergeOutcome }>>();
+
 export const verifierActor = actor({
   // PR mode can wait on required checks / merge queue (CAPCOMD_GITHUB_TIMEOUT_MS).
   options: { actionTimeout: 60 * 60_000 },
@@ -36,9 +39,21 @@ export const verifierActor = actor({
         expectSha?: string;
         /** "direct": a run's goal branch (reviewed work is pushed to it, never a PR per child), whatever the repo's mode. */
         mode?: "direct";
+        /** A merge after a passing verify: the commit that verify made and checked, and the target it made it on (the fast path). */
+        verified?: { sha: string; targetSha: string; how?: string };
+        /** A verify of a done agent: its pushed commit (lets the verify share a fetch that has it). */
+        branchSha?: string;
       }
     ) {
       const { verifierId, taskId, branch, runId } = params;
+      // A second call while one runs (a poll from another session, an await resuming an op) shares its run.
+      const key = `${runId}\0${verifierId}`;
+      const live = running.get(key);
+      if (live) return live;
+      const p = run().finally(() => running.delete(key));
+      running.set(key, p);
+      return p;
+      async function run() {
 
       const existing = await getLifecycle(c.db, verifierId);
       if (existing && ["passed", "failed", "conflict"].includes(existing.state)) {
@@ -55,7 +70,7 @@ export const verifierActor = actor({
       const outcome = await withSpan(
         params.testOnly ? "git.verify" : "git.merge",
         { "relay.run_id": runId, "git.operation": params.testOnly ? "verify" : "merge", "git.ref": branch, "git.target": params.target ?? "" },
-        async () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}), ...(params.mode ? { mode: params.mode } : {}) },
+        async () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}), ...(params.mode ? { mode: params.mode } : {}), ...(params.verified ? { verified: params.verified } : {}), ...(params.branchSha ? { branchSha: params.branchSha } : {}) },
           await (await import("../merge/run-config")).mergeConfigFor(runId)) // the run's repository, not the engine's env
       );
 
@@ -71,6 +86,7 @@ export const verifierActor = actor({
       }, { name: "completeVerify" });
 
       return { verifierId, passed: state === "passed", commitSha, outcome };
+      }
     },
 
     /**

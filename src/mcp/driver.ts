@@ -18,7 +18,8 @@ export const WAIT_DEFAULT_MS = 25_000;
 export const WAIT_MAX_MS = 55_000;
 
 const deny = (message: string, hint: string): never => { throw new RelayError("usage", message, hint, { code: "forbidden" }); };
-const waitMs = (v: unknown) => Math.min(Math.max(Number(v ?? WAIT_DEFAULT_MS) || WAIT_DEFAULT_MS, 1000), WAIT_MAX_MS);
+/** A wait's bound: 0 answers at once (a look, or a verify/merge started without waiting), at most WAIT_MAX_MS. */
+const waitMs = (v: unknown) => { const n = v === undefined || v === null ? WAIT_DEFAULT_MS : Number(v); return Number.isFinite(n) ? Math.min(Math.max(n, 0), WAIT_MAX_MS) : WAIT_DEFAULT_MS; };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** An agent's record for the driver: text the agent wrote is fenced (data, never instructions). */
@@ -165,21 +166,31 @@ export async function spawn(a: { runId: string; task: string; title?: string; pr
 }
 
 /**
- * Bounded wait: returns when all (or any) are done, when one of them looks stuck (ADR-019 §2: a notice raised while
- * waiting), or after timeoutMs with what's still pending.
+ * Bounded wait: returns when all (or any) of the agents and ops (verifies and merges) are done, when an agent looks stuck
+ * (ADR-019 §2: a notice raised while waiting), or after timeoutMs with what's still pending. Event-driven: it answers
+ * as soon as one finishes.
  */
-export async function awaitAgents(a: { runId: string; agents: string[]; mode?: "all" | "any"; timeoutMs?: number }) {
-  if (!a.agents?.length) throw new RelayError("usage", "agents required", "Pass the agent ids capcomd_spawn returned.");
-  const r: any = await O.awaitAgents(a.runId, a.agents, { timeoutMs: waitMs(a.timeoutMs), any: a.mode === "any", notices: true });
+export async function awaitAgents(a: { runId: string; agents?: string[]; ops?: string[]; mode?: "all" | "any"; timeoutMs?: number }) {
+  const agents = a.agents ?? [];
+  const ops = a.ops ?? [];
+  if (!agents.length && !ops.length) throw new RelayError("usage", "agents or ops required", "Pass the agent ids capcomd_spawn returned, and/or the vfy-…/mrg-… ids capcomd_verify and capcomd_merge returned.");
+  const bad = ops.find((x) => !/^(vfy|mrg)-/.test(x));
+  if (bad) throw new RelayError("usage", `${bad} isn't a verify or merge id`, "ops takes the vfy-… / mrg-… ids capcomd_verify and capcomd_merge returned; agent ids go in agents.");
+  const r: any = await O.awaitAgents(a.runId, agents, { timeoutMs: waitMs(a.timeoutMs), any: a.mode === "any", notices: true, ops });
   const rows: any[] = r.agents ?? [];
-  const pending = rows.filter((x) => !TERMINAL_AGENT.has(x.status)).map((x) => x.agentId);
-  const done = rows.filter((x) => !pending.includes(x.agentId)).map(agentView);
+  const pendingAgents = rows.filter((x) => !TERMINAL_AGENT.has(x.status)).map((x) => x.agentId);
+  const done = rows.filter((x) => !pendingAgents.includes(x.agentId)).map(agentView);
+  const opRows: any[] = r.ops ?? [];
+  const opsDone = opRows.filter((o) => o.state !== "running").map((o) => ({ ...o, next: opNext(a.runId, o) }));
+  const pending = [...pendingAgents, ...opRows.filter((o) => o.state === "running").map((o) => o.id)];
   const notices = ((r.notices ?? []) as Array<{ agentId: string; kind: string; detail: string }>).map((n) => ({ ...n, detail: fence(n.agentId, n.detail) }));
+  const anyDone = done.length + opsDone.length > 0;
   return {
-    done, pending, ...(r.first ? { first: agentView(r.first) } : {}), ...(notices.length ? { notices } : {}),
+    done, ...(ops.length ? { ops: opsDone } : {}), pending, ...(r.first ? { first: agentView(r.first) } : {}), ...(notices.length ? { notices } : {}),
     next: notices.length
       ? `${notices.map((n) => `${n.agentId} looks ${n.kind}: ${n.detail}`).join("; ")}. It keeps running (it is stopped, work kept, only if its profile sets a stuck window). Look with capcomd_inspect, cancel it with capcomd_cancel, or call capcomd_await again.`
-      : pending.length && !(a.mode === "any" && done.length) ? `Still running; call capcomd_await again for ${pending.join(", ")} (the agents keep working between calls).` : "Verify finished work with capcomd_verify.",
+      : pending.length && !(a.mode === "any" && anyDone) ? `Still running; call capcomd_await again for ${pending.join(", ")} (they keep working between calls).`
+      : [...(done.length ? ["Verify finished work with capcomd_verify (several at once: then await their ids in ops)."] : []), ...opsDone.map((o) => `${o.id}: ${o.next}`), ...(pending.length ? [`Still pending: ${pending.join(", ")}.`] : [])].join(" "),
   };
 }
 
@@ -226,26 +237,44 @@ async function bounded<T>(work: Promise<T>, ms: number): Promise<{ done: true; v
   return Promise.race([work.then((value) => ({ done: true as const, value })), timer]);
 }
 
-export async function verify(a: { runId: string; ref: string; check?: string; acceptance?: unknown; key?: string; timeoutMs?: number }) {
-  // Checks are named by the operator, the reviewer is the run's: a driver picks a check, never writes one.
-  const id = O.verifyIdFor(a.runId, a.ref, a.key);
-  const work = O.verifyRef({ runId: a.runId, ref: a.ref, ...(a.check ? { check: a.check } : {}), ...(a.acceptance !== undefined ? { acceptance: a.acceptance } : {}), ...(a.key ? { key: a.key } : {}) });
-  work.catch(() => {}); // a timed-out call leaves it running; its error reaches the next call
-  const r = await bounded(work, waitMs(a.timeoutMs));
-  if (!r.done) return { id, state: "running", next: `The checks (then the review, if the run has a reviewer) are still running; call capcomd_verify again with the same ref${a.key ? " and key" : ""}.` };
-  const v: any = r.value;
-  const setupFailed = typeof v.checks?.reason === "string" && v.checks.reason.startsWith("checks couldn't run");
-  return { ...v, next: v.state === "passed" ? `Merge with capcomd_merge {runId: "${a.runId}", ref: "${a.ref}", require: "${v.id}"}.`
-    : setupFailed ? "Not the agent's fault: the checks sandbox couldn't be set up (checks.output says why, usually `capcomd env build --sandbox …`). Tell the user, run what it says once they agree, then call capcomd_verify again with a new key."
-    : "Not merged: send the failure to the agent (capcomd_send) or spawn a fix with it in the task." };
+/** What to do with a finished verify or merge. */
+function opNext(runId: string, v: any): string {
+  if (v.kind === "verify") {
+    if (v.state === "passed") return `Merge with capcomd_merge {runId: "${runId}", ref: "${v.ref}", require: "${v.id}"}.`;
+    const setupFailed = typeof v.result?.checks?.reason === "string" && v.result.checks.reason.startsWith("checks couldn't run")
+      || typeof v.checks?.reason === "string" && v.checks.reason.startsWith("checks couldn't run");
+    return setupFailed
+      ? "Not the agent's fault: the checks sandbox couldn't be set up (checks.output says why, usually `capcomd env build --sandbox …`). Tell the user, run what it says once they agree, then call capcomd_verify again with a new key."
+      : "Not merged: send the failure to the agent (capcomd_send) or spawn a fix with it in the task.";
+  }
+  if (v.state === "merged") return `Merged into ${v.target}.`;
+  if (v.state === "awaiting_approval") return `${v.target ?? "The target"} is protected: it waits for a person's approval (capcomd_approve, or \`capcomd approve ${runId} ${v.id}\`).`;
+  return `Not merged (${v.result?.status ?? v.state}${v.result?.reason ? `: ${v.result.reason}` : ""}).`;
 }
 
-export async function merge(a: { runId: string; ref: string; require: string; key?: string; timeoutMs?: number }) {
-  if (!a.require) throw new RelayError("usage", "require is needed: the id of a passing capcomd_verify of this ref", "Call capcomd_verify first.");
-  const work = O.mergeRef({ runId: a.runId, ref: a.ref, require: a.require, ...(a.key ? { key: a.key } : {}), requestApproval: true });
+const still = (runId: string, id: string, what: string) =>
+  `${what} still running. Wait for it with capcomd_await {runId: "${runId}", ops: ["${id}"]} (put other verifies, merges and agents in the same call: the first to finish ends the wait), or poll it with capcomd_${id.startsWith("vfy-") ? "verify" : "merge"} {runId: "${runId}", id: "${id}"}.`;
+
+export async function verify(a: { runId: string; ref?: string; id?: string; check?: string; acceptance?: unknown; key?: string; timeoutMs?: number }) {
+  if (!a.ref && !a.id) throw new RelayError("usage", "ref or id required", "Pass the agent to verify (ref), or the vfy-… id of a verification to poll.");
+  // Checks are named by the operator, the reviewer is the run's: a driver picks a check, never writes one.
+  // A call without a key or id gets an id of its own up front, so the answer names it and later calls poll that one.
+  const id = a.id ?? O.verifyIdFor(a.runId, a.ref!, a.key ?? `drv-${crypto.randomUUID()}`);
+  const work = O.verifyRef({ runId: a.runId, ref: a.ref ?? "", id, ...(a.check ? { check: a.check } : {}), ...(a.acceptance !== undefined ? { acceptance: a.acceptance } : {}), ...(a.key ? { key: a.key } : {}) });
+  work.catch(() => {}); // a timed-out call leaves it running; its error reaches the next call
+  const r = await bounded(work, waitMs(a.timeoutMs));
+  if (!r.done) return { id, state: "running", next: still(a.runId, id, "The checks (and the review, if the run has a reviewer) are") };
+  const v: any = r.value;
+  return { ...v, next: opNext(a.runId, v) };
+}
+
+export async function merge(a: { runId: string; ref?: string; require?: string; id?: string; key?: string; timeoutMs?: number }) {
+  if (!a.ref && !a.id) throw new RelayError("usage", "ref or id required", "Pass the ref and require (the id of a passing capcomd_verify of it), or the mrg-… id of a merge to poll.");
+  const id = a.id ?? (a.key ? await O.mergeIdFor(a.runId, a.ref!, a.key) : `mrg-d${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`);
+  const work = O.mergeRef({ runId: a.runId, ref: a.ref ?? "", id, ...(a.require ? { require: a.require } : {}), ...(a.key ? { key: a.key } : {}), requestApproval: true });
   work.catch(() => {});
   const r = await bounded(work, waitMs(a.timeoutMs));
-  if (!r.done) return { state: "running", next: "The merge re-runs the checks on the latest target; call capcomd_merge again with the same arguments." };
+  if (!r.done) return { id, state: "running", next: still(a.runId, id, "The merge is") };
   const m: any = r.value;
   if (m.state === "awaiting_approval") {
     const how = `a person approves with \`capcomd approve ${a.runId} ${m.id}\` (or in the TUI)`;

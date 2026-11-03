@@ -60,7 +60,7 @@ async function handle(fn: () => Promise<unknown>, needsEngine = true): Promise<T
 
 const run = z.string().min(1).describe("Run id (run-…) from capcomd_run_new or capcomd_runs");
 const key = z.string().optional().describe("Idempotency key: a retry with the same key returns the first result");
-const wait = z.number().int().min(1000).max(D.WAIT_MAX_MS).optional().describe(`Max wait in ms (default ${D.WAIT_DEFAULT_MS}); returns pending/running when it runs out`);
+const wait = z.number().int().min(0).max(D.WAIT_MAX_MS).optional().describe(`Max wait in ms (default ${D.WAIT_DEFAULT_MS}; 0: answer at once); returns pending/running when it runs out`);
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true } as const;
@@ -229,8 +229,12 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_await", {
     title: "Wait for agents",
-    description: "Wait until the agents finish (mode all) or one does (mode any), up to timeoutMs; returns done (with results, fenced) and pending. It also returns early with `notices` when an agent looks stuck (idle, spinning on the same call, failing with the same error); it keeps running (stopped, work kept, only if its profile sets a stuck window). Call again for what is pending: agents keep working between calls.",
-    inputSchema: { runId: run, agents: z.array(z.string().min(1)).min(1), mode: z.enum(["all", "any"]).optional(), timeoutMs: wait, project },
+    description: "Wait until the agents, verifies and merges finish (mode all) or one does (mode any), up to timeoutMs; it answers as soon as one finishes. Returns done (agents, with results, fenced), ops (finished verifies and merges, with their records) and pending (ids still running). It also returns early with `notices` when an agent looks stuck (idle, spinning on the same call, failing with the same error); it keeps running (stopped, work kept, only if its profile sets a stuck window). Call again for what is pending: everything keeps working between calls. Start several verifies with capcomd_verify (timeoutMs 0 returns at once), then wait for them here together with mode any.",
+    inputSchema: {
+      runId: run, agents: z.array(z.string().min(1)).optional().describe("Agent ids (agt-…) from capcomd_spawn"),
+      ops: z.array(z.string().min(1)).optional().describe("vfy-… / mrg-… ids from capcomd_verify and capcomd_merge: a verify or merge counts as finished once it isn't running (passed, failed, merged, or waiting for an approval)"),
+      mode: z.enum(["all", "any"]).optional(), timeoutMs: wait, project,
+    },
     annotations: READ,
   }, routed("capcomd_await", (a) => D.awaitAgents(a)));
 
@@ -272,11 +276,12 @@ export function buildServer(): McpServer {
   // ── gates ──
   server.registerTool("capcomd_verify", {
     title: "Verify",
-    description: "Run the run's checks on an agent's branch merged with the latest target (in a fresh VM), then the run's reviewer agent. Both must pass. Long: returns state running after timeoutMs; call again with the same ref.",
+    description: "Run the run's checks on an agent's branch merged with the latest target (in a fresh VM) and the run's reviewer agent (alongside the checks). Both must pass. Long: returns {id, state: running} after timeoutMs (0: at once). Poll it with just {runId, id} (or the same key and ref): no other parameters are needed, and only ones you give that differ conflict. To verify several, start each, then wait for any with capcomd_await {ops: [ids]}. The result's timings say where the time went.",
     inputSchema: {
-      runId: run, ref: z.string().min(1).describe("Agent id (agt-…) or branch"),
+      runId: run, ref: z.string().min(1).optional().describe("Agent id (agt-…) or branch to verify; not needed to poll by id"),
+      id: z.string().min(1).optional().describe("vfy-… id of a verification to poll (from an earlier call)"),
       check: z.string().optional().describe("A check name; default: the one pinned at spawn"),
-      acceptance: z.unknown().optional().describe("Acceptance criteria for the reviewer"),
+      acceptance: z.unknown().optional().describe("Acceptance criteria for the reviewer (only when starting it)"),
       key, timeoutMs: wait, project,
     },
     annotations: WRITE,
@@ -284,8 +289,13 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_merge", {
     title: "Merge",
-    description: "Land exactly the commit a passing capcomd_verify tested (require: its vfy-… id). A protected target parks the merge for a person's approval. Long: returns state running after timeoutMs; call again.",
-    inputSchema: { runId: run, ref: z.string().min(1), require: z.string().min(1).describe("vfy-… id of a passing verify"), key, timeoutMs: wait, project },
+    description: "Land exactly the commit a passing capcomd_verify tested (require: its vfy-… id). When the target hasn't moved since that verify, the verified commit is pushed as it is (seconds); when it moved, the checks run again on the new target first. A protected target parks the merge for a person's approval. Returns {id, state: running} after timeoutMs; poll with just {runId, id}, or wait with capcomd_await {ops: [id]}.",
+    inputSchema: {
+      runId: run, ref: z.string().min(1).optional().describe("Agent id (agt-…) or branch to merge; not needed to poll by id"),
+      require: z.string().min(1).optional().describe("vfy-… id of a passing verify (needed to start a merge)"),
+      id: z.string().min(1).optional().describe("mrg-… id of a merge to poll (from an earlier call)"),
+      key, timeoutMs: wait, project,
+    },
     annotations: DESTRUCTIVE,
   }, routed("capcomd_merge", (a) => D.merge(a)));
 
