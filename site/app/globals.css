@@ -912,7 +912,8 @@ html:not(.js) .stage__title { display: block; }
     .sbx__gate { padding: 6px 6px; font-size: 12px; white-space: normal; text-align: center; }
     .sbx__pin--room { right: -6px; }
     .sbx__pin--wire { left: 10px; }
-    .sbx__pin--gate { right: -8px; }
+    .sbx__pin { width: 20px; height: 20px; font-size: 13px; }
+    .sbx__pin--gate, .sbx__pin--save { right: auto; left: -8px; top: -14px; width: 20px; height: 20px; font-size: 13px; }
     .sbx__promises { grid-template-columns: 1fr; gap: 24px; margin-top: 36px; }
     .sbx__where { margin-top: 56px; }
     .sbx__table thead td { display: none; }

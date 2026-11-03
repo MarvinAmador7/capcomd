@@ -15,7 +15,7 @@ const Pin = ({ n, className }: { n: number; className: string }) => <span classN
 const ROOMS: Array<{ i: number; state: "merged" | "checking" | "working" }> = [{ i: 1, state: "merged" }, { i: 2, state: "checking" }, { i: 3, state: "working" }];
 
 const PROMISES: Array<[string, ReactNode]> = [
-  ["Its own computer.", "A VM in the cloud, or a container on your machine. It can't see your files or the other agents."],
+  ["Walled off.", "A VM in the cloud, or a container on your machine. It can't see your files or the other agents."],
   ["Its own copy of the code.", "Each agent works on its own branch, so no agent can overwrite another's work."],
   ["Checked before it joins.", "Your checks run in a fresh, throwaway machine, on the branch merged with the latest main. Only what passes is merged."],
   ["Saved as it goes.", "Its work is pushed every 10 minutes and after every commit. If its computer dies, a new agent can pick up from the last save."],
@@ -55,8 +55,8 @@ function Rooms() {
 export function Sandboxes() {
   return (
     <section className="sec" id="sandboxes" aria-labelledby="sb-title">
-      <h2 className="big" id="sb-title" data-reveal><span>One agent, one VM,</span> <span>one branch.</span></h2>
-      <p className="sbx__lead" data-reveal style={delay(60)}>Every agent gets its own computer and its own copy of your code. They can&apos;t step on each other or touch your machine, and their work joins yours only after it&apos;s been checked.</p>
+      <h2 className="big" id="sb-title" data-reveal><span>Every agent gets</span> <span>its own computer.</span></h2>
+      <p className="sbx__lead" data-reveal style={delay(60)}>And its own copy of your code. Agents can&apos;t step on each other or touch your machine, and their work joins yours only after it&apos;s been checked.</p>
 
       <Rooms />
 
