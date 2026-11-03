@@ -270,8 +270,13 @@ jobs:
   publish:
     name: Publish the release
     needs: [prepare, test, smoke, binary-smoke, npm]
-    # npm is skipped while package.json is private; any failure (npm included) publishes nothing here.
-    if: ${{ !cancelled() && !failure() && (github.event_name == 'push' || inputs.publish) }}
+    # npm is skipped while package.json is private; any failure (npm included) publishes nothing here. Each check must
+    # have passed: a check job that was cancelled (say, no macOS runner picked it up) is neither failure() nor
+    # cancelled() for the run, so `!failure()` alone let 0.8.0's release out without its darwin-arm64 check.
+    if: >-
+      ${{ !cancelled() && (github.event_name == 'push' || inputs.publish)
+      && needs.prepare.result == 'success' && needs.test.result == 'success' && needs.smoke.result == 'success'
+      && needs.binary-smoke.result == 'success' && (needs.npm.result == 'success' || needs.npm.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
