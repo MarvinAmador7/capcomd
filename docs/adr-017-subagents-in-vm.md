@@ -59,7 +59,7 @@ Authority comes only from the token and the scope's limits, never from request t
   child's contract); in-VM verify runs the pinned check and refuses any other name (no switching
   to an easier check after a failure), and named checks reach a child only through a pin. The
   operator may still verify with any check. The vfy record keeps the check name and exact command.
-- `merge --require vfy` re-runs the checks that verification passed with, not the repo default.
+- `merge --require vfy` re-runs the checks that verification passed with, not the repo default, when the target moved since the verify; when it didn't, the verified commit lands as it is (ADR-016, step 2's fast path).
 - `merge` needs a passing `verify` of that exact commit. A merge into a protected target is parked
   (`awaiting_approval`) for the operator (`capcomd approve <runId> <mrgId>`, or `--deny`), not refused.
   A run's target can be a staging branch (`run new --target T`); agents can't choose another.

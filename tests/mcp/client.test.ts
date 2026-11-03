@@ -22,6 +22,7 @@ const saved = { ...process.env };
 
 const call = async (name: string, args: Record<string, unknown> = {}) => {
   const res: any = await mcp.callTool({ name, arguments: args });
+  if (!res.content?.[0]?.text?.startsWith("{")) throw new Error(`${name}: ${res.content?.[0]?.text}`);
   return { isError: !!res.isError, body: JSON.parse(res.content[0].text) };
 };
 const ok = async (name: string, args: Record<string, unknown> = {}) => {
@@ -48,7 +49,7 @@ beforeAll(async () => {
   const home = mkdtempSync(join(tmpdir(), "capcomd-mcp-home-"));
   project = mkdtempSync(join(tmpdir(), "capcomd-mcp-project-"));
   mkdirSync(join(project, ".capcomd"));
-  writeFileSync(join(project, ".capcomd", "config.json"), JSON.stringify({ run: { checks: { unit: CHECK }, target: "trunk" }, driver: { maxRunBudget: "usd=20" } }));
+  writeFileSync(join(project, ".capcomd", "config.json"), JSON.stringify({ run: { checks: { unit: CHECK, slow: `sleep 6; ${CHECK}` }, target: "trunk" }, driver: { maxRunBudget: "usd=20" } }));
   env = { ...repo.env, CAPCOMD_HOME: home, CAPCOMD_AGENTS_FILE: primitivesAgentsFile(), CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_AWAIT_POLL_MS: "100", CAPCOMD_DRIVER_LEASE_MS: "3000", CAPCOMD_SKIP_PREFLIGHT: "1", CAPCOMD_NO_ENGINE_AUTOSTART: "1" };
   Object.assign(process.env, env);
   const port = await testPort();
@@ -103,7 +104,7 @@ describe("capcomd mcp: the driver's tools", () => {
 
   test("fan-out on a staging target: spawn 3, await, verify, merge each; only verified commits land", async () => {
     const r = await ok("capcomd_run_new", { budget: "usd=10,turns=200", label: "fan-out", target: "capcomd/fanout", targetFrom: "trunk", key: `fo-${Date.now()}` });
-    expect(r.gates.checks).toEqual(["unit"]);
+    expect(r.gates.checks).toEqual(expect.arrayContaining(["unit"]));
     const run = r.runId as string;
     const ids: string[] = [];
     for (const t of ["a", "b", "c"]) ids.push((await ok("capcomd_spawn", { runId: run, task: `work ${t}`, profile: "coder", check: "unit", budget: "usd=1,turns=10", key: t })).agentId);
@@ -130,6 +131,62 @@ describe("capcomd mcp: the driver's tools", () => {
     const listed = (await ok("capcomd_runs")).runs.find((x: any) => x.runId === run);
     expect(listed).toMatchObject({ label: "fan-out", agents: { done: 3 } });
     expect((await ok("capcomd_tree", { runId: run })).runId).toBe(run);
+  }, 180_000);
+
+  test("verify several, await any; poll by key or id without resending parameters; merge a verified commit fast", async () => {
+    const r = await ok("capcomd_run_new", { budget: "usd=10,turns=200", label: "parallel verify", target: "capcomd/parallel", targetFrom: "trunk", key: `pv-${Date.now()}` });
+    const run = r.runId as string;
+    const fast = (await ok("capcomd_spawn", { runId: run, task: "work fast", profile: "coder", check: "unit", budget: "usd=1,turns=10", key: "fast" })).agentId;
+    const slow = (await ok("capcomd_spawn", { runId: run, task: "work slow", profile: "coder", check: "slow", budget: "usd=1,turns=10", key: "slow" })).agentId;
+    let pending = [fast, slow];
+    while (pending.length) pending = (await ok("capcomd_await", { runId: run, agents: pending, timeoutMs: 10_000 })).pending;
+
+    // Start both verifies without waiting (timeoutMs 0): each answers at once with its id.
+    const acceptance = "a long acceptance text the driver shouldn't have to send again ".repeat(20);
+    const vSlow = await ok("capcomd_verify", { runId: run, ref: slow, key: "v-slow", acceptance, timeoutMs: 0 });
+    const vFast = await ok("capcomd_verify", { runId: run, ref: fast, key: "v-fast", acceptance, timeoutMs: 0 });
+    // (Plain checks: toMatchObject with an asymmetric matcher replaces the matched value in the object it reads.)
+    for (const v of [vSlow, vFast]) { expect(v.state).toBe("running"); expect(v.id).toMatch(/^vfy-/); }
+
+    // One wait for both: it returns when the first finishes (the fast check), with the slow one still pending.
+    const t0 = Date.now();
+    const first = await ok("capcomd_await", { runId: run, ops: [vSlow.id, vFast.id], mode: "any", timeoutMs: 30_000 });
+    expect(Date.now() - t0).toBeLessThan(5_500);
+    expect(first.ops.map((o: any) => o.id)).toEqual([vFast.id]);
+    expect(first.ops[0]).toMatchObject({ kind: "verify", state: "passed", result: { pass: true } });
+    expect(typeof first.ops[0].result.timings.checksMs).toBe("number");
+    expect(typeof first.ops[0].result.timings.totalMs).toBe("number");
+    expect(first.pending).toEqual([vSlow.id]);
+    // Event-driven: it answered right after the verify's record changed, not at a poll interval.
+    const finishedAt = (await ok("capcomd_events", { runId: run, limit: 500 })).events.find((e: any) => e.type === "VERIFY_PASSED" && e.event.id === vFast.id).epochMs;
+    expect(Date.now() - finishedAt).toBeLessThan(2_000);
+
+    // Poll by key with no acceptance, and by id alone: the same verification, never a conflict (finished or not).
+    const byKeySlow = await ok("capcomd_verify", { runId: run, ref: slow, key: "v-slow", timeoutMs: 0 });
+    expect(byKeySlow).toMatchObject({ id: vSlow.id });
+    const byKey = await ok("capcomd_verify", { runId: run, ref: fast, key: "v-fast" });
+    expect(byKey).toMatchObject({ id: vFast.id, state: "passed" });
+    expect(await ok("capcomd_verify", { runId: run, id: vFast.id })).toMatchObject({ id: vFast.id, state: "passed", acceptance });
+    // Only a parameter given explicitly that differs conflicts.
+    const other = await call("capcomd_verify", { runId: run, ref: fast, key: "v-fast", acceptance: "something else" });
+    expect(other.isError).toBe(true);
+    expect(other.body.error).toMatchObject({ code: "conflict" });
+    expect(other.body.error.message).toContain("acceptance");
+
+    // The fast one merges at once: the target hasn't moved since its verify, so its commit is pushed as it is.
+    const m1 = await ok("capcomd_merge", { runId: run, ref: fast, require: vFast.id, key: "m-fast", timeoutMs: 0 });
+    expect(m1.id).toMatch(/^mrg-/);
+    const done1 = await ok("capcomd_await", { runId: run, ops: [m1.id, vSlow.id], mode: "all", timeoutMs: 30_000 });
+    const merged1 = done1.ops.find((o: any) => o.id === m1.id);
+    expect(merged1).toMatchObject({ state: "merged", result: { merged: true, timings: { path: "fast" } } });
+    expect(await ok("capcomd_merge", { runId: run, id: m1.id })).toMatchObject({ id: m1.id, state: "merged" }); // poll by id
+    // The slow one's target moved (the fast one landed): its merge checks again on the new target first.
+    const sv = done1.ops.find((o: any) => o.id === vSlow.id);
+    expect(sv).toMatchObject({ state: "passed" });
+    const m2 = await settle("capcomd_merge", { runId: run, ref: slow, require: vSlow.id, key: "m-slow" });
+    expect(m2).toMatchObject({ state: "merged", result: { merged: true, timings: { path: "full", checksWhere: "host" } } });
+    const files = await filesOn("capcomd/parallel");
+    expect(files).toEqual(expect.arrayContaining([`tasks/${fast}.md`, `tasks/${slow}.md`]));
   }, 180_000);
 
   test("gates stay the human's: protected target, budget cap, reserved kv, approvals", async () => {

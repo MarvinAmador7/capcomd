@@ -137,6 +137,75 @@ describe("direct merge against a local bare repo", () => {
   });
 });
 
+describe("merge after a verify: the fast path", () => {
+  /** A check command that counts its runs in a file (the checks run on the host here). */
+  const counted = (root: string) => ({ cmd: `echo run >> ${join(root, "check-runs")}; test -f tasks/$CAPCOMD_TASK_ID.md`, runs: async () => (await Bun.file(join(root, "check-runs")).text().catch(() => "")).split("\n").filter(Boolean).length });
+  const verified = (v: any) => ({ sha: v.sha, targetSha: v.targetSha, how: v.how });
+
+  test("target unchanged since the verify: the verified commit lands as it is, checks not run again", async () => {
+    const r = await bareRepo();
+    const c = counted(r.root);
+    const tip = await produceFakeWork(r.cfg, { ...req("rf1", "t"), epoch: 1 });
+    const v: any = await mergeTask(req("rf1", "t", { testOnly: true, testCommand: c.cmd }), r.cfg);
+    expect(v).toMatchObject({ status: "verified", taskSha: tip, targetSha: await r.sha("main") });
+    expect(await c.runs()).toBe(1);
+    const m: any = await mergeTask(req("rf1", "t", { testCommand: c.cmd, expectSha: tip, verified: verified(v) }), r.cfg);
+    expect(m).toMatchObject({ status: "merged", sha: v.sha, already: false, timings: { path: "fast" } });
+    expect(m.timings.checksMs).toBeUndefined();
+    expect(await c.runs()).toBe(1);
+    expect(await r.sha("main")).toBe(v.sha);
+    expect(await r.landings(taskKey("rf1", "t"))).toBe(1);
+    // A retry (a crash after the push, before its record): the target is there already.
+    const again: any = await mergeTask(req("rf1", "t", { testCommand: c.cmd, expectSha: tip, verified: verified(v) }), r.cfg);
+    expect(again).toMatchObject({ status: "merged", already: true });
+    expect(await r.landings(taskKey("rf1", "t"))).toBe(1);
+  }, 60_000);
+
+  test("target moved since the verify (by someone else): the push is refused, the merge checks again on the new target", async () => {
+    const r = await bareRepo();
+    const c = counted(r.root);
+    const tip = await produceFakeWork(r.cfg, { ...req("rf2", "t"), epoch: 1 });
+    const v: any = await mergeTask(req("rf2", "t", { testOnly: true, testCommand: c.cmd }), r.cfg);
+    await r.pushToMain("other.txt", "moved\n");
+    const moved = await r.sha("main");
+    const m: any = await mergeTask(req("rf2", "t", { testCommand: c.cmd, expectSha: tip, verified: verified(v) }), r.cfg);
+    expect(m).toMatchObject({ status: "merged", already: false, targetBefore: moved, timings: { path: "full", checksWhere: "host" } });
+    expect(m.timings.fastFallback).toContain("moved");
+    expect(await c.runs()).toBe(2);
+    expect(await r.show("main", "other.txt")).toBe("moved");
+    expect(await r.landings(taskKey("rf2", "t"))).toBe(1);
+  }, 60_000);
+
+  test("target moved by a merge from here: no doomed fast push, the checks run again from the clone's refs", async () => {
+    const r = await bareRepo();
+    const c = counted(r.root);
+    const a = await produceFakeWork(r.cfg, { ...req("rf3", "a"), epoch: 1 });
+    const b = await produceFakeWork(r.cfg, { ...req("rf3", "b"), epoch: 1 });
+    const [va, vb]: any[] = await Promise.all([mergeTask(req("rf3", "a", { testOnly: true, testCommand: c.cmd }), r.cfg), mergeTask(req("rf3", "b", { testOnly: true, testCommand: c.cmd }), r.cfg)]);
+    expect([va.status, vb.status]).toEqual(["verified", "verified"]);
+    expect(va.timings.lockWaitMs).toBeUndefined(); // verifies don't queue on the target's lock
+    expect((await mergeTask(req("rf3", "a", { testCommand: c.cmd, expectSha: a, verified: verified(va) }), r.cfg) as any).timings.path).toBe("fast");
+    const mb: any = await mergeTask(req("rf3", "b", { testCommand: c.cmd, expectSha: b, verified: verified(vb) }), r.cfg);
+    expect(mb).toMatchObject({ status: "merged", timings: { path: "full", fastFallback: "the target moved since the verify" } });
+    expect(mb.timings.pushMs).toBeGreaterThanOrEqual(0);
+    expect(await c.runs()).toBe(3);
+    expect(await r.landings(taskKey("rf3", "a"))).toBe(1);
+    expect(await r.landings(taskKey("rf3", "b"))).toBe(1);
+  }, 60_000);
+
+  test("branch moved since the verify: refused, whichever path", async () => {
+    const r = await bareRepo();
+    const tip = await produceFakeWork(r.cfg, { ...req("rf4", "t"), epoch: 1 });
+    const v: any = await mergeTask(req("rf4", "t", { testOnly: true }), r.cfg);
+    await produceFakeWork(r.cfg, { ...req("rf4", "t"), epoch: 2, rework: true, content: "sneaky\n" });
+    const before = await r.sha("main");
+    const m: any = await mergeTask(req("rf4", "t", { expectSha: tip, verified: verified(v) }), r.cfg);
+    expect(m.status).toBe("failed");
+    expect(m.reason).toContain("moved since verification");
+    expect(await r.sha("main")).toBe(before);
+  }, 60_000);
+});
+
 describe("direct merge crash recovery (real SIGKILL subprocess)", () => {
   for (const kp of ["merge.lock.acquired", "merge.after_fetch.before_integrate", "merge.before_cas", "merge.after_cas.before_event"]) {
     test(`crash at ${kp} → rerun lands exactly once`, async () => {

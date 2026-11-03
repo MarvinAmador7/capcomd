@@ -941,6 +941,12 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     for (const id of opIds) {
       if (opsDone.has(id)) continue;
       const op = await s.getOp({ opId: id });
+      // Started here a moment ago and not recorded yet (a verify answers with its id before it has resolved its ref).
+      if (!op && inflightOps.has(id)) {
+        opsLatest.set(id, { id, kind: id.startsWith("vfy-") ? "verify" : "merge", state: "running" } as any);
+        if (feed) void inflightOps.get(id)!.then(feed.poke, feed.poke);
+        continue;
+      }
       if (!op || (op.kind !== "verify" && op.kind !== "merge")) throw new RelayError("not_found", `${id} not found in ${runId}`, "Pass the vfy-… / mrg-… ids capcomd verify and capcomd merge returned.");
       const v = opView(op);
       opsLatest.set(id, v);
