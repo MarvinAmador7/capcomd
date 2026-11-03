@@ -28,7 +28,8 @@ const { values: a } = parseArgs({
 });
 const ROOT = resolve(import.meta.dir, "..");
 const PORT = Number(a.port);
-if (PORT === 6420) throw new Error("6420 is the user's daemon: pick another --port");
+// The engine takes the port, the next one and port+10: keep two evals at least 20 apart.
+if ([6420, 6421, 6430].some((p) => [PORT, PORT + 1, PORT + 10].includes(p))) throw new Error("6420 is the user's daemon: pick another --port");
 const WORK = a.work ? resolve(a.work) : mkdtempSync(join(process.env.CAPCOMD_EVAL_TMP ?? tmpdir(), "capcomd-eval-"));
 mkdirSync(WORK, { recursive: true });
 const log = (s: string) => console.error(`[eval ${a.ref ?? "checkout"}] ${s}`);

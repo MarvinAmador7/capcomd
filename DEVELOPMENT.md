@@ -151,13 +151,13 @@ the wall time and the driver's cost.
 
 ```bash
 bun scripts/eval-team-shape.ts --out after.json                    # this checkout
-bun scripts/eval-team-shape.ts --ref origin/main --port 6492       # capcomd as it is on origin/main (git archive)
+bun scripts/eval-team-shape.ts --ref origin/main --port 6531       # capcomd as it is on origin/main (git archive)
 ```
 
 Everything is in one scratch folder (`CAPCOMD_EVAL_TMP`, else the system temp dir), deleted at the end (`--keep`
 keeps it, with `session.ndjson` and `events.json`). It never uses `~/.capcomd`, :6420, Docker or your Claude Code
 settings (`--setting-sources project`, `--no-session-persistence`); it needs `claude` logged in. Runs vary: compare a
-few of each.
+few of each. Two at once need ports at least 20 apart (an engine takes its port, the next and port+10).
 
 ### Killpoints
 
