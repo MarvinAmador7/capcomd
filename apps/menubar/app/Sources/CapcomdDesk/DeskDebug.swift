@@ -90,6 +90,12 @@ import CapcomdStore
   /// menu (ReelMenu): `menu` (a click on the name), `menu <message|changes|pause|resume|stop|fold|remove|copy>` (that
   /// item), `menu confirm|cancel` (the Stop question). The palette: `palette [query]` (⌘K, with that query typed),
   /// `palette up|down|run|close`. `menus` writes the main menu's items and their shortcuts to <dir>/menus.txt.
+  /// The app outside the window: `choose` (Choose Project Folder…: the Open panel), `openpanel cancel`, `close` (the
+  /// window's close button); state.txt lists the app's activation and its windows front to back. Controls by place:
+  /// `hit <label|@X,Y>` (which view a click there lands on, into <dir>/hit.txt), `click <label|@X,Y>` (a mouse-down and
+  /// -up handed to this window), `press <label>` (an accessibility press), `ax` (the accessibility tree, into ax.txt;
+  /// empty until an assistive app has asked). @X,Y is in points from the window's top left. A menu a click or press
+  /// opens is written to <dir>/menu.txt, and <dir>/menucmd (`pick <title prefix>` or `cancel`) acts in it.
   static func control(_ model: DeskModel, _ dir: URL) {
     let cmd = dir.appendingPathComponent("cmd")
     if let text = try? String(contentsOf: cmd, encoding: .utf8) {
@@ -142,11 +148,135 @@ import CapcomdStore
           default: model.togglePalette(query: String(line.dropFirst(8)))
           }
         case "menus": menus(into: dir)
+        case "choose": model.chooseProjectFolder()   // + › Choose Project Folder…, the folder chip, Choose Another…
+        case "openpanel": if w.dropFirst().first == "cancel" { for case let p as NSOpenPanel in NSApp.windows where p.isVisible { p.cancel(nil) } }
+        case "ax": ax(into: dir)
+        case "press": if w.count > 1 { press(String(line.dropFirst(6)), dir) }
+        case "hit": if w.count > 1 { hit(String(line.dropFirst(4)), dir) }
+        case "click": if w.count > 1 { click(String(line.dropFirst(6)), dir) }
+        case "close": deskWindow?.performClose(nil)   // the window's close button
         default: break
         }
       }
     }
     try? state(model).write(to: dir.appendingPathComponent("state.txt"), atomically: true, encoding: .utf8)
+  }
+
+  // MARK: the window's own controls, through accessibility (in this process; nothing is posted to the system)
+
+  /// `ax`: the window's accessibility tree, one element per line (role, label, frame), into <dir>/ax.txt.
+  static func ax(into dir: URL) {
+    guard let root = deskWindow?.contentView else { return }
+    var out: [String] = []
+    func walk(_ e: Any, _ depth: Int) {
+      guard depth < 40, let el = e as? NSAccessibilityProtocol else { return }
+      let o = e as AnyObject
+      let role = (o.accessibilityRole?() ?? nil)?.rawValue ?? "?"
+      let label = (o.accessibilityLabel?() ?? nil) ?? ""
+      let title = (o.accessibilityTitle?() ?? nil) ?? ""
+      out.append(String(repeating: " ", count: depth) + "\(role) \"\(label)\" \"\(title)\" \(el.accessibilityFrame())")
+      for c in (o.accessibilityChildren?() ?? nil) ?? [] { walk(c, depth + 1) }
+    }
+    walk(root, 0)
+    try? (out.joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("ax.txt"), atomically: true, encoding: .utf8)
+  }
+
+  /// `press <label>`: presses the window's first control whose accessibility label starts with <label>, as VoiceOver
+  /// would. A menu it opens is tracked here: its items go to <dir>/menu.txt, and `<dir>/menucmd` (read while the menu is
+  /// open) picks one: `pick <title prefix>` or `cancel`.
+  static func press(_ label: String, _ dir: URL) {
+    guard let target = element(label) else {
+      try? "press: nothing labelled \(label)\n".write(to: dir.appendingPathComponent("menu.txt"), atomically: true, encoding: .utf8)
+      return
+    }
+    trackMenus(dir)
+    DispatchQueue.main.async { _ = target.accessibilityPerformPress?() }
+  }
+
+  /// The window's first accessibility element whose label starts with `label`.
+  static func element(_ label: String) -> AnyObject? {
+    guard let root = deskWindow?.contentView else { return nil }
+    func find(_ e: Any, _ depth: Int) -> AnyObject? {
+      guard depth < 40 else { return nil }
+      let o = e as AnyObject
+      if let l = o.accessibilityLabel?() ?? nil, l.hasPrefix(label) { return o }
+      for c in (o.accessibilityChildren?() ?? nil) ?? [] { if let f = find(c, depth + 1) { return f } }
+      return nil
+    }
+    return find(root, 0)
+  }
+
+  /// The middle of `label`'s element, in the window's coordinates.
+  /// `label` may instead be `@X,Y`: that point, in points from the window's top left (as a `snap` shows it, halved on 2x).
+  static func center(_ label: String) -> NSPoint? {
+    guard let w = deskWindow else { return nil }
+    if label.hasPrefix("@") {
+      let xy = label.dropFirst().split(separator: ",").compactMap { Double($0) }
+      guard xy.count == 2 else { return nil }
+      return NSPoint(x: xy[0], y: w.frame.height - xy[1])
+    }
+    guard let el = element(label) as? NSAccessibilityProtocol else { return nil }
+    let f = w.convertFromScreen(el.accessibilityFrame())
+    return NSPoint(x: f.midX, y: f.midY)
+  }
+
+  /// `hit <label>`: which view a click in the middle of `label`'s element lands on (as AppKit hit-tests a mouse-down),
+  /// into <dir>/hit.txt.
+  static func hit(_ label: String, _ dir: URL) {
+    var line = "hit \(label): "
+    if let w = deskWindow, let p = center(label), let frame = w.contentView?.superview {
+      var chain: [String] = []
+      var v = frame.hitTest(frame.convert(p, from: nil))
+      while let x = v, chain.count < 12 { chain.append(String(describing: Swift.type(of: x))); v = x.superview }
+      line += "at \(p) → " + chain.joined(separator: " < ")
+    } else { line += "not found" }
+    try? (line + "\n").write(to: dir.appendingPathComponent("hit.txt"), atomically: true, encoding: .utf8)
+  }
+
+  /// `click <label>`: a mouse-down and -up in the middle of `label`'s element, handed to this window (never posted to
+  /// the system), as a click there would arrive. A menu it opens is tracked as `press` tracks one.
+  static func click(_ label: String, _ dir: URL) {
+    guard let w = deskWindow, let p = center(label) else { return }
+    trackMenus(dir)
+    func event(_ type: NSEvent.EventType) -> NSEvent? {
+      NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber,
+                         context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)
+    }
+    DispatchQueue.main.async {
+      if let d = event(.leftMouseDown) { w.sendEvent(d) }
+      if let u = event(.leftMouseUp) { w.sendEvent(u) }
+    }
+  }
+
+  private static var menuObserver: NSObjectProtocol?
+  private static var menuTimer: Timer?
+  private static weak var tracked: NSMenu?
+  static func trackMenus(_ dir: URL) {
+    guard menuObserver == nil else { return }
+    menuObserver = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { n in
+      MainActor.assumeIsolated {
+        guard let m = n.object as? NSMenu, m.supermenu == nil, m !== NSApp.mainMenu else { return }
+        tracked = m
+        let items = m.items.map { i in i.isSeparatorItem ? "---" : "\(i.state == .on ? "✓" : " ") \(i.title)\(i.isEnabled ? "" : " (disabled)")" }
+        try? (items.joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("menu.txt"), atomically: true, encoding: .utf8)
+      }
+    }
+    // A menu runs its own event loop: this timer runs in it too (common modes), which the control file's doesn't.
+    let t = Timer(timeInterval: 0.25, repeats: true) { _ in
+      MainActor.assumeIsolated {
+        let f = dir.appendingPathComponent("menucmd")
+        guard let m = tracked, let text = try? String(contentsOf: f, encoding: .utf8) else { return }
+        try? FileManager.default.removeItem(at: f)
+        let cmd = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cmd.hasPrefix("pick "), let i = m.items.firstIndex(where: { $0.title.hasPrefix(String(cmd.dropFirst(5))) }) {
+          m.cancelTrackingWithoutAnimation()
+          m.performActionForItem(at: i)
+        } else { m.cancelTrackingWithoutAnimation() }
+        tracked = nil
+      }
+    }
+    RunLoop.main.add(t, forMode: .common)
+    menuTimer = t
   }
 
   static func setupAction(_ name: String) -> SetupAction? {
@@ -184,8 +314,19 @@ import CapcomdStore
     }
   }
 
+  /// The desk's window: the app also has the menu bar's status item and panel (and, in development, the panel's
+  /// off-screen host), so it's the visible one with the `main` id, else the first visible on-screen one.
+  static var deskWindow: NSWindow? {
+    let shown = NSApp.windows.filter { $0.isVisible && $0.contentView != nil && $0.frame.minX > -10_000 }
+    return shown.first { $0.identifier?.rawValue.hasPrefix("main") == true }
+      ?? shown.first { w in
+        let kind = String(describing: Swift.type(of: w))
+        return !kind.contains("StatusBar") && !kind.contains("MenuBarExtra")
+      }
+  }
+
   static func swipe(_ dx: Double) {
-    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    guard let win = deskWindow else { return }
     func find(_ v: NSView) -> SnapScrollView? { (v as? SnapScrollView) ?? v.subviews.lazy.compactMap(find).first }
     guard let root = win.contentView?.superview ?? win.contentView, let sv = find(root) else { return }
     let steps = 12, t0 = ProcessInfo.processInfo.systemUptime
@@ -205,7 +346,7 @@ import CapcomdStore
   /// `vscroll N dy`: a two-finger scroll of dy points handed to the thread of the N-th column on screen (from the left;
   /// positive scrolls up, toward older messages), as `swipe` hands one to the reel.
   static func vscroll(column n: Int, _ dy: Double) {
-    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+    guard let win = deskWindow,
           let root = win.contentView?.superview ?? win.contentView else { return }
     var found: [NSScrollView] = []
     func walk(_ v: NSView) {
@@ -231,7 +372,7 @@ import CapcomdStore
 
   static func key(_ spec: String) {
     let w = spec.split(separator: " ").map(String.init)
-    guard let k = w.first, let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    guard let k = w.first, let win = deskWindow else { return }
     var flags: NSEvent.ModifierFlags = []
     if w.contains("cmd") { flags.insert(.command) }; if w.contains("ctrl") { flags.insert(.control) }; if w.contains("shift") { flags.insert(.shift) }
     let (chars, code): (String, UInt16) = switch k {
@@ -251,7 +392,7 @@ import CapcomdStore
 
   /// Types `text` into this window's focused field, one key event per character (never posted to the system).
   static func type(_ text: String) {
-    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    guard let win = deskWindow else { return }
     for ch in text {
       let s = String(ch)
       guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -288,6 +429,11 @@ import CapcomdStore
     if model.menuOpen || model.openRunId != nil, let m = model.projectMenu {
       out.append("menu open \(model.menuOpen) items \(m.items.map(\.name).joined(separator: ",")) control \(m.control)")
     }
+    // The app's activation and its windows, front to back: for the Open panel (`choose`).
+    out.append("app active \(NSApp.isActive) policy \(NSApp.activationPolicy().rawValue) key \(NSApp.keyWindow.map { String(describing: Swift.type(of: $0)) } ?? "-")")
+    for w in NSApp.windows.filter(\.isVisible).sorted(by: { $0.orderedIndex < $1.orderedIndex }) {
+      out.append("window \(Swift.type(of: w)) level \(w.level.rawValue) key \(w.isKeyWindow) main \(w.isMainWindow) onScreen \(w.occlusionState.contains(.visible)) \(w is NSOpenPanel ? "OPENPANEL" : "")")
+    }
     if model.paletteOpen {
       out.append("palette \"\(model.paletteQuery)\" selection \(model.paletteSelection): " + model.paletteShown.map(\.title).joined(separator: " | "))
     }
@@ -298,7 +444,7 @@ import CapcomdStore
   }
 
   static func snapshot(into dir: URL, name: String = "window") {
-    guard let w = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+    guard let w = deskWindow,
           let frame = w.contentView?.superview ?? w.contentView,
           let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
     frame.layoutSubtreeIfNeeded()   // an occluded window gets no display passes: catch up before drawing it

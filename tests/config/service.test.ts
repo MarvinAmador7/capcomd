@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { LABEL, UNIT, serviceFile, type ServiceSpec } from "../../src/cli/commands/service";
+import { LABEL, UNIT, serviceFile, stableExecutable, type ServiceSpec } from "../../src/cli/commands/service";
 
 const spec = (platform: NodeJS.Platform, argv = ["/opt/bun/bin/bun", "/opt/capcomd/src/cli/index.ts", "serve", "--port", "6420"]): ServiceSpec => ({ platform, argv, port: 6420, home: "/home/me", logFile: "/home/me/.capcomd/engine.log", path: "/opt/bun/bin:/usr/bin:/bin" });
 
@@ -25,6 +25,15 @@ describe("engine as a service", () => {
     const argv = ["/home/me/.capcomd/bin/capcomd", "serve", "--port", "6420"];
     expect(serviceFile(spec("linux", argv)).body).toContain("ExecStart=/home/me/.capcomd/bin/capcomd serve --port 6420");
     expect(serviceFile(spec("darwin", argv)).body).toContain("<array><string>/home/me/.capcomd/bin/capcomd</string><string>serve</string>");
+  });
+  test("a Homebrew keg runs from its opt link, which survives brew upgrade", () => {
+    const keg = "/opt/homebrew/Cellar/capcomd/0.9.0/bin/capcomd", opt = "/opt/homebrew/opt/capcomd/bin/capcomd";
+    const id = (p: string) => p;
+    expect(stableExecutable(keg, (p) => p === opt, id)).toBe(opt);
+    expect(stableExecutable("/opt/homebrew/bin/capcomd", (p) => p === opt, () => keg)).toBe(opt);   // the bin symlink
+    expect(stableExecutable(keg, () => false, id)).toBe(keg);   // no opt link: keep what runs
+    expect(stableExecutable("/home/me/.capcomd/bin/capcomd", () => true, id)).toBe("/home/me/.capcomd/bin/capcomd");
+    expect(stableExecutable("/opt/homebrew/Cellar/bun/1.4.0/bin/bun", () => true, id)).toBe("/opt/homebrew/Cellar/bun/1.4.0/bin/bun");
   });
   test("other platforms are refused with a hint", () => {
     expect(() => serviceFile(spec("win32"))).toThrow(/no background service support/);

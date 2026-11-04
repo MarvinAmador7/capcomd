@@ -337,9 +337,11 @@ Socket path (`src/api/socket.ts` harnessSocketPath; the server is wired into `ca
 
 ### 7.2 Authentication for the GUI process
 
-- **Pairing.** `capcomd clients add --label "Menu bar" --scopes read,steer,approve` prints a one-time pairing code, valid for 5 min.
-  Alternatively, the app runs `capcomd clients pair --app com.capcomd.menubar` itself, the first time, with the user confirming in the terminal.
-  The daemon stores only `sha256(token)`, the scopes, and the label.
+- **Pairing** (as built). The macOS app runs `capcomd clients pair --app mac-app --json` itself, as the local user,
+  the first time it has no token: being able to write `~/.capcomd/harness-clients.json` is the proof it may, so there
+  is no code to confirm. The command prints the token (alone on stdout without `--json`) and revokes the token that
+  app paired before; the app keeps it in the Keychain. `capcomd clients add <name> --scopes …` makes a token by hand
+  for anything else. The daemon stores only `sha256(token)`, the scopes, the name and, for a pairing, the app.
 - **Storage.** The app stores the token in the **macOS Keychain** (access group limited to the signed app). The CLI uses
   `~/.capcomd/clients/cli.token` (0600). The plugin's MCP uses `${user_config}` sensitive storage (ADR-018).
 - **Per request.** `Authorization: Bearer cct-client.<id>.<secret>` over the 0600 socket. The scopes are `read`, `steer` (send, cancel,

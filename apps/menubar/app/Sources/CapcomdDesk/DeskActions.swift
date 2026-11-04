@@ -342,14 +342,20 @@ extension DeskModel {
   }
 }
 
-/// Asks for a project folder (a regular app: the Open panel needs no activation tricks).
+/// Asks for a project folder. The window takes a click while another app is in front, and a panel begun then opened
+/// behind that app's windows (or, in an accessory app, was cancelled by its first click): the app becomes regular and
+/// active first, and the panel comes to the front (Presence.beforeOpenPanel).
 @MainActor enum DeskFolderPicker {
   static func choose() async -> String? {
     let p = NSOpenPanel()
     p.canChooseDirectories = true; p.canChooseFiles = false; p.allowsMultipleSelection = false
     p.prompt = "Use This Project"; p.message = "Choose the project's folder."
+    let steps = Presence.beforeOpenPanel(regular: NSApp.activationPolicy() == .regular, active: NSApp.isActive)
+    if steps.becomeRegular { NSApp.setActivationPolicy(.regular) }
+    if steps.activate { NSApp.activate() }
     return await withCheckedContinuation { done in
       p.begin { r in done.resume(returning: r == .OK ? p.url?.path : nil) }
+      if steps.orderFront { p.makeKeyAndOrderFront(nil); p.orderFrontRegardless() }
     }
   }
 }

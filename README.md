@@ -127,6 +127,20 @@ curl -fsSL https://raw.githubusercontent.com/MarvinAmador7/capcomd/main/install.
 
 `capcomd upgrade` updates it later.
 
+**The Mac app** (optional; macOS 14 or later): a window with each run's agents side by side and a menu bar item with
+approvals, in one app. Homebrew installs it with the CLI:
+
+```bash
+brew install --cask MarvinAmador7/tap/capcomd-app
+```
+
+Open capcomd from Applications. It starts capcomd for you (as a login service) and connects by itself, so no
+terminal is needed after this. The app isn't notarized by Apple yet, so macOS blocks its first open: click **Done**,
+then in **System Settings › Privacy & Security** click **Open Anyway** next to "capcomd" and confirm. After that it
+opens like any app.
+Without Homebrew, download `capcomd-app-X.Y.Z.zip` from the [release](https://github.com/MarvinAmador7/capcomd/releases),
+move `capcomd.app` to Applications and install the CLI as above (the app finds it).
+
 **1. Add capcomd to your agent.** The capcomd plugin gives your agent the MCP tools and two skills
 (orchestration, and setup):
 
@@ -163,7 +177,7 @@ Your agent reports back as agents finish and merges land. Merges into protected 
 runId, the latest run).
 
 Each [release](https://github.com/MarvinAmador7/capcomd/releases) has the binaries for macOS and Linux (arm64 and
-x64) and the npm package, each with its SHA-256 (the installer and `capcomd upgrade` check it); the npm package is
+x64), the npm package and the Mac app (universal, signed ad hoc until it's notarized), each with its SHA-256 (the installer and `capcomd upgrade` check it); the npm package is
 published by CI with [provenance](https://docs.npmjs.com/generating-provenance-statements).
 
 ### Connecting your agent

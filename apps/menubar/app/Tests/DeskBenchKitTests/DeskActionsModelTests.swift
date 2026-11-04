@@ -67,6 +67,35 @@ final class DeskActionsModelTests: XCTestCase {
     XCTAssertEqual(m.decks.map(\.runId), ["run-a", "run-new"])
   }
 
+  /// The tool row's picks (place, driver, effort) as the chip's bindings make them, while the column is open: Start
+  /// sends them, and the column redraws with each.
+  @MainActor func testTheToolRowsPicksGoWithTheRun() async throws {
+    let st = Starter(); st.outcomes = [.success("run-new")]
+    let (m, s) = model(starter: st)
+    s.runOptions = RunOptions(
+      drivers: [DriverInfo(provider: "claude", label: "Claude Code", isDefault: true, efforts: ["low", "high"],
+                           sandboxes: ["docker": DriverAvailability(available: false, reason: "Not logged in to Claude Code for Local"), "boxd": DriverAvailability(available: true)]),
+                DriverInfo(provider: "codex", label: "Codex", efforts: ["low", "medium", "high"], effort: "medium")],
+      sandboxes: [SandboxInfo(name: "docker", label: "Local"), SandboxInfo(name: "boxd", label: "Cloud", isDefault: true)])
+    m.openNewProject()
+    let np = try XCTUnwrap(m.newProject)
+    XCTAssertEqual(s.driverChoices.current?.provider, "claude")
+    let before = np.revision
+    s.pickDriver("codex"); m.newProjectChanged()          // the driver menu's Picker
+    s.pickEffort("high"); m.newProjectChanged()           // its effort Picker
+    XCTAssertGreaterThan(np.revision, before)
+    XCTAssertEqual(s.driverChoices.current?.provider, "codex")
+    m.typeGoal("Ship it")
+    await m.startNewProject()
+    XCTAssertEqual(st.choices.first?.driver, "codex")
+    XCTAssertEqual(st.choices.first?.effort, "high")
+    XCTAssertEqual(st.choices.first?.sandbox, "boxd")
+    // Local: Claude Code can't run there, so the chip offers Codex and says why Claude Code isn't listed.
+    s.setDefaultPlace("docker"); s.pickDriver("claude")
+    XCTAssertEqual(s.driverChoices.current?.provider, "codex")
+    XCTAssertEqual(s.driverChoices.unavailable.first?.reason, "Not logged in to Claude Code for Local")
+  }
+
   /// A refused start: the column stays, with the daemon's sentence, and Start can go again.
   @MainActor func testARefusedStartKeepsTheColumn() async throws {
     let st = Starter(); st.outcomes = [.failure(StartRefused("codex can't drive this run: codex isn't logged in"))]

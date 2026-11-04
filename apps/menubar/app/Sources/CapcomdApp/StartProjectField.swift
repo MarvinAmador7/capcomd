@@ -225,6 +225,8 @@ struct StartProjectField: View {
       if model.startRepo != nil { Button("Use the Default Project") { model.startRepo = nil } }
       Divider()
       Button("Settings…") { SettingsWindow.open(openSettings) }
+      // The menu bar item is the app's home: with no window open there's no app menu, so Quit lives here.
+      Button("Quit capcomd") { NSApp.terminate(nil) }.keyboardShortcut("q", modifiers: .command)
     } label: {
       Image(systemName: "plus").font(Theme.Composer2.plusFont).foregroundStyle(.white)
         .frame(width: Theme.Composer2.round, height: Theme.Composer2.round)
@@ -280,9 +282,8 @@ struct StartProjectField: View {
 
 /// Asks for a project checkout (a folder `capcomd setup project` ran in) when the daemon has no default repository.
 enum ProjectFolderPicker {
-  /// An accessory app can't become the active app on current macOS (see SettingsWindow), and an Open panel whose app
-  /// can't become active is cancelled by the first click in it: no folder came back. So, as Settings does, the app is
-  /// a regular app while the panel is up and an accessory after (never .prohibited again, which hides every window).
+  /// An Open panel whose app isn't active is cancelled by the first click in it, so the app activates first (it's a
+  /// regular app; a bare debug build starts as .prohibited, which can't, so it becomes regular too).
   /// The Open panel sits above the menu bar panel's level so the panel can't cover its buttons; the menu bar panel
   /// closes at the first click in the Open panel and opens again after a pick, on what the folder needs.
   @MainActor static func choose(prompt: String = "capcomd has no default repository. Choose the project's checkout.") async -> String? {
@@ -290,9 +291,7 @@ enum ProjectFolderPicker {
     p.canChooseDirectories = true; p.canChooseFiles = false; p.allowsMultipleSelection = false
     p.prompt = "Use This Project"; p.message = prompt
     p.level = NSWindow.Level(NSWindow.Level.popUpMenu.rawValue + 1)   // above other apps' windows and the menu bar panel
-    // Not just .accessory: a bare debug build starts as .prohibited, which can't become active either.
-    let policy = NSApp.activationPolicy()
-    if policy != .regular { NSApp.setActivationPolicy(.regular) }
+    if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
     NSApp.activate()
     let fromMenuBar = MenuBarPanel.isOpen
     let path: String? = await withCheckedContinuation { done in
@@ -301,7 +300,6 @@ enum ProjectFolderPicker {
     }
     // The first click in the Open panel closed the menu bar panel: open it again on the picked folder's next steps.
     if fromMenuBar && path != nil { MenuBarPanel.open() }
-    if policy != .regular && !SettingsWindow.isOpen { NSApp.setActivationPolicy(.accessory) }
     return path
   }
 }

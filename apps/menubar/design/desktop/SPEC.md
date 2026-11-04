@@ -1,6 +1,6 @@
 ---
 title: capcomd desktop window: spec
-subtitle: The capcomd desktop app ("Reel"). Its own app (installable without the menu bar one), sharing the store, transport and thread renderer with it.
+subtitle: The capcomd app's window ("Reel"). One app with the menu bar item, sharing its session, transport and thread renderer.
 date: 2026-10-30
 ---
 
@@ -126,7 +126,7 @@ The menu and the palette: 0.2 s spring, opacity with a 0.98 scale from the top. 
 
 # 7. Phases
 
-1. The `CapcomdDesktop` app (a regular Dock app; the shared pieces live in the `CapcomdUI` library), title bar with
+1. The window in the `CapcomdApp` app (a regular Dock app with the menu bar item; the shared pieces live in the `CapcomdUI` library), title bar with
    projects and crew tabs, the reel with real threads, message boxes and decisions, Follow, keyboard. Keyed changes
    and many threads in the store.
 2. New project column, project menu and ⌘K actions (built), then overview and zoom.

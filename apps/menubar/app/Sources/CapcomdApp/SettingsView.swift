@@ -31,8 +31,7 @@ struct SettingsView: View {
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
       Task { await model.refreshSettings() }
     }
-    // A menu bar app is an accessory: while Settings is open it is a regular app, so the window comes to the front and
-    // its controls draw active (⌘, or the panel's Settings…).
+    // The window comes to the front with its controls drawn active (⌘, or the panel's Settings…), the panel closed.
     .background(WindowReader { SettingsWindow.attach($0) })
   }
 }
