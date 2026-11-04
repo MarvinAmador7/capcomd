@@ -10,7 +10,8 @@ import { capcomdHome } from "../utils/home";
 
 export const CLIENT_SCOPES = ["read", "steer", "approve", "configure"] as const;
 export type ClientScope = (typeof CLIENT_SCOPES)[number];
-export type ClientRecord = { id: string; name: string; scopes: ClientScope[]; sha256: string; createdAt: string; revokedAt: string | null };
+/** `app`: made by `capcomd clients pair --app <app>` (the next pairing of that app revokes it). */
+export type ClientRecord = { id: string; name: string; scopes: ClientScope[]; sha256: string; createdAt: string; revokedAt: string | null; app?: string };
 export type AuthedClient = { clientId: string; name: string; scopes: ClientScope[] };
 
 export const clientsPath = (env: Record<string, string | undefined> = process.env) => join(capcomdHome(env), "harness-clients.json");
@@ -28,14 +29,39 @@ function save(path: string, clients: ClientRecord[]) {
 	chmodSync(path, 0o600);
 }
 
-/** Create a client; returns the token once. */
-export function addClient(name: string, scopes: ClientScope[], path = clientsPath()): { client: ClientRecord; token: string } {
+function mint(name: string, scopes: ClientScope[], app?: string): { client: ClientRecord; token: string } {
 	for (const s of scopes) if (!CLIENT_SCOPES.includes(s)) throw new Error(`unknown scope ${s} (use ${CLIENT_SCOPES.join(", ")})`);
 	const id = `cli-${randomBytes(6).toString("hex")}`;
 	const token = `cch_${randomBytes(32).toString("base64url")}`;
-	const client: ClientRecord = { id, name, scopes: [...new Set(scopes)], sha256: hash(token), createdAt: new Date().toISOString(), revokedAt: null };
-	save(path, [...loadClients(path), client]);
+	const client: ClientRecord = { id, name, scopes: [...new Set(scopes)], sha256: hash(token), createdAt: new Date().toISOString(), revokedAt: null, ...(app ? { app } : {}) };
 	return { client, token };
+}
+
+/** Create a client; returns the token once. */
+export function addClient(name: string, scopes: ClientScope[], path = clientsPath()): { client: ClientRecord; token: string } {
+	const made = mint(name, scopes);
+	save(path, [...loadClients(path), made.client]);
+	return made;
+}
+
+/** What an app gets when it pairs: everything the capcomd app does (read, start and steer runs, approve, settings). */
+export const APP_SCOPES: ClientScope[] = ["read", "steer", "approve", "configure"];
+const APP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/**
+ * `capcomd clients pair --app <app>`: a token for an app on this computer. The app runs the command as the local user
+ * (being able to write the clients file is what lets it) and keeps the token itself, so nobody copies or pastes it. An
+ * app holds one token: those that earlier pairings of the same app made are revoked (`clients add` tokens are left alone).
+ */
+export function pairClient(app: string, scopes: ClientScope[] = APP_SCOPES, path = clientsPath()): { client: ClientRecord; token: string; revoked: string[] } {
+	if (!APP_NAME.test(app)) throw new Error(`app name ${JSON.stringify(app)}: use letters, digits, ".", "_" or "-" (up to 64)`);
+	const made = mint(app, scopes, app);
+	const all = loadClients(path);
+	const now = new Date().toISOString();
+	const revoked: string[] = [];
+	for (const c of all) if (c.app === app && !c.revokedAt) { c.revokedAt = now; revoked.push(c.id); }
+	save(path, [...all, made.client]);
+	return { ...made, revoked };
 }
 
 export function revokeClient(id: string, path = clientsPath()): boolean {
