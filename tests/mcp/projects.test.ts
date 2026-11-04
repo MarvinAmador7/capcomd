@@ -68,6 +68,10 @@ test("capcomd_setup {project}: the sandbox that project's runs use, its source, 
   expect(step("docker")).toMatchObject({ ok: false, hint: expect.stringContaining("Start Docker") });
   expect(step("boxd key")).toBeUndefined();
   expect(step("env image")).toMatchObject({ ok: true, advice: true, command: "capcomd env build --sandbox docker" });
+  // Asked through capcomd's MCP server, which this session has: the plugin is advice at most, never "not ready".
+  expect(step("agent plugin")).toMatchObject({ ok: true });
+  // The capacity of the sandbox this project's runs use, not the server process's default.
+  expect(s.capacity.sandbox).toBe("docker");
   expect(s.ready).toBe(false);
   expect(s.next).toContain("docker:");
   expect(s.gates).toMatchObject({ checks: { unit: "true" }, target: "dev" });

@@ -83,12 +83,12 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
 // ── team shape (how many agents run at once here; the skill's "Choose a team shape") ───────────────
 
 /** The capacity of the place a run's agents use: its own sandbox when it has one, else this process's. */
-async function runCapacity(runId: string | null) {
+export async function runCapacity(runId: string | null, configured?: string) {
   const { placeCapacity } = await import("../providers/capacity");
   const { runSandbox } = await import("../providers/run-sandbox");
   const { sandboxName } = await import("../providers/registry");
   let place: string;
-  try { place = (runId ? await runSandbox(runId) : null) ?? sandboxName(); } catch { place = "fake"; }
+  try { place = (runId ? await runSandbox(runId) : null) ?? configured ?? sandboxName(); } catch { place = configured ?? "fake"; }
   return placeCapacity(place);
 }
 /** A result with `capacity` and the plan-the-team-shape hint in front of its `next`. */
@@ -477,7 +477,7 @@ export async function budget(a: { runId: string; agent?: string }) {
 
 export async function setup() {
   const { checkSetup } = await import("../cli/commands/setup");
-  const steps = await checkSetup();
+  const steps = await checkSetup(process.cwd(), { mcpClient: true });
   const d = process.env.CAPCOMD_NO_CONFIG ? {} : (await import("../config/store")).runDefaults();
   const p = await policy();
   const ready = steps.every((s) => s.ok);
@@ -488,8 +488,9 @@ export async function setup() {
     // The target: the project's run default, else its merge target (what `capcomd setup project --target` writes).
     gates: { checks: d.checks ?? {}, reviewer: d.reviewer ?? null, target: d.target ?? (await import("../utils/env")).env("MERGE_TARGET") ?? null },
     driver: { approvals: p.approvals ?? "human", maxRunBudget: p.maxRunBudget ?? null },
-    // How many agents run at once here (the team shape's budget of parallelism).
-    capacity: await runCapacity(null),
+    // How many agents run at once here (the team shape's budget of parallelism): on the sandbox this project's runs
+    // would use (the project's, else the user config's), not this process's own default.
+    capacity: await runCapacity(null, steps.find((s) => s.step === "sandbox")?.sandbox?.name ?? undefined),
     ...(advice.length ? { advice } : {}),
     next: ready
       ? `${advice.length ? `${advice.join(" ")} Then start` : "Start"} with capcomd_run_new (its sandbox is this project's unless you pass one).`
