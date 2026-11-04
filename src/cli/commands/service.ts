@@ -3,7 +3,7 @@
 // It starts in the home directory, so only the user config applies (sandbox, the keychain's boxd key);
 // repository settings come from each run (recorded at `run new`).
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { capcomdHome } from "../../utils/home";
@@ -22,7 +22,18 @@ export function serviceSpec(o: { port?: number; platform?: NodeJS.Platform } = {
   // launchd/systemd start with a bare PATH: keep the dirs where capcomd (or bun), git, gh and node live.
   const path = [...new Set([bunDir, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(":");
   const port = o.port ?? 6420;
-  return { platform: o.platform ?? process.platform, argv: selfArgv("serve", "--port", String(port)), port, home, logFile: join(capcomdHome(), "engine.log"), path };
+  const [exe, ...args] = selfArgv("serve", "--port", String(port));
+  return { platform: o.platform ?? process.platform, argv: [stableExecutable(exe!), ...args], port, home, logFile: join(capcomdHome(), "engine.log"), path };
+}
+
+/** A Homebrew install runs from a versioned keg (…/Cellar/capcomd/0.9.0/bin/capcomd) that `brew upgrade` removes: the
+ *  service runs the keg's `opt` link instead (…/opt/capcomd/bin/capcomd), which follows upgrades. Anything else as is. */
+export function stableExecutable(exe: string, exists: (p: string) => boolean = existsSync, real: (p: string) => string = realpathSync): string {
+  let r = exe;
+  try { r = real(exe); } catch {}
+  const m = /^(.*)\/Cellar\/capcomd\/[^/]+\/bin\/capcomd$/.exec(r);
+  const opt = m ? `${m[1]}/opt/capcomd/bin/capcomd` : null;
+  return opt && exists(opt) ? opt : exe;
 }
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

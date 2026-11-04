@@ -3,7 +3,7 @@
 // use), nothing here drops, resets or replays: every stream sends one snapshot and then heartbeats.
 //
 //   SCENARIO=panel TOKEN=… bun scenarios.ts /tmp/capcomd-ui.sock
-//   swift run CapcomdMenuBar -capcomd.socketPath /tmp/capcomd-ui.sock     (argument domain: nothing is persisted)
+//   swift run CapcomdApp -capcomd.socketPath /tmp/capcomd-ui.sock     (argument domain: nothing is persisted)
 //   SETTINGS=mixed …                                                       Settings window routes (settings.ts)
 //   SETTINGS=mixed SANDBOXES=machines|stale|empty|unsafe|nores|off …     place details and machines (settings.ts)
 //   SETTINGS=mixed SANDBOXES=readonly|envlocked|noconfigure|conflict|owners …   changing settings, capcomd's own machines

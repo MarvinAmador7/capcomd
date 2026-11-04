@@ -7,35 +7,40 @@ import CapcomdLive
 import CapcomdClient
 import CapcomdBot
 
-/// Observable mirror of CapcomdStore. The store stays platform-neutral; every store change bumps `revision`,
-/// and computed properties read it so SwiftUI tracks them.
+/// The menu bar panel's view of the app's one store (the window reads the same store, AppSession's). The store stays
+/// platform-neutral; every store change bumps `revision`, and computed properties read it so SwiftUI tracks them.
 @Observable @MainActor
 final class AppModel {
-  /// Replaceable: a new token builds a fresh transport + store (the old one is stopped).
+  /// The session's store, replaced with each new token.
   @ObservationIgnored private(set) var store: CapcomdStore
-  /// The transport behind `store`. AsyncHTTPClient traps in debug if its client is freed without shutdown(),
-  /// so a replaced transport must be shut down explicitly before it is released.
-  @ObservationIgnored private var transport: UnixSocketTransport
   /// The composer's inline project setup (ProjectSetupInline.swift), on `store`.
   @ObservationIgnored private(set) var setup: ProjectSetupFlow
   private(set) var revision = 0
-  var path: [Route] = []
-  /// No Keychain token yet (first launch) or the daemon answered 401: the panel shows the token prompt.
-  private(set) var tokenMissing: Bool
+  /// The token, pairing, daemon start and store the window shares (CapcomdUI/AppSession.swift).
+  @ObservationIgnored let session: AppSession
   /// The Keychain read is still out (macOS may be asking whether this build can read the token).
-  private(set) var tokenPending = false
-  var needsToken: Bool { _ = revision; return !tokenPending && (tokenMissing || store.unauthorized) }
+  var tokenPending: Bool { session.token == .reading }
+  /// No token yet: pairing, or it couldn't (no CLI, or it failed).
+  var tokenMissing: Bool { switch session.token { case .pairing, .needsCLI, .failed: true; default: false } }
+  /// The panel shows how the app is connecting instead of its projects.
+  var needsToken: Bool { _ = revision; return session.current == nil || store.unauthorized }
+  /// Opens the window on a run, at an agent's column (the app sets it: every panel row leads there).
+  @ObservationIgnored var openInWindow: (_ runId: String, _ agentId: String?) -> Void = { _, _ in }
 
-  enum Route: Hashable { case run(String), thread(runId: String, agentId: String) }
-
-  init(_ pair: (CapcomdStore, UnixSocketTransport), tokenMissing: Bool = false) {
-    self.store = pair.0; self.transport = pair.1; self.tokenMissing = tokenMissing
-    self.setup = ProjectSetupFlow(store: pair.0)
-    attach(store)
+  init(session: AppSession) {
+    self.session = session
+    self.store = session.store
+    self.setup = ProjectSetupFlow(store: session.store)
   }
 
   private func attach(_ s: CapcomdStore) {
-    s.onChange = { [weak self] in self?.revision &+= 1 }
+    store = s
+    s.onChange = { [weak self] in
+      guard let self else { return }
+      self.revision &+= 1
+      if s.unauthorized { self.session.storeRejected(s) }
+      if !s.daemonUnreachable && s.daemonLoaded { self.session.reachable() }
+    }
     setup = ProjectSetupFlow(store: s)
     setup.onChange = { [weak self] in self?.revision &+= 1 }
     s.onNotify = { [weak self] n in
@@ -47,9 +52,6 @@ final class AppModel {
     }
   }
 
-  static var socketPath: String { Connection.socketPath }
-
-  static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) { Connection.makeStore(token: token) }
 
   // Identity moments: seen live only (never from a snapshot or a reopened panel), each once per run.
   @ObservationIgnored private var celebrations: [String: Date] = [:]
@@ -91,53 +93,35 @@ final class AppModel {
     return (t, agentId)
   }
 
-  /// The model at once, connecting when the token arrives. The Keychain read runs off the main thread: macOS can hold
-  /// it on an "allow access" prompt (a new build's signature), and the menu bar item must show meanwhile.
-  /// `CAPCOMD_TOKEN` in the environment wins (development and UI tests, so a rebuild doesn't need a Keychain prompt).
-  static func live() -> AppModel {
+  /// The menu bar's model, on each store the session makes (a token from the Keychain, a pairing or a paste).
+  static func live(session: AppSession) -> AppModel {
     Notifier.requestAuthorization()
     if Notifier.available { ApprovalNotifications.register() }
-    let m = AppModel(makeStore(token: ""), tokenMissing: false)   // not started until the token is in
-    m.tokenPending = true
+    let m = AppModel(session: session)
     ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
-    // A click on a goal branch notice: the run's detail, with its Ready bar.
-    ApprovalNotifications.onOpenRun = { [weak m] rid in m?.open(run: rid); MenuBarPanel.open() }
+    // A click on any other notice opens the window on its run and agent.
+    ApprovalNotifications.onOpen = { [weak m] rid, aid in m?.openInWindow(rid, aid) }
     #if DEBUG
     DispatchQueue.main.async { MenuBarDebug.start(m) }   // CAPCOMD_MENUBAR_CONTROL (MenuBarDebug.swift)
     #endif
-    if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { m.tokenFromEnvironment = true; m.connect(token: env); return m }
-    Task.detached(priority: .userInitiated) {
-      let token = Keychain.token()
-      await MainActor.run { m.connect(token: token) }
-    }
+    session.onStore { [weak m] s in m?.connect(s) }
     return m
   }
 
-  /// Starts with `token`, or asks for one when there is none.
-  private func connect(token: String?) {
-    tokenPending = false
-    guard let token, !token.isEmpty else { tokenMissing = true; revision &+= 1; return }
-    let old = transport
-    Task { try? await old.shutdown() }   // the placeholder's client must be shut down, not dropped (06db2b8)
-    let (s, t) = Self.makeStore(token: token); store = s; transport = t; attach(s)
-    tokenMissing = false; s.start(); revision &+= 1
+  /// A new store (a new token): attach to it; the session starts it.
+  private func connect(_ s: CapcomdStore) {
+    let again = connected
+    connected = true
+    attach(s)
+    revision &+= 1
+    if again { Task { await s.refreshSettings() } }   // Settings may be open on the old store's values
   }
+  @ObservationIgnored private var connected = false
 
-  /// Saves the pasted token (generic password, service "capcomd", account NSUserName()) and reconnects with it.
-  func submitToken(_ raw: String) -> Bool {
-    let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !token.isEmpty, Keychain.save(token) else { return false }
-    store.stop()
-    let old = transport
-    Task { try? await old.shutdown() }   // keeps `old` alive until its client is shut down
-    let (s, t) = Self.makeStore(token: token); store = s; transport = t; attach(s)
-    tokenMissing = false; tokenFromEnvironment = false; path = []
-    s.start(); revision &+= 1
-    Task { await s.refreshSettings() }
-    return true
-  }
+  /// Saves a pasted token in the Keychain item the window shares; both reconnect with it.
+  func submitToken(_ raw: String) -> Bool { session.submit(pasted: raw) }
   /// The token came from `CAPCOMD_TOKEN` (development): Settings says so and offers no Reset.
-  private(set) var tokenFromEnvironment = false
+  var tokenFromEnvironment: Bool { session.tokenFromEnvironment }
 
   /// Settings: what the user is finishing in Terminal (SettingsModel.swift).
   var handOffs = HandOffs()
@@ -151,51 +135,18 @@ final class AppModel {
   func approvals(_ runId: String) -> [PendingApproval] { _ = revision; return store.approvals(forRun: runId) }
   func approval(_ id: String) -> PendingApproval? { _ = revision; return store.approvals[id] }
   func steps(_ runId: String) -> [Step] { _ = revision; return store.steps(forRun: runId) }
-  func thread(_ agentId: String) -> [ThreadItem] { _ = revision; return store.thread(agentId: agentId) }
-  func threadEntries(_ agentId: String) -> [ThreadEntry] { _ = revision; return store.threadEntries(agentId: agentId) }
-  func threadUnavailable(_ agentId: String) -> DetailUnavailable? { _ = revision; return store.threadUnavailable[agentId] }
-  func media(_ key: MediaKey) -> Fetched<Data>? { _ = revision; return store.media[key] }
-  func loadMedia(_ key: MediaKey) async { await store.loadMedia(key) }
-  func openThread(runId: String, agentId: String) { store.openThread(runId: runId, agentId: agentId) }
-  func closeThread(agentId: String) { if store.openThreadAgent == agentId { store.closeThread() } }
-  func refreshThread(runId: String, agentId: String) async { await store.refreshThread(runId: runId, agentId: agentId) }
-  func threadTop(_ agentId: String) -> Int? { _ = revision; return store.threadTop(agentId: agentId) }
-  func threadLoadingEarlier(_ agentId: String) -> Bool { _ = revision; return store.threadLoadingEarlier.contains(agentId) }
-  func loadEarlierThread(runId: String, agentId: String) async { await store.loadEarlierThread(runId: runId, agentId: agentId) }
-
-  var drillView: DrillView {
-    get { _ = revision; return store.prefs.drillView }
-    set { store.prefs.drillView = newValue; revision &+= 1 }
-  }
-  var detailTab: DetailTab {
-    get { _ = revision; return store.prefs.detailTab }
-    set { store.prefs.detailTab = newValue; revision &+= 1 }
-  }
-  var activityCollapsed: Bool {
-    get { _ = revision; return store.prefs.activityCollapsed }
-    set { store.prefs.activityCollapsed = newValue; revision &+= 1 }
-  }
-
-  // Run detail (drill-down)
-  func traceRows(_ runId: String, nowMs: Int, collapsed: Set<String>) -> [TraceRow] { _ = revision; return store.traceRows(runId: runId, nowMs: nowMs, collapsed: collapsed) }
-  func traceState(_ runId: String) -> Fetched<[TraceSpan]>? { _ = revision; return store.traces[runId] }
-  func filesState(_ runId: String) -> Fetched<RunFiles>? { _ = revision; return store.files[runId] }
-  func log(_ agentId: String) -> [LogLine] { _ = revision; return store.logs[agentId] ?? [] }
-  func logUnavailable(_ agentId: String) -> DetailUnavailable? { _ = revision; return store.logUnavailable[agentId] }
   func focusAgent(_ runId: String) -> Agent? { _ = revision; return store.focusAgent(runId: runId) }
   func controlState(_ runId: String) -> ControlState { _ = revision; return store.controlState[runId] ?? .idle }
   func pauseAction(_ runId: String) -> RunControl { _ = revision; return store.pauseAction(runId: runId) }
   func control(_ runId: String, _ action: RunControl) { Task { _ = await store.control(runId, action) } }
-  /// One refresh of what the drill-down shows: the trace when it is on screen, and the visible Log or Files tab.
-  func refreshDetail(_ runId: String, trace: Bool, files: Bool, logAgent: String?) async {
-    if trace { await store.refreshTrace(runId) }
-    if files { await store.refreshFiles(runId) }
-    if let a = logAgent { await store.refreshLog(runId: runId, agentId: a) }
-  }
+  /// The run and agent in focus in the window (the store's, so the panel marks them).
+  var selection: Selection? { _ = revision; return store.selection }
 
   var startState: StartState { _ = revision; return store.startState }
   /// The daemon can't be reached right now (the app keeps retrying).
   var daemonUnreachable: Bool { _ = revision; return store.daemonUnreachable }
+  /// The app and the daemon are versions apart that matter (a different minor): said under the composer.
+  var versionSkew: VersionSkew? { _ = revision; return session.skew(daemon: store.daemonVersion) }
   /// The project checkout new runs go to (remembered); nil: the daemon's default project.
   var startRepo: String? {
     get { _ = revision; return store.prefs.startRepo }
@@ -305,27 +256,12 @@ final class AppModel {
   /// The width the project composer's tool row needs (its pills and chips never truncate); the panel widens past
   /// Theme.panelWidth to fit it.
   var composerRowWidth: CGFloat = 0
-  var routeHeight: CGFloat = 0
 
-  // Agent thread input (7c)
-  func agentControlState(_ agentId: String) -> ControlState { _ = revision; return store.agentControlState[agentId] ?? .idle }
-  func controlAgent(runId: String, agentId: String, _ action: RunControl) { Task { _ = await store.controlAgent(runId: runId, agentId: agentId, action) } }
   /// Renaming an agent (agents.title): where the field starts, and what Return sends.
   func titleEdit(runId: String, agentId: String) -> TitleEdit? { store.titleEdit(runId: runId, agentId: agentId) }
   func rename(runId: String, agentId: String, _ outcome: TitleEdit.Outcome) { Task { _ = await store.rename(runId: runId, agentId: agentId, outcome) } }
-  func pendingSteers(_ agentId: String) -> [PendingSteer] { _ = revision; return store.pendingSteers(agentId: agentId) }
-  func steer(runId: String, agentId: String, body: String, skills: [String]) { Task { await store.steer(runId: runId, agentId: agentId, body: body, skills: skills) } }
-  func retrySteer(runId: String, agentId: String, _ p: PendingSteer) { Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) } }
-  func discardSteer(agentId: String, id: String) { store.discardSteer(agentId: agentId, id: id) }
   var capabilities: Set<String> { _ = revision; return store.capabilities }
-  var skills: [SkillInfo] { _ = revision; return store.skills?.value ?? [] }
   func refreshDaemonInfo() async { await store.refreshDaemonInfo() }
-  /// The agents under `agentId` in its run, depth first: who a steer can @-mention.
-  func descendants(runId: String, of agentId: String) -> [AgentNode] {
-    func find(_ ns: [AgentNode]) -> AgentNode? { for n in ns { if n.id == agentId { return n }; if let f = find(n.children) { return f } }; return nil }
-    func flat(_ ns: [AgentNode]) -> [AgentNode] { ns.flatMap { [$0] + flat($0.children) } }
-    return find(tree(runId)).map { flat($0.children) } ?? []
-  }
 
   // The Active card (direction B: CapcomdStore/ActiveCard.swift, ActiveCardView.swift).
   func card(_ p: Project) -> ActiveCard { _ = revision; return store.activeCard(p) }
@@ -334,8 +270,8 @@ final class AppModel {
   var hiddenReasons: Set<String> = []
   /// Cards whose agent tree is showing (by project id).
   var treeShown: Set<String> = []
-  /// View diff: the run's drill-down with its Files tab.
-  func viewDiff(runId: String) { store.prefs.detailTab = .files; revision &+= 1; open(run: runId) }
+  /// View diff without a compare link: the run in the window.
+  func viewDiff(runId: String) { open(run: runId) }
   /// The outcome's files and lines (GET …/files), read once per finished run.
   @ObservationIgnored private var outcomeFilesAsked: Set<String> = []
   func loadOutcomeFiles(_ runId: String) {
@@ -343,8 +279,10 @@ final class AppModel {
     Task { await store.refreshFiles(runId) }
   }
 
-  func open(run id: String) { store.openRun(id); path = [.run(id)] }
-  func back() { if !path.isEmpty { path.removeLast() }; if path.isEmpty { store.closeRun() } }
+  /// Every panel row leads to the window: the run's project, at the agent's column (the planner's without one).
+  func open(run id: String, agent: String? = nil) { MenuBarPanel.close(); openInWindow(id, agent) }
+  /// Open capcomd (⌘O): the window, on what's in focus.
+  func openWindow() { MenuBarPanel.close(); MainWindow.show() }
   func decide(_ id: String, _ d: ApprovalDecision) { Task { _ = await store.decide(id, d) } }
 }
 
@@ -361,13 +299,15 @@ enum Notifier {
     let c = UNMutableNotificationContent()
     let id: String
     switch n {
-    case .approvalRequested(let aid, _, let q, let asker):
+    case .approvalRequested(let aid, let rid, let q, let asker):
       // "lead · login redirect asks": the agent as its tab names it (titles are plain text, like the question).
       id = "approval-\(aid)"; c.title = asker.map { "\($0) asks" } ?? "Approval needed"; c.body = q.plain   // plain text; notifications don't render markdown
-      c.categoryIdentifier = ApprovalNotifications.category; c.userInfo = ["approvalId": aid]
+      // Approve / Deny act on it; a click opens the window at the asking agent.
+      c.categoryIdentifier = ApprovalNotifications.category
+      c.userInfo = ["approvalId": aid].merging(rid.map { ["runId": $0] } ?? [:]) { a, _ in a }.merging(bot.map { ["agentId": $0.agentId] } ?? [:]) { a, _ in a }
       if let bot, let a = ApprovalNotifications.botAttachment(bot.traits, id: bot.agentId) { c.attachments = [a] }
     case .runFinished(let rid, let type, let title):
-      id = "run-\(rid)-\(type)"; c.title = title
+      id = "run-\(rid)-\(type)"; c.title = title; c.userInfo = ["runId": rid]
       c.body = type == "run.completed" ? "Run completed" : type == "run.cancelled" ? "Run stopped" : "Run failed"
     case .goalReady(let g):
       // "Ready: capcomd/add-x → dev: 2 of 3 tasks landed"; a click opens the run.
@@ -375,14 +315,5 @@ enum Notifier {
     }
     UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: c, trigger: nil))
   }
-}
-#endif
-
-#if canImport(SwiftUI) && os(macOS)
-/// The menu bar's thread views read the whole model (its `revision`): fine for one thread at a time in the panel.
-extension AppModel: ThreadHost {
-  func agentProvider(runId: String, agentId: String) -> Provider? { provider(runId: runId, agentId: agentId)?.provider }
-  func role(runId: String, agentId: String) -> String? { run(runId)?.agents[agentId]?.displayName }
-  func openAgent(runId: String, agentId: String) { path.append(.thread(runId: runId, agentId: agentId)) }
 }
 #endif

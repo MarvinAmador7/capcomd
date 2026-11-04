@@ -65,6 +65,9 @@ Usage:
              [--sandbox docker|boxd]       where this run's agents and checks run (default: CAPCOMD_SANDBOX)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
   capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages; configure: change settings, set up projects)
+  capcomd clients pair --app <name> [--scopes …] [--json]   a token for an app on this computer, printed alone on stdout
+                                       for the app to keep (the capcomd app runs it to connect; all four scopes unless
+                                       --scopes); revokes the token that app paired before
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE] | --goal-branch G --base B] [--sandbox docker|boxd]  → runId (a scope; plans nothing; sandbox default: the project's, then your user config's)
   capcomd spawn <runId> --task T [--title "2-4 words"] [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
@@ -217,6 +220,7 @@ async function main(argv: string[]): Promise<number> {
         goal: { type: "string" },
         "harness-socket": { type: "string" },
         scopes: { type: "string" },
+        app: { type: "string" },
         "no-start": { type: "boolean" },
         report: { type: "boolean" },
         continue: { type: "string" },
@@ -340,7 +344,17 @@ async function main(argv: string[]): Promise<number> {
         }
         if (sub === "list") { console.log(JSON.stringify(C.loadClients().map(({ sha256: _h, ...c }) => c), null, 2)); return EXIT.ok; }
         if (sub === "revoke" && arg) { if (!C.revokeClient(arg)) usage(`no active client ${arg}`); console.log(JSON.stringify({ revoked: arg })); return EXIT.ok; }
-        usage("capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>");
+        if (sub === "pair") {
+          // The app reads stdout: the token alone (with --json, the object). Nothing writes it anywhere else.
+          const app = (values.app as string | undefined) ?? usage("usage: capcomd clients pair --app <name> [--scopes read,steer,approve,configure] [--json]");
+          const scopes = values.scopes === undefined ? undefined : String(values.scopes).split(",").map((x) => x.trim()).filter(Boolean) as import("../api/clients").ClientScope[];
+          let r: ReturnType<typeof C.pairClient>;
+          try { r = C.pairClient(app, scopes); } catch (e) { usage(e instanceof Error ? e.message : String(e)); }
+          if (json) out({ id: r.client.id, name: r.client.name, app, scopes: r.client.scopes, token: r.token, revoked: r.revoked, version: (await import("../utils/self")).VERSION });
+          else process.stdout.write(`${r.token}\n`);
+          return EXIT.ok;
+        }
+        usage("capcomd clients add <name> [--scopes read,steer,approve,configure] | pair --app <name> | list | revoke <id>");
         return EXIT.usage;
       }
       case "sandbox": {

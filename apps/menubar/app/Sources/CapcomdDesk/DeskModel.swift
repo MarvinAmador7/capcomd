@@ -84,20 +84,26 @@ package final class MediaSlice { package var items: [MediaKey: Fetched<Data>] = 
 package final class DeskModel {
   package enum Link: Equatable { case connecting, needsToken, ready }
 
+  /// The app's one store (the session's, which the menu bar panel reads too), or the bench's.
   @ObservationIgnored package private(set) var store: CapcomdStore
-  @ObservationIgnored private var transport: UnixSocketTransport?
+  /// The app's session (token, pairing, starting the daemon, the store), shared with the menu bar; nil for the bench
+  /// and tests.
+  @ObservationIgnored package let session: AppSession?
+  @ObservationIgnored private var connected = false
   package private(set) var link: Link = .connecting { didSet { Mutations.record("DeskModel.link") } }
   /// The daemon refused the token it was given (rather than there being none).
   package private(set) var tokenRejected = false { didSet { Mutations.record("DeskModel.tokenRejected") } }
   /// The daemon's feed is down (it keeps retrying): the window says so instead of showing stale state as live.
-  package private(set) var unreachable = false { didSet { Mutations.record("DeskModel.unreachable") } }
+  package private(set) var unreachable = false { didSet { Mutations.record("DeskModel.unreachable"); if !unreachable { session?.reachable() } } }
+  /// The daemon's version (`GET /v1/health`), for the version check.
+  package private(set) var daemonVersion: String? { didSet { Mutations.record("DeskModel.daemonVersion") } }
   /// The daemon has answered: until then an empty title bar means "not read yet", not "nothing running".
   package private(set) var loaded = false { didSet { Mutations.record("DeskModel.loaded") } }
   /// Every project with something to show, oldest first (never reordered by activity).
   package private(set) var decks: [DeckInfo] = [] { didSet { Mutations.record("DeskModel.decks") } }
   /// The project the reel shows, and its run.
   package private(set) var openProjectId: String? { didSet { Mutations.record("DeskModel.openProjectId") } }
-  package private(set) var openRunId: String? { didSet { Mutations.record("DeskModel.openRunId") } }
+  package private(set) var openRunId: String? { didSet { Mutations.record("DeskModel.openRunId"); publishSelection() } }
   /// The open run's agents, in tree order: the reel's columns and the title bar's tabs.
   package private(set) var columns: [String] = [] { didSet { Mutations.record("DeskModel.columns") } }
   /// The reel's leading on-screen column, as the reel reports it: once per column crossed, never per frame.
@@ -107,7 +113,7 @@ package final class DeskModel {
   /// The agent whose rename field is open (one at a time): while it is, Return belongs to the field, never to a decision
   /// (`returnApproves`).
   package private(set) var renamingAgent: String? { didSet { Mutations.record("DeskModel.renamingAgent") } }
-  package var focusedAgent: String? { didSet { Mutations.record("DeskModel.focusedAgent"); if focusedAgent != oldValue { syncFlags() } } }
+  package var focusedAgent: String? { didSet { Mutations.record("DeskModel.focusedAgent"); if focusedAgent != oldValue { syncFlags(); publishSelection() } } }
   /// Follow: an ask or a failure in the open project scrolls the reel to its column (SPEC §3).
   package var follow = true { didSet { Mutations.record("DeskModel.follow") } }
   /// Columns across the window (3, 2 or 1), set by the reel when its width crosses a step.
@@ -173,23 +179,20 @@ package final class DeskModel {
   /// The open run's failed agents, once its columns were first read (nil: not yet).
   @ObservationIgnored private var knownFailures: Set<String>?
 
-  /// The app's model: connected to the daemon's socket with the Keychain token (or `CAPCOMD_TOKEN`).
-  package init() {
-    (store, transport) = Connection.makeStore(token: "")
+  /// The app's window, on each store the session makes (a token from the Keychain, a pairing, a paste or
+  /// `CAPCOMD_TOKEN`): the same store the menu bar panel reads. Notifications are the menu bar's (one banner per notice).
+  package init(session: AppSession) {
+    self.session = session
+    store = session.store
     setupFlow = ProjectSetupFlow(store: store)
     restoreHidden(from: .standard)
-    DeskNotifications.start(self)
-    if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { connect(env); return }
-    Task.detached(priority: .userInitiated) {
-      let token = Keychain.token()
-      await MainActor.run { [weak self] in self?.connect(token) }
-    }
+    session.onStore { [weak self] s in self?.connect(s) }
   }
 
   /// A model on a store that is already filled and needs no socket (the bench's fixtures, previews, tests): ready at
   /// once, following the store's keyed changes exactly as the connected model does.
   package init(store s: CapcomdStore, defaults d: UserDefaults? = nil) {
-    store = s; transport = nil
+    store = s; session = nil
     setupFlow = ProjectSetupFlow(store: s)
     if let d { restoreHidden(from: d) }
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
@@ -205,36 +208,52 @@ package final class DeskModel {
 
   // MARK: connection
 
-  private func connect(_ token: String?) {
-    guard let token, !token.isEmpty else { link = .needsToken; return }
-    let old = transport
-    (store, transport) = Connection.makeStore(token: token)
-    if let old { Task { try? await old.shutdown() } }
-    setupFlow = ProjectSetupFlow(store: store)
+  /// A new store (a new token): follow it; the session starts it.
+  private func connect(_ s: CapcomdStore) {
+    let reconnect = connected
+    connected = true
+    store = s
+    setupFlow = ProjectSetupFlow(store: s)
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
-    store.onChanges = { [weak self] keys in self?.apply(keys) }
-    store.onNotify = { [weak self] n in if let self { DeskNotifications.post(n, prefs: self.store.prefs) } }
-    store.start()
+    s.onChanges = { [weak self] keys in self?.apply(keys) }
     tokenRejected = false
+    // The run that was open follows the new store's feeds: select it again.
+    if reconnect { openRunId = nil }
     link = .ready
     apply([.all])
   }
 
-  /// A pasted token: saved to the Keychain item the menu bar app uses too.
-  package func submit(token raw: String) -> Bool {
-    let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !t.isEmpty, Keychain.save(t) else { return false }
-    store.stop(); connect(t); return true
+  /// The window's focus is the store's selection, which the menu bar panel reads (no copy to keep in step).
+  private func publishSelection() { store.select(runId: openRunId, agentId: openRunId == nil ? nil : focusedAgent) }
+
+  /// A panel row or a notification: the run's project, at the agent's column (its nearest shown ancestor's, else the
+  /// planner's). A project put away from the title bar comes back.
+  package func show(run runId: String, agent agentId: String? = nil) {
+    let project = store.runs[runId]?.projectId
+    guard let deck = DeepLink.deck(forRun: runId, project: project, in: store.decks()) else { return }
+    hidden[deck.id] = nil
+    open(project: deck.id)
+    let parents = store.runs[openRunId ?? runId]?.agents.mapValues(\.parent) ?? [:]
+    if let column = DeepLink.column(for: agentId, columns: columns, parent: { parents[$0] ?? nil }) { scroll(to: column, animated: false) }
   }
+
+  /// A pasted token: saved to the Keychain item the menu bar uses too; both reconnect with it.
+  package func submit(token raw: String) -> Bool { session?.submit(pasted: raw) ?? false }
 
   // MARK: changes
 
   /// The store changed: refresh only what the keys name. `.all` refreshes everything, comparing before assigning.
   package func apply(_ keys: Set<ChangeKey>) {
-    if store.unauthorized { tokenRejected = true; link = .needsToken; return }
+    if store.unauthorized {
+      tokenRejected = true; link = .needsToken
+      session?.storeRejected(store)
+      return
+    }
+    if keys == [.selection] { return }   // the window's own focus, published (publishSelection)
     let all = keys.contains(.all)
     if all {
       if unreachable != store.daemonUnreachable { unreachable = store.daemonUnreachable }
+      if daemonVersion != store.daemonVersion { daemonVersion = store.daemonVersion }
       if !loaded, store.daemonLoaded { loaded = true }
       actionsRevision &+= 1
       let d = shown(store.decks())
@@ -371,11 +390,7 @@ package final class DeskModel {
   }
 
   /// A notification's run: its project, at its planner's column (where a goal card docks).
-  package func openRun(_ runId: String) {
-    guard let deck = decks.first(where: { $0.runId == runId }) else { return }
-    open(project: deck.id)
-    if let planner = columns.first { scroll(to: planner, animated: false) }
-  }
+  package func openRun(_ runId: String) { show(run: runId) }
 
   package func agent(_ id: String) -> AgentSlice? { agents[id] }
   /// Every column's slice (renaming closes the others).

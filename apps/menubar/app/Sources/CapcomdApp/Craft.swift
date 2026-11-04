@@ -48,8 +48,8 @@ enum ApprovalNotifications {
   nonisolated static let approve = "capcomd.approve", deny = "capcomd.deny"
   /// Decisions picked in a notification go here (set by AppModel).
   static var onDecision: ((String, Bool) -> Void)?
-  /// A click on a notice that names a run (a goal branch run, ready or stopped) opens it (set by AppModel).
-  static var onOpenRun: ((String) -> Void)?
+  /// A click on a notice that names a run opens the window on it, at the agent it names (set by AppModel).
+  static var onOpen: ((_ runId: String, _ agentId: String?) -> Void)?
   private static let delegate = Delegate()
 
   static func register() {
@@ -80,7 +80,8 @@ enum ApprovalNotifications {
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
       let info = response.notification.request.content.userInfo
       if response.actionIdentifier == UNNotificationDefaultActionIdentifier, let rid = info["runId"] as? String {
-        await MainActor.run { ApprovalNotifications.onOpenRun?(rid) }
+        let aid = info["agentId"] as? String
+        await MainActor.run { ApprovalNotifications.onOpen?(rid, aid) }
         return
       }
       let id = info["approvalId"] as? String

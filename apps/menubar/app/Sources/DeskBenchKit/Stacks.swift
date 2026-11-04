@@ -181,7 +181,7 @@ public enum Symbols {
   /// Modules whose qualifier is dropped (`SwiftUI.NSHostingView.layout` → `NSHostingView.layout`), besides every
   /// `Capcomd…`/`DeskBench…` module and the image the symbol came from.
   static let modules: Set<String> = ["Swift", "SwiftUI", "SwiftUICore", "AppKit", "Foundation", "AttributeGraph", "CoreFoundation", "QuartzCore", "Combine",
-                                     "Observation", "_Concurrency", "__C", "os", "Dispatch", "ObjectiveC", "CoreGraphics", "CoreText", "MenuBarApp", "_SwiftUI_AppKit",
+                                     "Observation", "_Concurrency", "__C", "os", "Dispatch", "ObjectiveC", "CoreGraphics", "CoreText", "CapcomdApp", "_SwiftUI_AppKit",
                                      "_StringProcessing"]
 
   /// A demangled name without argument lists, return types, module qualifiers and specialisation noise, cut to 110

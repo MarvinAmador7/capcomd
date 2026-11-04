@@ -6,6 +6,12 @@ date: 2026-10-24
 
 # 1. Scope
 
+> **Since the window joined the app (one capcomd app):** the panel and the window are two views of one store. Every
+> panel row opens the window on its run, at its agent's column; the panel's run drill-down (§4.3) and thread view
+> (§4.5, with its composer) are gone, and the window's columns do that work. Approvals stay actionable in the panel.
+> The panel header has **Open capcomd** (⌘O) and the `+` menu has Quit. What follows is the original menu bar spec;
+> where it describes the drill-down or the panel's thread, the window applies instead (README › First run and below).
+
 A macOS menu bar app that shows capcomd runs ("projects") and lets you approve, steer, drill into runs and read agent threads. It renders data from `capcomd inspect <runId> --json --follow` and only acts through existing CLI verbs. All mockups are static 2x PNGs in `/workspace/capcomd-menubar/`; the HTML generators (`gen*.py`) are the source of truth for exact values.
 
 **Shell.** `MenuBarExtra` (`.window` style) hosts the 380 pt panel. The panel is as tall as the screen it shows: the list, a run view or a thread sizes the window to its content (top edge pinned under the menu bar), between 200 pt and 640 pt and never taller than the screen's visible frame minus 48 pt; past that, the content scrolls. The approved panels measure 535.5–576 pt (list), 295.5–439.5 pt (run view) and 624.5 pt (thread). Thread "Open in window" and long readers use a detached `NSPanel` (620 pt wide, resizable, non-activating until focused).

@@ -19,45 +19,46 @@ struct PanelView: View {
 
   /// The visible screen's content height, clamped to Theme.Panel and the screen.
   private var panelHeight: CGFloat {
-    let ideal = model.path.isEmpty ? model.listHeight : model.routeHeight
+    let ideal = model.listHeight
     let screen = (NSScreen.main?.visibleFrame.height ?? 900) - Theme.Panel.screenMargin
     guard ideal > 0 else { return min(Theme.Panel.initialHeight, screen) }
     return min(max(ideal, Theme.Panel.minHeight), Theme.Panel.maxHeight, screen)
   }
 
   var body: some View {
-    @Bindable var model = model
-    if model.tokenPending {
-      // macOS may be asking whether this build can read capcomd's token from the Keychain.
-      VStack(spacing: 8) {
-        ProgressView().controlSize(.small)
-        Text("Waiting for Keychain access…").font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)
-        Text("If macOS asks whether capcomd can use its token, choose Always Allow.").font(Theme.Composer.errorFont)
-          .foregroundStyle(Theme.Composer.kbdText).multilineTextAlignment(.center)
-      }
-      .padding(24).frame(width: Theme.panelWidth).background(.ultraThinMaterial)
-    } else if model.needsToken {
-      TokenPrompt(rejected: model.store.unauthorized)
-        .frame(width: Theme.panelWidth).background(.ultraThinMaterial)
+    if model.needsToken {
+      // Reading the Keychain, pairing, or something the window helps with (AppSession).
+      PanelConnect().frame(width: Theme.panelWidth).background(.ultraThinMaterial)
     } else {
-    NavigationStack(path: $model.path) {
+      // The panel and the window are two views of one app: every row opens the window on its run or agent.
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
           let projects = model.projects
           // A project whose run just completed stays up as its celebration for a moment, then drops to the finished rows.
           let active = projects.filter { $0.isActive || model.celebrating($0) != nil }
           let finished = Array(projects.filter { !$0.isActive && model.celebrating($0) == nil }.prefix(Theme.Finished.maxRows))
+          PanelHeader()
           StartProjectField().padding(.top, Theme.Composer.sectionTop)
           if model.daemonUnreachable {
             // Quiet, not red: usually a restart. What's below is the last state the daemon sent.
             HStack(spacing: 6) {
               ProgressView().controlSize(.mini)
               Text("Can't reach capcomd. Reconnecting…")
+              Spacer(minLength: 0)
+              if model.session.cli != nil && model.session.start != .starting && model.session.start != .started {
+                Button("Start capcomd") { model.session.startDaemon() }.buttonStyle(.link)
+                  .accessibilityHint("Starts capcomd now and at every login.")
+              }
             }
             .font(Theme.Composer.errorFont).foregroundStyle(Theme.Composer.kbdText)
             .padding(.horizontal, Theme.Composer.panelPadding).padding(.top, 6)
             .accessibilityElement(children: .combine)
             .transition(.opacity)
+          } else if let skew = model.versionSkew {
+            Text(skew.message)
+              .font(Theme.Composer.errorFont).foregroundStyle(Theme.Composer.kbdText)
+              .padding(.horizontal, Theme.Composer.panelPadding).padding(.top, 6)
+              .fixedSize(horizontal: false, vertical: true)
           }
           // While a folder's next steps show, an empty Active section steps aside (design/setup/InlineSetup).
           let quiet = active.isEmpty && model.setupShowing
@@ -94,18 +95,6 @@ struct PanelView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listContent = $0; model.listHeight = listContent }
         .animation(Theme.Motion.ease(reduceMotion), value: model.projects.map { "\($0.id)\($0.isActive)\(model.celebrating($0) != nil)" })
       }
-      // macOS keeps the root under a pushed view, and pushed views are clear (a material would only blur the list
-      // behind it), so the list steps out entirely while anything is pushed.
-      .opacity(model.path.isEmpty ? 1 : 0)
-      .allowsHitTesting(model.path.isEmpty)
-      .accessibilityHidden(!model.path.isEmpty)
-      .navigationDestination(for: AppModel.Route.self) { r in
-        switch r {
-        case .run(let id): RunDrillDownView(runId: id)
-        case .thread(let runId, let agentId): ThreadView(runId: runId, agentId: agentId)
-        }
-      }
-    }
     .frame(width: panelWidth, height: panelHeight)
     .transaction(value: panelHeight) { $0.animation = nil }   // layout changes snap (SPEC §7); only content fades
     .transaction(value: panelWidth) { $0.animation = nil }
@@ -120,25 +109,31 @@ struct PanelView: View {
       }
     }
     .clipShape(RoundedRectangle(cornerRadius: Theme.Panel.radius, style: .continuous))
-    .animation(Theme.Motion.push(reduceMotion), value: model.path)   // keyboard back (⌘[) runs in a no-animation transaction
     }
   }
 }
 
-/// Pushed views are clear (the panel's material shows through), so one under another would show through it: a run view
-/// under the thread opened from its Activity, or a thread under a child's opened from a handoff. Only the top one shows.
-private struct HiddenUnlessTop: ViewModifier {
+/// The panel's header: Open capcomd (⌘O), the window on whatever is in focus.
+private struct PanelHeader: View {
   @Environment(AppModel.self) private var model
-  let route: AppModel.Route
-  func body(content: Content) -> some View {
-    let top = model.path.last == route
-    content.opacity(top ? 1 : 0).allowsHitTesting(top).accessibilityHidden(!top)
+  var body: some View {
+    HStack {
+      Spacer(minLength: 0)
+      Button { model.openWindow() } label: {
+        HStack(spacing: 4) {
+          Text("Open capcomd")
+          Image(systemName: "macwindow").imageScale(.small)
+        }
+        .font(Theme.Composer.errorFont).foregroundStyle(Theme.Composer.kbdText).contentShape(Rectangle())
+      }
+      .buttonStyle(PressableStyle())
+      .keyboardShortcut("o", modifiers: .command)
+      .help("Open the capcomd window (⌘O)")
+      .accessibilityHint("Opens the capcomd window")
+    }
+    .padding(.horizontal, Theme.Composer.panelPadding)
   }
 }
-extension View {
-  func hiddenUnlessTop(_ route: AppModel.Route) -> some View { modifier(HiddenUnlessTop(route: route)) }
-}
-
 /// A recent project (Composer board "Continue" rows): its planner's bot on a tile in the bot's palette, the run's title,
 /// how it ended (its mark, then in words), and ⌘1–⌘3 to open it. No counts beyond the approved "· n repos".
 struct RecentRow: View {
@@ -183,7 +178,7 @@ struct RecentRow: View {
     // The words already say how it ended, except that its work merged.
     .accessibilityLabel([project.title, outcome?.end == .merged ? outcome?.head : nil, project.endedLine ?? "done",
                          run.flatMap { model.goalCard($0.id)?.rowFlag.map { "\($0): its goal branch waits on you" } }].compactMap { $0 }.joined(separator: ", "))
-    .accessibilityHint("Opens the run")
+    .accessibilityHint("Opens it in the capcomd window")
   }
 
   /// The tile takes the bot's own body colours, darkened a touch so the bot reads on it.
@@ -218,7 +213,7 @@ struct FinishedRow: View {
     }
     .buttonStyle(PressableStyle())
     .accessibilityLabel("\(project.title), \(spoken(line))")
-    .accessibilityHint("Opens the run")
+    .accessibilityHint("Opens it in the capcomd window")
   }
 
   /// "Done in 4m · 3 repos" → "Done in 4 minutes, 3 repos" for VoiceOver.

@@ -123,8 +123,12 @@ extension AppModel {
     handOffs.settle(current: now, finished: finished, terminalRunning: TerminalLauncher.terminalRunning)
   }
 
-  /// Reset…: Terminal revokes this app's old token(s) and makes a new one; the sheet takes it.
-  func resetToken() -> Bool { TerminalLauncher.resetToken() }
+  /// Reset…: the app pairs again with the CLI, which revokes the old token; both surfaces reconnect with the new one.
+  /// Without the CLI, Terminal does it and the sheet takes the token: `true` then (show the sheet).
+  func resetToken() -> Bool {
+    if session.cli != nil { session.pair(); return false }
+    return TerminalLauncher.resetToken()
+  }
 }
 
 /// Hand-off keys: one per row that can wait on Terminal.
@@ -170,6 +174,9 @@ enum PlaceNames {
   }
 }
 
+/// What Settings finishes in Terminal: a throwaway .command file (no Automation permission needed).
+enum TerminalLauncher {}
+
 extension TerminalLauncher {
   /// Opens Terminal running `command` through a throwaway .command file (no Automation permission needed), then a
   /// line saying whether it worked. Only plain capcomd commands are run (SettingsRows.isSafeCommand).
@@ -193,17 +200,14 @@ extension TerminalLauncher {
     return script(name: name, command)
   }
 
-  /// Reset…: revokes the active clients named "menubar" (the name `capcomd clients add menubar` gives this app's
-  /// token), then makes a new one to paste into Settings. `capcomd clients list` has no token hashes, so the app's own
-  /// client is found by that name.
+  /// Reset… when the app can't run the CLI itself: Terminal pairs the app again (which revokes the token it paired
+  /// before) and shows the new token to paste into Settings.
   static func resetToken() -> Bool {
     script(name: "reset-token", """
-      echo "Resetting the menu bar app's capcomd token."
-      old=$(capcomd clients list | /usr/bin/osascript -l JavaScript -e 'ObjC.import("Foundation"); const d = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile; JSON.parse($.NSString.alloc.initWithDataEncoding(d, $.NSUTF8StringEncoding).js).filter(c => c.name === "menubar" && !c.revokedAt).map(c => c.id).join(" ")')
-      for id in ${=old}; do capcomd clients revoke "$id" > /dev/null && echo "Revoked the old token ($id)."; done
-      capcomd clients add menubar --scopes read,steer,approve,configure || exit 1
+      echo "Resetting the capcomd app's token."
+      \(FirstRun.pairCommand) || exit 1
       echo
-      echo "Copy the token above (between the quotes) and paste it into capcomd Settings."
+      echo "Copy the token above and paste it into capcomd Settings."
       """)
   }
 
@@ -250,42 +254,28 @@ enum NotificationPermission {
   static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!
 }
 
-enum AppInfo {
-  /// The app's version: its bundle's, else (a `swift run` build) the release this source belongs to.
-  static var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? fallbackVersion }
-  static let fallbackVersion = "0.6.0"
-  static let repo = URL(string: "https://github.com/MarvinAmador7/capcomd")!
-  static let changelog = URL(string: "https://github.com/MarvinAmador7/capcomd/blob/main/CHANGELOG.md")!
-  static let newIssue = URL(string: "https://github.com/MarvinAmador7/capcomd/issues/new")!
-}
-
-/// The Settings window of a menu bar (accessory) app. An accessory app can't become the active app on current macOS,
-/// so its window would open behind the frontmost app and draw every control inactive. While Settings is open the app
-/// is a regular app (a Dock icon, as Apple's own menu bar apps do), and goes back to an accessory when it closes.
+/// The Settings window. The app is a regular Dock app, so it can always come to the front; opened from the menu bar
+/// panel, the panel closes first (it would stay on top) and the app activates with the window in front.
 @MainActor enum SettingsWindow {
   private static var window: NSWindow?
   private static var closeObserver: NSObjectProtocol?
-  /// Settings is showing: the app stays a regular app until it closes.
   static var isOpen: Bool { window?.isVisible == true }
 
-  /// Settings… in the panel: close the panel (it would stay on top), become a regular app, open the window.
+  /// Settings… in the panel: close the panel, open the window in front.
   static func open(_ openSettings: OpenSettingsAction) {
     closePanel()
-    becomeRegular()
     openSettings()
     DispatchQueue.main.async { if let window { bringFront(window) } }
   }
 
-  /// The Settings view found its window (⌘, or Settings…): regular app, window in front, accessory again on close.
+  /// The Settings view found its window (⌘, or Settings…): in front, forgotten when it closes.
   static func attach(_ w: NSWindow) {
     closePanel()
-    becomeRegular()
     if window !== w {
       if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
       window = w
       closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
         MainActor.assumeIsolated {
-          NSApp.setActivationPolicy(.accessory)
           if let o = closeObserver { NotificationCenter.default.removeObserver(o) }
           closeObserver = nil; window = nil
         }
@@ -294,9 +284,6 @@ enum AppInfo {
     DispatchQueue.main.async { bringFront(w) }
   }
 
-  private static func becomeRegular() {
-    if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
-  }
   private static func bringFront(_ w: NSWindow) {
     NSApp.activate()
     w.makeKeyAndOrderFront(nil)

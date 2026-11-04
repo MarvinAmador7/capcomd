@@ -184,8 +184,19 @@ import CapcomdStore
     }
   }
 
+  /// The desk's window: the app also has the menu bar's status item and panel (and, in development, the panel's
+  /// off-screen host), so it's the visible one with the `main` id, else the first visible on-screen one.
+  static var deskWindow: NSWindow? {
+    let shown = NSApp.windows.filter { $0.isVisible && $0.contentView != nil && $0.frame.minX > -10_000 }
+    return shown.first { $0.identifier?.rawValue.hasPrefix("main") == true }
+      ?? shown.first { w in
+        let kind = String(describing: Swift.type(of: w))
+        return !kind.contains("StatusBar") && !kind.contains("MenuBarExtra")
+      }
+  }
+
   static func swipe(_ dx: Double) {
-    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    guard let win = deskWindow else { return }
     func find(_ v: NSView) -> SnapScrollView? { (v as? SnapScrollView) ?? v.subviews.lazy.compactMap(find).first }
     guard let root = win.contentView?.superview ?? win.contentView, let sv = find(root) else { return }
     let steps = 12, t0 = ProcessInfo.processInfo.systemUptime
@@ -205,7 +216,7 @@ import CapcomdStore
   /// `vscroll N dy`: a two-finger scroll of dy points handed to the thread of the N-th column on screen (from the left;
   /// positive scrolls up, toward older messages), as `swipe` hands one to the reel.
   static func vscroll(column n: Int, _ dy: Double) {
-    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+    guard let win = deskWindow,
           let root = win.contentView?.superview ?? win.contentView else { return }
     var found: [NSScrollView] = []
     func walk(_ v: NSView) {
@@ -231,7 +242,7 @@ import CapcomdStore
 
   static func key(_ spec: String) {
     let w = spec.split(separator: " ").map(String.init)
-    guard let k = w.first, let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    guard let k = w.first, let win = deskWindow else { return }
     var flags: NSEvent.ModifierFlags = []
     if w.contains("cmd") { flags.insert(.command) }; if w.contains("ctrl") { flags.insert(.control) }; if w.contains("shift") { flags.insert(.shift) }
     let (chars, code): (String, UInt16) = switch k {
@@ -251,7 +262,7 @@ import CapcomdStore
 
   /// Types `text` into this window's focused field, one key event per character (never posted to the system).
   static func type(_ text: String) {
-    guard let win = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+    guard let win = deskWindow else { return }
     for ch in text {
       let s = String(ch)
       guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -298,7 +309,7 @@ import CapcomdStore
   }
 
   static func snapshot(into dir: URL, name: String = "window") {
-    guard let w = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+    guard let w = deskWindow,
           let frame = w.contentView?.superview ?? w.contentView,
           let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
     frame.layoutSubtreeIfNeeded()   // an occluded window gets no display passes: catch up before drawing it

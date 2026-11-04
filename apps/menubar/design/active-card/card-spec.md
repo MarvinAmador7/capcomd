@@ -5,7 +5,7 @@ the ask in light) and `Motion.dc.html` (`Motion.png`). Where this file and the b
 the board wins; fix this file in the same change.
 
 Code: state and wording in `app/Sources/CapcomdStore/ActiveCard.swift` (`activeCard(_:)`, `outcome(_:)`, tested in
-`ActiveCardTests`), layout in `app/Sources/MenuBarApp/ActiveCardView.swift`, tokens in `Theme.Ask`. Mock scenes:
+`ActiveCardTests`), layout in `app/Sources/CapcomdApp/ActiveCardView.swift`, tokens in `Theme.Ask`. Mock scenes:
 `SCENARIO=card-running | card-ask | card-stopped | card-finished | card-long | cards bun client/mock/scenarios.ts`.
 
 ## States

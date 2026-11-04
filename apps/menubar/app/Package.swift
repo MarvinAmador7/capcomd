@@ -1,13 +1,13 @@
 // swift-tools-version:5.9
 import PackageDescription
 let package = Package(
-  name: "CapcomdMenuBar",
+  name: "CapcomdApp",
   platforms: [.macOS(.v14)],
   products: [
     .library(name: "CapcomdStore", targets: ["CapcomdStore"]),
     .library(name: "CapcomdThread", targets: ["CapcomdThread"]),
-    .executable(name: "CapcomdMenuBar", targets: ["MenuBarApp"]),
-    .executable(name: "CapcomdDesktop", targets: ["CapcomdDesktop"]),
+    // The capcomd app: the window and the menu bar item in one Dock app (apps/menubar/scripts/build-app.sh bundles it).
+    .executable(name: "CapcomdApp", targets: ["CapcomdApp"]),
     // The desktop window's performance and debugging harness, for coding agents (DESKBENCH.md).
     .executable(name: "CapcomdDeskBench", targets: ["CapcomdDeskBench"]),
   ],
@@ -22,17 +22,17 @@ let package = Package(
     .target(name: "CapcomdStore", dependencies: ["CapcomdThread"]),
     // Glue to the CapcomdClient transport: SSE subscriptions per scope and the HTTP approval decider.
     .target(name: "CapcomdLive", dependencies: ["CapcomdStore", "CapcomdThread", .product(name: "CapcomdClient", package: "client")]),
-    // SwiftUI pieces both apps draw with: the theme, bots, provider marks and the thread renderer. macOS only (an
-    // empty module on Linux); declarations other targets use are `package`.
+    // SwiftUI pieces the window and the menu bar draw with (the theme, bots, provider marks, the thread renderer) and the
+    // session they share (the token, pairing, starting the daemon). macOS only (an empty module on Linux); declarations
+    // other targets use are `package`.
     .target(name: "CapcomdUI", dependencies: ["CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdLive", .product(name: "CapcomdClient", package: "client")]),
-    // SwiftUI menu bar app. Every view is behind `#if canImport(SwiftUI)`; on Linux this builds to a stub.
-    .executableTarget(name: "MenuBarApp", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI"]),
     // The desktop window (design/desktop) as a library: its model, reel and title bar, so the app and the bench both
     // host the same views. macOS only (an empty module on Linux).
     .target(name: "CapcomdDesk", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", .product(name: "CapcomdClient", package: "client"),
                                                 .product(name: "PerfLoopProbe", package: "perfloop")]),
-    // The desktop app (design/desktop): its own app, installable without the menu bar one. Only the @main scene.
-    .executableTarget(name: "CapcomdDesktop", dependencies: ["CapcomdDesk", "CapcomdUI"]),
+    // The app: the window (CapcomdDesk) with the menu bar item and its panel, and Settings, in one Dock app. Every view
+    // is behind `#if canImport(SwiftUI)`; on Linux this builds to a stub.
+    .executableTarget(name: "CapcomdApp", dependencies: ["CapcomdDesk", "CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI"]),
     // The bench's pure parts (fixtures, statistics, budgets, xctrace summaries), tested without a window.
     .target(name: "DeskBenchKit", dependencies: ["CapcomdStore", "CapcomdThread", .product(name: "PerfLoopProbe", package: "perfloop")]),
     // The bench: hosts the desktop window in-process against fixture data and measures it (DESKBENCH.md).

@@ -33,7 +33,7 @@ jobs:
         working-directory: apps/menubar/client
         run: swift test
       - name: App build and tests (includes SwiftUI views)
-        # A cold build (no cache, or a new runner image) of the app and its tests takes ~16 min since the desktop app.
+        # A cold build (no cache, or a new runner image) of the app and its tests takes ~16 min since the window joined the app.
         timeout-minutes: 25
         working-directory: apps/menubar/app
         run: swift build --build-tests && swift test --skip-build

@@ -3,7 +3,7 @@ import Foundation
 // The Settings window's data (design/settings/*.dc.html, design/settings-spec.md): the daemon's version, the logins per
 // AI × place, each place's agent environment and the background service, plus the mapping from what the daemon says
 // (or, on older daemons, what run-options implies) to the rows the window shows. Platform-neutral and tested; the
-// views live in MenuBarApp/Settings*.swift.
+// views live in CapcomdApp/Settings*.swift.
 
 // MARK: wire
 
@@ -383,7 +383,7 @@ public struct HandOffs: Sendable, Hashable {
 
 // MARK: window size
 
-/// The Settings window fitted to its pane (MenuBarApp's SettingsWindow.fit), in screen coordinates (y up).
+/// The Settings window fitted to its pane (CapcomdApp's SettingsWindow.fit), in screen coordinates (y up).
 public enum WindowFit {
   /// `frame` resized to `height` with its top edge kept, then kept inside `visible` (the screen's visible frame: no menu
   /// bar, no Dock) by moving it, never by resizing it further, unless it is taller than all of `visible`.

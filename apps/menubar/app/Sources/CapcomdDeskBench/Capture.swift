@@ -15,7 +15,7 @@ import DeskBenchKit
                                    [--token-file FILE | --keychain] [--raw] [--allow-in-repo] [--json]
     --from        the daemon's harness socket (~/.capcomd/harness.sock for the owner's), or an http endpoint serving harness.v1
     --token-file  a file holding a token with the read scope (capcomd clients add NAME --scopes read); else
-                  $CAPCOMD_TOKEN; --keychain reads the desktop app's own token from the login Keychain
+                  $CAPCOMD_TOKEN; --keychain reads the capcomd app's own token from the login Keychain
     --out         default: \(CapturedFixture.defaultDirectory.path)/NAME.json (never inside a git checkout)
     --raw         keep the real text (not anonymised): only for a file that never leaves this Mac
   """

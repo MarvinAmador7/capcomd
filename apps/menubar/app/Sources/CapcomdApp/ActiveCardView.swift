@@ -49,6 +49,9 @@ struct ActiveCardView: View {
       ZStack {
         shape.strokeBorder(Theme.Ask.amberRing, lineWidth: Theme.Ask.ringWidth).opacity(asking ? 1 : 0)
         shape.strokeBorder(Theme.Craft.contrastStroke, lineWidth: Theme.Craft.contrastStrokeWidth).opacity(contrast == .increased && !asking ? 1 : 0)
+        // The run open in the window (the store's selection): the same focus in both views.
+        shape.strokeBorder(Theme.accent.opacity(0.55), lineWidth: Theme.Ask.ringWidth)
+          .opacity(!asking && model.selection.map { card.runIds.contains($0.runId) } == true ? 1 : 0)
       }
       .allowsHitTesting(false)
     }
@@ -90,7 +93,7 @@ struct ActiveCardView: View {
     }
     .buttonStyle(PressableStyle())
     .accessibilityLabel(c.title)
-    .accessibilityHint("Opens the run")
+    .accessibilityHint("Opens it in the capcomd window")
   }
 
   // MARK: folded
@@ -174,8 +177,8 @@ struct ActiveCardView: View {
         Button("Hide") { if let r = c.reason { model.hiddenReasons.insert(r) } }.buttonStyle(CardTextButtonStyle())
           .accessibilityHint("Folds the card until something else needs you")
         Spacer(minLength: 0)
-        // There is no retry in the API yet: the thread is where to see why and steer it on.
-        Button("Open thread") { model.open(run: c.runId); model.path.append(.thread(runId: c.runId, agentId: f.agent.agentId)) }
+        // There is no retry in the API yet: its column in the window is where to see why and steer it on.
+        Button("Open thread") { model.open(run: c.runId, agent: f.agent.agentId) }
           .buttonStyle(CardButtonStyle(kind: .primary))
       case .paused:
         let state = model.controlState(c.runId)
@@ -581,7 +584,7 @@ struct OutcomeRow: View {
       .keyboardShortcut("1", modifiers: .command)
       .onAppear { model.loadOutcomeFiles(o.runId) }
       .accessibilityLabel(spoken(o))
-      .accessibilityHint("Opens the run (Command-1)")
+      .accessibilityHint("Opens it in the capcomd window (Command-1)")
       // A goal branch's Ready bar (or its pull request, or "Kept on"), docked to the row's foot.
       .safeAreaInset(edge: .bottom, spacing: 0) { GoalReadyBar(runId: o.runId) }
       .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.Ask.fill))
