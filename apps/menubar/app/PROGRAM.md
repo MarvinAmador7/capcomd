@@ -1,14 +1,15 @@
 # PROGRAM: making the desktop window faster with perfloop
 
 You are an agent improving the capcomd desktop window's performance. This file is your procedure. The bench
-(`deskbench`, DESKBENCH.md) measures; `perfloop` (tools/perfloop, design/perf-loop/SPEC.md) decides and remembers. You
+(`deskbench`, DESKBENCH.md) measures; `perfloop` ([PerfLoop](https://github.com/MarvinAmador7/perfloop), its docs/design/SPEC.md) decides and remembers. You
 change the app's code, one idea at a time, and keep a change only when the loop says it won and nothing visible broke.
 The owner checks what the bench can't: feel, taste and behaviour.
 
 ## Setup (once per machine)
 
 ```sh
-cd tools/perfloop && swift build -c release && cd -        # the runner; alias perfloop=$PWD/tools/perfloop/.build/release/perfloop
+git clone https://github.com/MarvinAmador7/perfloop ~/perfloop && (cd ~/perfloop && swift build -c release)
+alias perfloop=~/perfloop/.build/release/perfloop             # the runner
 export PERFLOOP_APP=capcomd-desktop                       # the store: ~/.perfloop/capcomd-desktop (never inside the repo)
 cd apps/menubar/app
 swift build -c release --product CapcomdDeskBench          # on a clean checkout of main
@@ -80,7 +81,7 @@ between builds, `explain` says so, and they mean nothing on their own (a 48 Hz b
 ## What you may not touch inside an experiment
 
 - The bench: `Sources/CapcomdDeskBench` (scenarios, drivers, guards), `Sources/DeskBenchKit` (budgets, stats,
-  fixtures), `tools/perfloop`, this file. Changes there are their own PR, reviewed by the owner (anti-Goodhart: the
+  fixtures), PerfLoop itself, this file. Changes there are their own PR, reviewed by the owner (anti-Goodhart: the
   rules are read from the champion's manifest, so a candidate that changes them needs `--owner` anyway).
 - No bench-only paths in the app: no `DESKBENCH_`/`PERFLOOP_` checks outside knobs, no fixture names, no "if
   measured" branches. A fast blank column is still a blank column.

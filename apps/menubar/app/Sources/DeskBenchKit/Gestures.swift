@@ -3,7 +3,7 @@ import PerfLoopProbe
 
 // Gestures for `swipe` (design/perf-loop CAPABILITIES.md C9): where a gesture comes from, the synthetic ones the bench
 // ships, and how a result's smoothness is summed up, compared and judged. The recorder, the file format and the meter
-// are tools/perfloop's (PerfLoopProbe: Gestures.swift, Smoothness.swift); the replay is CapcomdDeskBench/Swipe.swift.
+// are PerfLoop's (PerfLoopProbe: Gestures.swift, Smoothness.swift); the replay is CapcomdDeskBench/Swipe.swift.
 
 public enum Gestures {
   /// `synthetic:NAME` is one of `synthetic` (no file needed: a copied bench binary has them); anything else is a path.
