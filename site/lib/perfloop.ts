@@ -42,7 +42,7 @@ export const SWEEP: Array<{ what: string; perAgent: number; from: number; to: nu
   { what: "AppKit columns in reused slots", perAgent: 2.4, from: 43, to: 212 },
 ];
 
-/** The ten capabilities as built (JOURNEY §3), in the page's three senses. */
+/** The capabilities as built: C1–C10 from JOURNEY §3, C11–C12 and the additions from the perfloop repo's README. */
 export const CAPABILITIES: Array<[string, string, string]> = [
   ["C1", "In-process sampler", "Stacks inside every long stretch, every run, at about 1.3 % overhead. No profiler needed."],
   ["C2", "perfloop diff", "A differential call tree, A against B, per step: what grew in B."],
@@ -51,12 +51,15 @@ export const CAPABILITIES: Array<[string, string, string]> = [
   ["C5", "Ledger and champion", "A content-addressed build store, provenance stamped into every binary, an append-only ledger."],
   ["C6", "Correctness guards", "Every column in view built at rest; the window pixel for pixel against the champion's, within 0.5 %."],
   ["C7", "Why did this body run", "Each SwiftUI body re-evaluation charged to the state change that caused it."],
-  ["C8", "Sweeps", "Cost curves over crew size, thread length and knobs, with a fitted slope."],
-  ["C9", "Gesture replay", "A trackpad swipe replayed into the window, scored on how well the content followed the fingers."],
-  ["C10", "A machine nobody is using", "An idle-gated local runner, an ssh:// runner for a spare Mac, an overnight queue."],
+  ["C8", "Sweeps", "Cost curves over crew size, thread length and knobs, with a fitted slope and where each curve crosses the frame budget."],
+  ["C9", "Gesture replay", "A trackpad swipe replayed into the window, scored on how well the content followed the fingers; a recorder for a real one."],
+  ["C10", "A machine nobody is using", "An idle-gated local runner, an ssh:// runner for a spare Mac, a macOS VM for screening, an overnight queue."],
+  ["C11", "What to try next", "Ranked hypotheses for the next experiment, each with the share of the step it could remove and the evidence for it."],
+  ["C12", "An MCP server", "The loop as tools an agent calls: long stages run as jobs it checks on, and the owner's flags aren't offered."],
 ];
 
 export const LOOP_CMDS: Array<[string, string]> = [
+  ["perfloop suggest champion", "What to try next, ranked, with the evidence."],
   ["perfloop exp new \"<hypothesis>\" --knobs desk.column=native", "A candidate against the champion, screened at once."],
   ["perfloop exp full ID", "5 + 5 interleaved pairs, more while it's unsure: won, lost or needs review."],
   ["perfloop explain exp/ID", "Everything needed to decide the next step, in one file."],

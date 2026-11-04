@@ -201,7 +201,7 @@ export default function PerfLoopPage() {
 
         <section className="pl-sec pl-eng" aria-labelledby="eng-h">
           <details>
-            <summary id="eng-h">For engineers: the ten capabilities, the loop and what&apos;s not done</summary>
+            <summary id="eng-h">For engineers: twelve capabilities, the loop and what&apos;s not done</summary>
             <ol className="pl-caps">
               {CAPABILITIES.map(([id, name, what]) => <li key={id}><span>{id}</span><h3>{name}</h3><p>{what}</p></li>)}
             </ol>
@@ -210,10 +210,10 @@ export default function PerfLoopPage() {
             </dl>
             <h3 className="pl-eng__h">Not done yet</h3>
             <ul className="pl-eng__not">
-              <li>Feel is scored on synthetic gestures; a swipe recorded by hand is next.</li>
-              <li>Trusted numbers from the spare Mac wait on an unlocked screen. Runs on the developer&apos;s own Mac are marked untrusted.</li>
+              <li>Feel is scored on synthetic gestures and replays with real timestamps. The recorder is built; a swipe recorded by hand is next.</li>
+              <li>A spare Mac&apos;s runs count only while its screen is unlocked, so unattended nights wait on setting one up for it. Runs on the developer&apos;s own Mac are marked untrusted.</li>
               <li>On capcomd Desktop, no experiment has beaten today&apos;s build yet, so the loop has no speed-up there to claim. The reel&apos;s earlier gains were made by hand, in the <a href="/desktop/perf/">perf log</a>.</li>
-              <li>The VM runner is a stub.</li>
+              <li>A VM only screens: the guest reads no instruction counts and runs at 60 Hz, so full runs need a real Mac.</li>
             </ul>
           </details>
         </section>
