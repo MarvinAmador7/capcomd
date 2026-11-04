@@ -12,7 +12,7 @@ import { SITE } from "@/lib/site";
 // every number are design/perf-loop/JOURNEY.md and apps/menubar/app/LAYOUT.md; JOURNEY §7's "what not to claim" holds.
 const title = "PerfLoop · agents that see, feel and improve";
 const description = "PerfLoop gives coding agents the senses a native Mac app needs: where every millisecond goes, how a swipe feels, and a loop that keeps only what's better, run every night.";
-const CODE = `${SITE.repo}/tree/main/tools/perfloop`;
+const CODE = "https://github.com/MarvinAmador7/perfloop";
 
 export const metadata: Metadata = {
   title, description,
@@ -71,7 +71,7 @@ export default function PerfLoopPage() {
           <p className="pl-sub" data-load style={delay(140)}>PerfLoop gives coding agents the senses a native Mac app needs: where every millisecond goes, how a swipe feels, and a loop that keeps only what&apos;s better. Then it lets them run it every night.</p>
           <p className="pl-act" data-load style={delay(220)}>
             <a className="button" href={CODE}>Read the code</a>
-            <span>Built for <a href="/desktop/">capcomd Desktop</a>; its own Swift package, with no imports from the app.</span>
+            <span>Open source, MIT. Made on <a href="/desktop/">capcomd Desktop</a>; works with any AppKit or SwiftUI app.</span>
           </p>
         </div>
         <div className="pl-hero__night" data-load style={delay(320)}><Night /></div>
@@ -212,15 +212,15 @@ export default function PerfLoopPage() {
             <ul className="pl-eng__not">
               <li>Feel is scored on synthetic gestures; a swipe recorded by hand is next.</li>
               <li>Trusted numbers from the spare Mac wait on an unlocked screen. Runs on the developer&apos;s own Mac are marked untrusted.</li>
-              <li>No experiment has beaten today&apos;s build yet, so the loop has no speed-up of its own to claim. The reel&apos;s earlier gains were made by hand, in the <a href="/desktop/perf/">perf log</a>.</li>
+              <li>On capcomd Desktop, no experiment has beaten today&apos;s build yet, so the loop has no speed-up there to claim. The reel&apos;s earlier gains were made by hand, in the <a href="/desktop/perf/">perf log</a>.</li>
               <li>The VM runner is a stub.</li>
             </ul>
           </details>
         </section>
 
         <section className="pl-sec pl-close" aria-labelledby="close-h">
-          <h2 id="close-h" className="pl-h2" data-reveal>In the repo today.</h2>
-          <p className="pl-sub" data-reveal style={delay(60)}>PerfLoop is a Swift package in capcomd&apos;s repository, MIT-licensed, measuring capcomd Desktop.</p>
+          <h2 id="close-h" className="pl-h2" data-reveal>Bring it to your app.</h2>
+          <p className="pl-sub" data-reveal style={delay(60)}>PerfLoop has its own repository, MIT-licensed. Add it to an AppKit or SwiftUI app, or start with the sample app that comes with it.</p>
           <p className="pl-act" data-reveal style={delay(120)}>
             <a className="button" href={CODE}>Read the code</a>
             <a href="/desktop/perf/">Read the perf log</a>

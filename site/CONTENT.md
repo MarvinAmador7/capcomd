@@ -110,8 +110,10 @@ it when the switch work lands: the "Still slow" section says the next targets.
 
 What PerfLoop unlocks for agents (see, feel, improve, again), not how it works. Every number is from
 `design/perf-loop/JOURNEY.md` and `apps/menubar/app/LAYOUT.md` on main; JOURNEY §7 ("what not to claim") holds: no
-speed-up from the loop itself (none beat the champion), no trusted dedicated-hardware numbers, no hand-recorded
-gesture, not a standalone product. Linked from the Desktop page's "Native. Fast. Measured." (not in the main nav).
+speed-up on capcomd Desktop from the loop itself (none beat the champion), no trusted dedicated-hardware numbers, no
+hand-recorded gesture. PerfLoop has its own public repository (github.com/MarvinAmador7/perfloop, MIT; it moved out of
+capcomd's `tools/perfloop` on 2026-11-04; JOURNEY.md is also in its `docs/design/`). "Works with any AppKit or
+SwiftUI app" is its PerfLoopHost library and the SlowList sample, run end to end on 2026-11-04. Linked from the Desktop page's "Native. Fast. Measured." (not in the main nav).
 
 | Section | Claims | Source |
 |---|---|---|
