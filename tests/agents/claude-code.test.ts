@@ -39,7 +39,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(res.costUsd).toBeCloseTo(0.123);
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBe(res.sha);
     const msg = await new Git(s.r.bare).ok(["log", "-1", "--format=%B", s.task.branch]);
-    expect(msg).toStartWith("Make the failing test pass\n");                 // what it does; the task is in the trailer
+    expect(msg).toStartWith("Fix sum\n");  // what it did (its summary, "fixed sum", as a subject); the task is in the trailer
     expect(msg).toContain("Capcomd-Task: r1/task-1");
     expect(msg).toContain("Capcomd-Epoch: 1");
     expect(msg).toContain(`Capcomd-Agent: claude-code@${CLAUDE_CODE_VERSION}`);
