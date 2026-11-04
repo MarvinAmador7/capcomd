@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.9.0 (2026-11-03)
+
+Drivers get much further on their own. A project's runs use its own sandbox, setup registers the project and offers
+the Docker env build, and a merge of a verified commit lands in about 2 seconds when the target hasn't moved. Verifies
+run side by side, `capcomd_await` waits on verifies and merges, the orchestration skill opens with team shapes, and a
+`lead` profile lets parts of the work have helpers. **Breaking:** a goal-branch run you drive yourself becomes ready
+only when you mark it done (`capcomd goal done`, or `capcomd_goal` with `done: true`). Checked with a live run before
+the release: an Opus driver built a small project with 16 Claude agents on Docker, with no workarounds.
+
 - Fix: verify's reviewer now judges the same code the checks test: your agent's change merged onto the target
   branch. Before, an agent branch cut before the target got code its tests need could fail review even though its
   checks passed. If the target moves during a verify, the review runs again on what the checks tested.
