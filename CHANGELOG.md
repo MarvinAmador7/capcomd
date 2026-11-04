@@ -5,6 +5,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: verify's reviewer now judges the same code the checks test: your agent's change merged onto the target
+  branch. Before, an agent branch cut before the target got code its tests need could fail review even though its
+  checks passed. If the target moves during a verify, the review runs again on what the checks tested.
+- Fix: `capcomd run new --key` (and `capcomd_run_new`) scopes the key to the project, so two projects whose drivers
+  pick the same key get separate runs. Runs created before this keep working for their own project.
+- Fix: `capcomd_setup` no longer reports "not ready" because a Codex login is missing when no profile in the project
+  uses Codex, or because the plugin is missing when your agent already reaches capcomd's tools. Before a project is
+  set up, `capacity` describes the sandbox your config names.
+- Fix: agents' commit subjects, and the pull requests made from them, read like commit messages ("Add X" instead of
+  "I added X…"). The title you give an agent with `--title` is used before the task text, and names like `printExpr`
+  keep their case.
+- Fix: `capcomd setup`'s env-image check respects `CAPCOMD_WORKDIR`. When `CAPCOMD_HOME` is set, clones default to
+  `$CAPCOMD_HOME/work`.
+- Fix: `capcomd status <runId>` for a run you drive yourself (no planner) shows its agents' state, its budget and
+  spend, and its total number of events. With `--json`, `scope` includes them, and `events` counts every event of the
+  run.
+- `capcomd <command> --help` (for example `capcomd setup project --help`) shows that command's usage.
+
 - `capcomd run`'s planner can now hand a part of the goal that splits further to a lead, which splits it among
   helpers and verifies and merges their work itself. New projects get this from `capcomd setup`. In an existing
   project, add `"lead"` to the planner's `children.allowedChildProfiles` in `.capcomd/agents.json`.
