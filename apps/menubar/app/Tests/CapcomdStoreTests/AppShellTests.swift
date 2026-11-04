@@ -18,6 +18,18 @@ final class AppShellTests: XCTestCase {
     XCTAssertFalse(Presence.showsInMenuBar(keepInDock: true, showInMenuBar: false))
   }
 
+  /// The window's Choose Project Folder…: a click there while another app is in front used to begin the Open panel
+  /// behind that app. The app is made regular and active first when it isn't, and the panel is always ordered front.
+  func testTheOpenPanelComesToTheFront() {
+    // Clicked while another app was in front (the window takes the first click): ask to be active.
+    XCTAssertEqual(Presence.beforeOpenPanel(regular: true, active: false), OpenPanelSteps(becomeRegular: false, activate: true, orderFront: true))
+    // Reached with no window open (an accessory app, the menu bar its home): regular first, or the first click cancels it.
+    XCTAssertEqual(Presence.beforeOpenPanel(regular: false, active: true), OpenPanelSteps(becomeRegular: true, activate: true, orderFront: true))
+    XCTAssertEqual(Presence.beforeOpenPanel(regular: false, active: false), OpenPanelSteps(becomeRegular: true, activate: true, orderFront: true))
+    // Active with the window key: nothing to change, still in front.
+    XCTAssertEqual(Presence.beforeOpenPanel(regular: true, active: true), OpenPanelSteps(becomeRegular: false, activate: false, orderFront: true))
+  }
+
   private func deck(_ project: String, _ run: String) -> DeckInfo {
     DeckInfo(id: project, runId: run, title: project, startedAtMs: nil, endedHead: nil, isRunning: true, sandbox: nil,
              askingAgentId: nil, askingName: nil, agentIds: [])

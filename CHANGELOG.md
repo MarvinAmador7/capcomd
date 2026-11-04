@@ -25,6 +25,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - `capcomd clients pair --app <name>` makes a token for an app on this computer and prints only the token, for the app
   to keep (the Mac app runs it to connect). It has all four scopes unless you pass `--scopes`, and it revokes the token
   that app paired before. `--json` adds the client id, its scopes and what it revoked.
+- Fix: in the window's new project composer, choosing a project folder (the folder chip, + › **Choose Project
+  Folder…**, **Choose Another Folder…**) opens the folder panel in front. Before, a click there while another app was
+  in front opened the panel behind that app's windows, so nothing seemed to happen.
+- Fix: the window's driver chip opens even when no AI can drive a run where it would start (say, Local without a Local
+  login). It lists Claude Code and Codex with the reason each can't run there, as the menu bar's composer does; switch
+  to the other place, or run the command it names. Before, it was a name that did nothing when clicked.
 - Fix: `capcomd service install` from a Homebrew install runs capcomd through Homebrew's stable `opt` path, so the
   service keeps working after `brew upgrade` (before, it pointed at the old version's folder, which Homebrew removes).
   Run `capcomd service install` once more to update an existing service.
