@@ -612,10 +612,13 @@ private struct LaunchStage: View {
   var body: some View {
     let workers = model.workers
     ZStack(alignment: .topLeading) {
+      // The planner: its node at the top of the circuit, filled once the run has its planner.
+      let plannerAt = max(250, model.plannerArrival ?? Int.max)
+      LaunchNode(fill: model.planner == nil || ms < plannerAt ? 0 : (model.reduceMotion ? 1 : Launch.fill(atMs: ms, from: plannerAt)),
+                 color: OnboardColor.orange)
+        .offset(x: 600 - Launch.nodeSide / 2, y: Launch.plannerNodeTop)
       if Launch.showsPlanner(atMs: ms) {
         let p = progress(from: 250, 900)
-        OnboardBot(colorway: .orange, mood: .smile, cell: 7).accessibilityHidden(true)
-          .opacity(p).offset(x: 544, y: 92 - 32 * (1 - p))
         VStack(spacing: 6) {
           Text("Planner").font(OnboardType.text(16, 600)).foregroundStyle(OnboardColor.amber)
           HStack(spacing: 4) {
@@ -623,13 +626,13 @@ private struct LaunchStage: View {
             Rectangle().fill(OnboardColor.cyan).frame(width: 7, height: 13).opacity(ms / 500 % 2 == 0 ? 1 : 0)
           }
         }
-        .frame(width: 300).opacity(p).offset(x: 450, y: 216 - 32 * (1 - p))
+        .frame(width: 300).opacity(p).offset(x: 450, y: Launch.plannerLabelTop)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Planner, \(model.planner?.status ?? "planning")")
       }
       // The circuit: down from the planner, across, and down to each place (CSS steps(7) over 0.5 s).
-      Dashes(vertical: true, color: OnboardColor.purple).frame(width: 4, height: 54)
-        .scaleEffect(x: 1, y: stepped(from: 1000, 500, 7), anchor: .top).offset(x: 598, y: 266)
+      Dashes(vertical: true, color: OnboardColor.purple).frame(width: 4, height: Launch.traceHeight)
+        .scaleEffect(x: 1, y: stepped(from: 1000, 500, 7), anchor: .top).offset(x: 598, y: Launch.traceTop)
       ZStack(alignment: .leading) {
         Dashes(vertical: false, color: OnboardColor.purple).frame(width: 544, height: 4)
           .scaleEffect(x: stepped(from: 1300, 500, 7), y: 1, anchor: .center)
@@ -640,18 +643,18 @@ private struct LaunchStage: View {
           }
         }
       }
-      .frame(width: 544, height: 4, alignment: .leading).offset(x: 328, y: 320)
+      .frame(width: 544, height: 4, alignment: .leading).offset(x: 328, y: Launch.busTop)
       ForEach(0..<3, id: \.self) { i in
         let cx = Launch.slots[i]
-        Dashes(vertical: true, color: OnboardColor.purple).frame(width: 4, height: 44)
-          .scaleEffect(x: 1, y: stepped(from: 1650, 500, 7), anchor: .top).offset(x: cx - 2, y: 320)
-        if Launch.showsWorker(i, atMs: ms, workers: workers.count) {
-          WorkerSlot(member: workers[i], index: i, cx: cx, appeared: model.arrival(i), ms: ms, now: now)
-        } else if stepped(from: 1650, 500, 7) >= 1 {
-          // Not here yet: the place it will land.
-          Rectangle().strokeBorder(OnboardColor.node, lineWidth: 4).frame(width: 16, height: 16).offset(x: cx - 8, y: 364)
-            .accessibilityHidden(true)
+        Dashes(vertical: true, color: OnboardColor.purple).frame(width: 4, height: Launch.dropHeight)
+          .scaleEffect(x: 1, y: stepped(from: 1650, 500, 7), anchor: .top).offset(x: cx - 2, y: Launch.busTop)
+        let landed = Launch.showsWorker(i, atMs: ms, workers: workers.count)
+        // Its place on the circuit once the drop has reached it: hollow, then filled when its agent lands.
+        if landed || stepped(from: 1650, 500, 7) >= 1 {
+          LaunchNode(fill: landed ? (model.reduceMotion ? 1 : Launch.fill(atMs: ms, from: model.arrival(i))) : 0, color: slotColor(i))
+            .offset(x: cx - Launch.nodeSide / 2, y: Launch.nodeTop)
         }
+        if landed { WorkerSlot(member: workers[i], index: i, cx: cx, appeared: model.arrival(i), ms: ms, reduceMotion: model.reduceMotion) }
       }
       if Launch.showsDone(atMs: ms) {
         VStack(spacing: 0) {
@@ -663,11 +666,13 @@ private struct LaunchStage: View {
             .disabled(model.flow.runId == nil)
             .padding(.top, 22).enter(2)
         }
-        .frame(width: 1200).offset(y: 566)
+        .frame(width: 1200).offset(y: Launch.doneTop)
       }
     }
     .frame(width: 1200, height: 760, alignment: .topLeading)
   }
+
+  private func slotColor(_ i: Int) -> Color { Launch.slotColorways[i] == .orange ? OnboardColor.amber : OnboardColor.lilac }
 
   /// Expo-out progress of an arrival that starts at `start` ms and lasts `d`.
   private func progress(from start: Int, _ d: Int) -> Double {
@@ -678,26 +683,40 @@ private struct LaunchStage: View {
   }
 }
 
+/// A member's place on the circuit: a 16 pt pixel node, hollow, filling in its colour (expo out, no bounce) as its
+/// agent arrives.
+private struct LaunchNode: View {
+  let fill: Double
+  let color: Color
+  var body: some View {
+    ZStack {
+      Rectangle().fill(OnboardColor.ground)
+      Rectangle().fill(color).opacity(fill)
+      Rectangle().strokeBorder(OnboardColor.node, lineWidth: 4)
+      Rectangle().strokeBorder(color, lineWidth: 4).opacity(fill)
+    }
+    .frame(width: Launch.nodeSide, height: Launch.nodeSide)
+    .accessibilityHidden(true)
+  }
+}
+
+/// A worker's name and typed status under its node.
 private struct WorkerSlot: View {
   let member: OnboardingModel.CrewMember
   let index: Int
   let cx: Double
   let appeared: Int
   let ms: Int
-  let now: Double
+  let reduceMotion: Bool
   var body: some View {
-    let p = Curve.expo.apply(Double(ms - appeared) / 900)
+    let p = reduceMotion ? 1 : Curve.expo.apply(Double(ms - appeared) / 900)
     let color = Launch.slotColorways[index] == .orange ? OnboardColor.amber : OnboardColor.lilac
-    Group {
-      OnboardBot(colorway: Launch.slotColorways[index], mood: .smile, cell: 6, bobDelay: [0.6, 1.4, 2.1][index]).accessibilityHidden(true)
-        .opacity(p).offset(x: cx - 48, y: 368 - 32 * (1 - p))
-      VStack(spacing: 6) {
-        Text(verbatim: member.name).font(OnboardType.text(16, 600)).foregroundStyle(color).lineLimit(1)
-        Typed(text: member.status, from: appeared + 350, ms: ms)
-      }
-      .frame(width: 240).opacity(p).offset(x: cx - 120, y: 476 - 32 * (1 - p))
-      .accessibilityElement(children: .ignore).accessibilityLabel("\(member.name), \(member.status)")
+    VStack(spacing: 6) {
+      Text(verbatim: member.name).font(OnboardType.text(16, 600)).foregroundStyle(color).lineLimit(1)
+      Typed(text: member.status, from: appeared + 350, ms: ms)
     }
+    .frame(width: 240).opacity(p).offset(x: cx - 120, y: Launch.workerLabelTop)
+    .accessibilityElement(children: .ignore).accessibilityLabel("\(member.name), \(member.status)")
   }
 }
 

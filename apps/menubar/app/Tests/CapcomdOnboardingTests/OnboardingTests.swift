@@ -407,6 +407,30 @@ final class LaunchTests: XCTestCase {
     XCTAssertTrue(Launch.showsWorker(0, atMs: 9000, workers: 1)); XCTAssertFalse(Launch.showsWorker(1, atMs: 9000, workers: 1))
     XCTAssertFalse(Launch.showsWorker(3, atMs: 9000, workers: 5))   // three places
   }
+
+  /// No bots on Launch: nodes on the circuit, read top-down, with no gap where the planner bot stood.
+  func testNodesReadTopDown() {
+    // The planner's node is centred where the prototype's planner bot was (7 pt cells at top 92: 92 + 56).
+    XCTAssertEqual(Launch.plannerNodeTop + Launch.nodeSide / 2, 148)
+    XCTAssertLessThan(Launch.plannerNodeTop + Launch.nodeSide, Launch.plannerLabelTop)
+    XCTAssertLessThan(Launch.plannerLabelTop + 44, Launch.traceTop)             // name and status, then the trace
+    XCTAssertEqual(Launch.traceTop + Launch.traceHeight, Launch.busTop)          // the trace meets the bus
+    XCTAssertEqual(Launch.nodeTop, Launch.busTop + Launch.dropHeight)           // each drop ends on its node
+    XCTAssertLessThan(Launch.nodeTop + Launch.nodeSide, Launch.workerLabelTop)
+    XCTAssertLessThan(Launch.workerLabelTop + 44, Launch.doneTop)
+  }
+
+  func testANodeFillsWithoutBouncing() {
+    XCTAssertEqual(Launch.fill(atMs: 1000, from: 1000), 0)
+    XCTAssertEqual(Launch.fill(atMs: 1000 + Launch.fillMs, from: 1000), 1)
+    var last = 0.0
+    for t in stride(from: 1000, through: 1000 + Launch.fillMs + 200, by: 10) {
+      let f = Launch.fill(atMs: t, from: 1000)
+      XCTAssertGreaterThanOrEqual(f, last); XCTAssertLessThanOrEqual(f, 1)   // monotonic, never past full
+      last = f
+    }
+    XCTAssertGreaterThan(Launch.fill(atMs: 1000 + Launch.fillMs / 4, from: 1000), 0.6)   // expo out: most of it early
+  }
 }
 
 final class RepoScanTests: XCTestCase {

@@ -223,6 +223,24 @@ public enum Launch {
   /// Slot `i` holds a worker: its time has come and the run has an i-th worker.
   public static func showsWorker(_ i: Int, atMs t: Int, workers: Int) -> Bool { i < min(3, workers) && stage(atMs: t) >= 3 + i }
   public static let suggestions = ["Add a --json flag to every command", "Write tests for the parser", "Fix the flaky CI job"]
-  /// The colours of the three slots' names (purple, orange, purple) and their bots.
+  /// The colours of the three slots' names and nodes (purple, orange, purple).
   public static let slotColorways: [Sprite.Colorway] = [.purple, .orange, .purple]
+
+  // The layout, top-down (no bots on this screen: each member is a 16 pt pixel node on the circuit, hollow until its
+  // agent arrives, then filled in its colour).
+  /// The planner's node, centred where the planner bot's centre was (148), and its name and status under it.
+  public static let plannerNodeTop = 140.0, plannerLabelTop = 168.0
+  /// The trace down from the planner to the bus, the bus, and the drops to the slots.
+  public static let traceTop = 222.0, busTop = 320.0, dropHeight = 44.0
+  public static var traceHeight: Double { busTop - traceTop }
+  /// The workers' nodes at the drops' ends, their names and statuses under them.
+  public static var nodeTop: Double { busTop + dropHeight }
+  public static let workerLabelTop = 392.0
+  /// "Your crew is on it."
+  public static let doneTop = 500.0
+  public static let nodeSide = 16.0
+  /// A node fills in this long (expo out; no bounce), from when its agent is there and its time has come.
+  public static let fillMs = 400
+  /// Fill progress 0…1 of a node whose agent landed at `from` ms.
+  public static func fill(atMs t: Int, from: Int) -> Double { Curve.expo.apply(Double(t - from) / Double(fillMs)) }
 }

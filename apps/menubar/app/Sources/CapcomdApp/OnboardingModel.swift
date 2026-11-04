@@ -30,6 +30,8 @@ final class OnboardingModel {
   private(set) var workers: [CrewMember] = []
   /// When each worker first showed up (ms into the launch).
   private(set) var arrivals: [Int] = []
+  /// When the planner first showed up (ms into the launch): its node fills from then.
+  private(set) var plannerArrival: Int?
   private(set) var launching = false
 
   struct CrewMember: Equatable { var name: String; var status: String }
@@ -367,7 +369,7 @@ final class OnboardingModel {
   func launch() async {
     guard !launching, flow.go(.launch) else { return }
     launching = true
-    flow.runId = nil; flow.launchFailure = nil; planner = nil; workers = []; arrivals = []
+    flow.runId = nil; flow.launchFailure = nil; planner = nil; workers = []; arrivals = []; plannerArrival = nil
     launchStart = Date()
     let goal = flow.goal.trimmingCharacters(in: .whitespacesAndNewlines)
     let state = await store.startRun(goal: goal, store.newRunChoice(goalSetup: nil))
@@ -389,6 +391,7 @@ final class OnboardingModel {
         guard let self, self.flow.step == .launch else { return }
         let cols = self.store.reelColumns(runId: runId)
         if let p = cols.first(where: { $0.kind == .planner }) ?? cols.first {
+          if self.plannerArrival == nil, let s = self.launchStart { self.plannerArrival = Int(Date().timeIntervalSince(s) * 1000) }
           self.planner = CrewMember(name: "Planner", status: Self.status(p))
           let rest = cols.filter { $0.agentId != p.agentId }.prefix(3)
           let next = rest.map { CrewMember(name: $0.title ?? $0.label, status: Self.status($0)) }
