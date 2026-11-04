@@ -247,8 +247,8 @@ export type PushBranchParams = {
   agent?: string;
   /** The spec the agent was spawned with (its scope record): wins over `agent` looked up by name. */
   agentSpec?: Record<string, unknown> | null;
-  /** verify's reviewer: review this commit; nothing is committed or pushed. */
-  review?: { sha: string; branch: string; target: string };
+  /** verify's reviewer: review this commit (merged onto `targetSha`, the tree the checks test); nothing is committed or pushed. */
+  review?: { sha: string; branch: string; target: string; targetSha?: string };
   /** Report mode: read-only work; the final message is the result, nothing is pushed. */
   report?: boolean;
 };

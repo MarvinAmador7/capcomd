@@ -7,16 +7,27 @@ import { chmodSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { world, spawnRoot, waitAll, types, agentsOf, WORKER, type World } from "./harness";
+import { capcomd } from "../helpers/engine";
 
 let w: World;
 let worker: string;
+let repoFile: string;
 beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), "capcomd-reviewer-"));
   const reviewer = join(dir, "reviewer.sh");
-  // Scripted reviewer: the brief (its task) carries the child's task; GOOD passes, BAD fails, else no verdict.
+  repoFile = join(dir, "repo-path");
+  // Scripted reviewer: the brief (its task) carries the child's task; GOOD passes, BAD fails, else no verdict. TREE runs
+  // "the tests" (dep.txt and the agent's file present) in the checkout a real reviewer gets: the reviewed commit,
+  // merged onto the target commit verify gave it.
   writeFileSync(reviewer, `#!/bin/sh
 echo "BRIEF<<$CAPCOMD_TASK>>"
 case "$CAPCOMD_TASK" in
+  *TREE*)
+    git clone -q "$(cat ${JSON.stringify(repoFile)})" "$HOME/rv" && cd "$HOME/rv" && git checkout -q --detach "$CAPCOMD_REVIEW_SHA" || exit 1
+    if [ -n "$CAPCOMD_REVIEW_TARGET_SHA" ]; then git -c user.name=t -c user.email=t@example.com merge -q --no-edit "$CAPCOMD_REVIEW_TARGET_SHA" || exit 1; fi
+    echo "TREE target=$CAPCOMD_REVIEW_TARGET_SHA"
+    if test -f dep.txt && test -f src/tree.txt; then capcomd result --summary "tests pass" --data '{"passed":true,"reasons":["the tests pass"]}' >/dev/null
+    else capcomd result --summary "tests fail" --data '{"passed":false,"reasons":["dep.txt is missing: the tests fail"]}' >/dev/null; fi ;;
   *GOOD*) capcomd result --summary "looks right" --data '{"passed":true,"reasons":["does what the task asks"]}' >/dev/null ;;
   *BAD*) capcomd result --summary "wrong" --data '{"passed":false,"reasons":["returns the wrong value"]}' >/dev/null ;;
   *) capcomd result --summary "probably fine, I think" >/dev/null ;;
@@ -24,6 +35,7 @@ esac
 `);
   chmodSync(reviewer, 0o755);
   w = await world("review", { CAPCOMD_SCRIPT_REVIEWER: `sh ${reviewer}`, CAPCOMD_VERIFY_HOLD_MS: "100" });
+  writeFileSync(repoFile, w.repo.bare);
   worker = w.script("worker", WORKER);
 }, 120_000);
 afterAll(async () => { await w?.stop(); });
@@ -86,6 +98,34 @@ capcomd result --summary done >/dev/null`);
   expect(opReviewer.parent).toBeNull();
   expect(ov.j.result.judge).toMatchObject({ profile: "reviewer", passed: false }); // old --judge-profile contract
 }, 180_000);
+
+test("the reviewer judges the tree the checks test: the change merged onto the target, not the branch alone", async () => {
+  // The live false failure (vfy-k1d824c1b7680cd2c): the agent's branch was cut before the target got code its tests
+  // need; the checks, on the branch merged with the target, passed; the reviewer, on the branch alone, ran the tests and
+  // failed it. Started alongside the checks or after them, it must read the same tree.
+  for (const parallel of ["1", "0"]) {
+    const r = await w.cj(["run", "new", "--budget", "usd=10,turns=400,wallSeconds=3600", "--key", `rv-tree-${parallel}-${Date.now()}`, "--reviewer", "reviewer"]);
+    const run = r.j.runId as string;
+    const sp = await w.cj(["spawn", run, "--profile", "worker", "--task", "write TREE src/tree.txt", "--key", "tree", "--contract", JSON.stringify({ script: `FILE=src/tree.txt CONTENT=t ${worker}` })]);
+    const agt = sp.j.agentId as string;
+    expect((await waitAll(w, run, [agt])).agents[0].status).toBe("done");
+    // The target gets what the change's tests need after the branch was cut.
+    await w.repo.seed.ok(["fetch", "-q", "origin"]);
+    await w.repo.seed.ok(["checkout", "-q", "-B", "trunk", "origin/trunk"]);
+    writeFileSync(join(w.repo.root, "seed", "dep.txt"), `needed ${parallel}\n`);
+    await w.repo.seed.ok(["add", "dep.txt"]);
+    await w.repo.seed.ok(["commit", "-q", "-m", "dep"]);
+    await w.repo.seed.ok(["push", "-q", "origin", "HEAD:trunk"]);
+    const trunk = (await w.repo.sha("refs/heads/trunk"))!;
+    const x = await capcomd(["verify", run, "--ref", agt, "--checks", "test -f dep.txt && test -f src/tree.txt", "--key", "tree", "--json"], { ...w.env, PWD: w.dir, CAPCOMD_REVIEW_PARALLEL: parallel });
+    const v = { j: JSON.parse(x.stdout.trim().split("\n").pop()!) };
+    if (v.j?.result?.pass !== true) console.log(JSON.stringify(v.j, null, 1));
+    expect(v.j).toMatchObject({ state: "passed", result: { pass: true, checks: { passed: true }, review: { passed: true }, tested: { targetSha: trunk } } });
+    const rv = (await agentsOf(run)).find((x: any) => x.agentId === v.j.result.review.agentId);
+    expect(rv.contract.review).toMatchObject({ sha: v.j.result.commit, targetSha: trunk });
+    expect((await w.cj(["logs", run, rv.agentId])).j.lines.map((l: any) => l.line).join("\n")).toContain(`TREE target=${trunk}`);
+  }
+}, 120_000);
 
 test("report mode: a read-only child returns its answer as its result; nothing is pushed", async () => {
   const r = await w.cj(["run", "new", "--budget", "usd=10,turns=400,wallSeconds=3600", "--key", `rp-${Date.now()}`]);

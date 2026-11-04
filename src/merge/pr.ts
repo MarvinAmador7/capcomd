@@ -41,7 +41,7 @@ export async function prMerge(baseCfg: MergeConfig, req: MergeRequest, gh: GitHu
   if (!trial.ok) return { status: "conflict", files: trial.files, targetSha, taskSha };
   const tests = await runTests(git, req.testCommand ?? cfg.testCommand, { CAPCOMD_RUN_ID: req.runId, CAPCOMD_TASK_ID: req.taskId, CAPCOMD_TARGET: req.target });
   if (!tests.passed) return { status: "failed", reason: checksFailReason(tests), output: tests.output };
-  if (req.testOnly) return { status: "verified", sha: trial.head, output: tests.output, taskSha };
+  if (req.testOnly) return { status: "verified", sha: trial.head, output: tests.output, taskSha, targetSha, how: trial.how };
 
   let pr: PullRequest = existingPr && existingPr.state === "open"
     ? existingPr

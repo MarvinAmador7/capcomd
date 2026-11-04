@@ -115,6 +115,9 @@ export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitC
         CAPCOMD_AGENT_ID: a.agentId, CAPCOMD_RUN_ID: runId, CAPCOMD_TASK: a.task, CAPCOMD_DEPTH: String(a.depth),
         CAPCOMD_AWAIT_POLL_MS: env("SCRIPT_AWAIT_POLL_MS") ?? "150", CAPCOMD_RPC_TIMEOUT_MS: env("SCRIPT_RPC_TIMEOUT_MS") ?? "60000",
       };
+      // verify's reviewer: what a real one has checked out (the commit, merged onto the target at TARGET_SHA when set).
+      const rv = (a.contract as any)?.review;
+      if (rv && typeof rv.sha === "string") Object.assign(sEnv, { CAPCOMD_REVIEW_SHA: rv.sha, CAPCOMD_REVIEW_TARGET: String(rv.target ?? ""), ...(typeof rv.targetSha === "string" ? { CAPCOMD_REVIEW_TARGET_SHA: rv.targetSha } : {}) });
       // Detached: the "VM" keeps running if this driver dies; the exit code lands in a file.
       const wrapper = `( ${script} ) > ${JSON.stringify(out)} 2> ${JSON.stringify(err)} < /dev/null; echo $? > ${JSON.stringify(exitFile)}.tmp; mv ${JSON.stringify(exitFile)}.tmp ${JSON.stringify(exitFile)}`;
       const ch = spawnProc("sh", ["-c", wrapper], { cwd: home, env: sEnv, stdio: "ignore", detached: true });

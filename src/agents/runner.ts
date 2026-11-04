@@ -39,8 +39,9 @@ export interface AgentTask {
   goal: string;
   rework?: boolean;
   conflictFiles?: string[];
-  /** verify's reviewer: check out this commit, review it, never commit or push (goal = the review brief). */
-  review?: { sha: string; branch: string; target: string };
+  /** verify's reviewer: check out this commit, review it, never commit or push (goal = the review brief). With
+   *  `targetSha`, the commit merged onto the target at that commit: the tree verify's checks test. */
+  review?: { sha: string; branch: string; target: string; targetSha?: string };
   /** Report mode: read-only work on the target (research, triage); the final message is the result, nothing is pushed. */
   report?: boolean;
   /** ADR-019 §6: a paused agent running again; its earlier work (if any) is already on the branch. */
@@ -237,12 +238,17 @@ export function buildPrompt(t: AgentTask): string {
   return lines.join("\n");
 }
 
-/** A reviewer works on a detached checkout of the commit under review and only reports a verdict. */
+/** A reviewer works on a detached checkout of the commit under review (merged onto the target, when verify says where
+ *  the target is: the tree its checks test) and only reports a verdict. */
 export function buildReviewPrompt(t: AgentTask & { review: NonNullable<AgentTask["review"]> }): string {
-  const { sha, branch, target } = t.review;
+  const { sha, branch, target, targetSha } = t.review;
+  const where = targetSha
+    ? [`You are reviewing a change. The repository is checked out at the change (commit ${sha}, branch ${branch}) merged onto ${target} as it is now (${targetSha}): the same tree capcomd's checks test.`,
+      `See the change itself with \`git diff ${targetSha}...HEAD\` (what it adds to ${target}) and read the code around it. Run the project's tests if that helps you judge: they run on the merged tree.`]
+    : [`You are reviewing a change. The repository is checked out at commit ${sha} (branch ${branch}), based on ${target}.`,
+      `See the change with \`git diff origin/${target}...HEAD\` and read the code around it. Run the project's tests if that helps you judge.`];
   return [
-    `You are reviewing a change. The repository is checked out at commit ${sha} (branch ${branch}), based on ${target}.`,
-    `See the change with \`git diff origin/${target}...HEAD\` and read the code around it. Run the project's tests if that helps you judge.`,
+    ...where,
     "",
     t.goal,
     "",
@@ -405,6 +411,18 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
 
     if (task.review) {
       must(await git(["checkout", "-q", "--detach", task.review.sha], repo), "git checkout (review)");
+      // The tree verify's checks test: the change merged onto the target as verify found it (an ancestor of the tip the
+      // clone has, or else fetched). A conflict fails the review: the checks report it too, and the verify fails on them.
+      const on = task.review.targetSha;
+      if (on) {
+        if ((await git(["cat-file", "-e", `${on}^{commit}`], repo)).code !== 0) must(await git(["fetch", "--no-tags", "origin", on], repo, 300_000), "git fetch (review target)");
+        const m = await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "-c", "commit.gpgsign=false", "merge", "-q", "--no-edit", "-m", `capcomd review: ${task.review.branch} merged onto ${task.target}`, on], repo);
+        if (m.code !== 0) {
+          await git(["merge", "--abort"], repo).catch(() => {});
+          throw new AgentError("git", `the change (${task.review.sha.slice(0, 12)}) conflicts with ${task.target} at ${on.slice(0, 12)}, so there is no merged tree to review: ${(m.stderr || m.stdout).trim().slice(-300)}`);
+        }
+        addSpanEvent(span, "agent.review_tree", { "git.sha": task.review.sha, "git.target_sha": on });
+      }
     } else if (branchExists && !task.rework && !task.report) {
       const head = await git(["log", "-1", "--format=%H%x00%(trailers:key=Capcomd-Task,valueonly,separator=)%x00%(trailers:key=Capcomd-Epoch,valueonly,separator=)%x00%(trailers:key=Capcomd-Stop,valueonly,separator=)", `origin/${task.branch}`], repo);
       const [sha, k, ep, stop] = head.stdout.trim().split("\0");
