@@ -134,6 +134,13 @@ extension CapcomdStore {
     return ds.first { $0.provider == prefs.startDriver && $0.available } ?? ds.first { $0.isDefault == true && $0.available } ?? ds.first(where: \.available)
   }
   public func pickDriver(_ provider: String) { prefs.startDriver = provider; changed() }
+  /// What the composer's driver chip offers where a run would start. With no driver that can run there, the chip still
+  /// shows one (the project's default, dimmed) and opens on every driver with the reason it can't.
+  public var driverChoices: DriverChoices {
+    let ds = startDrivers, current = startDriver
+    return DriverChoices(current: current, shown: current ?? ds.first { $0.isDefault == true } ?? ds.first,
+                         pickable: ds.filter(\.available), unavailable: ds.filter { !$0.available })
+  }
   /// The driver's reasoning effort for new runs: the one last picked for it while it still offers it, else its default.
   /// nil is "Auto": nothing is sent and the CLI picks (Claude Code has no fixed default; it chooses per model).
   public var startEffort: String? {
@@ -157,6 +164,14 @@ extension CapcomdStore {
 
 /// What the menu bar mark shows (CapcomdBot's faces; `.plain` is the mark itself, eyes open).
 public enum MarkFace: Sendable, Hashable { case plain, idle, working, approval }
+
+/// The composer's driver chip (`CapcomdStore.driverChoices`): `current` drives new runs (nil: none can where the run
+/// would start), `shown` is the chip's name, `pickable` the drivers it lists to pick, `unavailable` the ones it lists
+/// disabled with their reasons.
+public struct DriverChoices: Sendable, Hashable {
+  public var current: DriverInfo?, shown: DriverInfo?
+  public var pickable: [DriverInfo], unavailable: [DriverInfo]
+}
 
 // MARK: rows
 

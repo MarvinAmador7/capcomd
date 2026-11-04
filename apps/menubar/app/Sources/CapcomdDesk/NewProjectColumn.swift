@@ -359,20 +359,23 @@ struct PlaceSwitch: View {
 }
 
 /// The model that drives the run (its planner) and its reasoning effort as bars, as the menu bar's driver chip offers
-/// them; a driver the daemon reports unavailable is listed, disabled, with its reason.
+/// them; a driver the daemon reports unavailable is listed, disabled, with its reason. With none that can run where the
+/// run would start, the chip stays a menu, dimmed, that lists them all and says why (it used to be a name that did
+/// nothing when clicked).
 struct DriverChip: View {
   @Environment(DeskModel.self) private var model
   /// The column's revision: what this shows is read from the store, which isn't observed.
   let revision: Int
   var body: some View {
     let s = model.store
-    if let current = s.startDriver {
+    let choices = s.driverChoices
+    if let current = choices.current {
       Menu {
         Picker("Driver", selection: Binding(get: { current.provider }, set: { s.pickDriver($0); model.newProjectChanged() })) {
-          ForEach(s.startDrivers.filter(\.available)) { d in Text(verbatim: d.label + (d.model.map { " · \($0)" } ?? "")).tag(d.provider) }
+          ForEach(choices.pickable) { d in Text(verbatim: d.label + (d.model.map { " · \($0)" } ?? "")).tag(d.provider) }
         }
         .pickerStyle(.inline)
-        ForEach(s.startDrivers.filter { !$0.available }) { d in Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true) }
+        unavailable(choices)
         if let levels = current.efforts, !levels.isEmpty {
           Divider()
           Picker("Effort", selection: Binding(get: { s.startEffort ?? EffortBars.auto }, set: { s.pickEffort($0 == EffortBars.auto ? nil : $0); model.newProjectChanged() })) {
@@ -397,12 +400,27 @@ struct DriverChip: View {
       .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
       .help(([current.label, current.model, s.startEffort.map { "\(EffortBars.title($0)) effort" }] as [String?]).compactMap { $0 }.joined(separator: " · "))
       .accessibilityLabel("Driver: \(current.label)" + (s.startEffort.map { ", \(EffortBars.title($0)) effort" } ?? ""))
-    } else if let shown = s.startDrivers.first(where: { $0.isDefault == true }) ?? s.startDrivers.first {
-      Text(verbatim: Self.modelName(shown)).font(.system(size: 12)).foregroundStyle(Theme.Desk.tertiary)
+    } else if let shown = choices.shown {
+      Menu {
+        unavailable(choices)
+      } label: {
+        HStack(spacing: 6) {
+          Text(verbatim: Self.modelName(shown)).font(.system(size: 12)).lineLimit(1)
+          Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+        }
+        .foregroundStyle(Theme.Desk.tertiary)
         .padding(.horizontal, 8).frame(height: 28)
-        .help(shown.reason ?? "No AI can drive a run yet")
-        .accessibilityLabel("Driver unavailable: \(shown.reason ?? "no AI can drive a run yet")")
+        .contentShape(Rectangle())
+      }
+      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+      .help(shown.reason ?? "No AI can drive a run yet")
+      .accessibilityLabel("Driver unavailable: \(shown.reason ?? "no AI can drive a run yet")")
     }
+  }
+
+  /// The drivers that can't run here, disabled, each with the daemon's reason.
+  @ViewBuilder private func unavailable(_ c: DriverChoices) -> some View {
+    ForEach(c.unavailable) { d in Button(d.label + (d.reason.map { " (\($0))" } ?? " (unavailable)")) {}.disabled(true) }
   }
 
   /// "claude-opus-5-5" → "Opus 5.5" (the board's model name); anything else is the driver's label.

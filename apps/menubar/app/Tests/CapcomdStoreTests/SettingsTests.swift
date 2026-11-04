@@ -247,6 +247,47 @@ final class SettingsTests: XCTestCase {
     XCTAssertEqual(s.startEffort, "medium")               // Codex's own default
   }
 
+  /// No driver can run where the run would start (Local here: neither is logged in for it): the chip still offers them
+  /// all, with the reasons, instead of a name that does nothing. A place where one can: that one is picked and listed.
+  func testTheDriverChipOffersEveryDriverEvenWhenNoneCanRunHere() async {
+    let d = FakeSettingsDaemon(); d.options = settingsOptions()
+    let s = CapcomdStore(daemonInfo: d)
+    await s.refreshSettings()
+    s.setDefaultPlace("docker")
+    var c = s.driverChoices
+    XCTAssertNil(c.current)
+    XCTAssertEqual(c.shown?.provider, "claude")                       // the project's default, dimmed
+    XCTAssertEqual(c.pickable, [])
+    XCTAssertEqual(c.unavailable.map(\.provider), ["claude", "codex"])
+    XCTAssertEqual(c.unavailable.first?.reason, "Not logged in to Claude Code for Local (run capcomd auth login claude --sandbox docker)")
+    XCTAssertNil(s.newRunChoice(goalSetup: nil).driver)
+    s.setDefaultPlace("boxd")
+    c = s.driverChoices
+    XCTAssertEqual(c.current?.provider, "claude")
+    XCTAssertEqual(c.pickable.map(\.provider), ["claude"])
+    XCTAssertEqual(c.unavailable.map(\.provider), ["codex"])
+  }
+
+  /// A pick in the chip is what Start sends: driver, its effort and the place, into the request body.
+  func testADriverPickReachesTheRunRequest() async throws {
+    let d = FakeSettingsDaemon()
+    var o = settingsOptions(); o.drivers[1].sandboxes?["boxd"] = DriverAvailability(available: true)
+    d.options = o
+    let s = CapcomdStore(daemonInfo: d)
+    await s.refreshSettings()
+    XCTAssertEqual(s.driverChoices.pickable.map(\.provider), ["claude", "codex"])
+    s.pickDriver("codex")
+    XCTAssertEqual(s.driverChoices.current?.provider, "codex")
+    s.pickEffort("high")
+    let c = s.newRunChoice(goalSetup: nil)
+    XCTAssertEqual(c.driver, "codex"); XCTAssertEqual(c.effort, "high"); XCTAssertEqual(c.sandbox, "boxd")
+    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StartWire.body(goal: "Ship it", choice: c)) as? [String: Any])
+    XCTAssertEqual(body["driver"] as? String, "codex"); XCTAssertEqual(body["effort"] as? String, "high"); XCTAssertEqual(body["sandbox"] as? String, "boxd")
+    // A pick that can't run where the run would start isn't sent: the place's default goes instead.
+    s.pickDriver("nope")
+    XCTAssertEqual(s.newRunChoice(goalSetup: nil).driver, "claude")
+  }
+
   // MARK: prefs
 
   func testNotificationPrefsGateEachKind() {
