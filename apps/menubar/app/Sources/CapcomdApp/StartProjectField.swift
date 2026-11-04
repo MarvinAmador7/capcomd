@@ -225,6 +225,8 @@ struct StartProjectField: View {
       if model.startRepo != nil { Button("Use the Default Project") { model.startRepo = nil } }
       Divider()
       Button("Settings…") { SettingsWindow.open(openSettings) }
+      // The menu bar item is the app's home: with no window open there's no app menu, so Quit lives here.
+      Button("Quit capcomd") { NSApp.terminate(nil) }.keyboardShortcut("q", modifiers: .command)
     } label: {
       Image(systemName: "plus").font(Theme.Composer2.plusFont).foregroundStyle(.white)
         .frame(width: Theme.Composer2.round, height: Theme.Composer2.round)

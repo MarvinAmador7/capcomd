@@ -44,6 +44,8 @@ public final class CapcomdStore {
   /// a change isn't narrowed (most durable events); live frames (activity, thread items) are always narrowed.
   public var onChanges: (@MainActor (Set<ChangeKey>) -> Void)?
   var pendingChanges: Set<ChangeKey> = []
+  /// The run and agent in focus, the same for the window and the menu bar panel (AppShell.swift).
+  public internal(set) var selection: Selection?
 
   // Run detail (drill-down): fetched over REST while a run is open; see StoreDetail.swift.
   public internal(set) var traces: [String: Fetched<[TraceSpan]>] = [:]
@@ -715,4 +717,6 @@ public enum ChangeKey: Hashable, Sendable {
   case agent(String)
   /// One agent's thread (its items).
   case thread(String)
+  /// The run and agent in focus (`CapcomdStore.selection`).
+  case selection
 }

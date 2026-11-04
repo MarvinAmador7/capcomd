@@ -10,6 +10,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   Each release also has it as `capcomd-app-X.Y.Z.zip` (universal: Apple silicon and Intel). If you built the separate
   menu bar or desktop app before, delete them: this app reads the same Keychain token (macOS asks once whether it may)
   and takes over their settings.
+- The menu bar panel and the window are two views of the same app. Click a project or an agent in the panel and the
+  window opens on it, at that agent's column; **Open capcomd** (⌘O) opens the window, and so does clicking a
+  notification. Approve and deny stay in the panel. What you focus in the window is marked in the panel. The menu bar
+  item is the app's home: closing the window keeps capcomd running there, and the Dock icon shows only while a window
+  is open. Settings › General has **Show in menu bar** and **Keep in Dock** (one of them stays on). Quit is in the
+  panel's + menu.
 - The app isn't notarized by Apple yet, so macOS blocks it the first time you open it. Click **Done**, then in **System
   Settings › Privacy & Security** click **Open Anyway** next to "capcomd" and confirm. After that it opens normally.
 - The app sets itself up without a terminal: it finds the capcomd CLI, offers to start capcomd as a login service when

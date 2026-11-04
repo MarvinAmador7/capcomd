@@ -140,7 +140,7 @@ struct AgentTreeRow: View {
       // While it's renamed the row is the field, not a button (a click in the field would open the thread).
       if renaming != nil { rowContent(node).frame(maxWidth: .infinity, alignment: .leading) }
       else {
-        Button { model.path.append(.thread(runId: runId, agentId: node.id)) } label: { rowContent(node).contentShape(Rectangle()) }
+        Button { model.open(run: runId, agent: node.id) } label: { rowContent(node).contentShape(Rectangle()) }
           .buttonStyle(PressableStyle())
       }
       if let p = model.provider(runId: runId, agentId: node.id) {
@@ -154,11 +154,14 @@ struct AgentTreeRow: View {
         .padding(.leading, Theme.Tree.statusLeading)
     }
     .frame(height: rowHeight)
+    // The agent focused in the window (the store's selection).
+    .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Theme.accent.opacity(0.14))
+      .opacity(model.selection.map { $0.runId == runId && $0.agentId == node.id } == true ? 1 : 0))
     .padding(.leading, CGFloat(line.guides.count) * Theme.Tree.indent)
     .overlay(alignment: .topLeading) { TreeGuides(guides: line.guides, row: true, elbowY: rowHeight / 2) }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(node.accessibilityLabel + (model.botName(runId: runId, agentId: node.id).map { ", \($0)" } ?? ""))
-    .accessibilityHint("Opens its thread")
+    .accessibilityHint("Opens its column in the capcomd window")
     .contextMenu { Button("Rename…") { beginRename() } }
     .accessibilityAction(named: "Rename") { beginRename() }
   }

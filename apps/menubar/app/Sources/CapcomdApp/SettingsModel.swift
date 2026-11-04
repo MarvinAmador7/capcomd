@@ -174,6 +174,9 @@ enum PlaceNames {
   }
 }
 
+/// What Settings finishes in Terminal: a throwaway .command file (no Automation permission needed).
+enum TerminalLauncher {}
+
 extension TerminalLauncher {
   /// Opens Terminal running `command` through a throwaway .command file (no Automation permission needed), then a
   /// line saying whether it worked. Only plain capcomd commands are run (SettingsRows.isSafeCommand).

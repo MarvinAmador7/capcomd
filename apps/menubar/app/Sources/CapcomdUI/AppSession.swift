@@ -2,11 +2,13 @@
 import Foundation
 import Observation
 import CapcomdStore
+import CapcomdClient
 
 /// What the app needs before it can show anything, shared by the window and the menu bar item: the daemon token, the
-/// capcomd CLI that makes one, and starting the daemon. From a fresh install it gets there by itself: the Keychain's
-/// token if there is one, else it finds the CLI and pairs (`capcomd clients pair --app mac-app`), saving the token in
-/// the Keychain. Each surface keeps its own store and connects whenever a token arrives (`onToken`).
+/// capcomd CLI that makes one, starting the daemon, and the one store both read. From a fresh install it gets there by
+/// itself: the Keychain's token if there is one, else it finds the CLI and pairs (`capcomd clients pair --app
+/// mac-app`), saving the token in the Keychain. Each token gets a fresh store, handed to both views (`onStore`) before
+/// it starts, so the window and the panel show the same state, selection included, with nothing to sync.
 @Observable @MainActor
 package final class AppSession {
   package enum Token: Equatable {
@@ -34,23 +36,36 @@ package final class AppSession {
   /// Starting the daemon as a login service (`capcomd service install`).
   package private(set) var start: Start = .idle
 
-  @ObservationIgnored private var listeners: [@MainActor (String) -> Void] = []
+  /// The store both views read: a placeholder (never started) until there is a token, then one per token.
+  @ObservationIgnored package private(set) var store: CapcomdStore
+  /// The transport behind `store`. AsyncHTTPClient traps in debug if its client is freed without shutdown(), so a
+  /// replaced transport is shut down explicitly before it's released.
+  @ObservationIgnored private var transport: UnixSocketTransport
+  @ObservationIgnored private var listeners: [@MainActor (CapcomdStore) -> Void] = []
   @ObservationIgnored private var located = false
 
-  package init() {}
+  package init() { (store, transport) = Connection.makeStore(token: "") }
 
   package var current: String? { if case .ready(let t) = token { return t }; return nil }
 
-  /// `f` gets every token the app connects with: the current one at once, then each new one.
-  package func onToken(_ f: @escaping @MainActor (String) -> Void) {
+  /// `f` gets the store to read: the connected one at once, if any, then each new one (a new token), before it starts.
+  package func onStore(_ f: @escaping @MainActor (CapcomdStore) -> Void) {
     listeners.append(f)
-    if let t = current { f(t) }
+    if current != nil { f(store) }
   }
 
   private func use(_ t: String) {
     token = .ready(t)
-    for f in listeners { f(t) }
+    store.stop()
+    let old = transport
+    Task { try? await old.shutdown() }
+    (store, transport) = Connection.makeStore(token: t)
+    for f in listeners { f(store) }
+    store.start()
   }
+
+  /// A view's store got a 401: the token it was made with is refused.
+  package func storeRejected(_ s: CapcomdStore) { if s === store, let t = current { rejected(t) } }
 
   /// Launch: `CAPCOMD_TOKEN`, else the Keychain (read off the main thread: macOS can hold it on its prompt), else pair.
   package func begin() {

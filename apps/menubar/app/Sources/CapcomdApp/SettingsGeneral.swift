@@ -12,6 +12,8 @@ struct GeneralPane: View {
   @State private var loginStatus: SMAppService.Status = .notRegistered
   @State private var loginError: String?
   @State private var notificationsDenied = false
+  @AppStorage(AppPresence.keepInDockKey) private var keepInDock = false
+  @AppStorage(AppPresence.showInMenuBarKey) private var showInMenuBar = true
 
   var body: some View {
     let connection = model.connection
@@ -27,6 +29,7 @@ struct GeneralPane: View {
 
       Section("Menu bar") {
         openAtLoginRow
+        presenceRows
         LabeledContent {
           HStack(spacing: Theme.Settings.rowGap) {
             BotFacePreview(face: model.menuBarFace)
@@ -195,6 +198,24 @@ struct GeneralPane: View {
   }
 
   // MARK: Menu bar
+
+  /// Show in menu bar and Keep in Dock: one of them stays on, so capcomd can always be reached (the one that would
+  /// turn the last off is disabled).
+  @ViewBuilder private var presenceRows: some View {
+    let menuBar = Presence.showsInMenuBar(keepInDock: keepInDock, showInMenuBar: showInMenuBar)
+    Toggle(isOn: Binding(get: { menuBar }, set: { showInMenuBar = $0; AppPresence.update() })) {
+      Text("Show in menu bar")
+      Text(menuBar && !keepInDock ? "Turn on Keep in Dock first: capcomd needs one of the two." : "Approvals and your projects, a click away.")
+    }
+    .toggleStyle(.switch)
+    .disabled(menuBar && !Presence.canTurnOffMenuBar(keepInDock: keepInDock))
+    Toggle(isOn: Binding(get: { keepInDock }, set: { keepInDock = $0; AppPresence.update() })) {
+      Text("Keep in Dock")
+      Text(keepInDock && !menuBar ? "Turn on Show in menu bar first: capcomd needs one of the two." : "Also with no window open. Otherwise the Dock icon shows while a window is open.")
+    }
+    .toggleStyle(.switch)
+    .disabled(keepInDock && !Presence.canTurnOffKeepInDock(showInMenuBar: menuBar))
+  }
 
   @ViewBuilder private var openAtLoginRow: some View {
     let on = Binding(get: { loginStatus == .enabled || loginStatus == .requiresApproval }, set: { v in

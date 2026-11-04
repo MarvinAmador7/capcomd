@@ -1,9 +1,9 @@
 # capcomd app (macOS)
 
-The capcomd app: one Dock app with a window (each run's agents side by side, [design/desktop](design/desktop/SPEC.md))
-and a menu bar item (projects, approvals and threads in a panel, [SPEC.md](SPEC.md)), talking to the daemon over its
-socket. The approved mockups are in [design/](design/README.md). Closing the window keeps the menu bar item; the Dock
-icon opens the window again.
+The capcomd app: a window (each run's agents side by side, [design/desktop](design/desktop/SPEC.md)) and a menu bar
+item (projects and approvals in a panel, [SPEC.md](SPEC.md)), talking to the daemon over its socket. The approved
+mockups are in [design/](design/README.md). The menu bar item is the app's home; the Dock icon shows while a window is
+open.
 
 - `app/`: the SwiftPM package. `CapcomdApp` is the app (its `@main`, the menu bar panel and Settings); the window is
   the `CapcomdDesk` library, which the bench (`CapcomdDeskBench`, [DESKBENCH.md](app/DESKBENCH.md)) hosts too; both
@@ -34,8 +34,17 @@ The app connects by itself (`CapcomdUI/AppSession.swift`, the pure parts in `Cap
 4. Versions: when the app and the daemon differ in their minor version (0.x), the window and the panel say which to
    update; **Restart capcomd** when the CLI is already new and the old daemon still runs.
 
-The window and the menu bar share that session, and each has its own store, so each can have its own run open.
-Notifications come from the menu bar's store (one banner per notice); a goal branch notice opens the run in the window.
+The window and the menu bar panel are two views of one app, on the session's one store (`CapcomdStore/AppShell.swift`):
+
+- Every panel row opens the window on its run, at its agent's column (`DeepLink`; an agent without a column lands on
+  its nearest ancestor's, else the planner's). **Open capcomd** (⌘O) opens the window; a notification click does what
+  a row does. Approve and deny stay in the panel.
+- What the window focuses is the store's `selection`; the panel marks that card and agent row. Nothing syncs.
+- The menu bar item is the app's home: closing the last window keeps the app running, and the Dock icon (with ⌘-Tab)
+  shows only while a window is open (`AppPresence` switches the activation policy). Settings › General: **Show in menu
+  bar** and **Keep in Dock**, one of which stays on (`Presence`). Quit is in the panel's + menu.
+
+Notifications come from the panel's model (one banner per notice).
 
 ## Run it while developing
 
