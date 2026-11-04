@@ -81,28 +81,3 @@ export function bot(seed: string, role: string, size: Size, mood?: Mood): string
 }
 
 export const stateText: Record<State, string> = { working: "working", asks: "waiting on you", queued: "queued", waiting: "waiting", merged: "merged", done: "done" };
-
-/** Every keyboard shortcut in the desktop SPEC (§4) and the project menu, grouped as the page's tabs. */
-export const KEYS: Array<{ tab: string; rows: Array<{ keys: string[]; title: string; note: string }> }> = [
-  { tab: "Projects", rows: [
-    { keys: ["⌘", "1–9"], title: "Open a project", note: "The decks are already in memory; the columns show at once." },
-    { keys: ["⇧", "⌘", "N"], title: "Start a new project", note: "One empty column, the goal box and Lumen." },
-    { keys: ["⌘", "L"], title: "Message the planner", note: "From anywhere in the project." },
-    { keys: ["⌥", "⌘", "P"], title: "Pause or resume the run", note: "Agents stop at their next step, then carry on." },
-    { keys: ["⌘", "T"], title: "Open the trace", note: "Every step the run recorded, in order." },
-  ] },
-  { tab: "Agents", rows: [
-    { keys: ["⌃", "1–9"], title: "Jump to an agent", note: "In tree order: the planner first, then each lead and its workers." },
-    { keys: ["⌃", "←"], title: "Focus the column on the left", note: "The reel moves only if that column would leave the window." },
-    { keys: ["⌃", "→"], title: "Focus the column on the right", note: "Keyboard moves never animate beyond a short slide." },
-  ] },
-  { tab: "The reel", rows: [
-    { keys: ["⌘", "0"], title: "Overview", note: "Every agent in the run as a card." },
-    { keys: ["⇧", "⌘", "↩"], title: "Zoom one column", note: "The focused agent takes the whole window." },
-    { keys: ["⌘", "K"], title: "Actions", note: "Everything the daemon can do to this run, searchable." },
-  ] },
-  { tab: "Decisions", rows: [
-    { keys: ["↩"], title: "Approve the ask in focus", note: "The planner opens the pull request it proposed." },
-    { keys: ["esc"], title: "Close, never deny", note: "Denying is always a click on Deny, never a key you hit by accident." },
-  ] },
-];
