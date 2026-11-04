@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 import { env as envVar } from "../utils/env";
+import { capcomdHome } from "../utils/home";
 
 export type MergeMode = "pr" | "direct";
 export type MergeStrategy = "squash" | "rebase" | "merge";
@@ -69,7 +69,7 @@ export function loadMergeConfig(source: Record<string, string | undefined> = pro
     testCommand: pick("TEST_COMMAND", "test", ""),
     maxPushRetries: Number(pick("MERGE_MAX_RETRIES", "maxPushRetries", "5")),
     signCommits: ["1", "true"].includes(pick("SIGN_COMMITS", "signCommits", "false")),
-    workdir: envVar("WORKDIR", source) ?? join(homedir(), ".capcomd", "work"),
+    workdir: envVar("WORKDIR", source) ?? join(capcomdHome(source), "work"),
     github: {
       repo: envVar("GITHUB_REPO", source) ?? (file.github ? String(file.github) : null) ?? githubRepoFromRemote(remote),
       api: envVar("GITHUB_API", source) ?? "https://api.github.com",
