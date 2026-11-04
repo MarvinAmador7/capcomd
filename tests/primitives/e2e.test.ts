@@ -143,3 +143,22 @@ test("run ids: a key is scoped by its project (two projects, one key: two runs);
   expect(other).toMatchObject({ created: true });
   expect(other.runId).not.toBe(legacy);
 }, 60_000);
+
+test("status: a run of agents (no planner, as an MCP driver's) reads its agents' state, budget and every event", async () => {
+  const r = await cj(["run", "new", "--budget", "usd=12", "--label", "driven", "--key", `st-${Date.now()}`]);
+  const runId = r.j.runId as string;
+  const a = await cj(["spawn", runId, "--profile", "coder", "--task", "part 1", "--key", "p1"]);
+  const b = await cj(["spawn", runId, "--profile", "coder", "--task", "part 2", "--key", "p2"]);
+  expect((await cj(["await", runId, a.j.agentId, b.j.agentId, "--timeout-ms", "30000"])).j.agents.map((x: any) => x.status)).toEqual(["done", "done"]);
+  const j = (await cj(["status", runId])).j.run;
+  const total = (await cj(["events", runId, "--limit", "1000"])).j.events.length;
+  expect(j.scope).toMatchObject({ state: "done", agents: 2, byStatus: { done: 2 }, label: "driven", budget: { usd: 12 } });
+  expect(j.events).toBe(total);
+  const text = (await capcomd(["status", runId], env)).stdout;
+  expect(text).toContain("State: done");
+  expect(text).not.toContain("planning");
+  expect(text).toContain("Goal: driven");
+  expect(text).toContain("Agents: 2 (2 done)");
+  expect(text).toMatch(/Budget: \$[0-9.]+ billed of \$12\.00/);
+  expect(text).toContain(`Events: ${total} total`);
+}, 60_000);

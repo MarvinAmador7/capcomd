@@ -465,8 +465,11 @@ export interface RunStatus {
   /** ISO-8601 UTC of the run's first event (null if none yet); startedAtMs is the same in ms. */
   startedAt: string | null;
   startedAtMs: number | null;
-  /** Primitives scope runs (`capcomd run new`): agent counts and a derived state (running|done|failed|cancelled). */
-  scope: { state: string; agents: number; byStatus: Record<string, number> } | null;
+  /** Primitives scope runs (`capcomd run new`, an MCP driver's): agent counts and a derived state
+   *  (running|done|failed|cancelled), the run's label and goal, its budget and what its agents spent (`usd`: billed to
+   *  an API key; `notionalUsd`: what agents on plan logins would have cost), and its own event count. */
+  scope: { state: string; agents: number; byStatus: Record<string, number>; label?: string | null; goal?: string | null; budget?: Record<string, number>; spent?: Record<string, number>; notionalUsd?: number; events?: number } | null;
+  /** Every event of the run (`capcomd events`): the run's, its tasks' and its scope's. */
   events: number;
 }
 
@@ -506,7 +509,10 @@ export async function getStatus(runId: string): Promise<RunStatus> {
   const { pendingMerges } = await import("../primitives/ops");
   pending.push(...(await pendingMerges(runId).catch(() => [])));
   let scope: RunStatus["scope"] = null;
-  const agents: any[] | null = await c.scope.getOrCreate([runId]).listAgents({}).catch(() => null);
+  let events = runEvents.length || run.seq;
+  for (const t of tasks) events += ((await c.taskBoard.getOrCreate([runId]).getTaskEvents({ taskId: t.taskId }).catch(() => [])) as any[]).length;
+  const sc = c.scope.getOrCreate([runId]);
+  const agents: any[] | null = await sc.listAgents({}).catch(() => null);
   if (agents && agents.length) {
     const byStatus: Record<string, number> = {};
     for (const a of agents) byStatus[a.status] = (byStatus[a.status] ?? 0) + 1;
@@ -515,7 +521,11 @@ export async function getStatus(runId: string): Promise<RunStatus> {
     // Ended: done when every root finished its work; cancelled when the run (or its roots) was cancelled; else failed.
     const state = live ? "running" : run.state === "cancelled" ? "cancelled" : roots.every((a) => a.status === "done") ? "done"
       : roots.some((a) => a.status === "failed") ? "failed" : "cancelled";
-    scope = { state, agents: agents.length, byStatus };
+    const meta: any = await sc.getScope({}).catch(() => null);
+    const scopeEvents = ((await sc.getEvents({}).catch(() => [])) as any[]).length;
+    events += scopeEvents;
+    const notionalUsd = Math.round(agents.reduce((x, a) => x + (Number(a.result?.notionalCostUsd) || 0), 0) * 1e6) / 1e6;
+    scope = { state, agents: agents.length, byStatus, label: meta?.label ?? null, goal: meta?.goal ?? null, budget: meta?.budget ?? {}, spent: meta?.spent ?? {}, notionalUsd, events: scopeEvents };
   }
   return {
     runId: run.runId,
@@ -528,7 +538,7 @@ export async function getStatus(runId: string): Promise<RunStatus> {
     budget: { spent: run.context.budget?.spent ?? 0, maxCost: run.context.budget?.maxCost ?? 0 },
     tasks,
     awaitingApproval: tasks.filter((t) => t.state === "awaiting_approval").map((t) => t.taskId),
-    events: run.seq,
+    events,
   };
 }
 

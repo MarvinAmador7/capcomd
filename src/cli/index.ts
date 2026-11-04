@@ -561,8 +561,7 @@ async function main(argv: string[]): Promise<number> {
         const s = await getStatus(runId);
         if (json) out({ run: s });
         else {
-          console.log(`Run: ${s.runId}\nState: ${s.state}\nGoal: ${s.goal}`);
-          console.log(`Budget: $${s.budget.spent.toFixed(4)} / $${s.budget.maxCost.toFixed(2)}`);
+          console.log((await import("./status-text")).statusText(s).join("\n"));
           if (s.tasks.length) {
             console.log(`\nTasks:`);
             for (const t of s.tasks) console.log(`  ${t.taskId}: ${t.state}${t.targetBranch ? ` → ${t.targetBranch}` : ""}`);

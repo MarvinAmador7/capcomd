@@ -60,7 +60,10 @@ for callers of the old `--judge-profile` contract. A review with no verdict has 
 `tasks[]`, `pendingApprovals[] {taskId, kind:"merge", targetBranch, since, ref?}` (recipe tasks, and agents'
 parked merges, whose `taskId` is the `mrg-…` id to pass to `approve`; events MERGE_AWAITING_APPROVAL, MERGE_APPROVED, MERGE_DENIED),
 `awaitingApproval[]` (**alias**: task ids only; recipe tasks), `scope` (`null` unless the run has scope agents:
-`{state: running|done|failed, agents, byStatus}`), `events` (count).
+`{state: running|done|failed|cancelled, agents, byStatus, label, goal, budget, spent, notionalUsd, events}`: for these
+runs `state` and `budget` at the top are the recipe's and say nothing, so read `scope`; `spent.usd` is what was billed to
+API keys, `notionalUsd` what agents on plan logins would have cost, `events` the scope's own), `events` (the count of
+every event of the run, as `capcomd events` lists them).
 
 ## Inspect: `capcomd inspect <runId> [--json] [--follow [--since-seq N] [--until TYPE] [--timeout-ms N]]`
 
