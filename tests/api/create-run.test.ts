@@ -217,11 +217,11 @@ describe("launchContext: where a run starts", () => {
 		const { envImageCheck } = await import("../../src/cli/commands/setup");
 		const saved = { w: process.env.CAPCOMD_WORKDIR };
 		process.env.CAPCOMD_WORKDIR = "/scratch/work";
-		let seen: string | null = null;
+		const seen: { workdir?: string } = {};
 		try {
-			await envImageCheck(d, { status: async (env) => { seen = loadMergeConfig(env)!.workdir; return { state: "current", ok: true, detail: "x", command: null, image: "img" }; } });
+			await envImageCheck(d, { status: async (env) => { seen.workdir = loadMergeConfig(env)!.workdir; return { state: "current", ok: true, detail: "x", command: null, image: "img" }; } });
 		} finally { if (saved.w === undefined) delete process.env.CAPCOMD_WORKDIR; else process.env.CAPCOMD_WORKDIR = saved.w; }
-		expect(seen).toBe("/scratch/work");
+		expect(seen.workdir).toBe("/scratch/work");
 	});
 
 	test("repo that isn't a set-up project checkout: 422 with what to do", () => {
