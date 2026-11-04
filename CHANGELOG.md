@@ -5,6 +5,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- The Mac app is one app now: the window with each run's agents side by side, and the menu bar item with approvals
+  and notifications. Install it with Homebrew (it brings the CLI along): `brew install --cask MarvinAmador7/tap/capcomd-app`.
+  Each release also has it as `capcomd-app-X.Y.Z.zip` (universal: Apple silicon and Intel). If you built the separate
+  menu bar or desktop app before, delete them: this app reads the same Keychain token (macOS asks once whether it may)
+  and takes over their settings.
+- The app isn't notarized by Apple yet, so macOS blocks it the first time you open it. Click **Done**, then in **System
+  Settings › Privacy & Security** click **Open Anyway** next to "capcomd" and confirm. After that it opens normally.
+- The app sets itself up without a terminal: it finds the capcomd CLI, offers to start capcomd as a login service when
+  it isn't running (**Start capcomd**), and connects without a token to paste. It says when it and capcomd are
+  versions apart that matter, and offers **Restart capcomd** when an upgraded CLI left the old one running. Pasting a
+  token still works.
+- `capcomd clients pair --app <name>` makes a token for an app on this computer and prints only the token, for the app
+  to keep (the Mac app runs it to connect). It has all four scopes unless you pass `--scopes`, and it revokes the token
+  that app paired before. `--json` adds the client id, its scopes and what it revoked.
+- Fix: `capcomd service install` from a Homebrew install runs capcomd through Homebrew's stable `opt` path, so the
+  service keeps working after `brew upgrade` (before, it pointed at the old version's folder, which Homebrew removes).
+  Run `capcomd service install` once more to update an existing service.
+
 ## 0.9.0 (2026-11-03)
 
 Drivers get much further on their own. A project's runs use its own sandbox, setup registers the project and offers

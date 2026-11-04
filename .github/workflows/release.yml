@@ -5,9 +5,11 @@ name: Release
 # executables (scripts/build-binary.ts: macOS and Linux, arm64 and x64) each installed the way a user installs them
 # (bun add -g; install.sh) and driven with fake agents on their own platform (scripts/release-smoke.sh), then that
 # same package on npm (with provenance; skipped while package.json is private), the release with the package, the
-# binaries, their SHA-256 and the changelog section as notes, and the Homebrew formula in MarvinAmador7/homebrew-tap
-# (needs the HOMEBREW_TAP_DEPLOY_KEY secret; skipped with a warning without it, and for prereleases). Re-running for the same tag updates the release in place (npm versions are immutable:
-# an already-published version is skipped).
+# binaries, the macOS app (apps/menubar/scripts/build-app.sh --universal --zip: capcomd-app-X.Y.Z.zip, signed ad hoc
+# until there's a Developer ID, installed with its cask from a throwaway tap first), their SHA-256 and the changelog
+# section as notes, and the Homebrew formula and cask in MarvinAmador7/homebrew-tap (needs the HOMEBREW_TAP_DEPLOY_KEY
+# secret; skipped with a warning without it, and for prereleases). Re-running for the same tag updates the release in
+# place (npm versions are immutable: an already-published version is skipped).
 # The live boxd/GitHub/agents e2e (scripts/mac-subagents-e2e.sh) stays a manual step before tagging (DEVELOPMENT.md).
 
 on:
@@ -234,9 +236,72 @@ jobs:
           brew test capcomd-ci/test/capcomd
           brew uninstall capcomd && brew untap capcomd-ci/test
 
+  app:
+    name: The macOS app
+    needs: [prepare, test, smoke, binaries]
+    runs-on: macos-15
+    # Two release builds (arm64, x86_64) of the app and its Swift dependencies, from scratch.
+    timeout-minutes: 60
+    env:
+      V: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0   # the app's build number counts commits
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      # Signed ad hoc: no CAPCOMD_SIGN_IDENTITY here until there's a Developer ID. Notarization will switch on in
+      # build-app.sh (CAPCOMD_NOTARIZE, from secrets); see the comment there.
+      - name: Build the universal app, its zip and SHA-256
+        run: BUN_BIN="$(command -v bun)" apps/menubar/scripts/build-app.sh --universal --zip
+
+      - name: Check the bundle and the zip
+        run: |
+          b=apps/menubar/build
+          app="$b/capcomd.app"
+          archs=$(lipo -archs "$app/Contents/MacOS/CapcomdApp" | tr ' ' '\n' | sort | xargs)
+          [ "$archs" = "arm64 x86_64" ] || { echo "::error::not a universal binary: $archs"; exit 1; }
+          codesign --verify --deep --strict "$app"
+          [ "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = "$V" ] || { echo "::error::the app isn't $V"; exit 1; }
+          [ "$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")" = dev.capcomd.app ]
+          (cd "$b" && shasum -a 256 -c "capcomd-app-$V.zip.sha256")
+          unzip -l "$b/capcomd-app-$V.zip" | grep -q ' capcomd.app/Contents/MacOS/CapcomdApp$' || { echo "::error::the zip has no capcomd.app"; exit 1; }
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - name: The cask installs the app and the formula (from a throwaway local tap)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_FROM_API: "1"
+        run: |
+          brew tap-new --no-git capcomd-ci/app
+          tap="$(brew --repository)/Library/Taps/capcomd-ci/homebrew-app"
+          mkdir -p "$tap/Formula" "$tap/Casks"
+          bun scripts/homebrew-formula.ts "$V" dist "file://$PWD/dist" > "$tap/Formula/capcomd.rb"
+          bun scripts/homebrew-cask.ts "$V" apps/menubar/build "file://$PWD/apps/menubar/build" capcomd-ci/app/capcomd > "$tap/Casks/capcomd-app.rb"
+          brew install --cask capcomd-ci/app/capcomd-app
+          [ "$(plutil -extract CFBundleShortVersionString raw -o - /Applications/capcomd.app/Contents/Info.plist)" = "$V" ]
+          "$(brew --prefix)/bin/capcomd" --version | grep -qx "capcomd $V"
+          brew uninstall --cask capcomd-app && brew uninstall capcomd && brew untap capcomd-ci/app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: |
+            apps/menubar/build/capcomd-app-*.zip
+            apps/menubar/build/capcomd-app-*.zip.sha256
+
   npm:
     name: Publish to npm
-    needs: [prepare, test, smoke, binary-smoke]
+    # The app too: nothing publishes unless every artifact of the release was built and checked.
+    needs: [prepare, test, smoke, binary-smoke, app]
     if: needs.prepare.outputs.npm == 'true' && (github.event_name == 'push' || inputs.publish)
     runs-on: ubuntu-latest
     permissions:
@@ -269,14 +334,15 @@ jobs:
 
   publish:
     name: Publish the release
-    needs: [prepare, test, smoke, binary-smoke, npm]
+    needs: [prepare, test, smoke, binary-smoke, app, npm]
     # npm is skipped while package.json is private; any failure (npm included) publishes nothing here. Each check must
     # have passed: a check job that was cancelled (say, no macOS runner picked it up) is neither failure() nor
     # cancelled() for the run, so `!failure()` alone let 0.8.0's release out without its darwin-arm64 check.
     if: >-
       ${{ !cancelled() && (github.event_name == 'push' || inputs.publish)
       && needs.prepare.result == 'success' && needs.test.result == 'success' && needs.smoke.result == 'success'
-      && needs.binary-smoke.result == 'success' && (needs.npm.result == 'success' || needs.npm.result == 'skipped') }}
+      && needs.binary-smoke.result == 'success' && needs.app.result == 'success'
+      && (needs.npm.result == 'success' || needs.npm.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -291,7 +357,7 @@ jobs:
       - name: Create or update the GitHub release
         run: |
           F=artifacts/package/capcomd-${{ needs.prepare.outputs.version }}.tgz
-          FILES=("$F" "$F.sha256" artifacts/binaries/capcomd-*)
+          FILES=("$F" "$F.sha256" artifacts/binaries/capcomd-* artifacts/app/capcomd-app-*)
           FLAGS=(); [ "${{ needs.prepare.outputs.prerelease }}" = "true" ] && FLAGS+=(--prerelease) || FLAGS+=(--latest)
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release edit "$TAG" --title "${{ needs.prepare.outputs.title }}" --notes-file artifacts/release-notes/release-notes.md "${FLAGS[@]}"
@@ -328,9 +394,15 @@ jobs:
           name: binaries
           path: dist
 
-      - name: Commit Formula/capcomd.rb to MarvinAmador7/homebrew-tap
+      - uses: actions/download-artifact@v4
+        with:
+          name: app
+          path: dist-app
+
+      # The cask is capcomd-app (scripts/homebrew-cask.ts says why), next to the formula, and depends on it.
+      - name: Commit Formula/capcomd.rb and Casks/capcomd-app.rb to MarvinAmador7/homebrew-tap
         run: |
-          if [ -z "$TAP_KEY" ]; then echo "::warning::no HOMEBREW_TAP_DEPLOY_KEY secret: the tap was not updated (brew install MarvinAmador7/tap/capcomd stays on the previous version)"; exit 0; fi
+          if [ -z "$TAP_KEY" ]; then echo "::warning::no HOMEBREW_TAP_DEPLOY_KEY secret: the tap was not updated (brew install MarvinAmador7/tap/capcomd and the capcomd-app cask stay on the previous version)"; exit 0; fi
           # A deploy key with write access to the tap only.
           key="$RUNNER_TEMP/tap-key"
           (umask 077 && printf '%s\n' "$TAP_KEY" > "$key")
@@ -338,10 +410,11 @@ jobs:
           echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$RUNNER_TEMP/known_hosts"
           export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes"
           git clone --depth 1 git@github.com:MarvinAmador7/homebrew-tap.git tap
-          mkdir -p tap/Formula
+          mkdir -p tap/Formula tap/Casks
           bun scripts/homebrew-formula.ts "$V" dist > tap/Formula/capcomd.rb
+          bun scripts/homebrew-cask.ts "$V" dist-app > tap/Casks/capcomd-app.rb
           cd tap
           git config user.name "capcomd release" && git config user.email "capcomd@users.noreply.github.com"
-          git add Formula/capcomd.rb
-          git diff --cached --quiet && { echo "Formula already at $V"; exit 0; }
+          git add Formula/capcomd.rb Casks/capcomd-app.rb
+          git diff --cached --quiet && { echo "Formula and cask already at $V"; exit 0; }
           git commit -m "capcomd $V" && git push origin HEAD
