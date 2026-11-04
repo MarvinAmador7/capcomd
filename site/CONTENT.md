@@ -105,3 +105,23 @@ marks dropped). Its data was extracted from the log's own embedded data, not re-
 
 The page names the machine (MacBook Pro, MacBookPro18,3, macOS 27.0.1) and the build hashes, as the log did. Retake
 it when the switch work lands: the "Still slow" section says the next targets.
+
+## PerfLoop (/perfloop/)
+
+What PerfLoop unlocks for agents (see, feel, improve, again), not how it works. Every number is from
+`design/perf-loop/JOURNEY.md` and `apps/menubar/app/LAYOUT.md` on main; JOURNEY §7 ("what not to claim") holds: no
+speed-up on capcomd Desktop from the loop itself (none beat the champion), no trusted dedicated-hardware numbers, no
+hand-recorded gesture. PerfLoop has its own public repository (github.com/MarvinAmador7/perfloop, MIT; it moved out of
+capcomd's `tools/perfloop` on 2026-11-04; JOURNEY.md is also in its `docs/design/`). "Works with any AppKit or
+SwiftUI app" is its PerfLoopHost library and the SlowList sample, run end to end on 2026-11-04. Linked from the Desktop page's "Native. Fast. Measured." (not in the main nav).
+
+| Section | Claims | Source |
+|---|---|---|
+| Hero, a night of the loop | the twelve ledger entries (the bench against itself; `reel.slide=clip`; `build.perFrame=4`; the planted cheat; `desk.layout=frames`; `frames-hide`; `desk.column=native` needs review; `park`; `reuse`; `bitmap`; the swipe with real timestamps; the 4 → 64 sweep) and the next idea queued (native Core Text rows); 0 kept | JOURNEY §4, §5.2, §5.3, §5.5; LAYOUT.md "What it measured", exp 0008–0010, "What's next". The clock times and the single night are staging, said in the caption: the runs were spread over 30–31 Oct; `ssh://mini` is the runner's form, not a claim the night ran there |
+| It sees why | in-process sampler in every long stretch; re-renders charged to the state change (C1, C7); the two-window bench bug, ~180 → ~120 ms for a 17-agent step | JOURNEY §3, §5.4; commit 7db3144 |
+| It feels the swipe | replay scored on following the fingers; the overshoot (~200 pt past the column edge, no snap) found by the replay with real timestamps; 48/48 synthetic replays at 0 pt p95 (bar 1 pt); a realistic swipe ~2× the CPU of the synthetic fling | JOURNEY §5.3, §5.6. The curves are a diagram; only the 200 pt is measured |
+| Only better survives | the cheat (67 vs 114 ms, built-within failed both reps, snapshot 1.9 % vs a 0.5 % limit, honest pair 0.13 %); `frames-hide`'s −27 % from blank columns; same-build in band; untrusted runs decide nothing; tolerances only the owner sets, refused inside `exp`; behaviour changes wait for the owner; bugs reported, not fixed | JOURNEY §5.1–5.3; tools/perfloop `main.swift` (`--guard-tolerance` refusal), `Explain.swift` (behaviour change) |
+| Every night | idle gate (two minutes, a rep redone on input, never on a locked screen); the ssh runner; results keyed by machine; the append-only ledger as memory across sessions; `explain.txt` enough to decide the next step | JOURNEY §5.7; `Ledger.swift`, `Explain.swift`; `perfloop help` |
+| It told us what not to build | the profile split at 4 and 40 agents; ~1,100 views; slopes 3.28 / 2.96 / 2.40 ms per agent (50 → 261, 46 → 237, 43 → 212 ms) | LAYOUT.md "Profile split", "Sweep"; JOURNEY §5.5 |
+| Agents built it, too | phases 0–4 planned at 7–8 weeks, built in ~1.5 days in parallel worktrees; ~65 commits; ~8,000 lines, 120 tests, plus 77 adapter tests | JOURNEY §3 |
+| For engineers | C1–C10 as built, plus C11 `suggest`, C12 `perfloop mcp`, sweep budget walls, the gesture recorder and the VM runner; five commands; not done: hand-recorded gesture, unattended nights on a spare Mac, a speed-up of its own on capcomd, full runs in a VM | JOURNEY §3, §7; the perfloop repo's README "Status" and docs/BEYOND.md (2026-11-04); `perfloop help` |

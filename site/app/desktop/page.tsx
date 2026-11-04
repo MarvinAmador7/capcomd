@@ -53,7 +53,7 @@ export default function DesktopPage() {
           <dl className="dt-figs">
             {FIGURES.map(([n, what], k) => <div key={n} data-reveal style={delay(80 * k)}><dt>{n}</dt><dd>{what}</dd></div>)}
           </dl>
-          <p className="dt-more" data-reveal><a href="/desktop/perf/">Read the perf log</a></p>
+          <p className="dt-more" data-reveal><a href="/desktop/perf/">Read the perf log</a> <span aria-hidden="true">·</span> <a href="/perfloop/">Meet PerfLoop</a></p>
         </section>
 
         <section className="dt-today" id="today" aria-labelledby="today-h">
