@@ -19,6 +19,14 @@
       }
     },
     {
+      "identity" : "perfloop",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/MarvinAmador7/perfloop",
+      "state" : {
+        "revision" : "6a5b0745889d5b35d99d2be8ad1a0933c0737916"
+      }
+    },
+    {
       "identity" : "swift-algorithms",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-algorithms",

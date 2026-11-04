@@ -1,10 +1,10 @@
 name: menubar
 on:
   pull_request:
-    paths: ["apps/menubar/**", "tools/perfloop/**", "openapi/**", ".github/workflows/menubar.yml"]
+    paths: ["apps/menubar/**", "openapi/**", ".github/workflows/menubar.yml"]
   push:
     branches: [main]
-    paths: ["apps/menubar/**", "tools/perfloop/**", "openapi/**", ".github/workflows/menubar.yml"]
+    paths: ["apps/menubar/**", "openapi/**", ".github/workflows/menubar.yml"]
   # Run workflow on main warms the Swift build cache that PRs read.
   workflow_dispatch:
 jobs:

@@ -474,7 +474,7 @@ so the sum stays within half a point) with the recorded phases and real timestam
 event didn't go out as recorded; `snapped` when the reel didn't rest on a column edge.
 
 **Smoothness** (`reps[].steps[].smoothness`, the rep's in `reps[].smoothness`, medians in `summary.smoothness`; the
-meter is tools/perfloop's PerfLoopProbe `SmoothnessMeter`). A display link on the scroll view reads the document
+meter is PerfLoop's PerfLoopProbe `SmoothnessMeter`). A display link on the scroll view reads the document
 layer's `presentation()` position every tick (a render-server slide counts); the expected position is the start plus
 the finger deltas that could be on screen by then:
 
@@ -603,7 +603,7 @@ range), plus `projects`, `asks` and `seed`. Parameters keep the base name's seed
 byte for byte and the points of a sweep differ only where the parameters do. `crew` is the family the sweeps vary
 (crew17's shape). `describe` lists each fixture's `parametric` ranges; `fixture NAME@…` shows what a name builds.
 
-**Cost curves.** `perfloop sweep` (tools/perfloop) runs a grid and fits curves through the objective:
+**Cost curves.** `perfloop sweep` ([PerfLoop](https://github.com/MarvinAmador7/perfloop)) runs a grid and fits curves through the objective:
 
 ```sh
 perfloop sweep step --bench $B --set agents=4..64/12 --reps 2 --dry-run      # the grid, the commands, an estimate
@@ -660,8 +660,8 @@ ago, and the threads are served from the captured items' own bytes.
 - A view worth counting: `DeskProbe.body("Name")` (or `body("Name", id: agentId)` for per-agent views) as the first
   statement of its `body`.
 - Tests: `swift test --filter DeskBenchKitTests` (fixtures, statistics, budgets, xctrace parsing, call trees and
-  `diff`, the manifest, the knobs' defaults: no window needed; the knob library's own tests: `cd tools/perfloop && swift test`; the exports in `Tests/DeskBenchKitTests/Fixtures` are hand-made. Never commit a real
+  `diff`, the manifest, the knobs' defaults: no window needed; the knob library's own tests: `swift test` in a checkout of [PerfLoop](https://github.com/MarvinAmador7/perfloop); the exports in `Tests/DeskBenchKitTests/Fixtures` are hand-made. Never commit a real
   export or `.trace`: a trace records the profiled process's environment, tokens included).
 
-The views only ever see `DeskProbe`, a nil-checked static, and `DeskKnobs` (tools/perfloop's `PerfLoopProbe`,
+The views only ever see `DeskProbe`, a nil-checked static, and `DeskKnobs` (PerfLoop's `PerfLoopProbe`,
 Foundation only, values stored once); nothing else from the bench is linked into the app.

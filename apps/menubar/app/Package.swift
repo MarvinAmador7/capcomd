@@ -11,8 +11,9 @@ let package = Package(
     // The desktop window's performance and debugging harness, for coding agents (DESKBENCH.md).
     .executable(name: "CapcomdDeskBench", targets: ["CapcomdDeskBench"]),
   ],
-  // tools/perfloop: the performance loop's probe library (runtime knobs), linked by the desktop window itself.
-  dependencies: [.package(path: "../client"), .package(path: "../../../tools/perfloop")],
+  // PerfLoop (github.com/MarvinAmador7/perfloop): the performance loop's probe library (runtime knobs), linked by the
+  // desktop window itself. Pinned to a commit until PerfLoop tags releases.
+  dependencies: [.package(path: "../client"), .package(url: "https://github.com/MarvinAmador7/perfloop", revision: "6a5b0745889d5b35d99d2be8ad1a0933c0737916")],
   targets: [
     // Thread items (format blocks/1): decoding, merge by id/rev, link and code presentation. Foundation only.
     .target(name: "CapcomdThread"),
