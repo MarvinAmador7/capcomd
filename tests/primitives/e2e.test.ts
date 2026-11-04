@@ -112,3 +112,53 @@ test("primitives: ids, keys, limits, budget, cancel propagation, await/wait-any,
   const all = await cj(["cancel", runId]);
   expect(all.code).toBe(0);
 }, 180_000);
+
+test("run ids: a key is scoped by its project (two projects, one key: two runs); a run from before that is kept by its own project", async () => {
+  const key = `same-key-${Date.now()}`;
+  const repoA = join(tmpdir(), `capcomd-proj-a-${Date.now()}.git`), repoB = join(tmpdir(), `capcomd-proj-b-${Date.now()}.git`);
+  const runNew = async (repo: string, k = key) => {
+    const r = await capcomd(["run", "new", "--budget", "usd=5", "--key", k, "--json"], { ...env, CAPCOMD_REPO: repo });
+    return JSON.parse(r.stdout.trim().split("\n").pop()!);
+  };
+  const a = await runNew(repoA);
+  const b = await runNew(repoB);
+  expect(a).toMatchObject({ ok: true, created: true });
+  expect(b).toMatchObject({ ok: true, created: true });
+  expect(b.runId).not.toBe(a.runId);
+  // The same project and key: the same run (idempotent), however its clone URL is spelled.
+  expect(await runNew(repoA)).toMatchObject({ runId: a.runId, created: false });
+  // Each run kept its own repository (the second project's run new never wrote over the first's).
+  expect((await cj(["kv", "get", a.runId, "_repo"])).j.value.CAPCOMD_REPO).toBe(repoA);
+  expect((await cj(["kv", "get", b.runId, "_repo"])).j.value.CAPCOMD_REPO).toBe(repoB);
+  expect(await runNew(`${repoA}/`)).toMatchObject({ runId: a.runId, created: false });
+
+  // A run made before keys were scoped (its id from the key alone): its own project still gets it back; another
+  // project gets a new run, never that one.
+  const { stableId } = await import("../../src/primitives/policy");
+  const old = `old-${key}`;
+  const legacy = stableId("run", "run", old);
+  expect((await capcomd(["run", "new", "--budget", "usd=5", "--run-id", legacy, "--json"], { ...env, CAPCOMD_REPO: repoA })).code).toBe(0);
+  expect(await runNew(repoA, old)).toMatchObject({ runId: legacy, created: false });
+  const other = await runNew(repoB, old);
+  expect(other).toMatchObject({ created: true });
+  expect(other.runId).not.toBe(legacy);
+}, 60_000);
+
+test("status: a run of agents (no planner, as an MCP driver's) reads its agents' state, budget and every event", async () => {
+  const r = await cj(["run", "new", "--budget", "usd=12", "--label", "driven", "--key", `st-${Date.now()}`]);
+  const runId = r.j.runId as string;
+  const a = await cj(["spawn", runId, "--profile", "coder", "--task", "part 1", "--key", "p1"]);
+  const b = await cj(["spawn", runId, "--profile", "coder", "--task", "part 2", "--key", "p2"]);
+  expect((await cj(["await", runId, a.j.agentId, b.j.agentId, "--timeout-ms", "30000"])).j.agents.map((x: any) => x.status)).toEqual(["done", "done"]);
+  const j = (await cj(["status", runId])).j.run;
+  const total = (await cj(["events", runId, "--limit", "1000"])).j.events.length;
+  expect(j.scope).toMatchObject({ state: "done", agents: 2, byStatus: { done: 2 }, label: "driven", budget: { usd: 12 } });
+  expect(j.events).toBe(total);
+  const text = (await capcomd(["status", runId], env)).stdout;
+  expect(text).toContain("State: done");
+  expect(text).not.toContain("planning");
+  expect(text).toContain("Goal: driven");
+  expect(text).toContain("Agents: 2 (2 done)");
+  expect(text).toMatch(/Budget: \$[0-9.]+ billed of \$12\.00/);
+  expect(text).toContain(`Events: ${total} total`);
+}, 60_000);

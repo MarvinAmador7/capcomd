@@ -4,7 +4,7 @@
 // this host, one workdir per sandbox, with fixed git dates so the same work makes the same commit.
 import { describe, expect, test } from "bun:test";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { bareRepo } from "../merge/gitfixture";
@@ -138,6 +138,51 @@ describe("warm workspace", () => {
     expect(res).toMatchObject({ sha: "", resultText: "fixed sum" });
     expect((await new Git(b.T).ok(["rev-parse", "HEAD"])).trim()).toBe(pushed.sha);
     expect(await r.sha(`refs/heads/${t.branch}`)).toBe(pushed.sha);
+  }, 60_000);
+
+  test("review mode with the target's commit: the change merged onto it (the tree verify's checks test), its own diff against it", async () => {
+    // The agent's branch is cut before the target gets what its tests need (dep.txt); the reviewer runs the tests.
+    const r = await project();
+    await r.pushToMain("check.sh", "test -f dep.txt && test -f src/sum.ts\n");
+    const t = task(r);
+    const a = await sandbox(r);
+    const pushed = await runClaudeCode(a.provider, a.id, t, a.cfg, { apiKey: KEY });
+    await r.pushToMain("dep.txt", "the target got this after the branch was cut\n");
+    const targetSha = (await r.sha("refs/heads/main"))!;
+    const review = (over: Record<string, unknown>) => ({ ...t, taskId: `rev-${Math.random()}`, goal: "Acceptance criteria:\n- sum adds [review-check]", review: { sha: pushed.sha, branch: t.branch, target: "main", ...over } });
+    for (const warm of [false, true]) {
+      const b = await sandbox(r, { warm });
+      const res = await runClaudeCode(b.provider, b.id, review({ targetSha }), b.cfg, { apiKey: KEY, warmTemplate: warm });
+      expect(res).toMatchObject({ sha: "" });
+      expect(JSON.parse(res.resultText!)).toEqual({ passed: true, reasons: ["check.sh passes"] });
+      const dir = warm ? b.T : join(b.workdir, readdirSync(b.workdir).find((d) => d.startsWith("rev-"))!, "repo");
+      const repo = new Git(dir);
+      expect((await repo.ok(["rev-parse", "HEAD^1", "HEAD^2"])).trim().split("\n")).toEqual([pushed.sha, targetSha]);
+      // The agent's own change, as the brief tells the reviewer to read it.
+      expect((await repo.ok(["diff", "--name-only", `${targetSha}...HEAD`])).trim()).toBe("src/sum.ts");
+      const prompt = readFileSync(join(dir, "..", "prompt-seen.txt"), "utf8"); // the fake CLI writes it next to its checkout
+      expect(prompt).toContain(`merged onto main as it is now (${targetSha})`);
+      expect(prompt).toContain(`git diff ${targetSha}...HEAD`);
+    }
+    // Without the target's commit (the old reviewer): the branch alone, and its tests fail there.
+    const c = await sandbox(r);
+    expect(JSON.parse((await runClaudeCode(c.provider, c.id, review({}), c.cfg, { apiKey: KEY })).resultText!).passed).toBe(false);
+    expect(await r.sha(`refs/heads/${t.branch}`)).toBe(pushed.sha); // nothing pushed
+    // A change that conflicts with the target: no merged tree to review, an error (the checks report the conflict).
+    mkdirSync(join(r.root, "seed", "src"), { recursive: true });
+    await r.pushToMain("src/sum.ts", "export const sum = 0;\n");
+    const d = await sandbox(r);
+    await expect(runClaudeCode(d.provider, d.id, review({ targetSha: (await r.sha("refs/heads/main"))! }), d.cfg, { apiKey: KEY })).rejects.toThrow(/conflicts with main/);
+  }, 90_000);
+
+  test("commit subject: a chatty summary gives way to the agent's title (the driver's --title), not the brief", async () => {
+    const r = await project();
+    const a = await sandbox(r);
+    const res = await runClaudeCode(a.provider, a.id, task(r, { goal: "You are landing the shared contract for widgets [chat]", title: "sum helper" }), a.cfg, { apiKey: KEY });
+    expect((await new Git(r.bare).ok(["log", "-1", "--format=%s", res.sha])).trim()).toBe("Sum helper");
+    const b = await sandbox(r);
+    const res2 = await runClaudeCode(b.provider, b.id, task(r, { taskId: "task-2", branch: taskBranch("r1", "task-2"), goal: "You are landing the shared contract for widgets [chat]" }), b.cfg, { apiKey: KEY });
+    expect((await new Git(r.bare).ok(["log", "-1", "--format=%s", res2.sha])).trim()).toBe("Land the shared contract for widgets [chat]");
   }, 60_000);
 
   test("falls back to the clone: lockfile changed, stale (not in the target's history), another repo, already used", async () => {

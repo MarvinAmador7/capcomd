@@ -512,8 +512,35 @@ export async function serviceStep(p: Prompter, v: Values): Promise<Step> {
   return { step: "engine", ok: !!r.running, detail: r.running ? `background service on :${r.port} (${r.path})` : `service installed but not answering yet; see ${r.log}`, ...(r.running ? {} : { hint: "Check `capcomd service status`." }) };
 }
 
-/** `capcomd setup --check`: what's configured and working, without changing anything. */
-export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
+/**
+ * The plan logins the agent profiles a project's runs use need: one per provider with a subscription profile
+ * ("claude-code" for claude). Null when there are no profiles to tell (none yet, or the file doesn't read): then every
+ * login counts.
+ */
+export function loginsNeeded(cwd = process.cwd(), env: Record<string, string | undefined> = process.env): Set<string> | null {
+  const P = require("../../agents/profiles") as typeof import("../../agents/profiles");
+  const { env: envVar } = require("../../utils/env") as typeof import("../../utils/env");
+  const { defaultAgentsFile } = require("../../utils/home") as typeof import("../../utils/home");
+  let agents: Record<string, { provider?: string; auth?: string }>;
+  try { agents = P.readAgentsFile(envVar("AGENTS_FILE", env) ?? defaultAgentsFile(env, cwd)).agents as any; } catch { return null; }
+  const specs = Object.values(agents ?? {});
+  if (!specs.length) return null;
+  return new Set(specs.filter((s) => s.auth === "subscription").map((s) => (s.provider === "codex" ? "codex" : "claude-code")));
+}
+
+/** The plan logins' steps: only the ones `needed` names (null: all) gate setup; a Claude-only project needs no Codex login. */
+export function loginSteps(auth: Array<{ agent: string; present?: boolean; valid?: boolean; detail?: string; store?: string }>, needed: Set<string> | null, sandbox: string | null): Step[] {
+  return auth.map((a) => {
+    const ok = !!a.present && a.valid !== false;
+    const name = a.agent === "claude-code" ? "claude" : a.agent;
+    if (needed && !needed.has(a.agent) && !ok) return { step: `${a.agent} login`, ok: true, detail: `not needed: no profile here uses ${name} with a plan login (${a.present ? a.detail ?? "not valid" : "not logged in"})` };
+    return { step: `${a.agent} login`, ok, detail: `${a.detail ?? (a.present ? a.store : "not logged in")}${sandbox ? ` (${sandbox})` : ""}`, ...(a.present ? {} : { hint: `Run \`capcomd auth login ${name} --sandbox ${sandbox}\` in a terminal.` }) };
+  });
+}
+
+/** `capcomd setup --check`: what's configured and working, without changing anything. `mcpClient`: asked by an agent
+ *  through capcomd's MCP server (capcomd_setup), which has capcomd's tools already, plugin or not. */
+export async function checkSetup(cwd = process.cwd(), o: { mcpClient?: boolean } = {}): Promise<Step[]> {
   const out: Step[] = [];
   const user = readConfig(userConfigPath());
   const projPath = projectConfigPath(cwd);
@@ -537,7 +564,7 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
   }
   // Logins are per sandbox: the ones agents of this project's runs will use.
   const auth = sandbox && !sandbox.startsWith("fake") ? json(self(["auth", "status", "--json"], { cwd, env: { CAPCOMD_SANDBOX: sandbox, RELAY_SANDBOX: undefined } }).stdout)?.profiles ?? [] : [];
-  for (const a of auth) out.push({ step: `${a.agent} login`, ok: !!a.present && a.valid !== false, detail: `${a.detail ?? (a.present ? a.store : "not logged in")}${sandbox ? ` (${sandbox})` : ""}`, ...(a.present ? {} : { hint: `Run \`capcomd auth login ${a.agent === "claude-code" ? "claude" : a.agent} --sandbox ${sandbox}\` in a terminal.` }) });
+  out.push(...loginSteps(auth, auth.length ? loginsNeeded(cwd) : null, sandbox));
   const repo = process.env.CAPCOMD_REPO ?? proj.env?.CAPCOMD_REPO;
   const target = proj.run?.target ?? process.env.CAPCOMD_MERGE_TARGET ?? proj.env?.CAPCOMD_MERGE_TARGET ?? null;
   out.push({ step: "project", ok: !!repo, detail: repo ? `${repo} → ${target ?? "no target branch set (each run asks for its base)"}${projPath ? ` (${projPath})` : " (environment)"}` : "no .capcomd/config.json here or above", ...(repo ? {} : { hint: "Run `capcomd setup project` in your repository." }) });
@@ -548,7 +575,11 @@ export async function checkSetup(cwd = process.cwd()): Promise<Step[]> {
   const hermes = (await import("./hermes")).hermesStatus();
   // Any agent that has capcomd counts: the plugin in Claude Code, the skill, or capcomd in Hermes.
   const any = plugin || skill || (hermes.found && hermes.ok);
-  out.push({ step: "agent plugin", ok: any, detail: plugin ? "capcomd plugin in Claude Code (MCP tools and skills)" : skill ? "Claude Code skill only (no MCP tools)" : any ? "not in Claude Code (Hermes has capcomd)" : "not installed", ...(plugin ? {} : { hint: `Run \`capcomd setup agent\`, or in Claude Code: \`/plugin install capcomd --marketplace ${pluginMarketplace()}\`.` }) });
+  const pluginHint = `Run \`capcomd setup agent\`, or in Claude Code: \`/plugin install capcomd --marketplace ${pluginMarketplace()}\`.`;
+  // An agent asking through capcomd's MCP server has its tools already (a plugin loaded with --plugin-dir, an MCP config):
+  // the installed plugin is then advice (its skills, other sessions), never what makes capcomd not ready.
+  if (!any && o.mcpClient) out.push({ step: "agent plugin", ok: true, advice: true, detail: "not installed in Claude Code, but this session reaches capcomd's tools already", hint: pluginHint });
+  else out.push({ step: "agent plugin", ok: any, detail: plugin ? "capcomd plugin in Claude Code (MCP tools and skills)" : skill ? "Claude Code skill only (no MCP tools)" : any ? "not in Claude Code (Hermes has capcomd)" : "not installed", ...(plugin ? {} : { hint: pluginHint }) });
   out.push({ step: "hermes", ok: hermes.ok, detail: hermes.detail, ...(hermes.hint ? { hint: hermes.hint } : {}) });
   const S = await import("./service");
   // The engine this CLI talks to (CAPCOMD_ENDPOINT), not only the service's default port.

@@ -232,9 +232,42 @@ export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key
   /** The run's goal branch (`--goal-branch G --base B`): cut from `base`, the run's target; reviewed work lands on it
    *  directly and the user opens a pull request from it into `base` when the planner is done. Needs `base`. */
   goalBranch?: string; base?: string }
+/** What a run's key is scoped by: the project's repository (its clone URL), else the project's directory (the nearest
+ *  .capcomd/config.json, else the working directory). */
+export function projectIdentity(source: Record<string, string | undefined> = process.env, cwd = process.cwd()): string {
+  const repo = env("REPO", source);
+  if (repo) return `repo:${(require("../merge/config") as typeof import("../merge/config")).normalizeRemote(repo)}`;
+  return `dir:${(require("../config/projects") as typeof import("../config/projects")).projectDirOf(cwd, source) ?? resolve(cwd)}`;
+}
+
+/** The id `run new --key K` gives a run: the key within its project, so two projects whose drivers pick the same key
+ *  (tinycalc-run-1) get two runs; the same project and key, the same run. */
+export function runIdFor(key: string, source: Record<string, string | undefined> = process.env, cwd = process.cwd()): string {
+  return stableId("run", `run\0${projectIdentity(source, cwd)}`, key);
+}
+
+/**
+ * The run a key names here: runIdFor's, unless only a run from before keys were scoped by project (0.8 and earlier: the
+ * key alone) exists, and it is this project's (the repository it recorded is this one, or neither has one). Then that
+ * run, so a retry across an upgrade gets its run back; another project's old run is never handed out.
+ */
+async function keyedRunId(key: string): Promise<string> {
+  const id = runIdFor(key);
+  if (await existingActor("scope", [id]).catch(() => null)) return id;
+  const legacy = stableId("run", "run", key);
+  const old = await existingActor("scope", [legacy]).catch(() => null);
+  if (!old || !(await old.getScope({}).catch(() => null))) return id;
+  const { RUN_REPO_KV } = await import("../merge/run-config");
+  const rec: any = await old.kvGet({ k: RUN_REPO_KV }).catch(() => null);
+  const had = rec && !rec.deleted && typeof rec.value?.CAPCOMD_REPO === "string" ? (rec.value.CAPCOMD_REPO as string) : null;
+  const repo = env("REPO");
+  const { normalizeRemote } = await import("../merge/config");
+  return (had && repo ? normalizeRemote(had) === normalizeRemote(repo) : !had && !repo) ? legacy : id;
+}
+
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
-  const runId = o.runId ?? stableId("run", "run", o.key);
+  const runId = o.runId ?? (o.key ? await keyedRunId(o.key) : stableId("run", "run"));
   const c = client();
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time
@@ -689,9 +722,9 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
 }
 
 /** A reviewer's review target (set by verify in the contract; RPC spawns can't set it). */
-function reviewOf(a: ScopeAgent): { sha: string; branch: string; target: string } | null {
+function reviewOf(a: ScopeAgent): { sha: string; branch: string; target: string; targetSha?: string } | null {
   const r: any = (a.contract as any)?.review;
-  return r && typeof r.sha === "string" && typeof r.branch === "string" && typeof r.target === "string" ? { sha: r.sha, branch: r.branch, target: r.target } : null;
+  return r && typeof r.sha === "string" && typeof r.branch === "string" && typeof r.target === "string" ? { sha: r.sha, branch: r.branch, target: r.target, ...(typeof r.targetSha === "string" && /^[0-9a-f]{40,64}$/.test(r.targetSha) ? { targetSha: r.targetSha } : {}) } : null;
 }
 
 /** The structured result an agent declared with `capcomd result` (kv _result/<agt>), if any. */
@@ -789,7 +822,10 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
   // Children branch from the run's target (a staging branch) when the operator set one.
   const target = await runTarget(runId);
-  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
+  // Its title (the driver's --title, its parent's, the user's or its own), for its commit's subject; not one derived from the brief.
+  const named = shownTitle(a.titleState, a.task);
+  const title = named.title && named.titleSource !== "derived" ? named.title : null;
+  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
   const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
   return { kind: "pushed", pushed, vmRpc: !!vmRpc };
 }
@@ -1324,8 +1360,20 @@ function reviewerSpec(profile: string): Record<string, any> | null {
 }
 
 interface Review { profile: string; agentId: string | null; passed: boolean; reasons: string[]; error?: string }
-interface ReviewTarget { runId: string; vfyId: string; profile: string; branch: string; sha: string; target: string; agentId: string | null; acceptance?: unknown; parent?: string; key?: string }
-type Reviewing = { agentId: string; sha: string; spec: Record<string, any> | null; startedAt: number } | { failed: Review };
+/** What a reviewer reads: the agent's commit `sha`, merged onto `target` at `targetSha` (the tree the checks test) when
+ *  that is known; without a repository (a dry run) the commit alone. */
+interface ReviewTarget { runId: string; vfyId: string; profile: string; branch: string; sha: string; target: string; targetSha?: string; agentId: string | null; acceptance?: unknown; parent?: string; key?: string }
+type Reviewing = { agentId: string; sha: string; targetSha?: string; spec: Record<string, any> | null; startedAt: number } | { failed: Review };
+
+/**
+ * Whether a reviewer started alongside the checks read what they tested: the same agent commit, put on the same target
+ * commit (when the checks say which). One that read another (the branch or the target moved in between) is replaced
+ * by one for the tested tree, never counted: both must pass for the same tree.
+ */
+export function reviewFits(started: { sha: string; targetSha?: string }, tested: { taskSha: string; targetSha?: string }): boolean {
+  if (started.sha !== tested.taskSha) return false;
+  return !tested.targetSha || started.targetSha === tested.targetSha;
+}
 
 const reviewFailed = (o: ReviewTarget, reviewer: string | null, e: unknown): Review =>
   ({ profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: `review failed: ${String((e as Error)?.message ?? e).slice(0, 300)}` });
@@ -1341,10 +1389,10 @@ async function startReview(o: ReviewTarget): Promise<Reviewing> {
     if (spec?.maxBudgetUsd) requested.usd = spec.maxBudgetUsd;
     const r = await spawnAgent({
       runId: o.runId, task: reviewBrief({ criteria: o.acceptance, childTask }), profile: o.profile, key: o.key ?? `review-${o.vfyId}`,
-      ...(o.parent ? { parent: o.parent } : {}), contract: { review: { sha: o.sha, branch: o.branch, target: o.target, of: o.agentId ?? o.branch } },
+      ...(o.parent ? { parent: o.parent } : {}), contract: { review: { sha: o.sha, branch: o.branch, target: o.target, ...(o.targetSha ? { targetSha: o.targetSha } : {}), of: o.agentId ?? o.branch } },
       ...(Object.keys(requested).length ? { budget: requested } : {}), review: true,
     });
-    return { agentId: r.agentId, sha: o.sha, spec, startedAt: Date.now() };
+    return { agentId: r.agentId, sha: o.sha, ...(o.targetSha ? { targetSha: o.targetSha } : {}), spec, startedAt: Date.now() };
   } catch (e) { return { failed: reviewFailed(o, null, e) }; }
 }
 
@@ -1366,12 +1414,36 @@ function dropReview(runId: string, started: Reviewing | null, why: string) {
   if (started && !("failed" in started)) void cancelAgents(runId, started.agentId, why).catch(() => {});
 }
 
+/** The key of a reviewer that replaces one that read another tree: the tested commit, and the target when it moved. */
+function replacementKey(vfyId: string, early: Reviewing, tested: { taskSha: string; targetSha?: string }): string {
+  const moved = !("failed" in early) && early.sha === tested.taskSha && tested.targetSha;
+  return `review-${vfyId}-${tested.taskSha.slice(0, 12)}${moved ? `-${tested.targetSha!.slice(0, 12)}` : ""}`;
+}
+
+/**
+ * The reviewer that starts with the checks, for the agent's commit merged onto the target as it is now (its tip on the
+ * remote, one ls-remote). A verify that runs again (its process went away) keeps the target its first reviewer was
+ * given, so that reviewer is the same agent (keyed), not a conflict. The target's tip unknown (the remote didn't
+ * answer): no early reviewer; one starts after the checks, for the tree they tested. No repository (a dry run): the
+ * commit alone, as there is no target to put it on.
+ */
+async function startEarlyReview(runId: string, vfyId: string, target: string, parent: string | undefined, of: (targetSha: string | undefined) => ReviewTarget): Promise<Reviewing | null> {
+  const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId).catch(() => null);
+  if (!cfg) return startReview(of(undefined));
+  const prior: any = await client().scope.getOrCreate([runId]).getAgent({ agentId: stableId("agt", `${runId}\0${parent ?? "operator"}`, `review-${vfyId}`) }).catch(() => null);
+  if (prior?.contract?.review) return startReview(of(typeof prior.contract.review.targetSha === "string" ? prior.contract.review.targetSha : undefined));
+  const targetSha = await (await import("../merge/repo")).remoteBranchSha(cfg, target, 15_000).catch(() => null);
+  return targetSha ? startReview(of(targetSha)) : null;
+}
+
 /**
  * Whether the reviewer starts with the checks instead of after them (CAPCOMD_REVIEW_PARALLEL=0 turns it off). The
- * reviewer reads the agent's pushed commit, not the checks' result, so it needn't wait for them: a verify then takes
- * about max(checks, review) instead of their sum. The gate is unchanged: both must pass, for the same commit (a reviewer
- * that read another commit than the one the checks tested is replaced by one for the tested commit). The price: when the
- * checks fail, the reviewer has already started, and is cancelled (a few seconds of its tokens).
+ * reviewer reads what the checks test (the agent's pushed commit merged onto the target as it is when the verify starts,
+ * in its own checkout), not the checks' result, so it needn't wait for them: a verify then takes about
+ * max(checks, review) instead of their sum. The gate is unchanged: both must pass, for the same tree (a reviewer that
+ * read another commit or another target than the checks tested is replaced by one for the tested tree: reviewFits). The
+ * price: when the checks fail (a conflict included), the reviewer has already started, and is cancelled (a few seconds
+ * of its tokens).
  */
 const reviewInParallel = () => env("REVIEW_PARALLEL") !== "0";
 
@@ -1405,10 +1477,11 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
   const { label } = await resolveRef(runId, d.ref);
   const direct = onGoal(await runGoal(runId), target);
   const reviewProfile = d.reviewProfile ?? undefined;
-  const reviewOf = (sha: string, key?: string): ReviewTarget => ({ runId, vfyId, profile: reviewProfile!, branch, sha, target, agentId, acceptance: d.acceptance ?? undefined, ...(reviewParent ? { parent: reviewParent } : {}), ...(key ? { key } : {}) });
-  // The commit the agent pushed (its result), which the checks are about to test: the reviewer can read it already.
+  const reviewOf = (sha: string, targetSha: string | undefined, key?: string): ReviewTarget => ({ runId, vfyId, profile: reviewProfile!, branch, sha, target, ...(targetSha ? { targetSha } : {}), agentId, acceptance: d.acceptance ?? undefined, ...(reviewParent ? { parent: reviewParent } : {}), ...(key ? { key } : {}) });
+  // The commit the agent pushed (its result), which the checks are about to test on the target: the reviewer can read
+  // the same already, the commit merged onto the target as it is now.
   const pushed = agentId ? ((await getAgentOrThrow(runId, agentId)).result?.commit as string | undefined) : undefined;
-  const early = reviewProfile && pushed && reviewInParallel() ? await startReview(reviewOf(pushed)) : null;
+  const early = reviewProfile && pushed && reviewInParallel() ? await startEarlyReview(runId, vfyId, target, reviewParent, (targetSha) => reviewOf(pushed, targetSha)) : null;
   const c0 = Date.now();
   const res: any = await c.verifier.getOrCreate([runId, vfyId]).verify({
     verifierId: vfyId, taskId: label, branch, runId, target, testOnly: true, ...(d.checks ? { testCommand: d.checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
@@ -1422,11 +1495,13 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
   let review: Review | null = null;
   let reviewStarted: number | null = null;
   if (checksPassed && reviewProfile && out.status === "verified" && out.taskSha) {
-    // The reviewer must have read the commit the checks tested; one that read another (the branch moved) is replaced.
-    let started = early && !("failed" in early) && early.sha !== out.taskSha ? (dropReview(runId, early, "replaced: it read another commit than the one the checks tested"), null) : early;
-    started ??= await startReview(reviewOf(out.taskSha, early ? `review-${vfyId}-${out.taskSha.slice(0, 12)}` : undefined));
+    // The reviewer must have read the tree the checks tested; one that read another (the branch or the target moved
+    // between the reviewer's start and the checks' integration) is replaced by one for the tested tree.
+    const tested = { taskSha: out.taskSha, ...(out.targetSha ? { targetSha: out.targetSha } : {}) };
+    let started = early && !("failed" in early) && !reviewFits(early, tested) ? (dropReview(runId, early, early.sha !== out.taskSha ? "replaced: it read another commit than the one the checks tested" : "replaced: the target moved before the checks put the change on it"), null) : early;
+    started ??= await startReview(reviewOf(out.taskSha, out.targetSha, early ? replacementKey(vfyId, early, tested) : undefined));
     reviewStarted = "failed" in started ? null : started.startedAt;
-    review = await finishReview(reviewOf(out.taskSha), started);
+    review = await finishReview(reviewOf(out.taskSha, out.targetSha), started);
   } else dropReview(runId, early, alreadyMerged ? "not needed: the work is on the target already" : "not needed: the checks failed");
   const pass = checksPassed && (review ? review.passed : true);
   const g = out.timings ?? {};

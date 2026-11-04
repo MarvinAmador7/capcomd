@@ -204,6 +204,26 @@ describe("launchContext: where a run starts", () => {
 		expect(launchContext(plain, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_SANDBOX: "boxd" }).env.CAPCOMD_SANDBOX).toBe("boxd");
 	});
 
+	test("repo: where capcomd keeps its clones stays this machine's (CAPCOMD_WORKDIR), unless the project names its own", async () => {
+		const d = project({ CAPCOMD_REPO: "/srv/git/app.git" });
+		expect(launchContext(d, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_WORKDIR: "/scratch/work" }).env.CAPCOMD_WORKDIR).toBe("/scratch/work");
+		expect(launchContext(d, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", RELAY_WORKDIR: "/scratch/old" }).env.RELAY_WORKDIR).toBe("/scratch/old");
+		const own = project({ CAPCOMD_REPO: "/srv/git/app.git", CAPCOMD_WORKDIR: "/project/work" });
+		expect(launchContext(own, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_WORKDIR: "/scratch/work" }).env.CAPCOMD_WORKDIR).toBe("/project/work");
+		// Without one, the clones are under the capcomd home (a scratch CAPCOMD_HOME's), not always ~/.capcomd/work.
+		const { loadMergeConfig } = await import("../../src/merge/config");
+		expect(loadMergeConfig(launchContext(d, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }).env)!.workdir).toBe(join(home, "work"));
+		// setup's env-image check (src/env/warm.ts) reads the template drift in that work dir.
+		const { envImageCheck } = await import("../../src/cli/commands/setup");
+		const saved = { w: process.env.CAPCOMD_WORKDIR };
+		process.env.CAPCOMD_WORKDIR = "/scratch/work";
+		const seen: { workdir?: string } = {};
+		try {
+			await envImageCheck(d, { status: async (env) => { seen.workdir = loadMergeConfig(env)!.workdir; return { state: "current", ok: true, detail: "x", command: null, image: "img" }; } });
+		} finally { if (saved.w === undefined) delete process.env.CAPCOMD_WORKDIR; else process.env.CAPCOMD_WORKDIR = saved.w; }
+		expect(seen.workdir).toBe("/scratch/work");
+	});
+
 	test("repo that isn't a set-up project checkout: 422 with what to do", () => {
 		const base = { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_REPO: "/daemon/repo" };
 		expect(() => launchContext("rel/path", base)).toThrow(/absolute path/);

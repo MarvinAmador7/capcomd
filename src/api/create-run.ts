@@ -52,6 +52,9 @@ function contextFor(repo: string | undefined, base: Env, cwd: string): { cwd: st
 	// CAPCOMD_NO_CONFIG (tests) skips the user's settings, never the project the request named.
 	if (base.CAPCOMD_NO_CONFIG) { for (const [k, v] of Object.entries(readConfig(project).env ?? {})) if (env[k] === undefined && typeof v === "string") env[k] = v; }
 	else applyConfig(env, dir);
+	// Where capcomd keeps its clones is this machine's, not the project's: the daemon's (CAPCOMD_WORKDIR) stays unless the
+	// project names its own (else a scratch setup's clones land in ~/.capcomd/work).
+	for (const k of ["CAPCOMD_WORKDIR", "RELAY_WORKDIR"]) if (env.CAPCOMD_WORKDIR === undefined && env.RELAY_WORKDIR === undefined && base[k] !== undefined) env[k] = base[k];
 	const r = envVar("REPO", env);
 	if (!r) throw new CreateRunError(`${project} names no repository (CAPCOMD_REPO). Run \`capcomd setup project\` in ${dir}.`);
 	return { cwd: dir, env, repo: r };
