@@ -449,6 +449,16 @@ extension CapcomdStore {
     changed()
   }
 
+  /// capcomd's projects and their checkouts (`projects.known`), for the onboarding's list; empty from a daemon without
+  /// the route, or when it can't be read (the list then comes from the folder scan alone).
+  public func knownProjects() async -> [KnownProject] {
+    await ensureCapabilities()
+    guard capabilities.contains(Capability.projectsKnown), let lister = daemonInfo as? KnownProjectsListing else { return [] }
+    do { return try await lister.knownProjects() }
+    catch is Unauthorized { unauthorized = true; changed(); return [] }
+    catch { return [] }
+  }
+
   /// Capabilities come with the first daemon read; a window opened before it asks for them itself.
   func ensureCapabilities() async {
     guard capabilities.isEmpty, let daemonInfo, let h = try? await daemonInfo.health() else { return }

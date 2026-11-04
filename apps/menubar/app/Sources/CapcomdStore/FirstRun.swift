@@ -9,6 +9,14 @@ public enum FirstRun {
   public static let appName = "mac-app"
   public static let pairArguments = ["clients", "pair", "--app", appName, "--json"]
   public static let serviceArguments = ["service", "install", "--json"]
+  /// The login service, started now and at every login, or now only (`--no-login`, capcomd 0.10 and later).
+  public static func serviceArguments(atLogin: Bool) -> [String] { atLogin ? serviceArguments : serviceArguments + ["--no-login"] }
+  public static let serviceStatusArguments = ["service", "status", "--json"]
+  /// `capcomd service status --json`: whether the login service is installed (nil: not an answer).
+  public static func parseServiceInstalled(_ out: String) -> Bool? {
+    guard let d = out.data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return nil }
+    return o["installed"] as? Bool
+  }
   /// What to tell someone without the CLI (Homebrew installs it with the app; this is for everyone else).
   public static let installCommand = "brew install MarvinAmador7/tap/capcomd"
   /// The paste fallback's command: the same pairing, printed for a person to copy.

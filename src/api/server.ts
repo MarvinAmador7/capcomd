@@ -74,6 +74,7 @@ export function harnessApp(o: ServerOptions) {
 		projects: {
 			list: os.projects.list.handler(() => src.projects()),
 			inspect: os.projects.inspect.handler(({ input }) => src.inspectProject(input.path)),
+			known: os.projects.known.handler(async () => ({ projects: await src.knownProjects() })),
 			// Served natively below (Idempotency-Key, the configure scope): this handler is never reached.
 			setup: os.projects.setup.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 			// Served natively below (refusals carry `field` and `problem`; the POSTs take an Idempotency-Key): never reached.

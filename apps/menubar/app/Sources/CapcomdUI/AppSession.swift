@@ -148,18 +148,38 @@ package final class AppSession {
   /// Start capcomd: install the login service (it starts now and at every login); the stores reconnect by themselves.
   package func startDaemon() {
     if start == .starting { return }
+    Task { _ = await startDaemon(atLogin: true) }
+  }
+
+  /// Installs the login service, started now and at every login (`atLogin`) or now only, and waits for it: nil once
+  /// it runs, else why not, in a line. The onboarding's boot runs this; Start capcomd above is the same call.
+  package func startDaemon(atLogin: Bool) async -> String? {
+    if start == .starting { return "capcomd is already starting." }
     start = .starting
-    Task {
-      guard let cli = await locate(again: true) else { start = .failed("Install the capcomd CLI first: \(FirstRun.installCommand)"); return }
+    let failure: String? = await {
+      guard let cli = await locate(again: true) else { return "Install the capcomd CLI first: \(FirstRun.installCommand)" }
       // `service install` waits up to 20 s for the engine to answer.
-      guard let r = await CLIRunner.run(cli, FirstRun.serviceArguments, timeout: 60) else { start = .failed("capcomd didn't answer."); return }
-      switch FirstRun.parseService(r.out, exitCode: r.code) {
-      case .running: start = .started
-      case .notAnswering(let log): start = .failed("capcomd didn't start yet." + (log.map { " Its log: \($0)" } ?? ""))
-      case .failed(let m): start = .failed(m)
+      guard let r = await CLIRunner.run(cli, FirstRun.serviceArguments(atLogin: atLogin), timeout: 60) else { return "capcomd didn't answer." }
+      // Exit 2 with --no-login: a capcomd from before it (0.9 and older).
+      if r.code == 2 && !atLogin {
+        return "This capcomd\(cliVersion.map { " (\($0))" } ?? "") can only start at login. Turn the switch on, or update it: brew upgrade capcomd"
       }
-      if let v = await CLIRunner.version(cli) { cliVersion = v }
-    }
+      switch FirstRun.parseService(r.out, exitCode: r.code) {
+      case .running: return nil
+      case .notAnswering(let log): return "capcomd didn't start yet." + (log.map { " Its log: \($0)" } ?? "")
+      case .failed(let m): return m
+      }
+    }()
+    start = failure.map(Start.failed) ?? .started
+    if let cli, let v = await CLIRunner.version(cli) { cliVersion = v }
+    return failure
+  }
+
+  /// Whether capcomd's login service is installed (`capcomd service status`); nil when the CLI can't say.
+  package func serviceInstalled() async -> Bool? {
+    guard let cli = await locate() else { return nil }
+    guard let r = await CLIRunner.run(cli, FirstRun.serviceStatusArguments, timeout: 15), r.code == 0 else { return nil }
+    return FirstRun.parseServiceInstalled(r.out)
   }
 
   /// A surface reached the daemon: a finished start has done its job.

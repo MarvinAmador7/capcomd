@@ -398,6 +398,26 @@ extension LiveDaemonInfo: GoalBranchActing {
   }
 }
 
+/// `GET /v1/projects/known` (capability `projects.known`): `{projects: [{name, path, default}]}`.
+extension LiveDaemonInfo: KnownProjectsListing {
+  public func knownProjects() async throws -> [KnownProject] {
+    let (status, data) = try await transport.get("/v1/projects/known")
+    switch status {
+    case 200:
+      guard let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let list = o["projects"] as? [[String: Any]] else {
+        throw DetailUnavailable.failed("unexpected response")
+      }
+      return list.compactMap { p in
+        guard let name = p["name"] as? String, let path = p["path"] as? String, path.hasPrefix("/") else { return nil }
+        return KnownProject(name: name, path: path, isDefault: p["default"] as? Bool ?? false)
+      }
+    case 401: throw Unauthorized()
+    case 404: throw DetailUnavailable.unsupported
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
+
 /// `GET /v1/projects/inspect` and `POST /v1/projects` (capability `projects.setup`), on the daemon adapter so the store
 /// picks them up from it.
 extension LiveDaemonInfo: ProjectSettingUp {

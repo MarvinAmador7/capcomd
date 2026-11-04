@@ -75,6 +75,15 @@ struct GeneralPane: View {
       }
       .toggleStyle(.switch)
       .disabled(!Notifier.available)
+
+      Section {
+        LabeledContent {
+          Button("Show Onboarding Again") { OnboardingController.shared?.showAgain() }
+        } label: {
+          Text("Onboarding")
+          Text("The welcome, with its intro, and the steps to a first run.")
+        }
+      }
     }
     .formStyle(.grouped)
     .sheet(isPresented: $tokenSheet) { TokenSheet(afterReset: false) }

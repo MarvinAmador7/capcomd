@@ -320,3 +320,19 @@ describe("POST /v1/projects", () => {
 		expect(describeEvent("project.configured", {}, null)).toBe("A project was set up.");
 	});
 });
+
+describe("GET /v1/projects/known", () => {
+	test("capcomd's projects with their checkouts and the default: empty at first, then each project set up", async () => {
+		const w = world();
+		expect(CAPABILITY_NAMES).toContain("projects.known");
+		expect((spec as any).paths["/v1/projects/known"].get).toBeDefined();
+		expect(await w.req("GET", "/v1/projects/known")).toEqual({ status: 200, body: { projects: [] } });
+		const a = checkout(), b = checkout({ origin: "https://github.com/acme/other.git" });
+		expect((await w.post(answers(a))).status).toBe(200);
+		expect((await w.post(answers(b))).status).toBe(200);
+		const r = await w.req("GET", "/v1/projects/known");
+		expect(r.status).toBe(200);
+		expect(r.body.projects).toEqual([{ name: "app", path: a, default: true }, { name: expect.any(String), path: b, default: false }]);
+		expect((await w.req("GET", "/v1/projects/known", undefined, { token: "cch_not-a-token" })).status).toBe(401);
+	});
+});

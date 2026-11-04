@@ -352,6 +352,20 @@ public protocol ProjectSettingUp: Sendable {
   func publishProject(path: String, owner: String, name: String, visibility: String) async throws -> ProjectInspection
 }
 
+/// One of capcomd's projects (`GET /v1/projects/known`, capability `projects.known`): its name and checkout folder.
+public struct KnownProject: Equatable, Sendable {
+  public var name: String
+  public var path: String
+  public var isDefault: Bool
+  public init(name: String, path: String, isDefault: Bool) { self.name = name; self.path = path; self.isDefault = isDefault }
+}
+
+/// `GET /v1/projects/known` (capability `projects.known`): capcomd's projects and their checkouts, for the onboarding's
+/// project list. A separate port so the setup ports' fakes don't need it.
+public protocol KnownProjectsListing: Sendable {
+  func knownProjects() async throws -> [KnownProject]
+}
+
 extension ProjectSettingUp {
   /// Daemons and ports from before `projects.git`.
   public func initGit(path: String) async throws -> ProjectInspection { throw DetailUnavailable.unsupported }
