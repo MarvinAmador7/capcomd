@@ -132,6 +132,20 @@ Options:
 Exit codes: 0 ok, 1 run failed, 2 usage, 3 not found, 4 engine unreachable
 `;
 
+/** `capcomd <command> … --help`: the usage lines of that command (each with the lines indented under it), or null when
+ *  the help names no such command (the whole help is shown then). */
+export function commandHelp(command: string, help = HELP): string | null {
+  const lines = help.split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^ {2}capcomd (\S+)/.exec(lines[i]!);
+    if (!m || m[1] !== command) continue;
+    out.push(lines[i]!);
+    while (i + 1 < lines.length && /^ {6,}\S/.test(lines[i + 1]!) && !/^ {2}capcomd /.test(lines[i + 1]!)) out.push(lines[++i]!);
+  }
+  return out.length ? `\nUsage:\n${out.join("\n")}\n\nRun \`capcomd --help\` for every command.\n` : null;
+}
+
 function deepMerge(a: Record<string, any>, b: Record<string, any>): Record<string, any> {
   const o: Record<string, any> = { ...a };
   for (const [k, v] of Object.entries(b)) o[k] = v && typeof v === "object" && !Array.isArray(v) && o[k] && typeof o[k] === "object" ? deepMerge(o[k], v) : v;
@@ -299,7 +313,7 @@ async function main(argv: string[]): Promise<number> {
       return EXIT.ok;
     }
     if (values.help || !command) {
-      console.log(HELP);
+      console.log((command && commandHelp(command)) || HELP);
       return command || values.help ? EXIT.ok : EXIT.usage;
     }
 
