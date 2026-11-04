@@ -117,8 +117,9 @@ Usage:
                                        checkout added to them; who approves merges into protected branches: elicit,
                                        capcomd asks you in Hermes (recommended), or human, capcomd approve)
   capcomd setup check                    What's configured and working (changes nothing)
-  capcomd service install|uninstall|status [--port N] [--dry-run]
-                                       The engine as a background service (launchd / systemd user unit)
+  capcomd service install|uninstall|status [--port N] [--dry-run] [--no-login]
+                                       The engine as a background service (launchd / systemd user unit);
+                                       install --no-login starts it now but not at the next login
   capcomd upgrade [--to X.Y.Z] [--dry-run]
                                        Replace this capcomd with the latest release (the installed binary;
                                        npm and Homebrew installs say how to upgrade them)
@@ -234,6 +235,7 @@ async function main(argv: string[]): Promise<number> {
         mode: { type: "string" },
         service: { type: "boolean" },
         "no-service": { type: "boolean" },
+        "no-login": { type: "boolean" },
         "no-skill": { type: "boolean" },
         "no-plugin": { type: "boolean" },
         "no-hermes": { type: "boolean" },
@@ -1010,10 +1012,10 @@ async function main(argv: string[]): Promise<number> {
         const sub = positionals[1] ?? "status";
         const port = parseInt(values.port as string, 10);
         if (sub === "install") {
-          const r: any = await S.serviceInstall({ port, dryRun: !!values["dry-run"] });
+          const r: any = await S.serviceInstall({ port, dryRun: !!values["dry-run"], atLogin: !values["no-login"] });
           if (json) out(r);
           else if (r.dryRun) console.log(`would write ${r.path}:\n\n${r.body}`);
-          else console.log(`✓ engine service installed (${r.path}); ${r.running ? `running on :${r.port}` : `not answering on :${r.port} yet; see ${r.log}`}`);
+          else console.log(`✓ engine service installed (${r.path}${r.atLogin ? "" : ", not started at login"}); ${r.running ? `running on :${r.port}` : `not answering on :${r.port} yet; see ${r.log}`}`);
           return r.dryRun || r.running ? EXIT.ok : EXIT.run_failed;
         }
         if (sub === "uninstall") { const r = S.serviceUninstall(); if (json) out(r); else console.log(r.uninstalled ? `✓ removed ${r.path}` : "no engine service was installed"); return EXIT.ok; }
@@ -1022,7 +1024,7 @@ async function main(argv: string[]): Promise<number> {
           if (json) out(r); else console.log(`service: ${r.installed ? (r.loaded ? "installed, loaded" : "installed, not loaded") : "not installed"}; engine on :${r.port}: ${r.running ? "running" : "not running"}  (log: ${r.log})`);
           return EXIT.ok;
         }
-        usage("usage: capcomd service install|uninstall|status [--port N] [--dry-run]");
+        usage("usage: capcomd service install|uninstall|status [--port N] [--dry-run] [--no-login]");
         return EXIT.usage;
       }
 

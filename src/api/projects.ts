@@ -57,6 +57,13 @@ export interface ProjectDeps {
 	ghReady: () => Promise<boolean>;
 }
 
+export interface KnownProject { name: string; path: string; default: boolean }
+/** GET /v1/projects/known: capcomd's project list (capcomd's user config), as it is. */
+export function knownProjects(deps: Pick<ProjectDeps, "env">): KnownProject[] {
+	const p = readProjects(deps.env);
+	return p.list.map((x) => ({ name: x.name, path: x.path, default: x.name === p.default }));
+}
+
 export const tilde = (p: string, env: Env) => { const h = resolve(env.HOME ?? homedir()); return p === h ? "~" : p.startsWith(`${h}/`) ? `~${p.slice(h.length)}` : p; };
 /** The home directory: capcomd's own settings live there, so it's never a project. */
 export const isHome = (p: string, env: Env) => samePath(p, env.HOME ?? homedir()) || samePath(p, userInfo().homedir) || isUserConfigDir(p, env);

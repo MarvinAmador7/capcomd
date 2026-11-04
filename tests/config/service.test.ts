@@ -13,6 +13,14 @@ describe("engine as a service", () => {
     expect(f.body).toContain("<key>StandardOutPath</key><string>/home/me/.capcomd/engine.log</string>");
     expect(f.body).not.toContain("BOXD_API_KEY"); // the key stays in the keychain
   });
+  test("macOS, not at login (--no-login): launchd loads it at login without starting it", () => {
+    const f = serviceFile({ ...spec("darwin"), atLogin: false });
+    expect(f.body).toContain("<key>RunAtLoad</key><false/>");
+    expect(f.body).not.toContain("<key>RunAtLoad</key><true/>");
+    expect(f.body).not.toContain("KeepAlive");   // SuccessfulExit would imply RunAtLoad
+    expect(f.body).toContain("<string>serve</string><string>--port</string><string>6420</string>");
+    expect(serviceFile(spec("darwin")).body).toContain("<key>RunAtLoad</key><true/>");   // the default stays at login
+  });
   test("Linux: a systemd user unit, enabled at login, restarted on failure", () => {
     const f = serviceFile(spec("linux"));
     expect(f.path).toBe(`/home/me/.config/systemd/user/${UNIT}`);

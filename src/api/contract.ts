@@ -396,6 +396,7 @@ export const CAPABILITIES = {
 	"sandboxes.settings": "PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime; Docker's memory per agent); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned",
 	"sandboxes.actions": "POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream",
 	"projects.setup": "GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream",
+	"projects.known": "GET /v1/projects/known: capcomd's projects with their checkout folders on the daemon's machine, and which is the default",
 	"projects.git": "POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`",
 	"runs.goal_branch": "Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events",
 	"agents.title": "Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled",
@@ -639,6 +640,14 @@ export const ProjectAgentInfo = z.object({
 	auth: z.enum(["subscription", "apikey"]).describe("How its profiles would log in: subscription (a plan login, or none yet) or apikey (only an API key: it bills per use, so setup asks for a spend cap)"),
 	places: z.array(z.object({ sandbox: z.string(), loggedIn: z.boolean(), how: z.enum(["plan", "api_key"]).nullable() })).describe("Its login in each place, as GET /v1/logins"),
 });
+export const KnownProjects = z.object({
+	projects: z.array(z.object({
+		name: z.string().describe("The project's name in capcomd's list"),
+		path: z.string().describe("Absolute path of its checkout on the daemon's machine (it may have moved or gone since)"),
+		default: z.boolean().describe("The default project: where a run without `repo` goes"),
+	})).describe("In the order capcomd lists them"),
+});
+export const PROJECTS_KNOWN_DOC = "Capability projects.known. capcomd's projects (the list `capcomd setup project` and POST /v1/projects add to) with their checkout folders, for a client choosing where a first run goes. Read only; folders aren't checked (one may have moved).";
 export const ProjectInspect = z.object({
 	path: z.string().describe("The path as given"),
 	root: z.string().nullable().describe("The git checkout it is in (its top level, symlinks resolved): a folder inside a checkout resolves to the checkout. null when it isn't in one"),
@@ -837,6 +846,7 @@ export const contract = {
 		.output(z.object({ ok: z.literal(true), api: z.literal("harness.v1"), version: z.string(), capabilities: z.array(z.string()).optional().describe(`Features this daemon has: ${CAPABILITIES_DOC} This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty`) })),
 	projects: {
 		list: oc.route({ method: "GET", path: "/v1/projects" }).output(z.array(Project)),
+		known: oc.route({ method: "GET", path: "/v1/projects/known", description: PROJECTS_KNOWN_DOC }).output(KnownProjects),
 		inspect: oc.route({ method: "GET", path: "/v1/projects/inspect", description: PROJECTS_INSPECT_DOC })
 			.input(z.object({ path: z.string().min(1).max(4096).refine((p) => p.startsWith("/"), "path must be an absolute path").describe("Absolute path of a folder on the daemon's machine") })).output(ProjectInspect),
 		setup: oc.route({ method: "POST", path: "/v1/projects", inputStructure: "detailed", description: PROJECTS_SETUP_DOC })

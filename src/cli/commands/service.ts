@@ -1,5 +1,6 @@
-// `capcomd service install|uninstall|status [--port N] [--dry-run]`: the engine as a background service, so
+// `capcomd service install|uninstall|status [--port N] [--dry-run] [--no-login]`: the engine as a background service, so
 // nobody keeps a terminal open. macOS: a launchd agent (~/Library/LaunchAgents); Linux: a systemd user unit.
+// `install --no-login` starts it now without starting it at the next login (the app's "Start capcomd when I log in", off).
 // It starts in the home directory, so only the user config applies (sandbox, the keychain's boxd key);
 // repository settings come from each run (recorded at `run new`).
 import { spawnSync } from "child_process";
@@ -13,17 +14,18 @@ import { RelayError } from "../../core/errors";
 export const LABEL = "dev.capcomd.engine";
 export const UNIT = "capcomd-engine.service";
 
-/** `argv`: the command that runs the engine (the single executable, or bun with the CLI's entry). */
-export interface ServiceSpec { platform: NodeJS.Platform; argv: string[]; port: number; home: string; logFile: string; path: string }
+/** `argv`: the command that runs the engine (the single executable, or bun with the CLI's entry). `atLogin` false: the
+ *  service runs when it's started (now), not at login; unset means at login. */
+export interface ServiceSpec { platform: NodeJS.Platform; argv: string[]; port: number; home: string; logFile: string; path: string; atLogin?: boolean }
 
-export function serviceSpec(o: { port?: number; platform?: NodeJS.Platform } = {}): ServiceSpec {
+export function serviceSpec(o: { port?: number; platform?: NodeJS.Platform; atLogin?: boolean } = {}): ServiceSpec {
   const home = homedir();
   const bunDir = dirname(process.execPath);
   // launchd/systemd start with a bare PATH: keep the dirs where capcomd (or bun), git, gh and node live.
   const path = [...new Set([bunDir, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(":");
   const port = o.port ?? 6420;
   const [exe, ...args] = selfArgv("serve", "--port", String(port));
-  return { platform: o.platform ?? process.platform, argv: [stableExecutable(exe!), ...args], port, home, logFile: join(capcomdHome(), "engine.log"), path };
+  return { platform: o.platform ?? process.platform, argv: [stableExecutable(exe!), ...args], port, home, logFile: join(capcomdHome(), "engine.log"), path, atLogin: o.atLogin ?? true };
 }
 
 /** A Homebrew install runs from a versioned keg (…/Cellar/capcomd/0.9.0/bin/capcomd) that `brew upgrade` removes: the
@@ -47,7 +49,12 @@ export function servicePath(platform: NodeJS.Platform, home: string): string | n
 
 /** The service definition and where it goes. */
 export function serviceFile(s: ServiceSpec): { path: string; body: string } {
+  const atLogin = s.atLogin !== false;
   if (s.platform === "darwin") {
+    // Not at login: RunAtLoad off and no KeepAlive (SuccessfulExit implies RunAtLoad), so launchd loads it at the next
+    // login without starting it; `install` starts it now with kickstart.
+    const start = atLogin ? `<key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>` : `<key>RunAtLoad</key><false/>`;
     return {
       path: servicePath("darwin", s.home)!,
       body: `<?xml version="1.0" encoding="UTF-8"?>
@@ -60,8 +67,7 @@ export function serviceFile(s: ServiceSpec): { path: string; body: string } {
   <key>WorkingDirectory</key><string>${xml(s.home)}</string>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>${xml(s.path)}</string><key>HOME</key><string>${xml(s.home)}</string></dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  ${start}
   <key>StandardOutPath</key><string>${xml(s.logFile)}</string>
   <key>StandardErrorPath</key><string>${xml(s.logFile)}</string>
 </dict>
@@ -100,8 +106,9 @@ async function engineUp(port: number): Promise<boolean> {
   try { const r = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1500) }); return r.status > 0; } catch { return false; }
 }
 
-export async function serviceInstall(o: { port?: number; dryRun?: boolean } = {}) {
+export async function serviceInstall(o: { port?: number; dryRun?: boolean; atLogin?: boolean } = {}) {
   const spec = serviceSpec(o);
+  const atLogin = spec.atLogin !== false;
   const f = serviceFile(spec);
   if (o.dryRun) return { installed: false, dryRun: true, path: f.path, body: f.body };
   mkdirSync(dirname(f.path), { recursive: true });
@@ -111,15 +118,21 @@ export async function serviceInstall(o: { port?: number; dryRun?: boolean } = {}
     sh("launchctl", ["bootout", `gui/${uid()}/${LABEL}`]); // replace a previous install
     const r = sh("launchctl", ["bootstrap", `gui/${uid()}`, f.path]);
     if (r.code !== 0) throw new RelayError("config", `launchctl bootstrap failed: ${r.out.slice(-300)}`, `Check ${f.path}; logs in ${spec.logFile}.`);
+    if (!atLogin) {
+      const k = sh("launchctl", ["kickstart", `gui/${uid()}/${LABEL}`]);
+      if (k.code !== 0) throw new RelayError("config", `launchctl kickstart failed: ${k.out.slice(-300)}`, `Check ${f.path}; logs in ${spec.logFile}.`);
+    }
   } else {
-    for (const args of [["--user", "daemon-reload"], ["--user", "enable", "--now", UNIT]]) {
+    const steps = atLogin ? [["--user", "daemon-reload"], ["--user", "enable", "--now", UNIT]]
+      : [["--user", "daemon-reload"], ["--user", "disable", UNIT], ["--user", "start", UNIT]];
+    for (const args of steps) {
       const r = sh("systemctl", args);
       if (r.code !== 0) throw new RelayError("config", `systemctl ${args.join(" ")} failed: ${r.out.slice(-300)}`, "A systemd user session is needed (on a server: `loginctl enable-linger $USER`).");
     }
   }
   let up = false;
   for (let i = 0; i < 40 && !(up = await engineUp(spec.port)); i++) await new Promise((r) => setTimeout(r, 500));
-  return { installed: true, path: f.path, port: spec.port, running: up, log: spec.logFile };
+  return { installed: true, atLogin, path: f.path, port: spec.port, running: up, log: spec.logFile };
 }
 
 export function serviceUninstall() {

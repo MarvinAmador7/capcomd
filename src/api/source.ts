@@ -14,7 +14,7 @@ import { LISTED_PROVIDERS } from "../providers/registry";
 import { sandboxSurface, type ActionOutcome, type MachineOwner, type RecordedMachine, type ResourceDetail, type ResourcePage, type SandboxDetail, type SandboxSummary, type SettingsOutcome, type SettingsPatch, type SurfaceDeps } from "./sandboxes";
 import type { VmInfo } from "../providers/sandbox";
 import { memorySettingsStore, type SettingsStore } from "../providers/settings";
-import { inspectProject, projectBranches, setUpProject, type BranchLister, type ProjectBranchesQuery, type ProjectBranchesResult, type ProjectDeps, type ProjectInspection, type ProjectSetupInput, type SetupOutcome } from "./projects";
+import { inspectProject, knownProjects, projectBranches, type KnownProject, setUpProject, type BranchLister, type ProjectBranchesQuery, type ProjectBranchesResult, type ProjectDeps, type ProjectInspection, type ProjectSetupInput, type SetupOutcome } from "./projects";
 import { initGit, publishOptions, publishProject, type GitInitOutcome, type OptionsOutcome, type PublishInput, type PublishOutcome } from "./project-git";
 import { applyTitle, normalizeTitle, shownTitle, type TitleState } from "../primitives/agent-title";
 
@@ -105,6 +105,8 @@ export interface HarnessSource {
 	send(runId: string, to: string, body: string, key: string, skills?: AttachedSkill[]): Promise<{ seq: number; note: string | null }>;
 	/** GET /v1/projects/inspect (capability projects.setup): a folder's facts and what blocks setting it up. Writes nothing. */
 	inspectProject(path: string): Promise<ProjectInspection>;
+	/** GET /v1/projects/known (capability projects.known): capcomd's projects and their checkouts. */
+	knownProjects(): Promise<KnownProject[]>;
 	/** POST /v1/projects, the body's shape already checked: checks it against the folder, writes the project, lists it. */
 	setUpProject(input: ProjectSetupInput): Promise<SetupOutcome>;
 	/** POST /v1/projects/git-init (capability projects.git): `git init -b main` in a folder that isn't a checkout. */
@@ -378,6 +380,7 @@ export function memorySource(seed: Partial<{
 		},
 		repo: async (r) => seed.repos?.[r] ?? null,
 		inspectProject: (path) => inspectProject(path, projectDeps),
+		knownProjects: async () => knownProjects(projectDeps),
 		setUpProject: (input) => setUpProject(input, projectDeps),
 		initGit: (path) => initGit(path, projectDeps),
 		publishOptions: (path) => publishOptions(path, projectDeps),
