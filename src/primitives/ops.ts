@@ -232,9 +232,42 @@ export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key
   /** The run's goal branch (`--goal-branch G --base B`): cut from `base`, the run's target; reviewed work lands on it
    *  directly and the user opens a pull request from it into `base` when the planner is done. Needs `base`. */
   goalBranch?: string; base?: string }
+/** What a run's key is scoped by: the project's repository (its clone URL), else the project's directory (the nearest
+ *  .capcomd/config.json, else the working directory). */
+export function projectIdentity(source: Record<string, string | undefined> = process.env, cwd = process.cwd()): string {
+  const repo = env("REPO", source);
+  if (repo) return `repo:${(require("../merge/config") as typeof import("../merge/config")).normalizeRemote(repo)}`;
+  return `dir:${(require("../config/projects") as typeof import("../config/projects")).projectDirOf(cwd, source) ?? resolve(cwd)}`;
+}
+
+/** The id `run new --key K` gives a run: the key within its project, so two projects whose drivers pick the same key
+ *  (tinycalc-run-1) get two runs; the same project and key, the same run. */
+export function runIdFor(key: string, source: Record<string, string | undefined> = process.env, cwd = process.cwd()): string {
+  return stableId("run", `run\0${projectIdentity(source, cwd)}`, key);
+}
+
+/**
+ * The run a key names here: runIdFor's, unless only a run from before keys were scoped by project (0.8 and earlier: the
+ * key alone) exists, and it is this project's (the repository it recorded is this one, or neither has one). Then that
+ * run, so a retry across an upgrade gets its run back; another project's old run is never handed out.
+ */
+async function keyedRunId(key: string): Promise<string> {
+  const id = runIdFor(key);
+  if (await existingActor("scope", [id]).catch(() => null)) return id;
+  const legacy = stableId("run", "run", key);
+  const old = await existingActor("scope", [legacy]).catch(() => null);
+  if (!old || !(await old.getScope({}).catch(() => null))) return id;
+  const { RUN_REPO_KV } = await import("../merge/run-config");
+  const rec: any = await old.kvGet({ k: RUN_REPO_KV }).catch(() => null);
+  const had = rec && !rec.deleted && typeof rec.value?.CAPCOMD_REPO === "string" ? (rec.value.CAPCOMD_REPO as string) : null;
+  const repo = env("REPO");
+  const { normalizeRemote } = await import("../merge/config");
+  return (had && repo ? normalizeRemote(had) === normalizeRemote(repo) : !had && !repo) ? legacy : id;
+}
+
 export async function runNew(o: RunNewOpts) {
   await assertEngine();
-  const runId = o.runId ?? stableId("run", "run", o.key);
+  const runId = o.runId ?? (o.key ? await keyedRunId(o.key) : stableId("run", "run"));
   const c = client();
   const hasChecks = !!o.checks && Object.keys(o.checks).length > 0;
   if (o.reviewer) reviewerSpec(o.reviewer); // unknown profiles are refused here, not at verify time

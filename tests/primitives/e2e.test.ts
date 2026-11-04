@@ -112,3 +112,34 @@ test("primitives: ids, keys, limits, budget, cancel propagation, await/wait-any,
   const all = await cj(["cancel", runId]);
   expect(all.code).toBe(0);
 }, 180_000);
+
+test("run ids: a key is scoped by its project (two projects, one key: two runs); a run from before that is kept by its own project", async () => {
+  const key = `same-key-${Date.now()}`;
+  const repoA = join(tmpdir(), `capcomd-proj-a-${Date.now()}.git`), repoB = join(tmpdir(), `capcomd-proj-b-${Date.now()}.git`);
+  const runNew = async (repo: string, k = key) => {
+    const r = await capcomd(["run", "new", "--budget", "usd=5", "--key", k, "--json"], { ...env, CAPCOMD_REPO: repo });
+    return JSON.parse(r.stdout.trim().split("\n").pop()!);
+  };
+  const a = await runNew(repoA);
+  const b = await runNew(repoB);
+  expect(a).toMatchObject({ ok: true, created: true });
+  expect(b).toMatchObject({ ok: true, created: true });
+  expect(b.runId).not.toBe(a.runId);
+  // The same project and key: the same run (idempotent), however its clone URL is spelled.
+  expect(await runNew(repoA)).toMatchObject({ runId: a.runId, created: false });
+  // Each run kept its own repository (the second project's run new never wrote over the first's).
+  expect((await cj(["kv", "get", a.runId, "_repo"])).j.value.CAPCOMD_REPO).toBe(repoA);
+  expect((await cj(["kv", "get", b.runId, "_repo"])).j.value.CAPCOMD_REPO).toBe(repoB);
+  expect(await runNew(`${repoA}/`)).toMatchObject({ runId: a.runId, created: false });
+
+  // A run made before keys were scoped (its id from the key alone): its own project still gets it back; another
+  // project gets a new run, never that one.
+  const { stableId } = await import("../../src/primitives/policy");
+  const old = `old-${key}`;
+  const legacy = stableId("run", "run", old);
+  expect((await capcomd(["run", "new", "--budget", "usd=5", "--run-id", legacy, "--json"], { ...env, CAPCOMD_REPO: repoA })).code).toBe(0);
+  expect(await runNew(repoA, old)).toMatchObject({ runId: legacy, created: false });
+  const other = await runNew(repoB, old);
+  expect(other).toMatchObject({ created: true });
+  expect(other.runId).not.toBe(legacy);
+}, 60_000);

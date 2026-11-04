@@ -91,6 +91,13 @@ export function withRepoFile(base: MergeConfig, worktree: string, source: Record
   }
 }
 
+/** A clone URL as one string per repository: https://github.com/o/r(.git), git@github.com:o/r.git and a URL with
+ *  credentials in it are the same; the host is case-insensitive. Paths (a local bare repository) are kept as given. */
+export function normalizeRemote(u: string): string {
+  const t = u.trim().replace(/^git@([^:]+):/, "https://$1/").replace(/^ssh:\/\/git@/, "https://").replace(/^(https?:\/\/)[^@/]*@/, "$1").replace(/\/+$/, "").replace(/\.git$/, "");
+  return /^[a-z+]+:\/\//i.test(t) ? t.toLowerCase() : t;
+}
+
 export function githubRepoFromRemote(remote: string): string | null {
   const m = remote.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
   return m ? `${m[1]}/${m[2]}` : null;
