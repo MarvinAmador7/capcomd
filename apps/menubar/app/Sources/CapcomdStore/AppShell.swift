@@ -54,4 +54,18 @@ public enum Presence {
   public static func canTurnOffMenuBar(keepInDock: Bool) -> Bool { keepInDock }
   /// Stored values with both off (`defaults write`, say) read as the menu bar item on.
   public static func showsInMenuBar(keepInDock: Bool, showInMenuBar: Bool) -> Bool { showInMenuBar || !keepInDock }
+
+  /// What the app does before it shows an Open panel (the window's Choose Project Folder…): a panel begun while the app
+  /// isn't active is ordered behind the frontmost app's windows (a click in the window while another app is in front
+  /// gets there), and one in an accessory app is cancelled by the first click in it. So the app becomes regular when
+  /// it isn't, asks to be active when it isn't, and the panel is ordered to the front either way.
+  public static func beforeOpenPanel(regular: Bool, active: Bool) -> OpenPanelSteps {
+    OpenPanelSteps(becomeRegular: !regular, activate: !regular || !active, orderFront: true)
+  }
+}
+
+/// `Presence.beforeOpenPanel`'s answer.
+public struct OpenPanelSteps: Equatable, Sendable {
+  public var becomeRegular: Bool, activate: Bool, orderFront: Bool
+  public init(becomeRegular: Bool, activate: Bool, orderFront: Bool) { self.becomeRegular = becomeRegular; self.activate = activate; self.orderFront = orderFront }
 }
