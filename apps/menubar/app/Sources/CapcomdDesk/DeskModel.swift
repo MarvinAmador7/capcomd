@@ -86,11 +86,17 @@ package final class DeskModel {
 
   @ObservationIgnored package private(set) var store: CapcomdStore
   @ObservationIgnored private var transport: UnixSocketTransport?
+  /// The app's session (token, pairing, starting the daemon), shared with the menu bar; nil for the bench and tests.
+  @ObservationIgnored package let session: AppSession?
+  /// The token `store` connects with.
+  @ObservationIgnored private var token: String?
   package private(set) var link: Link = .connecting { didSet { Mutations.record("DeskModel.link") } }
   /// The daemon refused the token it was given (rather than there being none).
   package private(set) var tokenRejected = false { didSet { Mutations.record("DeskModel.tokenRejected") } }
   /// The daemon's feed is down (it keeps retrying): the window says so instead of showing stale state as live.
-  package private(set) var unreachable = false { didSet { Mutations.record("DeskModel.unreachable") } }
+  package private(set) var unreachable = false { didSet { Mutations.record("DeskModel.unreachable"); if !unreachable { session?.reachable() } } }
+  /// The daemon's version (`GET /v1/health`), for the version check.
+  package private(set) var daemonVersion: String? { didSet { Mutations.record("DeskModel.daemonVersion") } }
   /// The daemon has answered: until then an empty title bar means "not read yet", not "nothing running".
   package private(set) var loaded = false { didSet { Mutations.record("DeskModel.loaded") } }
   /// Every project with something to show, oldest first (never reordered by activity).
@@ -173,23 +179,20 @@ package final class DeskModel {
   /// The open run's failed agents, once its columns were first read (nil: not yet).
   @ObservationIgnored private var knownFailures: Set<String>?
 
-  /// The app's model: connected to the daemon's socket with the Keychain token (or `CAPCOMD_TOKEN`).
-  package init() {
+  /// The app's window: connected to the daemon's socket with each token the session has (the Keychain's, a pairing's,
+  /// a pasted one, or `CAPCOMD_TOKEN`). Notifications are the menu bar's (one banner per notice for the whole app).
+  package init(session: AppSession) {
+    self.session = session
     (store, transport) = Connection.makeStore(token: "")
     setupFlow = ProjectSetupFlow(store: store)
     restoreHidden(from: .standard)
-    DeskNotifications.start(self)
-    if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { connect(env); return }
-    Task.detached(priority: .userInitiated) {
-      let token = Keychain.token()
-      await MainActor.run { [weak self] in self?.connect(token) }
-    }
+    session.onToken { [weak self] t in self?.connect(t) }
   }
 
   /// A model on a store that is already filled and needs no socket (the bench's fixtures, previews, tests): ready at
   /// once, following the store's keyed changes exactly as the connected model does.
   package init(store s: CapcomdStore, defaults d: UserDefaults? = nil) {
-    store = s; transport = nil
+    store = s; transport = nil; session = nil
     setupFlow = ProjectSetupFlow(store: s)
     if let d { restoreHidden(from: d) }
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
@@ -205,36 +208,40 @@ package final class DeskModel {
 
   // MARK: connection
 
-  private func connect(_ token: String?) {
-    guard let token, !token.isEmpty else { link = .needsToken; return }
+  private func connect(_ t: String) {
+    let reconnect = token != nil
+    token = t
+    store.stop()
     let old = transport
-    (store, transport) = Connection.makeStore(token: token)
+    (store, transport) = Connection.makeStore(token: t)
     if let old { Task { try? await old.shutdown() } }
     setupFlow = ProjectSetupFlow(store: store)
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     store.onChanges = { [weak self] keys in self?.apply(keys) }
-    store.onNotify = { [weak self] n in if let self { DeskNotifications.post(n, prefs: self.store.prefs) } }
     store.start()
     tokenRejected = false
+    // The run that was open follows the new store's feeds: select it again.
+    if reconnect { openRunId = nil }
     link = .ready
     apply([.all])
   }
 
-  /// A pasted token: saved to the Keychain item the menu bar app uses too.
-  package func submit(token raw: String) -> Bool {
-    let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !t.isEmpty, Keychain.save(t) else { return false }
-    store.stop(); connect(t); return true
-  }
+  /// A pasted token: saved to the Keychain item the menu bar uses too; both reconnect with it.
+  package func submit(token raw: String) -> Bool { session?.submit(pasted: raw) ?? false }
 
   // MARK: changes
 
   /// The store changed: refresh only what the keys name. `.all` refreshes everything, comparing before assigning.
   package func apply(_ keys: Set<ChangeKey>) {
-    if store.unauthorized { tokenRejected = true; link = .needsToken; return }
+    if store.unauthorized {
+      tokenRejected = true; link = .needsToken
+      if let token { session?.rejected(token) }
+      return
+    }
     let all = keys.contains(.all)
     if all {
       if unreachable != store.daemonUnreachable { unreachable = store.daemonUnreachable }
+      if daemonVersion != store.daemonVersion { daemonVersion = store.daemonVersion }
       if !loaded, store.daemonLoaded { loaded = true }
       actionsRevision &+= 1
       let d = shown(store.decks())

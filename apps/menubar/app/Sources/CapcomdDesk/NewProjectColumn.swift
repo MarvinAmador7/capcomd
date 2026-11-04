@@ -301,7 +301,7 @@ struct BranchLines: View {
   }
 }
 
-/// + : what the menu bar's + offers that this app has (Settings lives in the menu bar app).
+/// + : what the menu bar's + offers for a project folder (Settings is in the app menu, ⌘,).
 struct AddMenu: View {
   @Environment(DeskModel.self) private var model
   /// The column's revision: what this shows is read from the store, which isn't observed.

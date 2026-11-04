@@ -5,8 +5,8 @@ import CapcomdStore
 import CapcomdLive
 import CapcomdClient
 
-/// How both apps reach the daemon: its socket, the token in the login Keychain (one item shared by the menu bar and
-/// the desktop app), and a store wired to the live transport.
+/// How the app reaches the daemon: its socket, the token in the login Keychain (one item, which the menu bar and
+/// desktop apps before it shared too), and a store wired to the live transport.
 package enum Connection {
   package static var socketPath: String {
     UserDefaults.standard.string(forKey: "capcomd.socketPath")
@@ -30,8 +30,10 @@ package final class DefaultsPreferences: PreferenceStoring {
 }
 
 /// Daemon token in the login Keychain: generic password, service "capcomd", account NSUserName().
+/// `-capcomd.keychainService NAME` (development: a scratch daemon) uses another item, so your own token is never read
+/// or replaced.
 package enum Keychain {
-  package static let service = "capcomd"
+  package static var service: String { UserDefaults.standard.string(forKey: "capcomd.keychainService") ?? "capcomd" }
   package static func token() -> String? {
     let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                             kSecAttrAccount as String: NSUserName(),

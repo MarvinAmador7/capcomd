@@ -2,7 +2,7 @@
 
 Status: **approved on the design canvas; built.** The boards are `settings/*.dc.html` (HTML with inline CSS) and
 they win wherever this text and they differ. `settings/CloudExplore.dc.html` is a place's Details screen (§4.1), built
-read-only for ADR-021 phase 1 and with its settings changeable in phase 2, minus what the owner removed (below). Swift: `app/Sources/MenuBarApp/Settings*.swift`;
+read-only for ADR-021 phase 1 and with its settings changeable in phase 2, minus what the owner removed (below). Swift: `app/Sources/CapcomdApp/Settings*.swift`;
 the data and its mapping: `app/Sources/CapcomdStore/Settings.swift` and `Sandboxes.swift`.
 
 ## 1. Window
@@ -17,9 +17,8 @@ the data and its mapping: `app/Sources/CapcomdStore/Settings.swift` and `Sandbox
   `.command` file, no Automation permission); the row then says "Waiting for Terminal…" and updates by itself. Settings
   never shows a token or key.
 - Opening it: **⌘,** (the app menu's Settings…) and **Settings…** in the project composer's `+` menu. The panel closes.
-  An accessory app can't become active, so while Settings is open the app is a regular app (a Dock icon, as Apple's
-  own menu bar apps do) and its window comes to the front with active controls; closing the window makes it an
-  accessory again.
+  The app is a regular Dock app (the window and the menu bar item in one), so its window comes to the front with
+  active controls.
 - Each pane reports its content height and the window fits it (top edge fixed, no animation) inside the screen's
   visible frame (no menu bar, no Dock): a window that would run under the Dock moves up first; only a pane taller than
   the whole visible height is capped and scrolls. ⌘W closes it. Panes have no ⌘1–4: Settings
@@ -82,12 +81,13 @@ a boxd secret that only works on its AI's API (api.anthropic.com, api.openai.com
 accounts`); from run-options' `boxd` place. Footer "Agents on Cloud run on boxd machines, billed to this key."
 
 **This app** › App token (sub "Can read runs, message agents and approve merges"): "Saved in your keychain" +
-**Reset…**; "From CAPCOMD_TOKEN" (no button); "Not set" / "capcomd rejected it" + **Paste Token…**. Footer "The menu
-bar app talks to capcomd with its own token. Reset it if it may have been copied: the old one stops working at once."
+**Reset…**; "From CAPCOMD_TOKEN" (no button); "Not set" / "capcomd rejected it" + **Connect** (when the app found the
+capcomd CLI) and **Paste Token…**. Footer "This app talks to capcomd with its own token. Reset it if it may have been
+copied: the old one stops working at once."
 Reset… asks first (`States.dc.html`: the smiling bot, "Reset the app token?", "This app gets a new token, and the old
-one stops working at once. Anything else using it needs the new one.", Cancel / **Reset** destructive), then Terminal
-revokes the active clients named `menubar` and runs `capcomd clients add menubar --scopes read,steer,approve,configure`, and a
-sheet takes the new token. (`capcomd clients list` has no token hashes, so the app's client is found by that name.)
+one stops working at once. Anything else using it needs the new one.", Cancel / **Reset** destructive), then the app
+runs `capcomd clients pair --app mac-app` itself, which revokes the token it paired before, and reconnects. Without the
+CLI, Terminal runs that command and a sheet takes the new token.
 
 ## 4. Runs (`Runs.dc.html`)
 

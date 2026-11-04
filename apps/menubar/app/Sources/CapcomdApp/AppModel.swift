@@ -20,22 +20,30 @@ final class AppModel {
   @ObservationIgnored private(set) var setup: ProjectSetupFlow
   private(set) var revision = 0
   var path: [Route] = []
-  /// No Keychain token yet (first launch) or the daemon answered 401: the panel shows the token prompt.
-  private(set) var tokenMissing: Bool
+  /// The token, pairing and daemon start the window shares (CapcomdUI/AppSession.swift).
+  @ObservationIgnored let session: AppSession
   /// The Keychain read is still out (macOS may be asking whether this build can read the token).
-  private(set) var tokenPending = false
-  var needsToken: Bool { _ = revision; return !tokenPending && (tokenMissing || store.unauthorized) }
+  var tokenPending: Bool { session.token == .reading }
+  /// No token yet: pairing, or it couldn't (no CLI, or it failed).
+  var tokenMissing: Bool { switch session.token { case .pairing, .needsCLI, .failed: true; default: false } }
+  /// The panel shows how the app is connecting instead of its projects.
+  var needsToken: Bool { _ = revision; return session.current == nil || store.unauthorized }
 
   enum Route: Hashable { case run(String), thread(runId: String, agentId: String) }
 
-  init(_ pair: (CapcomdStore, UnixSocketTransport), tokenMissing: Bool = false) {
-    self.store = pair.0; self.transport = pair.1; self.tokenMissing = tokenMissing
+  init(_ pair: (CapcomdStore, UnixSocketTransport), session: AppSession) {
+    self.store = pair.0; self.transport = pair.1; self.session = session
     self.setup = ProjectSetupFlow(store: pair.0)
     attach(store)
   }
 
   private func attach(_ s: CapcomdStore) {
-    s.onChange = { [weak self] in self?.revision &+= 1 }
+    s.onChange = { [weak self] in
+      guard let self else { return }
+      self.revision &+= 1
+      if s.unauthorized, let t = self.connectedToken { self.session.rejected(t) }
+      if !s.daemonUnreachable && s.daemonLoaded { self.session.reachable() }
+    }
     setup = ProjectSetupFlow(store: s)
     setup.onChange = { [weak self] in self?.revision &+= 1 }
     s.onNotify = { [weak self] n in
@@ -91,53 +99,40 @@ final class AppModel {
     return (t, agentId)
   }
 
-  /// The model at once, connecting when the token arrives. The Keychain read runs off the main thread: macOS can hold
-  /// it on an "allow access" prompt (a new build's signature), and the menu bar item must show meanwhile.
-  /// `CAPCOMD_TOKEN` in the environment wins (development and UI tests, so a rebuild doesn't need a Keychain prompt).
-  static func live() -> AppModel {
+  /// The menu bar's model, connecting whenever the session has a token (the Keychain's, a pairing's or a pasted one).
+  static func live(session: AppSession) -> AppModel {
     Notifier.requestAuthorization()
     if Notifier.available { ApprovalNotifications.register() }
-    let m = AppModel(makeStore(token: ""), tokenMissing: false)   // not started until the token is in
-    m.tokenPending = true
+    let m = AppModel(makeStore(token: ""), session: session)   // not started until the token is in
     ApprovalNotifications.onDecision = { [weak m] id, approve in m?.decide(id, approve ? .approve : .deny) }   // Approve / Deny in the notification
-    // A click on a goal branch notice: the run's detail, with its Ready bar.
+    // A click on a goal branch notice: the run's detail, with its Ready bar (the app sends it to the window instead).
     ApprovalNotifications.onOpenRun = { [weak m] rid in m?.open(run: rid); MenuBarPanel.open() }
     #if DEBUG
     DispatchQueue.main.async { MenuBarDebug.start(m) }   // CAPCOMD_MENUBAR_CONTROL (MenuBarDebug.swift)
     #endif
-    if let env = ProcessInfo.processInfo.environment["CAPCOMD_TOKEN"], !env.isEmpty { m.tokenFromEnvironment = true; m.connect(token: env); return m }
-    Task.detached(priority: .userInitiated) {
-      let token = Keychain.token()
-      await MainActor.run { m.connect(token: token) }
-    }
+    session.onToken { [weak m] t in m?.connect(token: t) }
     return m
   }
 
-  /// Starts with `token`, or asks for one when there is none.
-  private func connect(token: String?) {
-    tokenPending = false
-    guard let token, !token.isEmpty else { tokenMissing = true; revision &+= 1; return }
-    let old = transport
-    Task { try? await old.shutdown() }   // the placeholder's client must be shut down, not dropped (06db2b8)
-    let (s, t) = Self.makeStore(token: token); store = s; transport = t; attach(s)
-    tokenMissing = false; s.start(); revision &+= 1
-  }
-
-  /// Saves the pasted token (generic password, service "capcomd", account NSUserName()) and reconnects with it.
-  func submitToken(_ raw: String) -> Bool {
-    let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !token.isEmpty, Keychain.save(token) else { return false }
+  /// A new token: a fresh store on it (the old one stopped, its transport shut down).
+  private func connect(token: String) {
+    let first = connectedToken == nil
+    connectedToken = token
     store.stop()
     let old = transport
-    Task { try? await old.shutdown() }   // keeps `old` alive until its client is shut down
+    Task { try? await old.shutdown() }   // the old client must be shut down, not dropped (06db2b8)
     let (s, t) = Self.makeStore(token: token); store = s; transport = t; attach(s)
-    tokenMissing = false; tokenFromEnvironment = false; path = []
+    if !first { path = [] }
     s.start(); revision &+= 1
-    Task { await s.refreshSettings() }
-    return true
+    if !first { Task { await s.refreshSettings() } }
   }
+  /// The token `store` uses (nil: none yet).
+  @ObservationIgnored private var connectedToken: String?
+
+  /// Saves a pasted token in the Keychain item the window shares; both reconnect with it.
+  func submitToken(_ raw: String) -> Bool { session.submit(pasted: raw) }
   /// The token came from `CAPCOMD_TOKEN` (development): Settings says so and offers no Reset.
-  private(set) var tokenFromEnvironment = false
+  var tokenFromEnvironment: Bool { session.tokenFromEnvironment }
 
   /// Settings: what the user is finishing in Terminal (SettingsModel.swift).
   var handOffs = HandOffs()
@@ -196,6 +191,8 @@ final class AppModel {
   var startState: StartState { _ = revision; return store.startState }
   /// The daemon can't be reached right now (the app keeps retrying).
   var daemonUnreachable: Bool { _ = revision; return store.daemonUnreachable }
+  /// The app and the daemon are versions apart that matter (a different minor): said under the composer.
+  var versionSkew: VersionSkew? { _ = revision; return session.skew(daemon: store.daemonVersion) }
   /// The project checkout new runs go to (remembered); nil: the daemon's default project.
   var startRepo: String? {
     get { _ = revision; return store.prefs.startRepo }

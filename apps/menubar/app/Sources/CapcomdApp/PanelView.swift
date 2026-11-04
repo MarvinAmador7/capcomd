@@ -27,18 +27,9 @@ struct PanelView: View {
 
   var body: some View {
     @Bindable var model = model
-    if model.tokenPending {
-      // macOS may be asking whether this build can read capcomd's token from the Keychain.
-      VStack(spacing: 8) {
-        ProgressView().controlSize(.small)
-        Text("Waiting for Keychain access…").font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)
-        Text("If macOS asks whether capcomd can use its token, choose Always Allow.").font(Theme.Composer.errorFont)
-          .foregroundStyle(Theme.Composer.kbdText).multilineTextAlignment(.center)
-      }
-      .padding(24).frame(width: Theme.panelWidth).background(.ultraThinMaterial)
-    } else if model.needsToken {
-      TokenPrompt(rejected: model.store.unauthorized)
-        .frame(width: Theme.panelWidth).background(.ultraThinMaterial)
+    if model.needsToken {
+      // Reading the Keychain, pairing, or something the window helps with (AppSession).
+      PanelConnect().frame(width: Theme.panelWidth).background(.ultraThinMaterial)
     } else {
     NavigationStack(path: $model.path) {
       ScrollView {
@@ -53,11 +44,21 @@ struct PanelView: View {
             HStack(spacing: 6) {
               ProgressView().controlSize(.mini)
               Text("Can't reach capcomd. Reconnecting…")
+              Spacer(minLength: 0)
+              if model.session.cli != nil && model.session.start != .starting && model.session.start != .started {
+                Button("Start capcomd") { model.session.startDaemon() }.buttonStyle(.link)
+                  .accessibilityHint("Starts capcomd now and at every login.")
+              }
             }
             .font(Theme.Composer.errorFont).foregroundStyle(Theme.Composer.kbdText)
             .padding(.horizontal, Theme.Composer.panelPadding).padding(.top, 6)
             .accessibilityElement(children: .combine)
             .transition(.opacity)
+          } else if let skew = model.versionSkew {
+            Text(skew.message)
+              .font(Theme.Composer.errorFont).foregroundStyle(Theme.Composer.kbdText)
+              .padding(.horizontal, Theme.Composer.panelPadding).padding(.top, 6)
+              .fixedSize(horizontal: false, vertical: true)
           }
           // While a folder's next steps show, an empty Active section steps aside (design/setup/InlineSetup).
           let quiet = active.isEmpty && model.setupShowing

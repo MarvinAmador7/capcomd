@@ -16,8 +16,7 @@ package struct RootView: View {
     let np = model.newProject
     return Group {
       switch model.link {
-      case .connecting: Color.clear
-      case .needsToken: TokenView()
+      case .connecting, .needsToken: ConnectView()
       case .ready:
         ZStack {
           // The reel stays built under the new project column, so closing the column shows it at once (SPEC §1).
@@ -34,6 +33,7 @@ package struct RootView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .overlay(alignment: .bottom) { if model.link == .ready { VersionNotice() } }
     .overlay(alignment: .top) { TitleBar().alignmentGuide(.top) { $0[.bottom] } }
     .overlayPreferenceValue(ProjectGroupBounds.self) { a in
       DeskOverlays(group: a).allowsHitTesting(model.menuOpen || model.paletteOpen)
@@ -69,39 +69,4 @@ struct EmptyReel: View {
   }
 }
 
-/// The daemon can't be reached and nothing has been read from it: say so, rather than "nothing running".
-struct Unreachable: View {
-  var body: some View {
-    VStack(spacing: 8) {
-      Text("Can't reach capcomd").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.Desk.text)
-      Text("Start it with capcomd serve, or from the menu bar app. This window connects as soon as it's up.")
-        .font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-}
-
-/// The daemon needs a token: the same one the menu bar app uses (one Keychain item).
-struct TokenView: View {
-  @Environment(DeskModel.self) private var model
-  @State private var token = ""
-  @State private var failed = false
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Connect to capcomd").font(.system(size: 15, weight: .semibold))
-      if model.tokenRejected {
-        Text("capcomd didn't accept the token this app has. Paste a new one.").font(Theme.Desk.label).foregroundStyle(Theme.amber)
-      }
-      Text("In Terminal, run `capcomd clients add desktop --scopes read,steer,approve` and paste the token it prints.")
-        .font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary).fixedSize(horizontal: false, vertical: true)
-      HStack(spacing: 8) {
-        SecureField("Token", text: $token).textFieldStyle(.roundedBorder).onSubmit(save)
-        Button("Connect", action: save).keyboardShortcut(.defaultAction).disabled(token.isEmpty)
-      }
-      if failed { Text("Couldn't save the token to the Keychain.").font(Theme.Desk.meta).foregroundStyle(Theme.red) }
-    }
-    .frame(width: 420).frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-  private func save() { failed = !model.submit(token: token); if !failed { token = "" } }
-}
 #endif

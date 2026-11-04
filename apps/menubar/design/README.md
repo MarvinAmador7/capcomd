@@ -4,7 +4,7 @@ Approved mockups for the menu bar app. **This folder is the visual source of tru
 
 ## Screen → mockup → Swift view
 
-Swift views live in `apps/menubar/app/Sources/MenuBarApp/`.
+Swift views live in `apps/menubar/app/Sources/CapcomdApp/`.
 
 | Screen / state | Mockup | Swift view |
 |---|---|---|

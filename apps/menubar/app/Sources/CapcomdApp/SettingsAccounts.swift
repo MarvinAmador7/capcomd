@@ -57,7 +57,7 @@ struct AccountsPane: View {
       } header: {
         Text("This app")
       } footer: {
-        Foot(verbatim: "The menu bar app talks to capcomd with its own token. Reset it if it may have been copied: the old one stops working at once.")
+        Foot(verbatim: "This app talks to capcomd with its own token. Reset it if it may have been copied: the old one stops working at once.")
       }
     }
     .formStyle(.grouped)
@@ -103,11 +103,11 @@ struct AccountsPane: View {
         switch model.connection {
         case .waitingForKeychain: WaitingValue(text: "Waiting for Keychain access…")
         case .noToken:
-          StatusValue(nil, "Not set")
-          Button("Paste Token…") { sheet = .paste }.prominent()
+          if model.session.token == .pairing { WaitingValue(text: "Connecting…") } else { StatusValue(nil, "Not set") }
+          ConnectButtons(sheet: $sheet)
         case .rejected:
           StatusValue(.bad, "capcomd rejected it")
-          Button("Paste Token…") { sheet = .paste }.prominent()
+          ConnectButtons(sheet: $sheet)
         default:
           if model.tokenFromEnvironment {
             StatusValue(nil, "From CAPCOMD_TOKEN")
@@ -120,6 +120,20 @@ struct AccountsPane: View {
     } label: {
       Text("App token")
       Text("Can read runs, message agents and approve merges")
+    }
+  }
+}
+
+/// No token, or a rejected one: Connect (pair with the CLI) when it's installed, and Paste Token… either way.
+struct ConnectButtons: View {
+  @Environment(AppModel.self) private var model
+  @Binding var sheet: AccountsPane.SheetKind?
+  var body: some View {
+    if model.session.cli != nil {
+      Button("Connect") { model.session.pair() }.prominent().disabled(model.session.token == .pairing)
+      Button("Paste Token…") { sheet = .paste }
+    } else {
+      Button("Paste Token…") { sheet = .paste }.prominent()
     }
   }
 }

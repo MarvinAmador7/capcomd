@@ -3,7 +3,7 @@
 Status: **approved on the design canvas; built.** The boards are `setup/Inline*.dc.html` (HTML with inline CSS, the panel
 at 380 pt) and they win wherever this text and they differ. The earlier window boards (`SetupWindow`, `SetupComposer`,
 `SetupAttention`) were **not** approved and aren't in the repo: there is no setup window. Swift:
-`app/Sources/MenuBarApp/ProjectSetupInline.swift` (views), `StartProjectField.swift` (where
+`app/Sources/CapcomdApp/ProjectSetupInline.swift` (views), `StartProjectField.swift` (where
 it sits), `Theme.Setup`; the logic and what each state shows: `app/Sources/CapcomdStore/ProjectSetupFlow.swift`
 (`ProjectSetupFlow`, `SetupScreen`), tested in `Tests/CapcomdStoreTests/ProjectSetupFlowTests.swift`.
 

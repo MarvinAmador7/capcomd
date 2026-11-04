@@ -102,16 +102,24 @@ struct GeneralPane: View {
     case .unreachable:
       LabeledContent {
         HStack(spacing: Theme.Settings.rowGap) {
-          if model.handOffs.waiting(HandOffKey.start) != nil { WaitingValue() } else { StatusValue(.bad, "Can't reach capcomd") }
-          Button("Start capcomd") {
-            model.handOff(HandOffKey.start, command: model.serviceInfo?.installCommand ?? SettingsRows.serviceInstall, baseline: "false")
+          let starting = model.session.start == .starting || model.session.start == .started
+          if model.handOffs.waiting(HandOffKey.start) != nil || starting { WaitingValue() } else { StatusValue(.bad, "Can't reach capcomd") }
+          if model.session.cli != nil {
+            // The app runs `capcomd service install` itself (AppSession).
+            Button("Start capcomd") { model.session.startDaemon() }
+              .prominent().disabled(starting)
+              .accessibilityHint("Starts capcomd now and at every login.")
+          } else {
+            Button("Start capcomd") {
+              model.handOff(HandOffKey.start, command: model.serviceInfo?.installCommand ?? SettingsRows.serviceInstall, baseline: "false")
+            }
+            .prominent()
+            .accessibilityHint("Opens Terminal to start capcomd as a background service.")
           }
-          .prominent()
-          .accessibilityHint("Opens Terminal to start capcomd as a background service.")
         }
       } label: {
         Text("Status")
-        Text("Trying again every few seconds.")
+        if case .failed(let why) = model.session.start { Text(why) } else { Text("Trying again every few seconds.") }
       }
     case .waitingForKeychain:
       LabeledContent("Status") { WaitingValue(text: "Waiting for Keychain access…") }
@@ -119,17 +127,19 @@ struct GeneralPane: View {
       LabeledContent {
         HStack(spacing: Theme.Settings.rowGap) {
           StatusValue(.empty, "Not connected")
-          Button("Paste Token…") { tokenSheet = true }.prominent()
+          if model.session.cli != nil { Button("Connect") { model.session.pair() }.prominent().disabled(model.session.token == .pairing) }
+          Button("Paste Token…") { tokenSheet = true }
         }
       } label: {
         Text("Status")
-        Text("This app needs a token from capcomd.")
+        if case .failed(let why) = model.session.token { Text(why) } else { Text("This app needs a token from capcomd.") }
       }
     case .rejected:
       LabeledContent {
         HStack(spacing: Theme.Settings.rowGap) {
           StatusValue(.bad, "capcomd rejected this app's token")
-          Button("Paste Token…") { tokenSheet = true }.prominent()
+          if model.session.cli != nil { Button("Connect") { model.session.pair() }.prominent().disabled(model.session.token == .pairing) }
+          Button("Paste Token…") { tokenSheet = true }
         }
       } label: {
         Text("Status")

@@ -2,26 +2,37 @@
 import SwiftUI
 import CapcomdStore
 
-/// First launch (no Keychain item for service "capcomd") or after a 401: paste the daemon token.
-struct TokenPrompt: View {
+/// The panel before the app is connected: what's happening in a line, and the window, where the rest is done.
+struct PanelConnect: View {
   @Environment(AppModel.self) private var model
-  @State private var token = ""
-  @State private var failed = false
-  let rejected: Bool
-
+  private var session: AppSession { model.session }
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("Connect to capcomd").font(Theme.panelTitle)
-      Text(rejected ? "capcomd rejected the saved token. Paste a new one." : "Make a token with `capcomd clients add menubar --scopes read,steer,approve,configure` and paste it here.")
-        .font(Theme.body).foregroundStyle(.secondary)
-      SecureField("Token", text: $token).textFieldStyle(.roundedBorder).onSubmit(save)
-      if failed { Text("Couldn’t save the token to the Keychain.").font(Theme.chip).foregroundStyle(.secondary) }
-      HStack { Spacer(); Button("Connect", action: save).keyboardShortcut(.defaultAction).disabled(token.isEmpty) }
+    VStack(spacing: 8) {
+      if session.token == .reading || session.token == .pairing { ProgressView().controlSize(.small) }
+      Text(title).font(Theme.Finished.titleFont).foregroundStyle(Theme.Finished.trailingText)
+      if let detail { Text(detail).font(Theme.Composer.errorFont).foregroundStyle(Theme.Composer.kbdText).multilineTextAlignment(.center) }
+      if session.token != .reading && session.token != .pairing {
+        Button("Open capcomd") { MenuBarPanel.close(); MainWindow.show() }.keyboardShortcut(.defaultAction)
+      }
     }
-    .padding(Theme.inset)
+    .padding(24)
   }
 
-  private func save() { failed = !model.submitToken(token); if !failed { token = "" } }
+  private var title: String {
+    switch session.token {
+    case .reading: "Waiting for Keychain access…"
+    case .pairing, .ready: "Connecting…"
+    case .needsCLI: "capcomd needs its command line tool"
+    case .failed: "Couldn't connect"
+    case .rejected: "capcomd didn't accept this app's token"
+    }
+  }
+  private var detail: String? {
+    switch session.token {
+    case .reading: "If macOS asks whether capcomd can use its token, choose Always Allow."
+    case .failed(let why): why
+    default: nil
+    }
+  }
 }
-
 #endif

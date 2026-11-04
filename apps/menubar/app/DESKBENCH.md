@@ -647,7 +647,7 @@ block types, common tool names, models and numbers are kept. Unknown fields are 
 their kind, mime and size; the bench draws a placeholder. The file is written 0600 and never inside a git checkout
 (`--allow-in-repo` overrides); it goes to `${PERFLOOP_HOME:-~/.perfloop}/capcomd-desktop/fixtures/` unless `--out`
 says otherwise. `--raw` keeps the real text, for a file that never leaves the Mac. The token is `--token-file`,
-`$CAPCOMD_TOKEN`, or `--keychain` (the desktop app's own). On load the times move again so the newest is a minute
+`$CAPCOMD_TOKEN`, or `--keychain` (the capcomd app's own). On load the times move again so the newest is a minute
 ago, and the threads are served from the captured items' own bytes.
 
 ## Adding to the bench
