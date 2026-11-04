@@ -18,6 +18,9 @@ let package = Package(
     .target(name: "CapcomdThread"),
     // Pixel bot avatars and the menu bar mark: a port of packages/bot-avatar (its catalog embedded). Foundation only.
     .target(name: "CapcomdBot"),
+    // The first-run onboarding's pure parts (design/onboarding): its bot sprite, the intro's keyframes and seeded pour,
+    // the flow and when it shows, the repository scan. Foundation only; the window is in CapcomdApp.
+    .target(name: "CapcomdOnboarding"),
     // Platform-neutral state store: no Foundation networking, no SwiftUI. Fully tested on Linux.
     .target(name: "CapcomdStore", dependencies: ["CapcomdThread"]),
     // Glue to the CapcomdClient transport: SSE subscriptions per scope and the HTTP approval decider.
@@ -32,7 +35,9 @@ let package = Package(
                                                 .product(name: "PerfLoopProbe", package: "perfloop")]),
     // The app: the window (CapcomdDesk) with the menu bar item and its panel, and Settings, in one Dock app. Every view
     // is behind `#if canImport(SwiftUI)`; on Linux this builds to a stub.
-    .executableTarget(name: "CapcomdApp", dependencies: ["CapcomdDesk", "CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI"]),
+    // Fonts/: the onboarding's League Spartan, Figtree and Geist Mono (SIL OFL 1.1, each with its license).
+    .executableTarget(name: "CapcomdApp", dependencies: ["CapcomdDesk", "CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", "CapcomdOnboarding"],
+                      resources: [.copy("Fonts")]),
     // The bench's pure parts (fixtures, statistics, budgets, xctrace summaries), tested without a window.
     .target(name: "DeskBenchKit", dependencies: ["CapcomdStore", "CapcomdThread", .product(name: "PerfLoopProbe", package: "perfloop")]),
     // The bench: hosts the desktop window in-process against fixture data and measures it (DESKBENCH.md).
@@ -47,6 +52,9 @@ let package = Package(
     .testTarget(name: "CapcomdThreadTests", dependencies: ["CapcomdThread"]),
     // Checks the port against packages/bot-avatar/fixtures (golden bots and the catalog), read in place.
     .testTarget(name: "CapcomdBotTests", dependencies: ["CapcomdBot"]),
+    // Checks the port against design/onboarding/onboarding.dc.html (its rows, read in place) and Fixtures/prototype.json
+    // (the prototype's own script, run by scripts/gen-onboarding-golden.ts).
+    .testTarget(name: "CapcomdOnboardingTests", dependencies: ["CapcomdOnboarding"], exclude: ["Fixtures"]),
     // Fixtures/ holds hand-made xctrace exports, read in place.
     // CapcomdDesk for its knobs' defaults (no window is made).
     .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore", "CapcomdDesk", .product(name: "PerfLoopProbe", package: "perfloop")], exclude: ["Fixtures"]),

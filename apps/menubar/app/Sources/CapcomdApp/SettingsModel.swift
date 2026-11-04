@@ -133,7 +133,8 @@ extension AppModel {
 
 /// Hand-off keys: one per row that can wait on Terminal.
 enum HandOffKey {
-  static func login(_ r: LoginRow) -> String { "login-\(r.provider)-\(r.sandbox)" }
+  static func login(_ r: LoginRow) -> String { login(provider: r.provider, sandbox: r.sandbox) }
+  static func login(provider: String, sandbox: String) -> String { "login-\(provider)-\(sandbox)" }
   static func environment(_ sandbox: String) -> String { "env-\(sandbox)" }
   static let service = "service"
   static let boxdKey = "boxd-key"
@@ -397,7 +398,7 @@ struct SheetFit: ViewModifier {
   static func provider(_ p: Provider) -> Image {
     switch p {
     case .claude: Image(nsImage: image("claude", path: ProviderMarks.claude, viewBox: 24, size: Theme.Settings.menuMark, color: NSColor(Theme.Provider.claude)))
-    case .codex: Image(systemName: "circle.hexagongrid.fill")
+    case .codex: Image(nsImage: image("openai", path: ProviderMarks.openai, viewBox: 24, size: Theme.Settings.menuMark, color: nil))
     }
   }
   /// A place's mark by its id (PlaceMarks): bundled marks, else a glyph by kind.

@@ -34,6 +34,14 @@ The app connects by itself (`CapcomdUI/AppSession.swift`, the pure parts in `Cap
 4. Versions: when the app and the daemon differ in their minor version (0.x), the window and the panel say which to
    update; **Restart capcomd** when the CLI is already new and the old daemon still runs.
 
+The first launch shows the onboarding ([design/onboarding](design/onboarding/onboarding.dc.html)): a borderless
+window with the intro, then Boot (the steps above, with "Start capcomd when I log in" choosing `service install` or
+`service install --no-login`), Crew (logins and where agents work), Project, Goal and Launch. Finishing or skipping is
+stored (`capcomd.onboarding.finished`); until then it comes back, at Boot, when the app can't reach or pair with
+capcomd. Settings › General › Show Onboarding Again replays it. In development builds,
+`CAPCOMD_ONBOARDING_CONTROL=<dir>` drives it without the screen (OnboardingDebug.swift: `<dir>/cmd`, `<dir>/state.txt`,
+snapshots), and `-capcomd.onboarding.home <dir>` points its repository scan at another home folder.
+
 The window and the menu bar panel are two views of one app, on the session's one store (`CapcomdStore/AppShell.swift`):
 
 - Every panel row opens the window on its run, at its agent's column (`DeepLink`; an agent without a column lands on

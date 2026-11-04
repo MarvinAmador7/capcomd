@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>capcomd onboarding</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;family=Figtree:wght@400;500;600;700&amp;family=League+Spartan:wght@600;700&amp;family=Nunito:wght@400;500;600;700;800&amp;family=Albert+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:transparent}
+a{color:#FFB15C}a:hover{color:#FFD3A0}
+.win{--ease-out:cubic-bezier(.22,1,.36,1);--ease-expo:cubic-bezier(.16,1,.3,1);--ease-io:cubic-bezier(.76,0,.24,1)}
+.win *{box-sizing:border-box}
+.win{font-kerning:normal;text-rendering:optimizeLegibility}
+.disp{font-family:var(--fd);font-weight:var(--fdw);letter-spacing:var(--fdt);line-height:var(--fdl);text-wrap:balance}
+.disp2{font-family:var(--fd);font-weight:var(--fdw);font-size:32px;line-height:1.1;letter-spacing:calc(var(--fdt) * .6);text-wrap:balance}
+::selection{background:#FF8A1F;color:#140A00}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.bot{position:relative;flex:none}
+.spr{position:absolute;top:0}
+.blink{opacity:0;animation:blink 4.6s infinite}
+.bob{animation:bob 3.2s var(--ease-io) infinite}
+.bgpix{position:absolute;width:4px;height:4px;opacity:.28;animation:twinkle 7s ease-in-out infinite}
+.bgring{position:absolute;width:10px;height:10px;border:2px solid;opacity:.3;animation:twinkle 7s ease-in-out infinite}
+.enter>*{animation:rise .8s var(--ease-expo) both}
+.enter>h2,.enter>label{animation-name:mask;padding-bottom:.08em}
+.enter>*:nth-child(2){animation-delay:.09s}.enter>*:nth-child(3){animation-delay:.18s}.enter>*:nth-child(4){animation-delay:.27s}.enter>*:nth-child(5){animation-delay:.36s}.enter>*:nth-child(6){animation-delay:.45s}.enter>*:nth-child(7){animation-delay:.54s}
+.stag>*{animation:rise .7s var(--ease-expo) both}
+.stag>*:nth-child(1){animation-delay:.24s}.stag>*:nth-child(2){animation-delay:.31s}.stag>*:nth-child(3){animation-delay:.38s}.stag>*:nth-child(4){animation-delay:.45s}.stag>*:nth-child(5){animation-delay:.52s}
+.btn{height:44px;padding:0 22px;border-radius:0;font:600 16px/1 var(--ft);border:0;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:transform 140ms var(--ease-out),background 180ms ease,opacity 180ms ease}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible,.opt:focus-visible,.chip:focus-visible,.link:focus-visible,.sw input:focus-visible+.track{outline:2px solid #63F5F2;outline-offset:2px}
+.pri{background:#FF8A1F;color:#140A00}
+.pri:hover{background:#FFA04A}
+.pri:disabled{background:#2A1C10;color:#8F6E4E;cursor:default;transform:none}
+.ghost{background:rgba(255,255,255,.08);color:#E4E4EA}
+.ghost:hover{background:rgba(255,255,255,.13)}
+.ghost:disabled{opacity:.4;cursor:default}
+.link{background:none;border:0;color:#C4C4CC;font:500 16px var(--ft);cursor:pointer;padding:8px;transition:color 180ms ease}
+.link:hover{color:#F2F2F7}
+.dot{width:8px;height:8px;background:#2A2A35;transition:background 300ms ease}
+.dot.on{background:#FF8A1F}.dot.done{background:#7C4DDB}
+.row .node{width:16px;height:16px;border:4px solid #34343F;background:#07070B;flex:none;transition:border-color 300ms ease,background 300ms ease}
+.row.run .node{border-color:#FF8A1F;animation:nodeblink .8s steps(1) infinite}
+.row.done .node{border-color:#30D158;background:#30D158}
+.row.wait .lbl{color:#8B8B95}
+.row.run .lbl{color:#FFB15C}
+.opt{width:100%;text-align:left;background:rgba(255,255,255,.045);border:0;border-radius:0;color:#F2F2F7;cursor:pointer;font-family:var(--ft);transition:background 180ms ease,box-shadow 180ms ease}
+.opt:hover{background:rgba(255,255,255,.075)}
+.opt.sel{background:rgba(255,138,31,.13);box-shadow:inset 0 0 0 2px #FF8A1F}
+.chip{height:36px;padding:0 14px;border-radius:0;border:0;background:rgba(255,255,255,.07);color:#E4E4EA;font:500 16px var(--ft);cursor:pointer;transition:background 180ms ease,color 180ms ease}
+.chip:hover{background:rgba(255,138,31,.18);color:#FFD3A0}
+.sw{display:inline-flex;align-items:center;gap:12px;cursor:pointer;color:#E4E4EA;font-size:16px;position:relative}
+.sw input{position:absolute;opacity:0;width:1px;height:1px}
+.sw .track{width:40px;height:22px;background:#34343F;position:relative;transition:background 180ms ease}
+.sw .track::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;background:#F2F2F7;transition:transform 240ms var(--ease-out)}
+.sw input:checked+.track{background:#FF8A1F}
+.sw input:checked+.track::after{transform:translateX(18px)}
+textarea.goal{width:100%;height:132px;resize:none;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.12);border-radius:0;padding:18px 20px;color:#F2F2F7;font:400 19px/1.5 var(--ft);outline:none;transition:border-color 180ms ease}
+textarea.goal:focus{border-color:#FF8A1F}
+textarea.goal::placeholder{color:#7D7D88}
+.pill{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 12px;font:500 13px var(--ft)}
+.pill.in{background:rgba(48,209,88,.13);color:#5BE07C}
+.pill.wait{background:rgba(255,138,31,.13);color:#FFB15C}
+.pill .pd{width:6px;height:6px;background:currentColor}
+.pill.wait .pd{animation:nodeblink .8s steps(1) infinite}
+.tr{position:absolute;transition:transform .5s steps(7)}
+.tr.v{transform-origin:top;transform:scaleY(0);width:4px;background:repeating-linear-gradient(to bottom,#7C4DDB 0 4px,transparent 4px 8px)}
+.tr.h{transform-origin:center;transform:scaleX(0);height:4px;background:repeating-linear-gradient(to right,#7C4DDB 0 4px,transparent 4px 8px)}
+.tr.on{transform:none}
+.packet{position:absolute;top:0;width:4px;height:4px;background:#63F5F2;animation:packet 1.8s steps(30) infinite}
+.drop{animation:drop .9s var(--ease-expo) both}
+.typed{display:inline-block;white-space:nowrap;vertical-align:bottom;animation:typein 1.1s steps(18) .35s both}
+.caret{display:inline-block;width:7px;height:13px;background:#63F5F2;margin-left:4px;vertical-align:-1px;animation:caret 1s steps(1) infinite}
+.bubble{position:relative;background:#121219;border:3px solid #2A2A35;padding:12px 16px;color:#E4E4EA;font:500 16px var(--ft);min-height:50px}
+.bubble::before{content:'';position:absolute;left:50%;top:-9px;width:12px;height:9px;margin-left:-6px;background:#2A2A35;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.code{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#121219;padding:8px 8px 8px 16px;font:500 13px 'Geist Mono',monospace;color:#E4E4EA}
+
+/* Intro: the CAPCOM comes on the air. A signal pixel, a scan line, the screen opening on him, his face powering on;
+   then the window opens out from him. Expo out for arrivals, steps for the pixel moments, nothing bounces. */
+.backdrop{position:absolute;inset:0;background:#07070B;border-radius:12px;clip-path:circle(1000px at 50% 50%);transition:clip-path 1.1s var(--ease-expo)}
+.chrome{transition:opacity .8s ease .35s}
+.face{opacity:0}
+.sig{display:none}
+.heroshadow{width:120px;height:8px;margin-top:16px;background:#1A1A24;animation:shadowpulse 3.2s var(--ease-io) infinite}
+.w-head{animation:mask .95s var(--ease-expo) .2s both}
+.played .w-head{animation-delay:.5s}
+/* He waits at the centre of the window, then moves to his place as the title comes in: a short crouch (anticipation),
+   a launch that carries him past his mark with a little stretch, and a settle back onto it. */
+.intro .lift{transform:translateY(var(--dy))}
+.lift.go{animation:liftup 1.2s both}
+@keyframes liftup{
+  0%{transform:translateY(var(--dy));animation-timing-function:cubic-bezier(.45,0,.55,1)}
+  13%{transform:translateY(calc(var(--dy) + 14px)) scale(1.05,.94);animation-timing-function:cubic-bezier(.12,.75,.25,1)}
+  56%{transform:translateY(-12px) scale(.97,1.04);animation-timing-function:cubic-bezier(.45,0,.55,1)}
+  78%{transform:translateY(3px) scale(1.012,.99);animation-timing-function:cubic-bezier(.45,0,.55,1)}
+  100%{transform:none}}
+.w-in{animation:rise .8s var(--ease-expo) both}
+.intro .backdrop{clip-path:circle(0px at 50% 50%)}
+.intro .chrome{opacity:0;pointer-events:none;transition:none}
+.intro .w-head,.intro .w-in{animation:none;opacity:0;pointer-events:none}
+.intro .bob{animation:none}
+.intro .blink{animation:blinkonce .24s 1.6s both}
+.intro .face{animation:poweron 1.6s both}
+.intro .mat{animation:crt .7s var(--ease-expo) .8s both}
+.intro .sig{display:block;position:absolute;left:0;right:0;top:90px;height:12px;animation:sigon 1.15s linear both}
+.intro .sigbar{height:100%;background:#63F5F2;transform:scaleX(.0625);animation:sigline .5s var(--ease-expo) .32s both}
+.intro .heroshadow{animation:fadein .6s ease 1s both}
+
+/* Then he pulls out a laptop, types, and a crew of heads pours out of it. Arcs are two motions: x at constant speed,
+   y up with ease-out and down with ease-in, so every head falls the way a thrown thing does. */
+.laptop{position:absolute;animation:pull .55s var(--ease-expo) 1.75s both}
+.laptop.away{animation:away .35s cubic-bezier(.55,.055,.675,.19) both}
+.lidj{animation:jitter .1s steps(2) 2.25s 9}
+.intro .tap{animation:tap .12s steps(2) 2.25s 8}
+.spark{position:absolute;top:0;width:6px;height:6px;background:#63F5F2;opacity:0;animation:spark .4s var(--ease-out) both}
+.mh{position:absolute;left:0;top:0;animation:mhx var(--du) linear var(--dl) both}
+.mhy{animation:mhy var(--du) var(--dl) both}
+.mhr{animation:mhr var(--du) linear var(--dl) both}
+@keyframes pull{from{transform:translateY(72px);opacity:0}}
+@keyframes away{to{transform:translateY(64px);opacity:0}}
+@keyframes jitter{50%{transform:translateY(2px)}}
+@keyframes tap{50%{transform:translateY(3px)}}
+@keyframes spark{0%{opacity:0;transform:translateY(0)}15%{opacity:1}100%{opacity:0;transform:translateY(-36px)}}
+@keyframes mhx{from{transform:translateX(0)}to{transform:translateX(var(--dx))}}
+@keyframes mhy{0%{transform:translateY(24px);opacity:0;animation-timing-function:cubic-bezier(.2,.7,.35,1)}6%{opacity:1}42%{transform:translateY(var(--up));animation-timing-function:cubic-bezier(.6,0,.85,.45)}86%{opacity:1}100%{transform:translateY(var(--fall));opacity:0}}
+@keyframes mhr{from{transform:rotate(0)}to{transform:rotate(var(--rot))}}
+/* Comets behind him: a pixel head and a four-pixel tail, each crossing once every 9-15 s at low opacity. */
+.comets{position:absolute;left:-180px;top:-70px;width:552px;height:330px;pointer-events:none;opacity:.6}
+.comet{position:absolute;width:0;height:0}
+.ctrav{position:absolute;top:-2px;display:flex;align-items:center;gap:2px;opacity:0;animation:ctrav linear infinite both}
+.ctrav span{width:4px;height:4px;flex:none}
+.ctrav span:nth-child(1){opacity:.14}.ctrav span:nth-child(2){opacity:.26}.ctrav span:nth-child(3){opacity:.42}.ctrav span:nth-child(4){opacity:.66}
+.ctrav span:nth-child(5){background:#F2F2F7 !important}
+@keyframes ctrav{0%{transform:translateX(0);opacity:0}4%{opacity:.75}28%{opacity:.75}34%{transform:translateX(var(--len));opacity:0}100%{transform:translateX(var(--len));opacity:0}}
+@media (prefers-reduced-motion: reduce){.comets{display:none}}
+@keyframes blink{0%,91%,100%{opacity:0}93%,97%{opacity:1}}
+@keyframes blinkonce{0%,100%{opacity:0}30%,70%{opacity:1}}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@keyframes twinkle{0%,100%{opacity:.16}50%{opacity:.55}}
+@keyframes rise{from{opacity:0;transform:translateY(22px)}}
+@keyframes mask{from{clip-path:inset(0 0 100% 0);transform:translateY(28px)}to{clip-path:inset(0 0 0 0);transform:none}}
+@keyframes nodeblink{50%{border-color:#5A3A14;opacity:.45}}
+@keyframes drop{from{opacity:0;transform:translateY(-32px)}}
+@keyframes typein{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes caret{50%{opacity:0}}
+@keyframes packet{from{left:0}to{left:100%}}
+@keyframes shadowpulse{0%,100%{transform:scaleX(1);opacity:.5}50%{transform:scaleX(.82);opacity:.3}}
+@keyframes poweron{0%,78%{opacity:1}81%{opacity:0}84%{opacity:1}87%,100%{opacity:0}}
+@keyframes crt{from{clip-path:inset(50% 0 50% 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes sigon{0%{opacity:0}5%{opacity:1}10%{opacity:.2}15%,80%{opacity:1}100%{opacity:0}}
+@keyframes sigline{from{transform:scaleX(.0625)}to{transform:scaleX(1)}}
+@keyframes fadein{from{opacity:0}}
+@media (prefers-reduced-motion: reduce){.win *,.win *::after,.win *::before{animation:none !important;transition:none !important}.blink,.face{opacity:0}}
+</style>
+</helmet>
+<div class="{{ winCls }}" role="dialog" aria-label="Set up capcomd" style="--fd: {{ font.fd }}; --ft: {{ font.ft }}; --fdw: {{ font.w }}; --fdt: {{ font.t }}; --fdl: {{ font.lh }}; position: relative; width: 1200px; height: 760px; border-radius: 12px; overflow: hidden; color: #F2F2F7; font-family: var(--ft)">
+  <div class="backdrop" aria-hidden="true"></div>
+
+  <div class="chrome" aria-hidden="true" style="position: absolute; inset: 0">
+    <sc-for list="{{ bg.pix }}" as="p" hint-placeholder-count="0">
+      <div class="bgpix" style="left: {{ p.x }}px; top: {{ p.y }}px; background: {{ p.c }}; animation-delay: {{ p.d }}s"></div>
+    </sc-for>
+    <sc-for list="{{ bg.rings }}" as="r" hint-placeholder-count="0">
+      <div class="bgring" style="left: {{ r.x }}px; top: {{ r.y }}px; border-color: {{ r.c }}; animation-delay: {{ r.d }}s"></div>
+    </sc-for>
+  </div>
+
+  <div class="chrome" aria-hidden="true" style="position: absolute; top: 0; left: 0; right: 0; height: 40px; display: flex; align-items: center; gap: 8px; padding-left: 16px">
+    <span style="width: 12px; height: 12px; border-radius: 6px; background: #FF5F57"></span>
+    <span style="width: 12px; height: 12px; border-radius: 6px; background: #FEBC2E"></span>
+    <span style="width: 12px; height: 12px; border-radius: 6px; background: #28C840"></span>
+    <span style="position: absolute; left: 0; right: 0; text-align: center; font-size: 13px; font-weight: 600; color: #A1A1AA">capcomd</span>
+  </div>
+
+  <sc-if value="{{ showDots }}" hint-placeholder-val="{{ false }}">
+    <div class="chrome" role="img" aria-label="{{ stepLabel }}" style="position: absolute; top: 56px; left: 0; right: 0; display: flex; justify-content: center; gap: 10px">
+      <sc-for list="{{ dots }}" as="d" hint-placeholder-count="5">
+        <div class="{{ d.cls }}"></div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <!-- 0 · Welcome -->
+  <sc-if value="{{ isS0 }}" hint-placeholder-val="{{ true }}">
+    <div class="{{ welcomeCls }}" style="position: absolute; inset: 40px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding-bottom: 40px">
+      <sc-if value="{{ introProps }}" hint-placeholder-val="{{ false }}">
+        <div aria-hidden="true" style="position: absolute; left: 600px; top: 366px; width: 0; height: 0">
+          <sc-for list="{{ sparks }}" as="k" hint-placeholder-count="0"><div class="spark" style="left: {{ k.x }}px; animation-delay: {{ k.d }}s"></div></sc-for>
+          <sc-for list="{{ minis }}" as="m" hint-placeholder-count="0">
+            <div class="mh" style="--dx: {{ m.dx }}px; --up: {{ m.up }}px; --fall: {{ m.fall }}px; --rot: {{ m.rot }}deg; --dl: {{ m.delay }}s; --du: {{ m.dur }}s">
+              <div class="mhy"><div class="mhr" style="margin-left: {{ m.offX }}px; margin-top: {{ m.offY }}px"><div class="bot" style="width: {{ m.s.w }}px; height: {{ m.s.h }}px"><div class="spr" style="width: {{ m.s.p }}px; height: {{ m.s.p }}px; left: {{ m.s.neg }}px; box-shadow: {{ m.s.body }}"></div></div></div></div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <div class="{{ liftCls }}" ref="{{ heroRef }}" style="--dy: {{ heroDy }}px; position: relative; display: flex; flex-direction: column; align-items: center; transform-origin: 50% 100%">
+        <div class="comets chrome" aria-hidden="true">
+          <sc-for list="{{ comets }}" as="c" hint-placeholder-count="0">
+            <div class="comet" style="left: {{ c.x }}px; top: {{ c.y }}px; transform: rotate({{ c.rot }}deg)">
+              <div class="ctrav" style="--len: {{ c.len }}px; animation-duration: {{ c.cycle }}s; animation-delay: {{ c.delay }}s"><span style="background: {{ c.color }}"></span><span style="background: {{ c.color }}"></span><span style="background: {{ c.color }}"></span><span style="background: {{ c.color }}"></span><span></span></div>
+            </div>
+          </sc-for>
+        </div>
+        <div class="bob" role="img" aria-label="The capcomd bot">
+          <div class="tap" style="position: relative">
+            <div class="mat"><div class="bot" style="width: {{ hero.w }}px; height: {{ hero.h }}px"><div class="spr" style="width: {{ hero.p }}px; height: {{ hero.p }}px; left: {{ hero.neg }}px; box-shadow: {{ hero.body }}"></div><div class="spr face" style="width: {{ hero.p }}px; height: {{ hero.p }}px; left: {{ hero.neg }}px; box-shadow: {{ hero.face }}"></div><div class="spr blink" style="width: {{ hero.p }}px; height: {{ hero.p }}px; left: {{ hero.neg }}px; box-shadow: {{ hero.lids }}"></div></div></div>
+            <div class="sig" aria-hidden="true"><div class="sigbar"></div></div>
+            <sc-if value="{{ introProps }}" hint-placeholder-val="{{ false }}">
+              <div class="{{ laptopCls }}" aria-hidden="true" style="left: 6px; top: 118px">
+                <div class="lidj"><div class="bot" style="width: {{ lap.w }}px; height: {{ lap.h }}px"><div class="spr" style="width: {{ lap.p }}px; height: {{ lap.p }}px; left: {{ lap.neg }}px; box-shadow: {{ lap.body }}"></div></div></div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+        <div class="heroshadow" aria-hidden="true"></div>
+      </div>
+      <h1 class="w-head disp" style="margin: 40px 0 0; padding-bottom: .08em; font-size: 64px">Meet your crew.</h1>
+      <p class="w-in" style="animation-delay: {{ wd.sub }}s; margin: 18px 0 0; max-width: 560px; font-size: 19px; line-height: 1.5; color: #E4E4EA">Coding agents that build and check each other's work.</p>
+      <div class="w-in" style="animation-delay: {{ wd.cta }}s; margin-top: 36px"><button class="btn pri" style="height: 52px; padding: 0 32px; font-size: 16px" onClick="{{ start }}">Get started</button></div>
+    </div>
+  </sc-if>
+
+  <!-- 1 · Boot -->
+  <sc-if value="{{ isS1 }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; left: 120px; top: 120px; width: 960px; display: flex; gap: 72px; align-items: flex-start">
+      <div class="enter" style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+        <h2 class="disp2" style="margin: 0">Boot capcomd</h2>
+        <p style="margin: 12px 0 0; font-size: 16px; line-height: 1.55; color: #A1A1AA; max-width: 480px">capcomd is the engine your crew runs on. It works in the background, on this Mac.</p>
+        <sc-if value="{{ cliMissing }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top: 30px; display: flex; flex-direction: column; gap: 14px; max-width: 520px">
+            <div style="display: flex; align-items: center; gap: 12px"><div style="width: 16px; height: 16px; border: 4px solid #FFB020"></div><div style="font-size: 16px; font-weight: 600; color: #FFC75A">capcomd isn't installed yet</div></div>
+            <div style="font-size: 13px; color: #A1A1AA; padding-left: 28px">Install it with Homebrew, then check again.</div>
+            <div class="code" style="margin-left: 28px"><span>brew install MarvinAmador7/tap/capcomd</span><button class="btn ghost" style="height: 32px; padding: 0 12px; font-size: 13px" onClick="{{ copy }}">{{ copyLabel }}</button></div>
+            <div style="padding-left: 28px"><button class="btn ghost" onClick="{{ checkAgain }}">Check again</button></div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ cliReady }}" hint-placeholder-val="{{ true }}">
+          <div style="margin-top: 30px; position: relative">
+            <div aria-hidden="true" style="position: absolute; left: 6px; top: 18px; width: 4px; height: 120px; background: repeating-linear-gradient(to bottom,#34343F 0 4px,transparent 4px 8px)"></div>
+            <div aria-hidden="true" style="position: absolute; left: 6px; top: 18px; width: 4px; height: {{ fillPx }}px; background: repeating-linear-gradient(to bottom,#30D158 0 4px,transparent 4px 8px); transition: height .9s steps(8)"></div>
+            <sc-for list="{{ rows }}" as="row" hint-placeholder-count="3">
+              <div class="{{ row.cls }}" style="height: 68px; display: flex; gap: 16px; align-items: flex-start; position: relative">
+                <div class="node" style="margin-top: 2px"></div>
+                <div style="display: flex; flex-direction: column; gap: 4px">
+                  <div class="lbl" style="font-size: 16px; font-weight: 500">{{ row.label }}</div>
+                  <sc-if value="{{ row.isDone }}" hint-placeholder-val="{{ false }}"><div style="font-size: 13px; color: #A1A1AA; animation: rise .5s var(--ease-expo) both">{{ row.detail }}</div></sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="margin-top: 14px"><label class="sw"><input type="checkbox" checked="{{ login }}" onChange="{{ toggleLogin }}" disabled="{{ booting }}"><span class="track"></span>Start capcomd when I log in</label></div>
+        </sc-if>
+      </div>
+      <div class="enter" style="width: 320px; display: flex; flex-direction: column; align-items: center; padding-top: 20px">
+        <div class="bob" aria-hidden="true">
+          <div class="bot" style="width: {{ bootBot.w }}px; height: {{ bootBot.h }}px"><div class="spr" style="width: {{ bootBot.p }}px; height: {{ bootBot.p }}px; left: {{ bootBot.neg }}px; box-shadow: {{ bootBot.body }}"></div><div class="spr blink" style="width: {{ bootBot.p }}px; height: {{ bootBot.p }}px; left: {{ bootBot.neg }}px; box-shadow: {{ bootBot.lids }}"></div></div>
+        </div>
+        <div class="bubble" role="status" style="margin-top: 26px; width: 280px; text-align: center">{{ bubble }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- 2 · Crew -->
+  <sc-if value="{{ isS2 }}" hint-placeholder-val="{{ false }}">
+    <div class="enter" style="position: absolute; left: 50%; top: 104px; width: 760px; margin-left: -380px; display: flex; flex-direction: column">
+      <h2 class="disp2" style="margin: 0">Who's on your crew?</h2>
+      <p style="margin: 12px 0 0; font-size: 16px; line-height: 1.55; color: #A1A1AA">Your agents use the accounts you already have. One is enough to start.</p>
+      <div class="stag" style="margin-top: 26px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+        <sc-for list="{{ agents }}" as="a" hint-placeholder-count="2">
+          <div class="opt" style="padding: 18px; display: flex; gap: 16px; align-items: center; cursor: default">
+            <div aria-hidden="true" style="width: 56px; height: 56px; flex: none; background: {{ a.tile }}; display: flex; align-items: center; justify-content: center">
+              <svg width="30" height="30" viewBox="0 0 24 24"><path fill="{{ a.color }}" d="{{ a.logo }}"></path></svg>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px; min-width: 0">
+              <div style="font-size: 19px; font-weight: 600; letter-spacing: -0.01em">{{ a.name }}</div>
+              <div style="font-size: 13px; color: #8B8B95">{{ a.account }}</div>
+              <div style="margin-top: 4px">
+                <sc-if value="{{ a.isIn }}" hint-placeholder-val="{{ true }}"><span class="pill in"><span class="pd"></span>Signed in</span></sc-if>
+                <sc-if value="{{ a.isSigning }}" hint-placeholder-val="{{ false }}"><span class="pill wait"><span class="pd"></span>Finish in your browser…</span></sc-if>
+                <sc-if value="{{ a.isOut }}" hint-placeholder-val="{{ false }}"><button class="btn ghost" style="height: 32px; padding: 0 14px; font-size: 13px" onClick="{{ a.signIn }}">Sign in</button></sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <h3 style="margin: 36px 0 0; font-size: 19px; font-weight: 600">Where they work</h3>
+      <div class="stag" style="margin-top: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+        <sc-for list="{{ places }}" as="o" hint-placeholder-count="2">
+          <button class="{{ o.cls }}" aria-pressed="{{ o.pressed }}" onClick="{{ o.pick }}" style="padding: 16px 18px; display: flex; gap: 14px; align-items: flex-start">
+            <sc-if value="{{ o.isMac }}" hint-placeholder-val="{{ true }}"><svg aria-hidden="true" width="26" height="26" viewBox="0 0 24 24" style="flex: none"><path fill="#2496ED" d="{{ dockerLogo }}"></path></svg></sc-if>
+            <sc-if value="{{ o.isCloud }}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#B795FF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 1px"><path d="M7 18h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.1 9.5 4.25 4.25 0 0 0 7 18z"></path></svg></sc-if>
+            <span style="display: flex; flex-direction: column; gap: 4px">
+              <span style="font-size: 16px; font-weight: 600">{{ o.title }}</span>
+              <span style="font-size: 13px; line-height: 1.45; color: #A1A1AA">{{ o.sub }}</span>
+            </span>
+          </button>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- 3 · Project -->
+  <sc-if value="{{ isS3 }}" hint-placeholder-val="{{ false }}">
+    <div class="enter" style="position: absolute; left: 50%; top: 104px; width: 680px; margin-left: -340px; display: flex; flex-direction: column">
+      <h2 class="disp2" style="margin: 0">Pick a first project</h2>
+      <p style="margin: 12px 0 0; font-size: 16px; line-height: 1.55; color: #A1A1AA">These are the Git repositories capcomd found on this Mac.</p>
+      <div class="stag" role="radiogroup" aria-label="Projects" style="margin-top: 24px; display: flex; flex-direction: column; gap: 8px">
+        <sc-for list="{{ repos }}" as="r" hint-placeholder-count="3">
+          <button class="{{ r.cls }}" role="radio" aria-checked="{{ r.pressed }}" onClick="{{ r.pick }}" style="padding: 14px 18px; display: flex; align-items: center; gap: 14px">
+            <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#A1A1AA" stroke-width="1.6" stroke-linejoin="round" style="flex: none"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.4l2 2.2h8.6A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"></path></svg>
+            <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+              <span style="font-size: 16px; font-weight: 600">{{ r.name }}</span>
+              <span style="font-size: 13px; color: #A1A1AA">{{ r.path }}</span>
+            </span>
+            <span style="font-size: 13px; font-weight: 500; color: #C9B0FF; background: rgba(155,107,255,.14); padding: 5px 10px">{{ r.branch }}</span>
+          </button>
+        </sc-for>
+        <button class="opt" style="padding: 16px 18px; color: #C4C4CC; font-size: 16px">Choose another folder…</button>
+      </div>
+      <p style="margin: 18px 0 0; font-size: 13px; line-height: 1.5; color: #8B8B95">Agents work on branches of their own. Nothing reaches your main branch unless you merge it.</p>
+    </div>
+  </sc-if>
+
+  <!-- 4 · Goal -->
+  <sc-if value="{{ isS4 }}" hint-placeholder-val="{{ false }}">
+    <div class="enter" style="position: absolute; left: 50%; top: 112px; width: 720px; margin-left: -360px; display: flex; flex-direction: column">
+      <label for="goal" class="disp2">What should your crew build first?</label>
+      <p style="margin: 12px 0 0; font-size: 16px; line-height: 1.55; color: #A1A1AA">Say it the way you'd tell a teammate. The planner splits it up and brings in the right team for <span style="color: #F2F2F7">{{ repoName }}</span>.</p>
+      <textarea id="goal" class="goal" style="margin-top: 24px" placeholder="Add a --json flag to every command" value="{{ goal }}" onChange="{{ setGoal }}"></textarea>
+      <div class="stag" style="margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px">
+        <sc-for list="{{ chips }}" as="c" hint-placeholder-count="3">
+          <button class="chip" onClick="{{ c.pick }}">{{ c.text }}</button>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- 5 · Launch -->
+  <sc-if value="{{ isS5 }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; inset: 0">
+      <sc-if value="{{ l.planner }}" hint-placeholder-val="{{ false }}">
+        <div class="drop" style="position: absolute; left: 544px; top: 92px">
+          <div class="bob" aria-hidden="true"><div class="bot" style="width: {{ planner.w }}px; height: {{ planner.h }}px"><div class="spr" style="width: {{ planner.p }}px; height: {{ planner.p }}px; left: {{ planner.neg }}px; box-shadow: {{ planner.body }}"></div><div class="spr blink" style="width: {{ planner.p }}px; height: {{ planner.p }}px; left: {{ planner.neg }}px; box-shadow: {{ planner.lids }}"></div></div></div>
+        </div>
+        <div class="drop" style="position: absolute; left: 450px; top: 216px; width: 300px; text-align: center">
+          <div style="font-size: 16px; font-weight: 600; color: #FFB15C">Planner</div>
+          <div style="margin-top: 6px; font-size: 13px; color: #C4C4CC"><span class="typed">Planning 3 tasks</span><span class="caret"></span></div>
+        </div>
+      </sc-if>
+      <div aria-hidden="true" class="{{ l.trV }}" style="left: 598px; top: 266px; height: 54px"></div>
+      <div aria-hidden="true" class="{{ l.trH }}" style="left: 328px; top: 320px; width: 544px; transition-delay: .3s"><sc-if value="{{ l.packets }}" hint-placeholder-val="{{ false }}"><div class="packet"></div><div class="packet" style="animation-delay: -.9s"></div></sc-if></div>
+      <sc-for list="{{ workers }}" as="w" hint-placeholder-count="0">
+        <div aria-hidden="true" class="{{ l.trD }}" style="left: {{ w.dropX }}px; top: 320px; height: 44px; transition-delay: .65s"></div>
+        <sc-if value="{{ w.show }}" hint-placeholder-val="{{ false }}">
+          <div class="drop" style="position: absolute; left: {{ w.x }}px; top: 368px">
+            <div class="bob" style="animation-delay: {{ w.delay }}s"><div class="bot" style="width: {{ w.bot.w }}px; height: {{ w.bot.h }}px"><div class="spr" style="width: {{ w.bot.p }}px; height: {{ w.bot.p }}px; left: {{ w.bot.neg }}px; box-shadow: {{ w.bot.body }}"></div><div class="spr blink" style="width: {{ w.bot.p }}px; height: {{ w.bot.p }}px; left: {{ w.bot.neg }}px; box-shadow: {{ w.bot.lids }}; animation-delay: {{ w.delay }}s"></div></div></div>
+          </div>
+          <div class="drop" style="position: absolute; left: {{ w.labelX }}px; top: 476px; width: 240px; text-align: center">
+            <div style="font-size: 16px; font-weight: 600; color: {{ w.color }}">{{ w.label }}</div>
+            <div style="margin-top: 6px; font-size: 13px; color: #C4C4CC"><span class="typed">{{ w.status }}</span></div>
+          </div>
+        </sc-if>
+      </sc-for>
+      <sc-if value="{{ l.done }}" hint-placeholder-val="{{ false }}">
+        <div class="enter" style="position: absolute; left: 0; right: 0; top: 566px; display: flex; flex-direction: column; align-items: center; text-align: center">
+          <h2 class="disp2" style="margin: 0">Your crew is on it.</h2>
+          <p style="margin: 10px 0 0; max-width: 560px; font-size: 16px; line-height: 1.55; color: #A1A1AA">Each agent gets a column of its own. capcomd lets you know when something needs you.</p>
+          <div style="margin-top: 22px; display: flex; gap: 10px; align-items: center"><button class="btn pri" onClick="{{ restart }}">Open capcomd</button><button class="link" onClick="{{ restart }}">Replay</button></div>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <!-- 6 · All set (the goal was skipped) -->
+  <sc-if value="{{ isS6 }}" hint-placeholder-val="{{ false }}">
+    <div class="enter" style="position: absolute; inset: 40px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding-bottom: 40px">
+      <div aria-hidden="true"><div class="bob"><div class="bot" style="width: {{ doneBot.w }}px; height: {{ doneBot.h }}px"><div class="spr" style="width: {{ doneBot.p }}px; height: {{ doneBot.p }}px; left: {{ doneBot.neg }}px; box-shadow: {{ doneBot.body }}"></div></div></div></div>
+      <h2 class="disp2" style="margin: 36px 0 0">You're all set.</h2>
+      <p style="margin: 14px 0 0; max-width: 540px; font-size: 19px; line-height: 1.5; color: #E4E4EA">Start a run whenever you like: from this window, from the menu bar, or by asking your coding agent to use capcomd.</p>
+      <div style="margin-top: 30px; display: flex; gap: 12px; align-items: center"><button class="btn pri" onClick="{{ restart }}">Open capcomd</button><button class="link" onClick="{{ backToGoal }}">Give the crew a goal</button></div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showFooter }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 88px; padding: 0 48px; display: flex; align-items: center; justify-content: space-between">
+      <button class="btn ghost" onClick="{{ back }}" disabled="{{ booting }}">Back</button>
+      <div style="display: flex; gap: 12px; align-items: center">
+        <sc-if value="{{ canSkip }}" hint-placeholder-val="{{ false }}"><button class="link" onClick="{{ skip }}">Skip for now</button></sc-if>
+        <button class="btn pri" onClick="{{ primary }}" disabled="{{ primaryDisabled }}">{{ primaryLabel }}</button>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"startStep":{"editor":"enum","options":["0 Welcome","1 Boot","2 Crew","3 Project","4 Goal","5 Launch","6 All set"],"default":"0 Welcome","section":"Prototype"},"cliMissing":{"editor":"boolean","default":false,"section":"Prototype"},"playIntro":{"editor":"boolean","default":true,"section":"Prototype"},"font":{"editor":"enum","options":["Geist (now)","Figtree","League Spartan + Figtree","Nunito","Albert Sans"],"default":"League Spartan + Figtree","section":"Type"},"$preview":{"width":1200,"height":760}}'>
+const ROWS = [
+  ".......AA.......",
+  ".......bb.......",
+  ".....BBBBBB.....",
+  "...BBHHBBBBBB...",
+  "..BHHBBBBBBBBB..",
+  "..BVVVVVVVVVVB..",
+  ".GBVEVVVVVVEVBG.",
+  ".GBVEVVVVVVEVBG.",
+  ".GBKVVMVVMVVKBG.",
+  "..BVVVVMMVVVVB..",
+  "..bBBBBBBBBBBb..",
+  "...bbbbbbbbbb...",
+  "....BHBBBBBB....",
+  "...BBPPKKPPBB...",
+  "...bBBBBBBBBb...",
+  "....bbb..bbb...."
+];
+const PAL = {
+  orange: { B: "#F28A26", b: "#B85D12", H: "#FFC07A", A: "#FFB15C", G: "#C9620E", P: "#7A3606" },
+  purple: { B: "#9B6BFF", b: "#6644CC", H: "#C9B0FF", A: "#B795FF", G: "#F28A26", P: "#5232A8" }
+};
+// Marks from Simple Icons (CC0); the logos are their owners' trademarks, shown to say which account an agent uses.
+const LOGO = { claude: "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z", openai: "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z", docker: "M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z" };
+const SCREEN = { V: "#0C0C16", E: "#63F5F2", M: "#63F5F2", K: "#F07AC8" };
+// Display face, text face, display weight, tracking and leading, per candidate (from the taste skill's type systems;
+// Nunito stands in for the rounded Fontshare faces, which this canvas can't load).
+const FONTS = {
+  "Geist (now)": { fd: "'Geist', system-ui, sans-serif", ft: "'Geist', system-ui, sans-serif", w: 600, t: "-0.035em", lh: 1 },
+  "Figtree": { fd: "'Figtree', system-ui, sans-serif", ft: "'Figtree', system-ui, sans-serif", w: 700, t: "-0.035em", lh: 1 },
+  "League Spartan + Figtree": { fd: "'League Spartan', system-ui, sans-serif", ft: "'Figtree', system-ui, sans-serif", w: 700, t: "-0.04em", lh: 0.92 },
+  "Nunito": { fd: "'Nunito', system-ui, sans-serif", ft: "'Nunito', system-ui, sans-serif", w: 800, t: "-0.03em", lh: 1 },
+  "Albert Sans": { fd: "'Albert Sans', system-ui, sans-serif", ft: "'Albert Sans', system-ui, sans-serif", w: 600, t: "-0.035em", lh: 1 }
+};
+const SUGGESTIONS = ["Add a --json flag to every command", "Write tests for the parser", "Fix the flaky CI job"];
+const RUNNING = ["Looking for capcomd…", "Starting capcomd…", "Pairing this Mac…"];
+const DONE = ["Found capcomd", "capcomd is running", "This Mac is paired"];
+const BUBBLE = ["Ready when you are.", "Looking around…", "Warming up the engine…", "Shaking hands…", "All systems go!"];
+
+function sprite(color, p, mood) {
+  const pal = Object.assign({}, SCREEN, PAL[color]);
+  const g = ROWS.map((r) => r.split(""));
+  if (mood === "happy") {
+    g[7][4] = "V"; g[7][11] = "V";
+    g[7][3] = "E"; g[7][5] = "E"; g[7][10] = "E"; g[7][12] = "E";
+  }
+  const cells = [];
+  g.forEach((r, y) => r.forEach((k, x) => { if (pal[k]) cells.push([x, y, pal[k]]); }));
+  const sh = (cs) => cs.length ? cs.map(([x, y, c]) => (x + 1) * p + "px " + y * p + "px 0 0 " + c).join(", ") : "none";
+  const lids = mood === "happy" ? [] : [[4, 6, pal.V], [11, 6, pal.V]];
+  const face = [];
+  g.forEach((r, y) => r.forEach((k, x) => { if (k === "E" || k === "M" || k === "K") face.push([x, y, pal.V]); }));
+  return { w: 16 * p, h: 16 * p, p: p, neg: -p, body: sh(cells), lids: sh(lids), face: sh(face) };
+}
+
+function shadowOf(cells, p) {
+  return cells.length ? cells.map(([x, y, c]) => (x + 1) * p + "px " + y * p + "px 0 0 " + c).join(", ") : "none";
+}
+
+function laptop(p) {
+  const cells = [];
+  const mark = [".MMMM.", "MMMMMM", "MeMMeM", "MMMMMM", ".MMMM."];
+  for (let y = 0; y < 14; y++) for (let x = 2; x < 28; x++) {
+    const edge = y === 0 || y === 13 || x === 2 || x === 27;
+    const mx = x - 12, my = y - 4, m = my >= 0 && my < 5 && mx >= 0 && mx < 6 ? mark[my][mx] : ".";
+    cells.push([x, y, edge ? "#4A4A5E" : m === "M" ? "#F28A26" : m === "e" ? "#2A2A38" : "#2A2A38"]);
+  }
+  for (let x = 0; x < 30; x++) cells.push([x, 14, "#5A5A70"]);
+  for (let x = 1; x < 29; x++) cells.push([x, 15, "#3A3A4A"]);
+  return { w: 30 * p, h: 16 * p, p: p, neg: -p, body: shadowOf(cells, p) };
+}
+
+function head(color, p) {
+  const pal = Object.assign({}, SCREEN, PAL[color]);
+  const cells = [];
+  ROWS.slice(0, 12).forEach((r, y) => r.split("").forEach((k, x) => { if (x >= 1 && x <= 14 && pal[k]) cells.push([x - 1, y, pal[k]]); }));
+  return { w: 14 * p, h: 12 * p, p: p, neg: -p, body: shadowOf(cells, p) };
+}
+
+function makePour() {
+  let a = 29;
+  const rnd = () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const sprites = {};
+  const minis = [];
+  for (let i = 0; i < 34; i++) {
+    const color = i % 3 === 1 ? "orange" : "purple", p = [2, 3, 3, 4][Math.floor(rnd() * 4)];
+    const key = color + p;
+    if (!sprites[key]) sprites[key] = head(color, p);
+    const side = i % 2 === 0 ? -1 : 1;
+    minis.push({
+      s: sprites[key], offX: -7 * p, offY: -6 * p,
+      dx: Math.round(side * (60 + rnd() * 500)), up: -Math.round(150 + rnd() * 300), fall: Math.round(180 + rnd() * 360),
+      rot: Math.round((rnd() - 0.5) * 70), delay: (2.7 + i * 0.034).toFixed(3), dur: (1.3 + rnd() * 0.6).toFixed(2)
+    });
+  }
+  const sparks = [];
+  for (let i = 0; i < 9; i++) sparks.push({ x: Math.round(-54 + rnd() * 102), d: (2.25 + i * 0.1).toFixed(2) });
+  return { minis: minis, sparks: sparks, lap: laptop(6) };
+}
+
+function makeBg() {
+  let a = 11;
+  const rnd = () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const cols = ["#7C4DDB", "#7C4DDB", "#7C4DDB", "#E07A1F", "#B4506A"];
+  const inCenter = (x, y) => x > 220 && x < 980 && y > 84 && y < 700;
+  const dirs = [[1, 0], [0, 1], [1, 1], [1, -1], [-1, 0], [0, -1], [-1, 1]];
+  const pix = [], rings = [];
+  let made = 0, tries = 0;
+  while (made < 18 && tries < 600) {
+    tries++;
+    let x = 16 + Math.floor(rnd() * 144) * 8, y = 56 + Math.floor(rnd() * 86) * 8;
+    const c = cols[Math.floor(rnd() * cols.length)], d = (rnd() * 7).toFixed(2);
+    if (inCenter(x, y)) continue;
+    const pts = [[x, y]];
+    const segs = 2 + Math.floor(rnd() * 2);
+    let ok = true;
+    for (let s = 0; s < segs && ok; s++) {
+      const dir = dirs[Math.floor(rnd() * dirs.length)], n = 3 + Math.floor(rnd() * 5);
+      for (let k = 0; k < n; k++) {
+        x += dir[0] * 8; y += dir[1] * 8;
+        if (x < 12 || x > 1184 || y < 50 || y > 744 || inCenter(x, y)) { ok = false; break; }
+        pts.push([x, y]);
+      }
+    }
+    if (!ok) continue;
+    const dashed = rnd() < 0.5;
+    pts.forEach((pt, i) => { if (i === 0 || i === pts.length - 1) return; if (dashed && i % 3 === 2) return; pix.push({ x: pt[0], y: pt[1], c: c, d: d }); });
+    const last = pts[pts.length - 1];
+    rings.push({ x: pts[0][0] - 3, y: pts[0][1] - 3, c: c, d: d });
+    rings.push({ x: last[0] - 3, y: last[1] - 3, c: c, d: d });
+    made++;
+  }
+  const plus = [[0, -1], [-1, 0], [0, 0], [1, 0], [0, 1]];
+  for (let i = 0; i < 9; i++) {
+    let cx = 0, cy = 0, t = 0;
+    do { cx = 20 + Math.floor(rnd() * 144) * 8; cy = 60 + Math.floor(rnd() * 84) * 8; t++; } while (inCenter(cx, cy) && t < 60);
+    if (inCenter(cx, cy)) continue;
+    const c = cols[Math.floor(rnd() * cols.length)], d = (rnd() * 7).toFixed(2);
+    plus.forEach((o) => pix.push({ x: cx + o[0] * 4, y: cy + o[1] * 4, c: c, d: d }));
+  }
+  return { pix: pix, rings: rings };
+}
+
+const BG = makeBg();
+const POUR = makePour();
+// Down and to the left, from the upper right of the space behind him; a few seconds apart, never in step.
+const COMETS = [
+  { x: 520, y: 18, rot: 158, len: 300, cycle: 11, delay: 1.2, color: "#63F5F2" },
+  { x: 430, y: 4, rot: 162, len: 250, cycle: 14, delay: 4.6, color: "#B795FF" },
+  { x: 548, y: 120, rot: 155, len: 280, cycle: 12.5, delay: 7.9, color: "#FFB15C" },
+  { x: 360, y: 30, rot: 165, len: 220, cycle: 15, delay: 10.4, color: "#63F5F2" },
+  { x: 500, y: 70, rot: 160, len: 260, cycle: 9.5, delay: 13.1, color: "#B795FF" }
+];
+const BOTS = {
+  hero: sprite("orange", 12, "smile"),
+  miniP: sprite("purple", 4, "smile"),
+  miniO: sprite("orange", 4, "smile"),
+  boot: sprite("orange", 10, "smile"),
+  bootHappy: sprite("orange", 10, "happy"),
+  planner: sprite("orange", 7, "smile"),
+  w0: sprite("purple", 6, "smile"),
+  w1: sprite("orange", 6, "smile"),
+  w2: sprite("purple", 6, "smile")
+};
+const WORKERS = [
+  { label: "CLI flags", status: "Editing cli.ts", cx: 330, bot: "w0", color: "#B795FF", delay: -0.6 },
+  { label: "JSON output", status: "Writing format.ts", cx: 600, bot: "w1", color: "#FFB15C", delay: -1.4 },
+  { label: "Tests", status: "Adding 12 tests", cx: 870, bot: "w2", color: "#B795FF", delay: -2.1 }
+];
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.timers = [];
+    this.heroRef = (el) => { this.heroEl = el; if (el) this.measure(); };
+    const step = this.stepOf(props.startStep);
+    this.state = { heroDy: 150, intro: this.introOn(step), introProps: this.introOn(step), introPlayed: this.introOn(step), step: step, bootStage: step >= 2 ? 4 : 0, login: true, cliFixed: false, copied: false, codex: "out", where: "docker", repo: 0, goal: "", ls: 0 };
+  }
+  componentDidMount() { if (this.state.step === 5) this.launch(); if (this.state.intro) this.introTimers(); }
+  measure() {
+    const el = this.heroEl;
+    if (!el) return;
+    // The window's centre (380) minus his centre in the finished layout: 40 for the title bar, then his top, then half his height.
+    const dy = Math.round(380 - (40 + el.offsetTop + 96));
+    if (dy !== this.state.heroDy) this.setState({ heroDy: dy });
+  }
+  introTimers() {
+    try { document.fonts.ready.then(() => this.measure()); } catch (e) {}
+    this.later(3700, () => this.setState({ intro: false }));
+    this.later(5900, () => this.setState({ introProps: false }));
+  }
+  introOn(step) {
+    let still = false;
+    try { still = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) {}
+    return step === 0 && this.props.playIntro !== false && !still;
+  }
+  playIntro() {
+    const on = this.introOn(0);
+    this.setState({ intro: on, introProps: on, introPlayed: on });
+    if (on) this.introTimers();
+  }
+  componentDidUpdate(prev) {
+    if (prev.startStep !== this.props.startStep) this.go(this.stepOf(this.props.startStep));
+    if (prev.cliMissing !== this.props.cliMissing) this.setState({ cliFixed: false, bootStage: 0 });
+    if (prev.font !== this.props.font) { try { document.fonts.ready.then(() => this.measure()); } catch (e) {} }
+  }
+  componentWillUnmount() { this.clear(); }
+  stepOf(v) { const n = parseInt(String(v == null ? "0" : v), 10); return Number.isFinite(n) ? Math.max(0, Math.min(6, n)) : 0; }
+  clear() { this.timers.forEach((t) => clearTimeout(t)); this.timers = []; }
+  later(ms, fn) { this.timers.push(setTimeout(fn, ms)); }
+  go(step) {
+    this.clear();
+    const patch = { step: step, intro: false, introProps: false, introPlayed: false };
+    if (step >= 2) patch.bootStage = 4;
+    if (step === 0) patch.bootStage = 0;
+    if (step === 5) { this.launch(); return; }
+    this.setState(patch);
+  }
+  boot() {
+    this.setState({ bootStage: 1 });
+    this.later(1100, () => this.setState({ bootStage: 2 }));
+    this.later(2300, () => this.setState({ bootStage: 3 }));
+    this.later(3300, () => this.setState({ bootStage: 4 }));
+  }
+  launch() {
+    this.clear();
+    this.setState({ step: 5, ls: 0, bootStage: 4, goal: this.state.goal.trim() ? this.state.goal : SUGGESTIONS[0] });
+    [[250, 1], [1000, 2], [1600, 3], [1850, 4], [2100, 5], [3200, 6]].forEach((s) => this.later(s[0], () => this.setState({ ls: s[1] })));
+  }
+  renderVals() {
+    const s = this.state, step = s.step;
+    const missing = !!this.props.cliMissing && !s.cliFixed;
+    const booting = s.bootStage > 0 && s.bootStage < 4;
+    const rows = RUNNING.map((label, i) => {
+      const done = s.bootStage === 4 || i < s.bootStage - 1;
+      const run = !done && i === s.bootStage - 1;
+      const detail = [ "0.9.0 · /opt/homebrew/bin/capcomd", s.login ? "in the background, and whenever you log in" : "in the background, until you quit it", "its key is kept in your Keychain" ][i];
+      return { cls: "row " + (done ? "done" : run ? "run" : "wait"), label: done ? DONE[i] : run ? label : DONE[i].replace("capcomd is running", "Start capcomd").replace("This Mac is paired", "Pair this Mac").replace("Found capcomd", "Find capcomd"), detail: detail, isDone: done };
+    });
+    const agentState = (st) => ({ isIn: st === "in", isOut: st === "out", isSigning: st === "signing" });
+    const agents = [
+      Object.assign({ name: "Claude Code", account: "Anthropic · your Claude account", logo: LOGO.claude, color: "#D97757", tile: "rgba(217,119,87,.12)", signIn: () => {} }, agentState("in")),
+      Object.assign({ name: "Codex", account: "OpenAI · your ChatGPT account", logo: LOGO.openai, color: "#F2F2F7", tile: "rgba(255,255,255,.08)", signIn: () => { this.setState({ codex: "signing" }); this.later(1600, () => this.setState({ codex: "in" })); } }, agentState(s.codex))
+    ];
+    const places = [
+      { id: "docker", title: "Docker on this Mac", sub: "Each agent gets its own container. Docker is running.", isMac: true, isCloud: false },
+      { id: "boxd", title: "boxd in the cloud", sub: "Each agent gets its own VM, so your Mac stays free. Needs a boxd account.", isMac: false, isCloud: true }
+    ].map((o) => Object.assign(o, { cls: "opt" + (s.where === o.id ? " sel" : ""), pressed: s.where === o.id, pick: () => this.setState({ where: o.id }) }));
+    const repoList = [
+      { name: "tinycalc", path: "~/Developer/tinycalc", branch: "main" },
+      { name: "notes-api", path: "~/Developer/notes-api", branch: "dev" },
+      { name: "website", path: "~/Code/website", branch: "main" }
+    ];
+    const repos = repoList.map((r, i) => Object.assign({}, r, { cls: "opt" + (s.repo === i ? " sel" : ""), pressed: s.repo === i, pick: () => this.setState({ repo: i }) }));
+    const chips = SUGGESTIONS.map((t) => ({ text: t, pick: () => this.setState({ goal: t }) }));
+    const workers = WORKERS.map((w, i) => ({ label: w.label, status: w.status, statusW: w.status.length, color: w.color, delay: w.delay, bot: BOTS[w.bot], x: w.cx - 48, labelX: w.cx - 120, dropX: w.cx - 2, show: s.ls >= 3 + i }));
+    const tr = (kind, on) => "tr " + kind + (on ? " on" : "");
+    let primaryLabel = "Continue", primaryDisabled = false, primary = () => this.go(step + 1);
+    if (step === 1) {
+      if (s.bootStage === 0) { primaryLabel = "Boot capcomd"; primaryDisabled = missing; primary = () => this.boot(); }
+      else if (booting) { primaryLabel = "Booting…"; primaryDisabled = true; }
+    }
+    if (step === 4) { primaryLabel = "Launch crew"; primaryDisabled = !s.goal.trim(); primary = () => this.launch(); }
+    return {
+      bg: BG, hero: BOTS.hero, miniP: BOTS.miniP, miniO: BOTS.miniO,
+      bootBot: s.bootStage === 4 ? BOTS.bootHappy : BOTS.boot, planner: BOTS.planner,
+      isS0: step === 0, isS1: step === 1, isS2: step === 2, isS3: step === 3, isS4: step === 4, isS5: step === 5, isS6: step === 6, doneBot: BOTS.bootHappy,
+      canSkip: step === 4, skip: () => this.go(6), backToGoal: () => this.go(4),
+      showDots: step < 5, stepLabel: "Step " + (step + 1) + " of 5",
+      dots: [0, 1, 2, 3, 4].map((i) => ({ cls: "dot" + (i === step ? " on" : i < step ? " done" : "") })),
+      start: () => this.go(1),
+      cliMissing: missing, cliReady: !missing,
+      copyLabel: s.copied ? "Copied" : "Copy",
+      copy: () => { try { navigator.clipboard.writeText("brew install MarvinAmador7/tap/capcomd").catch(() => {}); } catch (e) {} this.setState({ copied: true }); this.later(1400, () => this.setState({ copied: false })); },
+      checkAgain: () => this.setState({ cliFixed: true }),
+      rows: rows, fillPx: Math.min(120, Math.max(0, s.bootStage - 1) * 60),
+      login: s.login, toggleLogin: () => this.setState({ login: !s.login }), booting: booting,
+      bubble: missing ? "Hmm, I can't find capcomd." : BUBBLE[s.bootStage],
+      agents: agents, places: places, dockerLogo: LOGO.docker, repos: repos, repoName: repoList[s.repo].name,
+      goal: s.goal, setGoal: (e) => this.setState({ goal: e.target.value }), chips: chips,
+      l: { planner: s.ls >= 1, trV: tr("v", s.ls >= 2), trH: tr("h", s.ls >= 2), trD: tr("v", s.ls >= 2), packets: s.ls >= 5, done: s.ls >= 6 },
+      workers: workers,
+      restart: () => { this.clear(); this.setState({ step: 0, bootStage: 0, codex: "out", goal: "", ls: 0 }, () => this.playIntro()); },
+      font: FONTS[this.props.font] || FONTS["League Spartan + Figtree"],
+      winCls: "win" + (s.intro ? " intro" : ""), heroRef: this.heroRef, heroDy: s.heroDy,
+      liftCls: "lift" + (s.introPlayed && !s.intro ? " go" : ""), welcomeCls: s.introPlayed ? "played" : "",
+      wd: s.introPlayed ? { sub: 0.68, cta: 0.8, foot: 0.92 } : { sub: 0.34, cta: 0.46, foot: 0.58 }, introProps: s.introProps, laptopCls: "laptop" + (s.intro ? "" : " away"),
+      comets: COMETS, minis: POUR.minis, sparks: POUR.sparks, lap: POUR.lap, heroCls: "herowrap" + (s.introPlayed ? " played" : ""),
+      showFooter: step >= 1 && step <= 4,
+      back: () => this.go(step - 1),
+      primaryLabel: primaryLabel, primaryDisabled: primaryDisabled, primary: primary
+    };
+  }
+}
+</script>
+</body>
+</html>

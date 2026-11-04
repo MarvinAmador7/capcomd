@@ -44,4 +44,13 @@ final class FirstRunTests: XCTestCase {
     XCTAssertTrue(VersionSkew.appOlder(app: "0.9.0", daemon: "0.10.0").message.contains("brew upgrade capcomd-app"))
     XCTAssertTrue(VersionSkew.daemonOlder(app: "0.10.0", daemon: "0.9.0", restartFixes: true).message.contains("Restart"))
   }
+
+  /// The onboarding's "Start capcomd when I log in": the same login service, at login or now only.
+  func testServiceAtLoginOrNowOnly() {
+    XCTAssertEqual(FirstRun.serviceArguments(atLogin: true), ["service", "install", "--json"])
+    XCTAssertEqual(FirstRun.serviceArguments(atLogin: false), ["service", "install", "--json", "--no-login"])
+    XCTAssertEqual(FirstRun.parseServiceInstalled(#"{"installed":true,"loaded":true,"running":true,"port":6420}"#), true)
+    XCTAssertEqual(FirstRun.parseServiceInstalled(#"{"installed":false,"loaded":false,"running":true}"#), false)
+    XCTAssertNil(FirstRun.parseServiceInstalled("usage: capcomd service"))
+  }
 }

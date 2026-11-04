@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- The Mac app welcomes you the first time you open it: the capcomd bot comes on the air on your desktop, his crew pours
+  out of his laptop, and the window opens around him. Then, in five short steps, it finds the capcomd command line
+  tool, starts capcomd (at every login, or only now: your choice), pairs this Mac, signs in Claude Code and Codex,
+  picks where agents work (Docker on this Mac or boxd in the cloud), picks a first project from the Git repositories
+  on your Mac, and launches your crew on a first goal (or skip it). It shows once; finishing or skipping is remembered,
+  and **Settings › General › Show Onboarding Again** brings it back. With Reduce Motion on, it opens without the intro.
+  Until you've finished it, it also comes back when the app can't reach or pair with capcomd.
+- Codex shows OpenAI's mark in the app (Settings, the composer, the bots' badges) instead of a placeholder glyph.
+- `capcomd service install --no-login` starts capcomd in the background now without starting it at your next login.
+- `GET /v1/projects/known` (capability `projects.known`) lists capcomd's projects with their checkout folders, and
+  which is the default.
 - The Mac app is one app now: the window with each run's agents side by side, and the menu bar item with approvals
   and notifications. Install it with Homebrew (it brings the CLI along): `brew install --cask MarvinAmador7/tap/capcomd-app`.
   Each release also has it as `capcomd-app-X.Y.Z.zip` (universal: Apple silicon and Intel). If you built the separate

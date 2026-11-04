@@ -31,6 +31,9 @@ struct CapcomdApp: App {
     // A panel row, a notification: the window on that run, at that agent's column.
     m.openInWindow = { [weak d] rid, aid in MainWindow.show(); d?.show(run: rid, agent: aid) }
     _session = State(initialValue: s); _desk = State(initialValue: d); _model = State(initialValue: m)
+    // The first-run onboarding (design/onboarding): decided at launch (AppDelegate), held to the main window meanwhile.
+    OnboardFonts.register()
+    OnboardingController.shared = OnboardingController(session: s, app: m, desk: d)
     s.begin()
   }
 
@@ -49,6 +52,7 @@ struct CapcomdApp: App {
     Window("capcomd", id: MainWindow.id) {
       DeskWindowContent(model: desk)
         .modifier(CaptureOpener())   // also without the menu bar item (Keep in Dock, menu bar off)
+        .background(MainWindowHold())   // waits while the first onboarding is up
         #if DEBUG || DESK_PROBE
         .task { DeskDebug.start(desk) }
         #endif
@@ -78,6 +82,7 @@ struct CapcomdApp: App {
   static var opener: OpenWindowAction?
   /// Brings back the Dock icon and ⌘-Tab, activates the app and shows the window.
   static func show() {
+    OnboardingController.holdsMainWindow = false
     AppPresence.windowOpening()
     if let w = NSApp.windows.first(where: { $0.identifier?.rawValue == id || $0.identifier?.rawValue.hasPrefix("\(id)-") == true }) {
       w.makeKeyAndOrderFront(nil)
@@ -136,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     MainActor.assumeIsolated {
       AppPresence.windowOpening()   // the window opens at launch; `swift run` starts .prohibited
       AppPresence.observe()
+      OnboardingController.shared?.launched()
     }
   }
   func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
