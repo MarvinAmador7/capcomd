@@ -822,7 +822,10 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
   // Children branch from the run's target (a staging branch) when the operator set one.
   const target = await runTarget(runId);
-  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
+  // Its title (the driver's --title, its parent's, the user's or its own), for its commit's subject; not one derived from the brief.
+  const named = shownTitle(a.titleState, a.task);
+  const title = named.title && named.titleSource !== "derived" ? named.title : null;
+  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
   const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
   return { kind: "pushed", pushed, vmRpc: !!vmRpc };
 }

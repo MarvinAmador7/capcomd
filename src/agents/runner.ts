@@ -37,6 +37,8 @@ export interface AgentTask {
   /** Clone URL (token-free). Credentials come from the provider's git credential hook. */
   repoUrl: string;
   goal: string;
+  /** Its title as it starts (the driver's `--title`, its parent's or the user's): a commit subject before the brief. */
+  title?: string;
   rework?: boolean;
   conflictFiles?: string[];
   /** verify's reviewer: check out this commit, review it, never commit or push (goal = the review brief). With
@@ -188,12 +190,24 @@ export function logLinesOf(ev: AgentEvent): string[] {
 export function commitSubject(goal: string, max = 72): string {
   const line = goal.split("\n")[0]!.trim().replace(/\s+/g, " ");
   if (line.length <= max) return line;
-  const cut = line.slice(0, max - 1);
+  let cut = line.slice(0, max - 1);
+  // A parenthesis the cut leaves open is dropped with what's in it ("for tinycalc (TypeScript on Bun, strict…").
+  const open = unclosedParen(cut);
+  if (open > max / 3) return cut.slice(0, open).replace(/[\s,;:(\-]+$/, "");
   const at = cut.lastIndexOf(" ");
-  return `${(at > max / 2 ? cut.slice(0, at) : cut).replace(/[\s,;:(\-]+$/, "")}…`;
+  cut = at > max / 2 ? cut.slice(0, at) : cut;
+  return `${cut.replace(/[\s,;:(\-]+$/, "")}…`;
 }
 
-const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+/** Where the first "(" with no ")" after it is, or -1. */
+function unclosedParen(s: string): number {
+  const stack: number[] = [];
+  for (let i = 0; i < s.length; i++) { if (s[i] === "(") stack.push(i); else if (s[i] === ")") stack.pop(); }
+  return stack.length ? stack[0]! : -1;
+}
+
+/** The first letter up, unless the subject starts with an identifier (printExpr, src/x.ts, parse_expr, v2): kept as written. */
+const cap = (x: string) => (/^\S*(?:[a-z][A-Z]|[_$./\\0-9])/.test(x) ? x : x.charAt(0).toUpperCase() + x.slice(1));
 /** The first sentence of `text`'s first line with words: markdown and a "Task:"/"Summary:" label dropped. */
 function firstSentence(text: string): string {
   for (const raw of text.split(/\r?\n/)) {
@@ -204,19 +218,73 @@ function firstSentence(text: string): string {
   }
   return "";
 }
-/** A task brief as a subject: role framing ("You are …", "Your task is to …") dropped, its first sentence. */
+
+/** Verbs a commit subject starts with, in the imperative. Their past and -ing forms are recognized too (VERB_FORMS). */
+const VERBS = ("add adjust align allow apply avoid build bump cache change check clean clarify configure connect convert copy correct cover create cut " +
+  "define delete deprecate describe document drop emit enable ensure expose export extend extract finish fix format generate guard handle harden " +
+  "hide implement import improve inline introduce keep land lay limit link load log make map mark merge migrate model move normalize note optimize " +
+  "parse pass pin plumb polish port prepare preserve print protect prune read record reduce refactor register reject remove rename render reorder " +
+  "replace report require reset resolve restore restructure return reuse revert rewrite rework run scaffold scope separate serialize set ship show " +
+  "simplify skip sort specify split stop store strip stub support switch sync test tidy tighten track trim tweak unify update upgrade use validate " +
+  "verify wire wrap write").split(" ");
+const IRREGULAR: Record<string, string> = { built: "build", made: "make", wrote: "write", written: "write", rewrote: "rewrite", rewritten: "rewrite", laid: "lay",
+  ran: "run", kept: "keep", cut: "cut", set: "set", split: "split", read: "read", shown: "show", hid: "hide", hidden: "hide" };
+const VERB_SET = new Set(VERBS);
+/** A lead word's imperative (added, adding, add → add; built → build), or null when it isn't one of VERBS. Not the -s
+ *  form: "Tests pass" is not "Test pass". */
+function imperativeOf(word: string): string | null {
+  const w = word.toLowerCase();
+  if (VERB_SET.has(w)) return w;
+  if (IRREGULAR[w]) return IRREGULAR[w]!;
+  const tries = w.endsWith("ied") ? [`${w.slice(0, -3)}y`] : w.endsWith("ed") ? [w.slice(0, -2), w.slice(0, -1), w.slice(0, -3)]
+    : w.endsWith("ying") ? [w.slice(0, -3)] : w.endsWith("ing") ? [w.slice(0, -3), `${w.slice(0, -3)}e`, w.slice(0, -4)] : [];
+  return tries.find((t) => VERB_SET.has(t)) ?? null;
+}
+const verbCap = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
+/** "Adding the lexer" → "Add the lexer"; a sentence whose first word is no verb stays as it is. */
+function imperativeLead(s: string): string {
+  const [first, ...rest] = s.split(" ");
+  const v = first ? imperativeOf(first) : null;
+  return v ? [verbCap(v), ...rest].join(" ") : s;
+}
+
+/**
+ * A summary's first sentence as a commit subject (imperative), or null when it doesn't read like one. "I added X" →
+ * "Add X"; "X and Y are now implemented in Z" → "Implement X and Y in Z"; "Added X" → "Add X". A sentence that
+ * doesn't say what was done ("All three fixes are in, and …", "Tinycalc (TypeScript on Bun)", "Done!") gives null.
+ */
+export function summarySubject(summary: string): string | null {
+  let s = firstSentence(summary).replace(/^(?:ok(?:ay)?|great|sure|alright|so|now|finally)\b[,!:]?\s+/i, "");
+  if (!s || /^(?:done|all done|here(?:'s| is)|i have finished|finished|summary)\b/i.test(s)) return null;
+  let out: string | null = null;
+  const said = /^(?:i|we)(?:'ve|'d| have| had)?\s+(?:now\s+|just\s+|also\s+|then\s+)?(\S+)\s+(.+)$/i.exec(s);
+  const passive = /^(.+?)\s+(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:all\s+|fully\s+)?(\S+)(?:\s+(.*))?$/i.exec(s);
+  if (said) { const v = imperativeOf(said[1]!); out = v ? `${verbCap(v)} ${said[2]}` : null; }
+  else if (passive && /(?:ed|en|ilt|ade|ote)$/i.test(passive[2]!) && imperativeOf(passive[2]!)) out = `${verbCap(imperativeOf(passive[2]!)!)} ${passive[1]}${passive[3] ? ` ${passive[3]}` : ""}`;
+  else {
+    const [first, second, third] = s.split(" ");
+    // "Build is green", "Test suite passes": a noun that happens to be a verb, not what was done.
+    if (first && imperativeOf(first) && ![second, third].some((x) => x && /^(?:is|are|was|were|pass(?:es|ed)?|fails?|works?)$/i.test(x))) out = imperativeLead(s);
+  }
+  if (!out) return null;
+  out = out.replace(/[\s,;:]+(?:and|with|so|but)?\s*$/i, "").trim();
+  return out.split(" ").length >= 2 && out.length <= 100 && !/[:,]$/.test(out) ? out : null;
+}
+
+/** A task brief as a subject: role framing ("You are …", "Your task is to …") dropped, its first sentence, its lead verb
+ *  in the imperative ("You are landing X" → "Land X"). */
 export function taskSubject(goal: string): string {
   const s = firstSentence(goal).replace(/^(?:you are|you're|you will be|your (?:task|job) is(?: to)?|please)\s+/i, "").replace(/^(?:going|asked|tasked|responsible) (?:to|with|for)\s+/i, "");
-  return s ? cap(s) : goal.split("\n")[0]!.trim();
+  return s ? cap(imperativeLead(s)) : goal.split("\n")[0]!.trim();
 }
-/** What a capcomd commit's subject says: the agent's own commit message, else its summary's first sentence (when it reads
- *  like one), else the title it gave itself, else the task brief's first sentence; never the raw brief. */
+/** What a capcomd commit's subject says: the agent's own commit message, else its summary's first sentence as a subject
+ *  (when one can be made of it: summarySubject), else its title (its own, else the driver's or its parent's), else the
+ *  task brief's first sentence; never the raw brief. */
 export function subjectFor(o: { own?: string | null; summary?: string | null; title?: string | null; goal: string }): string {
   const own = o.own?.trim();
   if (own) return own;
-  const sum = firstSentence(o.summary ?? "");
-  const words = sum.split(" ").length;
-  if (sum && words >= 3 && sum.length <= 100 && !/[:,]$/.test(sum) && !/^(?:done|all done|ok|okay|here(?:'s| is)|i have finished|finished|summary)\b/i.test(sum)) return cap(sum);
+  const sum = summarySubject(o.summary ?? "");
+  if (sum) return cap(sum);
   const title = o.title?.trim();
   if (title) return cap(title);
   return taskSubject(o.goal);
@@ -819,7 +887,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     if (status.stdout.trim() || limit) {
       // The agent's own words for the change: its last commit's subject (not capcomd's), else its summary or title.
       const own = (await git(["log", "-1", "--format=%s", "--invert-grep", "--grep=^Capcomd-Task: ", `origin/${task.target}..HEAD`], repo)).stdout.trim();
-      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${commitSubject(subjectFor({ own, summary: limit ? null : r.text(state.resultText ?? ""), title: lastTitle, goal: task.goal }))}`;
+      const subject = `${limit ? `WIP (stopped: ${limit}) ` : ""}${commitSubject(subjectFor({ own, summary: limit ? null : r.text(state.resultText ?? ""), title: lastTitle ?? task.title ?? null, goal: task.goal }))}`;
       const msg = `${subject}\n\n${r.text(state.resultText ?? "").slice(0, 1500)}\n\nCapcomd-Task: ${key}\nCapcomd-Epoch: ${task.epoch}\nCapcomd-Agent: ${name}@${version}\n${limit ? `Capcomd-Stop: ${limit}\n` : ""}`;
       await provider.upload(vmId, `${W}/commit-msg.txt`, new TextEncoder().encode(msg));
       must(await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", ...(limit ? ["--allow-empty"] : []), "-F", `${W}/commit-msg.txt`], repo), "git commit");

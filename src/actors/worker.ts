@@ -251,6 +251,8 @@ export type PushBranchParams = {
   review?: { sha: string; branch: string; target: string; targetSha?: string };
   /** Report mode: read-only work; the final message is the result, nothing is pushed. */
   report?: boolean;
+  /** The agent's title when it starts (the driver's, its parent's or the user's): its commit's subject before the brief. */
+  title?: string;
 };
 
 /**
@@ -383,7 +385,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     const items = scope ? itemWriter(scope, workerId) : null;
     const res = await runAgent(adapter, provider, vmId, {
       runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
-      goal: params.goal ?? `Task ${taskId}`, rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
+      goal: params.goal ?? `Task ${taskId}`, ...(params.title ? { title: params.title } : {}), rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
       ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
     }, setup.config!, {
       apiKey,

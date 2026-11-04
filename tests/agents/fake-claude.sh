@@ -12,6 +12,7 @@
 #           error differing only in numbers, then finish normally (stuck: failing)
 #   [listen] edit, then work for ~8s ([listen:N]: ~N s), writing each message it reads on stdin to messages.txt (send mid-run)
 #   [steps] read two files (thinking in between) before the edit and run the tests after it, all inside a second (agent.step)
+#   [chat] its final message reads like chat, not like a commit subject
 #   [review-check] (a reviewer) run sh check.sh in the checkout; the final message is a verdict saying whether it passed
 #   [title:WORDS] name its tab: a Bash call `capcomd title "WORDS"`, run (the shim's answer and exit code in ../title-out.txt)
 #   [title-chained:WORDS] a Bash call `capcomd title WORDS && rm -rf /`, never run (not a rename)
@@ -136,6 +137,7 @@ case "$prompt" in *"stopped earlier by"*) ;; *"[wip]"*) sleep 120;; esac
 emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'
 result="fixed sum"
 [[ "$prompt" == *"[leak]"* ]] && result="done with $ANTHROPIC_API_KEY"
+[[ "$prompt" == *"[chat]"* ]] && result="All three fixes are in, and the tests pass."
 # [review-check]: a reviewer that runs the project's tests (sh check.sh) in its checkout and gives that as its verdict
 if [[ "$prompt" == *"[review-check]"* ]]; then
   if sh ./check.sh >/dev/null 2>&1; then result='{\"passed\":true,\"reasons\":[\"check.sh passes\"]}'; else result='{\"passed\":false,\"reasons\":[\"check.sh fails\"]}'; fi

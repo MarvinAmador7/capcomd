@@ -175,6 +175,16 @@ describe("warm workspace", () => {
     await expect(runClaudeCode(d.provider, d.id, review({ targetSha: (await r.sha("refs/heads/main"))! }), d.cfg, { apiKey: KEY })).rejects.toThrow(/conflicts with main/);
   }, 90_000);
 
+  test("commit subject: a chatty summary gives way to the agent's title (the driver's --title), not the brief", async () => {
+    const r = await project();
+    const a = await sandbox(r);
+    const res = await runClaudeCode(a.provider, a.id, task(r, { goal: "You are landing the shared contract for widgets [chat]", title: "sum helper" }), a.cfg, { apiKey: KEY });
+    expect((await new Git(r.bare).ok(["log", "-1", "--format=%s", res.sha])).trim()).toBe("Sum helper");
+    const b = await sandbox(r);
+    const res2 = await runClaudeCode(b.provider, b.id, task(r, { taskId: "task-2", branch: taskBranch("r1", "task-2"), goal: "You are landing the shared contract for widgets [chat]" }), b.cfg, { apiKey: KEY });
+    expect((await new Git(r.bare).ok(["log", "-1", "--format=%s", res2.sha])).trim()).toBe("Land the shared contract for widgets [chat]");
+  }, 60_000);
+
   test("falls back to the clone: lockfile changed, stale (not in the target's history), another repo, already used", async () => {
     const r = await project();
     const t = task(r);
