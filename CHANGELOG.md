@@ -17,6 +17,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   profile naming a provider that isn't there, or whose plugin the daemon has disabled, is refused when it is
   validated (`capcomd agents validate`, reading the agents file), with the providers you can use. In
   `capcomd agents schema`, `provider` and `effort` are strings checked against the provider rather than fixed lists.
+  `capcomd plugins validate <plugin> --conformance` now runs the agent provider suite too (no agent CLI is started).
 - New profile field `toolMode: "orchestrate"` (default `"execute"`) for agents that plan and spawn but never change
   files: Claude Code runs with only `Read, Glob, Grep, LS, Bash(capcomd:*)` and the edit tools denied, Codex with
   `--sandbox read-only`; capcomd never commits or pushes its work, and refuses to verify or merge its own ref ("an

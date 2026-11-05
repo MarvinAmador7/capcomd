@@ -1077,8 +1077,12 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
   rejects, `classifyError` returns `not_found` for a destroyed machine and `transient` for a refused connection, and a
   `SeamCall.signal` abort during `exec` rejects `timeout` within 5 s.
 - **agent**: recorded streams (`apps/tui/fixtures`, `packages/agent-thread/fixtures`) through `parse` produce the
-  golden `AgentRunState`; `guard` fires at `maxTurns`; `outcome` of each fixture matches; `command` writes to
-  `ctx.jsonl`; `toolPolicies.orchestrate` contains no edit or write tool.
+  golden `AgentRunState`; `guard` fires at `maxTurns`, or `command` hands the limit to a CLI that enforces it itself
+  (Claude Code `--max-turns`); `outcome` of each fixture matches; `command` writes to `ctx.jsonl`; `parse` returns null
+  for a foreign line and redacts every string; `toolPolicies.orchestrate` contains no edit or write tool (and, with no
+  allowlist, has `sandbox: "read-only"`). The suite is `packages/plugin/src/agent-conformance.ts`; every method it calls
+  is pure, so `capcomd plugins validate --conformance` runs it with no streams, and a plugin's own tests pass theirs to
+  `testkit.conformance.agent`.
 - **forge**: against a local bare repository (`tests/merge/gitfixture.ts`): `land direct` is a CAS (a moved target is
   `conflict`), `land` twice with the same `mrgId` is `already: true`, `pr` mode without `pullRequests` rejects
   `unsupported`, `matches` is pure.
@@ -1399,7 +1403,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0 | 2026-11-04 | First normative version: 21 hooks, 3 seams (40 methods), 22 services (77 primitives), protocol 1, manifest `capcomd.plugin/v1`. Includes the super-agent primitives (§16). |
 | 1.0.1 | 2026-11-05 | With the kernel's hook sites (§17.2 step 2): which process a hook fires in (§6.1); no listener, no stop-time denial (§5.5); `run.creating` at `POST /v1/runs` takes only `sandbox`; `agent.preparing`'s site, and `skills`/`env` refused until step 8; `agent.changed` `started` has a null `machine`; `verify.judging` after the checks pass; `merge.landing`'s `fastPath`/`sha`, a satisfied hold, no dry-run gate; run-stream plugin events from step 5. |
 | 1.0.2 | 2026-11-05 | With sandbox providers as plugins (§17.2 step 3): the sandbox conformance suite's home (§7.2); the Docker sweep is the seam's `sweep`, called by the kernel (§15.1). |
-| 1.0.3 | 2026-11-05 | With the agent providers as plugins (§17.2 step 4): §7.3's `AgentConfig` gains `auto` and `usdPerMtok`, `toolPolicies.orchestrate` gains `sandbox`, `redactJson`, where the active providers come from, the runner's kind; §16.1's Claude Code policy denies no bare `Bash`, Codex's is its sandbox, v1 profiles spell the mode `toolMode`, the refusal's relay.v1 code, and the policy applied as the config is built. |
+| 1.0.3 | 2026-11-05 | With the agent providers as plugins (§17.2 step 4): §7.3's `AgentConfig` gains `auto` and `usdPerMtok`, `toolPolicies.orchestrate` gains `sandbox`, `redactJson`, where the active providers come from, the runner's kind; §16.1's Claude Code policy denies no bare `Bash`, Codex's is its sandbox, v1 profiles spell the mode `toolMode`, the refusal's relay.v1 code, and the policy applied as the config is built; §14.2's agent suite: the turn limit may be the CLI's, `parse`'s null and redaction, a read-only sandbox for a policy with no allowlist, where it lives. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

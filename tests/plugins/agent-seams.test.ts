@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { PluginHost, type Candidate } from "../../packages/plugin/src/host/host";
 import type { PluginContext, PluginModule } from "../../packages/plugin/src/context";
 import type { AgentProvider, AgentRunState } from "../../packages/plugin/src/seams";
+import { testkit } from "../../packages/plugin/src/testkit";
+import { runAgentConformance } from "../../packages/plugin/src/agent-conformance";
 import { adapterFor, claudeAdapter, codexAdapter } from "../../src/agents/adapters";
 import { CLAUDE_CODE_VERSION, CODEX_VERSION, loadAgentConfig } from "../../src/agents/config";
 import { AGENTS_SCHEMA, applyOverrides, providerDefaultEffort, providerEfforts, resolveAgent, validateFile, validateSpec, type AgentSpec } from "../../src/agents/profiles";
@@ -42,7 +44,7 @@ describe("the built-in agent plugins (§7.3, §17.1)", () => {
   test("agent-claude and agent-codex load in the host and register the claude and codex seams", async () => {
     const h = host();
     const listed = await h.start(builtins());
-    expect(listed.map((p) => [p.name, p.state, p.seams])).toEqual([
+    expect(listed.filter((p) => p.name.startsWith("agent-")).map((p) => [p.name, p.state, p.seams])).toEqual([
       ["agent-claude", "active", [{ kind: "agent", name: "claude" }]],
       ["agent-codex", "active", [{ kind: "agent", name: "codex" }]],
     ]);
@@ -110,6 +112,32 @@ describe("a profile's provider is an active seam's name (§7.1)", () => {
     expect([a.kind, a.bin, a.pinnedVersion(cfg)]).toEqual(["echo", "echo-agent", CODEX_VERSION]);
     expect(a.command(ctx(cfg), q)).toBe("'agent' --model m1 > '/j'");
     await h.stop();
+  });
+});
+
+// §14.2: the test kit's agent suite, as every agent plugin runs it, with the recorded streams and their golden state.
+const stream = (file: string) => readFileSync(join(SESSIONS, file), "utf8");
+testkit.conformance.agent(() => claude, { name: "claude", streams: [
+  { name: "claude-2.1.303", text: stream("claude-2.1.303.jsonl"), state: { done: true, turns: 9, costUsd: 0.42, stopReason: "success" }, outcome: { ok: true, stopReason: "success" } },
+  { name: "claude-2.1.303-usage-limit", text: stream("claude-2.1.303-usage-limit.jsonl"), outcome: { ok: false } },
+] });
+testkit.conformance.agent(() => codex, { name: "codex", streams: [
+  { name: "codex-0.163.0", text: stream("codex-0.163.0.jsonl"), state: { done: true, inputTokens: 1000, outputTokens: 150 } },
+  { name: "codex-0.163.0-turn-failed", text: stream("codex-0.163.0-turn-failed.jsonl"), exitCode: 1, outcome: { ok: false, stopReason: "turn_failed" } },
+] });
+
+describe("the agent suite in `capcomd plugins validate --conformance` (§14)", () => {
+  test("a built-in agent provider passes it; a policy that lets an orchestrator edit fails it", () => {
+    const p = Bun.spawnSync([process.execPath, join(ROOT, "src", "cli", "index.ts"), "plugins", "validate", "agent-codex", "--conformance", "--json"], {
+      env: { ...process.env, CAPCOMD_HOME: mkdtempSync(join(tmpdir(), "capcomd-agent-seams-home-")), CAPCOMD_NO_CONFIG: "1" }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(p.exitCode).toBe(0);
+    const v = JSON.parse(p.stdout.toString());
+    const names = v.plugins[0].conformance.map((c: { name: string; ok: boolean; skipped: boolean }) => [c.name, c.ok, c.skipped]);
+    expect(names).toContainEqual(["toolPolicies.orchestrate contains no edit or write tool (§16.1)", true, false]);
+    expect(names.every(([, ok, skipped]: [string, boolean, boolean]) => ok && !skipped)).toBe(true);
+    const loose: AgentProvider = { ...claude, describe: () => ({ ...claude.describe(), toolPolicies: { orchestrate: { allowed: ["Read", "Edit"], disallowed: [] } } }) };
+    expect(runAgentConformance(loose, { name: "claude" }).find((r) => !r.ok)?.message).toBe("the orchestrate allowlist names Edit");
   });
 });
 

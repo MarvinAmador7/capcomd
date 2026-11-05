@@ -11,6 +11,7 @@ import type { PluginSummary } from "../../../packages/plugin/src/host/host";
 import type { PluginModule } from "../../../packages/plugin/src/context";
 import type { ConformanceResult, SandboxConformanceOptions } from "../../../packages/plugin/src/conformance";
 import type { ManifestIssue } from "../../../packages/plugin/src/load";
+import type { AgentProvider, SandboxProvider } from "../../../packages/plugin/src/seams";
 
 const USAGE = "usage: capcomd plugins list [--json] | capcomd plugins validate [<dir>|<name>] [--conformance] [--json]";
 
@@ -100,16 +101,19 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
   try { await testkit.loadDispose(manifest, mod!); result("load, dispose and load again (§14.1)", { ok: true, ms: Date.now() - t0 }); } catch (e) {
     result("load, dispose and load again (§14.1)", { ms: Date.now() - t0, message: (e as Error).message });
   }
+  const { runAgentConformance } = await import("../../../packages/plugin/src/agent-conformance");
   for (const s of manifest.contributes?.seams ?? []) {
-    if (s.kind !== "sandbox") { result(`the ${s.kind} seam's conformance suite`, { ok: true, skipped: true, message: `the ${s.kind} suite lands with ${s.kind === "agent" ? "agent providers" : "forges"} as plugins` }); continue; }
+    if (s.kind === "forge") { result(`the ${s.kind} seam's conformance suite`, { ok: true, skipped: true, message: "the forge suite lands with forges as plugins" }); continue; }
     const fake = testkit.fakeContext(manifest, undefined, t.dir ? { dir: t.dir } : {});
     try {
       await testkit.load(fake, mod!);
-      const seam = fake.seam("sandbox");
-      if (!seam) { result(`the sandbox seam ${s.name} is registered`, { message: "activate registered no sandbox seam" }); continue; }
-      v.conformance.push(...(await runSandboxConformance(seam, { name: s.name, ...(t.conformance ?? {}) })));
+      const seam = fake.seam(s.kind);
+      if (!seam) { result(`the ${s.kind} seam ${s.name} is registered`, { message: `activate registered no ${s.kind} seam` }); continue; }
+      // The agent suite runs no CLI (its methods are pure): the recorded streams it replays are the plugin's own tests'.
+      if (s.kind === "agent") v.conformance.push(...runAgentConformance(seam as AgentProvider, { name: s.name }));
+      else v.conformance.push(...(await runSandboxConformance(seam as SandboxProvider, { name: s.name, ...(t.conformance ?? {}) })));
     } catch (e) {
-      result(`the sandbox seam ${s.name} loads`, { message: (e as Error).message });
+      result(`the ${s.kind} seam ${s.name} loads`, { message: (e as Error).message });
     } finally { await fake.dispose(); }
   }
   v.ok = v.conformance.every((c) => c.ok);
