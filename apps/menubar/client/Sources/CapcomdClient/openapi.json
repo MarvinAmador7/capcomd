@@ -10932,6 +10932,25 @@
           "askedBy": {
             "description": "The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge",
             "type": "string"
+          },
+          "heldBy": {
+            "type": "object",
+            "properties": {
+              "plugin": {
+                "type": "string",
+                "description": "The plugin that held the merge"
+              },
+              "reason": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text (here the plugin's own words): render as plain text"
+              }
+            },
+            "required": [
+              "plugin",
+              "reason"
+            ],
+            "description": "Set when a plugin held the merge for a person's approval (merge.landing): who held it and why. Approving it satisfies only this hold; absent when the target is protected and no plugin held it"
           }
         },
         "required": [
@@ -11477,6 +11496,25 @@
               "askedBy": {
                 "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
                 "type": "string"
+              },
+              "heldBy": {
+                "description": "merge: a plugin held it for this approval (merge.landing): the plugin and its reason, which the question repeats. Approving satisfies only this hold: a merge another plugin then holds asks again. Absent when only the target's protection asks, and on older daemons",
+                "type": "object",
+                "properties": {
+                  "plugin": {
+                    "type": "string",
+                    "description": "The plugin that held the merge"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "x-untrusted": true,
+                    "description": "Agent-written text (here the plugin's own words): render as plain text"
+                  }
+                },
+                "required": [
+                  "plugin",
+                  "reason"
+                ]
               }
             },
             "additionalProperties": {},
@@ -13169,6 +13207,25 @@
                     "askedBy": {
                       "description": "merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons",
                       "type": "string"
+                    },
+                    "heldBy": {
+                      "description": "merge: a plugin held it for this approval (merge.landing): the plugin and its reason, which the question repeats. Approving satisfies only this hold: a merge another plugin then holds asks again. Absent when only the target's protection asks, and on older daemons",
+                      "type": "object",
+                      "properties": {
+                        "plugin": {
+                          "type": "string",
+                          "description": "The plugin that held the merge"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "x-untrusted": true,
+                          "description": "Agent-written text (here the plugin's own words): render as plain text"
+                        }
+                      },
+                      "required": [
+                        "plugin",
+                        "reason"
+                      ]
                     }
                   },
                   "additionalProperties": {},
