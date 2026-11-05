@@ -1,8 +1,19 @@
+import { afterAll, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Git } from "../../src/merge/git";
 import { loadMergeConfig, type MergeConfig } from "../../src/merge/config";
+
+/**
+ * For an engine-free test file: the checks look up the run's sandbox on CAPCOMD_ENDPOINT, which would otherwise be the
+ * default :6420 (a developer's daemon). Points it at a closed port for the file, and restores it afterwards.
+ */
+export function withoutEngine() {
+  const saved = process.env.CAPCOMD_ENDPOINT;
+  beforeAll(() => { process.env.CAPCOMD_ENDPOINT = "http://127.0.0.1:9"; });
+  afterAll(() => { if (saved === undefined) delete process.env.CAPCOMD_ENDPOINT; else process.env.CAPCOMD_ENDPOINT = saved; });
+}
 
 /** A local bare-repo "git server" with a seeded main branch, plus a config pointing at it. */
 export async function bareRepo(opts: { mode?: "pr" | "direct"; strategy?: "squash" | "rebase" | "merge"; test?: string; extraEnv?: Record<string, string> } = {}) {

@@ -1,6 +1,8 @@
 // Regression eval for ADR-016 primitives (fakes; no VMs, no model calls). Runs the skill's
 // recipes against a fresh engine and checks correctness plus latency against baseline.json.
-//   bun evals/primitives/run.ts [--update-baseline]
+//   bun evals/primitives/run.ts [--update-baseline] [--report-latency]
+// The baseline is a developer machine's; --report-latency (CI's shared runners, whose speed varies) prints a latency
+// regression without failing on it, so only correctness fails the run.
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -60,8 +62,11 @@ await run("best-of-3 + cancel rest", async () => {
 await run("nested supervisor + cancel propagation", async () => {
   const { runId } = await P.runNew({ budget: { usd: 8 }, key: `nest-${tag}` });
   const root = await P.spawnAgent({ runId, profile: "sup", task: "plan", key: "root", budget: { usd: 8 }, start: false });
-  const mid = await P.spawnAgent({ runId, parent: root.agentId, profile: "sup", task: "sub", key: "mid", start: false });
-  const leaf = await P.spawnAgent({ runId, parent: mid.agentId, profile: "coder", task: "leaf", key: "leaf", start: false });
+  // budgetShare caps what a child may ask for (ADR-019 §7: nothing is carved unless asked): sup's 0.5 of $8, then of $4.
+  const mid = await P.spawnAgent({ runId, parent: root.agentId, profile: "sup", task: "sub", key: "mid", budget: { usd: 4 }, start: false });
+  const greedy = await P.spawnAgent({ runId, parent: mid.agentId, profile: "coder", task: "leaf", key: "greedy", budget: { usd: 3 }, start: false }).then(() => "accepted", () => null);
+  if (greedy) return "budgetShare cap not enforced";
+  const leaf = await P.spawnAgent({ runId, parent: mid.agentId, profile: "coder", task: "leaf", key: "leaf", budget: { usd: 2 }, start: false });
   if (mid.budget.usd !== 4 || leaf.budget.usd !== 2) return `carve ${mid.budget.usd}/${leaf.budget.usd}`;
   const deep = await P.spawnAgent({ runId, parent: leaf.agentId, profile: "coder", task: "too deep", start: false }).then(() => "accepted", () => null);
   if (deep) return "depth limit not enforced";
@@ -80,6 +85,7 @@ await engine.stop();
 const basePath = new URL("./baseline.json", import.meta.url).pathname;
 const report = { at: new Date().toISOString(), cases };
 const update = process.argv.includes("--update-baseline");
+const reportLatency = process.argv.includes("--report-latency");
 let regress: string[] = [];
 if (existsSync(basePath) && !update) {
   const base = JSON.parse(readFileSync(basePath, "utf8")) as typeof report;
@@ -89,8 +95,8 @@ if (existsSync(basePath) && !update) {
   }
 }
 for (const c of cases) console.log(`${c.ok ? "✓" : "✗"} ${c.name.padEnd(40)} ${String(c.ms).padStart(6)}ms ${c.detail ?? ""}`);
-for (const r of regress) console.log(`✗ latency regression: ${r}`);
+for (const r of regress) console.log(`${reportLatency ? "! latency (not failing: --report-latency)" : "✗ latency regression"}: ${r}`);
 if (update) writeFileSync(basePath, JSON.stringify(report, null, 2) + "\n");
-const failed = cases.filter((c) => !c.ok).length + regress.length;
+const failed = cases.filter((c) => !c.ok).length + (reportLatency ? 0 : regress.length);
 console.log(JSON.stringify({ eval: "primitives", passed: cases.filter((c) => c.ok).length, total: cases.length, regressions: regress.length }));
 process.exit(failed ? 1 : 0);
