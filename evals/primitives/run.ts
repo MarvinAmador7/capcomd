@@ -1,6 +1,8 @@
 // Regression eval for ADR-016 primitives (fakes; no VMs, no model calls). Runs the skill's
 // recipes against a fresh engine and checks correctness plus latency against baseline.json.
-//   bun evals/primitives/run.ts [--update-baseline]
+//   bun evals/primitives/run.ts [--update-baseline] [--report-latency]
+// The baseline is a developer machine's; --report-latency (CI's shared runners, whose speed varies) prints a latency
+// regression without failing on it, so only correctness fails the run.
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -83,6 +85,7 @@ await engine.stop();
 const basePath = new URL("./baseline.json", import.meta.url).pathname;
 const report = { at: new Date().toISOString(), cases };
 const update = process.argv.includes("--update-baseline");
+const reportLatency = process.argv.includes("--report-latency");
 let regress: string[] = [];
 if (existsSync(basePath) && !update) {
   const base = JSON.parse(readFileSync(basePath, "utf8")) as typeof report;
@@ -92,8 +95,8 @@ if (existsSync(basePath) && !update) {
   }
 }
 for (const c of cases) console.log(`${c.ok ? "✓" : "✗"} ${c.name.padEnd(40)} ${String(c.ms).padStart(6)}ms ${c.detail ?? ""}`);
-for (const r of regress) console.log(`✗ latency regression: ${r}`);
+for (const r of regress) console.log(`${reportLatency ? "! latency (not failing: --report-latency)" : "✗ latency regression"}: ${r}`);
 if (update) writeFileSync(basePath, JSON.stringify(report, null, 2) + "\n");
-const failed = cases.filter((c) => !c.ok).length + regress.length;
+const failed = cases.filter((c) => !c.ok).length + (reportLatency ? 0 : regress.length);
 console.log(JSON.stringify({ eval: "primitives", passed: cases.filter((c) => c.ok).length, total: cases.length, regressions: regress.length }));
 process.exit(failed ? 1 : 0);

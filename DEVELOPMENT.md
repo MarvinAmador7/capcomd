@@ -131,7 +131,7 @@ What CI runs, and where (`.github/workflows/`):
 |---|---|
 | `ci.yml` test | contract and title-shim checks, typecheck, `test:fast`, `test:apps` |
 | `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
-| `ci.yml` evals | both evals above |
+| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed) |
 | `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
 | `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
 | `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |

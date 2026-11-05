@@ -81,8 +81,9 @@ jobs:
           path: ${{ runner.temp }}/scenario-timings.json
           retention-days: 14
 
-  # The deterministic evals (fakes: no VMs, no models): the primitives' recipes against evals/primitives/baseline.json
-  # (correctness, and latency within 2x the baseline), and `capcomd run --recipe` against `--legacy` on the same goals.
+  # The deterministic evals (fakes: no VMs, no models): the primitives' recipes (correctness; their latency against
+  # evals/primitives/baseline.json, a developer machine's, is printed but doesn't fail on a shared runner), and
+  # `capcomd run --recipe` against `--legacy` on the same goals.
   evals:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -99,7 +100,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: Primitives eval
-        run: bun evals/primitives/run.ts
+        run: bun evals/primitives/run.ts --report-latency
 
       - name: Recipe parity eval
         run: bun evals/recipe-parity/run.ts

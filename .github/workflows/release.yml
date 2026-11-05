@@ -74,7 +74,7 @@ jobs:
     name: Tests (${{ matrix.os }})
     needs: prepare
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 65
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
@@ -102,7 +102,7 @@ jobs:
 
       - name: Scenario suite (scenarios, sub-agents, primitives, agent adapters, merges)
         run: bun run test:scenarios
-        timeout-minutes: 50   # one runner here (ci.yml shards it): ~27 min on macOS, over 35 on ubuntu-latest
+        timeout-minutes: 65   # one runner here (ci.yml shards it): ~30 min on macOS, ~43 on ubuntu-latest (the CI shards' sum)
 
   package:
     name: Package
