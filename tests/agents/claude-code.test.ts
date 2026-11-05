@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test, beforeEach, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, readFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -28,6 +28,9 @@ async function setup(goal: string, cfgOver: Record<string, string> = {}) {
   return { r, provider, id, cfg, task, log, workdir, W: join(workdir, "task-1-e1") };
 }
 const traceText = () => JSON.stringify(getFinishedSpans());
+// Most tests here run a whole agent on the host (a clone, the fake CLI, a commit and a push; review and idempotency
+// tests two): 2-3 s on a laptop, more on a loaded CI runner, so not the 5 s default. The long ones set their own.
+setDefaultTimeout(30_000);
 
 beforeEach(() => resetSpans());
 

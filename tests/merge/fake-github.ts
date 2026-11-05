@@ -24,7 +24,16 @@ export function fakeGitHub(bare: string, opts: { requireChecks?: boolean; mergeQ
     await git.ok(["remote", "add", "origin", bare]);
   })();
 
-  async function doMerge(pr: FakePr, method: string): Promise<{ ok: boolean; sha?: string; message?: string }> {
+  // One merge at a time, as GitHub does: passChecks() merges while the runner, seeing the PR turn clean, may call the
+  // merge route too. Both used to fetch into `work` at once ("cannot lock ref"); the second now finds the PR merged.
+  let merging: Promise<unknown> = Promise.resolve();
+  function doMerge(pr: FakePr, method: string): Promise<{ ok: boolean; sha?: string; message?: string }> {
+    const run = merging.then(() => (pr.merged ? { ok: false, message: "Pull Request is not mergeable" } : mergeNow(pr, method)));
+    merging = run.catch(() => {});
+    return run;
+  }
+
+  async function mergeNow(pr: FakePr, method: string): Promise<{ ok: boolean; sha?: string; message?: string }> {
     await ready;
     await git.ok(["fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"]);
     const base = await git.ok(["rev-parse", `origin/${pr.base.ref}`]);
