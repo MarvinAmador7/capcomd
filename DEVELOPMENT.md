@@ -83,7 +83,10 @@ src/
   merge/        - git: direct and PR merge modes, verification runs (checks in a VM with boxd)
   models/       - model client (fake only, see STATUS.md)
   plugins/      - the kernel's plugin host (ADR-023): the built-in list (empty so far), what `capcomd serve` starts
-                  before the API opens, and the listing `capcomd plugins list` reads
+                  before the API opens, and the listing `capcomd plugins list` reads; hooks.ts, what the kernel's
+                  hook sites share (silent unless a plugin listens); changes.ts, the `*.changed` hooks from the scope
+                  actor's events; sandbox.ts, the sandbox hooks around every provider. Tests load a plugin directory
+                  as a built-in with CAPCOMD_TEST_PLUGINS (only under `bun test`)
   primitives/   - ADR-016 operations, policy, task board, kv, the reviewer
   providers/    - sandbox providers (boxd, fake)
   recipes/      - `capcomd run` composed from the primitives

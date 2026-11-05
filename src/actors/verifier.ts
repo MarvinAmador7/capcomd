@@ -41,6 +41,8 @@ export const verifierActor = actor({
         mode?: "direct";
         /** A merge after a passing verify: the commit that verify made and checked, and the target it made it on (the fast path). */
         verified?: { sha: string; targetSha: string; how?: string };
+        /** A merge: what merge.landing's plugins are asked (plugin API §6.6.15). */
+        gate?: import("../merge/types").MergeGate;
         /** A verify of a done agent: its pushed commit (lets the verify share a fetch that has it). */
         branchSha?: string;
       }
@@ -70,10 +72,12 @@ export const verifierActor = actor({
       const outcome = await withSpan(
         params.testOnly ? "git.verify" : "git.merge",
         { "relay.run_id": runId, "git.operation": params.testOnly ? "verify" : "merge", "git.ref": branch, "git.target": params.target ?? "" },
-        async () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}), ...(params.mode ? { mode: params.mode } : {}), ...(params.verified ? { verified: params.verified } : {}), ...(params.branchSha ? { branchSha: params.branchSha } : {}) },
+        async () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}), ...(params.mode ? { mode: params.mode } : {}), ...(params.verified ? { verified: params.verified } : {}), ...(params.branchSha ? { branchSha: params.branchSha } : {}), ...(params.gate ? { gate: params.gate } : {}) },
           await (await import("../merge/run-config")).mergeConfigFor(runId)) // the run's repository, not the engine's env
       );
 
+      // Held by a plugin for a person's approval: nothing landed and it isn't over (the approved merge calls again).
+      if (outcome.status === "failed" && outcome.held) return { verifierId, passed: false, commitSha: "", outcome };
       const state = outcome.status === "merged" || outcome.status === "verified" ? "passed" : outcome.status === "conflict" ? "conflict" : "failed";
       const commitSha = "sha" in outcome ? outcome.sha : "";
       await c.db.transaction(async (tx: RawAccess) => {

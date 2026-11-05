@@ -329,7 +329,8 @@ Stop (a signal, `capcomd service stop`, an upgrade):
 
 1. `daemon.stopping` fires (observe, 5 s budget) with the reason.
 2. The host stops firing hooks: an in-flight gate call runs to its deadline; a gate that would fire now is **denied**
-   with reason `daemon stopping` (the kernel is not starting new verifies or merges anyway).
+   with reason `daemon stopping` (the kernel is not starting new verifies or merges anyway). A gate no plugin listens
+   to does not fire, so nothing is denied: a daemon without plugins stops as it always did.
 3. Plugins dispose in **reverse load order** (§5.3). Out-of-process plugins can still call the API during their own
    disposal.
 4. The gateway closes.
@@ -352,6 +353,13 @@ A hook is a named point in a kernel operation. The kernel fires it; plugins list
 sites named in §6.6: `src/primitives/ops.ts` (spawn, verify, merge, send, cancel), `src/actors/agent-workflow.ts` (the
 agent's phases), `src/api/server.ts` (approvals, run creation), the host (daemon, plugins), the jobs and triggers
 services (§16).
+
+A hook fires in the process its kernel operation runs in, and only the daemon has a plugin host. The scope actor's
+changes (every `*.changed` hook), the sandbox calls, the agent's phases, `merge.landing` (under the target's lock) and
+everything an agent asks from its VM run in the daemon. An operation a CLI or the MCP server runs against the engine
+itself (`capcomd run new`, `spawn`, `verify`, `merge`, `approve` from the host shell or `capcomd mcp`) fires its
+`ops.ts` gates in that process, where nothing listens, until those front doors go through the daemon (§17.2 step 8).
+With no listener a site builds no payload and awaits nothing (`HookRegistry.listening`).
 
 Every call is a `HookCall<N>`:
 
@@ -448,7 +456,9 @@ member, not a new hook).
 #### 6.6.3 `run.creating` · modify · `ops.runNew` before the scope's `init`; `POST /v1/runs` before `runNew`
 `RunCreating {options: RunCreateOptions}`. Patch `{label?, budget?, sandbox?}`: `budget` may only lower each unit;
 `sandbox` must be a listed, available provider; `checks`, `reviewer`, `target` and `goalBranch` are the operator's and
-read-only (ADR-018 §4). For cost caps and run policies. Fires once per run.
+read-only (ADR-018 §4). For cost caps and run policies. Fires once per run. At `POST /v1/runs` (the daemon, before
+it starts `capcomd run`) only `sandbox` applies: the request has no label or budget to lower, so such a patch there
+is `invalid_result`.
 
 #### 6.6.4 `run.changed` · observe · after the run's event is committed
 `RunChanged {run, change: created|started|paused|resumed|titled|ended{state, reason}}`. Notifiers, the runs index,
@@ -471,11 +481,17 @@ Patch `{prompt?: {append?, skills?}, env?, egress?}`: `append` is appended after
 `skills` are added (pinned by hash, `src/agents/skills.ts`); `env` adds variables whose names match `^[A-Z][A-Z0-9_]*$`
 and are not already set, and whose values match no secret pattern (`src/agents/redact.ts`); `egress` may only remove
 hosts. **The only place a plugin adds prompt text**: the orchestration skill (`src/subagents/skill.ts`) and ADR-024's
-`skills` and `identity.persona` land here. Fires per attempt (a retried agent prepares again).
+`skills` and `identity.persona` land here. Fires per attempt (a retried agent prepares again), in the attempt's
+ensure-machine step (`ops.ensureMachine`; a driver's `ensureWorker`); the spec it makes is the one the attempt's
+machine and run get. Until the step that attaches them to an agent's run (ADR-024 skills, §17.2 step 8) a patch's
+`prompt.skills` and `env` are refused (`invalid_result`); `prompt.append` and `egress` apply. A deny fails the attempt
+for good (code `config`, reason `plugin:<name>`).
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
-`checkpointed` is the progress signal (§16.4). Notifiers, the watchdog, cost and runs-index observers.
+`checkpointed` is the progress signal (§16.4). Notifiers, the watchdog, cost and runs-index observers. `started` is
+recorded when the agent is claimed, before its machine is ensured, so its `machine` is null (`sandbox.changed`
+`ready` names the machine).
 
 #### 6.6.9 `agent.item` · observe · the runner, as it drains the thread (`putItems`)
 `AgentItem {agent: {id, runId, profile}, item: ThreadItem}`, untrusted. The only turn and tool-call surface capcomd can
@@ -501,9 +517,13 @@ Once per verification.
 capped at 20 × 500 chars (`src/primitives/review.ts`). Fail-closed: no answer is a fail. The reviewer gate (§15.3) is one
 judge; a security scanner or a coverage threshold is another of the same shape. The kernel keeps "both must pass for
 the same tree" (`reviewFits`): a judge's verdict counts only for the `tested.sha` it was asked about. 30 min default.
+The checker puts the branch on the target and runs the checks in one call, so the judges are asked once the checks
+passed (the tree they passed is `tested`), concurrently with the reviewer; checks that fail ask no judge.
 
 #### 6.6.14 `verify.changed` · observe
 `VerifyChanged {verification, change: started|checked{passed, where, excerpt}|judged{by, passed, reasons}|finished{passed}}`.
+`judged` is told once per judge plugin asked (until the first deny) and once for the run's reviewer (`by`
+`reviewer:<profile>`).
 
 #### 6.6.15 `merge.landing` · veto (+ `hold`) · gate · `ops.mergeRef`, under the target lock, after the `--require` check and the fast-path decision, before the forge's `land`
 `MergeLanding {merge, verification, target: {branch, protected, sha}, sha, fastPath, operator, requestedBy}`. Results:
@@ -511,7 +531,10 @@ the same tree" (`reviewFits`): a judge's verdict counts only for the `tested.sha
 of kind `merge` exactly as a protected target does (`parkOp`): a plugin may add a requirement, never decide one (§11.3).
 When `operator` is true the decisions are recorded and bypassed (§6.5). Once per merge attempt. Replaces ADR-023's
 `merge.requested` + `merge.gating` pair (decision: one gate under the lock; a cheap policy denial a few hundred ms
-later costs nothing that matters).
+later costs nothing that matters). It fires before the forge's path is chosen: `fastPath` says the merge has a verified
+commit to try the fast path with, and `sha` and `target.sha` are that commit and the target it was verified on (empty
+without one). A person's approval of a merge a plugin held satisfies the hold: the approved merge fires again and a
+`hold` then lets it land. A dry run (no repository) has no lock and lands nothing, and fires no `merge.landing`.
 
 #### 6.6.16 `merge.changed` · observe
 `MergeChanged {merge, change: requested|landed{sha, pr, bypassedVetoes[]}|failed{reason}|parked{approvalId}}`.
@@ -525,7 +548,8 @@ later costs nothing that matters).
 
 #### 6.6.19 `job.changed` · observe · the jobs service (§16.2)
 `JobChanged {job, change: started|output{stdout, stderr}|fired{n}|ended{state}}`. Results of background work arrive
-here; timers tick here. 5 s deadline.
+here; timers tick here. 5 s deadline. Its site arrives with the jobs service (§17.2 step 7), `trigger.*`'s with the
+intake (step 10).
 
 #### 6.6.20 `trigger.admitting` · veto · gate · the intake (§16.3), after the kernel's gate, before any action
 `TriggerAdmitting {trigger, gate: {allowed, strength, mode, subscribed}}`. A listener may only **deny**; it cannot
@@ -995,7 +1019,9 @@ On the `daemon` stream: `plugin.loaded`, `plugin.failed`, `plugin.disposed`, `pl
 `plugin.deprecation`, `plugin.process`, `plugin.trusted`. On the run's stream: `plugin.gate_denied` and
 `plugin.gate_bypassed`. Jobs: `job.started`, `job.ended`. Triggers: `trigger.received`, `trigger.subscribed`,
 `trigger.unsubscribed`. Data shapes: `packages/plugin/src/events.ts` and the fragment's `x-events`. All durable, written
-by the host, with daemon-written `text`; a plugin's `reason` inside them is untrusted.
+by the host, with daemon-written `text`; a plugin's `reason` inside them is untrusted. The run-stream ones are written from
+§17.2 step 5 (the gates), which brings the first plugin that can deny; until then a refusal reaches its caller as
+`plugin:<name>` (§6.2) and `plugin.hook_failed` is on the daemon stream.
 
 ### 13.2 `GET /v1/plugins`
 
@@ -1333,7 +1359,7 @@ step changes `relay.v1`/`capcomd.v1` output or harness.v1 except by adding featu
 | # | Ships | Tested by |
 |---|---|---|
 | 1 | The host, in-process, zero plugins: manifest loading (`packages/plugin` schema), §5.4 states, §6.3 order, hook registry with modes, deadlines and the breaker, `plugin.*` events, `GET /v1/plugins`, `capcomd plugins list`, the test kit (§14.5) | `tests/plugins/host.test.ts`: ordering, chaining, veto short-circuit, fail-closed vs open, timeout, breaker, dispose (§14.1), the mode-consistency script |
-| 2 | Hooks fired from the kernel at every §6.6 site, no listeners | `tests/scenarios/hooks-order.test.ts`: a recording plugin asserts the order for one agent, one verify, one merge; existing scenarios unchanged |
+| 2 | Hooks fired from the kernel at every §6.6 site that exists (not `job.changed`, `trigger.*`: steps 7, 10), no listeners | `tests/scenarios/hooks-order.test.ts`: a recording plugin (loaded in tests with `CAPCOMD_TEST_PLUGINS`) asserts the order for one agent, one verify, one merge; existing scenarios unchanged; `tests/plugins/kernel-hooks.test.ts`: no listener, no payload or await; the §6.6 patch rules |
 | 3 | Sandbox providers as plugins (§15.1, `sandbox-boxd`, fakes); `DESCRIPTORS` derived; `dependencies.ts` asks the host; `classifyError` replaces `isBoxdAuthError` | `tests/providers/*` unchanged; `descriptors.test.ts` equals today's list; conformance wired to `capcomd plugins validate --conformance` |
 | 4 | Agent providers as plugins; `Provider` becomes "an active agent seam's name"; `toolPolicies.orchestrate` and `PinnedSpec.toolMode` (§16.1); `planner`/`lead` templates set `orchestrate` | `tests/agents/*`, `profiles.test.ts` unchanged; an unknown provider refused at `validate`; an orchestrate agent's verify refused; the team-shape eval before and after |
 | 5 | Gates: `gate-reviewer`; a second test judge shows the AND; `--operator` bypass recorded (`plugin.gate_bypassed`) | `tests/primitives/verify-merge.test.ts`, `tests/scenarios/review.test.ts`, a bypass scenario asserting the event names the plugin |
@@ -1355,6 +1381,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-11-04 | First normative version: 21 hooks, 3 seams (40 methods), 22 services (77 primitives), protocol 1, manifest `capcomd.plugin/v1`. Includes the super-agent primitives (§16). |
+| 1.0.1 | 2026-11-05 | With the kernel's hook sites (§17.2 step 2): which process a hook fires in (§6.1); no listener, no stop-time denial (§5.5); `run.creating` at `POST /v1/runs` takes only `sandbox`; `agent.preparing`'s site, and `skills`/`env` refused until step 8; `agent.changed` `started` has a null `machine`; `verify.judging` after the checks pass; `merge.landing`'s `fastPath`/`sha`, a satisfied hold, no dry-run gate; run-stream plugin events from step 5. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

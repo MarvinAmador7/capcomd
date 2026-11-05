@@ -117,6 +117,12 @@ export class HookRegistry {
     } };
   }
 
+  /** Whether any listener would be called for `hook` (a suspended plugin's gate listener counts: it denies). Synchronous,
+   *  so a kernel site that nothing listens to builds no payload and awaits nothing (§17.2 step 2). */
+  listening(hook: HookName): boolean {
+    return (this.listeners.get(hook) ?? []).some((l) => l.live);
+  }
+
   /** Listening plugins for `hook`, in the order their listeners run (§6.3). */
   order(hook: HookName): string[] {
     return this.ordered(hook).map((l) => l.plugin);

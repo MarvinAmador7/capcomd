@@ -5,6 +5,7 @@ import { FakeProvider } from "./providers/fake";
 import { traceMethods } from "./utils/tracing-simple";
 import { sandboxName } from "./providers/registry";
 import { resilientProvider } from "./providers/resilient";
+import { hookedProvider } from "./plugins/sandbox";
 
 interface Dependencies {
   model: ModelClient;
@@ -59,7 +60,8 @@ function tracedProvider(provider: SandboxProvider, name: string): SandboxProvide
 export function providerFromEnv(env: Record<string, string | undefined> = process.env): SandboxProvider {
   const kind = sandboxName(env);
   // Every provider rides out an outage of a few minutes (src/providers/resilient.ts).
-  return resilientProvider(rawProviderFromEnv(env, kind), { name: kind });
+  // The sandbox hooks (src/plugins/sandbox.ts) see every machine capcomd ensures or destroys there.
+  return hookedProvider(resilientProvider(rawProviderFromEnv(env, kind), { name: kind }), kind);
 }
 
 function rawProviderFromEnv(env: Record<string, string | undefined>, kind: ReturnType<typeof sandboxName>): SandboxProvider {

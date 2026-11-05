@@ -1,7 +1,8 @@
 // The plugin host, in process, with test plugins (docs/spec/plugin-api.md §17.2 step 1): the §5.4 states, the §6.3
 // order, hook dispatch by mode (§6.2), deadlines (§6.4), the failure policy and the breaker (§6.5), disposal (§5.3,
 // §14.1), the plugin.* events (§13.1), GET /v1/plugins and `capcomd plugins list` (§13.2), and the mode-consistency
-// script (§14.4). No kernel site fires a hook yet; these tests fire them the way the kernel will.
+// script (§14.4). These tests fire hooks the way the kernel does (its sites: tests/plugins/kernel-hooks.test.ts and
+// tests/scenarios/hooks-order.test.ts).
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

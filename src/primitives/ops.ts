@@ -10,7 +10,7 @@ import { dirname, join, resolve } from "path";
 import { tmpdir } from "os";
 import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { agentsFilePath, encodeAgentRef, resolveAgent, AgentConfigError, type Overrides } from "../agents/profiles";
+import { agentsFilePath, applyOverrides, decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type AgentSpec, type Overrides, type ResolvedAgent } from "../agents/profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
@@ -29,6 +29,8 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, hooks, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
+import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 export { startDriver };
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
@@ -294,6 +296,7 @@ export async function runNew(o: RunNewOpts) {
     o = { ...o, target: o.goalBranch, targetFrom: o.base };
   }
   if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from <base>.");
+  if (hooks.listening("run.creating")) o = await runCreating(runId, o);
   const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}), ...(o.base ? { base: o.base } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, ...(o.goal ? { goal: o.goal } : {}), paramsHash: ph }).catch(asRelay);
   // The run carries its repository settings, so the engine (e.g. a background service) needn't have them.
@@ -345,6 +348,19 @@ export async function runNew(o: RunNewOpts) {
   return { runId, created: res.created, budget: res.budget, sandbox, ...(branchSetup ? { branchSetup } : {}), ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
 }
 
+/** run.creating (plugin API §6.6.3): plugins may lower the budget, relabel the run or pick its sandbox, or refuse it.
+ *  The checks, the reviewer, the target and the goal branch are the operator's and read-only. */
+async function runCreating(runId: string, o: RunNewOpts): Promise<RunNewOpts> {
+  const { isListedProvider } = await import("../providers/registry");
+  const options = { runId, label: o.label ?? null, goal: o.goal ? untrusted(o.goal, "operator") : null, budget: o.budget, checks: o.checks ?? {}, reviewer: o.reviewer ?? null,
+    target: o.target ?? null, goalBranch: o.goalBranch && o.base ? { branch: o.goalBranch, base: o.base } : null, sandbox: o.sandbox ?? null, profile: null, driver: null, repo: env("REPO") ?? null };
+  const out = await hooks.fire("run.creating", "modify", { options }, { principal: principalOf(null), entity: runId, runId,
+    apply: (p, patch) => applyRunPatch(p, patch, isListedProvider) });
+  if (out.decision === "deny") throw refusedError("run.creating", out);
+  const n = out.payload.options;
+  return { ...o, budget: n.budget, ...(n.label !== null ? { label: n.label } : {}), ...(n.sandbox !== null ? { sandbox: n.sandbox } : {}) };
+}
+
 /**
  * Runs this machine created, newest last (one JSON line each), so a later session can find them: `capcomd_runs`, and the
  * daemon's run list. CAPCOMD_RUNS_INDEX names another file (the live e2e scripts keep their runs out of the user's list).
@@ -382,11 +398,15 @@ export interface SpawnOpts {
  * asks the same of its planner before it starts the run, so a run that can't start is refused, not left started.
  */
 export function spawnChecks(ref: string | null, source: Record<string, string | undefined> = process.env) {
-  let resolved;
-  try { resolved = resolveAgent(ref); } catch (e) {
+  return checkResolved(resolveProfile(ref), source);
+}
+function resolveProfile(ref: string | null): ResolvedAgent {
+  try { return resolveAgent(ref); } catch (e) {
     if (e instanceof AgentConfigError) throw new RelayError("config", e.message, "Check the profile with `capcomd agents show <name>`; overrides may only narrow unless --operator.");
     throw e;
   }
+}
+function checkResolved(resolved: ResolvedAgent, source: Record<string, string | undefined>) {
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
   const envProblem = envSnapshotProblem(spec?.provider, source);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
@@ -426,12 +446,19 @@ export async function spawnAgent(o: SpawnOpts) {
   const scope = o.parent ?? "operator";
   const agentId = stableId("agt", `${o.runId}\0${scope}`, o.key);
   // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
-  const { resolved, spec } = spawnChecks(ref, await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId));
+  const runEnv = await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId);
+  const { resolved, spec } = hooks.listening("profile.resolved") ? checkResolved(await profileResolved(o, ref, resolveProfile(ref)), runEnv) : spawnChecks(ref, runEnv);
   // Requested budget: the contract's `budget` ({usd, turns, wallSeconds}), then --budget per unit.
   let requested: Budget;
   try { requested = { ...parseBudget(o.contract?.budget), ...(o.budget ?? {}) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Budget units: usd, turns, wallSeconds (e.g. --budget usd=2,turns=40)."); }
   let grant: Grant;
   try { grant = { ...parseGrant(o.contract?.children), ...parseGrant(o.grant) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Grant fan-out with --children.maxChildren=N, --children.maxDepth=N, --children.maxTotalDescendants=N, --children.allowedChildProfiles=a,b, --children.budgetShare=0.5 (each may only narrow the ceiling)."); }
+  if (hooks.listening("agent.spawning")) {
+    const s = await agentSpawning(o, agentId, resolved, spec, requested, grant);
+    requested = s.budget ?? {};
+    grant = s.grant ?? {};
+    if (s.contract) o = { ...o, contract: s.contract as Record<string, unknown> };
+  }
   const hasGrant = Object.keys(grant).length > 0;
   // Fan-out for a profile that can't spawn (a worker) would have no effect: refuse it by name, with what to do instead.
   const asksFanOut = grant.allowSpawn === true || (grant.maxChildren ?? 0) > 0 || (grant.maxDepth ?? 0) > 0 || (grant.maxTotalDescendants ?? 0) > 0 || !!grant.allowedChildProfiles?.length;
@@ -453,6 +480,34 @@ export async function spawnAgent(o: SpawnOpts) {
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
+}
+
+/** Who asked for a spawn (§3.2): the parent agent from its VM, else the operator or driver on the host. */
+const spawnPrincipal = (o: SpawnOpts) => (o.parent && !o.operator ? principalOf(o.parent, o.runId) : principalOf(null));
+
+/** profile.resolved (plugin API §6.6.5): a plugin may narrow the resolved spec as a user override does; a widening is
+ *  refused (`widening`). Fires on every resolution of a spawn, before the spawn checks run on the result. */
+async function profileResolved(o: SpawnOpts, ref: string | null, resolved: ResolvedAgent): Promise<ResolvedAgent> {
+  if (!resolved.spec || !resolved.name) return resolved;
+  const name = resolved.name;
+  const overrides = ref ? decodeAgentRef(ref).overrides?.set ?? null : null;
+  const out = await hooks.fire("profile.resolved", "modify", { profile: { name, version: 1, source: "user" }, spec: resolved.spec as unknown as import("../../packages/plugin/src/shapes").PinnedSpec, overrides },
+    { principal: spawnPrincipal(o), entity: `${o.runId}/${o.parent ?? "operator"}/${o.key ?? name}`, runId: o.runId, agentId: o.parent ?? null,
+      apply: (p, patch) => applyProfilePatch(p, patch, (spec, set) => applyOverrides(name, spec as unknown as AgentSpec, { set }) as unknown as Record<string, unknown>) });
+  if (out.decision === "deny") throw refusedError("profile.resolved", out);
+  return out.patches.length ? { ...resolved, spec: out.payload.spec as unknown as AgentSpec, overridden: true } : resolved;
+}
+
+/** agent.spawning (plugin API §6.6.6): after the spawn checks, before the scope records the agent. A plugin may lower
+ *  the budget, narrow the grant, add contract keys, or refuse the spawn (`plugin:<name>`). */
+async function agentSpawning(o: SpawnOpts, agentId: string, resolved: ResolvedAgent, spec: Record<string, unknown> | null, budget: Budget, grant: Grant) {
+  const parent = o.parent ? await client().scope.getOrCreate([o.runId]).getAgent({ agentId: o.parent }).catch(() => null) : null;
+  const spawn = { runId: o.runId, parent: o.parent ?? null, profile: resolved.name ?? resolved.kind, task: untrusted(o.task, o.parent ?? "operator"), contract: o.contract ?? null,
+    budget: Object.keys(budget).length ? budget : null, grant: Object.keys(grant).length ? grant : null, review: !!o.review, operator: !!o.operator };
+  const out = await hooks.fire("agent.spawning", "modify", { spawn, spec: (spec ?? {}) as unknown as import("../../packages/plugin/src/shapes").PinnedSpec, parent: parent ? agentOf(parent) : null },
+    { principal: spawnPrincipal(o), entity: agentId, runId: o.runId, agentId, apply: (p, patch) => applySpawnPatch(p, patch) });
+  if (out.decision === "deny") throw refusedError("agent.spawning", out);
+  return out.payload.spawn;
 }
 
 /**
@@ -763,12 +818,13 @@ async function preflightDrive(runId: string, agentId: string, s: any, a: ScopeAg
 }
 
 /** The agent's VM, provisioned (idempotent by its name) and assigned its task. True when it was cancelled meanwhile. */
-async function ensureWorker(runId: string, a: ScopeAgent, w: any): Promise<boolean> {
+async function ensureWorker(runId: string, a: ScopeAgent, w: any, prepared: PreparedSpec = null): Promise<boolean> {
   const agentId = a.agentId, epoch = a.epoch, exec = execOf(a);
   const s = client().scope.getOrCreate([runId]);
   let wk = await w.getWorker({ workerId: agentId });
   if (!wk || wk.state === "provisioning" || wk.state === "failed") {
-    await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}) });
+    const spec = prepared ?? a.spec;
+    await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(spec ? { agentSpec: spec as Record<string, unknown> } : {}) } : {}) });
     wk = await w.getWorker({ workerId: agentId });
   }
   if ((await s.getAgent({ agentId }))?.status === "cancelled") { await w.drainWorker({ workerId: agentId }); return true; }
@@ -783,7 +839,7 @@ export type AttemptOutcome = { kind: "pushed"; pushed: any; vmRpc: boolean } | {
  * One run of the agent on its VM: a scripted agent's script, a handoff, then the push (the runner for a real agent).
  * `push` is the worker's pushBranch: an action call from a driver process, the worker's own code from its workflow.
  */
-export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (params: Record<string, unknown>) => Promise<any> = (p) => w.pushBranch(p)): Promise<AttemptOutcome> {
+export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (params: Record<string, unknown>) => Promise<any> = (p) => w.pushBranch(p), prepared: PreparedSpec = null): Promise<AttemptOutcome> {
   const agentId = a.agentId, epoch = a.epoch, exec = execOf(a), mode = env("SPAWN_EXEC");
   const s = client().scope.getOrCreate([runId]);
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
@@ -825,7 +881,7 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   // Its title (the driver's --title, its parent's, the user's or its own), for its commit's subject; not one derived from the brief.
   const named = shownTitle(a.titleState, a.task);
   const title = named.title && named.titleSource !== "derived" ? named.title : null;
-  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(exec ? { agent: exec, ...(a.spec ? { agentSpec: a.spec as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
+  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
   const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
   return { kind: "pushed", pushed, vmRpc: !!vmRpc };
 }
@@ -887,8 +943,9 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   const w = workerOf(runId, agentId, a.epoch);
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   try {
-    if (await ensureWorker(runId, a, w)) return (await s.getAgent({ agentId }))!;
-    const out = await runAttempt(runId, a, w);
+    const prepared = hooks.listening("agent.preparing") ? await agentPreparing(runId, a) : null;
+    if (await ensureWorker(runId, a, w, prepared)) return (await s.getAgent({ agentId }))!;
+    const out = await runAttempt(runId, a, w, undefined, prepared);
     if (out.kind === "ended") return (await s.getAgent({ agentId }))!;
     return await settlePushed(runId, a, w, out);
   } catch (e) {
@@ -911,11 +968,45 @@ export async function prepareDrive(runId: string, agentId: string, driver: strin
   return paused ? { kind: "paused", until: Number(paused.pausedUntil ?? 0) } : { kind: "go", startedAt: Date.now() };
 }
 
-/** The workflow's ensure-machine step. */
-export async function ensureMachine(runId: string, agentId: string, epoch: number): Promise<{ kind: "ok" } | { kind: "ended" }> {
+/** The workflow's ensure-machine step. `prepared`: the spec agent.preparing's plugins made for this attempt, which its
+ *  run uses too (the workflow keeps it in the drive loop's state). */
+export async function ensureMachine(runId: string, agentId: string, epoch: number, attempt = 1): Promise<{ kind: "ok"; prepared?: Record<string, unknown> } | { kind: "ended" }> {
   const a = await getAgentOrThrow(runId, agentId);
   if (TERMINAL_AGENT.has(a.status)) return { kind: "ended" };
-  return (await ensureWorker(runId, a, workerOf(runId, agentId, epoch))) ? { kind: "ended" } : { kind: "ok" };
+  const prepared = hooks.listening("agent.preparing") ? await agentPreparing(runId, a, attempt) : null;
+  return (await ensureWorker(runId, a, workerOf(runId, agentId, epoch), prepared)) ? { kind: "ended" } : { kind: "ok", ...(prepared ? { prepared } : {}) };
+}
+
+/** The spec an attempt runs with when agent.preparing's plugins changed it; null: the agent's own. */
+export type PreparedSpec = Record<string, unknown> | null;
+
+/**
+ * agent.preparing (plugin API §6.6.7): once per attempt, before its machine is ensured. A plugin may append to the
+ * agent's system prompt (after the profile's own) or remove egress hosts, or refuse the attempt (it fails, naming the
+ * plugin). Returns the spec the attempt's machine and run get, or null when no plugin changed it.
+ */
+export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1): Promise<PreparedSpec> {
+  const spec = pinnedOf(a);
+  const RS = await import("../providers/run-sandbox");
+  const source = await RS.runSandboxEnv(runId);
+  let egress: string[] = [], credentialMode: "secret" | "env" | "subscription" | "none" = "none";
+  if (execOf(a)) {
+    try {
+      const cfg = (await import("../agents/config")).loadAgentConfig(source, a.ref, a.spec);
+      egress = cfg.egress;
+      credentialMode = cfg.credentialMode === "auto" ? "secret" : cfg.credentialMode;
+    } catch { /* the run reports a bad profile itself */ }
+  }
+  let provider = "fake";
+  try { provider = (await RS.runSandbox(runId)) ?? sandboxName(); } catch { /* an unknown CAPCOMD_SANDBOX: the run reports it */ }
+  const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, skills: [] }, env: [], egress, credentialMode, sandbox: { provider, environment: null } };
+  const out = await hooks.fire("agent.preparing", "modify", payload, { principal: principalOf(null), entity: `${a.agentId}/e${a.epoch}`, attempt, runId, agentId: a.agentId,
+    apply: (p, patch) => applyPreparePatch(p, patch) });
+  // A final error (code config): the attempt isn't retried, the agent fails with the plugin's reason.
+  if (out.decision === "deny") throw refusedError("agent.preparing", out, "config");
+  if (!out.patches.length) return null;
+  const n = out.payload;
+  return { ...(a.spec ?? {}), ...(n.prompt.append ? { appendSystemPrompt: n.prompt.append } : {}), ...(JSON.stringify(n.egress) !== JSON.stringify(egress) ? { egress: n.egress } : {}) };
 }
 
 /** The workflow's settle step after a run that came to an outcome. Returns the agent as it ends (paused included). */
@@ -1477,7 +1568,15 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
   const { label } = await resolveRef(runId, d.ref);
   const direct = onGoal(await runGoal(runId), target);
   const reviewProfile = d.reviewProfile ?? undefined;
-  const reviewOf = (sha: string, targetSha: string | undefined, key?: string): ReviewTarget => ({ runId, vfyId, profile: reviewProfile!, branch, sha, target, ...(targetSha ? { targetSha } : {}), agentId, acceptance: d.acceptance ?? undefined, ...(reviewParent ? { parent: reviewParent } : {}), ...(key ? { key } : {}) });
+  // verify.starting (plugin API §6.6.12): plugins may change the acceptance criteria (never the checks), or fail it.
+  let acceptance = d.acceptance;
+  if (hooks.listening("verify.starting")) {
+    const out = await hooks.fire("verify.starting", "modify", { verification: { vfyId, runId, ref: d.ref, target, check: (op.data.check as string | undefined) ?? null }, acceptance, reviewer: reviewProfile ?? null, requestedBy: principalOf(reviewParent ?? null, runId) },
+      { principal: principalOf(reviewParent ?? null, runId), entity: vfyId, runId, agentId, apply: (p, patch) => ({ ...p, ...(patch.acceptance !== undefined ? { acceptance: patch.acceptance } : {}) }) });
+    if (out.decision === "deny") return refusedVerify(runId, op, out);
+    acceptance = out.payload.acceptance;
+  }
+  const reviewOf = (sha: string, targetSha: string | undefined, key?: string): ReviewTarget => ({ runId, vfyId, profile: reviewProfile!, branch, sha, target, ...(targetSha ? { targetSha } : {}), agentId, acceptance: acceptance ?? undefined, ...(reviewParent ? { parent: reviewParent } : {}), ...(key ? { key } : {}) });
   // The commit the agent pushed (its result), which the checks are about to test on the target: the reviewer can read
   // the same already, the commit merged onto the target as it is now.
   const pushed = agentId ? ((await getAgentOrThrow(runId, agentId)).result?.commit as string | undefined) : undefined;
@@ -1492,6 +1591,10 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
   // Already on the target (merged earlier): nothing new to check or review, so it passes as already merged.
   const alreadyMerged = out.status === "merged";
   const checksPassed = out.status === "verified" || alreadyMerged;
+  if (hooks.listening("verify.changed")) verifyChanged(runId, op, { kind: "checked", passed: checksPassed, where: out.timings?.checksWhere ?? (alreadyMerged ? "reused" : "none"), excerpt: out.status === "failed" ? checkExcerpt("output" in out ? String(out.output ?? "") : "") : null });
+  // verify.judging (plugin API §6.6.13): plugins judge the tree the checks passed, alongside the reviewer; every judge must pass.
+  const judging = out.status === "verified" && out.sha && out.targetSha && hooks.listening("verify.judging") ? verifyJudging(runId, op, { sha: out.sha, targetSha: out.targetSha }, acceptance, reviewProfile ?? null, agentId, reviewParent)
+    .catch((e) => ({ passed: false, plugins: [] as string[], deniedBy: "capcomd", reasons: [`the judges could not be asked: ${String((e as Error)?.message ?? e).slice(0, 300)}`] })) : null;
   let review: Review | null = null;
   let reviewStarted: number | null = null;
   if (checksPassed && reviewProfile && out.status === "verified" && out.taskSha) {
@@ -1503,7 +1606,9 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
     reviewStarted = "failed" in started ? null : started.startedAt;
     review = await finishReview(reviewOf(out.taskSha, out.targetSha), started);
   } else dropReview(runId, early, alreadyMerged ? "not needed: the work is on the target already" : "not needed: the checks failed");
-  const pass = checksPassed && (review ? review.passed : true);
+  if (review && hooks.listening("verify.changed")) verifyChanged(runId, op, { kind: "judged", by: `reviewer:${review.profile}`, passed: review.passed, reasons: review.reasons });
+  const judges = judging ? await judging : null;
+  const pass = checksPassed && (review ? review.passed : true) && (judges ? judges.passed : true);
   const g = out.timings ?? {};
   const end = Date.now();
   // Where the time went: the checks (fetch, integrate, run), the review (from its start; with the checks when it ran
@@ -1521,12 +1626,48 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
     checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
     // `judge` mirrors `review` for callers of the old --judge-profile contract.
     ...(review ? { review, judge: { profile: review.profile, passed: review.passed, feedback: (review.error ?? review.reasons.join("; ")).slice(0, 1000) } } : {}),
+    ...(judges ? { judges } : {}),
     timings,
   };
   const fin = opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
   // A failed check says how on the agent's result too, with the lines of its output that name the failure (the app's card).
   const failedChecks = out.status === "failed" ? { reason: String(out.reason ?? "").slice(0, 300), excerpt: checkExcerpt("output" in out ? String(out.output ?? "") : "") } : {};
   if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status, ...failedChecks }, ...(review ? { review: { passed: review.passed, agentId: review.agentId } } : {}) } } }).catch(() => {});
+  return fin;
+}
+
+/** verify.changed (plugin API §6.6.14) for what only the verify knows: its checks' result and each judge's verdict.
+ *  `started` and `finished` come from the run's events (src/plugins/changes.ts). */
+function verifyChanged(runId: string, op: import("../actors/scope").ScopeOp, change: import("../../packages/plugin/src/hooks").VerifyChange) {
+  hooks.fire("verify.changed", "observe", { verification: verificationOf(runId, op), change }, { principal: principalOf(null), entity: `${op.id}#${change.kind === "judged" ? `judged:${change.by}` : change.kind}`, runId, agentId: (op.data.agentId as string | null) ?? null });
+}
+
+/** The plugins' judges of a verification (§6.6.13): the first deny fails it, with its reasons (at most 20 of 500 chars,
+ *  as a reviewer's). Fail-closed: a judge that doesn't answer is a deny (the registry's gate policy). */
+async function verifyJudging(runId: string, op: import("../actors/scope").ScopeOp, tested: { sha: string; targetSha: string }, acceptance: unknown, reviewer: string | null, agentId: string | null, reviewParent?: string) {
+  const a = agentId ? await getAgentOrThrow(runId, agentId).catch(() => null) : null;
+  const judges = hooks.order("verify.judging");
+  const out = await hooks.fire("verify.judging", "veto", { verification: { ...verificationOf(runId, op), tested }, acceptance, task: a ? untrusted(a.task, a.parent ?? "operator") : null, reviewer },
+    { principal: principalOf(reviewParent ?? null, runId), entity: op.id, runId, agentId });
+  const reasons = out.decision === "deny" ? (out.reasons.length ? out.reasons : [out.text]).slice(0, 20).map((r) => String(r).slice(0, 500)) : [];
+  if (hooks.listening("verify.changed")) {
+    for (const by of judges) {
+      const denied = out.decision === "deny" && out.plugin === by;
+      verifyChanged(runId, op, { kind: "judged", by, passed: !denied, reasons: denied ? reasons : [] });
+      if (denied) break;
+    }
+  }
+  return { passed: out.decision !== "deny", plugins: judges, deniedBy: out.decision === "deny" ? (out.plugin ?? "daemon stopping") : null, reasons };
+}
+
+/** A verification a verify.starting plugin refused: failed, with the plugin's reason, before anything ran. */
+async function refusedVerify(runId: string, op: import("../actors/scope").ScopeOp, out: import("../../packages/plugin/src/host/registry").Refusal) {
+  const s = client().scope.getOrCreate([runId]);
+  const reason = refusedText(out);
+  const result = { pass: false, branch: op.data.branch ?? null, target: op.data.target ?? null, commit: null, checks: { passed: false, status: "refused", reason, output: null }, refused: { plugin: out.plugin, reason: out.text }, timings: { totalMs: 0, checksMs: 0, queueMs: 0 } };
+  const fin = opView(await s.finishOp({ opId: op.id, state: "failed", result }));
+  const agentId = (op.data.agentId as string | null) ?? null;
+  if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: op.id, pass: false, commit: null, checks: { passed: false, status: "refused", reason } } } }).catch(() => {});
   return fin;
 }
 
@@ -1624,11 +1765,11 @@ export async function settleCleanups(ms = 30_000) {
 
 /** Run a recorded merge op: land its ref (only the verified commit; the fast path when the target hasn't moved since
  *  the verify, else re-running the checks verify passed with). */
-async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp) {
+async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp, o: { approved?: boolean } = {}) {
   const t0 = Date.now();
   const c = client();
   const s = c.scope.getOrCreate([runId]);
-  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null };
+  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null; operator?: boolean; askedBy?: string };
   const { label } = await resolveRef(runId, d.ref);
   // Re-run the checks that verification passed with (the target may have moved), not the repo default.
   const v = d.require ? await s.getOp({ opId: d.require }) : null;
@@ -1637,16 +1778,24 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   const tested = v?.result?.tested as { sha?: string; targetSha?: string; how?: string } | undefined;
   const verified = d.expectSha && v?.result?.commit === d.expectSha && tested?.sha && tested.targetSha ? { sha: tested.sha, targetSha: tested.targetSha, ...(tested.how ? { how: tested.how } : {}) } : undefined;
   const direct = onGoal(await runGoal(runId), d.target);
+  // What merge.landing's plugins are asked, where the merge runs (the engine host): this process can't tell whether one
+  // listens there, so it always says.
+  const gate: import("../merge/types").MergeGate = {
+    merge: mergeOf(runId, op), verification: v ? verificationOf(runId, v) : null, operator: !!d.operator, requestedBy: principalOf(d.askedBy ?? null, runId),
+    ...(o.approved ? { holdSatisfied: true } : {}),
+  };
   const res: any = await c.verifier.getOrCreate([runId, op.id]).verify({
     verifierId: op.id, taskId: label, branch: d.branch, runId, target: d.target, testOnly: false, ...(d.expectSha ? { expectSha: d.expectSha } : {}), ...(checks ? { testCommand: checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
-    ...(verified ? { verified } : {}),
+    ...(verified ? { verified } : {}), gate,
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
+  // A plugin held it: parked for a person's approval, as a protected target's merge is.
+  if (out.status === "failed" && out.held) return opView(await s.parkOp({ opId: op.id, reason: `held by the ${out.held.plugin} plugin: ${out.reason}` }));
   const merged = out.status === "merged";
   const g = out.timings ?? {};
   const timings = { totalMs: Date.now() - t0, queueMs: g.lockWaitMs ?? 0, ...Object.fromEntries(Object.entries(g).filter(([k]) => k !== "lockWaitMs")) };
   const result = merged
-    ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}), ...(out.targetBefore ? { targetBefore: out.targetBefore } : {}), timings }
+    ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}), ...(out.targetBefore ? { targetBefore: out.targetBefore } : {}), ...(out.bypassedVetoes?.length ? { bypassedVetoes: out.bypassedVetoes } : {}), timings }
     : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), timings };
   const fin = opView(await s.finishOp({ opId: op.id, state: merged ? "merged" : "failed", result }));
   if (d.agentId) await s.annotateResult({ agentId: d.agentId, patch: { merge: { id: op.id, target: d.target, state: merged ? "merged" : "failed", ...(merged ? { sha: out.sha, ...(out.pr ? { pr: out.pr } : {}) } : { status: out.status }) } } }).catch(() => {});
@@ -1679,9 +1828,18 @@ export async function decideMerge(runId: string, mrgId: string, o: { approve: bo
   const op = await s.getOp({ opId: mrgId });
   if (!op || op.kind !== "merge") throw new RelayError("not_found", `merge ${mrgId} not found in ${runId}`, `List pending merges with \`capcomd status ${runId} --json\` (pendingApprovals).`);
   if (op.state !== "awaiting_approval" && op.state !== "running") return opView(op);
+  // approval.deciding (plugin API §6.6.17): a plugin may refuse the decision (a second approver, a four-eyes rule); it
+  // can never make one.
+  if (op.state === "awaiting_approval" && hooks.listening("approval.deciding")) {
+    const { approvalIdFor } = await import("../api/source");
+    const by = o.by ?? "operator";
+    const out = await hooks.fire("approval.deciding", "veto", { approval: approvalOf(runId, op, approvalIdFor(runId, mrgId)), decision: o.approve ? "approve" : "deny", by: principalOf(by, runId), reason: o.reason ?? null },
+      { principal: principalOf(by, runId), entity: mrgId, runId, agentId: (op.data.agentId as string | null) ?? null });
+    if (out.decision === "deny") throw refusedError("approval.deciding", out);
+  }
   const { decided, op: now } = await s.decideOp({ opId: mrgId, approve: o.approve, by: o.by ?? "operator", ...(o.reason ? { reason: o.reason } : {}) });
   // Approved (now, or by an earlier call that crashed before merging): run it.
-  if (o.approve && now.state === "running") return inflightOps.get(mrgId) ?? track(mrgId, () => executeMerge(runId, now));
+  if (o.approve && now.state === "running") return inflightOps.get(mrgId) ?? track(mrgId, () => executeMerge(runId, now, { approved: true }));
   if (!decided && now.state === "running") throw new RelayError("conflict", `${mrgId} is already merging`, "Wait for it, then check its state.");
   if (decided && !o.approve && typeof op.data.agentId === "string")
     await s.annotateResult({ agentId: op.data.agentId, patch: { merge: { id: mrgId, target: op.data.target ?? null, state: "denied" } } }).catch(() => {});
