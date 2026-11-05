@@ -239,10 +239,35 @@ export interface PullRequestRef {
   mergeSha?: string | null;
 }
 
+/** A remote's branches and default branch, as a forge read them (§7.4 `listBranches`). */
+export interface ForgeBranches {
+  /** The default branch the remote reports; null when it doesn't say (never guessed). */
+  defaultBranch: string | null;
+  /** At most the `max` asked for. */
+  branches: string[];
+  /** service: the hosting service's own API; git: `git ls-remote`. */
+  source: "service" | "git";
+  /** Why the service's API wasn't used, or failed (a sentence for the person, in the forge's words), or null. */
+  note: string | null;
+}
+
+/** Someone the user's own login at the service can act as (`login` with `accounts`). */
+export interface ForgeAccount { login: string; kind: "user" | "org" }
+
+/** What the user's own login at the service is asked for (§7.4 `login`): opening and merging pull requests, or
+ *  creating repositories (`publishRepository`). A forge may need a different login for each. */
+export type ForgeLoginUse = "pullRequests" | "publish";
+
+/** Whether the user's own login at the service is on this machine for a use, and as whom. Shaped like a sandbox's or
+ *  an agent provider's `available`: `reason` and `fix` are sentences for the person. */
+export type ForgeLogin = { ok: true; accounts: ForgeAccount[] } | { ok: false; reason: string; fix: string | null };
+
 /** The hosting service a repository's remote points at (§7.4). Selected by `merge.forge` in the project's config,
  *  default by `matches(remote)`; the built-in `git` forge matches every remote and lands by push only. */
 export interface Forge {
-  describe(): { name: string; label: string; pullRequests: boolean };
+  /** `publish`: `publishRepository` creates repositories (POST /v1/projects/publish asks the first active forge that
+   *  does); absent is false. */
+  describe(): { name: string; label: string; pullRequests: boolean; publish?: boolean };
   /** Whether this forge serves `remote` (a URL as `git remote get-url` prints it); the kernel asks the forges in
    *  order and takes the first `true`. */
   matches(remote: string): boolean;
@@ -254,5 +279,12 @@ export interface Forge {
   findPullRequest(input: { remote: string; head: string; base: string }, c: SeamCall): Promise<PullRequestRef | null>;
   /** Create the remote repository for a plain folder (POST /v1/projects/publish). */
   publishRepository(input: { path: string; owner: string | null; name: string; visibility: "private" | "public" }, c: SeamCall): Promise<{ remote: string; url: string | null }>;
-  defaultBranch(remote: string, c: SeamCall): Promise<string | null>;
+  /** The remote's branches and its default branch (POST /v1/runs base resolution, GET /v1/projects/branches): from
+   *  the service when it can, else from the remote itself. `remote` is a URL as `git remote get-url` prints it (or a
+   *  path), read from `cwd`. Rejects when the remote can't be read at all; the message says why, for the person. */
+  listBranches(input: { remote: string; cwd: string; max: number }, c: SeamCall): Promise<ForgeBranches>;
+  /** Whether the user's own login at the service is on this machine for `use` (with `accounts`, also as whom it can
+   *  act: the user first, then its organizations). Cheap (the forge may cache it) and never rejects: no login, or a
+   *  service that doesn't answer, is `{ok: false}`; so is a use the forge has none of (no pull requests, no publish). */
+  login(input: { use: ForgeLoginUse; accounts?: boolean }, c: SeamCall): Promise<ForgeLogin>;
 }

@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import { PluginHost, type Candidate, type PluginSummary } from "../../packages/plugin/src/host/host";
 import { PluginError } from "../../packages/plugin/src/errors";
 import { eventTypeOwner } from "../../packages/plugin/src/event-type";
-import type { HookRegistry } from "../../packages/plugin/src/host/registry";
 import { CAPABILITY_NAMES } from "../api/contract";
 import { Redactor } from "../agents/redact";
 import { stateDir } from "../utils/home";
@@ -119,13 +118,23 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
   });
 }
 
+/** What a process that isn't the daemon loads: the built-ins marked `everyProcess` (the reviewer gate, the forges),
+ *  and in tests CAPCOMD_TEST_PLUGINS. */
+export function localCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
+  return [...BUILTINS.filter((b) => b.everyProcess).map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module })), ...testPlugins(env)];
+}
+
+let local: Promise<PluginHost> | null = null;
 /**
- * The gates of a process that isn't the daemon (src/plugins/hooks.ts `gates`): the built-ins marked `everyProcess`
- * (the reviewer gate), and in tests CAPCOMD_TEST_PLUGINS, in a host of its own. It writes no daemon-stream events (that
+ * The plugin host of a process that isn't the daemon, started once on first use: its gates (src/plugins/hooks.ts
+ * `gates`) and its forges (src/plugins/forges `forgeFor`) are this host's. It writes no daemon-stream events (that
  * stream is the daemon's) and no listing; its gate events go on the run's stream like the daemon's.
  */
-export async function localHost(env: Record<string, string | undefined> = process.env): Promise<HookRegistry> {
-  const host = kernelHost({ log: false });
-  await host.start([...BUILTINS.filter((b) => b.everyProcess).map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module })), ...testPlugins(env)]);
-  return host.hooks;
+export function localHost(env: Record<string, string | undefined> = process.env): Promise<PluginHost> {
+  local ??= (async () => {
+    const host = kernelHost({ log: false });
+    await host.start(localCandidates(env));
+    return host;
+  })();
+  return local;
 }
