@@ -1,0 +1,111 @@
+{
+  "session": "codex-0.166.0.jsonl",
+  "cli": "codex",
+  "updates": [
+    {
+      "id": "itm-agt-golden-1",
+      "rev": 1,
+      "kind": "say",
+      "status": "done",
+      "at": "2026-10-26T12:00:03.000Z",
+      "durationMs": null,
+      "text": "I’ll run the command once.",
+      "blocks": [
+        {
+          "t": "paragraph",
+          "children": [
+            {
+              "t": "text",
+              "text": "I’ll run the command once."
+            }
+          ]
+        }
+      ],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-2",
+      "rev": 1,
+      "kind": "tool",
+      "status": "open",
+      "at": "2026-10-26T12:00:04.000Z",
+      "durationMs": null,
+      "text": "Run echo hi",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "item_1",
+        "name": "command_execution",
+        "kind": "run",
+        "summary": "Run echo hi",
+        "isError": false,
+        "args": "/bin/zsh -lc 'echo hi'",
+        "output": null,
+        "files": [],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-2",
+      "rev": 2,
+      "kind": "tool",
+      "status": "done",
+      "at": "2026-10-26T12:00:04.000Z",
+      "durationMs": null,
+      "text": "Run echo hi",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "item_1",
+        "name": "command_execution",
+        "kind": "run",
+        "summary": "Run echo hi",
+        "isError": false,
+        "args": "/bin/zsh -lc 'echo hi'",
+        "output": "hi\n",
+        "files": [],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-3",
+      "rev": 1,
+      "kind": "say",
+      "status": "done",
+      "at": "2026-10-26T12:00:06.000Z",
+      "durationMs": null,
+      "text": "ok",
+      "blocks": [
+        {
+          "t": "paragraph",
+          "children": [
+            {
+              "t": "text",
+              "text": "ok"
+            }
+          ]
+        }
+      ],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    }
+  ],
+  "attachments": []
+}
