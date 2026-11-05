@@ -202,7 +202,8 @@ export class HookRegistry {
       const value = structuredClone(payload);
       if (p.queue.length >= this.observeQueue) { p.queue.shift(); p.dropped++; }
       p.queue.push(async () => {
-        if (!l.live) return;
+        // Disposed, or suspended since it was queued (§6.5: an open listener of a suspended plugin is skipped).
+        if (!l.live || p.suspended) return;
         const r = await this.invoke(l, p, value, o, at);
         if (r.ok) this.succeeded(p); else this.failed(l, p, r.callId, r.kind, r.message);
       });

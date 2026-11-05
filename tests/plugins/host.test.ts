@@ -93,6 +93,18 @@ describe("load order (§6.3, §4.6)", () => {
     expect(host.contributions.get("seam", "forge/git")?.plugin).toBe("forge-one");
     expect(host.get("forge-one")!.seams).toEqual([{ kind: "forge", name: "git" }]);
   });
+
+  test("enabling a plugin whose source an active plugin already provides fails it seam_conflict; the active one stays", async () => {
+    const { host } = makeHost();
+    const source = (name: string, enabled: boolean): Candidate => ({ ...builtin(manifest(name, { provides: ["source:chat"], contributes: { hooks: { "run.changed": {} }, sources: [{ name: "chat", summary: "Chat" }] } }), (ctx) => {
+      ctx.hooks.on("run.changed", () => {});
+    }), enabled });
+    await host.start([source("chat-one", false), source("chat-two", true)]);
+    expect([state(host, "chat-one"), state(host, "chat-two")]).toEqual(["validated(disabled)", "active"]);
+    await host.enable("chat-one");
+    expect([state(host, "chat-one"), state(host, "chat-two")]).toEqual(["failed(seam_conflict)", "active"]);
+    expect(host.message("chat-one")).toContain("source:chat is already provided by chat-two");
+  });
 });
 
 describe("dispatch by mode (§6.2)", () => {
@@ -190,6 +202,19 @@ describe("dispatch by mode (§6.2)", () => {
     expect(seen).toEqual(["3", "4"]);
     expect(reg.stats("p")).toMatchObject({ calls: 2, dropped: 2, failures: 0 });
     expect(events).toEqual([]);
+  });
+
+  test("observe: calls queued before the breaker trips are skipped once it has", async () => {
+    let calls = 0;
+    const events: HostEvent[] = [];
+    const { HookRegistry } = await import("../../packages/plugin/src/host/registry");
+    const reg = new HookRegistry({ emit: (e) => { events.push(e); }, rank: () => 0 });
+    reg.attach("p", new AbortController().signal);
+    reg.on("p", "run.changed", () => { calls++; throw new Error("down"); });
+    for (let i = 0; i < 5; i++) reg.fire("run.changed", "observe", samplePayload("run.changed"), at("run-1"));
+    await reg.idle();
+    expect(calls).toBe(3);
+    expect(events.map((e) => e.type)).toEqual(["plugin.hook_failed", "plugin.hook_failed", "plugin.hook_failed", "plugin.suspended"]);
   });
 
   test("a hook fired with the wrong mode is refused", () => {

@@ -163,7 +163,9 @@ export class PluginHost {
     }
     this.set(r, "validated", null);
     if (!this.loadable(r)) return this.summary(r);
-    const live = this.records.filter((x) => x === r || x.state === "active");
+    // The active plugins first: they hold their seams and sources, so a clash or a cycle fails the one being enabled,
+    // never one already running (§4.6). The order itself doesn't depend on this list's order (§6.3).
+    const live = [...this.records.filter((x) => x !== r && x.state === "active"), r];
     const { order, failed } = resolveOrder(live.map((x) => ({ name: x.name, manifest: x.manifest! })), this.kernel);
     const f = failed.get(r.name);
     if (f) { this.fail(r, f.cause, f.message); return this.summary(r); }
