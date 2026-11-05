@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ApiError, ApprovalId, contract, EventData, Scope, StreamFrames } from "../../src/api/contract";
 import { HarnessEvent } from "../../src/api/envelope";
+import { isEventType } from "../../packages/plugin/src/event-type";
 import { bodyHash, resolveDecide } from "../../src/api/idempotency";
 import spec from "../../openapi/capcomd.json";
 
@@ -15,8 +16,9 @@ describe("harness.v1 contract", () => {
 		expect(input["~standard"].validate({ params: { approvalId: "apr-k1" }, headers: {}, body: { decision: "approve" } })).toHaveProperty("issues");
 		expect(ApprovalId.safeParse("agt-1").success).toBe(false);
 	});
-	test("every event type is dotted lower-case", () => {
-		for (const t of [...Object.keys(EventData), ...Object.keys(StreamFrames)]) expect(t).toMatch(/^[a-z]+(\.[a-z_]+)+$/);
+	test("every event type matches the one event type pattern", () => {
+		// The one pattern (packages/plugin/src/event-type.ts), not a copy of it.
+		expect([...Object.keys(EventData), ...Object.keys(StreamFrames)].filter((t) => !isEventType(t))).toEqual([]);
 	});
 	test("committed OpenAPI covers every route, with a scoped stream and no global one", () => {
 		for (const p of ["/v1/health", "/v1/runs", "/v1/runs/{runId}", "/v1/runs/{runId}/agents", "/v1/runs/{runId}/files", "/v1/events", "/v1/streams/{scope}/events", "/v1/approvals/{approvalId}/decision",

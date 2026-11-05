@@ -17,7 +17,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   record, agent failures) instead of "An internal error occurred", with code `internal` for a failure inside the
   engine as opposed to a refusal.
 - `scripts/eval-team-shape.ts` keeps the engine's log (`engine.log`) in its scratch folder, for `--keep`.
-
+- A merge a plugin holds for your approval now shows the files it changes, as a merge into a protected branch does:
+  on the approval card in the apps (`subject.files`), on the `merge.approval_requested` event, and in `capcomd merge`
+  and `capcomd approve`, which also print the plugin's reason. For plugin authors, a `merge.landing` hold can carry an
+  optional `holdId` (`{decision: "hold", reason, holdId}`): once the person approves it, a later hold from your plugin
+  with the same `holdId` doesn't ask them again, even if its reason changed. Without a `holdId` the hold is still
+  matched by its exact reason. Approvals show it as `subject.heldBy.holdId`.
 - When a plugin holds a merge for your approval, the approval now says which plugin held it and why: in the question
   and `subject.heldBy` the apps show, in `capcomd approve`'s output, in the prompt `capcomd_approve` asks under
   `driver.approvals: "elicit"`, and as `heldBy` on the `merge.approval_requested` event. Approving satisfies only that
