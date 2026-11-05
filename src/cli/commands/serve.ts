@@ -277,14 +277,16 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   const P = await import("../../plugins/host");
   const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath() });
   process.on("exit", () => P.releaseSnapshot());
-  try { await host.start(P.builtinCandidates()); } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }
+  let started = false;
+  try { await host.start(P.builtinCandidates()); started = true; } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }
   plugins = host;
   // The kernel's hook sites fire through this host's registry from now on (§17.2 step 2), and its sandbox seams are
-  // the places runs use (§17.2 step 3).
+  // the places runs use (§17.2 step 3). A host that didn't start may hold only some of them: the daemon then keeps the
+  // built-in sandboxes it activated itself, rather than fail every run on a place it lost.
   const H = await import("../../plugins/hooks");
   H.useHooks(host.hooks);
   const SB = await import("../../plugins/sandboxes");
-  SB.useSandboxHost(host);
+  if (started) SB.useSandboxHost(host);
   // A place that doesn't delete idle machines by itself (Docker, ADR-020): its seam sweeps capcomd's expired ones, now
   // and every 5 minutes.
   try { SB.keepTidy((await import("../../providers/registry")).sandboxName()); } catch { /* an unknown CAPCOMD_SANDBOX fails the first run instead */ }
