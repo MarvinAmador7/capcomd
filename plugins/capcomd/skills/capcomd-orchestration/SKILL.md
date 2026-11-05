@@ -60,6 +60,15 @@ work onto the run's target (the goal branch) itself, and ends with a summary of 
 the rest back to you in it). `children` fan-out for a profile that can't spawn (`worker`, `reviewer`) would have no
 effect, so the spawn is refused (`reason: "cannot_spawn"`): spawn a lead instead, or leave `children` out.
 
+The `lead` and `planner` profiles `capcomd setup` writes **orchestrate** (`toolMode: "orchestrate"` in
+`capcomd_profiles`): they see everything (the code, git history and any branch, every agent's logs, the verify and
+merge reports with their full check output) and run nothing themselves (no edits, commits, installs, builds or tests).
+A lead still takes a part as before: its helpers write and test the code. Just give it no task that needs it to run code
+itself, and don't ask it to "run the tests" or "try the CLI": its helpers' checks run at verify and merge, and it reads
+the results. A merge's result says whether the checks ran on the combined code
+(`result.combined.text`, e.g. "checks ran on the combined code (… with 1 earlier merge from this run): pass"). Work
+that must run code (a smoke test of the whole, an end-to-end check) is a worker's task: spawn one, or pin a check.
+
 Shapes combine: contract first, then wide with a lead on each big part, is the usual shape for "build me X".
 
 ### What the user says → the shape

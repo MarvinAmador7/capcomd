@@ -11,23 +11,27 @@ import { TERMINAL_AGENT } from "../primitives/policy";
 export { DEFAULT_PLANNER, plannerProfile } from "../agents/run-driver";
 import { DEFAULT_PLANNER } from "../agents/run-driver";
 
-export function plannerBrief(goal: string, gates: { checks: string[]; reviewer: string | null; target: string | null; base?: string | null }): string {
+export function plannerBrief(goal: string, gates: { checks: string[]; reviewer: string | null; target: string | null; base?: string | null }, o: { orchestrate?: boolean } = {}): string {
   // A goal branch (gates.base set): merges land on it with no approval, and the user reads the summary before opening
   // a pull request into the base, so the summary is written for them.
   const goalBranch = gates.base && gates.target ? gates.target : null;
+  const target = gates.target ?? "the run's target";
   return [
     `Goal: ${goal}`,
     "",
     "You are the planner for this goal. Don't change files yourself: use the capcomd command (see the orchestration skill in your instructions).",
+    // Plugin API §16.1: the planner (and a lead) orchestrates: it knows everything and executes nothing.
+    ...(o.orchestrate ? [`You orchestrate: you see everything and run nothing. You can read any file, any branch and its history (\`capcomd fetch\` brings in the latest branches, e.g. ${target} after a merge; then \`git log\`, \`git show origin/<branch>:<path>\`, \`git diff\`), and every agent's logs and every verify and merge report with its full check output (\`capcomd inspect\`, \`capcomd logs\`, \`capcomd events\`). You can't edit, commit, install, build or run tests: checks run at verify and merge, and you read their results. A merge's result says whether the checks ran on the combined code (\`result.combined.text\`).`, ""] : []),
     ...(goalBranch ? [`This run's work goes onto its goal branch ${goalBranch}, cut from ${gates.base}. Every child you verify and merge lands there right away, with no approval; when you finish, the user reads your summary and decides whether to open a pull request from ${goalBranch} into ${gates.base}.`, ""] : []),
-    "1. Split the goal into tasks that child agents can do independently, and spawn one child per task (`capcomd spawn --task … --key <name>`), each with a self-contained task that says which files to change and how to check the result." +
+    "1. Split the goal into tasks that child agents can do independently, and spawn one child per task (`capcomd spawn --task … --key <name>`), each with a self-contained task that says which files to change and what its check must show." +
       (gates.checks.length ? ` Pin the check that fits each child with --check (the operator's checks: ${gates.checks.join(", ")}).` : "") +
-      " Land the shared pieces (types, stubs) first in one small child, then spawn every independent task at once. A task with two or more independent parts goes to a lead (`--profile lead --children.maxChildren=3 --children.maxDepth=1`), which splits it among helpers and verifies and merges their work itself.",
-    "2. `capcomd await` them. Verify each finished child (`capcomd verify --ref <agt> --key v-<agt>`" + (gates.reviewer ? "; a reviewer agent also reviews it, so give the command a 10-minute timeout and run it again if it is cut off" : "") + `), and merge the ones that pass (\`capcomd merge --ref <agt> --require <vfyId>\`) into ${gates.target ?? "the run's target"}.`,
+      " Land the shared pieces (types, stubs) first in one small child, then spawn every independent task at once. A task with two or more independent parts goes to a lead (`--profile lead --children.maxChildren=3 --children.maxDepth=1`), which splits it among helpers and verifies and merges their work itself." +
+      (o.orchestrate ? " A lead orchestrates as you do: it runs nothing, so never ask it to run tests, builds or the program; its helpers' checks run at its verifies and merges, and it reports their results. Work that must run code (an end-to-end check of the whole) is a worker's task." : ""),
+    "2. `capcomd await` them. Verify each finished child (`capcomd verify --ref <agt> --key v-<agt>`" + (gates.reviewer ? "; a reviewer agent also reviews it, so give the command a 10-minute timeout and run it again if it is cut off" : "") + `), and merge the ones that pass (\`capcomd merge --ref <agt> --require <vfyId>\`) into ${target}. Run each capcomd command on its own and read the ids from its JSON output (a shell variable like \`id=$(capcomd spawn …)\` can't be checked, so it is refused).`,
     "3. A child that failed or didn't pass: spawn one replacement with the failure in its task, or continue its work with `capcomd spawn --continue <agt>`; then verify and merge it.",
     goalBranch
-      ? `4. Finish with \`capcomd result --summary "<summary>"\`: it opens the pull request's description, so write it for the person who reviews it: what the change does and why, then per task what landed on ${goalBranch} (child, verified, reviewed) and what didn't (and why), and what is left to do.`
-      : '4. Finish with `capcomd result --summary "<per task: child, verified?, merged?; what is left>"`.',
+      ? `4. Finish with \`capcomd result --summary "<summary>"\`: it opens the pull request's description, so write it for the person who reviews it: what the change does and why, then per task what landed on ${goalBranch} (child, verified, reviewed) and what didn't (and why), whether the checks ran on the combined code (the last merge's \`result.combined\` says), and what is left to do.`
+      : '4. Finish with `capcomd result --summary "<per task: child, verified?, merged?; whether the checks ran on the combined code (result.combined); what is left>"`.',
   ].join("\n");
 }
 
@@ -53,7 +57,9 @@ export async function runWithPlanner(opts: RunOptions & { profile: string; drive
     // The run is a planner's: its goal is ready when this agent finishes (not when any top-level agent does).
     const { rootAgentIdFor, PLANNER_KV } = await import("../primitives/ops");
     await (await import("../primitives/state")).kvWrite(runId, { k: PLANNER_KV, value: { agentId: rootAgentIdFor(runId, "planner") }, writer: "operator" });
-    root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates), key: "planner" });
+    // An orchestrate planner (plugin API §16.1) is told what its mode means; its profile says (overrides can't lift it).
+    const orchestrate = (() => { try { return (require("../agents/profiles") as typeof import("../agents/profiles")).resolveAgent(planner).spec?.toolMode === "orchestrate"; } catch { return false; } })();
+    root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates, { orchestrate }), key: "planner" });
   } catch (e) {
     // The run started, but its planner can't: the run ends failed with the reason (not left "started" with no agent).
     const reason = (e as Error)?.message ?? String(e);

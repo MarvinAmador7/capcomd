@@ -16,8 +16,9 @@ import { CLAUDE_CODE_VERSION, CODEX_VERSION, loadAgentConfig } from "../../src/a
 import { AGENTS_SCHEMA, applyOverrides, providerDefaultEffort, providerEfforts, resolveAgent, validateFile, validateSpec, type AgentSpec } from "../../src/agents/profiles";
 import { Redactor } from "../../src/agents/redact";
 import { logins } from "../../src/api/settings";
-import { claude } from "../../src/plugins/agent-claude";
-import { codex } from "../../src/plugins/agent-codex";
+import { claude, ORCHESTRATE_ALLOWED, ORCHESTRATE_DISALLOWED } from "../../src/plugins/agent-claude";
+import { codex, codexDenyRules } from "../../src/plugins/agent-codex";
+import { ORCHESTRATE_DENIED_COMMANDS } from "../../src/plugins/agent-common";
 import { agentProviderNames, agentSeam, useAgentSeams } from "../../src/plugins/agents";
 import { BUILTINS } from "../../src/plugins/builtins";
 import { VERSION } from "../../src/utils/self";
@@ -32,6 +33,17 @@ function host() {
   return new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: (n) => join(tmpdir(), "capcomd-agent-seams", n) });
 }
 const builtins = (): Candidate[] => BUILTINS.map((b) => ({ source: "builtin", manifest: b.manifest, module: b.module }));
+/** A Claude Code Bash rule: `Bash(<prefix>:*)` (the command's first words), `Bash(<exact>)`, or `*` as any text. */
+interface Rule { text: string; prefix: boolean; wild: boolean }
+const ruleOf = (t: string): Rule => {
+  const body = t.slice("Bash(".length, -1);
+  return body.endsWith(":*") ? { text: body.slice(0, -2), prefix: true, wild: false } : { text: body, prefix: false, wild: body.includes("*") };
+};
+function matchRule(r: Rule, cmd: string): boolean {
+  if (r.wild) return new RegExp(`^${r.text.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`).test(cmd);
+  return r.prefix ? cmd === r.text || cmd.startsWith(`${r.text} `) : cmd === r.text;
+}
+
 function agentsFile(agents: Record<string, unknown>) {
   const path = join(mkdtempSync(join(tmpdir(), "capcomd-agent-seams-")), "agents.json");
   writeFileSync(path, JSON.stringify({ schema: AGENTS_SCHEMA, agents }));
@@ -138,6 +150,10 @@ describe("the agent suite in `capcomd plugins validate --conformance` (§14)", (
     expect(names.every(([, ok, skipped]: [string, boolean, boolean]) => ok && !skipped)).toBe(true);
     const loose: AgentProvider = { ...claude, describe: () => ({ ...claude.describe(), toolPolicies: { orchestrate: { allowed: ["Read", "Edit"], disallowed: [] } } }) };
     expect(runAgentConformance(loose, { name: "claude" }).find((r) => !r.ok)?.message).toBe("the orchestrate allowlist names Edit");
+    // With no allowlist: a read-only sandbox, or command rules that refuse at least commits and pushes.
+    const open: AgentProvider = { ...codex, describe: () => ({ ...codex.describe(), toolPolicies: { orchestrate: { allowed: [], disallowed: [], denyCommands: ["bun test"] } } }) };
+    expect(runAgentConformance(open, { name: "codex" }).find((r) => !r.ok)?.message).toContain("needs sandbox \"read-only\" or denyCommands that refuse git commit and git push");
+    expect(runAgentConformance(codex, { name: "codex" }).every((r) => r.ok)).toBe(true);
   });
 });
 
@@ -216,28 +232,104 @@ describe("toolMode: orchestrate (§16.1)", () => {
     expect(applyOverrides("lead", { provider: "claude", auth: "apikey", children: { allowSpawn: true, allowedChildProfiles: ["worker"] } } as AgentSpec, { set: { toolMode: "orchestrate" } }).toolMode).toBe("orchestrate");
   });
 
-  test("claude: reading and capcomd only, edit tools denied, no bypassPermissions", () => {
+  test("claude: the read tools, capcomd and read-only commands allowed; edits and the commands that change or run code denied; no bypassPermissions", () => {
     const path = agentsFile({ planner: { provider: "claude", ...PLANNER, disallowedTools: ["WebFetch"] }, worker: { ...WORKER, disallowedTools: ["WebFetch"] } });
     const cfg = loadAgentConfig({ CAPCOMD_AGENTS_FILE: path, ANTHROPIC_API_KEY: "k" }, "planner");
-    expect(cfg).toMatchObject({ toolMode: "orchestrate", allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(capcomd:*)"], disallowedTools: ["WebFetch", "Edit", "Write", "MultiEdit", "NotebookEdit"] });
+    expect(cfg.toolMode).toBe("orchestrate");
+    expect(cfg.allowedTools).toEqual([...ORCHESTRATE_ALLOWED]);
+    expect(cfg.disallowedTools).toEqual(["WebFetch", ...ORCHESTRATE_DISALLOWED]);
+    for (const t of ["Read", "Glob", "Grep", "LS", "Bash(capcomd:*)", "Bash(git fetch:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git diff:*)", "Bash(git status:*)", "Bash(git branch -a:*)", "Bash(git ls-tree:*)", "Bash(git rev-parse:*)", "Bash(git blame:*)", "Bash(git switch --detach:*)", "Bash(git branch)"])
+      expect(cfg.allowedTools).toContain(t);
+    for (const t of ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git merge:*)", "Bash(git rebase:*)", "Bash(bun test:*)", "Bash(bun run:*)", "Bash(bun install:*)", "Bash(npm:*)", "Bash(git fetch *--upload-pack*)"])
+      expect(cfg.disallowedTools).toContain(t);
+    expect(cfg.disallowedTools).not.toContain("Bash");
     const cmd = claudeAdapter.command(ctx(cfg), q);
-    expect(cmd).toContain("--allowedTools 'Read,Glob,Grep,LS,Bash(capcomd:*)'");
-    expect(cmd).toContain("--disallowedTools 'WebFetch,Edit,Write,MultiEdit,NotebookEdit'");
+    expect(cmd).toContain(`--allowedTools '${ORCHESTRATE_ALLOWED.join(",")}'`);
+    expect(cmd).toContain(`--disallowedTools 'WebFetch,${ORCHESTRATE_DISALLOWED.join(",")}'`);
     expect(cmd).not.toContain("bypassPermissions");
     // A profile's own allowlist is narrowed to the policy, never widened by it.
     const narrowed = loadAgentConfig({ CAPCOMD_AGENTS_FILE: agentsFile({ p: { provider: "claude", ...PLANNER, allowedTools: ["Read", "Edit", "Bash(npm test:*)"] }, worker: { ...WORKER, allowedTools: ["Read"] } }), ANTHROPIC_API_KEY: "k" }, "p");
     expect(narrowed.allowedTools).toEqual(["Read"]);
     // The pinned spec the engine runs from carries the mode too.
     const pinned = loadAgentConfig({ ANTHROPIC_API_KEY: "k" }, "planner", { provider: "claude", ...PLANNER, kind: "claude-code" });
-    expect(pinned.allowedTools).toEqual(["Read", "Glob", "Grep", "LS", "Bash(capcomd:*)"]);
+    expect(pinned.allowedTools).toEqual([...ORCHESTRATE_ALLOWED]);
   });
 
-  test("codex: its sandbox is the limit, read-only whatever the profile asks", () => {
+  test("claude: no deny rule swallows an allowed command (a deny outranks every allow)", () => {
+    const allows = ORCHESTRATE_ALLOWED.filter((t) => t.startsWith("Bash(")).map(ruleOf);
+    const denies = ORCHESTRATE_DISALLOWED.filter((t) => t.startsWith("Bash(")).map(ruleOf);
+    for (const d of denies) for (const a of allows) {
+      // A deny prefix that starts an allowed prefix (word by word) would refuse every command the allow names.
+      if (!d.wild) expect(`${a.text} `.startsWith(`${d.text} `)).toBe(false);
+      else expect(matchRule(d, a.text)).toBe(false);
+    }
+  });
+
+  // Every allowed and refused case of §16.1, through Claude Code's rule semantics as the live probe (claude 2.1.303,
+  // Docker, 2026-11-05) showed them: a compound line runs only when each command in it is allowed and none denied; a
+  // command no rule names is refused (headless, allowlist mode). claude also refuses, by itself, a command whose
+  // shell variables or nested commands it can't check (`id=$(capcomd spawn …); capcomd await $id`).
+  test.each([
+    ["git fetch origin", true], ["git fetch -q origin goal && git log --oneline -3 origin/goal", true], ["git log --oneline | head -5", true],
+    ["git show origin/goal:src/b.ts", true], ["git diff origin/main origin/goal --stat", true], ["git status", true], ["git branch -a", true], ["git branch", true],
+    ["git ls-tree -r --name-only origin/goal", true], ["git rev-parse HEAD origin/goal", true], ["git blame src/a.ts | head -3", true],
+    ["git grep -n world origin/goal", true], ["git switch --detach origin/goal && ls src", true], ["ls src && cat src/a.ts", true],
+    ["capcomd await agt-1 && capcomd verify --ref agt-1", true], ["capcomd spawn --task \"x y\" --key p2", true], ["capcomd logs agt-1 --tail 50", true],
+    ["capcomd fetch main", true], ["capcomd events --after 3", true], ["capcomd inspect agt-1", true],
+    ["git commit --allow-empty -m x", false], ["git push origin HEAD:main", false], ["git merge origin/goal", false], ["git rebase origin/main", false],
+    ["git reset --hard HEAD~1", false], ["git stash", false], ["git checkout -b newbranch", false], ["git branch -D main", false], ["git pull", false],
+    ["bun test", false], ["bun run build", false], ["npm install left-pad", false], ["bunx tsc --noEmit", false], ["cd /tmp && bun test", false],
+    ["touch notes2.txt", false], ["rm README.md", false], ["sed -i s/readme/x/ README.md", false], ["make", false], ["node src/cli.ts", false],
+    ["git fetch --upload-pack='touch /tmp/x' origin", false], ["git fetch origin --upload-pack='touch /tmp/x'", false], ["git log --output=/tmp/x -1", false],
+    ["git diff --output=/tmp/x origin/main", false], ["git grep -O'touch /tmp/x' world origin/goal", false], ["git -c core.pager=x log -1", false],
+  ])("claude orchestrate: %s → allowed %p", (line, allowed) => {
+    const allows = ORCHESTRATE_ALLOWED.filter((t) => t.startsWith("Bash(")).map(ruleOf);
+    const denies = ORCHESTRATE_DISALLOWED.filter((t) => t.startsWith("Bash(")).map(ruleOf);
+    const parts = line.split(/\s*(?:&&|\|\||;|\|)\s*/).filter(Boolean).map((p) => (p.startsWith("cd ") ? null : p)).filter((p): p is string => p !== null);
+    const ok = parts.every((p) => allows.some((a) => matchRule(a, p)) && !denies.some((d) => matchRule(d, p)));
+    expect(ok).toBe(allowed);
+  });
+
+  test("codex: command rules forbid what changes or runs code; its sandbox stays the agent's (read-only can't fetch, nor start in Docker); capcomd's tools approved", () => {
     const path = agentsFile({ planner: { provider: "codex", ...PLANNER, sandbox: "danger-full-access" }, worker: WORKER });
     const cfg = loadAgentConfig({ CAPCOMD_AGENTS_FILE: path, OPENAI_API_KEY: "k" }, "planner");
-    expect(cfg).toMatchObject({ toolMode: "orchestrate", codexSandbox: "read-only" });
+    expect(cfg).toMatchObject({ toolMode: "orchestrate", codexSandbox: "danger-full-access", denyCommands: [...ORCHESTRATE_DENIED_COMMANDS] });
     expect(cfg.allowedTools).toBeUndefined();
-    expect(codexAdapter.command(ctx(cfg), q)).toContain("--sandbox read-only");
+    const cmd = codexAdapter.command({ ...ctx(cfg), capcomd: { cli: "/rpc/bin/capcomd", mcpConfig: "/w/mcp.json" } }, q);
+    expect(cmd).toContain("--sandbox danger-full-access");
+    expect(cmd).not.toContain("--sandbox read-only");
+    // The rules are written where codex reads user rules, before it starts.
+    expect(cmd.indexOf("capcomd-orchestrate.rules")).toBeLessThan(cmd.indexOf(" exec --json"));
+    expect(cmd).toContain(`mkdir -p "\${CODEX_HOME:-$HOME/.codex}/rules"`);
+    expect(cmd).toContain(`'mcp_servers.capcomd.default_tools_approval_mode="approve"'`);
+    // `bash -c`, not `bash -lc`: a login shell's /etc/profile resets PATH (capcomd, bun: "command not found" in Docker).
+    expect(cmd).toContain(" -c allow_login_shell=false");
+    // An execute codex agent gets no rules.
+    const exec = loadAgentConfig({ CAPCOMD_AGENTS_FILE: agentsFile({ w: { provider: "codex", auth: "apikey" } }), OPENAI_API_KEY: "k" }, "w");
+    expect(codexAdapter.command(ctx(exec), q)).not.toContain("rules");
+    // A profile that asks for a read-only sandbox keeps it (the policy never loosens a sandbox).
+    const ro = loadAgentConfig({ CAPCOMD_AGENTS_FILE: agentsFile({ planner: { provider: "codex", ...PLANNER, sandbox: "read-only" }, worker: { ...WORKER, sandbox: "read-only" } }), OPENAI_API_KEY: "k" }, "planner");
+    expect(ro.codexSandbox).toBe("read-only");
+  });
+
+  test("codex: the rules file is codex execpolicy, one forbidden prefix rule per denied command", () => {
+    const rules = codexDenyRules(["git push", "bun test"]);
+    expect(rules.split("\n").filter(Boolean)).toEqual([
+      expect.stringMatching(/^prefix_rule\(pattern = \["git","push"\], decision = "forbidden", justification = ".*capcomd orchestrate mode.*"\)$/),
+      expect.stringMatching(/^prefix_rule\(pattern = \["bun","test"\], decision = "forbidden", justification = ".*"\)$/),
+    ]);
+    // Everything §16.1 refuses that a command's first words name; what it allows isn't (codex 0.163/0.166
+    // `execpolicy check`, and the live probe in the codex image: push, commit, merge, bun test, `cd x && bun test` refused).
+    const denied = (line: string) => ORCHESTRATE_DENIED_COMMANDS.some((d) => `${line} `.startsWith(`${d} `));
+    for (const c of ["git push origin HEAD:main", "git commit -m x", "git merge origin/goal", "git rebase main", "bun test", "bun run build", "npm install x", "bun install", "make", "rm -rf src"]) expect(denied(c)).toBe(true);
+    for (const c of ["git fetch origin", "git log --oneline", "git show origin/goal:src/b.ts", "git diff a b", "git status", "capcomd spawn --task x", "capcomd fetch", "ls src", "cat README.md"]) expect(denied(c)).toBe(false);
+  });
+
+  test("codex: a refused command, which codex 0.163 reports only on stderr, is read from its log line", () => {
+    const line = '2026-11-05T19:13:04.307231Z ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: "Rejected(\\"`/bin/bash -lc \'git push origin HEAD:main\'` rejected: capcomd orchestrate mode: this agent sees everything and runs nothing that changes or runs code.\\")" }';
+    expect(codex.refusal!(line, (s) => s)).toEqual({ call: 'command "git push origin HEAD:main"', reason: "capcomd orchestrate mode: this agent sees everything and runs nothing that changes or runs code." });
+    expect(codex.refusal!("2026-11-05T19:13:04Z INFO codex_core: started", (s) => s)).toBeNull();
+    expect(claude.refusal).toBeUndefined();
   });
 
   test("an execute agent is unchanged", () => {

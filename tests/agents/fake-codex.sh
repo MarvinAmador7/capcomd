@@ -14,6 +14,9 @@ if [[ "$prompt" == *"[loop]"* ]]; then
   for i in $(seq 1 200); do e "{\"type\":\"item.completed\",\"item\":{\"id\":\"i$i\",\"type\":\"command_execution\",\"command\":\"ls\",\"exit_code\":0,\"status\":\"completed\"}}"; sleep 0.05; done; exit 0
 fi
 [[ "$prompt" == *"[leak]"* ]] && e "{\"type\":\"item.completed\",\"item\":{\"id\":\"m0\",\"type\":\"agent_message\",\"text\":\"key $CODEX_API_KEY\"}}"
+# [refuse]: a command its rules forbid, which codex 0.163 reports only on stderr. [scribble]: write a file anyway.
+[[ "$prompt" == *"[refuse]"* ]] && printf '%s\n' "2026-11-05T19:13:04.307231Z ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: \"Rejected(\\\"\`/bin/bash -lc 'git push origin HEAD:main'\` rejected: capcomd orchestrate mode: no pushes\\\")\" }" >&2
+[[ "$prompt" == *"[scribble]"* ]] && printf 'notes\n' > notes.txt
 e '{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"bash -lc ls","status":"in_progress"}}'
 e '{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"bash -lc ls","exit_code":0,"status":"completed"}}'
 if [[ "$prompt" != *"[nochange]"* ]]; then

@@ -688,7 +688,9 @@ returning it (today `Redactor.text`); `redactJson` (`packages/plugin/src/seams.t
 kernel's own rule, a credential-named key's string replaced whole. The kernel keeps one `AgentRunState` object per run,
 so a provider may keep fields of its own on it between lines. The `AgentConfig` a provider reads has the kernel's
 `credentialMode` values (`auto` included) and `usdPerMtok`, the operator's token rates for a CLI that reports tokens and
-not cost. The kernel's runner (`src/agents/runner.ts`) stays the kernel's: it does clone,
+not cost, and `denyCommands`, the command prefixes an orchestrate agent's CLI must refuse (§16.1). The optional, pure
+`refusal(line, redact)` reads a tool call the CLI refused from one line of its stderr, for a CLI that reports refusals
+only there (codex). The kernel's runner (`src/agents/runner.ts`) stays the kernel's: it does clone,
 install, credentials, start, streaming, guards, cancel, commit and push; the provider says how its CLI is invoked and read.
 ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude` and `codex` are the built-ins
 (`agent-claude`, `agent-codex`: `src/plugins/agent-claude.ts`, `agent-codex.ts`). Only the daemon has a plugin host: in
@@ -1120,7 +1122,7 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
   golden `AgentRunState`; `guard` fires at `maxTurns`, or `command` hands the limit to a CLI that enforces it itself
   (Claude Code `--max-turns`); `outcome` of each fixture matches; `command` writes to `ctx.jsonl`; `parse` returns null
   for a foreign line and redacts every string; `toolPolicies.orchestrate` contains no edit or write tool (and, with no
-  allowlist, has `sandbox: "read-only"`). The suite is `packages/plugin/src/agent-conformance.ts`; every method it calls
+  allowlist, has `sandbox: "read-only"` or `denyCommands` that refuse `git commit` and `git push`). The suite is `packages/plugin/src/agent-conformance.ts`; every method it calls
   is pure, so `capcomd plugins validate --conformance` runs it with no streams, and a plugin's own tests pass theirs to
   `testkit.conformance.agent`.
 - **forge**: against a local bare repository (`tests/merge/gitfixture.ts`): `land direct` is a CAS (a moved target is
@@ -1219,24 +1221,69 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
 `PinnedSpec.toolMode`; in today's `capcomd.agents/v1` file, whose fields are the pinned spec's, it is the flat
 `toolMode` field. For `orchestrate`:
 
-1. The agent provider's `describe().toolPolicies.orchestrate` (§7.3) gives the CLI's tool lists that leave only reading
-   and the capcomd command (Claude Code: allow `Read, Glob, Grep, LS, Bash(capcomd:*)`, disallow `Edit, Write,
-   MultiEdit, NotebookEdit`, and not `Bash`: a deny rule outranks every allow, so it would take `Bash(capcomd:*)` with
-   it, and with an allowlist Claude Code refuses any other command headless; Codex: no lists, `sandbox: "read-only"`,
-   its `--sandbox`, with the capcomd MCP server, which Codex starts outside its sandbox). The kernel applies them on
-   top of the profile's own lists when it builds the agent's config, after `agent.preparing`: `allowed` replaces the
-   profile's allowlist or narrows it, `disallowed` joins its denylist, `sandbox` is the loosest the CLI runs in. A
-   profile cannot widen them (`widenings()` treats mode as a limit; a child's own mode is its own, as its provider is).
+1. **It sees everything and runs nothing.** Allowed: reading and searching files; read-only git, `fetch` included
+   (`log`, `show`, `diff`, `status`, listing branches, `ls-tree`, `ls-files`, `rev-parse`, `rev-list`, `blame`, `grep`,
+   `cat-file`, `merge-base`, a detached checkout of a ref to read it: `git switch --detach origin/<branch>`); every
+   capcomd read and inspect command and tool (status, tree, events, logs, inspect, results, verify and merge reports
+   with their full check output) and `capcomd fetch` (below). Refused: file edits and writes; commits, merges, rebases,
+   resets and pushes (its children's work lands only through `capcomd verify`/`merge`); package installs; builds,
+   tests and running the program. It knows the code works the way a router does: the checks run at verify and merge,
+   and it reads their output (a merge's `result.combined`, below, says whether they ran on the combined code).
+   The agent provider's `describe().toolPolicies.orchestrate` (§7.3) gives the CLI's lists:
+   - Claude Code: an allowlist (`Read, Glob, Grep, LS`, `Bash(capcomd:*)`, `Bash(<read-only command>:*)` for the
+     commands above and `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `jq`, …) and a denylist (`Edit, Write,
+     MultiEdit, NotebookEdit`, `Bash(<prefix>:*)` for git's writes, package managers, test runners and builds, and
+     `Bash(git fetch *--upload-pack*)`, `Bash(git grep *-O*)`, `Bash(git * --output*)`: options of allowed commands
+     that run a command or write a file). With an allowlist Claude Code runs without `bypassPermissions` and refuses
+     any command the list doesn't name, headless. No denied prefix starts an allowed one: a deny rule outranks every
+     allow (a bare `Bash` deny would take `Bash(capcomd:*)` with it). Compound lines of allowed commands run
+     (`git log --oneline | head`, `git fetch -q origin x && git log origin/x`); Claude Code itself refuses a command
+     whose shell variables it can't check (`id=$(capcomd spawn …); capcomd await $id`), so briefs say to run each
+     capcomd command on its own.
+   - Codex: no lists; `denyCommands`, the refused command prefixes, which the provider writes as codex execpolicy
+     rules (`$CODEX_HOME/rules/capcomd-orchestrate.rules`, `decision = "forbidden"`), and the capcomd MCP server's
+     tools approved up front (`default_tools_approval_mode = "approve"`; `codex exec` never asks, so a tool that needs
+     an approval is refused). Its sandbox stays the agent's: `--sandbox read-only` blocks `git fetch` (a write to
+     `.git`, and no network) and can't start in a container at all (bubblewrap needs user namespaces, which Docker
+     doesn't allow), so every command failed, reads included. Codex's rules see the commands of a simple shell line
+     (`cd x && bun test` is refused) but not a redirection (`echo x > f` runs): what an orchestrate agent writes anyway
+     stays in its checkout and never lands (item 3), and the runner reports it in the agent's log and trace
+     (`agent.orchestrate_discarded`).
+   The kernel applies them on top of the profile's own lists when it builds the agent's config, after
+   `agent.preparing`: `allowed` replaces the profile's allowlist or narrows it, `disallowed` joins its denylist,
+   `denyCommands` joins `AgentConfig.denyCommands`, `sandbox` is the loosest the CLI runs in. A profile cannot widen
+   them (`widenings()` treats mode as a limit; a child's own mode is its own, as its provider is).
+   **`capcomd fetch [branch…]`** (`capcomd_fetch`; an in-VM op, `fetch`): the host fetches the run's repository into
+   the agent's checkout as `refs/remotes/origin/*`, with the sandbox's git credentials, which the agent's own shell
+   never has (so a private repository's branches are readable too), by the repository's URL and not the checkout's
+   `origin`; a checkout whose git settings could send those credentials elsewhere or run a command (`url.*`,
+   `credential.*`, `http.*`, `include*`, `core.sshCommand`, …) is refused. It answers each branch's commit.
+   **A merge says whether its checks ran on the combined code**: a verify's and a merge's result gain `combined`
+   (additive): `{checked, passed, at: "verify" | "merge", on, earlierMerges, text}`, `on` the target commit the change
+   was put on and `earlierMerges` the run's merges into that target already on it; `text` says it plainly ("checks ran
+   on the combined code (this change on main with 1 earlier merge from this run): pass"). The CLI prints the text; the
+   MCP tools' `next` carries it.
 2. `children.allowSpawn` MUST be true (an orchestrator with no children can do nothing; `validate` refuses it).
 3. The kernel refuses `verify` and `merge` of such an agent's **own** ref (`ops.verifyRef`, `mergeRef`: `invalid`,
    relay.v1 code `usage` with reason `invalid`, "an orchestrate agent has no work of its own"), and the runner never
-   commits or pushes its work.
-4. `jobs.foregroundMs` defaults to 5 000 for `orchestrate` agents and 60 000 otherwise (§16.2), matching the prototype's
+   commits or pushes its work. An orchestrate agent that finishes having spawned no agents (its tools refused, or it
+   gave up) ends `failed` (`result.errorKind: "orchestrate_no_children"`, with its last words), never a silent `done`:
+   nothing it did can land, so a run whose planner did that doesn't report ok. Its final message is its `summary` when
+   it declared none.
+4. Everyone who hands an orchestrate agent work is told what the mode means: the profile's `description` and `does`
+   (`capcomd_profiles`, `capcomd agents list`, which also show `toolMode`), the MCP server's instructions, the driver
+   skill, the planner's brief and the orchestration skill an orchestrate agent gets. They say: it sees everything and
+   runs nothing; give it no task that needs it to run code itself (its helpers write and test the code); checks happen at verify and merge, and their results are
+   readable.
+5. `capcomd logs <agt>` shows every agent's tool calls and refusals (`tool …`, `error …`, `refused <call>: <reason>`)
+   next to the `[capcomd] <op> → …` lines, planners and leads included. A provider whose CLI reports refusals only on
+   stderr implements `refusal(line)` (§7.3; codex 0.163 leaves a command its rules forbid out of `--json`).
+6. `jobs.foregroundMs` defaults to 5 000 for `orchestrate` agents and 60 000 otherwise (§16.2), matching the prototype's
    router and `standard` presets, so a planner's shell never blocks its inbox.
 
 Enforcement is the agent provider (its CLI's permission system inside the sandbox) and the kernel's refusal to land an
 orchestrator's branch: no special case in the planner recipe. The `planner` and `lead` profiles `capcomd setup project`
-writes get `tools.mode: orchestrate`; `plannerBrief`'s sentence stays as explanation. This is a profile capability, not
+writes get `tools.mode: orchestrate` and a `description` that says what it means; `plannerBrief` explains it (item 4). This is a profile capability, not
 a hook, because it is a property of the agent for its whole life.
 
 ### 16.2 Background jobs
@@ -1456,6 +1503,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.3 | 2026-11-05 | With the agent providers as plugins (§17.2 step 4): §7.3's `AgentConfig` gains `auto` and `usdPerMtok`, `toolPolicies.orchestrate` gains `sandbox`, `redactJson`, where the active providers come from, the runner's kind; §16.1's Claude Code policy denies no bare `Bash`, Codex's is its sandbox, v1 profiles spell the mode `toolMode`, the refusal's relay.v1 code, and the policy applied as the config is built; §14.2's agent suite: the turn limit may be the CLI's, `parse`'s null and redaction, a read-only sandbox for a policy with no allowlist, where it lives. |
 | 1.0.4 | 2026-11-05 | With the gates (§17.2 step 5): the built-in gates in a process that isn't the daemon (§6.1); `merge --operator` asks every landing gate (§6.5); `verify.judging`'s `tested.commit`, judges in order, a judge's `review` report, the kernel's same-tree and no-review rules, stopped reviewers (§6.6.13); the built-in reviewer gate (§15.3); the gate events as scope events, a plugin's own run events not yet (§13.1). |
 | 1.0.5 | 2026-11-05 | With the forges (§17.2 step 6): `LandRequest.branchSha`/`leaseBranch`, `PullRequestRef.mergeSha`, a conflict's `detail` and unknown `targetSha` (all additive); a pr land merges at the checked head (`branchSha`), not a pushed integrated commit; `merge.forge` from `CAPCOMD_MERGE_FORGE` (not `.capcomd.json`), `CAPCOMD_GITHUB_REPO` naming `github`; `forge-git` is `order: post`; `forge-fake` lives in `tests/merge/forge-fake`. |
+| 1.0.6 | 2026-11-05 | Orchestrate means full read visibility and no execution (§16.1, the owner's call after a live run whose planner and lead couldn't `git fetch`): read-only git with fetch and a detached checkout, every capcomd read; edits, git writes, installs, builds and tests refused. Claude Code's lists gain the read-only commands and the refused prefixes (plus three option wildcards); Codex's policy is `denyCommands` as execpolicy rules with its sandbox the agent's (`read-only` can't fetch and can't start in Docker) and its capcomd MCP tools approved; `toolPolicies.orchestrate.denyCommands`, `AgentConfig.denyCommands` and the optional `refusal(line)` (§7.3; all additive); the agent suite accepts `denyCommands` that refuse commits and pushes in place of a read-only sandbox. `capcomd fetch`; a verify's and a merge's `result.combined`; an orchestrate agent that spawned nothing ends failed; the mode is explained to everyone who briefs one; `capcomd logs` shows every agent's tool calls and refusals. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

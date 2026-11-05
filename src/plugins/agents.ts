@@ -54,6 +54,7 @@ export function seamConfig(cfg: AgentConfig): SeamConfig {
   return {
     model: cfg.model, effort: cfg.effort, maxTurns: cfg.maxTurns, maxBudgetUsd: cfg.maxBudgetUsd,
     allowedTools: cfg.allowedTools, disallowedTools: cfg.disallowedTools, sandbox: cfg.codexSandbox, credentialMode: cfg.credentialMode,
+    ...(cfg.denyCommands?.length ? { denyCommands: cfg.denyCommands } : {}),
     ...(cfg.codexUsdPerMtokIn !== undefined && cfg.codexUsdPerMtokOut !== undefined ? { usdPerMtok: { in: cfg.codexUsdPerMtokIn, out: cfg.codexUsdPerMtokOut } } : {}),
   };
 }
@@ -82,6 +83,7 @@ export function adapterOf(p: AgentProvider): AgentAdapter {
     loginEgress: [...d.loginEgress],
     verifyCommand: (bin, q) => p.verifyCommand(bin, q),
     outcome: (state, exitCode) => p.outcome(state, exitCode),
+    ...(p.refusal ? { refusal: (line, r) => p.refusal!(line, (s) => r.text(s)) } : {}),
   };
   adapters.set(p, a);
   return a;
@@ -102,14 +104,16 @@ const SANDBOX_RANK = { "read-only": 0, "workspace-write": 1, "danger-full-access
 
 /**
  * §16.1: an `orchestrate` agent's config, the provider's `toolPolicies.orchestrate` on top of the profile's own lists.
- * The allowlist becomes the policy's (or the profile's, narrowed to it), the denylist gains the policy's, and the
- * CLI's sandbox is no looser than the policy's. A provider with no allowlist (codex) leaves the profile's alone.
+ * The allowlist becomes the policy's (or the profile's, narrowed to it), the denylist and the denied commands gain the
+ * policy's, and the CLI's sandbox is no looser than the policy's. A provider with no allowlist (codex) leaves the
+ * profile's alone.
  */
-export function orchestrateConfig<C extends Pick<AgentConfig, "allowedTools" | "disallowedTools" | "codexSandbox">>(cfg: C, provider: AgentProvider): C {
+export function orchestrateConfig<C extends Pick<AgentConfig, "allowedTools" | "disallowedTools" | "codexSandbox" | "denyCommands">>(cfg: C, provider: AgentProvider): C {
   const policy = provider.describe().toolPolicies.orchestrate;
   const next = { ...cfg };
   if (policy.allowed.length) next.allowedTools = cfg.allowedTools ? cfg.allowedTools.filter((t) => policy.allowed.includes(t)) : [...policy.allowed];
   next.disallowedTools = [...new Set([...cfg.disallowedTools, ...policy.disallowed])];
+  if (policy.denyCommands?.length) next.denyCommands = [...new Set([...(cfg.denyCommands ?? []), ...policy.denyCommands])];
   if (policy.sandbox && SANDBOX_RANK[cfg.codexSandbox] > SANDBOX_RANK[policy.sandbox]) next.codexSandbox = policy.sandbox;
   return next;
 }

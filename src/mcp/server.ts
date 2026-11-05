@@ -75,7 +75,7 @@ const project = z.string().optional().describe("Project: a name from capcomd_pro
  * where to start. Kept short; the capcomd-orchestration skill has the rest.
  */
 export const INSTRUCTIONS = `capcomd runs a team of coding agents for you: each agent works in its own VM (or container) on its own branch, capcomd_verify runs the project's checks and reviewer on its work, and capcomd_merge lands only the verified commit. You are the driver: you choose the team and its shape.
-Team shapes: single loop (one agent: one coherent change); wide fan-out (independent parts at once); contract first, then wide (land the shared types/stubs, then start every part at once, consumers against the stubs); leads with helpers (a lead profile, spawned with children: {maxChildren: N, maxDepth: 1}, splits its part among helpers and verifies and merges their work). When the user asks for parallel work, a team or a swarm, go wide and give a lead to any part with two or more independent sub-parts.
+Team shapes: single loop (one agent: one coherent change); wide fan-out (independent parts at once); contract first, then wide (land the shared types/stubs, then start every part at once, consumers against the stubs); leads with helpers (a lead profile, spawned with children: {maxChildren: N, maxDepth: 1}, splits its part among helpers and verifies and merges their work). When the user asks for parallel work, a team or a swarm, go wide and give a lead to any part with two or more independent sub-parts. A lead or planner with toolMode orchestrate (capcomd_profiles) sees everything and runs nothing: give it no task that needs it to run code itself (its helpers write and test the code); its helpers' checks run at verify and merge, and it reads their results.
 Load the capcomd-orchestration skill (its "Choose a team shape" section) before planning. Start with capcomd_setup: it says whether capcomd is ready, the project's gates and how many agents run at once here.`;
 
 /**
@@ -147,7 +147,7 @@ export function buildServer(): McpServer {
 
   server.registerTool("capcomd_profiles", {
     title: "Agent profiles",
-    description: "Agent profiles you can spawn (provider, login, model) and whether each is ready, with what each can do in plain words (`does`) and, for a profile that can lead a part, how many helpers it may spawn (`canLead`, e.g. \"up to 3 worker helpers, one level\"; null: it works alone).",
+    description: "Agent profiles you can spawn (provider, login, model) and whether each is ready, with what each can do in plain words (`does`) and, for a profile that can lead a part, how many helpers it may spawn (`canLead`, e.g. \"up to 3 worker helpers, one level\"; null: it works alone), and its `toolMode`: `orchestrate` (a lead, a planner) sees everything and runs nothing, so give it no task that needs it to run code itself (its helpers write and test the code) (its children's checks run at verify and merge, and their output is readable); `execute` does the work itself.",
     inputSchema: { project }, annotations: READ,
   }, routed("capcomd_profiles", () => D.profiles(), false));
 

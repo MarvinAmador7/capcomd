@@ -14,7 +14,29 @@ Give each child a title when you spawn it (\`--title "…"\`)${o.planner ? `, an
 (\`capcomd title --run "<2-4 words>"\`)` : ""}.`}`;
 }
 
-export function orchestrationSkill(o: { agentId: string; limits: Limits; budget: Budget; mcp: boolean; goal?: { branch: string; base: string } | null; root?: boolean }): string {
+/**
+ * Plugin API §16.1: what an orchestrate agent (a planner, a lead) is told about its mode. It knows everything and
+ * executes nothing, as DeepSeek's super-agent router: it reads, routes and decides; its children do and check the work.
+ */
+export function orchestrateSkill(o: { mcp: boolean }): string {
+  return `
+## You orchestrate: you see everything and run nothing
+Your profile's tool mode is orchestrate. You can read and search every file, read any branch and its history, and
+read everything capcomd knows: \`capcomd fetch\`${o.mcp ? " (capcomd_fetch)" : ""} brings in the latest branches as origin/<branch>
+(e.g. your target after a merge); then \`git log\`, \`git show origin/<branch>:<path>\`, \`git diff\`, \`git grep\`, or
+\`git switch --detach origin/<branch>\` to read it with the file tools. \`capcomd inspect\`, \`capcomd logs\`, \`capcomd events\`
+and every verify and merge report show each agent's work and the checks' full output.
+You can't edit or write files, commit, merge, rebase or push (your children's work lands only through \`capcomd merge\`),
+install packages, or run builds, tests or the program: those are refused. You don't need to: \`capcomd verify\` runs the
+checks on a child's work put on your target, and \`capcomd merge\` runs them again on the combined code when the target
+moved; its result says so (\`result.combined.text\`, e.g. "checks ran on the combined code (… with 1 earlier merge from
+this run): pass"). Report those results; don't try to re-run them. Work that must run code (an end-to-end check, a
+smoke test of the whole) is a child's task: spawn one, or pin a check. Run each capcomd command on its own and read the
+ids from its JSON output (a shell variable like \`id=$(capcomd spawn …)\` can't be checked, so it is refused).
+`;
+}
+
+export function orchestrationSkill(o: { agentId: string; limits: Limits; budget: Budget; mcp: boolean; goal?: { branch: string; base: string } | null; root?: boolean; orchestrate?: boolean }): string {
   const L = o.limits;
   const b = Object.entries(o.budget).map(([k, v]) => `${k}=${v}`).join(", ") || "unlimited";
   // A goal-branch run: every verified, reviewed merge lands on the goal branch at once (no PR per child, no approval);
@@ -47,6 +69,7 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   capcomd wait-any <agt…>   |   capcomd await <agt…>                    # structured results
   capcomd verify --ref <agt>                                            # runs operator-set checks; never trust a self-report
   capcomd merge --ref <agt> --require <vfyId> --key m-<child>          # only verified commits land
+  capcomd fetch [branch…]                                               # the latest branches as origin/<branch>, to read
   capcomd result --summary "<what you did, what landed>"                # last thing before you exit
 
 ## Sizing fan-out (you decide per child, at spawn time)
@@ -103,5 +126,5 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
 - Report progress with \`capcomd heartbeat "<note>"\` on long steps; silent agents are flagged stuck.
 - \`capcomd handoff --task …\` passes the rest of your task to a successor; then exit.
 - \`capcomd help\` lists every command.
-${goal}`;
+${o.orchestrate ? orchestrateSkill({ mcp: o.mcp }) : ""}${goal}`;
 }

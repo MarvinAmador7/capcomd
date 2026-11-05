@@ -110,6 +110,8 @@ export interface AgentConfig {
   /** Unset: every tool, without permission prompts (the VM is the boundary; agents never hold push credentials). */
   allowedTools?: string[];
   disallowedTools: string[];
+  /** Command prefixes the CLI's own rules refuse (an orchestrate agent's, plugin API §16.1; codex execpolicy). */
+  denyCommands?: string[];
   model?: string;
   /** Reasoning effort (claude --effort, codex model_reasoning_effort); unset: the CLI's default. */
   effort?: string;

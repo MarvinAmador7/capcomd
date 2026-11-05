@@ -71,8 +71,8 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
     }
     case "list": {
       const f = guard(() => readAgentsFile(path));
-      const rows = Object.entries(f.agents).map(([n, s]) => ({ name: n, provider: s.provider, auth: s.auth, model: s.model ?? null, default: f.default === n, canSpawn: !!s.children?.allowSpawn, canLead: leadText(s), does: abilityText(s), ...readiness(n, s) }));
-      out({ file: path, default: f.default ?? null, agents: rows }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}`).join("\n") : `no agents (${path}); add one: capcomd agents add <name> --provider claude|codex --auth apikey|subscription`);
+      const rows = Object.entries(f.agents).map(([n, s]) => ({ name: n, provider: s.provider, auth: s.auth, model: s.model ?? null, default: f.default === n, canSpawn: !!s.children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute", ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...readiness(n, s) }));
+      out({ file: path, default: f.default ?? null, agents: rows }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") : `no agents (${path}); add one: capcomd agents add <name> --provider claude|codex --auth apikey|subscription`);
       return 0;
     }
     case "show": {

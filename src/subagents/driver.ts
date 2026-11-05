@@ -40,7 +40,9 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
     mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits), ttlMs }); jti = t.claims.jti; return t.token; },
     handle: async (req) => {
       driverKillpoint(`rpc.${req.op}.before`);
-      const r = await handleRpc(req, { runId, agentId: a.agentId });
+      // The agent's machine: its VM, or this host for a scripted agent on a local spool.
+      const exec = spool instanceof VmSpool ? (cmd: string[], o: { cwd?: string; timeoutMs?: number }) => spool.provider.exec(spool.vmId, cmd, o) : localExec;
+      const r = await handleRpc(req, { runId, agentId: a.agentId, exec });
       // Counted by request: each spawn/send/verify/merge is one more; polls of await are the same wait.
       if (r.ok) activity.op(req.op, ["spawn", "send", "verify", "merge"].includes(req.op) ? String(req.id) : "");
       driverKillpoint(`rpc.${req.op}.before_reply`); // handled (e.g. child spawned) but the VM never got the answer
@@ -57,6 +59,13 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
       if (jti) await s.revokeToken({ jti, agentId: a.agentId, reason: `agent ${a.agentId} finished` }).catch(() => {});
     },
   };
+}
+
+/** A command on this host (a scripted agent's machine), as a sandbox's exec answers. */
+async function localExec(cmd: string[], o: { cwd?: string; timeoutMs?: number }): Promise<{ code: number; stdout: string; stderr: string }> {
+  const { execFile } = await import("child_process");
+  return new Promise((done) => execFile(cmd[0]!, cmd.slice(1), { cwd: o.cwd, timeout: o.timeoutMs, encoding: "utf8", maxBuffer: 16 << 20, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+    (e, stdout, stderr) => done({ code: e ? (typeof (e as { code?: unknown }).code === "number" ? (e as { code: number }).code : 1) : 0, stdout: stdout ?? "", stderr: stderr || (e ? String(e.message) : "") })));
 }
 
 /** Real agent VM: pump while `work` runs (the worker actor's pushBranch). `rpcDir`: its spool in the VM. */

@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, 
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 
 const DIR = process.env.CAPCOMD_RPC_DIR || "/tmp/capcomd-rpc";
 const TOKEN_FILE = process.env.CAPCOMD_TOKEN_FILE || join(DIR, "token");
@@ -124,6 +125,7 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
        | claim [tsk] [--lease-ms N] | renew|release|done <tsk> --epoch E [--result JSON]
   kv get <k> | put <k> <json> [--key K] | cas <k> <json> --expect V | del <k> [--expect V] | list [--prefix P]
   verify --ref <agt> [--acceptance JSON] [--key K]  (uses the check pinned at spawn)   merge --ref <agt> --require <vfy> [--key K]
+  fetch [branch…]   the latest branches into your checkout as origin/<branch> (e.g. the target after a merge), to read with git log/show/diff
   mcp   (serve these as MCP tools over stdio)`;
 
 export function toCall(argv) {
@@ -185,8 +187,15 @@ export function toCall(argv) {
       return { op: "verify", args: { ref: fl.ref, check: fl.check, acceptance: json(fl.acceptance, "--acceptance"), key: vkey, ...extra }, verifyLoop: true };
     }
     case "merge": if (!fl.ref || !fl.require) usage("merge needs --ref <agt> --require <vfy>"); return { op: "merge", args: { ref: fl.ref, require: fl.require, key } };
+    case "fetch": return { op: "fetch", args: { refs: pos, dir: checkout() } };
   }
   return usage(cmd ? `unknown command ${cmd}` : "no command");
+}
+
+/** This agent's checkout (where `fetch` lands): the runner's CAPCOMD_CHECKOUT, else the git checkout around the cwd. */
+function checkout() {
+  if (process.env.CAPCOMD_CHECKOUT) return process.env.CAPCOMD_CHECKOUT;
+  try { return execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return process.cwd(); }
 }
 
 function exitFor(r) { return r.ok ? 0 : r.error?.retryable ? 75 : r.error?.code === "usage" ? 2 : 1; }
@@ -211,7 +220,8 @@ export const TOOLS = [
   ["task", "Shared task board: action add|list|show|claim|renew|release|done.", S({ action: str, title: str, task: str, epoch: num, leaseMs: num, after: ids, data: {}, result: {}, status: str, key: str }, ["action"])],
   ["kv", "Shared blackboard: action get|put|cas|del|list (cas needs expect=version).", S({ action: str, k: str, value: {}, expect: num, prefix: str, key: str }, ["action"])],
   ["verify", "Run the run's checks on a child's branch (never self-reported); a child pinned with spawn check uses that check.", S({ ref: str, check: str, acceptance: {}, key: str }, ["ref"])],
-  ["merge", "Merge a child's verified commit (needs require=vfy id).", S({ ref: str, require: str, key: str }, ["ref", "require"])],
+  ["merge", "Merge a child's verified commit (needs require=vfy id). Its result says whether the checks ran on the combined code (result.combined).", S({ ref: str, require: str, key: str }, ["ref", "require"])],
+  ["fetch", "Fetch the latest branches (all, or `branches`) into your checkout as origin/<branch>, e.g. the target after a merge; read them with git log/show/diff, or `git switch --detach origin/<branch>` and the file tools. Changes no code.", S({ branches: ids })],
   ["inspect", "Everything about one agent: record, children, awaits, VM, logs, events.", S({ agent: str, tail: num }, ["agent"])],
   ["logs", "Tail an agent's logs (fenced).", S({ agent: str, tail: num }, ["agent"])],
   ["heartbeat", "Report progress (keeps you from being flagged stuck).", S({ note: str })],
@@ -234,7 +244,8 @@ async function mcp() {
       else if (m.method === "tools/list") send({ jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } });
       else if (m.method === "tools/call") {
         const name = String(m.params?.name ?? "").replace(/^capcomd_/, "").replace("wait_any", "wait-any");
-        const args = m.params?.arguments ?? {};
+        const a0 = m.params?.arguments ?? {};
+        const args = name === "fetch" ? { refs: [].concat(a0.branches ?? []), dir: checkout() } : a0;
         const r = name === "await" || name === "wait-any" ? await awaitLoop(name, args) : name === "verify" ? await verifyLoop({ ...args, key: args.key ?? `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }) : await call(name, args);
         send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: JSON.stringify(r.ok ? r.result : r.error) }], isError: !r.ok } });
       } else if (m.method === "ping") send({ jsonrpc: "2.0", id: m.id, result: {} });
