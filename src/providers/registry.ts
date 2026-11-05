@@ -1,11 +1,13 @@
 // ADR-020: the sandbox providers capcomd knows, by the name CAPCOMD_SANDBOX selects, and what each can do. Code
 // that depends on a feature asks for the capability (`sandboxCaps().snapshots`), never for a provider by name, so a
-// new provider is one entry here plus its SandboxProvider.
+// new provider is one sandbox plugin (docs/spec/plugin-api.md §7.2).
 // ADR-021 §1: each entry is the provider's descriptor, which the daemon also serves to clients as data
 // (GET /v1/sandboxes): its name and label, the settings and info rows its details screen shows, and the resource
 // actions it supports. Everything that lists places (run options, logins, environments, the API's sandbox names) is
 // derived from the listed descriptors here.
 import { env as envVar } from "../utils/env";
+import type { SANDBOX_BUILTINS } from "../plugins/builtin/sandboxes";
+import { describedSandboxes } from "../plugins/sandboxes";
 
 export interface ProviderCaps {
   /** Where an agent's commands run: in a VM or a container (real agent CLIs, checks on agent code), or on this host
@@ -66,35 +68,13 @@ export interface ProviderDescriptor {
   actions: readonly ResourceAction[];
 }
 
-const hostCaps = { isolation: "host", snapshots: false, hostBoundSecrets: false, egressAllowlist: false, interactive: false, idleLifetime: "none", shell: false } as const;
-
-// Listed providers in the order clients show them: docker, then boxd.
-export const PROVIDERS = {
-  /** Containers on this machine's Docker (Docker Desktop, OrbStack, Colima, Podman's docker): snapshots are images. */
-  docker: {
-    name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
-    caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
-    // agentMemory: how much of Docker's memory each agent gets; agentSlots: so how many run at once
-    // (src/providers/capacity.ts).
-    settings: ["idleLifetime", "agentMemory"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
-  },
-  /** boxd cloud VMs. */
-  boxd: {
-    name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
-    caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
-    settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
-  },
-  /** In-memory: nothing runs; task commits are made locally (tests, `capcomd setup`'s demo). */
-  fake: {
-    name: "fake", descriptorVersion: 1, label: "Fake", kind: "local", vendor: "in-memory", title: "Fake · in-memory", mark: "fake", listed: false,
-    caps: hostCaps, settings: [], info: [], resourceKinds: [], actions: [],
-  },
-  /** Runs commands on this host (adapter tests with fake agent CLIs). */
-  "fake-host": {
-    name: "fake-host", descriptorVersion: 1, label: "Fake host", kind: "local", vendor: "this host", title: "Fake host · this host", mark: "fake-host", listed: false,
-    caps: hostCaps, settings: [], info: [], resourceKinds: [], actions: [],
-  },
-} as const satisfies Record<string, ProviderDescriptor>;
+// docs/spec/plugin-api.md §17.2 step 3: each provider is a built-in sandbox plugin (src/plugins/builtin/), and this
+// registry is what their seams describe themselves as (`describe()`), activated through the plugin host's context in
+// its load order: docker, then boxd (the listed ones, in the order clients show them), then the test fakes. The types
+// come from the same plugins.
+type SandboxBuiltin = (typeof SANDBOX_BUILTINS)[number];
+type Described = { [B in SandboxBuiltin as B["descriptor"]["name"]]: B["descriptor"] };
+export const PROVIDERS = Object.fromEntries(describedSandboxes().map((d) => [d.name, d])) as Described satisfies Record<string, ProviderDescriptor>;
 export type ProviderName = keyof typeof PROVIDERS;
 /** The providers clients see (`listed: true`), as a type. */
 export type ListedProvider = { [K in ProviderName]: (typeof PROVIDERS)[K]["listed"] extends true ? K : never }[ProviderName];

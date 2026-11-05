@@ -11,6 +11,7 @@ import { Redactor } from "../agents/redact";
 import { stateDir } from "../utils/home";
 import { VERSION } from "../utils/self";
 import { BUILTINS } from "./builtins";
+import { resolveSecret } from "./secrets";
 
 /** A durable daemon-stream event (`harnessState().recordDaemonEvent`). */
 export type DaemonEventSink = (e: { type: string; entity: string; text: string; data: Record<string, unknown> }) => { seq: number };
@@ -68,6 +69,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
     kernel: CAPABILITY_NAMES.map((n) => `kernel:${n}`),
     emit: (e) => { try { record(e); } catch { /* a run-stream host event (a gate denied): written from step 5 */ } },
     dataDir: (name) => join(stateDir(), "plugins", name),
+    secret: async (m, key) => resolveSecret(m, key),
     sinks: {
       redact: (t) => redactor.text(t),
       // §13.3: one JSON line per log call in the daemon's log, never an event.

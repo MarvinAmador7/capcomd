@@ -222,12 +222,13 @@ async function classify(e: unknown): Promise<AttemptError> {
 }
 async function classifyOrThrow(e: unknown): Promise<AttemptError> {
   const { ScriptFailed } = await import("../subagents/driver");
-  const { isBoxdAuthError, isSandboxUnreachable, isTransientSandboxError } = await import("../providers/boxd-errors");
+  const { isSandboxUnreachable, isTransientSandboxError } = await import("../providers/boxd-errors");
+  const { sandboxAuthError } = await import("../plugins/sandboxes");
   const { EnvSnapshotMissing } = await ops();
   const kind = String((e as any)?.code ?? (e as any)?.kind ?? (e as Error)?.name ?? "error");
   const message = redactShapes(String((e as Error)?.message ?? e)).slice(0, 2000);
   // The provider didn't answer for the whole outage window: the waiting is over, another attempt would wait again.
-  const final = isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || kind === "sandbox_auth" || isSandboxUnreachable(e);
+  const final = !!sandboxAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || kind === "sandbox_auth" || isSandboxUnreachable(e);
   const transient = !final && isTransientSandboxError(e);
   return { kind, message, final, ...(transient ? { transient: true } : {}), ...(e instanceof ScriptFailed ? { exitCode: e.exitCode } : {}) };
 }

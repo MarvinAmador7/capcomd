@@ -634,8 +634,9 @@ progress is cancelled (an `exec` is killed inside the machine), and the method r
 | `extendTtl?`, `probe?` | | as today's optional methods | |
 | `sweep?(c)` | `caps.idleLifetime === "sweep"` | deletes machines past their deadline; the kernel calls it every 5 min | |
 
-Conformance: `tests/providers/conformance.test.ts` (ADR-020 §3), extended with `describe`, `available`,
-`classifyError` and the `SeamCall` cancellation case, is the suite every sandbox plugin MUST pass (§14.2).
+Conformance: the cases of `tests/providers/conformance.test.ts` (ADR-020 §3) on the seam, with `describe`,
+`available`, `classifyError` and the `SeamCall` cancellation case added, is the suite every sandbox plugin MUST pass
+(§14.2): `packages/plugin/src/conformance.ts`, run by the test kit and `capcomd plugins validate --conformance`.
 
 #### 7.2.3 `classifyError`
 
@@ -1106,8 +1107,9 @@ against the JSON Schema.
 
 `examples/sandbox-docker`. `src/providers/docker.ts` `DockerProvider` becomes the module; the descriptor from
 `registry.ts` is `describe()`; `available()` is `run-options.ts`'s `docker version` probe; `classifyError` replaces
-regexes elsewhere; the 5-minute sweep `serve.ts` starts moves into a `daemon.started` listener that dies with the
-plugin. Config: `bin`, `image`, `agentMemoryMb` (the `agentMemory` setting, with a `settings` descriptor),
+regexes elsewhere; the 5-minute sweep `serve.ts` started is the seam's `sweep`, which the kernel calls every 5
+minutes for a place in use (§7.2; the example schedules its own from a `daemon.started` listener instead, which a
+third-party plugin MAY do). Config: `bin`, `image`, `agentMemoryMb` (the `agentMemory` setting, with a `settings` descriptor),
 `idleLifetimeSeconds` (`x-per-run`). Nothing in `worker.ts`, `agent-workflow.ts` or the API changes.
 
 ### 15.2 The GitHub forge (`forge-github`, in-process)
@@ -1382,6 +1384,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 |---|---|---|
 | 1.0 | 2026-11-04 | First normative version: 21 hooks, 3 seams (40 methods), 22 services (77 primitives), protocol 1, manifest `capcomd.plugin/v1`. Includes the super-agent primitives (§16). |
 | 1.0.1 | 2026-11-05 | With the kernel's hook sites (§17.2 step 2): which process a hook fires in (§6.1); no listener, no stop-time denial (§5.5); `run.creating` at `POST /v1/runs` takes only `sandbox`; `agent.preparing`'s site, and `skills`/`env` refused until step 8; `agent.changed` `started` has a null `machine`; `verify.judging` after the checks pass; `merge.landing`'s `fastPath`/`sha`, a satisfied hold, no dry-run gate; run-stream plugin events from step 5. |
+| 1.0.2 | 2026-11-05 | With sandbox providers as plugins (§17.2 step 3): the sandbox conformance suite's home (§7.2); the Docker sweep is the seam's `sweep`, called by the kernel (§15.1). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

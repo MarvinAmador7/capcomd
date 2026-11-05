@@ -1,4 +1,5 @@
-import { isBoxdAuthError, isSandboxUnreachable, isTransientSandboxError } from "../providers/boxd-errors";
+import { isSandboxUnreachable, isTransientSandboxError } from "../providers/boxd-errors";
+import { sandboxAuthError } from "../plugins/sandboxes";
 import { redactShapes } from "../agents/redact";
 import { resolveEnvSnapshot } from "../env/resolve";
 // ADR-016 step 1: run new / spawn / await / wait-any / cancel, on top of the existing worker
@@ -763,7 +764,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
         // A limit (timeout, turns, budget) is a decision, not a fault: running the same task again hits it again.
         // So does a configuration problem (an unknown or invalid profile, no credentials): its message says what to fix.
         // And a provider that didn't answer for the whole outage window: the agent waited that long already.
-        if (isBoxdAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || isSandboxUnreachable(e)) break;
+        if (sandboxAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || isSandboxUnreachable(e)) break;
         await sleep(2000 * attempt);
       }
     }

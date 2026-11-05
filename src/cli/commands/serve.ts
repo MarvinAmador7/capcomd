@@ -223,20 +223,11 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   }
 
   // The daemon's durable state (idempotency keys, its own audit events): the harness API and the engine share it, so
-  // machines the engine deletes (a worker's drain, the sweep below) are audited with the API's (ADR-021 §5).
+  // machines the engine deletes (a worker's drain, the idle sweep) are audited with the API's (ADR-021 §5).
   const { harnessState } = await import("../../api/state");
   const harnessStore = harnessState();
   const audit = await import("../../providers/machine-audit");
   audit.setMachineAuditSink((e) => { harnessStore.recordDaemonEvent(e); });
-
-  // Docker doesn't delete containers by itself (ADR-020): remove capcomd's expired ones now and every 5 minutes.
-  if ((await import("../../providers/registry")).sandboxName() === "docker") {
-    const { DockerProvider, sweepIdle } = await import("../../providers/docker");
-    const docker = new DockerProvider();
-    const sweep = () => sweepIdle(docker).then((gone) => { if (gone.length) console.log(`  removed ${gone.length} expired sandbox container(s)`); }, () => {});
-    void sweep();
-    setInterval(sweep, 5 * 60_000).unref?.();
-  }
 
   // harness.v1 requests not yet answered ("METHOD /path#n"), named when the watchdog gives up.
   const inflight = new Set<string>();
@@ -286,11 +277,19 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   const P = await import("../../plugins/host");
   const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath() });
   process.on("exit", () => P.releaseSnapshot());
-  try { await host.start(P.builtinCandidates()); } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }
+  let started = false;
+  try { await host.start(P.builtinCandidates()); started = true; } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }
   plugins = host;
-  // The kernel's hook sites fire through this host's registry from now on (§17.2 step 2).
+  // The kernel's hook sites fire through this host's registry from now on (§17.2 step 2), and its sandbox seams are
+  // the places runs use (§17.2 step 3). A host that didn't start may hold only some of them: the daemon then keeps the
+  // built-in sandboxes it activated itself, rather than fail every run on a place it lost.
   const H = await import("../../plugins/hooks");
   H.useHooks(host.hooks);
+  const SB = await import("../../plugins/sandboxes");
+  if (started) SB.useSandboxHost(host);
+  // A place that doesn't delete idle machines by itself (Docker, ADR-020): its seam sweeps capcomd's expired ones, now
+  // and every 5 minutes.
+  try { SB.keepTidy((await import("../../providers/registry")).sandboxName()); } catch { /* an unknown CAPCOMD_SANDBOX fails the first run instead */ }
 
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {

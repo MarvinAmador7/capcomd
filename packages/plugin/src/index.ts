@@ -10,3 +10,4 @@ export * from "./events";
 export * from "./load";
 export * from "./semver";
 export * from "./testkit";
+export * from "./conformance";

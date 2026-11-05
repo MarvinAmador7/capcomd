@@ -5,12 +5,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- capcomd's sandboxes are now its first built-in plugins: `sandbox-docker`, `sandbox-boxd` and the test fakes
+  (`sandbox-fake`, `sandbox-fake-host`, never shown to apps). Runs, logins and environments work as before, and
+  `capcomd plugins list` shows the four. New: `capcomd plugins validate [<dir>|<name>] [--conformance] [--json]` checks
+  a plugin's manifest (a directory, or a built-in by name; every built-in with neither), and with `--conformance` loads
+  it and runs its sandbox's conformance suite against the real backend (for `sandbox-docker` that makes and removes
+  containers in your Docker; for `sandbox-boxd`, VMs in your boxd org). The boxd key is still read from
+  `BOXD_API_KEY`, the keychain or the credentials file `capcomd setup` wrote.
 - The plugin host now hears what capcomd does: runs, agents, sandboxes, verifies, merges and approvals each tell it
   their steps at the points the plugin API names (docs/spec/plugin-api.md §6.6), so a plugin will be able to watch
-  them, narrow them or refuse them. No plugins ship yet, so nothing changes, and with none listening capcomd does no
-  extra work.
+  them, narrow them or refuse them. No plugin listens yet (the built-in sandboxes have no hooks), so nothing changes,
+  and with none listening capcomd does no extra work.
 - capcomd has a plugin host, the first step of making its providers, forges, gates and front doors plugins
-  (docs/spec/plugin-api.md). No plugins ship yet, so nothing else changes. `capcomd plugins list [--json]` shows the
+  (docs/spec/plugin-api.md). `capcomd plugins list [--json]` shows the
   plugins the running daemon has (or would load, when none runs): each one's state, why it failed, its hooks and
   seams. Apps can read the same with `GET /v1/plugins` (the `read` scope; capability `plugins`), and the daemon stream
   carries `plugin.*` events (loaded, failed, disposed, version_refused, duplicate_refused, hook_failed, suspended,

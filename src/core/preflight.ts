@@ -1,6 +1,7 @@
 // Preflight for real sandboxes: validate credentials with cheap calls before creating anything.
 // Messages never include key material.
-import { BOXD_AUTH_HINT, isBoxdAuthError } from "../providers/boxd-errors";
+import { BOXD_AUTH_HINT } from "../providers/boxd-errors";
+import { sandboxAuthError } from "../plugins/sandboxes";
 import { Redactor } from "../agents/redact";
 import { realSandbox, sandboxName } from "../providers/registry";
 
@@ -57,7 +58,7 @@ export async function runPreflight(source: Record<string, string | undefined> = 
       await (deps.boxdList ?? defaultBoxdList)(boxdKey);
       out.push({ name: "boxd", ok: true, detail: "BOXD_API_KEY accepted (machines.list)" });
     } catch (err) {
-      out.push({ name: "boxd", ok: false, detail: isBoxdAuthError(err)
+      out.push({ name: "boxd", ok: false, detail: sandboxAuthError(err, "boxd")
         ? `BOXD_API_KEY was rejected by boxd (invalid or expired). ${BOXD_AUTH_HINT}`
         : `boxd unreachable: ${r.text((err as Error)?.message ?? String(err)).slice(0, 300)}` });
     }

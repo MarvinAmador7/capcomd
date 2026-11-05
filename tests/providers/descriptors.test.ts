@@ -58,6 +58,43 @@ describe("provider descriptors (registry)", () => {
 	});
 });
 
+describe("the registry is derived from the sandbox plugins (plugin API §17.2 step 3)", () => {
+	// The registry as it was written out by hand before the providers became plugins.
+	const hostCaps = { isolation: "host", snapshots: false, hostBoundSecrets: false, egressAllowlist: false, interactive: false, idleLifetime: "none", shell: false };
+	const TODAY = [
+		{ name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
+			caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
+			settings: ["idleLifetime", "agentMemory"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"] },
+		{ name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
+			caps: { isolation: "vm", snapshots: true, hostBoundSecrets: true, egressAllowlist: true, interactive: true, idleLifetime: "platform", shell: true },
+			settings: ["idleLifetime"], info: ["logins", "checkpoints"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"] },
+		{ name: "fake", descriptorVersion: 1, label: "Fake", kind: "local", vendor: "in-memory", title: "Fake · in-memory", mark: "fake", listed: false,
+			caps: hostCaps, settings: [], info: [], resourceKinds: [], actions: [] },
+		{ name: "fake-host", descriptorVersion: 1, label: "Fake host", kind: "local", vendor: "this host", title: "Fake host · this host", mark: "fake-host", listed: false,
+			caps: hostCaps, settings: [], info: [], resourceKinds: [], actions: [] },
+	];
+	test("DESCRIPTORS equals today's list, in today's order, and is what the seams describe", async () => {
+		const { describedSandboxes, sandboxSeams } = await import("../../src/plugins/sandboxes");
+		expect(DESCRIPTORS).toEqual(TODAY as never);
+		expect(describedSandboxes()).toEqual(TODAY as never);
+		expect(sandboxSeams().map((s) => [s.plugin, s.name])).toEqual([["sandbox-docker", "docker"], ["sandbox-boxd", "boxd"], ["sandbox-fake", "fake"], ["sandbox-fake-host", "fake-host"]]);
+		for (const s of sandboxSeams()) expect(PROVIDERS[s.name as keyof typeof PROVIDERS]).toBe(s.seam.describe() as never);
+	});
+	test("the daemon's host loads the same plugins and its seams describe the same list", async () => {
+		const { kernelHost, builtinCandidates } = await import("../../src/plugins/host");
+		const { describedSandboxes, useSandboxHost } = await import("../../src/plugins/sandboxes");
+		const host = kernelHost();
+		const listed = await host.start(builtinCandidates({ NODE_ENV: "test" }));
+		const sandboxes = listed.filter((p) => p.seams.some((s) => s.kind === "sandbox"));
+		expect(sandboxes.map((p) => [p.name, p.state, p.seams])).toEqual([
+			["sandbox-docker", "active", [{ kind: "sandbox", name: "docker" }]], ["sandbox-boxd", "active", [{ kind: "sandbox", name: "boxd" }]],
+			["sandbox-fake", "active", [{ kind: "sandbox", name: "fake" }]], ["sandbox-fake-host", "active", [{ kind: "sandbox", name: "fake-host" }]],
+		]);
+		useSandboxHost(host);
+		try { expect(describedSandboxes()).toEqual(TODAY as never); } finally { useSandboxHost(null); await host.stop(); }
+	});
+});
+
 describe("machine lists for the resources route", () => {
 	test("docker: created time from `docker ps`, delete-after from capcomd's sweep ledger, capcomd's prefix only", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "capcomd-desc-"));
